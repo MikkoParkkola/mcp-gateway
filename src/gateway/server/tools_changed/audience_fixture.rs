@@ -75,7 +75,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
         if self.0.hang_mints.load(SeqCst) {
             std::future::pending::<()>().await;
         }
-        let subject_key = identity.subject.clone();
+        let subject_key = identity.subject().to_owned();
         Ok(crate::identity_propagation::PropagatedCredential {
             expiry_synthetic: false,
             headers: vec![(
@@ -310,7 +310,7 @@ pub(super) struct World {
     _store: crate::gateway::router::tests::FixtureDir,
     _audit: crate::security::transparency_log::temp::TempLog,
     /// The adapter's env file, kept alive for [`Self::start_adapter`].
-    _adapter: Option<tempfile::TempDir>,
+    _adapter: Option<std::sync::Arc<tempfile::TempDir>>,
 }
 
 impl World {
@@ -342,7 +342,7 @@ impl World {
         configure: impl FnOnce(MetaMcp) -> MetaMcp,
         access: super::audience_access::McpAccess,
     ) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let env = dir.path().join("adapter.env");
         crate::gateway::test_helpers::write_owner_only(
             &env,
@@ -396,7 +396,7 @@ impl World {
 
     pub(super) async fn start_on(
         key_server: Arc<KeyServer>,
-        live: Option<(crate::config::Config, tempfile::TempDir)>,
+        live: Option<(crate::config::Config, std::sync::Arc<tempfile::TempDir>)>,
         configure: impl FnOnce(MetaMcp) -> MetaMcp,
         access: super::audience_access::McpAccess,
     ) -> Self {

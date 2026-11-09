@@ -67,6 +67,25 @@ class Repo:
         check = getattr(rows, "test_file_problems", lambda _base, _head: [])
         return check("base", "HEAD")
 
+    def stale(self) -> list[tuple[str, str, int]] | None:
+        """Rows the change adds that name no function at its head. None on a
+        script without the check, so a red row fails at its own assertion."""
+        rows.ROOT = self.root
+        check = getattr(rows, "stale_rows", lambda _base, _head: None)
+        return check("base", "HEAD")
+
+    def main(self) -> tuple[int, str]:
+        """`main` run in this process on the change, and what it printed."""
+        import contextlib
+        import io
+
+        rows.ROOT = self.root
+        rows.mount_status.cache_clear()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = rows.main(["check_inventory_rows.py", "base", "HEAD"])
+        return code, out.getvalue()
+
 
 class CheckInventoryRows(unittest.TestCase):
     def setUp(self) -> None:
@@ -226,6 +245,111 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn helper() {}\n")
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), ["helper"])
+
+
+class MainReportsEveryDiagnostic(unittest.TestCase):
+    """`main` with a file the parser reports on and a bad row: the parser
+    summary and the row's diagnostic are both printed, and the run fails, on
+    the normal path and on the ledger-error path."""
+
+    BROKEN = "pub fn existing() {}\nconst X: u8 = ;\n"
+
+    def setUp(self) -> None:
+        self.repo = Repo()
+        self.addCleanup(self.repo.dir.cleanup)
+
+    def test_the_normal_path_prints_the_parse_summary_and_the_stale_row(self) -> None:
+        self.repo.write("src/oauth/mod.rs", self.BROKEN)
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tgone\t1\tr\n")
+        self.repo.commit("add")
+        code, out = self.repo.main()
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("1 with parse errors", out)
+        self.assertIn("unsure as a whole: src/oauth/mod.rs", out)
+        self.assertIn("stale inventory row: src/oauth/mod.rs fn gone (occurrence 1)", out)
+
+    def test_the_ledger_error_path_prints_the_parse_summary_and_the_problem(self) -> None:
+        # A malformed row at the merge-base only: the head reads, the files
+        # are parsed, then reading the base's rows for the stale check fails.
+        self.repo.git("checkout", "-q", "base")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\t\n")
+        self.repo.commit("base with a malformed row")
+        self.repo.git("checkout", "-q", "-B", "change")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\tr\n")
+        self.repo.write("src/oauth/mod.rs", self.BROKEN)
+        self.repo.commit("change")
+        code, out = self.repo.main()
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("1 with parse errors", out)
+        self.assertIn("unsure as a whole: src/oauth/mod.rs", out)
+        self.assertIn(f"inventory: {rows.UNENFORCING}:2: the reason must not be empty", out)
+
+    def test_a_second_run_in_one_process_reports_only_its_own_files(self) -> None:
+        # The first run parses a broken file; the second, on another change,
+        # must not still count it.
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\npub mod broken;\n")
+        self.repo.write("src/oauth/broken.rs", "const X: u8 = ;\n")
+        self.repo.commit("add")
+        _, first = self.repo.main()
+        self.assertIn("unsure as a whole: src/oauth/broken.rs", first)
+        clean = Repo()
+        self.addCleanup(clean.dir.cleanup)
+        clean.write("src/oauth/mod.rs", "pub fn existing() {}\n// a note\n")
+        clean.commit("add")
+        code, second = clean.main()
+        self.assertEqual(code, 0, second)
+        self.assertIn("cfg items: 1 files parsed, 0 with parse errors", second)
+
+
+class StaleRows(unittest.TestCase):
+    """A row the change adds must name a function its head has: a row left
+    behind by a rename or a deletion vouches for nothing."""
+
+    def setUp(self) -> None:
+        self.repo = Repo()
+        self.addCleanup(self.repo.dir.cleanup)
+
+    def test_an_added_row_naming_no_function_fails(self) -> None:
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tgone\t1\tr\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.stale(), [("src/oauth/mod.rs", "gone", 1)])
+
+    def test_an_added_row_past_the_last_occurrence_fails(self) -> None:
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t2\tr\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.stale(), [("src/oauth/mod.rs", "existing", 2)])
+
+    def test_an_added_row_naming_a_function_only_in_a_comment_fails(self) -> None:
+        self.repo.write("src/oauth/mod.rs", 'pub fn existing() {}\n// fn gone was removed\nconst S: &str = "fn gone";\n')
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tgone\t1\tr\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.stale(), [("src/oauth/mod.rs", "gone", 1)])
+
+    def test_a_comment_naming_the_function_above_it_shifts_the_occurrence_for_both_checks(self) -> None:
+        # The grader counts every line naming `fn added`, the comment too, so
+        # the definition is occurrence 2 to the grader and to missing_rows; the
+        # stale check must agree, and the comment's own occurrence keeps no row.
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\n// fn added is new\npub fn added() {}\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tadded\t2\tr\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.stale(), [])
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tadded\t1\tr\n")
+        self.repo.commit("the comment's occurrence")
+        self.assertEqual(self.repo.stale(), [("src/oauth/mod.rs", "added", 1)])
+
+    def test_an_added_row_naming_a_function_passes(self) -> None:
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\tr\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.stale(), [])
+
+    def test_a_row_the_base_already_had_is_not_judged(self) -> None:
+        self.repo.git("checkout", "-q", "base")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tgone\t1\tr\n")
+        self.repo.commit("older stale row")
+        self.repo.git("checkout", "-q", "-B", "change")
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\npub fn other() {}\n")
+        self.repo.commit("change")
+        self.assertEqual(self.repo.stale(), [])
 
 
 class TestNamedFiles(unittest.TestCase):
@@ -425,6 +549,11 @@ class CoverageGradeTrigger(unittest.TestCase):
             "scripts/release/inventory_ledger.py",
             "scripts/release/critical_function_coverage.py",
             "scripts/release/critical_path_coverage.py",
+            # The Linux run's parts, their merge and its canary.
+            "scripts/ci/coverage_shards.py",
+            "scripts/ci/coverage_shard_*.sh",
+            "scripts/ci/testdata/llvm_cov_report_v.txt",
+            "src/coverage_canary.rs",
             ".github/workflows/coverage-probe.yml",
         }
         self.assertEqual(listed, wanted)

@@ -20,7 +20,7 @@ pub(super) const OWNER: (&str, &str) = ("https://idp.adapter.test", "alice");
 pub(super) struct Armed {
     pub(super) state: Arc<AppState>,
     pub(super) endpoint: Endpoint,
-    pub(super) dir: tempfile::TempDir,
+    pub(super) dir: Arc<tempfile::TempDir>,
     pub(super) log: Arc<crate::security::TransparencyLogger>,
     _store: crate::gateway::router::tests::FixtureDir,
 }
@@ -43,7 +43,7 @@ pub(super) async fn armed(
     policy: AuditFailurePolicy,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Armed {
-    let dir = tempfile::tempdir().expect("a private log directory");
+    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
     let endpoint = Endpoint::start(hold).await;
     let log = logger(&dir, policy);
     let sink = Arc::clone(&log);
@@ -177,6 +177,9 @@ async fn admission_refusal_writes_one_denied_record() {
     );
     let record = only(decisions(&row.dir), "decision record");
     std::assert_eq!(record["outcome"], json!("denied"), "{record}");
+    // No invocation record: the decision says so, and Activity lists it.
+    std::assert_eq!(record["invocation_recorded"], json!(false), "{record}");
+    std::assert_eq!(record["server"], json!(CAPS), "{record}");
     assert!(
         invocations(&row.dir).is_empty(),
         "{:#?}",
@@ -260,6 +263,11 @@ async fn surfaced_call_grant_denial_writes_one_record() {
         0,
         "the refused call reaches nothing"
     );
-    let record = only(decisions(&row.dir), "decision record");
+    // Written after the call settles, on the slot's own task (design: "withheld
+    // notes are owned by their slot").
+    let record = only(
+        crate::gateway::meta_mcp::grant_audit_fixture::wait_for_decisions(&row.dir, 1).await,
+        "decision record",
+    );
     std::assert_eq!(record["outcome"], json!("denied"), "{record}");
 }

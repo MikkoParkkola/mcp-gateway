@@ -28,6 +28,12 @@ pub(super) enum Extra {
     /// `alpha` requires passthrough identity propagation (shared slot), so a
     /// caller with no credential to pass is refused.
     AlphaRequiresIdentity,
+    /// `alpha` propagates the caller's identity, optionally: a failed mint
+    /// falls back to the static credential.
+    AlphaIdentityOptional,
+    /// `alpha` holds a gateway OAuth login that is not a shared account, so
+    /// a multi-user gateway isolates it per user.
+    AlphaOAuthIsolated,
     /// Message signing on, scoped by the posture (`gateway_invoke` only,
     /// every `tools/call` under [`Extra::Hardened`]).
     Signing,
@@ -60,16 +66,21 @@ pub(super) fn backend_config(setup: &Setup, name: &str) -> BackendConfig {
     BackendConfig {
         signature_chain: setup.chain,
         passthrough: setup.has(Extra::BetaPassthrough) && name == "beta",
-        identity_propagation: (setup.has(Extra::AlphaRequiresIdentity) && name == "alpha").then(
-            || crate::identity_propagation::IdentityPropagationConfig {
+        identity_propagation: ((setup.has(Extra::AlphaRequiresIdentity)
+            || setup.has(Extra::AlphaIdentityOptional))
+            && name == "alpha")
+            .then(|| crate::identity_propagation::IdentityPropagationConfig {
                 strategy: crate::identity_propagation::PropagationStrategyKind::Passthrough,
                 audience: "https://alpha".to_string(),
-                required: true,
+                required: setup.has(Extra::AlphaRequiresIdentity),
                 session_mode: crate::identity_propagation::SessionMode::Stateless,
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
-            },
-        ),
+            }),
+        oauth: (setup.has(Extra::AlphaOAuthIsolated) && name == "alpha").then(|| {
+            serde_json::from_value(serde_json::json!({"enabled": true}))
+                .expect("a minimal OAuth config")
+        }),
         ..BackendConfig::default()
     }
 }
@@ -193,11 +204,11 @@ pub(super) enum Log {
 pub(super) fn audit_log(
     fail_closed: bool,
 ) -> (
-    tempfile::TempDir,
+    Arc<tempfile::TempDir>,
     std::path::PathBuf,
     Arc<TransparencyLogger>,
 ) {
-    let audit = tempfile::tempdir().unwrap();
+    let audit = Arc::new(tempfile::tempdir().unwrap());
     let path = audit.path().join("audit.jsonl");
     let policy = if fail_closed {
         AuditFailurePolicy::FailClosed
@@ -214,5 +225,6 @@ pub(super) fn audit_log(
         .expect("open log")
         .with_failure_policy(policy),
     );
+    log.keep_test_dir(Arc::clone(&audit));
     (audit, path, log)
 }

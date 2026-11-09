@@ -97,6 +97,7 @@ pub(in crate::gateway::meta_mcp) mod publish_gate;
 pub(crate) use dispatch_names::is_composite_meta_tool;
 mod effects;
 mod events_hook;
+mod first_fill;
 pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
@@ -629,7 +630,13 @@ pub(crate) fn publish_identity_grants(
     sink: &RwLock<LocalIdentityGrantStore>,
     epoch: &AtomicU64,
     grants: LocalIdentityGrantStore,
+    key: Option<&crate::security::rule_id::RuleKey>,
 ) {
+    // Keyed before the swap, so no reader sees the new rows without ids.
+    let grants = match key {
+        Some(key) => grants.with_rule_ids(key),
+        None => grants,
+    };
     let mut lock = sink.write();
     *lock = grants;
     let prev = epoch.fetch_add(1, Ordering::Release);
@@ -721,12 +728,24 @@ mod boundary_pins;
 mod capability_cache_scan_tests;
 #[cfg(test)]
 pub(super) mod grant_audit_fixture;
+/// A chain resume step refused before it dispatches.
+#[cfg(test)]
+mod grant_chain_resume_tests;
 #[cfg(test)]
 mod grant_decision_audit_tests;
 #[cfg(test)]
 mod grant_decision_slot_tests;
+/// The decision record's `server` and `invocation_recorded`.
+#[cfg(test)]
+mod grant_marker_tests;
+/// The recovery read's premise: a capability task holds no upstream handle.
+#[cfg(test)]
+mod grant_recovery_premise_tests;
 #[cfg(test)]
 mod grant_replay_dedupe_tests;
+/// A retry-routed withheld call's decision marker.
+#[cfg(test)]
+mod grant_retry_marker_tests;
 #[cfg(test)]
 mod grant_slot_wrap_tests;
 /// MIK-8340 row 7: a failed grant record on a withheld name answers as absent.
@@ -759,6 +778,12 @@ mod slot_verdict_listing_tests;
 mod slot_verdict_listing_variant_tests;
 #[cfg(test)]
 mod slot_verdict_tests;
+/// Each refused exit of a stored read names the check that refused it.
+#[cfg(test)]
+mod stored_refusal_exit_tests;
+/// A withheld task notification names the check that refused its stored output.
+#[cfg(test)]
+mod task_notify_refused_by_tests;
 #[cfg(test)]
 mod task_notify_tests;
 /// MIK-8340 row 10: a listing follows the caller's own catalogue.

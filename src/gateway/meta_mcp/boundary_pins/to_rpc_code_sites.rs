@@ -113,17 +113,20 @@ impl Sink for Sites {
 
 /// The table's reads per `(file, fn)`, and the rows that are malformed or
 /// carry no reason.
-fn listed() -> (Reads, Vec<String>) {
+fn listed(text: &str) -> (Reads, Vec<String>) {
     let mut rows = Reads::new();
     let mut bad = Vec::new();
-    for line in LISTED
+    for line in text
         .lines()
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
         match line.split('\t').collect::<Vec<_>>()[..] {
             [file, func, reads, reason] if !reason.trim().is_empty() => match reads.parse() {
                 Ok(n) => {
-                    rows.insert((file.to_owned(), func.to_owned()), n);
+                    // A repeat would overwrite the earlier row and hide it.
+                    if rows.insert((file.to_owned(), func.to_owned()), n).is_some() {
+                        bad.push(format!("listed twice: {line}"));
+                    }
                 }
                 Err(_) => bad.push(line.to_owned()),
             },
@@ -137,7 +140,7 @@ fn listed() -> (Reads, Vec<String>) {
 fn every_rpc_code_read_is_a_reviewed_site() {
     let mut sites = Sites::default();
     walk(crate_root(), &ROOTS, &mut sites).expect("the walk reads every module");
-    let (rows, bad) = listed();
+    let (rows, bad) = listed(LISTED);
     assert!(
         bad.is_empty(),
         "rows without four columns, a read count or a reason: {bad:?}"
@@ -177,4 +180,15 @@ fn a_read_is_counted_in_a_call_a_path_and_a_macro() {
     let mut body = Body::default();
     body.visit_block(&block);
     assert_eq!(body.reads, 3);
+}
+
+/// A (file, fn) listed twice is refused, not silently overwritten.
+#[test]
+fn a_site_listed_twice_is_refused() {
+    let (_, first) = super::fragments::without_first_row(LISTED);
+    let (_, bad) = listed(&format!("{LISTED}{first}"));
+    assert!(
+        bad.contains(&format!("listed twice: {}", first.trim_end())),
+        "{bad:#?}"
+    );
 }

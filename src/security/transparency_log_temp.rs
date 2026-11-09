@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 /// directory with an open `.lock` inside cannot be removed on Windows.
 pub(crate) struct TempLog {
     path: PathBuf,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 impl TempLog {
@@ -22,10 +22,7 @@ impl TempLog {
     pub(crate) fn new() -> Self {
         // A name of its own, so a leaked log directory never passes as one of
         // the plain temp dirs the CI shard guard still tolerates.
-        let dir = tempfile::Builder::new()
-            .prefix("audit-log-")
-            .tempdir()
-            .expect("log tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir_prefixed("audit-log-");
         let path = dir.path().join("audit.jsonl");
         std::fs::File::create(&path).expect("log file");
         Self { path, _dir: dir }
@@ -44,6 +41,31 @@ mod tests {
     use super::TempLog;
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
+
+    /// A logger opened at a `TempLog` path is in a kept dir: no unkept open is
+    /// recorded, so the logger holds the dir past the `TempLog` itself.
+    /// Mutant: `TempLog` back to an unregistered `tempfile::Builder` dir.
+    #[test]
+    fn a_log_in_a_temp_log_is_kept() {
+        let log = TempLog::new();
+        let unkept = crate::test_dir_keep::expect_unkept();
+        let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: log.path().to_string_lossy().to_string(),
+            key_id: "temp-log".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("the log opens");
+        assert_eq!(unkept.recorded(), vec![]);
+        let folder = log.path().parent().expect("a parent").to_path_buf();
+        drop(log);
+        logger
+            .log_invocation("s", "c", "srv", "kept", "sha256:aa", "sha256:bb")
+            .expect("an append after the TempLog dropped");
+        assert!(folder.exists(), "the logger did not keep the folder");
+        drop(logger);
+        assert!(!folder.exists(), "the folder did not go with the logger");
+    }
 
     /// A logger and its `TempLog`, dropped in that order, leave nothing behind:
     /// the log, its sidecars and their folder all go. On Windows this fails if

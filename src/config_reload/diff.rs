@@ -22,6 +22,9 @@ pub struct ConfigPatch {
     pub backends_removed: Vec<String>,
     /// Backends whose config changed between `old` and `new`.
     pub backends_modified: Vec<(String, BackendConfig)>,
+    /// Backends whose only change is their display-only `owner`: published
+    /// with the new generation, never stopped or replaced.
+    pub backends_display_changed: Vec<String>,
     /// `true` when `server.host` or `server.port` changed (requires restart).
     pub server_changed: bool,
     /// `true` when any field outside of `backends` / `server` changed.
@@ -29,12 +32,15 @@ pub struct ConfigPatch {
 }
 
 impl ConfigPatch {
-    /// Returns `true` when no changes were detected.
+    /// Returns `true` when there is nothing to publish: a display-only
+    /// change (`backends_display_changed`) needs no apply work but must still
+    /// be published, so it counts.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.backends_added.is_empty()
             && self.backends_removed.is_empty()
             && self.backends_modified.is_empty()
+            && self.backends_display_changed.is_empty()
             && !self.server_changed
             && !self.profiles_changed
     }
@@ -67,6 +73,12 @@ impl ConfigPatch {
                     .map(|(n, _)| n.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
+            ));
+        }
+        if !self.backends_display_changed.is_empty() {
+            parts.push(format!(
+                "owner changed: [{}]",
+                self.backends_display_changed.join(", ")
             ));
         }
         if self.server_changed {
@@ -285,10 +297,6 @@ fn cost_governance_differs(running: &Config, wanted: &Config) -> bool {
     view(running) != view(wanted)
 }
 
-// PR2 of ADR-029's live-collusion work flips this; until then the relay gate judges with its startup lists.
-#[cfg(feature = "firewall")]
-const COLLUSION_LIVE: bool = false;
-
 /// Whether `security.firewall.collusion`'s four live fields (`sources`,
 /// `non_egress`, `allowed_flows`, `action`) count for a restart.
 #[derive(Clone, Copy)]
@@ -309,9 +317,8 @@ enum CollusionFields {
 #[cfg_attr(not(feature = "firewall"), expect(unused_variables))]
 fn collusion_fields(running: &Config, wanted: &Config) -> CollusionFields {
     #[cfg(feature = "firewall")]
-    if COLLUSION_LIVE
-        && crate::security::firewall::DetectorParams::of(&running.security.firewall)
-            .runs(&wanted.security.firewall)
+    if crate::security::firewall::DetectorParams::of(&running.security.firewall)
+        .runs(&wanted.security.firewall)
     {
         return CollusionFields::Masked;
     }
@@ -536,23 +543,35 @@ pub(super) fn classify_backends(old: &Config, new: &Config, patch: &mut ConfigPa
         }
     }
 
-    // Modified: in both but config differs
+    // Modified: in both but config differs. An `owner`-only difference is
+    // display only: published, never a reason to replace the backend.
     for (name, new_cfg) in &new_enabled {
-        if let Some(old_cfg) = old_enabled.get(name)
-            && (backend_config_changed(old_cfg, new_cfg)
-                || (runtime_changed && new_cfg.runtime_profile.is_some()))
+        let Some(old_cfg) = old_enabled.get(name) else {
+            continue;
+        };
+        if backend_config_changed(old_cfg, new_cfg)
+            || (runtime_changed && new_cfg.runtime_profile.is_some())
         {
             patch
                 .backends_modified
                 .push(((*name).to_string(), (*new_cfg).clone()));
+        } else if old_cfg.owner != new_cfg.owner {
+            patch.backends_display_changed.push((*name).to_string());
         }
     }
 }
 
-/// Returns `true` when any observable field of a backend config differs.
+/// Returns `true` when any field of a backend config that the running
+/// backend uses differs: every field but the display-only `owner`, which
+/// `classify_backends` reports apart.
 ///
 /// Uses canonical JSON for a stable, deep equality check without requiring
 /// `PartialEq` on all nested types.
 pub(super) fn backend_config_changed(old: &BackendConfig, new: &BackendConfig) -> bool {
-    canonical_json(old) != canonical_json(new)
+    let running = |c: &BackendConfig| {
+        let mut c = c.clone();
+        c.owner = None;
+        canonical_json(&c)
+    };
+    running(old) != running(new)
 }

@@ -199,9 +199,10 @@ async fn token_exchange_obtains_scoped_token_and_injects_authorization() {
     assert_eq!(temp.scopes.backends, vec!["mail-svc"]);
     assert_eq!(temp.scopes.tools, vec!["mail_read"]);
     assert_eq!(temp.scopes.rate_limit, 42);
-    assert_eq!(temp.identity.subject, "alice-subject");
+    assert_eq!(temp.identity.subject(), "alice-subject");
     assert_eq!(
-        temp.identity.email, "",
+        temp.identity.email(),
+        "",
         "an assertion without email_verified yields no email"
     );
 

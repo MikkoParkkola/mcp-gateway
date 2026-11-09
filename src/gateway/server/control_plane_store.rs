@@ -66,6 +66,21 @@ pub(super) fn build_control_plane_store(
     config: &Config,
     base_info: &ControlPlaneBaseInfo,
 ) -> Result<Option<Arc<dyn ControlPlaneStore>>> {
+    build_control_plane_store_with_log(config, base_info).map(|opened| opened.map(|o| o.store))
+}
+
+/// The opened store and its governance audit logger, which the web UI's live
+/// stream reads.
+pub(super) struct OpenedStore {
+    pub(super) store: Arc<dyn ControlPlaneStore>,
+    pub(super) governance_log: Arc<crate::security::TransparencyLogger>,
+}
+
+/// [`build_control_plane_store`], also handing back the governance logger.
+pub(super) fn build_control_plane_store_with_log(
+    config: &Config,
+    base_info: &ControlPlaneBaseInfo,
+) -> Result<Option<OpenedStore>> {
     let (base, source) = (&base_info.path, base_info.source);
     let path = base.display();
     if source == ControlPlaneBaseSource::Explicit && !base.is_absolute() {
@@ -89,9 +104,9 @@ pub(super) fn build_control_plane_store(
         ControlPlaneBaseSource::Default => open_store(config, base),
     };
     match (opened, source) {
-        (Ok(store), _) => {
+        (Ok(opened), _) => {
             info!(%path, ?source, "control-plane store opened");
-            Ok(Some(store))
+            Ok(Some(opened))
         }
         // Another gateway writes this governance log: two writers fork its
         // chain, so this refuses at any location, never degrades.
@@ -175,10 +190,7 @@ enum OpenFailure {
     Other(String),
 }
 
-fn open_store(
-    config: &Config,
-    base: &Path,
-) -> std::result::Result<Arc<dyn ControlPlaneStore>, OpenFailure> {
+fn open_store(config: &Config, base: &Path) -> std::result::Result<OpenedStore, OpenFailure> {
     use crate::control_plane::FileControlPlaneStore;
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::is_lease_held;
@@ -191,9 +203,13 @@ fn open_store(
             OpenFailure::Other(format!("audit log: {e}"))
         }
     })?;
-    let store = FileControlPlaneStore::open(base.join("store"), Arc::new(audit))
+    let audit = Arc::new(audit);
+    let store = FileControlPlaneStore::open(base.join("store"), Arc::clone(&audit))
         .map_err(|e| OpenFailure::Other(format!("store: {e}")))?;
-    Ok(Arc::new(store))
+    Ok(OpenedStore {
+        store: Arc::new(store),
+        governance_log: audit,
+    })
 }
 
 /// F6 (MIK 7570.GOVSTORE.1): where the governance store lives, and what a
@@ -244,7 +260,7 @@ mod tests {
     #[test]
     fn governance_log_uses_fixed_rotation() {
         use crate::security::transparency_log::OnDiskFull;
-        let cfg_dir = tempfile::tempdir().unwrap();
+        let cfg_dir = crate::test_dir_keep::kept_tempdir();
         let yaml = "security:\n  transparency_log:\n    enabled: true\n    rotation:\n      max_segment_bytes: 2097152\n      retain_segments: 30\n      on_disk_full: refuse\n";
         let (config, _) = load(cfg_dir.path(), yaml);
         let gov = super::governance_log_config(&config, cfg_dir.path());
@@ -255,7 +271,10 @@ mod tests {
 
     #[test]
     fn store_opens_at_explicit_store_dir() {
-        let (cfg_dir, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (cfg_dir, data) = (
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
+        );
         let store_dir = data.path().join("cp");
         let (config, path) = load(
             cfg_dir.path(),
@@ -279,7 +298,10 @@ mod tests {
 
     #[test]
     fn explicit_unopenable_store_dir_refuses_start() {
-        let (cfg_dir, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (cfg_dir, data) = (
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
+        );
         crate::gateway::test_helpers::write_owner_only(
             data.path().join("file"),
             b"not a directory",
@@ -304,9 +326,9 @@ mod tests {
     #[test]
     fn write_probe_does_not_follow_a_planted_symlink() {
         let (cfg_dir, data, outside) = (
-            tempfile::tempdir().unwrap(),
-            tempfile::tempdir().unwrap(),
-            tempfile::tempdir().unwrap(),
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
         );
         let store_dir = data.path().join("cp");
         std::fs::create_dir_all(&store_dir).unwrap();
@@ -328,7 +350,7 @@ mod tests {
 
     #[test]
     fn relative_store_dir_refuses_start() {
-        let cfg_dir = tempfile::tempdir().unwrap();
+        let cfg_dir = crate::test_dir_keep::kept_tempdir();
         let (config, path) = load(cfg_dir.path(), &auth_on_with_store_dir("relative/cp"));
 
         let err = start(&config, &path).expect_err("a relative store_dir must refuse start");
@@ -344,7 +366,7 @@ mod tests {
 
     #[test]
     fn default_unwritable_store_degrades_without_refusing() {
-        let cfg_dir = tempfile::tempdir().unwrap();
+        let cfg_dir = crate::test_dir_keep::kept_tempdir();
         crate::gateway::test_helpers::write_owner_only(
             cfg_dir.path().join("gateway-control-plane"),
             b"file",
@@ -369,7 +391,7 @@ mod tests {
 
     #[test]
     fn store_dir_change_is_restart_required() {
-        let cfg_dir = tempfile::tempdir().unwrap();
+        let cfg_dir = crate::test_dir_keep::kept_tempdir();
         let (running, _) = load(cfg_dir.path(), &auth_on_with_store_dir("/srv/a"));
         let (wanted, _) = load(cfg_dir.path(), &auth_on_with_store_dir("/srv/b"));
         let live = crate::config_reload::LiveConfig::new(running);
@@ -383,7 +405,10 @@ mod tests {
 
     #[tokio::test]
     async fn export_reads_governance_log_from_store_dir() {
-        let (cfg_dir, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (cfg_dir, data) = (
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
+        );
         let store_dir = data.path().join("cp");
         // The invocation log path goes into the one `security` block the
         // auth-on config already carries (D1: auth on requires the log).

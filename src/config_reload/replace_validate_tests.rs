@@ -128,68 +128,8 @@ fn with_key(extra: &str) -> String {
     )
 }
 
-/// W5: a new bearer token that is an API key's credential is refused before
-/// any store entry exists, and nothing is written.
-#[tokio::test]
-async fn a_bearer_duplicating_an_api_key_is_refused_before_any_store_entry() {
-    let dir = tempfile::tempdir().expect("dir");
-    let path = dir.path().join("gateway.yaml");
-    let base = with_key("");
-    write_owner_only(&path, &base).expect("write config");
-    let ctx = context(&path);
-    let store = Counting::new(dir.path());
-
-    replace_detached(
-        ctx,
-        save(
-            dir.path(),
-            Arc::clone(&store),
-            &["auth", "bearer_token"],
-            &with_key("  bearer_token: {slot}\n"),
-            CRED,
-        ),
-        WAIT,
-    )
-    .await
-    .expect_err("one secret would match two credentials");
-
-    assert_eq!(read(&path), base);
-    assert_eq!(
-        store.creates(),
-        0,
-        "W5: a store entry was created for a bearer that duplicates an API key"
-    );
-}
-
-/// W5, control: the collision is judged on the config the save makes, not
-/// the running one. Removing key `ci` in the same save frees its credential
-/// for the bearer.
-#[tokio::test]
-async fn a_running_key_removed_in_the_same_save_no_longer_collides() {
-    let dir = tempfile::tempdir().expect("dir");
-    let path = dir.path().join("gateway.yaml");
-    write_owner_only(&path, with_key("")).expect("write config");
-    let ctx = context(&path);
-    let store = Counting::new(dir.path());
-    let without_key = "auth:\n  bearer_token: {slot}\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
-
-    replace_detached(
-        ctx,
-        save(
-            dir.path(),
-            Arc::clone(&store),
-            &["auth", "bearer_token"],
-            without_key,
-            CRED,
-        ),
-        WAIT,
-    )
-    .await
-    .expect("the key is gone, so the bearer collides with nothing");
-
-    assert!(read(&path).contains("bearer_token: \""), "{}", read(&path));
-    assert_eq!(store.creates(), 1);
-}
+#[path = "replace_validate_bearer_tests.rs"]
+mod bearer;
 
 /// Production lines matching `hit`, as `path:line`, comments skipped.
 fn lines_where(hit: impl Fn(&str) -> bool) -> Vec<String> {
@@ -471,7 +411,8 @@ fn a_recognisable_secret_appears_in_no_trace_file_or_record() {
         runtime.block_on(async {
             let audited = || Audit::Required {
                 sink: Box::new(FileSink(record.clone())),
-                kind: IntentKind::Save,
+                kind: IntentKind::Save { fields: Vec::new() },
+                writer: None,
             };
             let mut seen = loud_refusals(dir.path(), audited).await;
             let path = kept.path().join("gateway.yaml");

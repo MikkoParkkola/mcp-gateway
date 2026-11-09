@@ -15,6 +15,7 @@ mod backend_debug;
 mod backend_ownership;
 mod backend_transport;
 mod config_file;
+pub(crate) mod configured_secrets;
 mod env_overlay;
 mod env_provider;
 pub(crate) mod secret_rules;
@@ -78,7 +79,10 @@ pub(crate) use secret_ref::{is_keychain_name, is_reference, is_template_syntax};
 // New items (F18): the one mode-checked read for files outside `config`.
 #[cfg(windows)]
 pub(crate) use secret_file::Protects;
-pub(crate) use secret_file::{CheckedFile, read_checked_bytes, read_checked_file};
+pub(crate) use secret_file::{
+    CheckedFile, UnreadConfig, read_checked_bytes, read_checked_file, read_config_text,
+    read_recovery_text,
+};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
@@ -528,9 +532,9 @@ impl Config {
             )
             .map_err(|error| Error::ConfigValidation(error.to_string()))?;
         }
-        let (mut secret_refs, mut files) = match expansion {
+        let (mut secret_refs, mut files, configured) = match expansion {
             Expansion::Resolve => {
-                let mut refs = config.expand_env_vars(&overlay)?;
+                let (mut refs, configured) = config.expand_env_vars(&overlay)?;
                 posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
                 let auth_enabled = config.auth.enabled;
                 let log = &mut config.security.transparency_log;
@@ -539,9 +543,13 @@ impl Config {
                     config.security.message_signing.resolve_with_env(&overlay)?;
                 let chain = &mut config.security.signature_chain;
                 SignatureChainConfig::resolve_section(chain, &overlay)?;
-                refs
+                (refs.0, refs.1, configured)
             }
-            Expansion::Literal => (BTreeSet::new(), SecretFileDigests::new()),
+            Expansion::Literal => (
+                BTreeSet::new(),
+                SecretFileDigests::new(),
+                configured_secrets::ConfiguredByBackend::new(),
+            ),
         };
         config.validate_with_env(&overlay)?;
         // Account secrets are recorded only once the block has passed
@@ -568,6 +576,7 @@ impl Config {
             env_paths,
             secret_refs,
             inputs,
+            configured,
         })
     }
 
@@ -592,11 +601,20 @@ impl Config {
     /// one is refused the same way. A disabled backend keeps its text
     /// verbatim: auth validation skips it too, and enabling it goes through
     /// reload, which runs this again.
-    fn expand_env_vars(&mut self, overlay: &EnvOverlay) -> Result<SecretRefsRead> {
+    fn expand_env_vars(
+        &mut self,
+        overlay: &EnvOverlay,
+    ) -> Result<(SecretRefsRead, configured_secrets::ConfiguredByBackend)> {
         // Every unresolved reference in one error: fixing them one restart at a
         // time is the experience this replaces.
         let mut unresolved = Vec::new();
-        secret_ref::evaluate_backends(&mut self.backends, overlay, &mut unresolved);
+        let mut configured = configured_secrets::ConfiguredByBackend::new();
+        secret_ref::evaluate_backends(
+            &mut self.backends,
+            overlay,
+            &mut unresolved,
+            &mut configured,
+        );
         let mut expand = |field: String, value: &mut String| match secret_ref::expand_field(
             &field, value, overlay,
         ) {
@@ -613,7 +631,7 @@ impl Config {
             return Err(Self::unresolved_error(&unresolved, overlay));
         }
 
-        Ok(self.resolve_secret_refs(overlay))
+        Ok((self.resolve_secret_refs(overlay), configured))
     }
 
     /// Substitute `env:NAME` secret references with the value the overlay holds.
@@ -709,6 +727,8 @@ pub mod humantime_serde;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+mod backend_owner_tests;
 #[cfg(test)]
 mod backend_refs_tests;
 #[cfg(test)]

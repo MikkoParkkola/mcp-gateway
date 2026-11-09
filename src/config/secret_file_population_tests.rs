@@ -64,7 +64,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/commands/regular_file.rs",
-        "gateway.yaml re-read by doctor (after Config::load's mode-checked read; prints key names, never values) and by upgrade (to rename backend url keys; prints line numbers and backend names, never values); opened as the loader opens it (O_NONBLOCK|O_NOCTTY, follows a symlink), regular files only, no size limit (as the guarded reader for config); the mode-checked read is lib-internal, widening it was declined",
+        "gateway.yaml read for reports that write nothing: doctor's key names (after Config::load's mode-checked read; never values) and the upgrade dry run's URL-key report (line numbers and backend names, never values); the upgrade rewrite itself reads under the config lock through the guard; opened as the loader opens it (O_NONBLOCK|O_NOCTTY, follows a symlink), regular files only, no size limit",
     ),
     (
         "src/commands/kubernetes.rs",
@@ -93,7 +93,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/commands/upgrade.rs",
-        "version stamp, 3.x pattern notice and config backup (fs::copy keeps the mode)",
+        "version stamp, the 3.0.0 notice's read-only posture read (prints a notice, writes nothing from it) and the config backup (fs::copy keeps the mode)",
     ),
     (
         "src/commands/upgrade_webhook_notice.rs",
@@ -109,7 +109,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
          created at 0600 by create_new_private; File::open only fsyncs its directory",
     ),
     ("src/config/secret_file.rs", "the checked reader itself"),
-    ("src/config_persistence.rs", "owner-only atomic writer"),
     (
         "src/config_persistence_scratch.rs",
         "the scratch-and-rename writer: creates its scratch file owner-only (0600 / owner-only DACL)",
@@ -123,11 +122,15 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the atomic writer's Windows half: opens the save target with READ_CONTROL only, to read its access list; never reads its bytes",
     ),
     (
-        "src/config_persistence_journal.rs",
-        "the replace journal (paths, SHA-256 revisions and a state; no secret) and the staged \
-         original of gateway.yaml, both created owner-only by create_new_private; the original is \
-         checked against the journal's digest before it is written back; File::open only fsyncs \
-         its directory",
+        "src/config_persistence.rs",
+        "the shared directory sync: File::open on a directory only to fsync it; reads no file bytes",
+    ),
+    (
+        "src/config_persistence_commit.rs",
+        "the config commit primitive's read-back: opens gateway.yaml (unix: without waiting; \
+         Windows: read-write without write or delete sharing) only to check it is a regular file, \
+         flush it and hash its bytes against the revision it just wrote; never parses or returns \
+         the bytes",
     ),
     (
         "src/config_persistence_lock.rs",
@@ -136,17 +139,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/config_reload/grant_audit_plan.rs",
         "grant audit state: journal ids and grant digests; no secret",
-    ),
-    (
-        "src/config_reload/replace.rs",
-        "re-reads gateway.yaml under the config lock to check the caller's revision and stage the \
-         original; the target is the canonical path this gateway loaded at start, and every write \
-         back is owner-only",
-    ),
-    (
-        "src/config_reload/replace_audit.rs",
-        "reads gateway.yaml under the config lock only to hash it for a recovery intent's base \
-         revision; the bytes are hashed, never kept or logged",
     ),
     (
         "src/control_plane/export.rs",
@@ -207,6 +199,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/plain_reads.rs",
+        "cfg(test) plain-read inventory: walks the crate's own sources and writes one fixture crate in a temp dir; its fixture text names plain reads; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/shipped_reads.rs",
         "cfg(test) source scanner reading Cargo.toml and the crate's own sources for the MIK-8481 unshipped-read guard; no secret",
     ),
@@ -215,12 +211,20 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) scanner for the file-creation inventory, reading the crate's own sources; its fs::write calls are quoted syntax in a scanner test, never run; no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/read_history_access.rs",
+        "cfg(test) source scanner reading the crate's own sources to find which production files name the read history; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/scan.rs",
         "cfg(test) source scanner reading the crate's own source for the MIK-8387 boundary pins; no secret",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/caller_view.rs",
         "cfg(test) source scanner reading the crate's own sources to count unfiltered capability-provider reads; no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/identity_sources.rs",
+        "cfg(test) identity-source pin: hashes the bytes of the three identity-type source files; no secret",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/invoke_stages.rs",
@@ -260,12 +264,16 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "reads through read_secret_file (R1, I1, I2); writes keys 0600 (W1) and public certs",
     ),
     (
+        "src/mutant_scan.rs",
+        "lists and reads tracked .rs source files for mutant! sites (tests and the mutants runner); no secret",
+    ),
+    (
         "src/oauth/storage.rs",
         "tokens read through token_file (R2) and written 0600 (W2); client_id is public",
     ),
     (
         "src/open_nonblocking.rs",
-        "the loader's mode-checked read (config_persistence read_text), the guarded secret-file read and the CLI's gateway.yaml re-read (commands/regular_file.rs); opens with O_NONBLOCK|O_NOCTTY so a FIFO is refused, not waited on",
+        "the guarded secret-file read (every gateway.yaml read that feeds a write goes through it), the atomic writer's ACL probe and the CLI's read-only gateway.yaml reports (commands/regular_file.rs); opens with O_NONBLOCK|O_NOCTTY so a FIFO is refused, not waited on",
     ),
     (
         "src/personal_accounts/commit.rs",
@@ -340,6 +348,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/security/transparency_log_hwm_scan.rs",
         "reads audit log segments for a missing-mark finding; no secret",
+    ),
+    (
+        "src/security/transparency_log_identity.rs",
+        "reads the audit log's active file and sealed segments for its id at recovery; no secret",
     ),
     (
         "src/security/transparency_log_pager.rs",
@@ -481,6 +493,28 @@ mod tests {
 }
 ";
     assert!(!has_raw_io(source));
+}
+
+/// MIK-9387.TCFG.3a: a test module gated on `all(test, ..)` is test code too,
+/// so its raw I/O does not count (the #4706 shape); `any(test, ..)` also
+/// builds outside tests, so raw I/O under it still counts.
+#[test]
+fn raw_io_under_a_compound_test_gate_counts_only_when_it_builds_outside_tests() {
+    let gated = |gate: &str| {
+        format!(
+            "fn product() {{}}\n\n#[cfg({gate})]\nmod tests {{\n    fn fixture() -> String {{\n        std::fs::read_to_string(\"x\").unwrap()\n    }}\n}}\n"
+        )
+    };
+    for gate in [
+        "all(test, unix)",
+        "all(unix, test)",
+        "all(test, feature = \"firewall\")",
+    ] {
+        assert!(!has_raw_io(&gated(gate)), "{gate}: counted");
+    }
+    for gate in ["any(test, unix)", "not(test)", "reads_token_probe"] {
+        assert!(has_raw_io(&gated(gate)), "{gate}: not counted");
+    }
 }
 
 #[test]

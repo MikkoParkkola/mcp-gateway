@@ -302,15 +302,20 @@ fn strict_header(
 pub(crate) fn grant_subject_from_verified_identity(
     identity: &VerifiedIdentity,
 ) -> Option<GrantSubject> {
-    if identity.subject.is_empty() || identity.issuer.is_empty() {
+    if identity.subject().is_empty() || identity.issuer().is_empty() {
         return None;
     }
     // The label is operator-facing display text, never a key, so it keeps the
     // hygiene bound.
-    let label = trimmed_non_empty(&identity.email)
-        .or_else(|| identity.name.as_deref().and_then(trimmed_non_empty));
+    let label =
+        trimmed_non_empty(identity.email()).or_else(|| identity.name().and_then(trimmed_non_empty));
 
-    GrantSubject::new(identity.issuer.clone(), identity.subject.clone(), label).ok()
+    GrantSubject::new(
+        identity.issuer().to_owned(),
+        identity.subject().to_owned(),
+        label,
+    )
+    .ok()
 }
 
 /// A certificate's grant subject: the subject it names, or none. A

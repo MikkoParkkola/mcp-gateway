@@ -60,12 +60,12 @@ const FORBIDDEN_SITES: &[(&str, usize)] = &[
     ),
     // The call-level policy, judged before dispatch.
     (
-        "gateway::meta_mcp::invoke::gate::MetaMcp::check_call_level_policy",
+        "gateway::meta_mcp::invoke::gate_as_undefined::MetaMcp::check_call_level_policy",
         1,
     ),
     // The invocation policy, before dispatch.
     (
-        "gateway::meta_mcp::invoke::policy::MetaMcp::authorize_invocation",
+        "gateway::meta_mcp::invoke::policy::MetaMcp::authorize_target_explained",
         1,
     ),
     // The relay check on a call's egress, before secret injection and send.
@@ -168,11 +168,11 @@ const GATEWAY_REFUSED_SITES: &[(&str, usize)] = &[
         1,
     ),
     (
-        "gateway::meta_mcp::invoke::dispatch_guards::MetaMcp::admit_backend_wide",
+        "gateway::meta_mcp::invoke::dispatch_guards::MetaMcp::admit_backend_wide_explained",
         1,
     ),
     (
-        "gateway::meta_mcp::invoke::dispatch_guards::MetaMcp::admit_enabled_capability",
+        "gateway::meta_mcp::invoke::dispatch_guards::MetaMcp::admit_enabled_capability_explained",
         1,
     ),
     (

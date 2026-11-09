@@ -11,13 +11,20 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
 
+use super::activity_source::ActivitySource;
 use super::guard::{Guard, Snapshot};
-use super::id::StreamId;
+use super::id::{LogCursor, StreamId};
+use super::merge::{LogMerge, Out};
 use super::sent::Sent;
 use super::watcher;
-use crate::gateway::auth::AuthState;
+use crate::config_reload::Generation;
 use crate::gateway::auth::live::{HeldCredential, current_caller};
+use crate::gateway::auth::{AuthState, AuthenticatedClient};
+use crate::gateway::authz::BackendGrant;
 use crate::gateway::router::AppState;
+use crate::gateway::ui::activity::access::{self, Access};
+use crate::gateway::ui::activity::forward::StreamKind;
+use crate::key_server::oidc::VerifiedIdentity;
 
 /// A comment frame this often keeps proxies from closing an idle stream.
 pub(super) const KEEP_ALIVE: Duration = Duration::from_secs(15);
@@ -40,7 +47,15 @@ pub(super) struct Conn {
     pub(super) auth: AuthState,
     pub(super) held: Option<HeldCredential>,
     pub(super) kinds: Vec<&'static str>,
+    /// The caller's Activity access at connect, `None` when Activity refuses
+    /// it. Every entitlement check resolves it again and ends the stream when
+    /// it differs.
+    pub(super) access: Option<Access>,
     pub(super) admin: bool,
+    /// The backends the caller's UI grant reaches, sorted and deduplicated;
+    /// `None` when the grant is unscoped. Every entitlement check derives it
+    /// again and ends the stream when it differs.
+    pub(super) scope: Option<Vec<String>>,
     /// The caller's `auth` member of the status payload, fixed at connect.
     pub(super) facts: Value,
     pub(super) tx: Tx,
@@ -55,6 +70,8 @@ pub(super) enum End {
     CredentialChanged,
     ValidationTimeout,
     Lifetime,
+    /// A log source closed or failed: the client reconnects with its id.
+    LogEnded,
 }
 
 /// One SSE frame as bytes.
@@ -136,20 +153,172 @@ impl Conn {
         {
             std::future::pending::<()>().await;
         }
-        match current_caller(&self.auth, self.held.as_ref()).await {
-            Some(caller) => super::kinds_for(&caller.client) == self.kinds,
-            None => false,
+        #[cfg(test)]
+        {
+            let delay = self
+                .state
+                .dashboard_bootstrap
+                .stream_hub()
+                .validation_delay();
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+        }
+        let Some(caller) = current_caller(&self.auth, self.held.as_ref()).await else {
+            return false;
+        };
+        let access = activity_access(&caller.client, caller.identity.as_ref(), &caller.generation);
+        super::kinds_for(&caller.client, access.as_ref(), &self.state) == self.kinds
+            && access == self.access
+            && ui_scope(&caller.client) == self.scope
+    }
+}
+
+/// The caller's UI scope, the grant the status route counts by: `None` when
+/// it is unscoped (an admin with an empty list is a UI-wide admin), else the
+/// backends it reaches, sorted and deduplicated so a reordered or repeated
+/// list in the config is no change. An empty list reaches nothing.
+pub(super) fn ui_scope(client: &AuthenticatedClient) -> Option<Vec<String>> {
+    match BackendGrant::for_ui(Some(client)) {
+        BackendGrant::Unscoped => None,
+        BackendGrant::Empty => Some(Vec::new()),
+        BackendGrant::Scoped(backends) => {
+            let mut backends = backends.to_vec();
+            backends.sort();
+            backends.dedup();
+            Some(backends)
         }
     }
 }
 
-/// Run the connection until it ends; `resumed` is for the debug log only,
-/// because snapshot kinds always resend their latest state.
-pub(super) async fn run(conn: Conn, boot: u64, resumed: bool) {
+/// The caller's Activity access under the role mapping of the generation it
+/// was judged by, as the list resolves it: `None` when Activity refuses the
+/// caller. A scoped key's backend list is sorted, so reordering it in the
+/// config is no change.
+pub(super) fn activity_access(
+    client: &AuthenticatedClient,
+    identity: Option<&VerifiedIdentity>,
+    generation: &Generation,
+) -> Option<Access> {
+    let mapping = &generation.config().control_plane.role_mapping;
+    let mut access = access::resolve(Some(client), identity, mapping).ok()?;
+    if let Access::Scoped { backends, .. } = &mut access {
+        backends.sort();
+        backends.dedup();
+    }
+    Some(access)
+}
+
+/// The log kinds a merge serves, by index: activity (invocation log), config
+/// (governance log).
+const LOG_KINDS: [&str; 2] = ["activity", "config"];
+
+type Merge = LogMerge<ActivitySource>;
+
+/// A merge per advertised log kind, each over its own log and its own half of
+/// the cursor. A reconnect resumes a half it carries; a half it does not
+/// carry starts at that log's head, never at its oldest record.
+async fn merges(conn: &Conn, resume: Option<&LogCursor>) -> [Option<Merge>; 2] {
+    let mut out = [None, None];
+    let Some(access) = conn.access.clone() else {
+        return out;
+    };
+    let paths = advertised(
+        &conn.kinds,
+        [
+            conn.state.transparency_log.as_ref().map(|l| l.path()),
+            conn.state.governance_log.as_ref().map(|l| l.path()),
+        ],
+    );
+    let kinds = [StreamKind::Activity, StreamKind::Config];
+    for (i, path) in paths.into_iter().enumerate() {
+        let Some(path) = path else {
+            continue;
+        };
+        let source = Arc::new(ActivitySource::new(Arc::clone(&conn.state), kinds[i], path));
+        let half = resume.and_then(|c| match i {
+            0 => c.inv.clone().map(|m| LogCursor {
+                inv: Some(m),
+                gov: None,
+            }),
+            _ => c.gov.clone().map(|m| LogCursor {
+                inv: None,
+                gov: Some(m),
+            }),
+        });
+        out[i] = Some(LogMerge::connect(source, access.clone(), half).await);
+    }
+    out
+}
+
+/// Each log, kept only where the connection advertised its kind: a log the
+/// caller was not offered gets no merge, whatever its access would admit.
+/// The first guard of a scoped admin's config: its access admits no config
+/// row either, so no stream row can see this one alone.
+fn advertised<T>(kinds: &[&str], [inv, gov]: [Option<T>; 2]) -> [Option<T>; 2] {
+    [
+        inv.filter(|_| kinds.contains(&LOG_KINDS[0])),
+        gov.filter(|_| kinds.contains(&LOG_KINDS[1])),
+    ]
+}
+
+/// What the connection has delivered across both logs.
+fn delivered(logs: &[Option<Merge>; 2]) -> LogCursor {
+    LogCursor {
+        inv: logs[0].as_ref().and_then(|m| m.delivered().inv.clone()),
+        gov: logs[1].as_ref().and_then(|m| m.delivered().gov.clone()),
+    }
+}
+
+/// One live step of a merge, or never when the kind has none.
+async fn live(merge: &mut Option<Merge>) -> Option<Vec<Out>> {
+    match merge {
+        Some(m) => m.step().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Write one step's outputs, oldest first. Each is acknowledged before it is
+/// framed, so its id carries the position that includes it; a write that
+/// fails ends the connection, whose client resumes from its last id.
+async fn write(
+    conn: &Conn,
+    sent: &mut Sent,
+    logs: &mut [Option<Merge>; 2],
+    i: usize,
+    outs: Vec<Out>,
+) -> Result<(), End> {
+    for out in outs {
+        if let Some(m) = logs[i].as_mut() {
+            m.ack(&out);
+        }
+        let cursor = delivered(logs);
+        match out {
+            Out::Row(row) => {
+                sent.log_event(conn, LOG_KINDS[i], cursor, &row.data)
+                    .await?;
+            }
+            Out::Reset => {
+                let data = json!({ "kind": LOG_KINDS[i] });
+                sent.log_event(conn, "reset", cursor, &data).await?;
+            }
+        }
+    }
+    // A page can move the delivered position with no row to carry it (a
+    // replay that showed this viewer nothing): later frames' ids follow it.
+    sent.set_cursor(delivered(logs));
+    Ok(())
+}
+
+/// Run the connection until it ends. `resume` is the log position a
+/// reconnect carried; snapshot kinds always resend their latest state.
+pub(super) async fn run(conn: Conn, boot: u64, resume: Option<LogCursor>) {
     let hub = conn.state.dashboard_bootstrap.stream_hub();
     let mut rx = hub.subscribe();
-    tracing::debug!(resumed, kinds = ?conn.kinds, "ui stream: open");
-    let end = drive(&conn, boot, &mut rx).await.unwrap_or_else(|end| end);
+    tracing::debug!(resumed = resume.is_some(), kinds = ?conn.kinds, "ui stream: open");
+    let end = drive(&conn, boot, &mut rx, resume.as_ref())
+        .await
+        .unwrap_or_else(|end| end);
     tracing::debug!(?end, "ui stream: closed");
     drop(conn.guard);
 }
@@ -158,31 +327,179 @@ async fn drive(
     conn: &Conn,
     boot: u64,
     rx: &mut tokio::sync::watch::Receiver<Snapshot>,
+    resume: Option<&LogCursor>,
 ) -> Result<End, End> {
     let mut sent = Sent::new(boot);
+    // Subscribed and their heads read before `hello`: a row written after
+    // this is delivered.
+    let mut logs = merges(conn, resume).await;
+    sent.set_cursor(delivered(&logs));
     let start = Instant::now();
     let deadline = start + MAX_LIFETIME;
     let mut recheck = interval_at(start + RECHECK, RECHECK);
     recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let first = first_snapshot(conn, rx, &mut recheck, deadline).await?;
-    let hello = json!({"kinds": conn.kinds, "head": sent.head(&first, conn.admin)});
+    let hello = json!({"kinds": conn.kinds, "head": sent.head(&first, conn)});
     conn.send(hello_frame(&hello)).await?;
     sent.deliver(conn, &first).await?;
     let mut keep = interval_at(Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
+    keep.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut served = Upkeeps::default();
     loop {
-        tokio::select! {
+        // Biased: whatever is already due (the client gone, the lifetime, a
+        // check, a keep-alive, a snapshot) is served first, one per pass, and
+        // with a scan pending a page is read only on a pass where nothing
+        // servable was due, each upkeep served at most once between pages
+        // (`servable`), so a catch-up delays upkeep by one page at most and
+        // upkeep delays a page by one round of it at most. The page is
+        // read after the race, never cancelled; the live receives wait until
+        // the scan ends.
+        let scan = (0..2).find(|&i| logs[i].as_ref().is_some_and(LogMerge::scanning));
+        let phase = if scan.is_some() {
+            Phase::CatchUp
+        } else {
+            Phase::Live
+        };
+        let may = servable(served, phase);
+        let [activity, config] = &mut logs;
+        let pass = tokio::select! {
+            biased;
             () = conn.tx.closed() => return Ok(End::ClientGone),
             () = tokio::time::sleep_until(deadline) => return Ok(End::Lifetime),
-            _ = recheck.tick() => {
+            _ = recheck.tick(), if may.recheck => {
                 if let Err(end) = conn.upkeep().await { return Ok(end); }
+                // The next check is a period after this one ends, not after
+                // it began: a check slower than the period would otherwise be
+                // due again at once and win every pass of the biased race.
+                recheck.reset();
+                served.recheck = true;
+                Pass::Upkept
             }
-            _ = keep.tick() => conn.send(Bytes::from_static(b": keep-alive\n\n")).await?,
-            changed = rx.changed() => {
+            _ = keep.tick(), if may.keep => {
+                conn.send(Bytes::from_static(b": keep-alive\n\n")).await?;
+                keep.reset();
+                served.keep = true;
+                Pass::Upkept
+            }
+            changed = rx.changed(), if may.snapshot => {
                 changed.map_err(|_| End::ClientGone)?;
                 let snap = rx.borrow_and_update().clone();
                 sent.deliver(conn, &snap).await?;
+                served.snapshot = true;
+                Pass::Snapshot
             }
+            () = std::future::ready(()), if scan.is_some() => Pass::Page,
+            (i, out) = live_either(activity, config), if scan.is_none() => Pass::Live(i, out),
+            // After the live receives: reached only when no live row is ready.
+            () = std::future::ready(()), if phase == Phase::Live && served.snapshot => Pass::LiveTurn,
+        };
+        // A snapshot leaves the live logs owed one look: only a live row, or
+        // a look that found none, pays it. A check due meanwhile would
+        // otherwise lift the cap and let the next snapshot win again.
+        if phase == Phase::Live && matches!(pass, Pass::Live(..) | Pass::LiveTurn) {
+            served = Upkeeps::default();
         }
+        if let (Pass::Page, Some(i)) = (&pass, scan) {
+            served = Upkeeps::default();
+            #[cfg(test)]
+            conn.state
+                .dashboard_bootstrap
+                .stream_hub()
+                .page_gate()
+                .await;
+            conn.require_entitled().await?;
+            let step = match logs[i].as_mut() {
+                Some(m) => m.step().await,
+                None => None,
+            };
+            #[cfg(test)]
+            conn.state.dashboard_bootstrap.stream_hub().page_read();
+            let Some(outs) = step else {
+                return Ok(End::LogEnded);
+            };
+            write(conn, &mut sent, &mut logs, i, outs).await?;
+            continue;
+        }
+        match pass {
+            Pass::Live(_, None) => return Ok(End::LogEnded),
+            Pass::Live(i, Some(outs)) => write(conn, &mut sent, &mut logs, i, outs).await?,
+            // Served what was due; the next pass serves the next due one, or
+            // the page.
+            Pass::Upkept | Pass::Snapshot | Pass::LiveTurn | Pass::Page => {}
+        }
+    }
+}
+
+/// Whether a catch-up page is pending on this pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    /// No scan pending: the stream follows the live logs.
+    Live,
+    /// A scan is pending: its next page follows the due upkeep.
+    CatchUp,
+}
+
+/// One flag per upkeep: a recheck, a keep-alive, a snapshot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Upkeeps {
+    recheck: bool,
+    keep: bool,
+    snapshot: bool,
+}
+
+impl Upkeeps {
+    const ALL: Self = Self {
+        recheck: true,
+        keep: true,
+        snapshot: true,
+    };
+}
+
+/// Which upkeeps the next pass may serve, given those `served` since the
+/// last page. Following the live logs, every one, except that a snapshot
+/// leaves the live logs owed one look first: nothing is servable until a
+/// live row is sent or a look finds none, so a snapshot changing faster than
+/// it is sent cannot hold ready rows back, and on an idle stream the debt
+/// lasts one pass. During a catch-up,
+/// each at most once between pages: an upkeep that falls due again while it
+/// is served (a recheck slower than its period, a snapshot faster than the
+/// reader) cannot hold the next page back, which follows once nothing
+/// servable is due.
+fn servable(served: Upkeeps, phase: Phase) -> Upkeeps {
+    match phase {
+        Phase::Live if served.snapshot => Upkeeps::default(),
+        Phase::Live => Upkeeps::ALL,
+        Phase::CatchUp => Upkeeps {
+            recheck: !served.recheck,
+            keep: !served.keep,
+            snapshot: !served.snapshot,
+        },
+    }
+}
+
+/// What one pass of the connection's race did.
+enum Pass {
+    /// Served one due upkeep: a check or a keep-alive.
+    Upkept,
+    /// Sent one snapshot.
+    Snapshot,
+    /// Looked at the live logs after a snapshot and found no row ready.
+    LiveTurn,
+    /// Nothing was due and a scan is pending: read its next page.
+    Page,
+    /// A live announcement from this log, or `None` when it closed.
+    Live(usize, Option<Vec<Out>>),
+}
+
+/// The next live announcement from either log, the two raced fairly: a run
+/// on one log never holds back the other.
+async fn live_either(
+    activity: &mut Option<Merge>,
+    config: &mut Option<Merge>,
+) -> (usize, Option<Vec<Out>>) {
+    tokio::select! {
+        out = live(activity) => (0, out),
+        out = live(config) => (1, out),
     }
 }
 
@@ -206,3 +523,7 @@ async fn first_snapshot(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "conn_tests.rs"]
+mod tests;

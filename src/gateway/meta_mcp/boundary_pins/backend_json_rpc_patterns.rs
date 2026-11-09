@@ -241,29 +241,7 @@ fn backend_only(pat: &syn::Pat) -> bool {
 
 /// `matches!(expr, pat)`'s pattern.
 fn matches_pattern(mac: &syn::Macro) -> Option<syn::Pat> {
-    if mac
-        .path
-        .segments
-        .last()
-        .is_none_or(|s| s.ident != "matches")
-    {
-        return None;
-    }
-    let parser = |input: syn::parse::ParseStream| {
-        input.parse::<syn::Expr>()?;
-        input.parse::<syn::Token![,]>()?;
-        let pat = syn::Pat::parse_multi_with_leading_vert(input)?;
-        // The guard, if any: skipped, the pattern is what is pinned.
-        input.step(|cursor| {
-            let mut rest = *cursor;
-            while let Some((_, next)) = rest.token_tree() {
-                rest = next;
-            }
-            Ok(((), rest))
-        })?;
-        Ok(pat)
-    };
-    mac.parse_body_with(parser).ok()
+    crate::gateway::syn_scan_support::matches_parts(mac).map(|(_, pat, _)| pat)
 }
 
 /// (file, function, anchor) -> uncarried `JsonRpc` patterns of that shape.
@@ -376,7 +354,13 @@ fn diff(found: &Found, listed: &str) -> Vec<String> {
             wrong.push(format!("count is not a number: {line}"));
             continue;
         };
-        want.insert((file.to_owned(), func.to_owned(), anchor.to_owned()), count);
+        // A repeat would overwrite the earlier row and hide it.
+        if want
+            .insert((file.to_owned(), func.to_owned(), anchor.to_owned()), count)
+            .is_some()
+        {
+            wrong.push(format!("listed twice: {line}"));
+        }
     }
     for (key, count) in found {
         let (file, func, anchor) = key;
@@ -417,3 +401,12 @@ fn every_json_rpc_pattern_carries_the_backend_variant_or_is_excluded() {
 
 #[path = "backend_json_rpc_patterns_fixtures.rs"]
 mod fixtures;
+
+/// A key listed twice is refused, not silently overwritten by the later row.
+#[test]
+fn a_key_listed_twice_is_refused() {
+    let (_, first) = super::fragments::without_first_row(LISTED);
+    let wrong = diff(&Found::new(), &format!("{LISTED}{first}"));
+    let repeat = format!("listed twice: {}", first.trim_end());
+    assert!(wrong.contains(&repeat), "{wrong:#?}");
+}

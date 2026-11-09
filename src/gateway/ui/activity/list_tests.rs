@@ -351,7 +351,14 @@ fn rows_are_checked_with_the_running_key_not_a_reloaded_one() {
 async fn a_fifth_read_waits_until_one_of_four_finishes() {
     use axum::response::IntoResponse;
     use std::sync::mpsc;
-    assert_eq!(super::MAX_CONCURRENT_READS, 4);
+    // Its own state's pool: another test's reads cannot fill or free these slots.
+    let facts = crate::gateway::router::ProcessFacts::default();
+    let reads = facts.activity_reads();
+    assert_eq!(
+        reads.available_permits(),
+        4,
+        "a state's pool holds four read slots"
+    );
     // Four reads that hold their permit until released. Waiting on their own
     // start count, not on the permits, so a looser limit fails the assertion
     // below instead of hanging here.
@@ -362,23 +369,23 @@ async fn a_fifth_read_waits_until_one_of_four_finishes() {
         let (tx, rx) = mpsc::channel::<()>();
         releases.push(tx);
         let started = std::sync::Arc::clone(&started);
-        held.push(tokio::spawn(super::blocking(move || {
-            started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let _ = rx.recv();
-            StatusCode::OK.into_response()
-        })));
+        let reads = std::sync::Arc::clone(reads);
+        held.push(tokio::spawn(async move {
+            super::blocking(&reads, move || {
+                started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = rx.recv();
+                StatusCode::OK.into_response()
+            })
+            .await
+        }));
     }
     while started.load(std::sync::atomic::Ordering::SeqCst) < 4 {
         tokio::task::yield_now().await;
     }
-    assert_eq!(
-        super::READS.available_permits(),
-        0,
-        "four reads fill the limit"
-    );
+    assert_eq!(reads.available_permits(), 0, "four reads fill the limit");
     // The fifth does not start while four run.
     let (ran_tx, ran_rx) = mpsc::channel::<()>();
-    let mut fifth = Box::pin(super::blocking(move || {
+    let mut fifth = Box::pin(super::blocking(reads, move || {
         let _ = ran_tx.send(());
         StatusCode::OK.into_response()
     }));
@@ -395,4 +402,171 @@ async fn a_fifth_read_waits_until_one_of_four_finishes() {
     for h in held {
         h.await.unwrap();
     }
+}
+
+/// The shared-permit flake: one state's reads, on another runtime, hold every
+/// slot of their pool; a paused-clock test waiting for a read of its own state
+/// is not timed out by that hold. With one process-wide pool its idle clock
+/// auto-advanced past its 20 s bound while the other runtime held the slots.
+#[test]
+fn a_paused_wait_for_a_read_permit_is_not_timed_out_by_another_states_hold() {
+    use axum::response::IntoResponse;
+    use std::sync::mpsc;
+    let (held_tx, held_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let other = crate::gateway::router::ProcessFacts::default();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let reads = std::sync::Arc::clone(other.activity_reads());
+            let limit = reads.available_permits();
+            let release = std::sync::Arc::new(std::sync::Mutex::new(release_rx));
+            let started = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut held = Vec::new();
+            for _ in 0..limit {
+                let (reads, started, release) = (
+                    std::sync::Arc::clone(&reads),
+                    std::sync::Arc::clone(&started),
+                    std::sync::Arc::clone(&release),
+                );
+                held.push(tokio::spawn(async move {
+                    super::blocking(&reads, move || {
+                        started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let _ = release.lock().unwrap().recv();
+                        StatusCode::OK.into_response()
+                    })
+                    .await
+                }));
+            }
+            while started.load(std::sync::atomic::Ordering::SeqCst) < limit {
+                tokio::task::yield_now().await;
+            }
+            held_tx.send(()).unwrap();
+            for h in held {
+                h.await.unwrap();
+            }
+        });
+    });
+    held_rx.recv().unwrap();
+    let mine = crate::gateway::router::ProcessFacts::default();
+    let limit = mine.activity_reads().available_permits();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap();
+    let waited = rt.block_on(async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            super::blocking(mine.activity_reads(), || StatusCode::OK.into_response()),
+        )
+        .await
+    });
+    // The other state's reads end only after the observation: a handshake, not a sleep.
+    for _ in 0..limit {
+        let _ = release_tx.send(());
+    }
+    holder.join().unwrap();
+    assert!(
+        waited.is_ok(),
+        "the paused clock jumped past its 20 s bound while another state held its slots"
+    );
+}
+
+/// A read whose caller stops waiting keeps its permit until the read itself
+/// finishes, so cancelled requests cannot run more reads than the limit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_read_keeps_its_permit_until_the_read_ends() {
+    use axum::response::IntoResponse;
+    use std::sync::mpsc;
+    let facts = crate::gateway::router::ProcessFacts::default();
+    let reads = std::sync::Arc::clone(facts.activity_reads());
+    let before = reads.available_permits();
+    let (entered_tx, entered_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let pool = std::sync::Arc::clone(&reads);
+    let caller = tokio::spawn(async move {
+        super::blocking(&pool, move || {
+            entered_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+            let _ = done_tx.send(());
+            StatusCode::OK.into_response()
+        })
+        .await
+    });
+    tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+        .await
+        .unwrap();
+    caller.abort();
+    let _ = caller.await;
+    assert_eq!(
+        reads.available_permits(),
+        before - 1,
+        "the cancelled caller's read is still running, so its permit stays taken"
+    );
+    release_tx.send(()).unwrap();
+    tokio::task::spawn_blocking(move || done_rx.recv().unwrap())
+        .await
+        .unwrap();
+    every_slot_returns(&reads, before).await;
+}
+
+/// Once its read ends, every slot of the pool comes back: a permit kept past
+/// the read would leak a slot for good. The read signals before its closure
+/// returns and drops the permit, so this waits (in real time) for all of them.
+async fn every_slot_returns(reads: &tokio::sync::Semaphore, all: usize) {
+    let all = u32::try_from(all).unwrap();
+    let back =
+        tokio::time::timeout(std::time::Duration::from_secs(5), reads.acquire_many(all)).await;
+    assert!(
+        matches!(back, Ok(Ok(_))),
+        "a slot stayed taken after its read ended"
+    );
+}
+
+/// Guard row: the live stream's read path holds its permit until the read
+/// ends too, even when its caller stops waiting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_stream_read_keeps_its_permit_until_the_read_ends() {
+    use std::sync::mpsc;
+    let (state, _dir) = crate::gateway::router::tests::audience_state(
+        &crate::config::AuthConfig::default(),
+        (None, None),
+        |meta| meta,
+    )
+    .await;
+    let reads = std::sync::Arc::clone(state.process.activity_reads());
+    let before = reads.available_permits();
+    let (entered_tx, entered_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let reader = std::sync::Arc::clone(&state);
+    let caller = tokio::spawn(async move {
+        super::stream_read(&reader, move |_given| {
+            entered_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+            let _ = done_tx.send(());
+            Ok(())
+        })
+        .await
+    });
+    tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+        .await
+        .unwrap();
+    caller.abort();
+    let _ = caller.await;
+    assert_eq!(
+        reads.available_permits(),
+        before - 1,
+        "the cancelled caller's stream read is still running, so its permit stays taken"
+    );
+    release_tx.send(()).unwrap();
+    tokio::task::spawn_blocking(move || done_rx.recv().unwrap())
+        .await
+        .unwrap();
+    every_slot_returns(&reads, before).await;
 }

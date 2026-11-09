@@ -458,6 +458,21 @@ impl ExecutionAdmission {
         }
     }
 
+    /// The stored bytes of every completed entry, for rows that read what a
+    /// settled delivery stored.
+    #[cfg(test)]
+    pub(crate) fn completed_bytes_for_test(&self) -> Vec<Arc<[u8]>> {
+        self.state
+            .lock()
+            .entries
+            .values()
+            .filter_map(|entry| match &entry.status {
+                Status::Completed { bytes, .. } => bytes.clone(),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     pub(crate) fn snapshot(&self) -> Snapshot {
         let state = self.state.lock();

@@ -82,8 +82,15 @@ mod append;
 mod bounded;
 #[path = "transparency_log_hwm_scan.rs"]
 mod hwm_scan;
+#[path = "transparency_log_identity.rs"]
+pub(crate) mod identity;
+#[cfg(test)]
+#[path = "transparency_log_kill.rs"]
+mod kill;
 #[path = "transparency_log_rotation.rs"]
 pub(crate) mod rotation;
+#[path = "transparency_log_settle.rs"]
+pub(crate) mod settle;
 /// Test seam for the write-fault injector, for tests outside this module.
 #[cfg(test)]
 pub(crate) mod rotation_fault {
@@ -121,8 +128,8 @@ pub(crate) use verify::is_signed_entry;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
 pub use verify::{
-    VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries, verify_log,
-    verify_log_signed,
+    FailedCheck, VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries,
+    verify_log, verify_log_signed,
 };
 
 use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
@@ -144,6 +151,10 @@ struct Inner {
     last_entry_hash: String,
     /// Which segment `file` is, and the inode it was opened on (D6).
     seg: rotation::SegState,
+    /// The identity of the log `file` extends. Under the same lock as the
+    /// tail, so a rebuild that finds another log adopts its id before any
+    /// record (a rotation's open record included) is written.
+    log_id: identity::LogId,
 }
 
 // ── TransparencyLogger ────────────────────────────────────────────────────────
@@ -188,6 +199,18 @@ pub struct TransparencyLogger {
     bound: bounded::Bound,
     /// Readers told of each appended record of their kind.
     subscribers: append::Subscribers,
+    /// Test-only: a share of the temporary directory this log lives in, so
+    /// the directory is removed only after the log's last handle drops. A
+    /// late append (a worker the test left running) then lands before the
+    /// directory goes, never mid-removal. Declared last, so the log's files
+    /// and lease close first.
+    #[cfg(test)]
+    test_dir: crate::test_dir_keep::TestDirKeep,
+    /// Test-only: every registered temp dir containing this log, taken at
+    /// open before any file is touched (`crate::test_dir_keep`). Declared
+    /// last, so the log's files and lease close before these shares drop.
+    #[cfg(test)]
+    _kept_dirs: Vec<Arc<tempfile::TempDir>>,
 }
 
 /// Which rung of the correlation chain supplied an invocation entry's
@@ -231,6 +254,14 @@ impl CorrelationSource {
 }
 
 impl TransparencyLogger {
+    /// Test-only: hold a share of the temporary directory this log lives in
+    /// until the log's last handle drops (see the `test_dir` field). The log
+    /// must live inside `dir`, and a second call must name the same one.
+    #[cfg(test)]
+    pub(crate) fn keep_test_dir(&self, dir: Arc<tempfile::TempDir>) {
+        self.test_dir.keep(dir, &self.path);
+    }
+
     /// Open (or create) the transparency log file and recover chain state.
     ///
     /// # Errors
@@ -258,6 +289,16 @@ impl TransparencyLogger {
         home: Option<&Path>,
     ) -> io::Result<Self> {
         let path = resolved_path(&config.path, home.map(Path::to_path_buf));
+        // Before any filesystem call: hold every registered temp dir that
+        // contains the log, so none can be removed while it opens or writes.
+        #[cfg(test)]
+        let kept_dirs = crate::test_dir_keep::kept_dirs_for(&path);
+        #[cfg(test)]
+        if kept_dirs.is_empty() {
+            crate::test_dir_keep::report_unkept(crate::test_dir_keep::AUDIT_LOG, &path);
+        }
+        #[cfg(test)]
+        crate::test_dir_keep::run_before_first_fs_call();
         if home.is_none() && crate::home_dir::tilde_rest(&config.path).is_some() {
             let abs = std::path::absolute(&path).unwrap_or_else(|_| path.clone());
             tracing::warn!(
@@ -280,13 +321,15 @@ impl TransparencyLogger {
         // retention and recovery below runs under it, and a second writer of
         // this path is refused.
         let lease = lease::acquire(&path, wait)?;
-        let recovered = rotation::recover(&path, &config, &lease, rotation::now_secs(0))?;
+        let (recovered, log_id) =
+            rotation::recover(&path, &config, &lease, rotation::now_secs(0), None)?;
         Ok(Self {
             inner: Mutex::new(Inner {
                 file: recovered.file,
                 counter: recovered.counter,
                 last_entry_hash: recovered.last_entry_hash,
                 seg: recovered.seg,
+                log_id,
             }),
             config,
             path,
@@ -313,6 +356,10 @@ impl TransparencyLogger {
             last_failure_cause: std::sync::atomic::AtomicUsize::new(usize::MAX),
             bound: bounded::Bound::default(),
             subscribers: append::Subscribers::default(),
+            #[cfg(test)]
+            test_dir: crate::test_dir_keep::TestDirKeep::default(),
+            #[cfg(test)]
+            _kept_dirs: kept_dirs,
         })
     }
 
@@ -328,6 +375,22 @@ impl TransparencyLogger {
     pub(crate) fn append_attempts_for_test(&self) -> usize {
         self.append_attempts
             .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// The log's identity: reused from the log's own records on open, minted
+    /// (and recorded once) only when it has none.
+    #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the settle step, which binds to it")
+    )]
+    pub(crate) fn log_id(&self) -> identity::LogId {
+        // A poisoned lock still holds the last id a rebuild adopted.
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.log_id.clone()
     }
 
     /// Path the log writes to, with any leading `~/` expanded. Lets callers
@@ -472,22 +535,46 @@ impl TransparencyLogger {
     }
 
     fn reject_reserved_keys(fields: &serde_json::Map<String, serde_json::Value>) -> io::Result<()> {
-        let chain = ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"];
         // D6: only the logger writes segment records, so a caller cannot
-        // forge a seal, an open or an expiry.
-        let segment = rotation::RESERVED_SEGMENT_FIELDS;
+        // forge a seal, an open or an expiry; nor the id record, which would
+        // become the log's newest identity.
         if let Some(event) = fields.get("event").and_then(serde_json::Value::as_str)
-            && event.starts_with(rotation::SEGMENT_EVENT_PREFIX)
+            && (event.starts_with(rotation::SEGMENT_EVENT_PREFIX)
+                || identity::RESERVED_EVENTS.contains(&event)
+                || settle::RESERVED_EVENTS.contains(&event))
         {
             return Err(io::Error::other(format!(
                 "transparency log: event '{event}' is written only by the logger"
             )));
         }
-        for reserved in chain
+        // Settle records own the `settle.` kinds: a reader of one never sees
+        // another writer's record (a non-string kind matches no reader).
+        if let Some(kind) = fields.get("kind").and_then(serde_json::Value::as_str)
+            && kind.starts_with(settle::KIND_PREFIX)
+        {
+            return Err(io::Error::other(format!(
+                "transparency log: kind '{kind}' is written only by settle"
+            )));
+        }
+        Self::reject_reserved_fields(fields)
+    }
+
+    /// The chain, envelope and segment fields: the one list settle's refusal
+    /// and its caller view both read.
+    pub(crate) fn reserved_field_names() -> impl Iterator<Item = &'static str> {
+        const CHAIN: [&str; 5] = ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"];
+        CHAIN
             .into_iter()
             .chain(AuditEnvelope::RESERVED)
-            .chain(segment)
-        {
+            .chain(rotation::RESERVED_SEGMENT_FIELDS)
+    }
+
+    /// The chain, envelope and segment fields no caller may supply, whatever
+    /// the record's event.
+    fn reject_reserved_fields(
+        fields: &serde_json::Map<String, serde_json::Value>,
+    ) -> io::Result<()> {
+        for reserved in Self::reserved_field_names() {
             if fields.contains_key(reserved) {
                 return Err(io::Error::other(format!(
                     "transparency log: reserved chain field '{reserved}' cannot be supplied by caller"
@@ -643,6 +730,21 @@ mod hwm_contradiction_tests;
 #[path = "transparency_log_hwm_missing_tests.rs"]
 mod hwm_missing_tests;
 #[cfg(test)]
+#[path = "transparency_log_identity_tests.rs"]
+mod identity_tests;
+#[cfg(test)]
+#[path = "transparency_log_keep_dir_tests.rs"]
+mod keep_dir_tests;
+#[cfg(test)]
+#[path = "transparency_log_keep_scan_tests.rs"]
+mod keep_scan_tests;
+#[cfg(test)]
+#[path = "transparency_log_kept_dir_tests.rs"]
+mod kept_dir_tests;
+#[cfg(test)]
+#[path = "transparency_log_kill_tests.rs"]
+mod kill_tests;
+#[cfg(test)]
 #[path = "transparency_log_lease_tests.rs"]
 mod lease_tests;
 #[cfg(test)]
@@ -651,6 +753,9 @@ mod lossy_tests;
 #[cfg(test)]
 #[path = "transparency_log_overflow_tests.rs"]
 mod overflow_tests;
+#[cfg(test)]
+#[path = "transparency_log_predecessor_tests.rs"]
+mod predecessor_tests;
 #[cfg(test)]
 #[path = "transparency_log_reader_tests.rs"]
 mod reader_tests;
@@ -670,3 +775,39 @@ mod writer_tests;
 #[cfg(test)]
 #[path = "transparency_log_bounded_clock_compile_red_tests.rs"]
 mod bounded_clock_compile_red_tests;
+
+#[cfg(test)]
+#[path = "transparency_log_settle_tests.rs"]
+mod settle_tests;
+
+#[cfg(test)]
+#[path = "transparency_log_settle_bound_tests.rs"]
+mod settle_bound_tests;
+
+#[cfg(test)]
+#[path = "transparency_log_settle_kind_tests.rs"]
+mod settle_kind_tests;
+
+#[cfg(test)]
+#[path = "transparency_log_pairing_tests.rs"]
+mod pairing_tests;
+
+#[cfg(test)]
+#[path = "transparency_log_pairing_field_tests.rs"]
+mod pairing_field_tests;
+
+/// Test support: `records` without the logger's `audit_log_identified`
+/// record, which every new log writes after its open record. For a row that
+/// counts the records of its own kind; it skips that one event and nothing
+/// else, so a duplicate or missing record of any other kind still shows.
+#[cfg(test)]
+pub(crate) fn without_log_identified(
+    records: impl IntoIterator<Item = serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    records
+        .into_iter()
+        .filter(|r| {
+            r.get("event").and_then(serde_json::Value::as_str) != Some(identity::EV_IDENTIFIED)
+        })
+        .collect()
+}

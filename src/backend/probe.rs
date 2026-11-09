@@ -255,7 +255,10 @@ impl Backend {
     async fn rebuild_from_probe(&self) {
         // Boxed: a restart runs a whole start, too large to inline in
         // every probe path's future.
-        let _ = crate::oauth::login_gate::short_contention(Box::pin(self.force_restart())).await;
+        let _ = crate::oauth::login_gate::short_contention(Box::pin(
+            self.force_restart_for(super::restart::RestartCause::Unhealthy),
+        ))
+        .await;
     }
 }
 

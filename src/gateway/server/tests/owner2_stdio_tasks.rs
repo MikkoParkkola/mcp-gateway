@@ -87,9 +87,9 @@ pub(crate) struct Fixture {
     pub(super) rounds: Arc<AtomicUsize>,
     /// `security.sanitize_input` as `run_stdio_on` reads it from the config.
     sanitize: crate::gateway::server::stdio_single::InputSanitizing,
-    pub(super) store: tempfile::TempDir,
+    pub(super) store: Arc<tempfile::TempDir>,
     pub(super) expiry: Option<crate::gateway::task_service::execution::ExpirySweep>,
-    _data: tempfile::TempDir,
+    _data: std::sync::Arc<tempfile::TempDir>,
 }
 
 pub(super) async fn fixture(policy: Option<ToolPolicyConfig>) -> Fixture {
@@ -111,7 +111,7 @@ pub(crate) async fn fixture_on_with(
     policy: Option<ToolPolicyConfig>,
     configure: impl FnOnce(&mut Config),
 ) -> Fixture {
-    let store = tempfile::tempdir().expect("store root");
+    let store = crate::test_dir_keep::kept_tempdir();
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.backends.insert(
@@ -130,12 +130,12 @@ pub(crate) async fn fixture_on_with(
     if let Some(policy) = policy {
         config.security.tool_policy = policy;
     }
-    let data = tempfile::tempdir().expect("data dir");
+    let data = crate::test_dir_keep::kept_tempdir();
     let built = Gateway::new(config.clone())
         .await
         .expect("the production constructor accepts this configuration")
         .with_data_dir(data.path().to_path_buf())
-        .build_meta_mcp()
+        .build_meta_mcp_published()
         .await
         .expect("the production builder accepts this configuration");
     let tool_policy = built.tool_policy;
@@ -152,6 +152,7 @@ pub(crate) async fn fixture_on_with(
     )
     .await
     .expect("the stdio store opens");
+    tasks.service.keep_test_dir(Arc::clone(&store));
     Fixture {
         tasks,
         meta: built.meta_mcp,
@@ -189,7 +190,7 @@ pub(super) fn intent(tasks: &StdioTasks, tool: &str, retry: &RetryFields) -> Tas
             protocol_revision: None,
             scope: crate::gateway::meta_mcp::InvokeScope {
                 authorizer: &crate::gateway::authz::AllowAll,
-                is_admin: false,
+                admin: crate::gateway::authz::AdminStanding::None,
                 api_key_name: None,
                 grant_key: None,
                 agent_id: None,
@@ -299,7 +300,7 @@ pub(super) fn modern_call(id: u64, tool: &str, key: &str, task: bool) -> Value {
 pub(crate) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     Gateway::dispatch_single_for_client(
         &fixture.meta,
-        &fixture.policy,
+        &crate::gateway::authz::published_line(&fixture.meta),
         &fixture.mtls,
         request,
         super::super::StdioClient {
@@ -437,70 +438,6 @@ async fn a_stdio_task_runs_under_the_current_tool_policy() {
     );
 }
 
-/// U6: EOF releases the stdio store's lease before `run_stdio_on` returns.
-#[tokio::test]
-async fn stdio_eof_releases_the_store_lease_before_returning() {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let (url, _rounds) = backend().await;
-    let store = tempfile::tempdir().expect("store root");
-    let mut config = Config::default();
-    config.tasks.store_dir = store.path().display().to_string();
-    config.backends.insert(
-        BACKEND.to_string(),
-        BackendConfig {
-            enabled: true,
-            transport: TransportConfig::Http {
-                http_url: url,
-                streamable_http: Some(true),
-                protocol_version: None,
-            },
-            ..BackendConfig::default()
-        },
-    );
-    let data = tempfile::tempdir().expect("data dir");
-    let gateway = Gateway::new(config.clone())
-        .await
-        .expect("gateway boots")
-        .with_data_dir(data.path().to_path_buf());
-    let (mut stdin, input) = tokio::io::duplex(64 * 1024);
-    let (output, reader) = tokio::io::duplex(1 << 20);
-    let served = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
-    let mut lines = BufReader::new(reader).lines();
-    let handshake = json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
-        "protocolVersion": "2025-06-18", "capabilities": {},
-        "clientInfo": {"name": "owner2", "version": "1"}}});
-    stdin
-        .write_all(format!("{handshake}\n").as_bytes())
-        .await
-        .expect("write");
-    tokio::time::timeout(Duration::from_secs(10), lines.next_line())
-        .await
-        .expect("handshake answered in time")
-        .expect("read");
-    let created = modern_call(1, TOOL, "u6", true);
-    stdin
-        .write_all(format!("{created}\n").as_bytes())
-        .await
-        .expect("write");
-    let answer = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
-        .await
-        .expect("answered in time")
-        .expect("read")
-        .expect("a line");
-    assert!(answer.contains("taskId"), "a task was created: {answer}");
-    drop(stdin);
-    tokio::time::timeout(Duration::from_secs(40), served)
-        .await
-        .expect("EOF returns within the bound")
-        .expect("no panic")
-        .expect("run_stdio_on returns Ok");
-    let reopened = reopen(&config).await;
-    assert!(
-        reopened.is_ok(),
-        "the lease is free once run_stdio_on returned"
-    );
-}
-
 /// U7: a `tasks/*` method the stdio body does not name is not found, never
 /// handled as one it does (a cancel, say) on the caller's task id.
 #[tokio::test]
@@ -568,7 +505,7 @@ async fn a_legacy_task_member_is_answered_synchronously() {
 }
 
 /// Open the stdio store `config` names, as the next process would.
-pub(super) async fn reopen(
+pub(super) async fn reopen_stdio_store(
     config: &Config,
 ) -> Result<
     (
@@ -653,142 +590,6 @@ pub(super) async fn held_backend() -> (
     (format!("http://{address}/"), arrived, release)
 }
 
-/// U9: EOF while a task is still running waits for it. `run_stdio_on` is
-/// still serving while the held call is open, returns once it settles, and
-/// the store, reopened at once, is free and holds the backend's own result:
-/// the worker finished before the store closed. A task cut off instead would
-/// recover at reopen as completed with a restart error, never with `done`.
-#[tokio::test]
-async fn eof_drains_a_running_task_before_returning() {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let (url, mut arrived, release) = held_backend().await;
-    let store = tempfile::tempdir().expect("store root");
-    let mut config = Config::default();
-    config.tasks.store_dir = store.path().display().to_string();
-    config.server.shutdown_timeout = Duration::from_secs(20);
-    config.backends.insert(
-        BACKEND.to_string(),
-        BackendConfig {
-            enabled: true,
-            transport: TransportConfig::Http {
-                http_url: url,
-                streamable_http: Some(true),
-                protocol_version: None,
-            },
-            ..BackendConfig::default()
-        },
-    );
-    let data = tempfile::tempdir().expect("data dir");
-    let gateway = Gateway::new(config.clone())
-        .await
-        .expect("gateway boots")
-        .with_data_dir(data.path().to_path_buf());
-    let (mut stdin, input) = tokio::io::duplex(64 * 1024);
-    let (output, reader) = tokio::io::duplex(1 << 20);
-    let mut served = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
-    let mut lines = BufReader::new(reader).lines();
-    let handshake = json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
-        "protocolVersion": "2025-06-18", "capabilities": {},
-        "clientInfo": {"name": "owner2", "version": "1"}}});
-    stdin
-        .write_all(format!("{handshake}\n").as_bytes())
-        .await
-        .expect("write");
-    tokio::time::timeout(Duration::from_secs(10), lines.next_line())
-        .await
-        .expect("handshake answered in time")
-        .expect("read");
-    let created = modern_call(1, "held", "u9", true);
-    stdin
-        .write_all(format!("{created}\n").as_bytes())
-        .await
-        .expect("write");
-    let answer = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
-        .await
-        .expect("answered in time")
-        .expect("read")
-        .expect("a line");
-    let answer: Value = serde_json::from_str(&answer).expect("one frame");
-    let id = answer
-        .pointer("/result/taskId")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("a task handle: {answer}"))
-        .to_owned();
-    tokio::time::timeout(Duration::from_secs(10), arrived.wait_for(|seen| *seen >= 1))
-        .await
-        .expect("the held call reaches the backend")
-        .expect("fixture alive");
-    drop(stdin);
-    // Five seconds is far past EOF's own work; a server that does not drain
-    // returns well inside it, one that does is still held by the barrier.
-    assert!(
-        tokio::time::timeout(Duration::from_secs(5), &mut served)
-            .await
-            .is_err(),
-        "EOF waits for the running task instead of returning past it"
-    );
-    release.send_modify(|open| *open = true);
-    tokio::time::timeout(Duration::from_secs(30), served)
-        .await
-        .expect("EOF returns once the task settled")
-        .expect("no panic")
-        .expect("run_stdio_on returns Ok");
-    let (service, _executor) = reopen(&config)
-        .await
-        .expect("the lease is free once run_stdio_on returned");
-    let task = service
-        .get(LOCAL_OPERATOR_PRINCIPAL, &id)
-        .expect("the local operator's task is in its store");
-    let wire = serde_json::to_value(task.task.wire()).expect("the task serializes");
-    assert_eq!(
-        task.task.status(),
-        crate::protocol::tasks::TaskStatus::Completed,
-        "{wire}"
-    );
-    assert!(
-        wire.to_string().contains("done") && !wire.to_string().contains("gateway_restart"),
-        "settled by its own worker with the backend's result, not by recovery: {wire}"
-    );
-}
-
-/// `MIK-7638.GH2543.2`: stdio serves no listener route, so its task store does
-/// not depend on the gateway's auth configuration. A bearer token whose
-/// secret reference cannot be resolved leaves the store open.
-#[tokio::test]
-async fn an_unresolvable_auth_config_leaves_the_stdio_store_open() {
-    let fixture = Box::pin(fixture(None)).await;
-    let store = tempfile::tempdir().expect("store root");
-    let mut config = Config::default();
-    config.tasks.store_dir = store.path().display().to_string();
-    config.auth.bearer_token = Some("env:MIK_7638_UNSET_FIXTURE_TOKEN".to_string());
-    assert!(
-        crate::gateway::auth::ResolvedAuthConfig::try_from_config(
-            &config.auth,
-            &crate::config::EnvOverlay::default(),
-            crate::gateway::record_principal::TEST_RECORD_KEY
-        )
-        .is_err(),
-        "premise: the fixture's auth secret must not resolve"
-    );
-    let opened = stdio_tasks::open(
-        &config,
-        &fixture.meta,
-        &std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
-            config.clone(),
-            std::sync::Arc::new(crate::gateway::server::stdio_tasks::default_auth(
-                &crate::config::EnvOverlay::default(),
-                std::sync::Arc::new(crate::gateway::record_principal::test_record_key()),
-            )),
-        )),
-    )
-    .await;
-    assert!(
-        opened.is_some(),
-        "an auth secret stdio never uses turned its task store off"
-    );
-    if let Some((tasks, expiry)) = opened {
-        let window = std::time::Duration::from_secs(5);
-        let budget = super::super::task_runtime::ShutdownBudget::within(window, window);
-        stdio_tasks::shutdown(&tasks, expiry, budget).await;
-    }
-}
+/// The stdio task store at the end of a session.
+#[path = "owner2_stdio_shutdown_tests.rs"]
+mod shutdown;

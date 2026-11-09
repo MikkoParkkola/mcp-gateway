@@ -112,7 +112,7 @@ pub(super) struct Fixture {
     pub(super) executor: Arc<TaskExecutor>,
     pub(super) id: String,
     pub(super) owner_digest: String,
-    pub(super) dir: tempfile::TempDir,
+    pub(super) dir: Arc<tempfile::TempDir>,
 }
 
 pub(super) fn executor_over(service: &Arc<TaskService>) -> Arc<TaskExecutor> {
@@ -129,13 +129,17 @@ pub(super) fn executor_over(service: &Arc<TaskService>) -> Arc<TaskExecutor> {
     )
 }
 
-pub(super) async fn open_service(dir: &std::path::Path) -> Arc<TaskService> {
+/// The fixture's service over `dir`, which its store keeps until its last
+/// handle drops.
+pub(super) async fn open_service(dir: &Arc<tempfile::TempDir>) -> Arc<TaskService> {
     let admission = ExecutionAdmission::new(Arc::new(|| 1_000));
-    Arc::new(
-        TaskService::open(&dir.join("tasks"), StoreLimits::default(), admission)
+    let service = Arc::new(
+        TaskService::open(&dir.path().join("tasks"), StoreLimits::default(), admission)
             .await
             .expect("the fixture store opens"),
-    )
+    );
+    service.keep_test_dir(Arc::clone(dir));
+    service
 }
 
 /// Whether the fixture row's upstream handle reached the disk.
@@ -153,8 +157,8 @@ pub(super) async fn fixture(ttl_ms: Option<u64>) -> Fixture {
 }
 
 pub(super) async fn fixture_with(ttl_ms: Option<u64>, handle: Handle) -> Fixture {
-    let dir = tempfile::tempdir().expect("a fixture store root");
-    let service = open_service(dir.path()).await;
+    let dir = Arc::new(tempfile::tempdir().expect("a fixture store root"));
+    let service = open_service(&dir).await;
     let executor = executor_over(&service);
     let (operation, representation) = (json!({"backend": BACKEND, "tool": TOOL}), json!({}));
     let workers = Arc::new(tokio::sync::Semaphore::new(1));
@@ -519,7 +523,7 @@ async fn a_pending_cancel_survives_a_restart_and_is_sent_once() {
     f.state_becomes(Pending { attempts: 1 }).await;
     f.service.shutdown().await.expect("the first gateway stops");
     for sends in [1, 0] {
-        let service = open_service(f.dir.path()).await;
+        let service = open_service(&f.dir).await;
         let executor = executor_over(&service);
         let peer = ScriptedPeer::new([]);
         assert!(executor.install_recovery(peer.clone()));
@@ -546,7 +550,7 @@ async fn a_pending_cancel_keeps_its_age_across_a_restart() {
     let later = f.service.store.now().expect("a clock after 1970")
         + chrono::Duration::from_std(DAY + HOUR).expect("a representable step");
     f.service.shutdown().await.expect("the first gateway stops");
-    let service = open_service(f.dir.path()).await;
+    let service = open_service(&f.dir).await;
     assert_eq!(
         service.store.upstream_cancel_state(&f.owner_digest, &f.id),
         Some(Pending { attempts: 1 }),

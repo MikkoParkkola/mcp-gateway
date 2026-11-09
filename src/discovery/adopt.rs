@@ -13,7 +13,7 @@
 //! beside a template refuses: it may be a secret, and only the whole value
 //! can move to the store.
 
-use crate::config::secret_ref::{has_literal_default, literal_outside_templates};
+use crate::config::secret_ref::{has_literal_default, only_scheme_beside_templates};
 use crate::config::{Config, TransportConfig, is_reference};
 
 use super::DiscoveredServer;
@@ -50,18 +50,6 @@ impl AdoptRefusal {
             Self::LiteralInTemplate => "literal_in_template",
         }
     }
-}
-
-/// The literal text a template value may carry: one auth scheme word and a
-/// space, before the template.
-const SCHEME_PREFIXES: &[&str] = &["Bearer ", "Basic ", "Token ", "Bot "];
-
-/// Whether the text of `value` outside its templates is nothing, or one
-/// scheme prefix in front of them.
-fn only_scheme_beside_templates(value: &str) -> bool {
-    let outside = literal_outside_templates(value);
-    outside.is_empty()
-        || (SCHEME_PREFIXES.contains(&outside.as_str()) && value.starts_with(&outside))
 }
 
 /// Every reason `server` is not adoptable, each with the client field it
@@ -205,18 +193,38 @@ impl Literal {
 }
 
 /// `server` as an adopted backend. A template and an empty value stay as
-/// written; every other value is a literal and leaves the backend, env
-/// before headers, each sorted by key, so the order is the same on every
-/// run. Call it only for a find [`refusals`] accepts.
+/// written. Every other value the web UI's shared rule stores
+/// (`stores_header_value` for a header, `stores_env_value` for an env value:
+/// long enough to redact safely, and for env a credential name), and every
+/// value that reads as a secret reference whatever its length, is a literal
+/// and leaves the backend, env before headers, each sorted by key, so the
+/// order is the same on every run. Any other value (an ordinary setting such
+/// as `DEBUG=1`, a short header) stays as written. Call it only for a find
+/// [`refusals`] accepts.
 #[cfg(feature = "webui")]
-pub(crate) fn adoption(server: &DiscoveredServer) -> Adoption {
+pub(crate) fn adoption(
+    server: &DiscoveredServer,
+    stores_env_value: fn(&str, &str) -> bool,
+    stores_header_value: fn(&str) -> bool,
+) -> Adoption {
     let mut backend = server.to_backend_config();
     backend.enabled = false;
     let mut literals = Vec::new();
     for (header, map) in [(false, &mut backend.env), (true, &mut backend.headers)] {
         let mut keys: Vec<String> = map
             .iter()
-            .filter(|(_, value)| !value.is_empty() && !value.contains("${"))
+            .filter(|(key, value)| {
+                // A reference-shaped literal (`file:/x`) under any name is
+                // stored as its bytes too: written as text, the gateway would
+                // read it as a reference instead.
+                !value.is_empty()
+                    && !value.contains("${")
+                    && (if header {
+                        stores_header_value(value)
+                    } else {
+                        stores_env_value(key, value)
+                    } || is_reference(value))
+            })
             .map(|(key, _)| key.clone())
             .collect();
         keys.sort();

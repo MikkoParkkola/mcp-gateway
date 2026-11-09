@@ -412,7 +412,10 @@ pub(super) async fn tools_call(
                 agent_id,
                 agent_declared,
                 grant_subject: grant_subject.clone(),
-                is_admin: client.as_ref().is_some_and(|c| c.admin),
+                admin: client.as_ref().map_or(
+                    crate::gateway::authz::AdminStanding::None,
+                    crate::gateway::auth::AuthenticatedClient::admin_standing,
+                ),
                 scope: invoke_scope,
                 input_capabilities: declared_capabilities,
                 session_id: Some(session_id.as_str()),
@@ -483,6 +486,7 @@ pub(super) async fn tools_call(
             target,
             dispatched,
             bindings,
+            effect_slot,
         )) => {
             // STORED.2 site 1: a retained single-call result is served only
             // on proven liveness; otherwise the call proceeds as Unprotected
@@ -496,7 +500,7 @@ pub(super) async fn tools_call(
                     &arguments,
                     &caller,
                     target,
-                    (dispatched, bindings),
+                    (dispatched, bindings, effect_slot),
                     (response, audit),
                 )
                 .await

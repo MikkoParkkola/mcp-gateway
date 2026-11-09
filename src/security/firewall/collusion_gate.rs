@@ -16,8 +16,7 @@ use super::collusion::egress_parts;
 pub(super) use super::collusion::egress_text;
 use super::collusion::replay::ReplayReceipts;
 use super::collusion::{
-    CAPACITY_METRIC, CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams,
-    RelayReason, SeamForms,
+    CAPACITY_METRIC, CollusionDetector, MAX_COMMON_PRINCIPALS, RelayParams, RelayReason, SeamForms,
 };
 #[cfg(test)]
 pub(super) use super::collusion_digest::delivery_leaves;
@@ -32,6 +31,32 @@ use crate::security::Severity;
 /// a step's receipt is dropped and counted, as an over-bound answer's are
 /// (under-receipt, never a false excuse).
 const PLAN_STAGED_CAP: usize = 4 * DELIVERED_SET_CAP;
+
+/// The seam a config-timing row arms (patterned on `refuse_hook`): reached
+/// on each route before the first generation read in its handler, after the
+/// request's own generation is pinned, so any read the handler makes, a
+/// re-read included, sees the row's reload. `hook_order` pins every site.
+#[cfg(test)]
+pub(crate) mod relay_witness_hook {
+    use super::super::collusion_live_rig::Hook;
+
+    thread_local! {
+        static HOOK: Hook = Hook::default();
+    }
+
+    pub(crate) fn arm(action: impl FnOnce() + 'static) {
+        HOOK.with(|h| h.arm(action));
+    }
+
+    /// Called at each witness site.
+    pub(crate) fn run() {
+        HOOK.with(Hook::run);
+    }
+
+    pub(crate) fn reached() -> u32 {
+        HOOK.with(Hook::reached)
+    }
+}
 
 /// What relay detection does with a finding.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,16 +203,12 @@ impl<'a> RelayCaller<'a> {
 }
 
 /// Per-firewall relay state: the detector (shared across firewalls through
-/// [`Firewall::with_collusion`]) and the compiled globs.
+/// [`Firewall::with_collusion`]); the lists are read from each generation.
 pub(super) struct RelayGate {
     detector: Option<Arc<CollusionDetector>>,
     /// The replay receipt store (`MIK-8408` E1): one beside the detector,
     /// shared wherever the detector is shared.
     replay: Arc<ReplayReceipts>,
-    sources: Vec<glob::Pattern>,
-    non_egress: Vec<glob::Pattern>,
-    /// The compiled `allowed_flows`, as (source, egress), bit `i` for entry `i`.
-    flows: Vec<(glob::Pattern, glob::Pattern)>,
     /// Delivered results whose text was cut to the recording cap.
     text_cut: AtomicU64,
     /// Plans whose answer was over the bound their receipts are kept against.
@@ -210,11 +231,8 @@ impl RelayGate {
 
     pub(super) fn from_config(config: &CollusionConfig) -> Self {
         Self {
-            detector: detector_for(config),
+            detector: Some(detector_for(config)),
             replay: Arc::new(ReplayReceipts::new()),
-            sources: compile_globs(&config.sources),
-            non_egress: compile_globs(&config.non_egress),
-            flows: compile_flows(&config.allowed_flows),
             text_cut: AtomicU64::new(0),
             plan_drop: AtomicU64::new(0),
             #[cfg(test)]
@@ -231,23 +249,6 @@ impl RelayGate {
             return frozen;
         }
         Instant::now()
-    }
-
-    /// The `allowed_flows` entries (bit each) whose source matches `target`.
-    fn source_flows(&self, target: &str) -> u64 {
-        Self::mask(self.flows.iter().map(|(source, _)| source), target)
-    }
-
-    /// The `allowed_flows` entries (bit each) whose egress matches `target`.
-    fn egress_flows(&self, target: &str) -> u64 {
-        Self::mask(self.flows.iter().map(|(_, egress)| egress), target)
-    }
-
-    fn mask<'a>(patterns: impl Iterator<Item = &'a glob::Pattern>, target: &str) -> u64 {
-        patterns
-            .enumerate()
-            .filter(|(_, pattern)| pattern.matches(target))
-            .fold(0, |mask, (bit, _)| mask | (1 << bit))
     }
 }
 
@@ -275,20 +276,15 @@ pub(super) fn compile_flows(flows: &[AllowedFlow]) -> Vec<(glob::Pattern, glob::
         .collect()
 }
 
-/// The detector `config` asks for; `None` when relay detection is off.
-fn detector_for(config: &CollusionConfig) -> Option<Arc<CollusionDetector>> {
-    let action = match config.action {
-        CollusionAction::Off => return None,
-        CollusionAction::Observe => RelayAction::Observe,
-        CollusionAction::Block => RelayAction::Block,
-    };
-    Some(Arc::new(CollusionDetector::new(RelayParams {
-        action,
+/// The detector `config` asks for, built whatever its action: the action is
+/// read from the generation at each record and witness.
+fn detector_for(config: &CollusionConfig) -> Arc<CollusionDetector> {
+    Arc::new(CollusionDetector::new(RelayParams {
         window: Duration::from_secs(config.window_secs),
         min_matches: config.min_matches,
         common_principals: config.common_principals,
         ..RelayParams::default()
-    })))
+    }))
 }
 
 /// Result text kept per delivery: the first and last half of this, so an
@@ -298,7 +294,8 @@ fn detector_for(config: &CollusionConfig) -> Option<Arc<CollusionDetector>> {
 pub(super) const RECORD_CAP: usize = 6 * 1024;
 
 /// A context-integrity data class that makes a delivery sensitive.
-const SENSITIVE_CLASSES: [&str; 3] = ["personal_data", "financial_data", "guarded_material"];
+pub(crate) const SENSITIVE_CLASSES: [&str; 3] =
+    ["personal_data", "financial_data", "guarded_material"];
 
 impl Firewall {
     /// Record into and check against `other`'s relay detector, when there is
@@ -347,6 +344,9 @@ impl Firewall {
         self.relay_detector().is_some()
     }
 
+    /// The detector, while the firewall is on, whatever the action: staging
+    /// keeps a receipt's facts under `off`, and each record and witness takes
+    /// the action of its own generation.
     fn relay_detector(&self) -> Option<&CollusionDetector> {
         self.relay
             .detector
@@ -359,6 +359,7 @@ impl Firewall {
     /// forwarded params counts, `_meta` included. Findings are audited.
     pub(crate) fn check_relay(
         &self,
+        view: &super::CollusionView,
         caller: RelayCaller<'_>,
         server: &str,
         tool: &str,
@@ -368,11 +369,17 @@ impl Firewall {
         let Some(detector) = self.relay_detector() else {
             return FirewallVerdict::allow();
         };
-        let target = format!("{server}:{tool}");
-        if self.relay.non_egress.iter().any(|p| p.matches(&target)) {
+        // The witness's generation decides: its action, its `non_egress`,
+        // and the lists and flows every held copy is judged by. An effective
+        // `off` checks nothing and audits nothing.
+        if view.action() == CollusionAction::Off {
             return FirewallVerdict::allow();
         }
-        let block = self.config.collusion.action == CollusionAction::Block;
+        let target = format!("{server}:{tool}");
+        if view.non_egress.iter().any(|p| p.matches(&target)) {
+            return FirewallVerdict::allow();
+        }
+        let block = view.action() == CollusionAction::Block;
         let label = if block { "block" } else { "observe" };
         if matches!(caller, RelayCaller::Unkeyed(_)) {
             telemetry_metrics::counter!(UNKEYED_METRIC, "action" => label).increment(1);
@@ -388,7 +395,7 @@ impl Firewall {
             _ => detector
                 .check_egress_fingerprints_at(
                     caller.key(),
-                    (&target, self.relay.egress_flows(&target)),
+                    (&target, view),
                     detector.egress_fingerprints(&egress_parts(params)),
                     self.relay.now(),
                 )
@@ -410,7 +417,7 @@ impl Firewall {
         // under the reason it was reported for (MIK-8201).
         telemetry_metrics::counter!(RELAY_METRIC, "action" => label, "reason" => reason)
             .increment(1);
-        // The configured action alone decides: no rule may soften a relay.
+        // The witness's action alone decides: no rule may soften a relay.
         let action = if block {
             FirewallAction::Block
         } else {
@@ -433,12 +440,13 @@ impl Firewall {
     /// observed relay (`Warn`) is logged here and the call goes.
     pub(crate) fn relay_block_message(
         &self,
+        view: &super::CollusionView,
         caller: RelayCaller<'_>,
         (server, tool): (&str, &str),
         params: &Value,
         audit: (&str, &str),
     ) -> Option<String> {
-        let verdict = self.check_relay(caller, server, tool, params, audit);
+        let verdict = self.check_relay(view, caller, server, tool, params, audit);
         if verdict.action == FirewallAction::Warn {
             tracing::warn!(server, tool, "Firewall: relay observed");
         }
@@ -489,12 +497,6 @@ impl Firewall {
             }
         }
         seams
-    }
-
-    /// The `allowed_flows` mask of each of `sources`, in order: a seam's flow
-    /// policy beside its sensitivity (`MIK-8113`).
-    pub(crate) fn source_masks(&self, sources: &[String]) -> Vec<u64> {
-        sources.iter().map(|s| self.relay.source_flows(s)).collect()
     }
 }
 

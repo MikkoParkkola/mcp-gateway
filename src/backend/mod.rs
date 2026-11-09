@@ -85,10 +85,7 @@ pub(crate) use era::start_detached_http;
 pub(crate) use input_keys::{KeyAnswer, KeyAnswerKind, Lens};
 #[cfg(feature = "webui")]
 pub(crate) use metadata::{PreviewListing, list_tools_for_preview};
-#[cfg(test)]
 pub(crate) use pool::PoolKey;
-#[cfg(not(test))]
-use pool::PoolKey;
 use pool::PooledEntry;
 pub(crate) use probe::HealthTicker;
 
@@ -310,6 +307,9 @@ pub struct Backend {
     /// The values this backend's rules resolved to, shared with every
     /// instance of its name; stamped by its registry.
     needles: std::sync::OnceLock<Arc<crate::security::needles::NeedleSet>>,
+    /// The configured `headers:`/`env:` credentials this instance was seeded
+    /// with: held redacted while it is registered, compared on reload.
+    configured: std::sync::OnceLock<crate::config::configured_secrets::ConfiguredSecrets>,
     /// Where this backend says its shared start succeeded; stamped by its
     /// registry (MIK-8347). Unstamped: nobody listens.
     started: std::sync::OnceLock<tokio::sync::broadcast::Sender<String>>,
@@ -378,6 +378,9 @@ pub struct Backend {
     /// Where this instance's nudges go, set when a registry with a change feed
     /// holds it.
     nudge_feed: std::sync::OnceLock<tools_nudge::NudgeFeed>,
+    /// The stop deadline of the registry that holds this instance, set when
+    /// it is registered; each stdio transport it builds joins it.
+    pub(crate) stop_deadline: std::sync::OnceLock<Arc<crate::transport::StopDeadline>>,
     /// Whether a per-user store nudge is queued and unread (`MIK-8148`).
     views_dirty: tools_nudge::ViewsDirty,
     /// A tool the next drain snapshot blocks between reading the descriptor
@@ -602,7 +605,7 @@ pub(crate) struct CleanupState {
     /// design M1): a replaced transport held by a busy caller or an orphaned
     /// entry is still here, so [`Backend::retire_now`] reaches it. An entry
     /// dies with its last strong reference; the next registration prunes it.
-    pub(crate) live: Vec<std::sync::Weak<dyn crate::transport::Transport>>,
+    pub(crate) live: Vec<std::sync::Weak<dyn crate::transport::LiveTree>>,
 }
 
 // The cells read counters from a local Prometheus render.
@@ -637,6 +640,12 @@ mod silence_resend_tests;
 #[cfg(test)]
 #[path = "slot_eviction_tests.rs"]
 mod slot_eviction_tests;
+
+// MIK-9216.EFFECT.1: the slot a settled execution stores, and the exact
+// lookup its replay makes.
+#[cfg(test)]
+#[path = "slot_effect_tests.rs"]
+mod slot_effect_tests;
 
 #[cfg(test)]
 #[path = "send_check_eviction_tests.rs"]
@@ -693,6 +702,10 @@ mod a2a_lent_slot_tests;
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]
 mod frame_limit_start_tests;
+
+#[cfg(all(test, unix))]
+#[path = "stop_deadline_tests.rs"]
+mod stop_deadline_tests;
 
 #[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]

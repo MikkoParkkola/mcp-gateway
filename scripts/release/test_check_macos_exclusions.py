@@ -173,6 +173,10 @@ class Predicates(unittest.TestCase):
     def assert_off(self, gate: str) -> None:
         self.assertEqual(self.gated(gate), ["not run on macOS and not listed: src/x_tests.rs probe"], gate)
 
+    def test_the_mutation_build_flag_is_off_on_both_platforms(self) -> None:
+        self.assert_on("#[cfg(all(test, not(mutants)))]")
+        self.assert_on("#[cfg(all(test, mutants))]")
+
     def test_p1_any_linux_or_macos_in_another_spelling_runs_on_macos(self) -> None:
         self.assert_on('#[cfg(all(any(target_os = "macos", target_os = "linux"), test))]')
 
@@ -240,6 +244,16 @@ class Predicates(unittest.TestCase):
     def test_p13_a_production_module_gated_on_test_anywhere_is_a_test_module(self) -> None:
         found = self.tree('#[cfg(all(target_os = "linux", test))]\nmod probe_tests;\n', path="src/reload/mod.rs")
         self.assertEqual(found, ["not run on macOS and not listed: src/reload/mod.rs probe_tests"])
+
+    def test_p13b_a_module_under_any_test_or_x_is_production(self) -> None:
+        # MIK-9387.TCFG.3a: any(test, ..) also builds outside tests, so a module
+        # gated on it is production code, not a test module needing a listing.
+        # Alone it always runs on macOS under test; the misread shows only
+        # inside a gate that is off on macOS.
+        found = self.tree(
+            '#[cfg(all(any(test, unix), target_os = "linux"))]\nmod helper;\n', path="src/reload/mod.rs"
+        )
+        self.assertEqual(found, [])
 
     def test_p14_true_and_false_are_decided(self) -> None:
         self.assert_on("#[cfg(true)]")

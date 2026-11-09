@@ -30,6 +30,8 @@ mod read_reflect_tests;
 #[cfg(test)]
 mod role_wiring_tests;
 mod snapshot;
+#[cfg(test)]
+mod snapshot_scope_tests;
 
 #[cfg(test)]
 use mutations::{
@@ -39,8 +41,8 @@ use mutations::{
     actor_from_client, mutate_grant, mutate_policy, mutation_disabled_reason, resolve_decision,
 };
 use snapshot::{
-    ControlPlaneApiResponse, ControlPlaneResponseFlags, caller_grant_subject,
-    local_runtime_snapshot, local_shadow_radar,
+    ControlPlaneApiResponse, ControlPlaneResponseFlags, ControlPlaneShadowRadar,
+    caller_grant_subject, is_scoped, local_runtime_snapshot, local_shadow_radar,
 };
 #[cfg(test)]
 use snapshot::{
@@ -89,7 +91,8 @@ async fn require_authenticated(
 
 /// GET the SIEM export status (MIK-6703 SIEM.RUN.2): per-source forwarded/lag/
 /// max-lag/re-anchor/error counters. Requires read-inventory RBAC. Returns 404
-/// (via a `configured: false` body) when export is not running.
+/// (via a `configured: false` body) when export is not running. The counters
+/// are gateway-wide, so a backend-scoped caller is refused.
 async fn export_status_handler(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
@@ -102,7 +105,10 @@ async fn export_status_handler(
             &generation.config().control_plane.role_mapping,
         );
         match check {
-            CpCheck::Action(action) if ControlPlaneRbac::authorize(&actor, action).allowed => {
+            CpCheck::Action(action)
+                if !snapshot::is_scoped(client)
+                    && ControlPlaneRbac::authorize(&actor, action).allowed =>
+            {
                 Ok(())
             }
             _ => Err(Box::new(
@@ -169,7 +175,12 @@ async fn control_plane_snapshot(
         (&actor, grant_subject.as_ref()),
         now,
     );
-    let shadow_radar = local_shadow_radar(&state).await;
+    let scoped = is_scoped(client.as_ref());
+    let shadow_radar = if scoped {
+        ControlPlaneShadowRadar::out_of_scope()
+    } else {
+        local_shadow_radar(&state).await
+    };
 
     let Some(view) = snapshot.read_only_view(&actor) else {
         return auth_required(StatusCode::FORBIDDEN).into_response();
@@ -196,6 +207,11 @@ async fn control_plane_snapshot(
                 .map_or(ControlPlaneBaseSource::Default, |base| base.source),
             store_read_degraded,
             export_configured: state.export_status.is_some(),
+            reader: if scoped {
+                snapshot::Reader::Scoped
+            } else {
+                snapshot::Reader::Unscoped
+            },
         },
     );
     Json(response).into_response()

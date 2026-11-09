@@ -13,6 +13,7 @@ use std::path::Path;
 use super::{ReplaceError, SecretStep};
 use crate::config::{Config, EnvOverlay, PENDING_SLOT_PREFIX, reserved_slot_reference};
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
+use crate::config_persistence::lock::Locked;
 use crate::config_reload::ReloadContext;
 use crate::config_reload::reload_context::EvaluatedReload;
 
@@ -56,13 +57,22 @@ fn refuse_shared_credentials(
     let Ok(bearer) = std::str::from_utf8(bearer.value.as_bytes()) else {
         return Ok(());
     };
-    let keys: Vec<_> = (config.auth.api_keys.iter())
-        .filter_map(|key| {
-            let current = key.resolve_digest(overlay).ok()?;
-            let previous = key.resolve_previous_digest(overlay).ok()?;
-            Some((key.name.as_str(), current, previous))
-        })
-        .collect();
+    // A key that cannot be compared refuses the bearer, never drops out of
+    // the comparison. Fixed text: the resolver's error is not quoted.
+    let unreadable = |name: &str, field: &str| {
+        ReplaceError::Refused(format!(
+            "auth.api_keys['{name}'].{field} cannot be read, so the new bearer token \
+             cannot be checked against it; fix that key first"
+        ))
+    };
+    let mut keys = Vec::with_capacity(config.auth.api_keys.len());
+    for key in &config.auth.api_keys {
+        let name = key.name.as_str();
+        let current = (key.resolve_digest(overlay)).map_err(|_| unreadable(name, "key_sha256"))?;
+        let previous = (key.resolve_previous_digest(overlay))
+            .map_err(|_| unreadable(name, "previous_key_sha256"))?;
+        keys.push((name, current, previous));
+    }
     crate::gateway::auth::refuse_shared_digests(Some(bearer), keys)
         .map_err(|e| ReplaceError::Refused(e.to_string()))
 }
@@ -114,14 +124,38 @@ impl ReloadContext {
             ReplaceError::Refused("the new gateway.yaml is not UTF-8 text".to_string())
         })?;
         let (file, env_paths) = (target.to_path_buf(), self.env.env_paths().clone());
-        let evaluated = tokio::task::spawn_blocking(move || {
-            Config::load_pending(&file, &text, &env_paths, pending)
+        // The bytes being replaced, as the writer reads them: a firewall rule
+        // is carried from them, which a hand edit since the last reload may
+        // have changed; bytes that do not load carry nothing.
+        let (evaluated, replaced) = tokio::task::spawn_blocking(move || {
+            let replaced = Config::load_literal_with_text(&file).ok().map(|(c, _)| c);
+            (
+                Config::load_pending(&file, &text, &env_paths, pending),
+                replaced,
+            )
         })
         .await
-        .map_err(|e| ReplaceError::Failed(format!("the config check task failed: {e}")))?
-        .map_err(|e| ReplaceError::ReloadRefused(format!("Failed to parse config: {e}")))?;
+        .map_err(|e| ReplaceError::Failed(format!("the config check task failed: {e}")))?;
+        let evaluated = evaluated
+            .map_err(|e| ReplaceError::ReloadRefused(format!("Failed to parse config: {e}")))?;
         if let Some(step) = step {
             refuse_shared_credentials(step, &evaluated.config, &evaluated.overlay)?;
+        }
+        #[cfg(not(feature = "firewall"))]
+        let _ = replaced;
+        // A replacement writes every rule: one the firewall-on load refuses
+        // goes in only as carried over unchanged, and none while it runs.
+        #[cfg(feature = "firewall")]
+        {
+            let refused =
+                |e: String| ReplaceError::ReloadRefused(format!("Failed to validate config: {e}"));
+            crate::security::firewall::refuse_while_running(
+                self.live_config.running(),
+                &evaluated.config,
+            )
+            .map_err(refused)?;
+            crate::security::firewall::refuse_authored(replaced.as_ref(), &evaluated.config)
+                .map_err(refused)?;
         }
         let patch = crate::config_reload::compute_diff(&self.live_config.get(), &evaluated.config);
         self.refuse_candidate(EvaluatedReload {
@@ -130,7 +164,24 @@ impl ReloadContext {
             overlay: evaluated.overlay,
             secret_refs: evaluated.secret_refs,
             inputs: evaluated.inputs,
+            configured: evaluated.configured,
         })
         .map_err(ReplaceError::ReloadRefused)
+    }
+
+    /// `Err(NoConfigFile)` when the file read under this lock is gone now.
+    /// Read from the disk, never from the lock's snapshot: a recovery since
+    /// the lock was taken may have restored it. A link that no longer names
+    /// the locked target, or points at a missing one, is `Failed`, never a
+    /// missing config.
+    pub(super) fn still_there(
+        locked: &Locked,
+        config: &std::path::Path,
+    ) -> Result<(), ReplaceError> {
+        match locked.absent(config) {
+            Ok(true) => Err(ReplaceError::NoConfigFile),
+            Ok(false) => Ok(()),
+            Err(why) => Err(ReplaceError::Failed(why)),
+        }
     }
 }

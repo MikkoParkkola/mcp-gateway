@@ -10,7 +10,7 @@
 )]
 use super::*;
 
-const CAPS: Caps = Caps {
+pub(super) const CAPS: Caps = Caps {
     per_principal: 100,
     global: 100,
 };
@@ -25,7 +25,7 @@ const TAIL: TailPolicy = TailPolicy {
     max_per_principal: 2,
 };
 
-fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
+pub(super) fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
     Subscription {
         generation: 0,
         incarnation: 0,
@@ -380,6 +380,57 @@ fn a_version_zero_record_is_not_loaded() {
     write_record(&subs, &name, &value).expect("rewrite");
     let store = Store::open(dir.path(), Ok(now), TAIL).expect("reopen");
     assert!(store.get(&s.id).is_none(), "a version 0 record is skipped");
+}
+
+/// A row file whose stored observed identity names nobody is read back on
+/// open through the checked constructor: it observes as no one. A sibling
+/// whose identity names someone observes as that person.
+#[test]
+fn a_stored_identity_naming_nobody_observes_as_no_one_after_a_reopen() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
+    let (nobody, someone) = (sub("p", "https://h/a", now), sub("q", "https://h/bb", now));
+    for s in [&nobody, &someone] {
+        store
+            .admit(s.clone(), true, CAPS, grace(), now, TAIL)
+            .expect("io")
+            .expect("admitted");
+    }
+    drop(store);
+    let subs = dir.path().join("subs");
+    for (s, subject) in [(&nobody, ""), (&someone, "q")] {
+        let name = format!("{}.json", s.id);
+        let bytes = std::fs::read(subs.join(&name)).expect("record");
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        value["observed_identity"] = serde_json::json!({
+            "subject": subject, "email": "q@h", "groups": [], "issuer": "https://idp",
+        });
+        write_record(&subs, &name, &value).expect("rewrite");
+    }
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("reopen");
+    let reloaded = |id: &str| store.get(id).expect("the row loads");
+    assert!(
+        reloaded(&nobody.id).observed_as().is_none(),
+        "an identity naming nobody observes as no one after a reopen"
+    );
+    // Both sides unwrapped: the control cannot pass on `None == None`.
+    let expected = crate::key_server::oidc::VerifiedIdentity::checked(
+        "https://idp".into(),
+        "q".into(),
+        "q@h".into(),
+        None,
+        Vec::new(),
+    )
+    .expect("names someone");
+    assert_eq!(
+        reloaded(&someone.id)
+            .observed_as()
+            .expect("a stored identity naming someone survives the reopen")
+            .stable_actor_id(),
+        expected.stable_actor_id(),
+        "control: a stored identity naming someone survives the reopen"
+    );
 }
 
 /// MIK-7854.EVENTS.4: a verification tail over the cap in force is trimmed

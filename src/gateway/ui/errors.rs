@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use axum::Json;
 use axum::http::StatusCode;
-use serde_json::Value;
+use serde_json::{Value, json};
 
+use crate::config_reload::FileRevision;
 use crate::gateway::http_error::{flat_error_body, json_body, structured_error_body};
 
 pub(super) fn flat_error(
@@ -19,6 +20,33 @@ pub(super) fn structured_error(
     message: impl Into<String>,
 ) -> (StatusCode, Json<Value>) {
     json_body(status, structured_error_body(code, message))
+}
+
+/// The 409 of a gateway.yaml revision that moved: the one to retry against.
+pub(super) fn stale(current: &FileRevision) -> (StatusCode, Json<Value>) {
+    json_body(
+        StatusCode::CONFLICT,
+        json!({"error": "stale", "current": current.as_str()}),
+    )
+}
+
+/// Why a config write found no gateway.yaml to write into, and the way
+/// forward: every web UI route that edits the file answers it.
+const NO_CONFIG_FILE: &str = "no gateway.yaml exists yet; create one with `mcp-gateway init --profile local` (see QUICKSTART), then retry";
+
+/// 409 `no_config_file`: nothing is written; the operator creates the file.
+pub(super) fn no_config_file() -> (StatusCode, Json<Value>) {
+    structured_error(StatusCode::CONFLICT, "no_config_file", NO_CONFIG_FILE)
+}
+
+/// gateway.yaml could not be read, or the read guard refused it or its
+/// recovery files. Fixed text for every route that writes it: the reason
+/// names the file, so it goes to the log only.
+pub(super) fn config_refusal() -> (StatusCode, Json<Value>) {
+    flat_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "gateway.yaml could not be loaded",
+    )
 }
 
 pub(super) fn admin_auth_required() -> (StatusCode, Json<Value>) {
@@ -39,7 +67,6 @@ pub(super) fn config_path_unavailable() -> (StatusCode, Json<Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn admin_auth_required_shape_is_stable() {

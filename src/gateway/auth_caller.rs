@@ -53,6 +53,20 @@ pub(in crate::gateway) fn authenticated_principal<P: Principal + ?Sized>(
     }
 }
 
+/// Whether `client` holds the gateway-wide admin powers: the one spelling of
+/// that question for an optional caller.
+///
+/// Admin access follows a credential: the bearer, an API key with `admin: true`,
+/// or an SSO identity while a `role: admin` mapping rule matches it (E1),
+/// scoped to every backend: a backend-scoped admin has no gateway-wide admin
+/// standing. No client is never an admin, and the identity used when
+/// authentication is disabled is not one either: an unauthenticated gateway
+/// cannot tell its operator from any other caller that reaches the port.
+#[must_use]
+pub(in crate::gateway) fn is_gateway_admin(client: Option<&AuthenticatedClient>) -> bool {
+    client.is_some_and(AuthenticatedClient::is_gateway_admin)
+}
+
 /// Information about an authenticated client
 #[derive(Debug, Clone)]
 pub struct AuthenticatedClient {
@@ -92,6 +106,22 @@ pub struct AuthenticatedClient {
 }
 
 impl AuthenticatedClient {
+    /// This client's admin standing: with the rule in
+    /// [`crate::gateway::authz::admin_standing`], the one reader of `admin`
+    /// for authorization. Gateway-wide powers need `Gateway`; admin breadth
+    /// inside the scope reads `InScope` too.
+    #[must_use]
+    pub(crate) fn admin_standing(&self) -> crate::gateway::authz::AdminStanding {
+        crate::gateway::authz::admin_standing(self.admin, &self.backends)
+    }
+
+    /// Whether this client holds the gateway-wide admin powers: an admin
+    /// scoped to every backend.
+    #[must_use]
+    pub(crate) fn is_gateway_admin(&self) -> bool {
+        self.admin_standing().is_gateway()
+    }
+
     /// Check if this client can access a backend
     #[must_use]
     pub fn can_access_backend(&self, backend: &str) -> bool {

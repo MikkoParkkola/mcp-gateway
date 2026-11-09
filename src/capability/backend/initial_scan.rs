@@ -30,6 +30,12 @@ impl CapabilityBackend {
 
     /// Record that the startup scan has loaded every configured directory.
     pub(crate) fn mark_initial_scan_complete(&self) {
+        // Taken before the flag is visible, so it is what a reader that sees
+        // the scan complete could see (the startup readiness-order row).
+        #[cfg(test)]
+        let _ = self
+            .records_at_scan_complete
+            .set(self.rug_pull_records().len());
         // Release pairs with the Acquire below: a probe that sees `true` also
         // sees every capability the scan registered before marking.
         self.initial_scan

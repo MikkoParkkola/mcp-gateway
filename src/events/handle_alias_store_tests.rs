@@ -86,8 +86,9 @@ fn non_empty_hub(dir: &std::path::Path) -> Arc<EventsHub> {
 // S1: an empty store adopts the current key silently.
 #[test]
 fn s1_an_empty_store_adopts_the_key_without_a_warning() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let warnings = start_capturing(&hub, test_record_key(), async {});
     assert_eq!(
         sidecar(dir.path()),
@@ -105,8 +106,9 @@ fn s1_an_empty_store_adopts_the_key_without_a_warning() {
 // sidecar) adopts the key with exactly one warning naming the store.
 #[test]
 fn s2_a_non_empty_store_without_the_sidecar_adopts_with_one_warning() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = non_empty_hub(dir.path());
+    hub.keep_test_dir(Arc::clone(&dir));
     let warnings = start_capturing(&hub, test_record_key(), async {});
     assert_eq!(sidecar(dir.path()), Some(test_record_key().identity()));
     assert_eq!(
@@ -121,7 +123,7 @@ fn s2_a_non_empty_store_without_the_sidecar_adopts_with_one_warning() {
 // hex) and the store, and delivery continues.
 #[test]
 fn s3_a_key_mismatch_adopts_the_new_key_with_one_warning_and_delivery_continues() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -129,6 +131,7 @@ fn s3_a_key_mismatch_adopts_the_new_key_with_one_warning_and_delivery_continues(
             .build()
             .expect("runtime");
         let hub = non_empty_hub(dir.path());
+        hub.keep_test_dir(Arc::clone(&dir));
         hub.runtime
             .services
             .set(Arc::new(services_with(other_key())))
@@ -141,6 +144,7 @@ fn s3_a_key_mismatch_adopts_the_new_key_with_one_warning_and_delivery_continues(
     )
     .expect("bind to B");
     let hub = EventsHub::open(&config, dir.path()).expect("reopen");
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.register_source(Arc::new(Probe));
     let (current, previous) = (test_record_key().identity(), other_key().identity());
     let fan = Arc::clone(&hub);
@@ -201,13 +205,14 @@ fn s6_a_store_with_only_verification_outbox_or_dead_state_is_non_empty() {
     let config = crate::config::EventsConfig::default();
     let mut built = Vec::new();
     for case in ["verified", "outbox", "dead"] {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("runtime");
             let hub = non_empty_hub(dir.path());
+            hub.keep_test_dir(Arc::clone(&dir));
             hub.runtime.services.set(Arc::new(services())).ok();
             if case != "verified" {
                 runtime.block_on(async {
@@ -255,6 +260,7 @@ fn s6_a_store_with_only_verification_outbox_or_dead_state_is_non_empty() {
     }
     for (case, dir) in built {
         let hub = EventsHub::open(&config, dir.path()).expect("reopen");
+        hub.keep_test_dir(Arc::clone(&dir));
         let warnings = start_capturing(&hub, test_record_key(), async {});
         assert_eq!(
             sidecar(dir.path()),
@@ -273,8 +279,9 @@ fn s6_a_store_with_only_verification_outbox_or_dead_state_is_non_empty() {
 // so a normal start is quiet.
 #[test]
 fn s4_a_matching_sidecar_is_kept_and_nothing_warns() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = non_empty_hub(dir.path());
+    hub.keep_test_dir(Arc::clone(&dir));
     let bytes = format!("{}\n", test_record_key().identity());
     crate::gateway::test_helpers::write_owner_only(dir.path().join(SIDECAR), &bytes)
         .expect("bound to A");
@@ -293,8 +300,9 @@ fn s4_a_matching_sidecar_is_kept_and_nothing_warns() {
 // S5: the adoption warning is one-time; a restart with the same key is quiet.
 #[test]
 fn s5_the_adoption_warning_is_not_repeated_on_restart() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = non_empty_hub(dir.path());
+    hub.keep_test_dir(Arc::clone(&dir));
     let first = start_capturing(&hub, test_record_key(), async {});
     assert_eq!(
         warnings_naming(&first, &[&store_path(dir.path())]),
@@ -303,6 +311,7 @@ fn s5_the_adoption_warning_is_not_repeated_on_restart() {
     );
     drop(hub);
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("reopen");
+    hub.keep_test_dir(Arc::clone(&dir));
     let second = start_capturing(&hub, test_record_key(), async {});
     assert_eq!(
         warnings_naming(&second, &[&store_path(dir.path())]),
@@ -316,10 +325,11 @@ fn s5_the_adoption_warning_is_not_repeated_on_restart() {
 // its bytes, nor a full identity.
 #[test]
 fn s7_the_adoption_warning_names_fingerprints_never_key_material() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     {
         let hub = non_empty_hub(dir.path());
+        hub.keep_test_dir(Arc::clone(&dir));
         hub.runtime
             .services
             .set(Arc::new(services_with(other_key())))
@@ -331,6 +341,7 @@ fn s7_the_adoption_warning_names_fingerprints_never_key_material() {
     )
     .expect("bind to B");
     let hub = EventsHub::open(&config, dir.path()).expect("reopen");
+    hub.keep_test_dir(Arc::clone(&dir));
     let warnings = start_capturing(&hub, test_record_key(), async {});
     let (current, previous) = (test_record_key().identity(), other_key().identity());
     assert_eq!(

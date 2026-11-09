@@ -52,6 +52,10 @@ fn attributing(mut meta: MetaMcp) -> MetaMcp {
         )
         .with_continuations(meta.continuation()),
     )));
+    crate::security::firewall::collusion_live_rig::seed_meta(
+        &meta,
+        &meta.firewall_for_test().expect("set above"),
+    );
     meta
 }
 
@@ -647,6 +651,7 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
     );
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     meta.share_keyring_with_for_test(&firewall);
     let meta = idempotent(meta);
     let who = api_key_caller();
@@ -662,7 +667,7 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
         let (answer, staged) = meta
             .collecting_staged(meta.invoke_tool(&args_for(None), None, &ctx))
             .await;
-        staged.commit(true);
+        staged.commit(true, &firewall.paired_generation_for_test());
         answers.push(answer.expect("answered"));
     }
     assert_eq!(
@@ -680,7 +685,7 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
         answers[1]
     );
     let params = json!({"name": "read", "arguments": {"text": notice}});
-    let verdict = firewall.check_relay(
+    let verdict = firewall.check_relay_paired(
         RelayCaller::Keyed("other-caller"),
         "alpha",
         "read",
@@ -700,7 +705,7 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
         "read",
         &answers[1],
     );
-    let verdict = firewall.check_relay(
+    let verdict = firewall.check_relay_paired(
         RelayCaller::Keyed("other-caller"),
         "alpha",
         "read",

@@ -451,6 +451,93 @@ class SelectHeadLines(unittest.TestCase):
         self.assertEqual(result[9], [], "a count-0 head is missed, not unverifiable")
 
 
+class LocalMacroCollection(unittest.TestCase):
+    """A `macro_rules!` name leaves SAFE_MACROS only when the definition is
+    code. Text in a string or comment does not count. A test-like path is
+    not an exemption, and a file the blanker cannot lex is scanned raw."""
+
+    def names(self, files):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            for rel, text in files.items():
+                path = root / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+            return cfc.macro_names(root)
+
+    def test_quoted_macro_rules_text_leaves_format_safe(self):
+        # format stays in SAFE_MACROS unless a real definition names it.
+        rows = [
+            ("string literal", {"src/lib.rs": 'const FIXTURE: &str = "macro_rules! format { () => {} }";\n'}, True),
+            ("raw string", {"src/lib.rs": 'const FIXTURE: &str = r"macro_rules! format { () => {} }";\n'}, True),
+            ("hashed raw string", {"src/lib.rs": 'const FIXTURE: &str = r#"macro_rules! format { () => {} }"#;\n'}, True),
+            ("byte string", {"src/lib.rs": 'const FIXTURE: &[u8] = b"macro_rules! format { () => {} }";\n'}, True),
+            ("byte raw string", {"src/lib.rs": 'const FIXTURE: &[u8] = br#"macro_rules! format { () => {} }"#;\n'}, True),
+            ("line comment", {"src/lib.rs": "// macro_rules! format { () => {} }\n"}, True),
+            ("block comment", {"src/lib.rs": "/* macro_rules! format { () => {} } */\n"}, True),
+            ("real definition", {"src/lib.rs": "macro_rules! format { () => {} }\n"}, False),
+        ]
+        for label, files, stays in rows:
+            with self.subTest(label=label):
+                safe = self.names(files)
+                if stays:
+                    self.assertIn("format", safe)
+                else:
+                    self.assertNotIn("format", safe)
+
+    def test_a_real_macro_in_a_tests_named_file_still_shadows(self):
+        # No #[cfg(test)]. A *_tests.rs path must not hide the definition.
+        rows = [
+            (
+                "tests-named file",
+                {"src/identity_sources_tests.rs": "macro_rules! format { () => {} }\n"},
+            ),
+        ]
+        for label, files in rows:
+            with self.subTest(label=label):
+                self.assertNotIn("format", self.names(files))
+
+    def test_an_unlexable_file_is_scanned_raw(self):
+        # c6_resolve.blank raises Unsupported on an unterminated string.
+        # Scanning the raw text shadows the name instead of aborting the grade.
+        rows = [
+            (
+                "unterminated string",
+                {"src/lib.rs": 'const FIXTURE: &str = "macro_rules! format { () => {} }\n'},
+            ),
+        ]
+        for label, files in rows:
+            with self.subTest(label=label):
+                self.assertNotIn("format", self.names(files))
+
+    def test_lexer_shapes_before_a_real_definition_still_shadow(self):
+        # Each shape is one the blanker must step over. The definition after
+        # it is real and must still take its name off the safe set.
+        real = "macro_rules! format { () => {} }\n"
+        rows = [
+            ("lifetime", "fn f<'a>(s: &'a str) {}\n"),
+            ("quote char", "let q = '\"';\n"),
+            ("byte quote char", "let q = b'\"';\n"),
+            ("nested block comment", "/* outer /* inner */ tail */\n"),
+            ("escaped-quote string", 'const S: &str = "say \\"hi\\"";\n'),
+            ("multi-hash raw string", 'const S: &str = r##"he said "hi""##;\n'),
+        ]
+        for label, prefix in rows:
+            with self.subTest(label=label):
+                self.assertNotIn("format", self.names({"src/lib.rs": prefix + real}))
+
+    def test_a_real_definition_beside_quoted_text_shadows_only_its_own_name(self):
+        safe = self.names({
+            "src/lib.rs": 'const FIXTURE: &str = "macro_rules! vec { () => {} }";\nmacro_rules! format { () => {} }\n',
+        })
+        self.assertNotIn("format", safe)
+        self.assertIn("vec", safe)
+
+    def test_a_comment_inside_a_real_header_still_shadows(self):
+        safe = self.names({"src/lib.rs": "macro_rules /* c */ ! format { () => {} }\n"})
+        self.assertNotIn("format", safe)
+
+
 class HeadLineCalls(unittest.TestCase):
     """A call on a tracing macro's head line rides that line's hit count, so the
     count cannot show the call ran: the line is graded as missed and listed as
@@ -546,12 +633,21 @@ class HeadLineCalls(unittest.TestCase):
             "use tracing::{\n    // logging\n    debug as d,\n};\n",
             "pub use ::tracing::warn as w;\n",
             "use tracing as t;\n",
+            "pub(crate) use tracing::warn as w;\n",
+            "#[cfg(test)] use tracing::debug as d;\n",
+            "#[cfg(test)]\nuse tracing::debug as d;\n",
         ]
         allowed = [
             "use tracing::{debug, info};\n",
             "use tracing::instrument::WithSubscriber as _;\n",
             "macro_rules! twice {\n    ($e:expr) => { $e + $e };\n}\n",
             "macro_rules! emit {\n    ($($t:tt)*) => { tracing::debug!($($t)*) };\n}\n",
+            # Text that only mentions a renaming use is not one: a doc
+            # comment, a line comment, a string literal.
+            "/// A renamed `use tracing::warn as w;` is still found.\nfn doc() {}\n",
+            "// use tracing::warn as w;\nfn line() {}\n",
+            "const S: &str = \"use tracing::warn as w;\\nfn f() {}\";\n",
+            "const T: &[&str] = &[\n    \"use tracing::warn as w;\",\n];\n",
         ]
         for header, expect in [(h, True) for h in refused] + [(h, False) for h in allowed]:
             with self.subTest(header=header):

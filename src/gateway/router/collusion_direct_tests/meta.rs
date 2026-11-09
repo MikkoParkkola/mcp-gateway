@@ -32,6 +32,8 @@ async fn meta_fixture_with(
         meta.share_keyring_with_for_test(firewall);
     }
     meta.set_firewall(st.firewall.clone());
+    // The Meta-MCP reads the router's live config, as startup wires it.
+    meta.set_live_config(Arc::clone(&st.live_config));
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
     st.meta_mcp = Arc::new(configure(meta));
     fx
@@ -424,7 +426,7 @@ async fn meta_read_record_failure_leaves_no_receipt() {
         None,
     )
     .await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = Arc::new(tempfile::tempdir().unwrap());
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -501,7 +503,7 @@ async fn meta_grant_decision_failure_leaves_no_receipt() {
         None,
     )
     .await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = Arc::new(tempfile::tempdir().unwrap());
     let log = logger(&dir, AuditFailurePolicy::FailClosed);
     let state = Arc::get_mut(&mut fx.state).expect("state is unique");
     let meta = Arc::get_mut(&mut state.meta_mcp).expect("meta is unique");
@@ -547,7 +549,11 @@ async fn meta_grant_decision_failure_leaves_no_receipt() {
 mod chain_key;
 #[path = "meta/hidden_provider.rs"]
 mod hidden_provider;
+#[path = "meta/live_recording.rs"]
+mod live_recording;
 #[path = "meta/withheld.rs"]
 mod withheld;
+#[path = "meta/write_time.rs"]
+mod write_time;
 #[path = "meta/writes.rs"]
 mod writes;

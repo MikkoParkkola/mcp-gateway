@@ -35,7 +35,7 @@ src/gateway/meta_mcp/chain_receipt.rs	refuse_chained_task	json_rpc	1	gateway	the
 src/gateway/meta_mcp/dispatch_names.rs	no_such_meta_tool	json_rpc	1	gateway	the gateway's unknown meta-tool answer
 src/gateway/meta_mcp/grant_audit.rs	invoke_tool	json_rpc	2	gateway	the gateway's grant refusal
 src/gateway/meta_mcp/invoke/admin.rs	get_stats	json_rpc	1	gateway	the gateway's admin-tool refusal
-src/gateway/meta_mcp/invoke/admin.rs	reload_capabilities	json_rpc	2	gateway	the gateway's admin-tool refusal
+src/gateway/meta_mcp/invoke/admin.rs	reload_capabilities	json_rpc	3	gateway	the gateway's admin-tool refusal
 src/gateway/meta_mcp/invoke/admin.rs	reload_config	json_rpc	2	gateway	the gateway's admin-tool refusal
 src/gateway/meta_mcp/invoke/admin.rs	run_playbook	json_rpc	2	gateway	the gateway's admin-tool refusal
 src/gateway/meta_mcp/invoke/admin.rs	webhook_status	json_rpc	1	gateway	the gateway's admin-tool refusal
@@ -90,4 +90,5 @@ src/protocol/mrtr.rs	take_chain_nonce_params	json_rpc	1	gateway	the gateway's co
 src/security/message_signing.rs	register_for_principal	json_rpc	4	gateway	the gateway's signing registration refusals
 src/security/message_signing_v2.rs	signing_error	json_rpc	1	gateway	the gateway's signing error
 src/security/needles.rs	refusal	literal	1	gateway	the injected-value scrub's own refusal of an answer that echoed a value
+src/security/needles_configured.rs	scrub_stored_value	literal	1	gateway	the stored-answer scrub's fixed refusal of a stored tool result that would echo a held value
 src/transport/http/mod.rs	peer_refusal	backend_json_rpc	1	origin	a backend's JSON-RPC body on a non-retry status, taken off the wire

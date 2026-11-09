@@ -28,9 +28,9 @@ def tree(extra: dict[str, str], lib_mods: str = "") -> Path:
         "src/lib.rs": "pub mod key_server;\n" + lib_mods,
         "src/main.rs": "fn main() {}\n",
         "src/key_server/mod.rs": "pub mod oidc;\n",
-        "src/key_server/oidc.rs": "pub struct VerifiedIdentity { pub subject: String }\n"
-                                  "#[path = \"oidc_identity.rs\"]\nmod identity;\n",
-        "src/key_server/oidc_identity.rs": ORACLE,
+        "src/key_server/oidc.rs": "mod verified;\npub use verified::VerifiedIdentity;\n",
+        "src/key_server/oidc/verified.rs": "pub struct VerifiedIdentity { pub subject: String }\n"
+                                           + ORACLE,
     }
     files.update(extra)
     root = Path(tempfile.mkdtemp())
@@ -46,7 +46,7 @@ class Shapes(unittest.TestCase):
         self.assertEqual(cis.violations(tree({})), [])
 
     def test_a_second_literal_in_an_allowed_file_fails(self):
-        root = tree({"src/key_server/oidc_identity.rs": ORACLE.replace(
+        root = tree({"src/key_server/oidc/verified.rs": "pub struct VerifiedIdentity { pub subject: String }\n" + ORACLE.replace(
             "}\n}\n", "}\n    fn other() -> Self { Self { issuer: x, subject: y } }\n}\n")})
         self.assertEqual(len(cis.violations(root)), 1, cis.violations(root))
 
@@ -148,7 +148,7 @@ class RealTree(unittest.TestCase):
                      for v in cis.violations(HERE.parents[1])}
             self.assertEqual(found, {
                 "src/identity_grants/subject.rs new",
-                "src/key_server/oidc_identity.rs checked", "src/mtls/identity/cert.rs parse",
+                "src/key_server/oidc/verified.rs checked", "src/mtls/identity/cert.rs parse",
                 # GrantSubject::new is checked; each call site is listed
                 # until the rule is retired.
                 "src/identity_grants/subject.rs try_from",
@@ -159,7 +159,7 @@ class RealTree(unittest.TestCase):
                 "src/gateway/router/identity.rs grant_subject_from_oauth_agent",
                 "src/gateway/router/identity.rs grant_subject_from_verified_identity",
                 "src/gateway/router/identity.rs trusted_proxy_identity",
-                "src/gateway/ui/admin_audit.rs record_admin_action_as",
+                "src/gateway/ui/admin_audit.rs caller_who",
                 "src/gateway/ui/admin_audit.rs recorded",
                 "src/gateway/ui/events.rs admitted", "src/gateway/ui/tool_call.rs via_label",
             })
@@ -178,6 +178,19 @@ class CodeReviewBypasses(unittest.TestCase):
 
     def test_a_cfg_all_with_test_is_test_code(self):
         root = tree({"src/a.rs": "#[cfg(all(test, unix))]\n" + self.LIT}, "mod a;\n")
+        self.assertEqual(cis.violations(root), [])
+
+    # MIK-9387.TCFG.2: the shared reader decides (scripts/dev/check-orphan-test-modules.py).
+    def test_an_any_whose_every_operand_needs_test_is_test_code(self):
+        root = tree({"src/a.rs": "#[cfg(any(test, all(test, unix)))]\n" + self.LIT}, "mod a;\n")
+        self.assertEqual(cis.violations(root), [])
+
+    def test_a_quoted_comma_is_not_an_operand(self):
+        root = tree({"src/a.rs": '#[cfg(all(feature = "a,test,b"))]\n' + self.LIT}, "mod a;\n")
+        self.assertEqual(len(cis.violations(root)), 1, cis.violations(root))
+
+    def test_a_child_of_an_inner_test_file_is_test_code(self):
+        root = tree({"src/a.rs": "#![cfg(test)]\nmod child;\n", "src/a/child.rs": self.LIT}, "mod a;\n")
         self.assertEqual(cis.violations(root), [])
 
     def test_production_reachability_wins_whatever_the_walk_order(self):

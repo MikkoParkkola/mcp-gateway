@@ -132,17 +132,24 @@ pub(super) fn execution_lease(
             if binds_passthrough(scope) {
                 lease.note_binding((scope.name, tool), propagation.identity_key.as_deref());
             }
+            // The slot it runs under, for a completed replay's declared effect.
+            lease.note_effect_slot(
+                scope
+                    .route
+                    .backend
+                    .slot_key_for(propagation.identity_key.as_deref()),
+            );
             Ok((Some(lease), None))
         }
         // Released before the replay's delivery begins, not when it ends.
         // The second element is the replayed execution's record facts, which
         // `/mcp` writes into its invocation record. The direct route records a
         // replay as it records a cache hit (`note_cached`), so it sets them aside.
-        Ok(SyncAdmission::Replay(response, _, _, _, bindings)) => {
+        Ok(SyncAdmission::Replay(response, _, _, _, bindings, slot)) => {
             if let Some(GuardOutcome::Proceed(mut reservation)) = guarded.take() {
                 reservation.release();
             }
-            Ok((None, Some((response, bindings))))
+            Ok((None, Some((response, bindings, slot))))
         }
         // The caller's `?` drops the undispatched 7a reservation, which
         // releases it (`IdempotencyReservation`'s drop, OnDrop::Release).
@@ -150,10 +157,12 @@ pub(super) fn execution_lease(
     }
 }
 
-/// A 7b replay: the stored answer and the binding each step ran under.
+/// A 7b replay: the stored answer, the binding each step ran under, and the
+/// one slot the execution ran on (none when it stored none).
 pub(super) type StoredReplay = (
     JsonRpcResponse,
     Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+    Option<crate::backend::PoolKey>,
 );
 
 /// Whether this route binds its stored results (MIK-8440): only a
@@ -211,7 +220,7 @@ pub(super) fn deliver_replay(
     // MIK-8440: a replay is served only under the forwarded credential that
     // produced it; another credential's retry is refused, never re-run.
     let replay = match replay {
-        Some((response, bindings)) => {
+        Some((response, bindings, slot)) => {
             let current = propagation
                 .identity_key
                 .as_deref()
@@ -226,15 +235,36 @@ pub(super) fn deliver_replay(
                     StatusCode::OK,
                 ));
             }
+            #[cfg(test)]
+            seams::note_served(seams::Served::Execution);
+            // The slot the first execution ran on, read now and looked up
+            // as stored (never resolved again, never the replaying caller's).
+            if let Some(effect) = slot.as_ref().and_then(|slot| {
+                scope
+                    .route
+                    .backend
+                    .declared_effect_at(slot, admitted.call.tool)
+            }) {
+                crate::gateway::meta_mcp::invoke::audit::note_declared_effect(
+                    effect,
+                    crate::security::decision_record::EffectSource::ToolAnnotation,
+                );
+            }
             Some(response)
         }
         None => None,
     };
     let replay = match guarded {
         Some(GuardOutcome::CachedResult(cached)) => {
+            #[cfg(test)]
+            seams::note_served(seams::Served::Cache);
+            note_caller_slot_effect(scope, propagation, admitted.call.tool);
             Some(JsonRpcResponse::success(id.clone(), cached))
         }
         Some(GuardOutcome::CachedError(error)) => {
+            #[cfg(test)]
+            seams::note_served(seams::Served::Cache);
+            note_caller_slot_effect(scope, propagation, admitted.call.tool);
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
             crate::gateway::meta_mcp::invoke::audit::counting::note_replay();
             let mut response = super::cached_error_response(Some(id.clone()), &error);
@@ -276,6 +306,25 @@ pub(super) fn deliver_replay(
     Ok(())
 }
 
+/// Note what the caller's own slot declares for `tool` now: the slot the
+/// call's binding selects, resolved as the dispatch resolves it; nothing when
+/// that slot cannot say. A live direct call reads it so, and a 7a cache hit
+/// too, since the cache is keyed by the caller's binding. A direct call names
+/// a registry backend, never a capability provider (answered absent), so the
+/// source is the tool's own annotation.
+pub(super) fn note_caller_slot_effect(scope: Scope<'_>, propagation: &Propagation, tool: &str) {
+    if let Some(effect) = scope
+        .route
+        .backend
+        .declared_effect_for(propagation.identity_key.as_deref(), tool)
+    {
+        crate::gateway::meta_mcp::invoke::audit::note_declared_effect(
+            effect,
+            crate::security::decision_record::EffectSource::ToolAnnotation,
+        );
+    }
+}
+
 /// Just before the backend can be reached: from here a drop is uncertain.
 pub(super) fn mark(lease: Option<&SyncLease>) {
     lease.inspect(|lease| lease.mark_dispatched());
@@ -302,6 +351,11 @@ fn replay_scan(
     ),
     response: &mut JsonRpcResponse,
 ) {
+    // Every stored answer this route serves (a 7a result or error, a 7b
+    // replay) passes here: scrubbed against the values current now, so a
+    // value marked secret after it was stored is removed, and a refused
+    // scrub makes the fixed refusal the answer.
+    let _ = state.backends.scrub_stored(response);
     let method = envelope.method.as_str();
     let target = super::direct_dispatch::screen_target(call, method);
     super::super::direct_guards::scan_direct_egress(
@@ -346,6 +400,28 @@ pub(crate) mod seams {
 
     pub(in crate::gateway::router::backend_handlers) fn note_replay(held_7a: bool) {
         REPLAY_HELD.with(|cell| cell.set(Some(held_7a)));
+    }
+
+    /// Which store answered a stored delivery on this thread.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Served {
+        /// Stage 7a: the idempotency cache (a cached success or failure).
+        Cache,
+        /// Stage 7b: the execution store's completed replay.
+        Execution,
+    }
+
+    thread_local! {
+        static SERVED: std::cell::Cell<Option<Served>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// The store that served the last stored delivery on this thread; taken once.
+    pub(crate) fn served() -> Option<Served> {
+        SERVED.with(std::cell::Cell::take)
+    }
+
+    pub(in crate::gateway::router::backend_handlers) fn note_served(served: Served) {
+        SERVED.with(|cell| cell.set(Some(served)));
     }
 
     pub(in crate::gateway::router::backend_handlers) async fn before_mark() {

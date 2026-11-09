@@ -7,8 +7,10 @@ The Tests, Windows check and macOS check suites run as shards. Each shard is
 a plain `cargo test` over a subset of test targets. The shards of one OS are
 exact complements of the command that job ran before sharding:
 
-- the library is split by a libtest filter and the matching `--skip`, or run
-  whole in one shard (macOS);
+- the library is split by a libtest filter and the matching `--skip` (Windows
+  splits the skipped part again by module filters, so it has three lib
+  shards), or run whole in one shard (macOS). Filters match substrings of
+  the test path, so a module filter also takes its nested paths;
 - the integration targets are split by `--test` glob classes `[a-l]*` and
   `[!a-l]*`, or taken whole (`*`) where the OS runs a single integration shard.
 
@@ -47,6 +49,12 @@ BASE = ["test", "--all-features", "--no-fail-fast"]
 #  libtest args before the OS skips, floor of selected tests)
 _LIB_A = ("suite", ["--lib"], [LIB_SPLIT])
 _LIB_B = ("suite", ["--lib"], ["--skip", LIB_SPLIT])
+# Windows splits lib-b again: its tests ran about 23 min after a 22-min build (run 42493724287),
+# the longest job on a lane pull request. These top-level modules move to lib-c (4,727 of 9,251
+# tests then); lib-b skips them, so each library test still runs in exactly one shard.
+LIB_C_MODULES = ["security::", "capability::", "events::", "backend::", "transport::", "oauth::"]
+_WIN_LIB_B = ("suite", ["--lib"], ["--skip", LIB_SPLIT, *(x for m in LIB_C_MODULES for x in ("--skip", m))])
+_WIN_LIB_C = ("suite", ["--lib"], [*LIB_C_MODULES, "--skip", LIB_SPLIT])
 SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
     # Floors: the selections measured by the MIK-8482 probe (run 39135535466).
     "linux": {
@@ -57,7 +65,9 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
     },
     "windows": {
         "lib-a": [(*_LIB_A, 5335)],
-        "lib-b": [(*_LIB_B, 6747)],
+        # The former lib-b floor (6747), divided in the measured proportion.
+        "lib-b": [(*_WIN_LIB_B, 3299)],
+        "lib-c": [(*_WIN_LIB_C, 3448)],
         "int-a": [("suite", ["--bins", "--test", GLOB_A], [], 763)],
         "int-b": [("suite", ["--test", GLOB_B], [], 1238)],
     },
@@ -92,20 +102,6 @@ KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
      "(transparency_log::bounded_tests, identity_propagation::audit_fail_closed, "
      "signing_allocation_tests::withheld_parity_stdio, hardened_signing_e2e, "
      "mik_7272_task_1_acs)"),
-    (_TMP, r"stdio/task-[0-9a-f-]{36}\.json", 1,
-     "a stdio task record written after its test's temp dir is gone"),
-    (_TMP,
-     r"\.mcp-gateway/protocol-revision-telemetry/(\.window\.lock|window\.json)"
-     r"|\.mcp-gateway/record-principal\.key|tasks/stdio/store\.lease|inner\.yaml"
-     r"|\.gateway\.yaml\.lock|\.mcp-gateway/transparency/transparency\.jsonl(\.hwm|\.lock)?"
-     r"|gateway-control-plane/audit\.jsonl(\.hwm|\.lock)?"
-     r"|\.mcp-gateway/tasks/task-[0-9a-f-]{36}\.json|serve\.log", 3,
-     "the home of a gateway an integration test spawned, written after the "
-     "test's temp dir is gone: its telemetry window, record key and stdio "
-     "lease, or its config lock, transparency log and control-plane audit, "
-     "or a full home with its task record and serve log (CI job 125219817324); "
-     "the tests' wait for that gateway removes it; up to three in one int-a "
-     "run (CI job 125058531711)"),
 ]
 # Written out, not derived from the list above: an entry added there and not
 # here, or a count raised past its ceiling, fails the self-test, so the list
@@ -113,13 +109,6 @@ KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
 # matches none of these.
 LEFTOVER_CEILING: dict[tuple[str, str], int] = {
     (r"\.tmp[A-Za-z0-9]{6}", r"audit\.jsonl\.hwm"): 3,
-    (r"\.tmp[A-Za-z0-9]{6}", r"stdio/task-[0-9a-f-]{36}\.json"): 1,
-    (r"\.tmp[A-Za-z0-9]{6}",
-     r"\.mcp-gateway/protocol-revision-telemetry/(\.window\.lock|window\.json)"
-     r"|\.mcp-gateway/record-principal\.key|tasks/stdio/store\.lease|inner\.yaml"
-     r"|\.gateway\.yaml\.lock|\.mcp-gateway/transparency/transparency\.jsonl(\.hwm|\.lock)?"
-     r"|gateway-control-plane/audit\.jsonl(\.hwm|\.lock)?"
-     r"|\.mcp-gateway/tasks/task-[0-9a-f-]{36}\.json|serve\.log"): 3,
 }
 
 HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
@@ -182,6 +171,28 @@ def cargo(
     return p.wait(), lines
 
 
+def leftovers(tmp: str) -> dict[str, str]:
+    """Every entry left in a shard's TMPDIR, by name, with its path. An entry a test binary left in
+    its own BY_BINARY/<binary> folder is named `<binary>/<entry>`; an empty binary folder is no
+    leftover. The runner itself is not one. Everything else at the top is checked as it is."""
+    out = {}
+    for name in os.listdir(tmp):
+        path = os.path.join(tmp, name)
+        if name == RUNNER_NAME:
+            continue
+        if name == BY_BINARY and os.path.isdir(path) and not os.path.islink(path):
+            for binary in os.listdir(path):
+                folder = os.path.join(path, binary)
+                if not os.path.isdir(folder) or os.path.islink(folder):
+                    out[f"{BY_BINARY}/{binary}"] = folder
+                    continue
+                for entry in os.listdir(folder):
+                    out[f"{binary}/{entry}"] = os.path.join(folder, entry)
+            continue
+        out[name] = path
+    return out
+
+
 def unexpected(entries: dict[str, list[str]],
                known: list[tuple[str, str, int, str]] = KNOWN_LEFTOVERS) -> list[str]:
     """The entries `known` does not allow. An entry is allowed when its name
@@ -193,7 +204,7 @@ def unexpected(entries: dict[str, list[str]],
         files = entries[name]
         for pattern, holds, most, _why in known:
             key = (pattern, holds)
-            if (re.fullmatch(pattern, name) and files
+            if (re.fullmatch(pattern, name.rsplit("/", 1)[-1]) and files
                     and all(re.fullmatch(holds, f) for f in files)
                     and used.get(key, 0) < most):
                 used[key] = used.get(key, 0) + 1
@@ -246,13 +257,44 @@ def run(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     return 1 if failed else 0
 
 
+RUNNER_NAME = ".shard-runner.sh"
+BY_BINARY = "by-binary"
+
+
+# One shared TMPDIR cannot say which test binary left an entry. Every test binary starts through
+# this runner instead, with TMPDIR set to BY_BINARY/<target> (cargo's `-<hash>` suffix dropped), so
+# a leftover is reported under the binary that left it. A gateway a test spawns inherits that TMPDIR.
+RUNNER_SH = """#!/bin/sh
+b=${1##*/}
+b=${b%-*}
+d="$TMPDIR/by-binary/$b"
+mkdir -p "$d" || exit 1
+TMPDIR=$d exec "$@"
+"""
+
+
+def write_runner(tmp: str) -> str:
+    """Write the cargo runner into `tmp` and return its path."""
+    path = os.path.join(tmp, RUNNER_NAME)
+    with open(path, "w") as f:
+        f.write(RUNNER_SH.replace("by-binary", BY_BINARY))
+    os.chmod(path, 0o755)
+    return path
+
+
+def runner_config(path: str) -> list[str]:
+    """Cargo arguments that start each test binary, on any host triple, through `path`."""
+    return ["--config", f"target.'cfg(all())'.runner=['{path}']"]
+
+
 def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> list[str]:
     failed = []
     tmp = tempfile.mkdtemp(prefix="shard-tmp-") if os_kind in TMP_GUARDED else None
     env = {**os.environ, "TMPDIR": tmp} if tmp else None
+    runner = runner_config(write_runner(tmp)) if tmp else []
     for step, cargo_args, test_args, floor in SHARDS[os_kind][shard]:
         rc, lines = cargo(
-            [*BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
+            [*runner, *BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
             program,
             env,
         )
@@ -270,16 +312,15 @@ def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -
         if rc != 0:
             failed.append(f"examples: cargo build exited {rc}")
     if tmp:
-        names = os.listdir(tmp)
-        bad = unexpected({name: files_in(os.path.join(tmp, name)) for name in names})
+        paths = leftovers(tmp)
+        bad = unexpected({name: files_in(path) for name, path in paths.items()})
         # Tolerated entries are printed too: which ones count against the
         # allowance is only sort order, so the cause can sit in either list.
-        for name in sorted(set(names) - set(bad)):
+        for name in sorted(set(paths) - set(bad)):
             print(f"::notice::{os_kind} {shard} tolerated in TMPDIR: {name} "
-                  f"({contents(os.path.join(tmp, name))})")
+                  f"({contents(paths[name])})")
         # A failure lists every file: the writer may be named by the last one.
-        failed += [f"left in TMPDIR: {name} ({contents(os.path.join(tmp, name), None)})"
-                   for name in bad]
+        failed += [f"left in TMPDIR: {name} ({contents(paths[name], None)})" for name in bad]
         shutil.rmtree(tmp, ignore_errors=True)
     return failed
 
@@ -361,7 +402,7 @@ def self_test() -> int:
         "the count bounds a source"
     assert all(n <= LEFTOVER_CEILING.get((p, h), 0) for p, h, n, _ in KNOWN_LEFTOVERS), \
         "KNOWN_LEFTOVERS may only shrink"
-    hwm, task = ["audit.jsonl.hwm"], ["stdio/task-0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0.json"]
+    hwm = ["audit.jsonl.hwm"]
     home = [".mcp-gateway/protocol-revision-telemetry/window.json", "tasks/stdio/store.lease"]
     control = [".gateway.yaml.lock", ".mcp-gateway/transparency/transparency.jsonl",
                "gateway-control-plane/audit.jsonl"]
@@ -369,14 +410,29 @@ def self_test() -> int:
             *(f".mcp-gateway/transparency/transparency.jsonl{x}" for x in ("", ".hwm", ".lock")),
             *(f"gateway-control-plane/audit.jsonl{x}" for x in ("", ".hwm", ".lock")),
             "serve.log"]
+    # A spawned gateway's home is no longer a known leftover: the HTTP harness
+    # drains its gateway before its folders go (#4576), and no int-a run since
+    # left one. Each of its three shapes now fails, even alone.
+    for files in (home, control, full):
+        assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
     # A leaked TempLog folder is never one of the tolerated plain temp dirs.
     assert unexpected({"audit-log-Ab12Cd": hwm, ".tmpAb12Cd": hwm}) == ["audit-log-Ab12Cd"]
     # The families whose tests now use their own temp folders are no longer
     # tolerated.
     gone = ["oauth_test_no_token", "chain-test-0b1c", "http_transport_tls_guard", "stdio-tail-1"]
     assert unexpected({n: ["tokens"] for n in gone}) == sorted(gone), gone
+    # A test's task store or events store keeps its folder until its last
+    # write, so a task record or an events-store file in a plain temp folder
+    # is a leak: none is tolerated, not even alone or beside an audit file.
+    stores = [["stdio/task-0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0.json"],
+              ["tasks/task-0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0.json"],
+              ["subs/sub_u1_pt.json"], ["outbox/evt_0b1c.json"],
+              ["dead/evt_0b1c.json"], ["verified/0b1c.json"],
+              ["audit.jsonl.hwm", "subs/sub_u1_pt.json"]]
+    for files in stores:
+        assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
     # Each known source is tolerated up to its own count.
-    for files, most in ((hwm, 3), (task, 1), (home, 3), (control, 3), (full, 3)):
+    for files, most in ((hwm, 3),):
         names = [f".tmpAb12C{i}" for i in range(most + 1)]
         assert unexpected({n: files for n in names}) == [names[-1]], (files, most)
     # A plain temp folder is tolerated only for what a known source writes: a
@@ -403,7 +459,8 @@ def self_test() -> int:
     # Every file is named, the fourth too: no "+1 more" hides the writer.
     assert planted == ["left in TMPDIR: .tmpXyZ789 (a.db 0B, b.db 0B, c.db 0B, other.db 0B)"], \
         planted
-    # And a known source's leftover, through the same step, stays green.
+    # Through the same step, a planted gateway home now turns red, and the one
+    # known source's leftover, the audit high-water mark, stays green.
     fake_home = (*fake[:2], fake[2].replace(
         "open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()",
         "d = os.path.join(os.environ['TMPDIR'], '.tmpHoMe12', 'tasks', 'stdio')\n"
@@ -412,7 +469,19 @@ def self_test() -> int:
     assert fake_home != fake, "the planted home must replace the planted file"
     os.environ["PLANT_LEAK"] = "1"
     try:
-        assert run_steps("linux", "lib-a", fake_home) == [], "a known source turned red"
+        home_run = run_steps("linux", "lib-a", fake_home)
+    finally:
+        del os.environ["PLANT_LEAK"]
+    assert home_run == ["left in TMPDIR: .tmpHoMe12 (tasks/stdio/store.lease 0B)"], home_run
+    fake_known = (*fake[:2], fake[2].replace(
+        "open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()",
+        "d = os.path.join(os.environ['TMPDIR'], '.tmpKnoWn1')\n"
+        "    os.makedirs(d)\n"
+        "    open(os.path.join(d, 'audit.jsonl.hwm'), 'w').close()"))
+    assert fake_known != fake, "the planted known source must replace the planted file"
+    os.environ["PLANT_LEAK"] = "1"
+    try:
+        assert run_steps("linux", "lib-a", fake_known) == [], "a known source turned red"
     finally:
         del os.environ["PLANT_LEAK"]
     # The same on real folders: files_in feeds the match, and a link to a
@@ -425,16 +494,83 @@ def self_test() -> int:
                 open(path, "w").close()
             return name
         found = {name: files_in(os.path.join(root, name)) for name in (
-            plant(".tmpHome01", home), plant(".tmpHome02", [*home, ".mcp-gateway/other.db"]),
+            plant(".tmpKnown1", hwm), plant(".tmpStray1", [*hwm, "other.db"]),
             plant(".tmpLink01", hwm))}
         os.symlink(root, os.path.join(root, ".tmpLink01", "elsewhere"))
         found[".tmpLink01"] = files_in(os.path.join(root, ".tmpLink01"))
-        assert found[".tmpHome01"] == sorted(home), found
+        assert found[".tmpKnown1"] == hwm, found
         assert found[".tmpLink01"] == ["audit.jsonl.hwm", "elsewhere"], found
-        assert unexpected(found) == [".tmpHome02", ".tmpLink01"], found
+        assert unexpected(found) == [".tmpLink01", ".tmpStray1"], found
+    per_binary_rows()
     print("shard_tests self-test: ok")
     return 0
 
+
+def per_binary_rows() -> None:
+    """Each test binary gets its own TMPDIR under BY_BINARY, so a leftover names the binary that left it."""
+    # The runner itself: a binary named by cargo with its hash suffix runs with TMPDIR set to
+    # BY_BINARY/<target>, which the runner creates.
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as bins:
+        runner = write_runner(tmp)
+        stub = os.path.join(bins, "a0_per_caller_cache-0123456789abcdef")
+        with open(stub, "w") as f:
+            f.write('#!/bin/sh\nprintf %s "$TMPDIR"\n')
+        os.chmod(stub, 0o755)
+        out = subprocess.run([runner, stub], env={**os.environ, "TMPDIR": tmp},
+                             capture_output=True, text=True, check=True).stdout
+        want = os.path.join(tmp, BY_BINARY, "a0_per_caller_cache")
+        assert out == want, f"the binary's TMPDIR is {out!r}, not {want!r}"
+        assert os.path.isdir(want), "the runner creates the binary's folder"
+        # Its exit status is the binary's.
+        with open(stub, "w") as f:
+            f.write("#!/bin/sh\nexit 7\n")
+        assert subprocess.run([runner, stub], env={**os.environ, "TMPDIR": tmp}).returncode == 7, \
+            "the runner keeps the binary's exit status"
+    # cargo is told to use it.
+    cfg = runner_config("/x/r.sh")
+    assert cfg == ["--config", "target.'cfg(all())'.runner=['/x/r.sh']"], cfg
+    # End to end through run_steps: a fake cargo that starts stub test binaries through the runner its
+    # --config names, as real cargo does. PLANT selects what each binary leaves in its own TMPDIR.
+    with tempfile.TemporaryDirectory() as bins:
+        stubs = []
+        for name in ("gh452_session_owner-fedcba9876543210", "a0_per_caller_cache-0123456789abcdef"):
+            stub = os.path.join(bins, name)
+            with open(stub, "w") as f:
+                f.write('#!/bin/sh\ncase " $PLANT " in *" leak "*) mkdir -p "$TMPDIR/.tmpXyZ789/tasks"; '
+                        ': > "$TMPDIR/.tmpXyZ789/tasks/task-x.json" ;; esac\n'
+                        'case " $PLANT " in *" hwm "*) mkdir -p "$TMPDIR/.tmpHwmA12"; '
+                        ': > "$TMPDIR/.tmpHwmA12/audit.jsonl.hwm" ;; esac\n')
+            os.chmod(stub, 0o755)
+            stubs.append(stub)
+        fake_cargo = (sys.executable, "-c", (
+            "import os, re, subprocess, sys\n"
+            "args = sys.argv[1:]\n"
+            "cfg = [args[i + 1] for i, a in enumerate(args) if a == '--config']\n"
+            "run = [re.search(r\"runner=\\['(.*)'\\]\", c).group(1) for c in cfg if 'runner=' in c]\n"
+            f"for stub in {stubs!r}:\n"
+            "    subprocess.run([*run, stub], check=True)\n"
+            "print('     Running unittests src/lib.rs (x)')\n"
+            "print('running 99999 tests')\n"
+            "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"))
+        def run(plant: str) -> list[str]:
+            os.environ["PLANT"] = plant
+            try:
+                return run_steps("linux", "lib-a", fake_cargo)
+            finally:
+                del os.environ["PLANT"]
+        # A task record each binary leaves is named under its own binary, the same entry name in both.
+        got = run("leak")
+        assert got == ["left in TMPDIR: a0_per_caller_cache/.tmpXyZ789 (tasks/task-x.json 0B)",
+                       "left in TMPDIR: gh452_session_owner/.tmpXyZ789 (tasks/task-x.json 0B)"], got
+        # A known leftover inside a binary's folder stays tolerated, and its count is shared across
+        # binaries (two here, within the allowance of three).
+        assert run("hwm") == [], run("hwm")
+        assert run("") == [], "clean binaries leave only their empty folders"
+    # The allowance is shared across binaries: four known leftovers in four binaries fail on the fourth.
+    four = {f"bin{i}/.tmpAb12C{i}": ["audit.jsonl.hwm"] for i in range(4)}
+    assert unexpected(four) == ["bin3/.tmpAb12C3"], unexpected(four)
+    # An unexpected empty folder at the top of TMPDIR still fails, as before.
+    assert unexpected({"stray": []}) == ["stray"]
 
 def main(argv: list[str]) -> int:
     if argv[1:] == ["--self-test"]:

@@ -78,6 +78,7 @@ pub(crate) async fn stdio_sealed(setup: StdioSetup, era: Era, answer: Value) -> 
             dual_signed(meta);
             if let Some(firewall) = firewall {
                 meta.share_keyring_with_for_test(&firewall);
+                crate::security::firewall::collusion_live_rig::seed_meta(meta, &firewall);
                 meta.set_firewall(Some(firewall));
             }
         },
@@ -166,7 +167,8 @@ pub(crate) async fn stdio_legacy_then_modern_replay() -> (Value, Value, usize) {
 /// `n1`), with both provenance signers and a transparency log on the
 /// Meta-MCP. Returns the delivered body, its `response_delivery_attempt` rows
 /// and the log's directory (kept alive by the caller).
-pub(crate) async fn stdio_signed_recorded() -> (Value, Vec<Value>, tempfile::TempDir) {
+pub(crate) async fn stdio_signed_recorded() -> (Value, Vec<Value>, std::sync::Arc<tempfile::TempDir>)
+{
     use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
     let (dir, log) = temp_log(None);
     let meta_log = Arc::clone(&log);

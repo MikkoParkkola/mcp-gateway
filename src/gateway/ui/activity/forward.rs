@@ -16,6 +16,23 @@
 //! anchor's re-read, plus the shared segment opener's identity check of the
 //! active file, which reads that file's first line (at most one capped line)
 //! each time the active file is opened. Opening a sealed segment reads nothing.
+//!
+//! Opens of the active file, each reading at most its first line (one capped
+//! line, `RECORD_CAP`). Every listing of the segments opens it once, three
+//! times when a rotation races it three times, and a call lists at most
+//! `3 + X` times: a resume, a fresh start, the end of the log, and one per
+//! segment crossed (`X`). Every attempt to open a segment opens it at most
+//! once, directly or by the opener's fallback when a listed sealed segment
+//! has vanished, and a call makes at most `2S + X` attempts: the resume and
+//! the start each walk the listing, and each crossing opens one. `S` is the
+//! most segments any of the call's listings shows, and `X <= S`, so one call
+//! opens the active file at most `9 + 6S` times. `S` is the kept sealed
+//! segments plus the active file, and a rotation seals the old active file
+//! before its retention pass unlinks the oldest segment, so `S` is at most
+//! `retain_segments + 2`: 93 opens at the invocation log's default of 12 and
+//! 45 for the governance log's fixed 4. Retention runs on the next append, so
+//! after `retain_segments` is lowered `S` is, until then, at most the largest
+//! value the log has run under, plus 2.
 
 use std::fs::File;
 use std::io;
@@ -24,7 +41,8 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::access::Access;
-use super::reader::{Limits, Line, WINDOW, Which, read_page};
+pub(in crate::gateway::ui) use super::reader::Limits;
+use super::reader::{Line, WINDOW, Which, read_page};
 use super::rows::{Kind, kind_of, row};
 
 /// After this many restarts in one catch-up, the page ends in `reset`, so a
@@ -60,7 +78,7 @@ impl StreamKind {
     /// Whether a row of `kind` belongs on this stream.
     fn keeps(self, kind: Kind) -> bool {
         match self {
-            Self::Activity => matches!(kind, Kind::Call | Kind::AdminAction),
+            Self::Activity => matches!(kind, Kind::Call | Kind::Refusal | Kind::AdminAction),
             Self::Config => kind == Kind::Config,
         }
     }
@@ -130,7 +148,7 @@ pub(in crate::gateway::ui) struct Diagnostics {
 
 /// Rows after `cursor` up to and including `stop`, oldest first. `None` for
 /// `cursor` starts at the log's oldest kept record.
-pub(super) fn rows_after(
+pub(in crate::gateway::ui) fn rows_after(
     log: &Log<'_>,
     cursor: Option<&Mark>,
     stop: Option<&Mark>,
@@ -315,7 +333,7 @@ enum Outcome {
 }
 
 /// A record's place, from its own counter and entry hash.
-fn mark_of(entry: &Value) -> Option<Mark> {
+pub(in crate::gateway::ui) fn mark_of(entry: &Value) -> Option<Mark> {
     let counter = entry.get("counter")?.as_u64()?;
     let hash = entry.get("entry_hash")?.as_str()?.strip_prefix("sha256:")?;
     Some(Mark {

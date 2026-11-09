@@ -18,7 +18,14 @@ pub mod agent_identity;
 pub mod audit;
 pub(crate) mod audit_rotation_config;
 pub mod caller_identity;
+/// Credential names by member or key name: the firewall's redactor and the
+/// web UI's secret slots both judge names by it.
+#[cfg(any(feature = "firewall", feature = "webui"))]
+pub(crate) mod credential_names;
 pub mod data_flow;
+/// The decision fixture table's row shape (tests only).
+#[cfg(test)]
+pub(crate) mod decision_fixture_table;
 pub(crate) mod decision_record;
 pub(crate) mod dispatched;
 pub(crate) mod dump_guard;
@@ -46,6 +53,7 @@ pub mod response_contract;
 pub mod response_inspect;
 pub(crate) mod response_policy;
 pub mod response_scanner;
+pub(crate) mod rule_id;
 pub mod sanitize;
 pub mod scope_collision;
 pub(crate) mod security_metrics;

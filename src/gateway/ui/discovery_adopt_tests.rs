@@ -9,9 +9,12 @@ use serde_json::Value;
 
 use super::*;
 use crate::config::{BackendConfig, TransportConfig};
+use crate::config_reload::FileRevision;
 use crate::secret_store::StoreError;
 
 const CANARY: &str = "zq-adopt-canary";
+/// The guard's refusal text: it goes to the server log, never the answer.
+const GUARD_DETAIL: &str = "Refusing to load config file /zq/guard/gateway.yaml: mode 0660";
 
 async fn body_of(response: Response) -> (StatusCode, Value) {
     let status = response.status();
@@ -41,6 +44,7 @@ fn writer_outcomes() -> Vec<(
                 revision: Some(FileRevision::of(b"new")),
                 kept_beside: None,
                 reload: crate::config_reload::ReloadOutcome::no_changes(),
+                secrets: Vec::new(),
             }),
             StatusCode::CREATED,
             "",
@@ -50,6 +54,7 @@ fn writer_outcomes() -> Vec<(
                 revision: None,
                 kept_beside: None,
                 reload: crate::config_reload::ReloadOutcome::no_changes(),
+                secrets: Vec::new(),
             }),
             StatusCode::INTERNAL_SERVER_ERROR,
             "",
@@ -65,9 +70,7 @@ fn writer_outcomes() -> Vec<(
             "not_in_place",
         ),
         (
-            Err(ReplaceError::Refused(
-                "auth is on but no audit log is configured; config writes are refused".to_owned(),
-            )),
+            Err(ReplaceError::NoAuditLog),
             StatusCode::SERVICE_UNAVAILABLE,
             "audit_log_required",
         ),
@@ -96,6 +99,16 @@ fn writer_outcomes() -> Vec<(
             error: CANARY.to_owned(),
         }),
         failed(ReplaceError::Failed(CANARY.to_owned())),
+        (
+            Err(ReplaceError::NoConfigFile),
+            StatusCode::CONFLICT,
+            "no_config_file",
+        ),
+        (
+            Err(ReplaceError::ConfigRefused(GUARD_DETAIL.to_owned())),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "gateway.yaml could not be loaded",
+        ),
     ]
 }
 
@@ -117,6 +130,30 @@ fn every_writer_outcome_has_one_answer_and_quotes_nothing() {
         assert!(!text.contains(CANARY), "{what} answered {text}");
         assert!(!logs.contains(CANARY), "{what} logged {logs}");
     }
+}
+
+/// The guard's refusal is logged with its text, which names the file and the
+/// fix, and answered with fixed text naming no path.
+#[test]
+fn a_guard_refusal_is_logged_in_full_and_answered_without_a_path() {
+    let ((status, json), logs) = {
+        let (response, logs) = crate::test_log_capture::capture_warnings(|| {
+            answer(
+                "tool",
+                Err(ReplaceError::ConfigRefused(GUARD_DETAIL.to_owned())),
+            )
+        });
+        (futures::executor::block_on(body_of(response)), logs)
+    };
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        logs.contains(GUARD_DETAIL),
+        "the detail was not logged: {logs}"
+    );
+    assert!(
+        !json.to_string().contains("/zq/"),
+        "the answer names a path: {json}"
+    );
 }
 
 fn stdio_backend() -> BackendConfig {
@@ -220,9 +257,78 @@ fn the_compute_refuses_a_managed_name_and_a_short_reference_list() {
     );
 }
 
-/// Every value kind across env and headers: literals (a reference-shaped
-/// one included) leave the backend in a fixed order, templates and empty
-/// values stay, and the backend is disabled.
+/// Adopt's split of a find, as the route makes it.
+fn adopted(server: &crate::discovery::DiscoveredServer) -> crate::discovery::adopt::Adoption {
+    use super::super::super::secret_slots::{stores_env_value, stores_header_value};
+    crate::discovery::adopt::adoption(server, stores_env_value, stores_header_value)
+}
+
+/// A find carrying ordinary settings and credentials side by side, as a
+/// desktop client's config would.
+fn find_with_settings() -> crate::discovery::DiscoveredServer {
+    let mut server = crate::discovery::DiscoveredServer::new(
+        "tool".to_owned(),
+        String::new(),
+        crate::discovery::DiscoverySource::ClaudeDesktop,
+        TransportConfig::Stdio {
+            command: "npx tool".to_owned(),
+            cwd: None,
+            protocol_version: None,
+        },
+        crate::discovery::ServerMetadata::default(),
+    );
+    server.env = [
+        ("DEBUG", "1"),
+        ("LOG_LEVEL", "debug"),
+        ("API_KEY", "zq-adopt-a1"),
+        ("X_AUTH_TOKEN", "zq-adopt-b2"),
+        ("DB_PASSWORD", "zq-adopt-c3"),
+        ("SESSION_TIMEOUT", "30"),
+        ("CONFIG_PATH", "file:/example"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    .collect();
+    server.headers = [("X-Plain", "plain-header")]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+    server
+}
+
+/// Adopt's side of the shared rule (regression): ordinary settings stay in
+/// the backend as text; values under credential-like names, every header, and
+/// a reference-shaped value under any name (stored as its bytes, so the
+/// gateway never reads it as a reference) leave it for the store.
+#[test]
+fn adoption_stores_credentials_and_keeps_ordinary_settings() {
+    let adopted = adopted(&find_with_settings());
+    let fields: Vec<String> = adopted
+        .literals
+        .iter()
+        .map(crate::discovery::adopt::Literal::field)
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            "env.API_KEY",
+            "env.CONFIG_PATH",
+            "env.DB_PASSWORD",
+            "env.X_AUTH_TOKEN",
+            "headers.X-Plain"
+        ]
+    );
+    let env = &adopted.backend.env;
+    assert_eq!(env.get("DEBUG").map(String::as_str), Some("1"), "{env:?}");
+    assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("debug"));
+    assert_eq!(env.get("SESSION_TIMEOUT").map(String::as_str), Some("30"));
+    assert_eq!(env.len(), 3, "{:?}", env.keys());
+    assert!(adopted.backend.headers.is_empty());
+}
+
+/// Every value kind across env and headers: credential-named literals (a
+/// reference-shaped one included) and header literals leave the backend in a
+/// fixed order, templates and empty values stay, and the backend is disabled.
 #[test]
 fn adoption_takes_out_literals_in_a_fixed_order() {
     let mut server = crate::discovery::DiscoveredServer::new(
@@ -237,7 +343,7 @@ fn adoption_takes_out_literals_in_a_fixed_order() {
         crate::discovery::ServerMetadata::default(),
     );
     server.env = [
-        ("Z_KEY", "zq-z"),
+        ("Z_API_KEY", "zq-adopt-z9"),
         ("A_KEY", "file:/looks/like/a/reference"),
         ("TEMPLATE", "${TOKEN}"),
         ("EMPTY", ""),
@@ -250,14 +356,17 @@ fn adoption_takes_out_literals_in_a_fixed_order() {
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect();
 
-    let adopted = crate::discovery::adopt::adoption(&server);
+    let adopted = adopted(&server);
 
     let fields: Vec<String> = adopted
         .literals
         .iter()
         .map(crate::discovery::adopt::Literal::field)
         .collect();
-    assert_eq!(fields, ["env.A_KEY", "env.Z_KEY", "headers.Authorization"]);
+    assert_eq!(
+        fields,
+        ["env.A_KEY", "env.Z_API_KEY", "headers.Authorization"]
+    );
     assert_eq!(
         adopted.literals[0].value.as_bytes(),
         b"file:/looks/like/a/reference"
@@ -365,4 +474,56 @@ fn escaped_keys_each_take_their_own_reference() {
     for (key, reference) in keys.iter().zip(&references) {
         assert_eq!(&config.backends["tool"].env[*key], reference, "{key}");
     }
+}
+
+/// SAVE.6: the audit-log answer follows the refusal's type. A refusal
+/// carrying the same words answers exactly as any other refusal.
+#[test]
+fn the_audit_log_answer_follows_the_type_not_the_words() {
+    let answered = |why: &str| {
+        futures::executor::block_on(body_of(answer(
+            "tool",
+            Err(ReplaceError::Refused(why.to_owned())),
+        )))
+    };
+    let look_alike = answered(NO_AUDIT_LOG);
+    assert_eq!(look_alike, answered(CANARY), "{look_alike:?}");
+    assert_ne!(
+        look_alike.1["error"], "audit_log_required",
+        "{look_alike:?}"
+    );
+}
+
+/// Adopt's side of the length bound: a credential-named env value or a header
+/// shorter than the redactor's short-value bound stays as written, one at the
+/// bound leaves for the store; a reference-shaped value leaves at any length
+/// (written as text, the gateway would read it as a reference).
+#[test]
+fn adoption_stores_nothing_shorter_than_the_bound_but_references() {
+    let bound = crate::security::needles::SHORT_VALUE_BYTES;
+    let digits = "0123456789abcdef";
+    let under: String = digits.chars().take(bound - 1).collect();
+    let at: String = digits.chars().take(bound).collect();
+    let mut server = find_with_settings();
+    server.env = [
+        ("API_KEY", under.as_str()),
+        ("DB_PASSWORD", at.as_str()),
+        ("CONFIG", "file:/x"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    .collect();
+    server.headers = [("X-Short", under.as_str()), ("X-Long", at.as_str())]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+    let adopted = adopted(&server);
+    let fields: Vec<String> = adopted
+        .literals
+        .iter()
+        .map(crate::discovery::adopt::Literal::field)
+        .collect();
+    assert_eq!(fields, ["env.CONFIG", "env.DB_PASSWORD", "headers.X-Long"]);
+    assert_eq!(adopted.backend.env.get("API_KEY"), Some(&under));
+    assert_eq!(adopted.backend.headers.get("X-Short"), Some(&under));
 }

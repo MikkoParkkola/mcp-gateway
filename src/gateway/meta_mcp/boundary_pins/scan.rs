@@ -8,66 +8,36 @@ use std::path::{Path, PathBuf};
 
 use syn::visit::Visit;
 
-/// A cfg predicate's value with `test` false and every other atom unknown.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Cfg {
-    True,
-    False,
-    Unknown,
-}
+// The cfg judgement is the crate's one shared reader (MIK-9387.TCFG.1).
+pub(super) use crate::test_source_text::{Cfg, eval};
 
-/// Evaluate one cfg predicate (`test`, `not(..)`, `all(..)`, `any(..)`, or
-/// any other atom). `all()` is true and `any()` false, as Rust defines them.
-pub(super) fn eval(meta: &syn::Meta) -> Cfg {
-    match meta {
-        syn::Meta::Path(path) if path.is_ident("test") => Cfg::False,
-        syn::Meta::List(list) => {
-            let args: Vec<syn::Meta> = list
-                .parse_args_with(
-                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-                )
-                .map(|p| p.into_iter().collect())
-                .unwrap_or_default();
-            let values: Vec<Cfg> = args.iter().map(eval).collect();
-            if list.path.is_ident("not") {
-                match values.as_slice() {
-                    [Cfg::True] => Cfg::False,
-                    [Cfg::False] => Cfg::True,
-                    _ => Cfg::Unknown,
-                }
-            } else if list.path.is_ident("all") {
-                if values.contains(&Cfg::False) {
-                    Cfg::False
-                } else if values.iter().all(|v| *v == Cfg::True) {
-                    Cfg::True
-                } else {
-                    Cfg::Unknown
-                }
-            } else if list.path.is_ident("any") {
-                if values.contains(&Cfg::True) {
-                    Cfg::True
-                } else if values.iter().all(|v| *v == Cfg::False) {
-                    Cfg::False
-                } else {
-                    Cfg::Unknown
-                }
-            } else {
-                Cfg::Unknown
-            }
-        }
-        _ => Cfg::Unknown,
-    }
-}
-
-/// Whether `attrs` carry a `#[cfg(..)]` that is definitely false outside
-/// tests: the node exists only in test builds.
+/// Whether `attrs` mark a node no product build compiles: test-only by the
+/// shared reader, or gated on the read token's must-fail probe. That cfg is
+/// set only by `scripts/ci/check-reads-token.py`, whose build exists to fail,
+/// so the pins must not read its deliberate violation as production. Kept
+/// here, not in the shared reader: other scanners count probe code, on the
+/// side that sees more.
 pub(super) fn test_only(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        attr.path().is_ident("cfg")
-            && attr
-                .parse_args::<syn::Meta>()
-                .is_ok_and(|meta| eval(&meta) == Cfg::False)
-    })
+    crate::test_source_text::test_only(attrs)
+        || attrs.iter().any(|attr| {
+            attr.path().is_ident("cfg")
+                && attr
+                    .parse_args::<syn::Meta>()
+                    .is_ok_and(|meta| probe_only(&meta))
+        })
+}
+
+/// `reads_token_probe`, alone or as one operand of an `all(..)`.
+fn probe_only(meta: &syn::Meta) -> bool {
+    match meta {
+        syn::Meta::Path(path) => path.is_ident("reads_token_probe"),
+        syn::Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|args| args.iter().any(probe_only)),
+        _ => false,
+    }
 }
 
 /// What the walk reports: every production node, with where it sits.

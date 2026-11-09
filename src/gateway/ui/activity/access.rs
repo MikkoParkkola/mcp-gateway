@@ -77,7 +77,9 @@ fn breadth(
     identity: Option<&VerifiedIdentity>,
     mapping: &ControlPlaneRoleMappingConfig,
 ) -> Result<Access, Refused> {
-    if client.admin {
+    // Admin breadth inside the scope: `within` bounds it
+    // to the caller's backends, so an in-scope admin reads all of its own.
+    if client.admin_standing() != crate::gateway::authz::AdminStanding::None {
         return Ok(Access::All);
     }
     let Some(identity) = identity else {
@@ -86,11 +88,11 @@ fn breadth(
     match mapping.resolve_role(identity) {
         Some(ControlPlaneRole::Admin | ControlPlaneRole::Auditor) => Ok(Access::All),
         Some(ControlPlaneRole::Developer)
-            if !identity.issuer.is_empty() && !identity.subject.is_empty() =>
+            if !identity.issuer().is_empty() && !identity.subject().is_empty() =>
         {
             Ok(Access::Own {
-                issuer: identity.issuer.clone(),
-                subject: identity.subject.clone(),
+                issuer: identity.issuer().to_owned(),
+                subject: identity.subject().to_owned(),
             })
         }
         _ => Err(Refused::Forbidden),

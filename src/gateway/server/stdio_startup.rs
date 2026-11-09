@@ -45,12 +45,16 @@ impl Gateway {
                 CapabilityExecutor::for_config(&self.config.capabilities)
                     .with_env(Arc::clone(&self.env))
                     .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
-                    .with_account_strategies(account_strategies),
+                    .with_account_strategies(account_strategies)
+                    .with_stop_deadline(self.backends.stop_deadline()),
             );
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
                 executor,
             ));
+            // Registered before the load, as on HTTP: a directory whose load
+            // fails is still checked for pin mismatches below.
+            cap_backend.register_directories(&self.config.capabilities.directories);
             let mut refused = Vec::new();
             for dir in &self.config.capabilities.directories {
                 match cap_backend.load_from_directory_reporting(dir).await {
@@ -70,6 +74,10 @@ impl Gateway {
                     refused.join("; ")
                 )));
             }
+            // A file whose pin stopped matching while the gateway was down was
+            // skipped by the load without a record: record it now, as the
+            // file watcher records one that changes while it runs.
+            cap_backend.detect_rug_pulls().await;
             cap_backend.mark_initial_scan_complete();
             meta_mcp.set_capabilities(cap_backend);
         }
@@ -120,3 +128,7 @@ fn key_error(error: &str) -> crate::Error {
 #[cfg(test)]
 #[path = "stdio_startup_tests.rs"]
 mod stdio_startup_tests;
+
+#[cfg(test)]
+#[path = "stdio_startup_pin_tests.rs"]
+mod stdio_startup_pin_tests;

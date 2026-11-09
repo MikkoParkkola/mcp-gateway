@@ -47,6 +47,9 @@ struct Session {
     live: Arc<crate::config_reload::LiveConfig>,
     task: tokio::task::JoinHandle<()>,
     next_id: u64,
+    /// The Meta-MCP the session serves.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
 }
 
 impl Session {
@@ -56,11 +59,23 @@ impl Session {
     /// notification still in flight when the row arms it would take the
     /// pause in place of the row's own line.
     async fn start(dir: &Path, path: std::path::PathBuf, announce: Announce) -> Self {
+        Self::start_with(dir, path, announce, |_| {}).await
+    }
+
+    /// [`Self::start`], after `setup` has seen the built gateway (a row
+    /// registering a backend of its own).
+    async fn start_with(
+        dir: &Path,
+        path: std::path::PathBuf,
+        announce: Announce,
+        setup: impl FnOnce(&Gateway),
+    ) -> Self {
         let config = Config::load(Some(&path)).expect("loads");
         let mut gateway = Gateway::new_with_path(config, Some(path))
             .await
             .expect("valid config")
             .with_data_dir(dir.to_path_buf());
+        setup(&gateway);
         let (hold, _) = gateway.stdio_drain_seams_for_test();
         let meta = gateway.stdio_meta_mcp_for_test();
         let (client, input) = tokio::io::duplex(64 * 1024);
@@ -84,6 +99,7 @@ impl Session {
             live,
             task,
             next_id: 1,
+            meta,
         };
         let id = session
             .send(
@@ -175,7 +191,7 @@ fn reached_resolution(reply: &Value) -> bool {
 /// to the next call, with no restart.
 #[tokio::test]
 async fn f2_stdio_sanitise_input_follows_a_reload() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_flag(&path, true);
     let mut s = Session::start(dir.path(), path.clone(), Announce::Yes).await;
@@ -220,7 +236,7 @@ async fn held_across_a_flip(s: &mut Session, path: &Path, to: bool) -> Value {
 /// turns it off before the line dispatches; and the reverse.
 #[tokio::test]
 async fn g4_a_held_stdio_line_keeps_the_generation_it_was_read_under() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_flag(&path, true);
     let mut s = Session::start(dir.path(), path.clone(), Announce::No).await;
@@ -283,7 +299,7 @@ async fn held_across_a_policy_flip(s: &mut Session, path: &Path, deny: bool) -> 
 /// allowed goes on to resolve its server, even when a reload denies it.
 #[tokio::test]
 async fn a_held_stdio_line_keeps_the_tool_policy_it_was_read_under() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_policy(&path, true);
     let mut s = Session::start(dir.path(), path.clone(), Announce::No).await;
@@ -299,3 +315,7 @@ async fn a_held_stdio_line_keeps_the_tool_policy_it_was_read_under() {
         "allowed then denied: {reply}"
     );
 }
+
+#[cfg(feature = "firewall")]
+#[path = "stdio_live_collusion_tests.rs"]
+mod collusion;

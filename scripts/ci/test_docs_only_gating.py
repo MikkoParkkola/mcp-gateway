@@ -53,7 +53,7 @@ KEPT = {
     "release-criteria", "capability-pins", "secrets-scan", "secret-leak-lint",
     "file-size-ceiling", "control-drift-probes", "registry-packages",
     # A few seconds of Python; a docs-only change is simply not judged.
-    "event-source-scope", "timing-asserts", "request-panics",
+    "event-source-scope", "timing-asserts", "request-panics", "doc-backticks",
     # Release signing's own unit tests; docker-build waits for them.
     "release-signing-checks",
 }
@@ -61,23 +61,26 @@ KEPT = {
 NOT_ON_PRS = {"test-throwaway-hosted", "test-trusted", "docker-build", "docker-manifest", "publish-mcp-registry",
               "packaged-suite-rehearsal", "binary-signing-rehearsal", "binary-sbom-rehearsal",
               "helm-chart-publish"}  # dispatch-only, or a tag
-# Runs only on a merge train: a pull request into the release line from a
-# `train/` branch in this repository, and not when it is docs-only. Checked by
-# its own cases below, so it is in neither SKIPPED nor KEPT.
-TRAIN_ONLY = {"feature-combos-train"}
+# Runs on a pull request into the release line, lane or merge train, that is not
+# docs-only and not a throwaway; feature-combos.yml covers every release-line push.
+# Checked by its own cases below, so it is in neither SKIPPED nor KEPT.
+RELEASE_PRS = {"feature-combos-pr"}
 # On a pull request, macOS runs only for a merge train (a `train/` branch in
 # this repository), docs-only or not, into any base; every non-PR event runs it
 # as before, except the release-line push (POST_MERGE_SKIPPED). Checked by its
 # own cases below, so it is in neither SKIPPED nor KEPT.
 MACOS_TRAIN = {"macos-shards", "macos-check"}
-# On a pull request into the release line, run only for a merge train and
-# judged there by HEAVY_GATE; scripts/ci/test_heavy_train_gating.py checks
-# their routing on every event, so the generic pull-request cases below leave
-# them out (their docs-only membership above still applies on a train).
-HEAVY_TRAIN = {
+# Judged on a merge train by HEAVY_GATE (scripts/ci/test_heavy_train_gating.py).
+# Each also runs on a lane pull request by its SKIPPED or KEPT rule above, so a
+# Windows, feature or release-tooling break fails the pull request that made it.
+HEAVY_JUDGED = {
     "windows-shards", "windows-clippy", "windows-check", "release-script-tests",
     "task-sdk-recovery", "gws-dry-run", "linux-keychain", "kani", "upgrade-rehearsal",
+    "feature-combos-pr",
 }
+# Kani is not train-only: a lane pull request that is not docs-only runs it too, so code that
+# does not compile under cfg(kani) fails its own CI, not a train (train 40l attempt 2 lost a full
+# train CI to two assert!-only variables). It stays in SKIPPED and POST_MERGE_SKIPPED.
 HEAVY_GATE = "heavy-gate"
 BINARY_STEPS = ("Build the shipped binary", "Verify pins with cap validate (real files accepted, tampered copy refused)")
 
@@ -102,11 +105,18 @@ POST_MERGE_SKIPPED = {
 POST_MERGE_PUSH = {"event_name": "push", "ref": f"refs/heads/{RELEASE_LINE}"}
 
 
-def simulate(jobs: dict, c: dict) -> set[str]:
+def simulate(jobs: dict, c: dict, keep_scope: bool = False) -> set[str]:
     """Jobs that run, resolving `needs` in order with each prerequisite's own
-    simulated result, so a kept job behind a skipped one counts as skipped."""
+    simulated result, so a kept job behind a skipped one counts as skipped.
+    `keep_scope`: take the scope job's result and outputs from `c` (a docs-only or
+    failed decision) instead of simulating it as a successful code change."""
     results: dict[str, str] = {}
     pending = dict(jobs)
+    scope_outputs = {"docs_only": "false"}
+    if keep_scope and "scope" in pending:
+        results["scope"] = c["needs"]["scope"]["result"]
+        scope_outputs = c["needs"]["scope"]["outputs"]
+        del pending["scope"]
     while pending:
         progressed = False
         for name, job in list(pending.items()):
@@ -114,8 +124,8 @@ def simulate(jobs: dict, c: dict) -> set[str]:
             needs = [needs] if isinstance(needs, str) else needs
             if any(n not in results for n in needs):
                 continue
-            outputs = {"docs_only": "false"}
-            local = dict(c, needs={n: {"result": results[n], "outputs": outputs if n == "scope" else {}} for n in needs})
+            local = dict(c, needs={n: {"result": results[n], "outputs": scope_outputs if n == "scope" else {}}
+                                   for n in needs})
             results[name] = "success" if runs(job, local) else "skipped"
             del pending[name]
             progressed = True
@@ -130,24 +140,30 @@ def as_train(c: dict, head: str = "train/20261027-1", repo: str = REPO) -> dict:
     return c
 
 
-def train_errors(jobs: dict) -> list[str]:
-    """Each TRAIN_ONLY job runs on a code train and on nothing else."""
+def release_pr_errors(jobs: dict) -> list[str]:
+    """Each RELEASE_PRS job runs on a code pull request into the release line, lane
+    or train, and on nothing else."""
     cases = {
         "code train": (as_train(ctx("pull_request", "success", "false")), True),
         "scope failed on a train": (as_train(ctx("pull_request", "failure", None)), True),
         "scope failed after emitting docs-only": (as_train(ctx("pull_request", "failure", "true")), True),
         "scope gave no output on a train": (as_train(ctx("pull_request", "success", None)), True),
         "docs-only train": (as_train(ctx("pull_request", "success", "true")), False),
-        "code PR": (ctx("pull_request", "success", "false"), False),
-        "train branch from a fork": (as_train(ctx("pull_request", "success", "false"), repo="fork/x"), False),
-        "a branch merely containing train/": (as_train(ctx("pull_request", "success", "false"), head="x/train/y"), False),
+        "code PR": (ctx("pull_request", "success", "false"), True),
+        "scope failed on a PR": (ctx("pull_request", "failure", None), True),
+        "docs-only PR": (ctx("pull_request", "success", "true"), False),
+        "train branch from a fork": (as_train(ctx("pull_request", "success", "false"), repo="fork/x"), True),
+        "a branch merely containing train/": (as_train(ctx("pull_request", "success", "false"), head="x/train/y"), True),
+        "same-repo throwaway PR": (as_train(ctx("pull_request", "success", "false"), head="throwaway/x"), False),
         "release-line push": (dict(ctx("push", "success", "false")), False),
         "a train into another base": (as_train(ctx("pull_request", "success", "false")), False),
+        "a code PR into another base": (ctx("pull_request", "success", "false"), False),
     }
     cases["a train into another base"][0]["github"]["base_ref"] = "main"
+    cases["a code PR into another base"][0]["github"]["base_ref"] = "main"
     cases["release-line push"][0]["github"].update(POST_MERGE_PUSH)
-    errors = [f"TRAIN_ONLY names a job ci.yml lacks: {j}" for j in sorted(TRAIN_ONLY - set(jobs))]
-    for job in sorted(TRAIN_ONLY & set(jobs)):
+    errors = [f"RELEASE_PRS names a job ci.yml lacks: {j}" for j in sorted(RELEASE_PRS - set(jobs))]
+    for job in sorted(RELEASE_PRS & set(jobs)):
         # The routing below is evaluated on an injected scope result, so the
         # dependency and the status function it relies on are asserted here.
         needs = jobs[job].get("needs") or []
@@ -215,6 +231,29 @@ def macos_train_errors(jobs: dict) -> list[str]:
     return errors
 
 
+AGGREGATES = ("test", "windows-check", "macos-check", HEAVY_GATE)
+
+
+def aggregate_cancel_errors(jobs: dict) -> list[str]:
+    """On a train PR (where all four run) each aggregate runs after a
+    failed, skipped or green shard, but a cancelled run creates no aggregate:
+    always() created them after the cancel and left the run queued for a runner,
+    holding the newer run in the concurrency group behind it."""
+    errors = []
+    for job in AGGREGATES:
+        needs = jobs[job].get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        for result in ("success", "failure", "skipped"):
+            for cancelled in (False, True):
+                c = as_train(ctx("pull_request", "success", "false"))
+                c["needs"] = {n: {"result": result, "outputs": {}} for n in needs}
+                c["_status"] = dict(c["_status"], cancelled=cancelled)
+                if runs(jobs[job], c) == cancelled:
+                    run = "cancelled run" if cancelled else "run"
+                    errors.append(f"{job}: a {run} with {result} shards {'runs' if cancelled else 'skips'} it")
+    return errors
+
+
 def post_merge_errors(jobs: dict) -> list[str]:
     """A release-line push runs everything but POST_MERGE_SKIPPED and NOT_ON_PRS."""
     errors = []
@@ -259,10 +298,68 @@ def runs(job: dict, c: dict) -> bool:
     return evaluate(cond, local) if cond else all_ok
 
 
+def expression_value(text, github: dict):
+    """A concurrency value: each `${{ }}` in `text` evaluated with GitHub's `&&`/`||` returning
+    operands (Python's `and`/`or` do the same), over the subset ci.yml's concurrency block uses.
+    A value that is one expression keeps its type; one mixed with literal text is a string."""
+    text = str(text).strip()
+
+    def one(expr: str):
+        expr = re.sub(r"format\('pr-\{0\}',\s*github\.event\.pull_request\.number\)",
+                      f"'pr-{github.get('event', {}).get('pull_request', {}).get('number', '')}'", expr)
+
+        def name(m):
+            value = github
+            for part in m.group(0).split(".")[1:]:
+                value = value.get(part, "") if isinstance(value, dict) else ""
+            return repr(value)
+        expr = re.sub(r"\bgithub(?:\.[\w-]+)+", name, expr)
+        expr = re.sub(r"!(?!=)", " not ", expr).replace("&&", " and ").replace("||", " or ")
+        return eval(expr, {"__builtins__": {}}, {})  # noqa: S307 - literals only after substitution
+
+    whole = re.fullmatch(r"\$\{\{(.*)\}\}", text, re.S)
+    if whole and "${{" not in whole.group(1):
+        return one(whole.group(1))
+    return re.sub(r"\$\{\{(.*?)\}\}", lambda m: str(one(m.group(1))), text)
+
+
+def concurrency_errors(block: dict) -> list[str]:
+    """Release-line pushes share one group and cancel older ones; every other non-PR event keeps
+    a group of its own run and never cancels; a pull request keeps pr-<n> and cancels."""
+    out = []
+    line = {"event_name": "push", "ref": f"refs/heads/{RELEASE_LINE}", "run_id": "101"}
+    cases = {
+        "release-line push": (line, "shared", True),
+        "next release-line push": ({**line, "run_id": "102"}, "shared", True),
+        "tag push": ({"event_name": "push", "ref": "refs/tags/v4.0.0", "run_id": "103"}, "own", False),
+        "main push": ({"event_name": "push", "ref": "refs/heads/main", "run_id": "104"}, "own", False),
+        "other branch push": ({"event_name": "push", "ref": "refs/heads/x", "run_id": "105"}, "own", False),
+        "dispatch on the line": ({"event_name": "workflow_dispatch", "ref": f"refs/heads/{RELEASE_LINE}",
+                                  "run_id": "106"}, "own", False),
+        "pull request": ({"event_name": "pull_request", "ref": "refs/pull/7/merge", "run_id": "107",
+                          "event": {"pull_request": {"number": 7}}}, "pr", True),
+    }
+    groups = {}
+    for label, (github, kind, cancels) in cases.items():
+        github = {"workflow": "CI", **github}
+        group = str(expression_value(block.get("group", ""), github))
+        cancel = expression_value(block.get("cancel-in-progress", False), github)
+        groups[label] = group
+        if bool(cancel) is not cancels:
+            out.append(f"concurrency: a {label} {'does not cancel' if cancels else 'cancels'} an older run")
+        if kind == "own" and github["run_id"] not in group:
+            out.append(f"concurrency: a {label} shares a group ({group}); it must keep a run of its own")
+        if kind == "pr" and not group.endswith("pr-7"):
+            out.append(f"concurrency: a pull request's group is {group}, not its pr-<n>")
+    if groups["release-line push"] != groups["next release-line push"]:
+        out.append("concurrency: two release-line pushes get different groups; the newer cannot cancel the older")
+    return out
+
+
 def main() -> int:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     errors = []
-    unclassified = set(jobs) - SKIPPED - KEPT - NOT_ON_PRS - TRAIN_ONLY - MACOS_TRAIN - {HEAVY_GATE}
+    unclassified = set(jobs) - SKIPPED - KEPT - NOT_ON_PRS - RELEASE_PRS - MACOS_TRAIN - {HEAVY_GATE}
     if unclassified:
         errors.append(f"jobs not classified for docs-only gating: {sorted(unclassified)}")
     for wf in PUSH_ONLY_WORKFLOWS:
@@ -297,9 +394,10 @@ def main() -> int:
     if {"test", "test-shards"} & set(shard_needs):
         errors.append("windows-shards needs the Linux suite: it must start in parallel with it")
     for name, c in cases.items():
-        left_out = NOT_ON_PRS | TRAIN_ONLY | MACOS_TRAIN | HEAVY_TRAIN | {HEAVY_GATE}
+        # A lane pull request runs every heavy job by the same docs-only rule (none is train-only).
+        left_out = NOT_ON_PRS | RELEASE_PRS | MACOS_TRAIN | {HEAVY_GATE}
         ran = {k for k, j in jobs.items() if k not in left_out and runs(j, c)}
-        want = (SKIPPED | KEPT) - HEAVY_TRAIN - (SKIPPED if name == "docs-only PR" else set())
+        want = (SKIPPED | KEPT) - (SKIPPED if name == "docs-only PR" else set())
         if ran != want:
             errors.append(f"{name}: unexpected runs {sorted(ran - want)}, unexpected skips {sorted(want - ran)}")
         steps = {st.get("name"): st for st in jobs["capability-pins"]["steps"]}
@@ -308,14 +406,17 @@ def main() -> int:
             active = cond is None or evaluate(str(cond), c)
             if active == (name == "docs-only PR"):
                 errors.append(f"{name}: capability-pins step '{step}' {'runs' if active else 'skips'}")
-    errors += train_errors(jobs)
+    errors += release_pr_errors(jobs)
     errors += macos_train_errors(jobs)
     errors += post_merge_errors(jobs)
     # The macOS cases must be able to fail: each mutant is caught by the case
     # named beside it, not merely by some case.
     import copy
+    # The train gate, with the os-sensitive label's alternative inside it.
     gate = (" && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/')"
-            " && github.event.pull_request.head.repo.full_name == github.repository))")
+            " && github.event.pull_request.head.repo.full_name == github.repository)"
+            " || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
+            " && contains(github.event.pull_request.labels.*.name, 'os-sensitive')))")
     def ungate(j: dict, job: str) -> None:
         j[job]["if"] = str(j[job]["if"]).replace(gate, "")
     def waits_on_scope(j: dict) -> None:
@@ -327,22 +428,58 @@ def main() -> int:
     def fork_trains_too(j: dict) -> None:
         for job in MACOS_TRAIN:
             j[job]["if"] = str(j[job]["if"]).replace(
-                " && github.event.pull_request.head.repo.full_name == github.repository))", "))")
+                " && github.event.pull_request.head.repo.full_name == github.repository) ||", ") ||")
     def check_loses_always(j: dict) -> None:
-        j["macos-check"]["if"] = str(j["macos-check"]["if"]).replace("${{ always() && ", "${{ ")
+        j["macos-check"]["if"] = str(j["macos-check"]["if"]).replace("${{ !cancelled() && ", "${{ ")
     macos_mutants = {
         "macos-shards loses its train gate": (lambda j: ungate(j, "macos-shards"), "macos-shards: code PR runs"),
         "macos-check loses its train gate": (lambda j: ungate(j, "macos-check"), "macos-check: code PR runs"),
         "macOS waits on the scope job": (waits_on_scope, "macos-shards: scope failed on a train skips"),
         "macOS skips a docs-only change": (skips_docs_only, "macos-shards: docs-only train skips"),
         "a fork's train branch gets macOS": (fork_trains_too, "macos-shards: train branch from a fork runs"),
-        "macos-check loses always()": (check_loses_always, "macos-check: a train with a failure shard skips"),
+        "macos-check loses !cancelled()": (check_loses_always, "macos-check: a train with a failure shard skips"),
     }
     for label, (mutate, expected) in macos_mutants.items():
         mutated = copy.deepcopy(jobs)
         mutate(mutated)
         if expected not in macos_train_errors(mutated):
             errors.append(f"macOS self-test: '{label}' was not caught by: {expected}")
+    errors += aggregate_cancel_errors(jobs)
+    # The cancel rows must be able to fail: always() back on any one aggregate is caught.
+    for job in AGGREGATES:
+        mutated = copy.deepcopy(jobs)
+        mutated[job]["if"] = str(mutated[job]["if"]).replace("${{ !cancelled() && ", "${{ always() && ")
+        expected = f"{job}: a cancelled run with failure shards runs it"
+        if expected not in aggregate_cancel_errors(mutated):
+            errors.append(f"cancel self-test: always() on {job} was not caught by: {expected}")
+    # The feature-combination routing must be able to fail: each mutant is caught by the case named beside it.
+    fc = "feature-combos-pr"
+    train_only = ("${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
+                  " && startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository"
+                  " && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') }}")
+    throwaway = (" && !(github.event.pull_request.head.repo.full_name == github.repository"
+                 " && startsWith(github.head_ref, 'throwaway/'))")
+    docs = " && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true')"
+    def fc_set(j: dict, cond: str) -> None:
+        j[fc]["if"] = cond
+    fc_mutants = {
+        "feature combinations stay train-only": (lambda j: fc_set(j, train_only), f"{fc}: code PR skips"),
+        "feature combinations run on a throwaway": (
+            lambda j: fc_set(j, str(j[fc]["if"]).replace(throwaway, "")), f"{fc}: same-repo throwaway PR runs"),
+        "feature combinations run on a docs-only change": (
+            lambda j: fc_set(j, str(j[fc]["if"]).replace(docs, "")), f"{fc}: docs-only PR runs"),
+    }
+    for label, (mutate, expected) in fc_mutants.items():
+        mutated = copy.deepcopy(jobs)
+        if fc not in mutated:
+            errors.append(f"feature-combos self-test: ci.yml has no {fc} job")
+            break
+        before = str(mutated[fc].get("if", ""))
+        mutate(mutated)
+        if str(mutated[fc].get("if", "")) == before:
+            errors.append(f"feature-combos self-test: '{label}' changed nothing (clause not found)")
+        elif expected not in release_pr_errors(mutated):
+            errors.append(f"feature-combos self-test: '{label}' was not caught by: {expected}")
     # The post-merge check must be able to fail (MIK-8163): each mutation is caught.
     import copy
     mutations = {
@@ -361,12 +498,14 @@ def main() -> int:
     on = workflow.get(True) or workflow.get("on") or {}
     if RELEASE_LINE not in (on.get("push") or {}).get("branches", []):
         errors.append(f"ci.yml does not run on a push to {RELEASE_LINE}")
-    # Every merge keeps its own run, so a red one names its merge commit.
-    cancel = str((workflow.get("concurrency") or {}).get("cancel-in-progress", ""))
-    c = ctx("push", "success", "false")
-    c["github"].update(POST_MERGE_PUSH)
-    if cancel in ("true", "True") or (cancel.startswith("${{") and evaluate(cancel, c)):
-        errors.append("ci.yml cancels an in-progress run on a release-line push")
+    # A newer release-line tip cancels the push runs of older tips (lead decision 2026-11-09,
+    # superseding the post-merge rule "every merge keeps its own run, so a red one names its merge
+    # commit"):
+    # a 7-merge train queued about 250 push jobs behind every PR's CI. The train already tested the
+    # exact landed tree, bisecting one train's merges is local, and every PR's own CI and the train
+    # run the shrink gates. Tags, dispatches (the release freeze dispatches on the line), main and
+    # other branches keep a run of their own; pull requests keep their per-PR group.
+    errors += concurrency_errors(workflow.get("concurrency") or {})
     for e in errors:
         print(f"docs-gating: {e}", file=sys.stderr)
     if not errors:

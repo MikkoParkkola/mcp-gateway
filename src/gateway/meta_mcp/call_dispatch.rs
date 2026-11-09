@@ -52,9 +52,9 @@ impl MetaMcp {
                         Some(super::visible::Visibility::Withheld(reason)) => reason,
                         _ => super::visible::Withholding::Lacked,
                     };
-                    self.record_withheld(server, tool_name, reason, caller, session_id)
+                    return self
+                        .withheld_then_retry((server, tool_name, reason), target)
                         .await;
-                    return self.route_retry_to_origin_backend(target).await;
                 }
                 let server_name = server.to_owned();
                 return Some(self.invoke_named_backend_tool(target, &server_name).await);
@@ -64,12 +64,30 @@ impl MetaMcp {
             // the answer (MIK-8340). This is the one place its operator record
             // is written, best-effort.
             super::visible::Surfaced::Withheld(server, reason) => {
-                self.record_withheld(server, tool_name, reason, caller, session_id)
+                return self
+                    .withheld_then_retry((server, tool_name, reason), target)
                     .await;
             }
             super::visible::Surfaced::Absent => {}
         }
         self.route_retry_to_origin_backend(target).await
+    }
+
+    /// Record a withheld surfaced call, then route it as a retry when it
+    /// carries a continuation this gateway minted. The retry's trace id
+    /// reaches the withheld note, so the note says the call has an invocation
+    /// record only when the retry's own record landed.
+    async fn withheld_then_retry(
+        &self,
+        (server, tool_name, reason): (&str, &str, super::visible::Withholding),
+        target: &DispatchTarget<'_>,
+    ) -> Option<JsonRpcResponse> {
+        Box::pin(super::grant_audit::with_retry_trace(async {
+            self.record_withheld(server, tool_name, reason, target.caller, target.session_id)
+                .await;
+            self.route_retry_to_origin_backend(target).await
+        }))
+        .await
     }
 
     /// Route a retry to the backend that opened the exchange, or `None` when
@@ -132,6 +150,7 @@ impl MetaMcp {
         let invoke_args =
             admission::named_tool_envelope(server_name, tool_name, &target.arguments, caller);
         let trace_id = crate::gateway::trace::generate();
+        super::grant_audit::note_retry_trace(&trace_id);
         let trace = Arc::<str>::from(trace_id.as_str());
         let sourced = self
             .invoke_tool_with_source(&invoke_args, target.session_id, caller, trace_id)
@@ -263,7 +282,7 @@ impl MetaMcp {
         // Moving it here caught stdio passing a default non-admin context.
         // The same predicate `tools/list` filters with (`meta_tools_for`) and
         // the signing layer reads (`refused_before_dispatch`).
-        if !CallerStanding::of_admin_flag(caller.is_admin).permits(tool_name) {
+        if !CallerStanding::of(caller.admin).permits(tool_name) {
             return JsonRpcResponse::error(
                 Some(id),
                 INVALID_REQUEST,
@@ -489,7 +508,7 @@ impl MetaMcp {
                     ControlFlow::Break(stored) => return stored,
                 }
             }
-            Some(MetaArm::GetStats) => self.get_stats(&arguments, caller.is_admin).await,
+            Some(MetaArm::GetStats) => self.get_stats(&arguments, caller.admin.is_gateway()).await,
             Some(MetaArm::CostReport) => self.get_cost_report(&arguments, session_id, caller).await,
             Some(MetaArm::WebhookStatus) => self.webhook_status(),
             Some(MetaArm::RunPlaybook) => {
@@ -506,8 +525,10 @@ impl MetaMcp {
                 self.revalidate_caller_slots(Self::proof_of(caller)).await;
                 self.list_disabled_capabilities(caller.scope(), session_id)
             }
-            Some(MetaArm::SetProfile) => self.set_profile(&arguments, session_id, caller.is_admin),
-            Some(MetaArm::GetProfile) => self.get_profile(session_id, caller.is_admin),
+            Some(MetaArm::SetProfile) => {
+                self.set_profile(&arguments, session_id, caller.admin.is_gateway())
+            }
+            Some(MetaArm::GetProfile) => self.get_profile(session_id, caller.admin.is_gateway()),
             Some(MetaArm::ListProfiles) => self.list_profiles(),
             Some(MetaArm::SetState) => self.set_state(&arguments, session_id, caller.scope()),
             Some(MetaArm::ReloadConfig) => self.reload_config().await,

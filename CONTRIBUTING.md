@@ -44,6 +44,12 @@ cargo kani setup
 cargo kani --output-format=terse
 ```
 
+CI runs these proofs (the `Kani` job) on every pull request that is not docs-only,
+merge trains included, so code that does not build under `cfg(kani)` fails its own
+pull request. Under Kani, `assert!` ignores its message arguments: a variable used
+only in an assertion message is unused there and fails the build with
+`unused variable`. Use it outside the message, or do not bind it.
+
 ### Windows test coverage
 
 The `Windows check` job runs `cargo test --all-features --tests --no-fail-fast`: the
@@ -263,6 +269,23 @@ ledger and the file-size check. If that decision fails, everything runs.
 Maintainer `throwaway/` branches (red-first and mutation-proof runs, never merged) run only the
 test suite (`Tests (throwaway)`), on a hosted runner until the project's own arm64 runner is
 registered, then on that runner; see `scripts/ci/trusted-runner/`.
+**Heavy checks on pull requests.** A pull request into the release branch runs the four Windows
+shards, Windows clippy (`Windows check`), the feature combinations, the release tooling tests,
+Task SDK recovery, gws dry-run, Linux keychain, Kani and the upgrade rehearsal on its own CI, the
+same jobs its merge train runs, so a Windows or feature-gating break fails the pull request that
+made it. A docs-only pull request skips the ones the docs-only rule skips. The merge train still
+judges all of them (`Heavy checks (merge train)`).
+**The `os-sensitive` label.** A pull request into the release branch skips the macOS test shards;
+the merge train runs them. Label a pull request `os-sensitive` when it touches file
+paths, temporary directories, file permissions or ACLs, sockets, process spawning or signals, or
+code under `cfg(windows)`, `cfg(unix)` or `target_os`: it then runs the macOS lib shard on its own
+CI (`macOS check`; the macOS integration shard stays train-only), so a
+macOS break shows on the pull request instead of failing a train. The label counts from
+the next `pull_request` event that carries it: push after labelling (an empty commit works,
+`git commit --allow-empty -m "ci: run the OS shards" && git push`) or close and reopen the pull
+request. A label added at creation (`gh pr create --label`) or a re-run of an earlier run does not
+start them. The macOS lib shard takes about 75 minutes, and the macOS runners also serve every
+train, so the label is for changes that need it.
 Mutation proofs are batched: push `throwaway/mutants-<pr>` as the pull request's head plus one
 commit adding `.mutants/manifest.tsv` and the patches; one run of the Mutants workflow classifies
 every mutant (format and rules in `scripts/ci/mutants/run_mutants.py`).

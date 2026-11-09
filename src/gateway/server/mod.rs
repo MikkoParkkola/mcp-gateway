@@ -22,11 +22,17 @@ mod cost_estimate_restart_tests;
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_restart_tests;
 #[cfg(all(test, feature = "cost-governance"))]
+mod cost_restore_attribution_tests;
+#[cfg(all(test, feature = "cost-governance"))]
 mod cost_save_stamp_tests;
 mod counter_wiring;
 mod events_wiring;
+/// The startup notice that the read verdict runs with the firewall off.
+#[cfg(all(test, feature = "firewall"))]
+mod read_verdict_notice_tests;
 #[cfg(test)]
 pub(crate) use events_wiring::listener_mint_for_test;
+mod first_list_wait;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;

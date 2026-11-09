@@ -1,0 +1,143 @@
+# file	fn	callee	count	class	reason (classes: see plain_reads.rs)
+src/bin/provenance-eval.rs	load_corpus	File::open	1	not-config	evaluation tool corpus input
+src/capability/backend_rug_pull.rs	current_mismatches	fs::read_to_string	1	not-config	capability YAML; public definitions
+src/capability/backend_rug_pull.rs	detect_rug_pulls_in_dir	fs::read_to_string	1	not-config	capability YAML; public definitions
+src/capability/executor/save_file.rs	create_new	.open	1	write-only	creates a fetched attachment at 0600 under the downloads root; reads nothing
+src/capability/file_writer.rs	read_current	.open	1	not-config	reads a capability YAML under the directory lock; public definitions
+src/capability/openapi/convert.rs	convert_file	fs::read_to_string	1	not-config	OpenAPI spec input; public
+src/capability/parser.rs	parse_capability_file	fs::read_to_string	1	not-config	capability YAML; public definitions
+src/capability/pin_file.rs	pin_file_until	fs::read_to_string	1	not-config	capability YAML under the directory lock; public definitions
+src/chains/checkpoint.rs	append	.open	1	write-only	appends a chain checkpoint; reads nothing
+src/chains/checkpoint.rs	load	fs::read_to_string	1	not-config	chain checkpoint JSON
+src/commands/config_export/mod.rs	merge_into_config	fs::read_to_string	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
+src/commands/config_export/mod.rs	rollback_client_config	fs::read	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
+src/commands/config_export/mod.rs	verify_gateway_entry	fs::read_to_string	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
+src/commands/dashboard_link.rs	read_file	fs::read	1	not-config	operator-named client cert, key and CA for one request
+src/commands/doctor/lease_custody.rs	dm_crypt	fs::read_to_string	1	not-config	kernel tables under /proc and /sys
+src/commands/doctor/lease_custody.rs	swap	fs::read_to_string	1	not-config	kernel tables under /proc and /sys
+src/commands/kubernetes.rs	read_cluster_apply_plan	fs::read_to_string	1	not-config	Kubernetes plan or report input
+src/commands/kubernetes.rs	read_controller_report	fs::read_to_string	1	not-config	Kubernetes plan or report input
+src/commands/kubernetes.rs	read_plan	fs::read_to_string	1	not-config	Kubernetes plan or report input
+src/commands/mod.rs	read_ca_files	fs::read_to_string	1	not-config	the CA certificate (public); the CA key goes through load_private_key
+src/commands/protocol_import.rs	preview_plan_from_file	fs::read_to_string	1	not-config	protocol import plan input
+src/commands/ranking.rs	evaluate_ranking_file	fs::read_to_string	1	not-config	ranking evaluation input
+src/commands/regular_file.rs	read_regular_text	open_nonblocking	1	read-only	doctor reads gateway.yaml for its key names (a report row) and the upgrade dry run for its URL-key report; neither writes, and the real rewrite reads under the lock through the guard
+src/commands/trust.rs	read_card_file	fs::read_to_string	1	not-config	agent card file input
+src/commands/trust/baseline.rs	read_lab_baseline	fs::read_to_string	1	not-config	trust lab baseline input
+src/commands/trust/baseline.rs	read_lab_registry_manifest	fs::read_to_string	1	not-config	trust lab registry manifest input
+src/commands/trust/lab.rs	read_active_fixture_spec	fs::read_to_string	1	not-config	trust lab fixture spec input
+src/commands/upgrade.rs	migrate_3_0_0_multi_user_notice	fs::read_to_string	1	read-only	the 3.0.0 notice parses gateway.yaml for its auth posture and prints a notice; it writes nothing (the stamp written after it carries no config bytes)
+src/commands/upgrade.rs	read_stamp	fs::read_to_string	1	not-config	version.stamp beside gateway.yaml
+src/config/mod.rs	prepare	File::open	1	no-content	opens the selected config only to word a permission error; the guarded read then reads it
+src/config/record_key.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/config/secret_file.rs	open_for_guarded_read	.open	1	guard	Windows: the config guard's open; the DACL and owner are judged on this handle before its bytes are read
+src/config/secret_file.rs	open_for_guarded_read	open_nonblocking	1	guard	the config guard: type, mode and owner are judged on this handle before its bytes are read
+src/config_persistence_atomic.rs	apply_inherited_mode	open_nonblocking	1	no-content	opens the write target only to probe its ACL; no bytes are read
+src/config_persistence_atomic.rs	copy_keeping_access	File::open	1	backup-copy	Windows: copies gateway.yaml to gateway.yaml.bak.<version> for upgrade, which nothing in the gateway reads back, and a third-party client config to its backup for config export, which rollback_client_config restores; the copy keeps the source's access, so it is no less protected
+src/config_persistence_atomic.rs	copy_keeping_access	fs::copy	1	backup-copy	Unix (fs::copy keeps the mode): copies gateway.yaml to gateway.yaml.bak.<version> for upgrade, which nothing in the gateway reads back, and a third-party client config to its backup for config export, which rollback_client_config restores; the copy keeps the source's access, so it is no less protected
+src/config_persistence_atomic.rs	create_scratch	.open	1	write-only	creates the atomic writer's scratch file (create_new): owner-only for a private write, the process default for an inherit write; reads nothing
+src/config_persistence_atomic.rs	finish_kept	.open	1	write-only	Windows: creates the scratch (create_new) on a volume that keeps no access lists; reads nothing
+src/config_persistence_atomic_windows.rs	prepare	.open	1	no-content	Windows: opens the write target with READ_CONTROL only, to copy its access list; no bytes are read
+src/config_persistence.rs	sync_dir_for	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/config_persistence_commit.rs	open_target	.open	1	read-only	Windows: the commit primitive's read-back handle on gateway.yaml, opened read-write without write or delete sharing so the file flushed is the file hashed; reads to hash, writes nothing
+src/config_persistence_commit.rs	open_target	open_nonblocking	1	read-only	hashes gateway.yaml's bytes just written by the commit primitive, or the revision the replace journal records, and compares the digest; never parsed, writes nothing; only a regular file is hashed
+src/config_persistence_lock.rs	keep_private	.open	1	no-content	opens the config lock sidecar to hold the lock; its bytes are never read
+src/config_persistence_scratch.rs	create_new_private	.open	1	write-only	creates an owner-only file (create_new); reads nothing
+src/config_persistence_scratch.rs	create_private_replacing	.open	1	write-only	creates an owner-only file over an old one; reads nothing
+src/config_reload/grant_audit_plan.rs	save	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/control_plane/export.rs	deliver	.open	1	write-only	appends to the control-plane export sink; reads nothing
+src/control_plane/export.rs	deliver	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/control_plane/export.rs	drop_torn_tail	.open	1	not-config	reads the last byte of the control-plane export log to cut a torn tail
+src/control_plane/export.rs	drop_torn_tail	File::open	1	not-config	reads the last byte of the control-plane export log
+src/control_plane/export.rs	open	fs::read	1	not-config	the control-plane export cursor
+src/control_plane/store/file_io.rs	write_atomic	File::open	1	no-content	opens a directory only to fsync it
+src/cost_accounting/persistence.rs	load	fs::read_to_string	1	not-config	cost history JSON
+src/counters/persist.rs	restore	fs::read	1	not-config	persisted counters
+src/debug_trust_roots.rs	with_roots_from	fs::read	1	not-config	test-only trust roots PEM
+src/discovery/config_scanner.rs	parse_claude_config	fs::read_to_string	1	not-config	a third-party MCP client config, never gateway.yaml
+src/discovery/config_scanner.rs	parse_continue_config	fs::read_to_string	1	not-config	a third-party MCP client config, never gateway.yaml
+src/discovery/config_scanner.rs	parse_vscode_config	fs::read_to_string	1	not-config	a third-party MCP client config, never gateway.yaml
+src/discovery/config_scanner.rs	parse_zed_config	fs::read_to_string	1	not-config	a third-party MCP client config, never gateway.yaml
+src/discovery/config_scanner_client_scan.rs	scan_candidates	File::open	1	no-content	opens a third-party client config only to classify an unreadable one by its error kind
+src/events/records.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/fs_lock.rs	acquire	.open	1	no-content	opens a lock sidecar to hold the lock; its bytes are never read
+src/fs_lock.rs	try_acquire	.open	2	no-content	opens a lock sidecar to hold the lock; its bytes are never read
+src/fs_lock.rs	try_lease	.open	1	no-content	opens a lease sidecar to hold it; its bytes are never read
+src/fs_lock_windows.rs	open_exclusive	.open	1	no-content	Windows: opens a lock sidecar to hold the lock; its bytes are never read
+src/fs_lock_windows.rs	open_existing	.open	1	no-content	Windows: opens an existing lock sidecar to hold the lock; its bytes are never read
+src/gateway/health_metrics/process.rs	exposition_from	fs::read_to_string	1	not-config	process statistics under /proc
+src/gateway/meta_mcp/chain_interim.rs	plan_chain_resume	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/gateway/meta_mcp/confirmation.rs	redeem_confirmation	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/gateway/meta_mcp/invoke/continuation.rs	redeem_retry	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/gateway/meta_mcp/sealed_hold.rs	reopens	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/gateway/meta_mcp/search/chain_exec.rs	execute_chain	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/gateway/meta_mcp/search/chain_exec.rs	resume_fingerprint	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/gateway/meta_mcp/task_confirmation.rs	redeem	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/gateway/mod.rs	snapshot	fs::read	1	read-only	test_helpers::ConfigFiles (tests only, doc-hidden): reads gateway.yaml, its journal and its staged original to compare a refusal's before and after; writes nothing
+src/gateway/server/control_plane_store.rs	probe_writable	.open	1	write-only	writability probe: creates and removes its own marker; reads nothing
+src/gateway/task_service/execution/input_round.rs	round_deadline	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/gateway/task_service/store_unix.rs	open_new_private	.open	1	write-only	creates an owner-only task record; reads nothing
+src/gateway/task_service/store_unix.rs	open_record	.open	1	not-config	reads a task record in the task store; no config
+src/gateway/task_service/store_unix.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/gateway/ui/capabilities.rs	get_capability	fs::read_to_string	1	not-config	capability YAML; public
+src/gateway/ui/capabilities.rs	list_capabilities	fs::read_to_string	1	not-config	capability YAML; public
+src/gateway/ui/capabilities.rs	validate_only	fs::read_to_string	1	not-config	capability YAML; public
+src/gateway/ui/preview.rs	redeem	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/identity_grants/journal.rs	append_line	.open	1	not-config	the grant-change journal, opened to append and to check its tail; judged by its own integrity rule
+src/identity_grants/journal.rs	open_journal_windows	.open	1	not-config	Windows: the grant-change journal, judged by its own integrity rule before an append
+src/identity_grants/journal.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/oauth/storage.rs	load_client_id	fs::read_to_string	1	not-config	the OAuth client_id (public); tokens are read through the token-file guard
+src/oauth/storage.rs	load_refresh_state	fs::read_to_string	1	not-config	OAuth refresh-rotation state JSON, no token
+src/open_nonblocking.rs	open_nonblocking	.open	1	no-content	the opener itself (its Unix form); each read through it is a row of its own
+src/open_nonblocking.rs	open_nonblocking	File::open	1	no-content	the opener itself (its non-Unix form); each read through it is a row of its own
+src/personal_accounts/commit.rs	open_private	.open	1	write-only	creates a commit's owner-only scratch file; reads nothing
+src/personal_accounts/migration_source.rs	read_legacy_source	File::open	1	not-config	personal-accounts legacy source; its own stricter check (exactly 0600)
+src/personal_accounts/storage.rs	open_nofollow	.open	1	not-config	personal-accounts storage; its own stricter check (O_NOFOLLOW, no group or world bits)
+src/personal_accounts/storage.rs	sync_directory	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/playbook/engine/mod.rs	load_from_directory	fs::read_to_string	1	not-config	playbook YAML definitions; public
+src/preview_sandbox/linux/mod.rs	read	fs::read_to_string	1	not-config	kernel settings under /proc/sys
+src/preview_sandbox/linux/mounts.rs	mountinfo	fs::read_to_string	1	not-config	/proc/self/mountinfo in the sandbox namespace
+src/private_fs.rs	open_dir	.open	1	no-content	Windows: opens a directory for its access list or a flush; no file bytes
+src/private_fs.rs	open_file_read	.open	1	not-config	Windows store custody: a secret-store record or manifest, judged by its DACL on this handle (ADR-016)
+src/private_fs.rs	same_place	.open	1	no-content	Windows: opens a path only for its file identity
+src/private_fs.rs	sync_dir	.open	1	no-content	Windows: opens a directory only to flush it
+src/protocol/continuation/keyring.rs	open_now	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/protocol/continuation/probe.rs	text_carries	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/protocol_revision_telemetry/durable.rs	sync_parent_directory	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/protocol_revision_telemetry/window.rs	read_window_v2	fs::read	1	not-config	telemetry window counters
+src/ranking/ranker.rs	load	fs::read_to_string	1	not-config	tool usage counts JSON
+src/runtime/provision.rs	compile_descriptor_file	fs::read_to_string	1	not-config	runtime provisioning descriptor; public
+src/secret_store/index.rs	append	.open	1	not-config	the secret-entry index: names, stores and timestamps, never a value; created owner-only
+src/secret_store/index.rs	live	fs::read_to_string	1	not-config	the secret-entry index: names, stores and timestamps, never a value
+src/security/firewall/audit.rs	new	.open	1	write-only	appends to the firewall audit log; reads nothing
+src/security/transparency_log.rs	bounded_read_to_string	fs::read_to_string	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
+src/security/transparency_log.rs	read_last_nonempty_line_raw	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
+src/security/transparency_log_anchor.rs	read_anchor	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
+src/security/transparency_log_append.rs	cut_back	.open	1	write-only	reopens the audit log for write to cut a torn tail; reads nothing
+src/security/transparency_log_hwm_scan.rs	hwm_missing_in	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
+src/security/transparency_log_hwm_scan.rs	record_at_mark	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
+src/security/transparency_log_identity.rs	each_line	File::open	1	not-config	the audit log's active file (TransparencyLogConfig.path) and its sealed segments from list_segments; recover-only; yields a log id or a bool, no line text; no secret
+src/security/transparency_log_pager.rs	open_segment	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
+src/security/transparency_log_rotation.rs	finish_pending_expiry	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
+src/security/transparency_log_rotation.rs	open_after_seal	.open	4	write-only	opens audit log segments to write after a seal; reads nothing
+src/security/transparency_log_rotation.rs	path_id	.open	1	no-content	Windows: opens an audit log segment with FILE_READ_ATTRIBUTES only, for its file id
+src/security/transparency_log_rotation.rs	path_id	File::open	1	no-content	opens an audit log segment only for its file id
+src/security/transparency_log_rotation.rs	repair_torn_tail	.open	2	not-config	reads and cuts back the torn tail of an audit log segment; no secret
+src/security/transparency_log_rotation.rs	resume_active	.open	1	write-only	reopens the active audit log segment to append; reads nothing
+src/security/transparency_log_segments.rs	listing	File::open	1	not-config	reads the active audit log segment for its sequence; no secret
+src/security/transparency_log_segments.rs	read_first_line_raw	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
+src/security/transparency_log_segments.rs	read_hwm	fs::read	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
+src/security/transparency_log_segments.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/security/transparency_log_segments.rs	write_hwm	.open	1	write-only	writes the audit log high-water mark; reads nothing
+src/skills/installer.rs	copy_dir_recursive	fs::copy	1	not-config	copies a skill bundle into the skills directory; public
+src/skills/parser.rs	parse_skill_file	fs::read_to_string	1	not-config	skill files; public
+src/skills/parser.rs	read_auxiliary_file	fs::read_to_string	1	not-config	skill files; public
+src/skills/registry.rs	load	fs::read	1	not-config	skill registry; public
+src/tool_profiles/persistence.rs	load	fs::read_to_string	1	not-config	tool usage profiles
+src/transition.rs	load	fs::read_to_string	1	not-config	transition state
+src/transport/stdio_cache.rs	writable	.open	1	write-only	writability probe for a backend package cache: creates and removes its own marker; reads nothing
+src/trust/claim_capture.rs	open	.open	1	write-only	appends to the claim capture log; reads nothing
+src/trust/export_verify.rs	read_bounded	File::open	1	not-config	an Activity export bundle given to audit verify
+src/trust/provenance_public_cli.rs	run_verify	fs::read_to_string	3	not-config	provenance verify inputs: the public-key trust set, receipt and result
+src/validator/cli_handler.rs	run_validate_command	fs::read_to_string	1	not-config	capability YAML being validated; public
+src/win_acl.rs	create_file_private	.open	1	write-only	Windows: creates an owner-only file; reads nothing

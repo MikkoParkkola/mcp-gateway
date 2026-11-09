@@ -94,7 +94,7 @@ fn allow_all_ctx_named<'a>(
         stdio_nonce: None,
         caller_key: None,
         verified_identity: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
@@ -132,7 +132,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         stdio_nonce: None,
         caller_key: None,
         verified_identity: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
@@ -461,6 +461,8 @@ const TARGET_STATE: &str = "triage";
 
 #[path = "bridge_fallthrough_tests.rs"]
 mod bridge_fallthrough;
+#[path = "ci_rewrite_cache_tests.rs"]
+mod ci_rewrite_cache;
 #[cfg(feature = "firewall")]
 #[path = "collusion_bridge_tests.rs"]
 mod collusion_bridge;

@@ -15,6 +15,8 @@ use crate::security::response_policy::{RuleTarget, ServerOf};
 struct Covering<'a> {
     root: &'a CompiledRoot,
     action: FirewallAction,
+    /// The covering rule's keyed id, when the policy was compiled with one.
+    id: Option<&'a crate::security::rule_id::RuleId>,
 }
 
 /// The folder check for one call: a forced refusal, or the root findings
@@ -36,9 +38,10 @@ pub(crate) fn root_check(
     let Some(first) = covering.first() else {
         return RootOutcome::default();
     };
-    let refuse = |root: &CompiledRoot, argument: Option<&str>, reason| RootOutcome {
+    let refuse = |rule: &Covering<'_>, argument: Option<&str>, reason| RootOutcome {
         forced: Some(RootRefusal {
-            rule: root.identity.clone(),
+            rule: rule.root.identity.clone(),
+            rule_id: rule.id.cloned(),
             argument: argument.map(str::to_string),
             reason,
         }),
@@ -46,18 +49,14 @@ pub(crate) fn root_check(
     };
     let owned = match classify(firewall, server, target.tool, backend) {
         Ok(owned) => owned,
-        Err(reason) => return refuse(first.root, None, reason),
+        Err(reason) => return refuse(first, None, reason),
     };
     // A secret rule owning a declared path argument would rewrite, or drop,
     // what the check judges: refused before any value is read (design d1).
     for rule in &covering {
         let args = rule.root.args.as_deref().unwrap_or_default();
         if let Some(arg) = super::owned_path_arg(&owned, args) {
-            return refuse(
-                rule.root,
-                Some(&arg_name(arg)),
-                RootReason::InjectedPathArgument,
-            );
+            return refuse(rule, Some(&arg_name(arg)), RootReason::InjectedPathArgument);
         }
     }
     // Every value of every covering rule is extracted and prechecked first,
@@ -66,16 +65,16 @@ pub(crate) fn root_check(
     let mut owners = Vec::new();
     for rule in &covering {
         let Some(args_of_rule) = &rule.root.args else {
-            return refuse(rule.root, None, RootReason::RootUnresolvable);
+            return refuse(rule, None, RootReason::RootUnresolvable);
         };
         for arg in args_of_rule {
             let name = arg_name(arg);
             let values = match extract(args, arg) {
                 Ok(values) => values,
-                Err(reason) => return refuse(rule.root, Some(&name), reason),
+                Err(reason) => return refuse(rule, Some(&name), reason),
             };
             if let Some(reason) = values.iter().find_map(|v| precheck(v)) {
-                return refuse(rule.root, Some(&name), reason);
+                return refuse(rule, Some(&name), reason);
             }
             if values.is_empty() {
                 continue;
@@ -93,14 +92,20 @@ pub(crate) fn root_check(
             let (rule, name) = owners
                 .get(at)
                 .map_or((first, None), |(r, n)| (*r, Some(n.as_str())));
-            return refuse(rule.root, name, reason);
+            return refuse(rule, name, reason);
         }
     };
     let findings = owners
         .iter()
         .zip(inside)
         .filter(|(_, inside)| !inside)
-        .map(|((rule, name), _)| (outside_finding(rule.root, name), rule.action))
+        .map(|((rule, name), _)| {
+            (
+                outside_finding(rule.root, name),
+                rule.action,
+                rule.id.cloned(),
+            )
+        })
         .collect();
     RootOutcome {
         forced: None,
@@ -125,6 +130,7 @@ fn covering<'a>(
                 .then_some(Covering {
                     root,
                     action: rule.action,
+                    id: rule.id.as_ref(),
                 })
         })
         .collect()
@@ -216,13 +222,18 @@ fn outside_finding(root: &CompiledRoot, name: &str) -> Finding {
     }
 }
 
-/// Fold a folder outcome into the content action: a forced refusal blocks,
-/// whatever any rule says; otherwise the most restrictive of the content
-/// action and each root finding's own rule action.
+/// Fold a folder outcome into the content resolution: a forced refusal
+/// blocks, whatever any rule says, and names its covering rule; otherwise the
+/// most restrictive of the content action and each root finding's own rule
+/// action, content first, then root findings in rule order, naming the first
+/// rule that decided the action that stands.
 pub(crate) fn apply_roots(
     outcome: RootOutcome,
-    content_action: FirewallAction,
-) -> (FirewallAction, Vec<Finding>) {
+    content: (FirewallAction, Option<crate::security::rule_id::RuleId>),
+) -> (
+    (FirewallAction, Option<crate::security::rule_id::RuleId>),
+    Vec<Finding>,
+) {
     if let Some(refusal) = outcome.forced {
         let code = serde_json::to_value(refusal.reason)
             .ok()
@@ -238,20 +249,13 @@ pub(crate) fn apply_roots(
             matched: String::new(),
             location: FindingLocation::RequestArgs,
         };
-        return (FirewallAction::Block, vec![finding]);
+        return ((FirewallAction::Block, refusal.rule_id), vec![finding]);
     }
-    let rank = |a: FirewallAction| match a {
-        FirewallAction::Allow => 0,
-        FirewallAction::Warn => 1,
-        FirewallAction::Block => 2,
-    };
-    let action = outcome
-        .findings
-        .iter()
-        .map(|(_, action)| *action)
-        .fold(content_action, |a, b| if rank(b) > rank(a) { b } else { a });
-    (
-        action,
-        outcome.findings.into_iter().map(|(f, _)| f).collect(),
-    )
+    let mut decided = content;
+    let mut findings = Vec::with_capacity(outcome.findings.len());
+    for (finding, action, id) in outcome.findings {
+        decided = super::super::merge_attributed(decided, (action, id));
+        findings.push(finding);
+    }
+    (decided, findings)
 }

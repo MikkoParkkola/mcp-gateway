@@ -137,7 +137,7 @@ pub(super) struct Fx {
     pub(super) state: Arc<AppState>,
     pub(super) calls: Arc<AtomicUsize>,
     audit_path: std::path::PathBuf,
-    _audit: tempfile::TempDir,
+    _audit: Arc<tempfile::TempDir>,
     _store: crate::gateway::router::tests::FixtureDir,
 }
 
@@ -185,7 +185,7 @@ pub(super) async fn fixture_with(setup: Setup) -> Fx {
     };
     let (mut state, store) =
         test_router_app_state_with_auth_and_config(&auth, crate::config::Config::default()).await;
-    let audit = tempfile::tempdir().expect("a log directory");
+    let audit = Arc::new(tempfile::tempdir().expect("a log directory"));
     let audit_path = audit.path().join("audit.jsonl");
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
@@ -198,6 +198,7 @@ pub(super) async fn fixture_with(setup: Setup) -> Fx {
         ))
         .expect("open log"),
     );
+    log.keep_test_dir(Arc::clone(&audit));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     let backends = Arc::clone(&state_mut.backends);
     let mut meta = if setup == Setup::Cached {

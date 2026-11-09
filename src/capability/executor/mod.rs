@@ -53,6 +53,7 @@ use super::{
     validate_capability_url_for_context, validate_personal_capability_identity,
 };
 use crate::cache::ResponseCache;
+use crate::capability::execution_context::{RefusalTest, record_refusal};
 use crate::gateway::gateway_writes::WriteRecord;
 use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
@@ -133,6 +134,14 @@ impl CapabilityExecutor {
     #[must_use]
     pub fn with_policy_epoch(mut self, epoch: Arc<std::sync::atomic::AtomicU64>) -> Self {
         self.policy_epoch = Some(epoch);
+        self
+    }
+
+    /// Share the gateway's stop deadline with every MCP child backend this
+    /// executor builds, so a gateway stop also cuts their trees' exit waits.
+    #[must_use]
+    pub(crate) fn with_stop_deadline(self, deadline: Arc<crate::transport::StopDeadline>) -> Self {
+        let _ = self.mcp_children.stop_deadline.set(deadline);
         self
     }
 
@@ -460,8 +469,11 @@ impl CapabilityExecutor {
         let params = effective_params.as_ref();
 
         let url = self.build_url(config, params)?;
-        super::require_tls_for_rest(&url, &capability.auth, config)?;
-        validate_capability_url_for_context(&url, context)?;
+        // Each refusal here is the call's answer: its record says so.
+        super::require_tls_for_rest(&url, &capability.auth, config)
+            .inspect_err(|e| record_refusal(e, RefusalTest::Cleartext(&url)))?;
+        validate_capability_url_for_context(&url, context)
+            .inspect_err(|e| record_refusal(e, RefusalTest::Destination))?;
         tracing::debug!(url = %url, method = %config.method, "Executing REST request");
 
         let method = config.method.parse::<Method>().map_err(|e| {

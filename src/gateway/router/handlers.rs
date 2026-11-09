@@ -130,7 +130,10 @@ async fn meta_mcp_dispatch(
     };
     let invoke_scope = InvokeScope {
         authorizer: &router_authorizer,
-        is_admin: client.as_ref().is_some_and(|c| c.admin),
+        admin: client.as_ref().map_or(
+            crate::gateway::authz::AdminStanding::None,
+            crate::gateway::auth::AuthenticatedClient::admin_standing,
+        ),
         api_key_name: client.as_ref().map(|c| c.name.as_str()),
         grant_key: client
             .as_ref()
@@ -231,7 +234,10 @@ async fn meta_mcp_dispatch(
                     agent_declared: None,
                     grant_subject: grant_subject.clone(),
                     verified_identity: verified_identity.as_ref(),
-                    is_admin: client.as_ref().is_some_and(|client| client.admin),
+                    admin: client.as_ref().map_or(
+                        crate::gateway::authz::AdminStanding::None,
+                        crate::gateway::auth::AuthenticatedClient::admin_standing,
+                    ),
                     input_capabilities: declared_capabilities,
                     session_id: Some(session_id.as_str()),
                 };
@@ -273,7 +279,7 @@ async fn meta_mcp_dispatch(
                     .into_iter()
                     .filter(|b| state.meta_mcp.admits_backend(b, invoke_scope, session))
                     .collect(),
-                admin: CallerStanding::of_client(client.as_ref()) == CallerStanding::Admin,
+                admin: crate::gateway::auth::is_gateway_admin(client.as_ref()),
             };
             events::answer(&hub, id, method, params, &caller).await
         }
@@ -460,7 +466,7 @@ async fn meta_mcp_dispatch(
                 grant_subject.as_ref(),
                 cert_identity.as_ref(),
                 client.as_ref(),
-                session_id,
+                (session_id, &intake.generation),
             );
             // Boxed like `handle_tools_call` above: an inline future would
             // enlarge `meta_mcp_dispatch`'s own state, which every request
@@ -495,7 +501,7 @@ async fn meta_mcp_dispatch(
                 grant_subject.as_ref(),
                 cert_identity.as_ref(),
                 client.as_ref(),
-                session_id,
+                (session_id, &intake.generation),
             );
             Box::pin(relay::as_caller(
                 caller,
@@ -582,7 +588,10 @@ async fn meta_mcp_dispatch(
                 agent_declared: agent_identity.declared_agent_label(),
                 grant_subject: grant_subject.clone(),
                 verified_identity: verified_identity.as_ref(),
-                is_admin: client.as_ref().is_some_and(|client| client.admin),
+                admin: client.as_ref().map_or(
+                    crate::gateway::authz::AdminStanding::None,
+                    crate::gateway::auth::AuthenticatedClient::admin_standing,
+                ),
                 input_capabilities: declared_capabilities,
                 session_id: Some(session_id.as_str()),
             };
@@ -664,9 +673,6 @@ async fn meta_mcp_dispatch(
         finalized,
     )
     .await;
-    if let (Some(execution), Some(finalized)) = (execution, finalized) {
-        execution.complete_delivery(&finalized, signing_context.as_ref());
-    }
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");
@@ -681,6 +687,14 @@ async fn meta_mcp_dispatch(
     }
     // COLLUDE.1: receipts ride on the response to `emit_http`, after the last replacer.
     state.meta_mcp.settle_relay_receipts(response);
+    // The receipts are final: a retained answer is captured pending now,
+    // before settlement publishes it for replay, so a retry that finds it
+    // finds its snapshot too. Settlement that does not retain it discards
+    // the capture (E1, `cancel_replay_capture`).
+    state.meta_mcp.capture_pending_now(response);
+    if let (Some(execution), Some(finalized)) = (execution, finalized) {
+        execution.complete_delivery(&finalized, signing_context.as_ref());
+    }
 
     telemetry_metrics::counter!(
         "mcp_jsonrpc_requests_total",

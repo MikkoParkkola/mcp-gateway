@@ -20,6 +20,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::idempotency::IdempotencyCache;
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::security::firewall::collusion_live_rig::{freeze, paired};
 use crate::security::firewall::{
     AllowedFlow, CollusionAction, CollusionConfig, Firewall, FirewallConfig,
 };
@@ -322,13 +323,21 @@ async fn fixture(setup: Setup) -> Fixture {
         ..FirewallConfig::default()
     };
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
+    // The firewall and the live config come from this one section, so the
+    // generation a request is judged under agrees with the detector; the
+    // fixture's resolved keys stay.
+    let (firewall, live) = paired(config, &state_mut.live_config);
+    state_mut.live_config = Arc::new(live);
+    // The Meta-MCP reads the same live config, as startup wires it.
+    meta.set_live_config(Arc::clone(&state_mut.live_config));
+    // Frozen at construction: nothing ages out on a slow run, only
+    // `lapse_window` moves the clock.
+    freeze(&firewall);
     // With the gateway's keyring, as the gateway builds it (#2210, MIK-8276).
-    state_mut.firewall = Some(Arc::new(
-        Firewall::from_config(config, None).with_continuations(meta.continuation()),
-    ));
-    if let Some(firewall) = &state_mut.firewall {
-        crate::gateway::router::firewall_publish_fixture::publish_firewall(state_mut, firewall);
-    }
+    // `paired` already published this firewall's section as the live
+    // config's, which is what `publish_firewall` does for fixtures
+    // that build the two apart.
+    state_mut.firewall = Some(Arc::new(firewall.with_continuations(meta.continuation())));
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
     state_mut.meta_mcp = Arc::new((setup.arm)(meta));
     Fixture {
@@ -451,22 +460,39 @@ fn envelope(body: &str) -> Value {
     serde_json::from_str(&body[start..=end]).unwrap_or_else(|e| panic!("{e}: {body}"))
 }
 
-fn assert_refused(fx: &Fixture, (status, body): &(u16, String), sends: usize) {
-    let answer = envelope(body);
-    assert_eq!(answer["error"]["code"], -32002, "{body}");
-    let message = answer["error"]["message"].as_str().unwrap_or_default();
-    assert!(message.starts_with("Relay detection blocked: "), "{body}");
-    assert!(answer.get("result").is_none(), "{body}");
-    assert_eq!(*status, 403, "{body}");
-    assert_eq!(fx.sends(), sends, "the backend was called: {body}");
+fn assert_refused(fx: &Fixture, response: &(u16, String), sends: usize) {
+    assert_refused_as("", fx, response, sends);
 }
 
-fn assert_sent(fx: &Fixture, (status, body): &(u16, String), sends: usize) {
+/// [`assert_refused`] naming the row (`row` is a prefix such as `"T1a: "`),
+/// so a failure says which expectation broke, not just which helper line.
+fn assert_refused_as(row: &str, fx: &Fixture, (status, body): &(u16, String), sends: usize) {
     let answer = envelope(body);
-    assert_eq!(*status, 200, "{body}");
-    assert!(answer.get("error").is_none(), "{body}");
-    assert_eq!(answer["result"]["content"][0]["text"], "sent", "{body}");
-    assert_eq!(fx.sends(), sends, "{body}");
+    assert_eq!(answer["error"]["code"], -32002, "{row}not refused: {body}");
+    let message = answer["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("Relay detection blocked: "),
+        "{row}{body}"
+    );
+    assert!(answer.get("result").is_none(), "{row}{body}");
+    assert_eq!(*status, 403, "{row}{body}");
+    assert_eq!(fx.sends(), sends, "{row}the backend was called: {body}");
+}
+
+fn assert_sent(fx: &Fixture, response: &(u16, String), sends: usize) {
+    assert_sent_as("", fx, response, sends);
+}
+
+/// [`assert_sent`] naming the row.
+fn assert_sent_as(row: &str, fx: &Fixture, (status, body): &(u16, String), sends: usize) {
+    let answer = envelope(body);
+    assert_eq!(*status, 200, "{row}not sent: {body}");
+    assert!(answer.get("error").is_none(), "{row}{body}");
+    assert_eq!(
+        answer["result"]["content"][0]["text"], "sent",
+        "{row}{body}"
+    );
+    assert_eq!(fx.sends(), sends, "{row}{body}");
 }
 
 /// A1: under `block`, B sending what A was delivered is refused before
@@ -689,6 +715,8 @@ async fn a_forged_public_verdict_is_replaced_by_the_gateways_own() {
 }
 
 mod catalogue;
+mod hook_order;
+mod live;
 mod meta;
 mod recording;
 mod relay_split;

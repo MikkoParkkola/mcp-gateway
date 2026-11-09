@@ -742,3 +742,7 @@ mod told_exemption_tests;
 #[cfg(test)]
 #[path = "streaming_unframed_tests.rs"]
 mod unframed_tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "streaming_receipt_commit_tests.rs"]
+mod receipt_commit_tests;

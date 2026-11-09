@@ -65,6 +65,14 @@ pub(crate) mod keyedit;
 mod splice;
 #[cfg(feature = "webui")]
 pub(crate) use splice::{NOT_IN_PLACE, edit_text};
+
+/// Why [`edit_text`] could not edit `text` (at `path`) in place, as the
+/// web UI's backend routes answer it: the comment lines a rewrite would
+/// drop, by line number, never their text.
+#[cfg(feature = "webui")]
+pub(crate) fn not_in_place(path: &Path, text: &str) -> String {
+    splice::not_in_place(path, text)
+}
 #[path = "config_persistence_url.rs"]
 mod url_spelling;
 
@@ -91,6 +99,51 @@ pub use atomic::{FileMode, Symlink, copy_keeping_access, write_atomic};
 
 #[path = "config_persistence_scratch.rs"]
 mod scratch;
+
+/// Flush `path`'s directory, so a create, rename or remove in it is durable;
+/// on Windows through the shared helper that opens the directory for it.
+fn sync_dir_of(path: &Path) -> std::io::Result<()> {
+    sync_dir_for(path, None)
+}
+
+/// [`sync_dir_of`] for one A call: `key` names the call, so a test seam can
+/// fail that call's sync alone. Every real sync is counted under test, so a
+/// row can prove A synced.
+fn sync_dir_for(path: &Path, key: Option<commit::SyncKey>) -> std::io::Result<()> {
+    #[cfg(test)]
+    {
+        use journal::fault::{Fault, fires};
+        if let Some(key) = key
+            && fires(path, |f| matches!(f, Fault::FailDirSync(k) if *k == key)).is_some()
+        {
+            return Err(std::io::Error::other("injected dir-sync failure"));
+        }
+    }
+    #[cfg(not(test))]
+    let _ = key;
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    #[cfg(not(windows))]
+    let synced = std::fs::File::open(dir).and_then(|d| d.sync_all());
+    #[cfg(windows)]
+    let synced = crate::private_fs::sync_dir(dir);
+    // Counted only once it succeeded: a row's "one real sync" means done.
+    #[cfg(test)]
+    if synced.is_ok() {
+        journal::fault::note_synced(path);
+    }
+    synced
+}
+
+// Primitive A: commit the config's bytes and prove them durable.
+#[path = "config_persistence_commit.rs"]
+pub(crate) mod commit;
+
+#[cfg(test)]
+#[path = "config_persistence_commit_tests.rs"]
+mod commit_tests;
 pub use scratch::write_text_atomic;
 use scratch::{
     SCRATCH_ATTEMPTS, ScratchClaimError, claim_scratch, next_scratch_seed, rename_with_retry,
@@ -107,9 +160,12 @@ use scratch::{create_scratch_exclusive, is_transient, scratch_candidate};
 ///
 /// With no journal pending there is nothing to do and no lock is taken: the
 /// file is whole, since every writer replaces it by atomic rename. With one,
-/// the config lock is taken (waiting up to [`CLI_LOCK_WAIT`]) and recovers it
-/// ([`journal::recover`]): back to the original, or keeping bytes a reload
-/// accepted.
+/// the config lock is taken (waiting up to [`CLI_LOCK_WAIT`]) and the journal
+/// recovered ([`journal::recover`]): back to the original, or keeping bytes a
+/// reload accepted. First, the config that recovery leaves is worked out
+/// without writing it and loaded, and the recovery's intent is appended to
+/// that config's audit log, so the record lands where the gateway that starts
+/// will write. A recovery that cannot be recorded recovers nothing.
 ///
 /// # Errors
 ///
@@ -117,16 +173,20 @@ use scratch::{create_scratch_exclusive, is_transient, scratch_candidate};
 /// writer past the wait, or beside a file this account cannot lock (fix it
 /// from the side that can write). The message says what to do; the gateway
 /// must not start on either version.
-pub fn recover_before_start(config: &Path) -> Result<(), String> {
+pub(crate) fn recover_before_start(
+    config: &Path,
+    record: &dyn Fn(&lock::Locked, &Config) -> Result<(), String>,
+) -> Result<(), String> {
     if !lock::journal_pending(config) {
         return Ok(());
     }
-    match lock::lock_config_blocking(config, Instant::now() + CLI_LOCK_WAIT, |_| {}) {
-        Ok(_locked) => Ok(()),
+    match lock::lock_config_blocking_deferred(config, Instant::now() + CLI_LOCK_WAIT, |_| {}) {
+        Ok(locked) => recover_recorded(&locked, record),
         Err(lock::NotLocked::Busy) => Err(format!(
             "{} has a pending write and another writer holds its lock; start again when it finishes",
             config.display()
         )),
+        Err(lock::NotLocked::Refused(message)) => Err(message),
         Err(lock::NotLocked::Failed(message)) => Err(match lock::no_writer_possible(config) {
             Some(why) => format!(
                 "a pending write's journal {} sits beside {}, which this gateway cannot lock ({why}); resolve the pending write from the writable side",
@@ -138,14 +198,64 @@ pub fn recover_before_start(config: &Path) -> Result<(), String> {
     }
 }
 
+/// [`recover_before_start`] under the lock: `record` given the config the
+/// recovery leaves, then the recovery.
+fn recover_recorded(
+    locked: &lock::Locked,
+    record: &dyn Fn(&lock::Locked, &Config) -> Result<(), String>,
+) -> Result<(), String> {
+    let message = |e: journal::NotRecovered| match e {
+        journal::NotRecovered::Refused(why) | journal::NotRecovered::Failed(why) => why,
+    };
+    if locked.journal_pending {
+        // `None`: the journal went after the lock reported it, so recovery
+        // below only clears a stray staged copy and changes no config.
+        if let Some(text) = journal::surviving_text(&locked.target).map_err(message)? {
+            let config = crate::config::Config::load_evaluated_text(&locked.target, &text)
+                .map_err(|e| {
+                    unrecorded(locked, &format!("the config it leaves does not load: {e}"))
+                })?
+                .config;
+            record(locked, &config).map_err(|why| unrecorded(locked, &why))?;
+        }
+    }
+    journal::recover(&locked.target).map(drop).map_err(message)
+}
+
+/// A pending journal whose recovery cannot be recorded: nothing was
+/// recovered, and the operator is told how to finish by hand.
+fn unrecorded(locked: &lock::Locked, why: &str) -> String {
+    let target = locked.target.display();
+    format!(
+        "{journal} is pending beside {target}, but its recovery cannot be recorded in the audit log: {why}. Nothing was recovered. Fix that and start again, or recover by hand: if the journal's state is staged, restore the staged original {original} over {target} only if its SHA-256 matches the journal's original_revision, then delete the journal; if it is all_renamed, only delete the journal. Either way, record the recovery yourself",
+        journal = journal::journal_path(&locked.target).display(),
+        original = journal::original_path(&locked.target).display(),
+    )
+}
+
 /// Take the config lock for a CLI write, waiting up to [`CLI_LOCK_WAIT`].
 /// The holder reads and writes the lock's target, never `path` again: a
 /// symlink at `path` re-pointed meanwhile would name another file.
+///
+/// A pending journal (a gateway write that failed and could not roll back)
+/// is refused, not recovered: the CLI holds no audit sink, so its recovery
+/// would go unrecorded. Starting or reloading the gateway recovers it.
 fn cli_lock(path: &Path) -> Result<lock::Locked, String> {
-    lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
-        say_waiting(path, lock);
-    })
-    .map_err(|e| not_locked(path, e))
+    let locked =
+        lock::lock_config_blocking_deferred(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
+            say_waiting(path, lock);
+        })
+        .map_err(|e| not_locked(path, e))?;
+    if locked.journal_pending {
+        return Err(format!(
+            "Not saved: {} has a write the gateway left pending ({}); start or reload the \
+             gateway, which recovers it (a reload on a gateway with an audit log records the \
+             recovery there), then run this command again.",
+            path.display(),
+            journal::journal_path(&locked.target).display()
+        ));
+    }
+    Ok(locked)
 }
 
 /// How long a synchronous writer (the CLI) waits for another writer's
@@ -221,7 +331,9 @@ fn not_locked(path: &Path, e: lock::NotLocked) -> String {
             "Not saved: {} is locked by another writer; retry.",
             path.display()
         ),
-        lock::NotLocked::Failed(message) => format!("Not saved: {message}"),
+        lock::NotLocked::Failed(message) | lock::NotLocked::Refused(message) => {
+            format!("Not saved: {message}")
+        }
     }
 }
 
@@ -336,7 +448,8 @@ where
     // Advisory only: a file that does not load is refused before the lock
     // file is made, so the refusal leaves the directory as it was. The load
     // under the lock is the authoritative one. Skipped while a replace journal
-    // is pending: the lock recovers the file before that load.
+    // is pending: the file may be a refused candidate, and `cli_lock` refuses
+    // the write without loading it.
     if !journal::exists(path) {
         load_existing_or_default(path)
             .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
@@ -430,13 +543,19 @@ fn edit_locked<T>(
         return Ok(false);
     };
     // Fail closed (GH462): bytes that do not parse are never written.
-    Config::from_file_text(&text).map_err(|e| {
+    let parsed = Config::from_file_text(&text).map_err(|e| {
         format!(
             "Not saved: the new {} does not parse as a config: {e}",
             path.display()
         )
     })?;
     write_yaml_at(&locked.target, &text)?;
+    // A text writer carries the file through (`init`, `upgrade`): a rule the
+    // firewall-on load refuses stays as it was, and warns.
+    #[cfg(feature = "firewall")]
+    crate::security::firewall::warn_refused_rules(&parsed);
+    #[cfg(not(feature = "firewall"))]
+    let _ = parsed;
     Ok(true)
 }
 
@@ -451,27 +570,17 @@ fn read_config(path: &Path, locked: &lock::Locked) -> Result<Option<(Config, Str
         .map_err(|e| format!("Failed to load {}: {e}", path.display()))
 }
 
-/// `path`'s text, or `None` when there is no file. A FIFO or a device would
-/// block the read or never end it, so the file is opened without blocking
-/// and the handle itself must be a regular file before it is read.
+/// `path`'s text, or `None` when there is no file, read through the guard
+/// every loader uses: a file another account can change or read, or one that
+/// is not a regular file, is refused before anything is written.
 fn read_text(path: &Path) -> Result<Option<String>, String> {
-    use std::io::Read as _;
-    let failed = |e: &dyn std::fmt::Display| format!("Failed to read {}: {e}", path.display());
-    let mut file = match crate::open_nonblocking::open_nonblocking(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        // Windows refuses to open a directory at all: name the cause the same.
-        Err(_) if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) => {
-            return Err(failed(&"not a regular file"));
+    crate::config::read_config_text(path).map_err(|e| match e {
+        crate::config::UnreadConfig::Refused(why)
+        | crate::config::UnreadConfig::Failed(why)
+        | crate::config::UnreadConfig::NotTheConfig(why) => {
+            format!("Not saved: {why}")
         }
-        Err(e) => return Err(failed(&e)),
-        Ok(file) => file,
-    };
-    if !file.metadata().map_err(|e| failed(&e))?.is_file() {
-        return Err(failed(&"not a regular file"));
-    }
-    let mut text = String::new();
-    file.read_to_string(&mut text).map_err(|e| failed(&e))?;
-    Ok(Some(text))
+    })
 }
 
 /// How many backends one splice may change.
@@ -494,11 +603,12 @@ fn write_spliced(
 ) -> Result<(), Unwritten> {
     let current = Config::load_literal_with_text(path).ok();
     let (before, text) = current.as_ref().map(|(c, t)| (c, t.as_str())).unzip();
-    // A file that does not load is still read, so its comments are refused.
-    let unloaded = text
-        .is_none()
-        .then(|| std::fs::read_to_string(path).ok())
-        .flatten();
+    // A file that does not load is still read, so its comments are refused,
+    // through the same guard: one the guard refuses is never written over.
+    let unloaded = match text {
+        Some(_) => None,
+        None => read_text(path)?,
+    };
     let text = text.or(unloaded.as_deref());
     if let Some((yaml, _)) = render(path, before, text, config, mode, scope)? {
         // `path` is the lock holder's target ([`write_config_with`]).
@@ -523,6 +633,11 @@ fn render(
 ) -> Result<Option<(String, Vec<String>)>, Unwritten> {
     config
         .validate_with_env(&config.env_overlay())
+        .map_err(|e| format!("Failed to validate config: {e}"))?;
+    // A rule the firewall-on load refuses is written only as carried over
+    // unchanged, whatever `enabled` says: the rules apply on a reload.
+    #[cfg(feature = "firewall")]
+    crate::security::firewall::refuse_authored(before, config)
         .map_err(|e| format!("Failed to validate config: {e}"))?;
     if let (Some(before), Some(text)) = (before, text) {
         let value = |c: &Config| serde_json::to_value(c).ok();
@@ -579,9 +694,16 @@ pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
 }
 
 #[cfg(test)]
+#[path = "config_persistence_cli_recovery_tests.rs"]
+mod cli_recovery_tests;
+#[cfg(test)]
 #[path = "config_persistence_tests.rs"]
 mod tests;
 
 #[cfg(test)]
 #[path = "config_persistence_edit_tests.rs"]
 mod edit_tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "config_persistence_refused_tests.rs"]
+mod refused_tests;

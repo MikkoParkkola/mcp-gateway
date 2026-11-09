@@ -48,6 +48,43 @@ pub(super) struct StoredDelivery {
     /// process.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) bindings: Vec<StepBinding>,
+    /// The one slot a single-slot execution dispatched under, which a
+    /// replay's declared effect is read from. Absent when none was noted, the
+    /// steps ran under two slots, or the record is older: the replay then
+    /// records no effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) effect_slot: Option<crate::backend::PoolKey>,
+}
+
+/// The slot an execution's dispatches ran under, gathered on its lease: none
+/// noted yet, one slot, or two distinct slots, which stays conflicted.
+#[derive(Debug, Clone, Default)]
+pub(crate) enum SlotNote {
+    #[default]
+    Unnoted,
+    One(crate::backend::PoolKey),
+    Conflicted,
+}
+
+impl SlotNote {
+    /// Note a dispatch's slot: the first sets it, the same slot again keeps
+    /// it, and a distinct one conflicts it for good, so an A, B, A
+    /// execution stores none.
+    pub(crate) fn note(&mut self, slot: crate::backend::PoolKey) {
+        *self = match std::mem::take(self) {
+            Self::Unnoted => Self::One(slot),
+            Self::One(held) if held == slot => Self::One(held),
+            Self::One(_) | Self::Conflicted => Self::Conflicted,
+        };
+    }
+
+    /// The slot a settled answer stores: only from one slot.
+    pub(crate) fn settled(&self) -> Option<crate::backend::PoolKey> {
+        match self {
+            Self::One(slot) => Some(slot.clone()),
+            Self::Unnoted | Self::Conflicted => None,
+        }
+    }
 }
 
 /// One dispatched step and the binding it ran under: `(server, tool,
@@ -168,19 +205,29 @@ pub(super) fn refusal_to_meet(
         .map(|(_, refusal)| refusal)
 }
 
-/// The steps a stored execution was served, if its record lists them.
-/// The bindings a stored delivery recorded (MIK-8407); none for a record
-/// that cannot be decoded, which then has no response to serve either.
-pub(super) fn stored_bindings(bytes: &[u8]) -> Vec<StepBinding> {
-    serde_json::from_slice::<StoredDelivery>(bytes)
-        .map(|stored| stored.bindings)
-        .unwrap_or_default()
+impl super::SyncLease {
+    /// The lease of a fresh execution: nothing noted yet.
+    pub(super) fn fresh(lease: crate::idempotency::admission::Lease) -> Self {
+        Self {
+            state: parking_lot::Mutex::new((lease, 0)),
+            playbook: None,
+            audit: parking_lot::Mutex::new(None),
+            steps: parking_lot::Mutex::new(Vec::new()),
+            bindings: parking_lot::Mutex::new(Vec::new()),
+            effect_slot: parking_lot::Mutex::new(SlotNote::default()),
+            era: None,
+        }
+    }
 }
 
-pub(super) fn dispatched_steps(bytes: &[u8]) -> Option<Vec<(String, String)>> {
-    serde_json::from_slice::<StoredDelivery>(bytes)
-        .ok()
-        .and_then(|stored| stored.dispatched)
+/// What a stored execution recorded beside its answer, read from its bytes
+/// in one parse: the steps it was served (if its record lists them), the
+/// binding each ran under, and the one slot it ran on. A record that cannot
+/// be decoded lists none of them, and has no response to serve either.
+pub(super) fn stored_steps(bytes: &[u8]) -> super::StoredSteps {
+    serde_json::from_slice::<StoredDelivery>(bytes).map_or((None, Vec::new(), None), |stored| {
+        (stored.dispatched, stored.bindings, stored.effect_slot)
+    })
 }
 
 /// The era the stored delivery was shaped for (MIK-8747), read without

@@ -43,7 +43,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
         crate::identity_propagation::PropagatedCredential,
         crate::identity_propagation::PropagationError,
     > {
-        let subject_key = identity.subject.clone();
+        let subject_key = identity.subject().to_owned();
         Ok(crate::identity_propagation::PropagatedCredential {
             expiry_synthetic: false,
             headers: vec![(
@@ -407,7 +407,7 @@ fn audit_actions(path: &str) -> Vec<String> {
 /// identified caller does the same, one is.
 ///
 /// THIS GUARDS A COST, NOT A CORRECTNESS PROPERTY, AND THAT IS WHY IT EXISTS.
-/// `caller_credential_for_identity` returns empty *without calling the resolver* when
+/// `caller_credential_minted` returns empty *without calling the resolver* when
 /// the caller has no verified identity. Dropping that short-circuit would still
 /// be correct — the resolver refuses and the guard omits the backend either way
 /// — so nothing else in this suite would go red. What it would do is mint once

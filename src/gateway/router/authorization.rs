@@ -10,8 +10,10 @@ use super::AppState;
 use super::backend_choke::backend_for;
 use super::caller_hiding::{CallerParts, admits_some_tool};
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::authz::{
+    AdminStanding, BackendGrant, Decision, Emit, ToolAuthorizer, Transport,
+};
 pub(super) use crate::gateway::authz::{AuthorizationError, CallTarget, ToolTarget};
-use crate::gateway::authz::{BackendGrant, Decision, Emit, ToolAuthorizer, Transport};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::invoke::TargetNaming;
 use crate::gateway::oauth::{
@@ -203,16 +205,28 @@ impl CallerStanding {
     /// Standing of an authenticated HTTP client (absent client ⇒ `Standard`).
     #[must_use]
     pub(crate) fn of_client(client: Option<&AuthenticatedClient>) -> Self {
-        Self::of_admin_flag(client.is_some_and(|client| client.admin))
+        Self::of(client.map_or(AdminStanding::None, AuthenticatedClient::admin_standing))
     }
 
-    /// Standing carried by a caller context's `is_admin` flag.
+    /// The single conversion from an admin standing: the admin meta-tools are
+    /// gateway-wide powers, so only `Gateway` holds them.
     #[must_use]
-    pub(crate) fn of_admin_flag(is_admin: bool) -> Self {
-        if is_admin {
+    pub(crate) fn of(standing: AdminStanding) -> Self {
+        if standing.is_gateway() {
             Self::Admin
         } else {
             Self::Standard
+        }
+    }
+
+    /// The admin standing this caller standing stands for: the inverse of
+    /// [`Self::of`]. Lossy by design, as `of` is: an in-scope admin is
+    /// `Standard` here, so it comes back as `AdminStanding::None`.
+    #[must_use]
+    pub(crate) fn admin_standing(self) -> AdminStanding {
+        match self {
+            Self::Admin => AdminStanding::Gateway,
+            Self::Standard => AdminStanding::None,
         }
     }
 
@@ -260,6 +274,7 @@ pub(super) async fn require_admin_tool_access(
         status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
         message: error.to_string(),
         kind: DecisionKind::AdminCapability,
+        rule_id: None,
     };
     log.admit().await.map_err(unavailable)?;
     let outcome = match &verdict {
@@ -297,7 +312,7 @@ pub(super) fn require_admin_log_level(
     server: &str,
 ) -> Result<(), AuthorizationError> {
     if !method.eq_ignore_ascii_case("logging/setLevel")
-        || CallerStanding::of_client(client) == CallerStanding::Admin
+        || crate::gateway::auth::is_gateway_admin(client)
     {
         return Ok(());
     }
@@ -361,12 +376,7 @@ pub(super) fn decide_tool_target<'a>(
     let early = validate_tool_name(target.tool)
         .map_err(|e| refused(DecisionKind::Syntax, e.clone()))
         .and_then(|()| crate::gateway::authz::authorize_backend(client, target.server))
-        .and_then(|()| {
-            generation
-                .tool_policy()
-                .check(target.server, target.tool)
-                .map_err(|e| refused(DecisionKind::ToolPolicy, e.to_string()))
-        })
+        .and_then(|()| crate::gateway::authz::tool_policy_refusal(generation.tool_policy(), target))
         .and_then(|()| {
             client.map_or(Ok(()), |client| {
                 client
@@ -378,19 +388,23 @@ pub(super) fn decide_tool_target<'a>(
         return Decision::of(Err(e));
     }
 
-    if !state.mtls_policy.is_empty()
-        && state
-            .mtls_policy
-            .evaluate(cert_identity, target.server, target.tool)
-            == PolicyDecision::Deny
-    {
+    let mtls = (!state.mtls_policy.is_empty())
+        .then(|| {
+            state
+                .mtls_policy
+                .evaluate_explained(cert_identity, target.server, target.tool)
+        })
+        .filter(|(decision, _)| *decision == PolicyDecision::Deny);
+    if let Some((_, rule_id)) = mtls {
+        // A refusal no rule decided (no certificate, no rule matched) names none.
         let refusal = refused(
             DecisionKind::Mtls,
             format!(
                 "Tool '{}' on server '{}' is blocked by certificate policy",
                 target.tool, target.server
             ),
-        );
+        )
+        .with_rule(rule_id.cloned());
         return Decision::recorded(Err(refusal), move || {
             let identity_label = cert_identity.map_or("<unauthenticated>", |id| id.display_name());
             warn!(

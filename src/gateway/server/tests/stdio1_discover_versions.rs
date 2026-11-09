@@ -19,7 +19,7 @@ use crate::gateway::Gateway;
 /// `supportedVersions` from a stdio gateway whose config sets
 /// `server.modern_protocol` to `modern`.
 async fn discovered_versions(modern: bool) -> Vec<String> {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut config = Config::default();
     config.server.modern_protocol = modern;
     config.tasks.store_dir = dir.path().join("tasks").display().to_string();

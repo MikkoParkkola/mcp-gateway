@@ -62,7 +62,7 @@ fn the_first_refusal_noted_is_the_one_recorded() {
 fn the_memo_kind_wins_over_a_later_note() {
     let mut noted = super::Noted::default();
     noted.refused(DecisionKind::Firewall, None);
-    noted.refused_by_memo(DecisionKind::BackendScope);
+    noted.refused_by_memo((DecisionKind::BackendScope, None));
     let denied = crate::security::audit::AuditOutcome::Denied(-32003);
     assert_eq!(recorded(&noted, denied), DecisionKind::BackendScope);
 }
@@ -101,5 +101,33 @@ fn noted_is_one_pointer_and_unboxed_until_a_note() {
     let mut noted = super::Noted::default();
     noted.refused(DecisionKind::Firewall, None);
     noted.refused(DecisionKind::Grant, None);
-    assert_eq!(noted.refusal_kind(), Some(DecisionKind::Firewall));
+    assert_eq!(
+        noted.refusal_pair().map(|(kind, _)| kind),
+        Some(DecisionKind::Firewall)
+    );
+}
+
+/// GUARD (canary, type half): a request finding enters the decision object as
+/// exactly its scan type, severity and location. A finding's description and
+/// matched text (the parts that can carry caller-supplied text) have no field
+/// to land in; adding one fails this row.
+#[test]
+fn a_decision_finding_carries_no_description_or_match() {
+    let finding = super::DecisionFinding {
+        scan_type: "prompt_injection".to_owned(),
+        severity: "high".to_owned(),
+        location: "arguments".to_owned(),
+    };
+    let value = serde_json::to_value(&finding).expect("serialises");
+    let keys: std::collections::BTreeSet<&str> = value
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        ["location", "scan_type", "severity"].into_iter().collect(),
+        "{value}"
+    );
 }

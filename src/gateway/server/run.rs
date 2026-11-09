@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 use tracing::{debug, info, warn};
 
 use super::Gateway;
-use super::control_plane_store::{build_control_plane_store, control_plane_base};
+use super::control_plane_store::{build_control_plane_store_with_log, control_plane_base};
 #[cfg(not(test))]
 use super::support;
 use super::support::log_startup_banner;
@@ -193,7 +193,9 @@ impl Gateway {
         // reloads), built after the store it records into. Audited before the
         // live config exists, so the served grants are in the startup inputs:
         // the running revision names the grants this process serves.
-        let control_plane_store = build_control_plane_store(&self.config, &control_plane_base)?;
+        let opened_store = build_control_plane_store_with_log(&self.config, &control_plane_base)?;
+        let governance_log = opened_store.as_ref().map(|o| Arc::clone(&o.governance_log));
+        let control_plane_store = opened_store.map(|o| o.store);
         let (identity_grant_sink, grants_read) = identity_grants::start_identity_grant_audit(
             &self.config,
             &meta_mcp,
@@ -480,9 +482,20 @@ impl Gateway {
             live_config: Arc::clone(&live_config),
             export_status,
             transparency_log,
+            governance_log,
             dashboard_bootstrap,
+            // One ProcessFacts, so one Activity read pool, per Gateway::run: its
+            // slots bound every read this gateway runs. A second listener shares
+            // this state (or this ProcessFacts); building another would double the
+            // bound. An embedder that calls run twice gets two pools.
             process: Arc::new(ProcessFacts::new(started, counters.upgrade.clone())),
         });
+        // The live stream's two feeds, attached once per process.
+        #[cfg(feature = "webui")]
+        state.dashboard_bootstrap.stream_hub().attach_logs(
+            state.transparency_log.as_deref(),
+            state.governance_log.as_deref(),
+        );
 
         // REST capability watch polls through the router's controls, so it
         // joins the running events hub once the router state exists.
@@ -686,11 +699,14 @@ impl Gateway {
         // Stop all backends, after their warmers can no longer start one.
         info!("Shutting down backends...");
         warmer.cancel().await;
+        // One deadline for the whole stage: each stdio backend gets its EOF,
+        // then SIGTERM, then the kill, planned to end by then.
+        let stop_deadline = tokio::time::Instant::now() + self.config.server.shutdown_timeout;
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
-        self.backends.stop_all().await;
+        self.backends.stop_all_by(stop_deadline).await;
 
         Ok(())
     }

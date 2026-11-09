@@ -57,22 +57,20 @@ fn resolve_api_keys(
         .collect::<Result<Vec<_>>>()
 }
 
-/// An admin key whose list names some backends sees only those in the web
-/// UI: say so at each load, so an operator who meant full admin learns it at
-/// startup rather than from a narrowed page. An empty list is a UI-wide
+/// An admin key whose list names some backends holds no gateway-wide admin
+/// power and sees only those backends in the web UI: say so at
+/// each load, so an operator who meant full admin learns it at startup rather
+/// than from a refused call. An empty list is a UI-wide
 /// admin that calls no backend, and is not warned here.
 fn warn_if_scoped_admin(key: &crate::config::ApiKeyConfig) {
-    if key.admin
-        && matches!(
-            crate::gateway::authz::BackendGrant::for_ui_list(key.admin, &key.backends),
-            crate::gateway::authz::BackendGrant::Scoped(_)
-        )
+    if crate::gateway::authz::admin_standing(key.admin, &key.backends)
+        == crate::gateway::authz::AdminStanding::InScope
     {
         warn!(
             target: AUTH_TARGET,
             key = %key.name,
             backends = ?key.backends,
-            "admin API key lists only some backends: the Activity and status in the web UI show it only those; set backends: [\"*\"] for full admin"
+            "admin API key lists only some backends: it holds no gateway-wide admin power (admin UI routes, admin meta-tools, control-plane Admin) and the web UI shows it only those backends; set backends: [\"*\"] for full admin"
         );
     }
 }
@@ -274,9 +272,7 @@ impl ResolvedAuthConfig {
                 && secret_still_valid(k, &minter.digest_tag, |end| {
                     !crate::config::api_key_expired(Some(end), at)
                 })
-                && k.admin
-                && crate::gateway::authz::BackendGrant::for_ui_list(k.admin, &k.backends)
-                    == crate::gateway::authz::BackendGrant::Unscoped
+                && crate::gateway::authz::admin_standing(k.admin, &k.backends).is_gateway()
                 && !crate::config::api_key_expired(k.expires_at, at)
         })
     }

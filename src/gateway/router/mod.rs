@@ -176,6 +176,9 @@ mod f13_text_a_tests;
 mod firewall_publish_fixture;
 #[cfg(all(test, feature = "webui"))]
 mod gateway_status_tests;
+/// Identity-grant refusals through `/mcp`, read back as Activity rows.
+#[cfg(all(test, feature = "webui"))]
+mod grant_refusal_rows_tests;
 /// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
 #[cfg(test)]
 mod hardened_elicitation_tests;
@@ -256,15 +259,21 @@ mod canary_tests;
 /// The capability editor's audit record: the change, never the content.
 #[cfg(all(test, feature = "webui"))]
 mod capability_edit_audit_tests;
+/// A context-integrity rewrite is recorded as the gateway's rewrite.
+#[cfg(all(test, feature = "firewall"))]
+mod context_integrity_effect_tests;
+/// The decision fixture table's HTTP rows (direct route and the meta HTTP gate).
+#[cfg(all(test, feature = "firewall"))]
+mod decision_fixture_rows;
 /// A delivery record says what the gateway did to the answer.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
-/// The direct route records no declared effect yet (pinned absence).
+/// The direct route's reach and its declared effect.
 #[cfg(test)]
-mod direct_effect_absent_tests;
+mod direct_effect_tests;
 /// A late refusal keeps its own code, and its run keeps the key.
 #[cfg(all(test, feature = "firewall"))]
 mod late_refusal_lease_tests;
@@ -358,6 +367,8 @@ mod stored_replay_liveness_tests;
 /// A UI write's admin record outlives a client cancel with its handler.
 #[cfg(all(test, feature = "webui"))]
 mod ui_audit_cancel_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_owner_tests;
 #[cfg(test)]
 mod webhook_mount_tests;
 /// MIK-8340: a withheld surfaced name answers as an absent one.
@@ -391,12 +402,19 @@ mod r2_input_keys_tests;
 mod replay_policy_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
+/// A credential a backend's `env:` or `headers:` gave it is kept out of
+/// the client's answer when the backend echoes it.
+#[cfg(test)]
+mod secret_echo_config_tests;
 /// An echoed injected secret is kept out of the idempotency cache, task
 /// answers and the task store.
 #[cfg(all(test, feature = "firewall"))]
 mod secret_echo_stored_tests;
 #[cfg(test)]
 mod secret_echo_tests;
+/// Answers kept before a value was marked secret are redacted when served.
+#[cfg(all(test, feature = "firewall"))]
+mod secret_marked_later_tests;
 #[cfg(test)]
 mod session_fp_once_tests;
 /// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.
@@ -533,6 +551,10 @@ pub struct AppState {
     /// (`idp_mint` / `idp_refuse`) into the same hash chain (MIK-6740). `None`
     /// when the transparency log is disabled — audit writes are then a no-op.
     pub transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
+    /// The governance audit log's writer, when the control-plane store is
+    /// open: the web UI's live stream reads its config rows through it.
+    /// `None` without a store; the stream then has no config source.
+    pub governance_log: Option<Arc<crate::security::TransparencyLogger>>,
     /// Lifecycle registry for TTL-reaped per-identity state
     /// (`MIK-7215.CONTROL.4`). `None` when the gateway was constructed
     /// without lifecycle wiring — tests and any embedder that does not run

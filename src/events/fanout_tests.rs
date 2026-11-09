@@ -445,14 +445,10 @@ async fn an_occurrence_with_a_lifecycle_key_reaches_only_its_holders() {
     );
     hub.fan_out(&services, &event("t1", Some(alices))).await;
     let outbox = |dir: &std::path::Path| -> Vec<String> {
-        std::fs::read_dir(dir.join("outbox"))
-            .map(|entries| {
-                entries
-                    .flatten()
-                    .map(|e| std::fs::read_to_string(e.path()).expect("read"))
-                    .collect()
-            })
-            .unwrap_or_default()
+        crate::events::records::committed_records(&dir.join("outbox"))
+            .iter()
+            .map(|p| std::fs::read_to_string(p).expect("read"))
+            .collect()
     };
     let records = outbox(dir.path());
     assert_eq!(records.len(), 1, "alice's key reaches one subscription");
@@ -590,7 +586,7 @@ async fn a_clock_before_the_epoch_delivers_nothing_on_a_live_lease() {
         fence: None,
     };
     let outbox = |dir: &std::path::Path| {
-        std::fs::read_dir(dir.join("outbox")).map_or(0, |entries| entries.flatten().count())
+        crate::events::records::committed_records(&dir.join("outbox")).len()
     };
     hub.fan_out(&services, &event("t1")).await;
     assert_eq!(

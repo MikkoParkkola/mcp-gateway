@@ -96,16 +96,21 @@ impl crate::transport::Transport for Alpha {
 
 /// One stdio `gateway_invoke` of `alpha:{tool}`; the answer.
 async fn invoke(meta: &Arc<MetaMcp>, tool: &str, arguments: &Value) -> Value {
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
     let params = json!({"name": "gateway_invoke",
                         "arguments": {"server": "alpha", "tool": tool, "arguments": arguments}});
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
-    super::super::Gateway::dispatch_single(meta, &policy, &mtls, &request, "stdio-m8")
-        .await
-        .expect("a request is answered")
+    super::super::Gateway::dispatch_single(
+        meta,
+        &crate::gateway::authz::default_line(meta),
+        &mtls,
+        &request,
+        "stdio-m8",
+    )
+    .await
+    .expect("a request is answered")
 }
 
 #[tokio::test]
@@ -141,6 +146,7 @@ async fn stdio_operator_is_one_principal() {
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let meta = Arc::new(meta);
 
     // An HTTP caller was delivered both texts from `alpha:read`.
@@ -212,6 +218,7 @@ fn judged_stdio(
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     if let Some(log) = audit {
         meta.enable_transparency_log(log);
     }
@@ -253,7 +260,6 @@ async fn staged_request(
     crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
 ) {
     use crate::gateway::server::{Gateway, StdioClient};
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -270,7 +276,7 @@ async fn staged_request(
         reads.guard(),
         Box::pin(Gateway::dispatch_single_staged(
             meta,
-            &policy,
+            &crate::gateway::authz::default_line(meta),
             &mtls,
             request.clone(),
             client,
@@ -284,7 +290,7 @@ async fn staged_request(
 /// Whether an HTTP caller sending `text` through `alpha:send` is refused.
 fn http_relay_refused(firewall: &Firewall, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
-    let verdict = firewall.check_relay(
+    let verdict = firewall.check_relay_paired(
         RelayCaller::Keyed("http-caller"),
         "alpha",
         "send",
@@ -342,7 +348,6 @@ async fn batch_read_delivers(
 ) -> bool {
     use crate::gateway::server::Gateway;
     *cell.lock() = text.to_string();
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -354,7 +359,7 @@ async fn batch_read_delivers(
     let batch = json!([rpc(1, "read", json!({}))]);
     let frames = Gateway::dispatch_batch_read(
         meta,
-        &policy,
+        &crate::gateway::authz::default_line(meta),
         &mtls,
         batch,
         (
@@ -390,11 +395,16 @@ async fn stdio_judged_out_batch_item_records_no_receipt() {
     );
 }
 
-/// A later batch item sees what an earlier one delivered: the operator reads
-/// text an HTTP caller also holds, then sends it, in one batch. Its own copy
-/// excuses it; deferring the receipt past the later item would refuse it.
+/// A later batch item is not excused by an earlier item of the same batch.
+/// A client composes every item of a JSON-RPC batch before it receives any
+/// answer, so the send cannot carry text the operator got from the read
+/// beside it: if it carries text an HTTP caller holds, the operator got that
+/// text some other way, which is the relay the gate refuses. Receipts record
+/// when the frame is written, after the whole batch ran.
+/// (Reverses the earlier pin, which let the read's receipt, recorded before
+/// anything was delivered, excuse the send.)
 #[tokio::test]
-async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
+async fn a_batch_item_is_not_excused_by_an_earlier_item_of_the_same_batch() {
     use crate::gateway::server::Gateway;
     let (meta, firewall, cell) = judged_stdio(None);
     let reads = meta.stdio_reads();
@@ -405,7 +415,6 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
         "read",
         &text_result(PROSE),
     );
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -420,7 +429,7 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
     ]);
     let frames = Gateway::dispatch_batch_read(
         &meta,
-        &policy,
+        &crate::gateway::authz::default_line(&meta),
         &mtls,
         batch,
         (
@@ -441,18 +450,21 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
         "base: the earlier read is delivered: {}",
         answers[0]
     );
-    assert!(
-        answers[1].get("error").is_none(),
-        "the operator's own earlier copy must excuse the send: {}",
+    assert_eq!(
+        answers[1]["error"]["code"], -32002,
+        "the send relays text the operator was not delivered: {}",
         answers[1]
     );
 }
 
 /// A fail-closed log whose next delivery record fails.
-fn failing_audit() -> (Arc<crate::security::TransparencyLogger>, tempfile::TempDir) {
+fn failing_audit() -> (
+    Arc<crate::security::TransparencyLogger>,
+    std::sync::Arc<tempfile::TempDir>,
+) {
     use crate::security::audit::AuditFailurePolicy;
     use crate::security::transparency_log::TransparencyLogConfig;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -495,6 +507,7 @@ async fn stdio_audit_withheld_read_records_no_receipt() {
         !frame.delivers_result(),
         "base: the failed delivery record replaces the answer"
     );
+    frame.stdio_written();
     assert!(
         !http_relay_refused(&firewall, &note),
         "an audit-withheld read must record no receipt"
@@ -512,6 +525,8 @@ async fn stdio_audit_withheld_read_records_no_receipt() {
         frame.delivers_result(),
         "control: the audited read is delivered"
     );
+    // The sink writes it: that is what commits the read history.
+    frame.stdio_written();
     assert!(
         http_relay_refused(&firewall, &note),
         "control: it records a receipt"
@@ -543,7 +558,11 @@ const THIRD: &str = "The lighthouse log for the outer skerry notes the oil used 
 #[tokio::test]
 async fn stdio_catalogue_is_inside_relay_detection() {
     let (meta, firewall, cell) = judged_stdio(None);
-    let policy = Arc::new(crate::security::ToolPolicy::default());
+    // The line as the read loop takes it: the generation published now, so a
+    // catalogue read is judged under the fixture's `block`.
+    let policy = meta
+        .current_generation()
+        .expect("the fixture publishes a live config");
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -603,7 +622,7 @@ async fn stdio_catalogue_is_inside_relay_detection() {
     let read = rpc("resources/read", json!({"uri": "res://orchard"})).await;
     assert!(read.get("error").is_none(), "base: {read}");
     let params = json!({"name": "send", "arguments": {"text": THIRD}});
-    let sent = firewall.check_relay(
+    let sent = firewall.check_relay_paired(
         RelayCaller::Keyed("http-caller"),
         "alpha",
         "send",
@@ -626,7 +645,6 @@ async fn stdio_gateway_built_refusal_is_sent_as_written() {
     use crate::gateway::server::{Gateway, StdioClient};
     let (meta, _firewall, _cell) = judged_stdio(None);
     let reads = meta.stdio_reads();
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -643,7 +661,7 @@ async fn stdio_gateway_built_refusal_is_sent_as_written() {
         reads.guard(),
         Box::pin(Gateway::dispatch_single_staged(
             &meta,
-            &policy,
+            &crate::gateway::authz::default_line(&meta),
             &mtls,
             json!({"jsonrpc": "2.0", "id": 7}),
             client,
@@ -735,3 +753,6 @@ async fn stdio_replay_leaves_the_cost_suggestion_out_of_the_receipt() {
         "control: the backend's text is receipted"
     );
 }
+
+#[path = "collusion_stdio_write.rs"]
+mod write_rows;

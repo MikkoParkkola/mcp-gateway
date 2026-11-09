@@ -224,6 +224,7 @@ pub(super) static ROWS: &[Row] = &[
         false,
     ),
     row(routes::UI_DECISIONS, Get, Admin(AdminRequired), &[], false),
+    row(routes::UI_POLICIES, Get, Admin(AdminRequired), &[], false),
     row(
         routes::UI_DECISIONS_COUNT,
         Get,
@@ -253,6 +254,7 @@ pub(super) static ROWS: &[Row] = &[
         &[(Page::Access, Tab::Status)],
         true,
     ),
+    row(routes::UI_KEYS, Post, Admin(Forbidden), &[], false),
     row(
         routes::UI_DEAD_LETTERS,
         Get,

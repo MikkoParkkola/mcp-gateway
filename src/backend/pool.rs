@@ -28,7 +28,8 @@ mod eviction;
 /// caller identity is present, the backend additionally owns one
 /// [`PoolKey::PerUser`] slot per stable identity binding, so two distinct users
 /// never share a backend transport or its upstream MCP session (IDP.7).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "slot", rename_all = "snake_case")]
 pub(crate) enum PoolKey {
     /// The canonical single-tenant slot. Every backend without identity
     /// propagation, and every propagating request that lacks a resolved
@@ -743,7 +744,13 @@ impl Backend {
         // is already out of the pool, so abandoning the wait cannot strand a
         // caller — only, at worst, the child process, which is exactly what the
         // failure branch below already reports.
-        let close = tokio::time::timeout(self.budgets.close_stage, transport.close()).await;
+        // The close plans its exit waits to fit the same budget.
+        let budget = self.budgets.close_stage;
+        let close = crate::transport::within_stop_deadline(
+            tokio::time::Instant::now() + budget,
+            transport.close(),
+        );
+        let close = tokio::time::timeout(budget, close).await;
         match close {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {

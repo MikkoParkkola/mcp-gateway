@@ -35,11 +35,22 @@ use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict};
 pub(crate) use audit::{REJECTION_AUDIT_PERMITS, RejectionAudit, audit_rejection, recorded};
 pub(crate) use callback::{CallbackSend, callback_frame, send_callback};
 pub(crate) use http::{HeldAnswerId, carry_record, emit_http, emit_http_checked, to_http};
+/// The read token: built only in the judge.
+#[cfg(feature = "firewall")]
+pub(crate) use judge::ReadsToken;
+#[cfg(all(test, feature = "firewall"))]
+pub(crate) use judge::test_token;
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) use judge::{admit, attribute, delivered};
-pub(crate) use reply::{
-    OutboundReply, gateway_reply, judged_reply, judged_reply_checked, stream_reply,
-};
+/// Without the `firewall` feature nothing is judged and no token exists, as
+/// for [`Guard`]: the history's `reserve` compiles, and nothing can call it.
+#[cfg(not(feature = "firewall"))]
+pub(crate) enum ReadsToken {}
+/// The must-fail probe of the read token, built only by
+/// `scripts/ci/check-reads-token.py`.
+#[cfg(all(reads_token_probe, feature = "firewall"))]
+mod reads_token_probe;
+pub(crate) use reply::{OutboundReply, gateway_reply, judged_reply, stream_reply};
 pub(crate) use stdio::StdioReads;
 pub(crate) use stream::{SessionJudge, StreamJudge, StreamMark, sse_data, sse_message};
 
@@ -438,5 +449,8 @@ mod caller_key_record_tests;
 #[cfg(all(test, feature = "firewall"))]
 #[path = "coverage_tests.rs"]
 mod coverage_tests;
+#[cfg(all(test, feature = "firewall"))]
+#[path = "read_scope_scan_tests.rs"]
+mod read_scope_scan_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod tests;

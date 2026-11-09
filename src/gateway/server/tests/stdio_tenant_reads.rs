@@ -100,7 +100,7 @@ struct Session {
     client: tokio::io::DuplexStream,
     lines: tokio::io::Lines<BufReader<tokio::io::DuplexStream>>,
     task: tokio::task::JoinHandle<()>,
-    dir: tempfile::TempDir,
+    dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 /// Whether the session's gateway keeps a transparency log.
@@ -119,7 +119,7 @@ impl Session {
     }
 
     async fn open_with(backend_url: &str, mode: &str, log: Log) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("gateway.yaml");
         let quoted = |name: &str| {
             serde_json::to_string(&dir.path().join(name).display().to_string())

@@ -5,12 +5,9 @@
 //! Every part is optional and printed in that fixed order. An id names what one
 //! connection has delivered, so a frame changes only its own part.
 
-/// One log's position: the counter and the 16-hex hash of its last row.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct LogPart {
-    pub(super) counter: u64,
-    pub(super) hash16: String,
-}
+/// One log's position: the counter and the 16-hex hash of its last row, the
+/// forward read's own type.
+pub(super) use crate::gateway::ui::activity::forward::Mark;
 
 /// Which log a row belongs to: the export source enum already names both.
 pub(super) use crate::control_plane::export::ExportSource as LogName;
@@ -18,8 +15,8 @@ pub(super) use crate::control_plane::export::ExportSource as LogName;
 /// A position in both logs. Either half may be absent.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct LogCursor {
-    pub(super) inv: Option<LogPart>,
-    pub(super) gov: Option<LogPart>,
+    pub(super) inv: Option<Mark>,
+    pub(super) gov: Option<Mark>,
 }
 
 /// The id could not be read.
@@ -106,12 +103,29 @@ fn parse_boot(text: &str) -> Result<u64, IdError> {
     u64::from_str_radix(text, 16).map_err(|_| IdError)
 }
 
-fn parse_log(text: &str) -> Result<LogPart, IdError> {
+/// A log's half after a reset, before its replay has delivered a row: the
+/// replay from the oldest kept record is still owed. Counter 0 names no
+/// record (a log's counters start at 1), so it cannot be a real position,
+/// and it renders and parses as any other part does: a reconnect that
+/// carries it resumes the replay instead of starting at the log's head.
+pub(super) fn replay_pending() -> Mark {
+    Mark {
+        counter: 0,
+        hash16: "0".repeat(16),
+    }
+}
+
+/// Whether `mark` is [`replay_pending`]'s marker.
+pub(super) fn is_replay_pending(mark: &Mark) -> bool {
+    mark.counter == 0
+}
+
+fn parse_log(text: &str) -> Result<Mark, IdError> {
     let (n, hash) = text.split_once('-').ok_or(IdError)?;
     if !is_hash(hash) {
         return Err(IdError);
     }
-    Ok(LogPart {
+    Ok(Mark {
         counter: parse_num(n)?,
         hash16: hash.to_owned(),
     })

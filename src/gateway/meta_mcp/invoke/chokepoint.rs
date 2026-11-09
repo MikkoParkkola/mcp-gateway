@@ -340,7 +340,7 @@ impl MetaMcp {
         let decision = authorizer.decide(target);
         let refusal = if decision.verdict.is_err() {
             decision.emit(Emit::Audit).map_err(|e| {
-                super::audit::note_refused_by(e.kind, None);
+                super::audit::note_refused_by(e.kind, e.rule_id.clone());
                 Error::Forbidden {
                     code: e.code,
                     status: e.status.as_u16(),
@@ -350,13 +350,17 @@ impl MetaMcp {
         } else {
             // Allowed: the record, when this stage owns it, then the admin rule.
             let _allowed = decision.emit(on_allow);
-            self.admin_capability_rule(server, tool, scope.is_admin)
-                .inspect_err(|_| {
-                    super::audit::note_refused_by(
-                        crate::security::decision_record::DecisionKind::AdminCapability,
-                        None,
-                    );
-                })
+            self.admin_capability_rule(
+                server,
+                tool,
+                scope.admin != crate::gateway::authz::AdminStanding::None,
+            )
+            .inspect_err(|_| {
+                super::audit::note_refused_by(
+                    crate::security::decision_record::DecisionKind::AdminCapability,
+                    None,
+                );
+            })
         };
         if let Err(e) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());
@@ -413,7 +417,7 @@ impl MetaMcp {
         };
         let published = self.current_generation();
         let policy = firewall.policy_under(scope.authorizer.generation().or(published.as_deref()));
-        let mut verdict = firewall.rescan(
+        let (mut verdict, mut rule) = firewall.rescan_attributed(
             policy,
             target,
             outbound.arguments,
@@ -421,15 +425,20 @@ impl MetaMcp {
             outbound.backend,
         );
         if let Some(answers) = outbound.answers {
-            let answered = firewall.rescan(
+            let (answered, answered_rule) = firewall.rescan_attributed(
                 policy,
                 target,
                 answers,
                 crate::security::firewall::ScanSubject::Answers,
                 outbound.backend,
             );
+            // The arguments' rule stands at an equal action; a stronger
+            // answer brings its own.
             if rank(answered.action) > rank(verdict.action) {
                 verdict.action = answered.action;
+                rule = answered_rule;
+            } else if answered.action == verdict.action && rule.is_none() {
+                rule = answered_rule;
             }
             verdict.findings.extend(answered.findings);
         }
@@ -459,7 +468,7 @@ impl MetaMcp {
         }
         super::audit::note_refused_by(
             crate::security::decision_record::DecisionKind::Firewall,
-            None,
+            rule,
         );
         // The stateless rescan has no anomaly findings, so this is the
         // `-32600` arm of the one shared wording.

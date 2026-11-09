@@ -30,7 +30,7 @@ impl crate::identity_propagation::IdentityPropagation for Mint {
         crate::identity_propagation::PropagatedCredential,
         crate::identity_propagation::PropagationError,
     > {
-        let subject_key = identity.subject.clone();
+        let subject_key = identity.subject().to_owned();
         Ok(crate::identity_propagation::PropagatedCredential {
             expiry_synthetic: false,
             headers: vec![(
@@ -101,13 +101,13 @@ async fn a_catalogue_read_mints_what_the_captured_backend_asks_for() {
 
     let control = meta.catalogue_credential_for(&replacement, caller).await;
     assert!(
-        control.is_some_and(|(headers, binding)| !headers.headers.is_empty() && binding.is_some()),
+        control.is_ok_and(|(headers, binding)| !headers.headers.is_empty() && binding.is_some()),
         "control: the replacement mints a per-user credential"
     );
     let served = meta.catalogue_credential_for(&captured, caller).await;
     assert_eq!(
         served.map(|(credential, binding)| (credential.headers.to_vec(), binding)),
-        Some((Vec::new(), None)),
+        Ok((Vec::new(), None)),
         "the captured backend propagates nothing: the reload must not mint for it"
     );
 }

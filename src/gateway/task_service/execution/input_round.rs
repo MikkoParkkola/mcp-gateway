@@ -18,7 +18,7 @@ use super::observe::{Acceptance, Handoff};
 use super::settlement::{
     DispatchSettlement, abandoned_input_round, classify_dispatch, interrupted_before_dispatch,
 };
-use super::worker::{dispatched_in_cell, inspect_and_record, settle_surfaced_refused};
+use super::worker::{CellRefusal, dispatched_in_cell, inspect_and_record, settle_surfaced_refused};
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor};
 use crate::gateway::task_service::host::LiveHost;
 use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound};
@@ -342,7 +342,7 @@ async fn dispatch(
     let generation = state.generation();
     // K15: the key that created this task, as the current table holds it: a
     // reload since the round was accepted can refuse the continuation.
-    let rejudged = match state.rejudge(owned.authorizer(), &generation) {
+    let rejudged = match state.rejudge(owned.authorizer(), owned.verified_identity(), &generation) {
         Ok(rejudged) => rejudged,
         Err(refused) => return Some(*refused),
     };

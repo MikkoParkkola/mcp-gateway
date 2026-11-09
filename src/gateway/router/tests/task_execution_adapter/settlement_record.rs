@@ -23,6 +23,7 @@ use crate::security::firewall::tenant_guard::TenantGuardConfig;
 use crate::security::firewall::{Firewall, FirewallConfig};
 use crate::security::transparency_log::TransparencyLogConfig;
 
+mod ci_rewrite_record;
 mod races;
 
 const UPSTREAM_HANDLE: &str = "upstream-job-settlement-record";
@@ -242,7 +243,7 @@ struct Fixture {
     state: Arc<AppState>,
     recovery: Arc<Recovery>,
     log: Arc<TransparencyLogger>,
-    log_dir: tempfile::TempDir,
+    log_dir: std::sync::Arc<tempfile::TempDir>,
     _store: crate::gateway::router::tests::FixtureDir,
 }
 
@@ -276,7 +277,7 @@ async fn fixture(setup: Setup, path: Path) -> Fixture {
         "the recovery adapter must install"
     );
 
-    let log_dir = tempfile::tempdir().expect("a log directory");
+    let log_dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,

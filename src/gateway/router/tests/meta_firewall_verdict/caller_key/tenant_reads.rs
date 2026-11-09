@@ -38,6 +38,7 @@ use Outcome::Delivered;
 /// in `mode`, on the process history `reads` (startup shares one between
 /// both firewalls, `Gateway::response_firewall`).
 fn reads_firewall(
+    switch: Switch,
     mode: CrossTenantReads,
     window_secs: u64,
     reads: &Arc<ReadHistory>,
@@ -47,6 +48,7 @@ fn reads_firewall(
     Arc::new(
         Firewall::from_config(
             FirewallConfig {
+                enabled: switch == Switch::On,
                 tenant_guard: TenantGuardConfig {
                     enabled: false,
                     window_secs,
@@ -92,12 +94,29 @@ async fn keyed_state(
     window: u64,
     arg_keys: &[&str],
 ) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
+    switched_state(Switch::On, mode, window, arg_keys).await
+}
+
+/// `security.firewall.enabled` for a fixture.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Switch {
+    On,
+    Off,
+}
+
+/// [`keyed_state`] with the firewall switch at `switch`.
+async fn switched_state(
+    switch: Switch,
+    mode: CrossTenantReads,
+    window: u64,
+    arg_keys: &[&str],
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let reads = ReadHistory::shared();
     // One keyring for both, as startup pairs them (#2210, MIK-8276).
     let keys = Arc::new(crate::protocol::continuation::ContinuationState::new());
     let (handler, meta) = (
-        reads_firewall(mode, window, &reads, arg_keys, &keys),
-        reads_firewall(mode, window, &reads, arg_keys, &keys),
+        reads_firewall(switch, mode, window, &reads, arg_keys, &keys),
+        reads_firewall(switch, mode, window, &reads, arg_keys, &keys),
     );
     let (state, store) =
         super::super::state_with_firewalls_and_auth(handler, meta, &one_key()).await;
@@ -164,7 +183,7 @@ impl Transport for NotifyingBackend {
 async fn logged_router() -> (
     axum::Router,
     crate::gateway::router::tests::FixtureDir,
-    tempfile::TempDir,
+    Arc<tempfile::TempDir>,
 ) {
     logged_router_in(CrossTenantReads::Observe).await
 }
@@ -175,10 +194,10 @@ async fn logged_router_in(
 ) -> (
     axum::Router,
     crate::gateway::router::tests::FixtureDir,
-    tempfile::TempDir,
+    Arc<tempfile::TempDir>,
 ) {
     let (state, store) = split_state(mode, 3600).await;
-    let log_dir = tempfile::tempdir().expect("a log directory");
+    let log_dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -192,12 +211,51 @@ async fn logged_router_in(
         }))
         .expect("open log"),
     );
+    // A late append lands before the directory goes.
+    log.keep_test_dir(Arc::clone(&log_dir));
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
     let mut meta =
         Arc::try_unwrap(app.meta_mcp).unwrap_or_else(|_| panic!("fixture meta is exclusive"));
     meta.enable_transparency_log(log);
     app.meta_mcp = Arc::new(meta);
     (create_router(Arc::new(app)), store, log_dir)
+}
+
+/// The fixture state with the firewall switch at `switch`, one transparency
+/// log shared by the Meta-MCP (`POST /mcp`, the GET stream) and `AppState`
+/// (the direct route writes its delivery record there, `direct_audit.rs`).
+async fn logged_state_switched(
+    switch: Switch,
+    mode: CrossTenantReads,
+) -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    Arc<tempfile::TempDir>,
+) {
+    let (state, store) = switched_state(switch, mode, 3600, &["customer_id"]).await;
+    let log_dir = crate::test_dir_keep::kept_tempdir();
+    let log = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: log_dir
+                .path()
+                .join("audit.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+            key_id: "min2".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("open log"),
+    );
+    // A late append lands before the directory goes.
+    log.keep_test_dir(Arc::clone(&log_dir));
+    let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
+    let mut meta =
+        Arc::try_unwrap(app.meta_mcp).unwrap_or_else(|_| panic!("fixture meta is exclusive"));
+    meta.enable_transparency_log(Arc::clone(&log));
+    app.meta_mcp = Arc::new(meta);
+    app.transparency_log = Some(log);
+    (Arc::new(app), store, log_dir)
 }
 
 fn log_lines(dir: &tempfile::TempDir) -> Vec<String> {
@@ -601,3 +659,6 @@ async fn delayed_sse_body_keeps_reservation() {
 
 #[path = "tenant_read_streams.rs"]
 mod streams;
+
+#[path = "tenant_read_firewall_off.rs"]
+mod firewall_off;

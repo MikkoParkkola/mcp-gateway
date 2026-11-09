@@ -20,14 +20,30 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
-use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::oidc::VerifiedIdentity;
 
 /// A temporary gateway token issued after OIDC verification.
-#[derive(Clone, Serialize, Deserialize)]
+///
+/// Output only, like the identity it carries: a token is never read back
+/// from bytes.
+///
+/// ```compile_fail,E0277
+/// fn read(bytes: &str) -> mcp_gateway::key_server::TemporaryToken {
+///     serde_json::from_str(bytes).expect("a token")
+/// }
+/// ```
+///
+/// Writing one out compiles:
+///
+/// ```
+/// fn write(token: &mcp_gateway::key_server::TemporaryToken) -> String {
+///     serde_json::to_string(token).expect("a token")
+/// }
+/// ```
+#[derive(Clone, Serialize)]
 pub struct TemporaryToken {
     /// Unique token identifier (used for revocation).
     pub jti: String,
@@ -155,14 +171,7 @@ impl InMemoryTokenStore {
     /// scanners (e.g., `truffleHog`, GitHub secret scanning).
     #[must_use]
     pub fn generate_bearer() -> String {
-        let random_bytes: [u8; 32] = rand::rng().random();
-        format!(
-            "mcpgw_{}",
-            base64::Engine::encode(
-                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-                random_bytes,
-            )
-        )
+        crate::random_secret::random_secret("mcpgw_")
     }
 
     /// Generate a UUID v4 JTI.
@@ -229,7 +238,7 @@ impl TokenStore for InMemoryTokenStore {
 
         for entry in &self.by_bearer {
             let identity = &entry.value().identity;
-            if identity.issuer == issuer && identity.subject == subject {
+            if identity.issuer() == issuer && identity.subject() == subject {
                 jtis_to_revoke.push(entry.value().jti.clone());
             }
         }
@@ -246,7 +255,9 @@ impl TokenStore for InMemoryTokenStore {
             .iter()
             .filter(|e| {
                 let identity = &e.value().identity;
-                identity.issuer == issuer && identity.subject == subject && !e.value().aged_out()
+                identity.issuer() == issuer
+                    && identity.subject() == subject
+                    && !e.value().aged_out()
             })
             .count()
     }
@@ -371,7 +382,7 @@ mod tests {
 
         // THEN: the token is returned
         assert!(found.is_some());
-        assert_eq!(found.unwrap().identity.email, "alice@company.com");
+        assert_eq!(found.unwrap().identity.email(), "alice@company.com");
     }
 
     #[tokio::test]

@@ -45,7 +45,7 @@ pub(super) fn is_bridged(config: &Config, identity: &VerifiedIdentity) -> bool {
             .adapters
             .iter()
             .filter(|adapter| adapter.session.is_some())
-            .any(|adapter| identity.issuer == adapter_issuer(&adapter.installation_id))
+            .any(|adapter| identity.issuer() == adapter_issuer(&adapter.installation_id))
     })
 }
 

@@ -93,6 +93,7 @@ impl MetaMcp {
     #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     pub(super) fn relay_refusal(
         &self,
+        pinned: Option<&crate::config_reload::Generation>,
         who: RelayKey<'_>,
         audit: (&str, &str),
         (server, tool): (&str, &str),
@@ -118,7 +119,20 @@ impl MetaMcp {
                 outbound_params(tool, arguments, meta, key, egress.retry)
             };
             let caller = RelayCaller::new(who.key, who.keyed);
-            fw.relay_block_message(caller, (server, tool), &params, audit)
+            // The request's pinned generation, else the one published now;
+            // with neither it fails closed (`unpublished_refusal`).
+            let published = self.current_generation();
+            let message = match pinned.or(published.as_deref()) {
+                Some(generation) => fw.relay_block_message(
+                    generation.collusion_view(),
+                    caller,
+                    (server, tool),
+                    &params,
+                    audit,
+                ),
+                None => Some(staging::unpublished_refusal("witness")),
+            };
+            message
                 .inspect(|_| super::audit::note_refused_by(DecisionKind::Firewall, None))
                 .map(|message| crate::Error::Forbidden {
                     code: -32002,
@@ -128,7 +142,7 @@ impl MetaMcp {
         }
         #[cfg(not(feature = "firewall"))]
         {
-            let _ = (who, audit, server, tool, egress);
+            let _ = (pinned, who, audit, server, tool, egress);
             None
         }
     }
@@ -166,7 +180,11 @@ impl MetaMcp {
             caller.api_key_name.unwrap_or("anonymous"),
         );
         let who = caller.relay_caller(session_id);
-        let Some(refused) = self.relay_refusal(who, audit, target, egress) else {
+        // Test builds: the witness hook runs before the first generation read on this route.
+        #[cfg(all(test, feature = "firewall"))]
+        crate::security::firewall::relay_witness_hook::run();
+        let pinned = caller.authorizer.generation();
+        let Some(refused) = self.relay_refusal(pinned, who, audit, target, egress) else {
             return Ok(());
         };
         super::nonce_settle::settle_pre_send(
@@ -218,7 +236,16 @@ impl super::BridgeDispatcher<'_> {
             self.api_key_name.unwrap_or("anonymous"),
         );
         let target = (self.server, self.tool);
-        let Some(refused) = self.meta.relay_refusal(self.relay, audit, target, &egress) else {
+        // Test builds: the witness hook runs before the first generation read on this route.
+        #[cfg(all(test, feature = "firewall"))]
+        crate::security::firewall::relay_witness_hook::run();
+        // Every round is judged under the generation the call was admitted
+        // under, never one published between rounds.
+        let pinned = self.caller.authorizer.generation();
+        let Some(refused) = self
+            .meta
+            .relay_refusal(pinned, self.relay, audit, target, &egress)
+        else {
             return Ok(());
         };
         let message = refused.to_string();
@@ -367,7 +394,14 @@ impl MetaMcp {
     pub(crate) fn commit_staged_relay(&self, delivered: bool) {
         #[cfg(feature = "firewall")]
         if let Some(fw) = self.firewall.as_deref() {
-            commit_with(fw, delivered);
+            // Under the generation current at delivery (none only before
+            // startup publishes one: see `unpublished`).
+            if let Some(generation) = self.current_generation() {
+                commit_with(fw, delivered, &generation);
+            } else {
+                discard_staged();
+                staging::unpublished("commit");
+            }
             return;
         }
         let _ = delivered;
@@ -574,10 +608,12 @@ mod staging;
 pub(crate) use seams::noting_plan_members;
 pub(crate) use seams::{note_plan_member, pointer_token};
 
-pub(crate) use catalogue::{CatalogueCaller, as_caller};
+pub(crate) use catalogue::{CatalogueCaller, CatalogueGeneration, as_caller};
 #[cfg(feature = "firewall")]
 pub(crate) use delivered::strip_gateway_stamps;
 pub(crate) use delivered::{AnswerShape, GatewayStamps};
+#[cfg(all(test, feature = "firewall"))]
+pub(crate) use staging::commit_capture_hook;
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) use staging::take_staged_for_test;
 pub(crate) use staging::{
@@ -585,7 +621,7 @@ pub(crate) use staging::{
     plan_step,
 };
 #[cfg(feature = "firewall")]
-pub(crate) use staging::{commit_with, stage_with};
+pub(crate) use staging::{commit_with, stage_with, take_staged_now};
 
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_tests.rs"]

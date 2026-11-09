@@ -126,17 +126,19 @@ pub(crate) async fn current_caller(
             crate::gateway::oauth::validate_agent_token(token, &state.agent_auth.registry).ok()?,
         );
     }
-    let found = |client, identity| CurrentCaller {
-        client,
-        identity,
-        agent: agent.clone(),
-    };
     // A held credential has no request: it is judged by the generation
     // current at this delivery, its key table and its role mapping alike, so
     // a key or an admin rule removed by reload stops here. One snapshot,
     // taken before any key-server verification: a reload landing during it
     // applies from the next delivery.
     let generation = state.live_config.generation();
+    let found = |client, identity| CurrentCaller {
+        client,
+        identity,
+        agent: agent.clone(),
+        #[cfg(feature = "webui")]
+        generation: std::sync::Arc::clone(&generation),
+    };
     let auth_config = generation.auth();
     if !auth_config.enabled {
         return Some(found(anonymous_client(), None));
@@ -181,6 +183,11 @@ pub(crate) struct CurrentCaller {
     pub(crate) client: AuthenticatedClient,
     pub(crate) identity: Option<crate::key_server::oidc::VerifiedIdentity>,
     pub(crate) agent: Option<crate::gateway::oauth::ValidatedToken>,
+    /// The generation the caller was judged by: a later judgement of the
+    /// same delivery (its role mapping) reads this one, never the live config.
+    /// Only the UI live stream reads it.
+    #[cfg(feature = "webui")]
+    pub(crate) generation: std::sync::Arc<crate::config_reload::Generation>,
 }
 
 /// Who a notification is for: callers who may access one backend, or every
@@ -285,7 +292,7 @@ pub(super) async fn key_server_credential(
                 expires_at,
                 jti,
                 issued_at,
-                provider_sha256: provider_fingerprint(ks, &identity.issuer),
+                provider_sha256: provider_fingerprint(ks, identity.issuer()),
             },
             identity,
         },

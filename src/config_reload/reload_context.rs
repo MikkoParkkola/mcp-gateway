@@ -251,6 +251,22 @@ impl ReloadContext {
         self
     }
 
+    /// Test-only: a context whose every reload after a write refuses the new
+    /// bytes, so a route's answer to a refused reload can be driven end to end.
+    /// Its only caller is the web UI's backend rows.
+    #[cfg(all(test, feature = "webui"))]
+    #[must_use]
+    pub(crate) fn refusing_reloads_for_test(self) -> Self {
+        fn refused(
+            _: &std::path::Path,
+            _: &Arc<LiveConfig>,
+            _: &LiveEnv,
+        ) -> std::result::Result<EvaluatedReload, String> {
+            Err("the reload refused the new bytes (test)".to_owned())
+        }
+        self.with_load(refused)
+    }
+
     /// Replace how the load thread starts, so a test can refuse it.
     #[cfg(test)]
     #[must_use]
@@ -432,11 +448,29 @@ impl ReloadContext {
         let env_restart_keys = changed_startup_env_keys(&self.env, &evaluated);
         let EvaluatedReload {
             config: new_config,
-            patch,
+            mut patch,
             overlay,
             inputs,
+            configured,
             ..
         } = evaluated;
+        // A backend whose configured credentials changed (a value newly
+        // written as a reference, or no longer) is modified: replacing its
+        // instance clears what it cached and seeds the new one, and the
+        // publish moves every cache key on.
+        for name in self.registry.marking_changes(&configured) {
+            let Some(cfg) = new_config
+                .enabled_backends()
+                .find(|(n, _)| **n == name)
+                .map(|(_, c)| c)
+            else {
+                continue;
+            };
+            let mut listed = patch.backends_added.iter().chain(&patch.backends_modified);
+            if !listed.any(|(n, _)| *n == name) {
+                patch.backends_modified.push((name, cfg.clone()));
+            }
+        }
 
         if patch.is_empty() {
             // The env files can rotate under an unchanged config file, so the
@@ -462,6 +496,9 @@ impl ReloadContext {
         let generation = Arc::new(prepared.map_err(|reason| nothing_published(&reason))?);
 
         let outcome = patch.outcome();
+        // After every refusal: a backend `apply_patch` registers is seeded
+        // from this load's record.
+        self.registry.set_load_record(configured);
         let fully_applied = apply_patch(
             &patch,
             &self.registry,
@@ -477,6 +514,10 @@ impl ReloadContext {
             // outcome; the honest one is an error.
             return Err(SHUTDOWN_ABORTED_ERROR.to_string());
         }
+        // Test seam: after the patch registered its backends, before the
+        // publish, so a test can drop a reload between the two.
+        #[cfg(test)]
+        super::reload_pause::pause_here(&super::reload_pause::after_apply(&self.config_path)).await;
 
         // Published together: a resolver that read the new config against the
         // old overlay would resolve an `env:` reference the reload just changed.

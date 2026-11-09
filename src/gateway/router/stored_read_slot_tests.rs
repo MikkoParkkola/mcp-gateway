@@ -555,3 +555,6 @@ async fn p1c_passthrough_stored_read_refreshes_a_stale_shared_catalogue() {
     assert!(read.get("error").is_none(), "P1c: no error: {read}");
     assert!(gw.shared.lists() > lists, "P1c: the shared list refreshed");
 }
+
+#[path = "stored_read_slot_refusal_tests.rs"]
+mod refused_by;

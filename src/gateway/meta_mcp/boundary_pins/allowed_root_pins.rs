@@ -4,13 +4,14 @@
 //! R38b, P1, P2 of the allowed-folder test plan). Syntax scan over
 //! production code, test-only code skipped by cfg as in the other pins.
 //!
-//! - R38b: `check_request_keyed` and `rescan` each call `root_check` and
-//!   `apply_roots`; `check_request` only delegates to `check_request_keyed`.
+//! - R38b: `check_request_attributed` and `rescan_attributed` each call
+//!   `root_check` and `apply_roots`; `check_request` only delegates to
+//!   `check_request_keyed`, which only delegates to `check_request_attributed`.
 //! - P1: every production `Firewall::from_config` sits in
 //!   `response_firewall`, which also calls `with_registries`.
-//! - P2: every production `check_request_keyed` and `rescan` call site is
-//!   listed as passing the sending backend or as a live-lookup fallback
-//!   passing `None`; an unlisted site fails whatever it passes.
+//! - P2: every production call of a request or rescan check is listed as
+//!   passing the sending backend or as a live-lookup fallback passing
+//!   `None`; an unlisted site fails whatever it passes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,14 +30,21 @@ enum Pass {
     Fallback(&'static str),
 }
 
-/// Every production `check_request_keyed` and `rescan` call: file, function,
-/// method and what it passes. A call site not listed here fails P2, whatever
-/// it passes, so the instance-passing guarantee cannot erode silently.
-const SITES: [(&str, &str, &str, Pass); 6] = [
+/// The request and rescan checks a call site can call.
+const CHECKS: [&str; 3] = [
+    "check_request_keyed",
+    "check_request_attributed",
+    "rescan_attributed",
+];
+
+/// Every production request or rescan check call: file, function, method and
+/// what it passes. A call site not listed here fails P2, whatever it passes,
+/// so the instance-passing guarantee cannot erode silently.
+const SITES: [(&str, &str, &str, Pass); 7] = [
     (
         "src/gateway/router/handlers/dispatch_tools_call/route_stage.rs",
         "scan_targets",
-        "check_request_keyed",
+        "check_request_attributed",
         Pass::Fallback(
             "the /mcp route scan: its targets carry no instance, and the chokepoint re-judges",
         ),
@@ -65,15 +73,21 @@ const SITES: [(&str, &str, &str, Pass); 6] = [
         ),
     ),
     (
-        "src/gateway/router/backend_handlers.rs",
-        "firewall_refusal",
+        "src/security/firewall/mod.rs",
         "check_request_keyed",
+        "check_request_attributed",
+        Pass::Instance,
+    ),
+    (
+        "src/gateway/router/backend_handlers/direct_security.rs",
+        "firewall_refusal",
+        "check_request_attributed",
         Pass::Instance,
     ),
     (
         "src/gateway/meta_mcp/invoke/chokepoint.rs",
         "rescan_outbound",
-        "rescan",
+        "rescan_attributed",
         Pass::Instance,
     ),
 ];
@@ -107,7 +121,7 @@ impl Sink for Calls {
                     .entry(key(at))
                     .or_default()
                     .insert(method.clone());
-                if matches!(method.as_str(), "check_request_keyed" | "rescan") {
+                if CHECKS.contains(&method.as_str()) {
                     let (file, func) = key(at);
                     self.sites
                         .push((file, func, method, is_none(call.args.last())));
@@ -157,7 +171,7 @@ fn called(calls: &Calls, file: &str, func: &str) -> BTreeSet<String> {
 fn r38b_both_entry_points_call_the_folder_check() {
     let calls = scan();
     let file = "src/security/firewall/mod.rs";
-    for entry in ["check_request_keyed", "rescan"] {
+    for entry in ["check_request_attributed", "rescan_attributed"] {
         let names = called(&calls, file, entry);
         for needed in ["root_check", "apply_roots"] {
             assert!(

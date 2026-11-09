@@ -388,17 +388,11 @@ pub(crate) fn identity_binding_prefix(
     if !url::Url::parse(subject.authority()).is_ok_and(|url| url.has_host()) {
         return None;
     }
-    // Built through `stable_actor_id` rather than restated, so the two cannot
-    // drift: the pool binding is derived from that same method.
-    // Through `checked`: a subject that names no one has no slot to evict.
-    let subject_key = VerifiedIdentity::checked(
-        subject.authority().to_owned(),
-        subject.subject().to_owned(),
-        String::new(),
-        None,
-        Vec::new(),
-    )?
-    .stable_actor_id();
+    // The verified identity's own actor-id formula rather than a restatement,
+    // so the two cannot drift: the pool binding is derived from that formula.
+    // A subject that names no one has no slot to evict.
+    let subject_key =
+        VerifiedIdentity::stable_actor_id_for(subject.authority(), subject.subject())?;
     Some(format!("idp:{}:{subject_key}:", subject_key.len()))
 }
 
@@ -479,12 +473,12 @@ impl SignedAssertionStrategy {
         let now = Self::now_secs()?;
         let exp = now + self.ttl_secs;
         let claims = AssertionClaims {
-            sub: identity.subject.clone(),
-            email: identity.email.clone(),
+            sub: identity.subject().to_owned(),
+            email: identity.email().to_owned(),
             iss: Self::ISSUER.to_string(),
             aud: audience.to_string(),
-            tenant: identity.issuer.clone(),
-            groups: identity.groups.clone(),
+            tenant: identity.issuer().to_owned(),
+            groups: identity.groups().to_vec(),
             iat: now,
             nbf: now,
             exp,

@@ -348,6 +348,11 @@ fn entries_settle_by_the_final_result() {
             err(ReplaceError::Unsupported(String::new())),
             Settle::Discard,
         ),
+        (err(ReplaceError::NoConfigFile), Settle::Discard),
+        (
+            err(ReplaceError::ConfigRefused(String::new())),
+            Settle::Discard,
+        ),
         (err(ReplaceError::Failed(String::new())), Settle::Abandon),
         (
             err(ReplaceError::RollbackFailed {
@@ -727,3 +732,9 @@ async fn two_secrets_for_one_field_are_refused_before_any_entry() {
     assert_eq!(read(&path), START);
     assert_eq!(creates.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
+
+#[path = "replace_guard_tests.rs"]
+mod guard;
+
+#[path = "replace_deleted_tests.rs"]
+mod deleted;

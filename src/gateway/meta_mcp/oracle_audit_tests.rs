@@ -28,7 +28,7 @@ const ALICE: (&str, &str) = ("api_key", "alice");
 /// capability backend defines [`PERSONAL`] (`defines`) or nothing.
 fn ungranted(
     endpoint: &Endpoint,
-    dir: &tempfile::TempDir,
+    dir: &Arc<tempfile::TempDir>,
     defines: bool,
 ) -> (MetaMcp, Arc<crate::security::TransparencyLogger>) {
     let log = logger(dir, AuditFailurePolicy::FailClosed);
@@ -69,9 +69,9 @@ async fn invoke(meta: &MetaMcp) -> Value {
 async fn a1_a2_a_withheld_call_is_recorded_and_an_outage_is_counted_not_answered() {
     let endpoint = Endpoint::start(false).await;
     let (absent_dir, dir, outage_dir) = (
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
+        Arc::new(tempfile::tempdir().unwrap()),
+        Arc::new(tempfile::tempdir().unwrap()),
+        Arc::new(tempfile::tempdir().unwrap()),
     );
     let absent = invoke(&ungranted(&endpoint, &absent_dir, false).0).await;
     let mut cells = Vec::new();
@@ -81,7 +81,11 @@ async fn a1_a2_a_withheld_call_is_recorded_and_an_outage_is_counted_not_answered
     if answered != absent {
         cells.push(format!("A1: withheld {answered} vs undefined {absent}"));
     }
-    if decisions(&dir).is_empty() {
+    // Written after the call settles, on the slot's own task.
+    if super::grant_audit_fixture::wait_for_decisions(&dir, 1)
+        .await
+        .is_empty()
+    {
         cells.push("A1: no decision record was written".to_string());
     }
     // A2: the decision append fails.
@@ -93,6 +97,11 @@ async fn a1_a2_a_withheld_call_is_recorded_and_an_outage_is_counted_not_answered
         cells.push(format!(
             "A2: withheld during the outage {answered} vs undefined {absent}"
         ));
+    }
+    // The failed append happens on the slot's own task, after the answer.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while log.append_failures() == before && std::time::Instant::now() < deadline {
+        tokio::task::yield_now().await;
     }
     let counted = log.append_failures() - before;
     if counted != 1 {
@@ -112,7 +121,7 @@ async fn a1_a2_a_withheld_call_is_recorded_and_an_outage_is_counted_not_answered
 #[tokio::test]
 async fn a3_a_dispatching_call_during_an_outage_still_fails_closed() {
     let endpoint = Endpoint::start(false).await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = Arc::new(tempfile::tempdir().unwrap());
     let meta = gateway(
         &endpoint,
         vec![grant("g1", ALICE, ALICE)],
@@ -136,7 +145,7 @@ const OTHER: &str = "calendar_peek_day";
 /// [`PERSONAL`]; [`OTHER`] is defined (withheld from alice, `defines`) or not.
 fn mixed(
     endpoint: &Endpoint,
-    dir: &tempfile::TempDir,
+    dir: &Arc<tempfile::TempDir>,
     defines: bool,
 ) -> (MetaMcp, Arc<crate::security::TransparencyLogger>) {
     let log = logger(dir, AuditFailurePolicy::FailClosed);
@@ -196,16 +205,29 @@ async fn chain(meta: &MetaMcp) -> Value {
 async fn a3a_a_withheld_steps_failed_record_is_isolated() {
     use super::grant_audit::seams;
     let endpoint = Endpoint::start(false).await;
-    let (absent_dir, dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (absent_dir, dir) = (
+        Arc::new(tempfile::tempdir().unwrap()),
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
     let absent = chain(&mixed(&endpoint, &absent_dir, false).0).await;
     let (withheld, _log) = mixed(&endpoint, &dir, true);
     // The withheld step's note is written at once, before the request-end
     // flush of the granted step's: the first grant-record append from now.
-    seams::fail_append_at_for_test(1);
+    seams::fail_append_of_tool_for_test(OTHER);
     let answered = chain(&withheld).await;
     assert_eq!(
         answered, absent,
         "A3a: withheld {answered} vs undefined {absent}"
+    );
+    // The withheld step's detached writer must have consumed its injected
+    // fault before the row is judged, or the row could pass untested.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while seams::tool_fault_pending_for_test() && std::time::Instant::now() < deadline {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !seams::tool_fault_pending_for_test(),
+        "A3a: the injected fault was never consumed by the withheld step's write"
     );
     assert!(
         decisions(&dir)
@@ -224,9 +246,9 @@ async fn a3a_a_withheld_steps_failed_record_is_isolated() {
 async fn a3b_another_steps_failed_record_still_fails_closed() {
     use super::grant_audit::seams;
     let endpoint = Endpoint::start(false).await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = Arc::new(tempfile::tempdir().unwrap());
     let (withheld, _log) = mixed(&endpoint, &dir, true);
-    seams::fail_append_at_for_test(2);
+    seams::fail_append_of_tool_for_test(PERSONAL);
     let answered = chain(&withheld).await;
     assert_eq!(
         answered.pointer("/error/code"),
