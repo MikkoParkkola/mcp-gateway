@@ -195,7 +195,7 @@ impl LogTail {
                 // Consuming any bytes is progress, a skipped partial head
                 // included: from here the log keeps the strict budget, so it
                 // never assembles twice in one page.
-                self.advanced = true;
+                self.advanced = mutant!("advanced-dropped", self.advanced, true);
                 if bytes.is_empty() {
                     // A window ending on a newline: the head is empty.
                     self.skip_head = false;
@@ -405,7 +405,7 @@ pub(super) fn read_page_joined(
         Look::Carried(seen) => seen,
         Look::Fold(fold) => {
             let valid = cursor.filter(|_| !cursor_reset);
-            look_above(inv, valid, fold, &mut spent, LOOK_ABOVE.min(limits.bytes))?
+            look_above(inv, valid, fold, &mut spent, mutant!("look-above-unbounded", u64::MAX, LOOK_ABOVE.min(limits.bytes)))?
         }
     };
     let mut lines = Vec::new();
@@ -526,7 +526,7 @@ fn look_above(
         if ended == Next::Budget {
             break;
         }
-        if previous == seg_last(inv)? {
+        if mutant!("look-above-first-segment", true, previous == seg_last(inv)?) {
             *spent += above;
             return Ok(Seen {
                 above,

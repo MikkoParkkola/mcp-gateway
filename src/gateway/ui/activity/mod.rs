@@ -385,13 +385,20 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
             j.count(&this);
         }
         let hit = parsed.filter.matches(line, kind, &this);
-        if hit {
+        if mutant!("joined-pushed-always", true, hit) {
             answers.push(this);
         }
         hit
     };
     let look = if parsed.cursor.is_some() {
-        Look::Fold(&mut fold)
+        mutant!(
+            "look-above-skipped",
+            Look::Carried(reader::Seen {
+                above: 0,
+                head_covered: true,
+            }),
+            Look::Fold(&mut fold)
+        )
     } else {
         Look::Carried(reader::Seen {
             above: 0,

@@ -85,7 +85,7 @@ pub(super) fn scan(
             (out.stopped, out.finished) = ("missing segment", false);
             break;
         };
-        let mut forward = Forward::open(file, offset, RECEIPT_SCAN - out.bytes)?;
+        let mut forward = Forward::open(file, offset, mutant!("receipt-scan-unbounded", u64::MAX, RECEIPT_SCAN - out.bytes))?;
         let ended = loop {
             let bytes = match forward.next_line()? {
                 Next::Line(bytes) => bytes,
@@ -97,16 +97,16 @@ pub(super) fn scan(
                 out.chain_broken = true;
                 continue;
             };
-            out.chain_broken |= !follows(&prev, &entry);
+            out.chain_broken |= mutant!("chain-check-removed", false, !follows(&prev, &entry));
             if trace.is_some_and(|t| is_delivery(&entry, t)) {
                 total += 1;
-                if out.records.len() < 2 {
+                if mutant!("receipt-dup-cap-removed", true, out.records.len() < 2) {
                     out.records.push(summary(&entry));
                 }
             }
             // Continuity covers every record; the join takes only this call's
             // trace, so other traces cannot evict its record.
-            if trace.is_some() && entry.get("trace_id").and_then(Value::as_str) == trace {
+            if mutant!("receipt-joins-every-trace", true, trace.is_some() && entry.get("trace_id").and_then(Value::as_str) == trace) {
                 let line = Line {
                     log: Which::Invocation,
                     entry: entry.clone(),
@@ -142,7 +142,7 @@ pub(super) fn scan(
     };
     out.joined = joiner.join(call, seen);
     // A found record in a window whose chain broke is not vouched for.
-    if out.chain_broken && matches!(out.joined, Joined::Found(_)) {
+    if mutant!("chain-downgrade-removed", false, out.chain_broken && matches!(out.joined, Joined::Found(_))) {
         out.joined = Joined::Incomplete(Why::Chain);
     }
     Ok(out)

@@ -78,7 +78,7 @@ impl Effect {
 
     /// Whether `outcome=cleaned` lists a call with this effect.
     pub(super) fn is_cleaned(self) -> bool {
-        matches!(self, Self::Annotated | Self::Rewritten)
+        mutant!("cleaned-matches-all", true, matches!(self, Self::Annotated | Self::Rewritten))
     }
 }
 
@@ -184,7 +184,7 @@ impl Joined {
             Self::NoRecord(_) => NO_RECORD.into(),
             Self::Incomplete(_) => INCOMPLETE.into(),
         };
-        row.insert("answer_findings".into(), findings);
+        row.insert(mutant!("answer-in-findings", "findings", "answer_findings").into(), findings);
         match self {
             Self::Found(d) if d.unverifiable => {
                 row.insert("answer_integrity".into(), "unverifiable".into());
