@@ -100,8 +100,9 @@ pub(super) async fn mutate_grant(
     )
 }
 
-/// POST a policy upsert: same RBAC-then-409 contract as [`mutate_grant`].
-/// Dispatch enforces policies from gateway config, never from this store.
+/// POST a policy upsert: RBAC, then 409, whether or not the store is
+/// available (ADR-029); unlike [`mutate_grant`], no 503 first. Dispatch
+/// enforces policies from gateway config, never from this store.
 pub(super) async fn mutate_policy(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<Generation>>,
@@ -233,11 +234,12 @@ pub(super) fn store_unavailable(reason: String) -> axum::response::Response {
         .into_response()
 }
 
-/// Sync core of [`resolve_decision`] (testable without a router). Authorizes
-/// FIRST, so a non-admin still gets RBAC's 403, then refuses a grant or policy
-/// decision with 409 before any store read or audit write: the store is not
-/// what dispatch enforces (E2-min). Other kinds return 422. An unavailable
-/// store answers 503 only for a refusal whose [`StoreCheck`] is `First`.
+/// Sync core of [`resolve_decision`] (testable without a router). Other kinds
+/// return 422 first. A grant decision then answers 503 if the store is
+/// unavailable ([`StoreCheck::First`]); a policy decision never consults it
+/// (ADR-029). Then RBAC, so a non-admin gets 403, then a grant or policy
+/// decision is refused with 409 before any store read or audit write: the
+/// store is not what dispatch enforces (E2-min).
 pub(super) fn resolve_decision_core(
     store: Result<&Arc<dyn ControlPlaneStore>, String>,
     actor: &ControlPlaneActor,
@@ -364,9 +366,11 @@ pub(super) const POLICY_WRITES_REFUSED: WriteRefusal = WriteRefusal {
     store: StoreCheck::Never,
 };
 
-/// Shared write path: build the audited mutation and authorize it with
-/// `validate_for_actor`, so a non-admin gets RBAC's 403; then refuse with 409
-/// before any store or audit write, because dispatch never reads this store.
+/// Shared write path: answer 503 for an unavailable store only when the
+/// refusal says [`StoreCheck::First`]; build the audited mutation and authorize
+/// it with `validate_for_actor`, so a non-admin gets RBAC's 403; then refuse
+/// with 409 before any store or audit write, because dispatch never reads this
+/// store.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_mutation(
     store: Result<&Arc<dyn ControlPlaneStore>, String>,
