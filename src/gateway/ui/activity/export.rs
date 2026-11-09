@@ -172,7 +172,7 @@ pub(super) fn collect(
             let Some(kind) = kind_of(line) else { continue };
             // A matched record that cannot be projected (no counter or hash)
             // is counted, never dropped silently.
-            let Some(r) = export_row(line, kind, secret, answer) else {
+            let Some(r) = export_row(line, kind, secret, mutant!("export-bypasses-join", &NOT_A_CALL, answer)) else {
                 c.unreadable += 1;
                 continue;
             };

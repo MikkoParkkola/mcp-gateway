@@ -85,7 +85,7 @@ pub(super) fn scan(
             (out.stopped, out.finished) = ("missing segment", false);
             break;
         };
-        let mut forward = Forward::open(file, offset, RECEIPT_SCAN - out.bytes)?;
+        let mut forward = Forward::open(file, offset, mutant!("receipt-scan-unbounded", u64::MAX, RECEIPT_SCAN - out.bytes))?;
         let ended = loop {
             let bytes = match forward.next_line()? {
                 Next::Line(bytes) => bytes,
@@ -95,10 +95,10 @@ pub(super) fn scan(
             let Ok(entry @ Value::Object(_)) = serde_json::from_slice::<Value>(&bytes) else {
                 continue;
             };
-            out.chain_broken |= !follows(&prev, &entry);
+            out.chain_broken |= mutant!("chain-check-removed", false, !follows(&prev, &entry));
             if trace.is_some_and(|t| is_delivery(&entry, t)) {
                 total += 1;
-                if out.records.len() < 2 {
+                if mutant!("receipt-dup-cap-removed", true, out.records.len() < 2) {
                     out.records.push(summary(&entry));
                 }
             }

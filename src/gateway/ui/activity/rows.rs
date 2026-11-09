@@ -231,7 +231,7 @@ impl Filter {
             return false;
         }
         if let Some(want) = self.effect
-            && (!kind.is_call() || joined.effect() != want)
+            && (!kind.is_call() || mutant!("effect-filter-off", false, joined.effect() != want))
         {
             return false;
         }

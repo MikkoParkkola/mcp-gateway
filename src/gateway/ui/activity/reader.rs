@@ -234,13 +234,13 @@ impl LogTail {
             // is not taken past it. The page then ends resumable, and the next
             // one, with a fresh budget, reads the line whole.
             let remaining = budget - *spent;
-            let (tail, read) = if remaining < ASSEMBLY_WINDOW {
+            let (tail, read) = if mutant!("probe-past-budget", false, remaining < ASSEMBLY_WINDOW) {
                 tail_window_in(file, self.end, WINDOW.min(remaining))?
             } else {
                 tail_window_assembled(file, self.end, WINDOW)?
             };
             *spent += read;
-            if remaining < ASSEMBLY_WINDOW && matches!(tail, Tail::LineTooLong) {
+            if mutant!("probe-past-budget", false, remaining < ASSEMBLY_WINDOW) && matches!(tail, Tail::LineTooLong) {
                 return Ok(None);
             }
             match tail {
@@ -380,7 +380,7 @@ pub(super) fn read_page_joined(
         Look::Carried(seen) => seen,
         Look::Fold(fold) => {
             let valid = cursor.filter(|_| !cursor_reset);
-            look_above(inv, valid, fold, &mut spent, LOOK_ABOVE.min(limits.bytes))?
+            look_above(inv, valid, fold, &mut spent, mutant!("look-above-unbounded", u64::MAX, LOOK_ABOVE.min(limits.bytes)))?
         }
     };
     let mut lines = Vec::new();
@@ -501,7 +501,7 @@ fn look_above(
         if ended == Next::Budget {
             break;
         }
-        if previous == seg_last(inv)? {
+        if mutant!("look-above-first-segment", true, previous == seg_last(inv)?) {
             *spent += above;
             return Ok(Seen {
                 above,
