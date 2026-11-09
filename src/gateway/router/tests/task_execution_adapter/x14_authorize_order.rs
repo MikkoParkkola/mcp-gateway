@@ -141,8 +141,13 @@ async fn an_ungranted_surfaced_task_call_is_refused_before_x14() {
 async fn an_ungranted_refusal_counts_its_late_withheld_record_in_its_own_window() {
     let row = armed(false, false, AuditFailurePolicy::BestEffort, surfaced).await;
     let hold = crate::gateway::meta_mcp::grant_audit::seams::hold_next_best_effort_write_for_test();
+    // Released only while the row's count waits for grant writes to settle:
+    // a count that does not wait reads the sync window with the record parked.
     let release = async {
         hold.held().await;
+        while !crate::gateway::meta_mcp::grant_audit::seams::settle_waiting_for_test() {
+            tokio::task::yield_now().await;
+        }
         hold.release();
     };
     let (sync, task) = (by_surfaced_name(1, PERSONAL), by_surfaced_name(2, PERSONAL));

@@ -78,6 +78,7 @@ thread_local! {
     static HOLDS_SIGNALLED: Cell<usize> = const { Cell::new(0) };
     static SPAWNS: RefCell<Vec<SpawnSnapshot>> = const { RefCell::new(Vec::new()) };
     static IN_FLIGHT: Cell<usize> = const { Cell::new(0) };
+    static SETTLE_WAITING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// S1: park the next grant-record write at its start, before it is handed to
@@ -236,6 +237,7 @@ pub(super) fn write_finished() {
 pub(crate) async fn grant_writes_settled_for_test() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while IN_FLIGHT.with(Cell::get) > 0 {
+        SETTLE_WAITING.with(|w| w.set(true));
         assert!(
             std::time::Instant::now() < deadline,
             "{} grant-record writes still running after 10 s",
@@ -243,4 +245,11 @@ pub(crate) async fn grant_writes_settled_for_test() {
         );
         tokio::task::yield_now().await;
     }
+    SETTLE_WAITING.with(|w| w.set(false));
+}
+
+/// Whether [`grant_writes_settled_for_test`] is waiting on this thread now: a
+/// row forcing a late write releases it only while a count waits for it.
+pub(crate) fn settle_waiting_for_test() -> bool {
+    SETTLE_WAITING.with(Cell::get)
 }
