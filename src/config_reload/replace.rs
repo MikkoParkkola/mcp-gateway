@@ -1,16 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The shared byte writer for gateway.yaml (ADR-024): exact bytes, written
-//! under the config lock pair, then one reload, and the old bytes back on
-//! disk whenever that reload refuses.
-//!
-//! Settings saves and history restores share the audited writer. Refused
-//! reloads restore the old bytes; the next lock holder recovers crashed writes.
-//!
-//! Lock order, for every holder: the reload lock, then the config sidecar
-//! lock, then (for a save that also writes secrets) the vault lock. Nothing
-//! ranked earlier is taken while a later one is held: the config sidecar
-//! before the vault, never the reverse.
+//! Shared audited byte writer for settings saves and history restores.
+//! A refused reload restores the old bytes; the next lock holder recovers crashes.
+//! Lock order: reload, config sidecar, then vault when writing secrets.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,7 +20,7 @@ use crate::secret_store::{
 use crate::config_persistence::keyedit::Template;
 
 use super::ReloadContext;
-use super::lock_api::ReloadRefusal;
+use super::lock_api::{ReloadRefusal, ReloadRefusalKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RefusalClass {
@@ -38,9 +30,18 @@ pub(crate) enum RefusalClass {
     Internal,
 }
 
-/// Classification is wired in after the refusal types and oracle rows.
-pub(super) fn post_write_class(_refusal: &ReloadRefusal) -> RefusalClass {
-    RefusalClass::Internal
+/// Only the typed reload refusal establishes a posture refusal.
+pub(super) fn post_write_class(refusal: &ReloadRefusal) -> RefusalClass {
+    use crate::config_reload::{ReloadFailure, reload_failure};
+    match refusal.kind {
+        ReloadRefusalKind::Posture => RefusalClass::Posture,
+        ReloadRefusalKind::Other
+            if reload_failure(&refusal.text) == ReloadFailure::ShuttingDown =>
+        {
+            RefusalClass::ShuttingDown
+        }
+        ReloadRefusalKind::Other => RefusalClass::Internal,
+    }
 }
 
 // The revision type lives with the config commit primitive, which every
@@ -175,10 +176,7 @@ pub(crate) enum ReplaceError {
     Write(String),
     /// The reload refused the new bytes, or the check of them before any
     /// entry or write did; the original stands.
-    ReloadRefused {
-        class: RefusalClass,
-        reason: String,
-    },
+    ReloadRefused { class: RefusalClass, reason: String },
     /// Putting the original back failed; the journal stays `staged`.
     RollbackFailed { journal: PathBuf, error: String },
     /// The reload accepted the bytes but that could not be recorded
@@ -627,9 +625,9 @@ impl ReloadContext {
             let reload = self
                 .reload_outcome_locked_at(target)
                 .await
-                .map_err(|reason| ReplaceError::ReloadRefused {
-                    class: RefusalClass::Internal,
-                    reason,
+                .map_err(|refusal| ReplaceError::ReloadRefused {
+                    class: post_write_class(&refusal),
+                    reason: refusal.text,
                 })?;
             return Ok(ReplaceOutcome {
                 revision: None,
@@ -733,8 +731,8 @@ impl ReloadContext {
                 Err(Self::roll_back(
                     target,
                     ReplaceError::ReloadRefused {
-                        class: RefusalClass::Internal,
-                        reason: refusal,
+                        class: post_write_class(&refusal),
+                        reason: refusal.text,
                     },
                 ))
             }

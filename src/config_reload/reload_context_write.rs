@@ -105,7 +105,9 @@ impl ReloadContext {
         .map_err(|e| ConfigWriteError::from(MutateError::from(e)))?;
         self.reload_outcome_locked_at(&locked.target)
             .await
-            .map_err(|e| ConfigWriteError::Failed(format!("Config written but reload failed: {e}")))
+            .map_err(|e| {
+                ConfigWriteError::Failed(format!("Config written but reload failed: {}", e.text))
+            })
     }
 
     /// Read the config, apply `mutate`, write, and reload, all under one guard.
@@ -206,7 +208,7 @@ impl ReloadContext {
         let outcome = self
             .reload_outcome_locked_at(target)
             .await
-            .map_err(|e| crate::config_reload::write::reload_failure(&e, mode))?;
+            .map_err(|e| crate::config_reload::write::reload_failure(&e.text, mode))?;
         Ok(ConfigMutation::Applied(value, Some(outcome)))
     }
 }

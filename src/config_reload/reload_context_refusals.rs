@@ -95,7 +95,7 @@ impl ReloadContext {
             // restart reads the whole file. Claiming more than the two facts
             // below is how a security message starts the next report.
             return Some(BeforeApply {
-                kind: BeforeApplyKind::CapabilityClash,
+                kind: BeforeApplyKind::NetworkPosture,
                 text: format!(
                     "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped, \
                      and no configuration was published. {restart}",
@@ -116,7 +116,7 @@ impl ReloadContext {
             new_config,
         ) {
             return Some(BeforeApply {
-                kind: BeforeApplyKind::CapabilityClash,
+                kind: BeforeApplyKind::AccountBinding,
                 text: format!(
                     "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
                      configuration was published."

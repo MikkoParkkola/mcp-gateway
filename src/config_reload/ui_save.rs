@@ -229,19 +229,24 @@ fn map_error(error: ReplaceError, halt: Option<Halt>) -> Mapped {
         ReplaceError::Refused(_) if halt == Some(Halt::SlotMismatch) => {
             UiRefused::Unsupported("the edit's secret slots do not match".to_owned())
         }
-        ReplaceError::Refused(why) | ReplaceError::ReloadRefused { reason: why, .. } => {
-            UiRefused::Invalid(why)
+        ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused { class },
+        ReplaceError::Refused(_) => {
+            UiRefused::Invalid("the change would be refused by the config loader".to_owned())
         }
         // No log under auth, or the log refused this save's intent: either
         // way the audit the save requires is not there, and nothing was
         // written (the adopt route answers both alike).
         ReplaceError::NoAuditLog | ReplaceError::AuditRefused(_) => UiRefused::NoAuditLog,
         ReplaceError::Busy => UiRefused::Busy,
-        ReplaceError::Secrets(SaveError::Refused(e) | SaveError::Store(e)) => {
-            UiRefused::SecretsRefused {
-                timeout: matches!(e, StoreError::TimedOut),
-            }
-        }
+        ReplaceError::Secrets(SaveError::Refused(e) | SaveError::Store(e)) => match e {
+            StoreError::Failed(_) => UiRefused::Failed(FAILED.to_owned()),
+            StoreError::TimedOut => UiRefused::SecretsRefused { timeout: true },
+            StoreError::Exists
+            | StoreError::Unavailable(_)
+            | StoreError::Empty
+            | StoreError::NotUtf8
+            | StoreError::TooLarge { .. } => UiRefused::SecretsRefused { timeout: false },
+        },
         ReplaceError::Secrets(SaveError::Commit(never)) => match never {},
         ReplaceError::NoConfigFile => UiRefused::Preview(PreviewRefused::NoConfigFile),
         ReplaceError::ConfigRefused(why) => UiRefused::Preview(PreviewRefused::Unread(why)),

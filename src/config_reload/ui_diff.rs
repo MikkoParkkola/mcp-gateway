@@ -164,7 +164,9 @@ pub(crate) enum UiRefused {
     Preview(PreviewRefused),
     /// The loader or the reload would refuse the result.
     Invalid(String),
-    ReloadRefused { class: RefusalClass },
+    ReloadRefused {
+        class: RefusalClass,
+    },
     Unsupported(String),
     /// Save: auth is on and no audit log is configured, or the audit log
     /// refused this save's intent; nothing was written either way.
@@ -305,7 +307,7 @@ fn resolve(edit: &PreviewEdit, doc: &Value) -> Result<Vec<(FieldPath, Change)>, 
                         .and_then(Value::as_mapping)
                         .is_some_and(|m| m.get(Value::from(name.as_str())).is_some());
                     if !known {
-                        return Err(bad(format!("gateway.yaml has no backend {name:?}")));
+                        return Err(bad(format!("no such backend for {}", id.spec().id)));
                     }
                     Segment::Key(name)
                 }
@@ -336,9 +338,7 @@ fn resolve(edit: &PreviewEdit, doc: &Value) -> Result<Vec<(FieldPath, Change)>, 
         if *at != alerts + n || !complete {
             return Err(UiRefused::BadParam(
                 *id,
-                format!(
-                    "alert {at}: gateway.yaml lists {alerts}; a new alert follows the last and sets every field"
-                ),
+                format!("index out of range for {}", id.spec().id),
             ));
         }
     }
@@ -413,10 +413,27 @@ async fn validate(
 
 pub(super) fn validate_refusal(e: ReplaceError) -> UiRefused {
     match e {
-        ReplaceError::Refused(why) => UiRefused::Invalid(why),
-        ReplaceError::ReloadRefused { .. } => UiRefused::Invalid("x".to_owned()),
-        ReplaceError::Failed(why) => UiRefused::Unsupported(why),
-        other => UiRefused::Unsupported(format!("{other:?}")),
+        ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused { class },
+        ReplaceError::Refused(_) => {
+            UiRefused::Invalid("the change would be refused by the config loader".to_owned())
+        }
+        ReplaceError::Unsupported(_) => {
+            UiRefused::Unsupported("this change is not supported here".to_owned())
+        }
+        ReplaceError::Failed(_)
+        | ReplaceError::Busy
+        | ReplaceError::Stale { .. }
+        | ReplaceError::NoAuditLog
+        | ReplaceError::AuditRefused(_)
+        | ReplaceError::Stage(_)
+        | ReplaceError::Write(_)
+        | ReplaceError::RollbackFailed { .. }
+        | ReplaceError::Unconfirmed { .. }
+        | ReplaceError::Secrets(_)
+        | ReplaceError::NoConfigFile
+        | ReplaceError::ConfigRefused(_) => {
+            UiRefused::Failed("the preview did not complete".to_owned())
+        }
     }
 }
 

@@ -126,7 +126,7 @@ impl ReloadContext {
     pub(super) async fn reload_outcome_locked_at(
         &self,
         path: &std::path::Path,
-    ) -> std::result::Result<ReloadOutcome, String> {
+    ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         // Audits the overrides the registry holds however this ends: applied,
         // refused, or dropped at an await after registering backends.
         let _audit = (self.reporting.override_audit.as_deref()).map(|a| a.guard(&self.registry));
@@ -143,7 +143,7 @@ impl ReloadContext {
                 refusals.record(
                     crate::config_reload::refusals::RefusalKind::Reload,
                     None,
-                    refusal,
+                    &refusal.text,
                 );
                 self.reporting.tally.refused();
             }
@@ -168,7 +168,7 @@ impl ReloadContext {
         if self.reload_owed.load(SeqCst)
             && let Err(error) = self.reload_outcome_locked_at(target).await
         {
-            tracing::warn!(%error, path = %target.display(), "the reload owed after restoring gateway.yaml failed; it is retried on the next one");
+            tracing::warn!(error = %error.text, path = %target.display(), "the reload owed after restoring gateway.yaml failed; it is retried on the next one");
         }
     }
 
