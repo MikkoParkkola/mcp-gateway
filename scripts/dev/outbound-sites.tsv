@@ -1,19 +1,19 @@
 file	sites	purpose
-src/capability/executor/client.rs	1	calls a capability file makes, to the URL written in that file
-src/commands/config_export/mod.rs	1	`config export`: a TCP connect to the local gateway's health address
-src/commands/dashboard_link.rs	1	`dashboard`: reads the local gateway
-src/commands/doctor.rs	1	`doctor`: probes configured HTTP backends
-src/commands/doctor/health.rs	1	`doctor`: probes the local gateway runtime
-src/commands/doctor/npm_pin.rs	1	`doctor`: asks registry.npmjs.org about npx packages enabled stdio backends pin; off with --no-registry-check, MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK or security.posture: hardened
-src/commands/doctor/ws_reach.rs	1	`doctor`: reachability of configured WebSocket backends
-src/commands/skills.rs	1	`skills` given an http(s) URL: fetches that URL
-src/commands/stats.rs	1	`stats`: reads the local gateway
-src/events/client.rs	1	event deliveries, when events are on (off by default), to callback URLs authenticated clients registered
-src/gateway/router/accounts/bridge.rs	1	personal-account bridge to the provider the operator configured
-src/gateway/ui/import.rs	1	web UI import: fetches the URL the operator enters
-src/identity_propagation/token_exchange.rs	1	token exchange with the identity provider the operator configured
-src/key_server/oidc_jwks_cache.rs	2	signing keys (JWKS) of the token issuers the operator configured
-src/oauth/client/destination.rs	4	OAuth discovery and token endpoints of the servers the operator configured
-src/security/ssrf/mod.rs	1	shared client for untrusted destinations (DNS pinned, no environment proxy): used by `cap install --from-github`, `import-url`, the UI import, personal-account providers, capability calls
-src/transport/http/client.rs	2	HTTP connections to the backends the operator configured (A2A included)
-src/transport/websocket_pinned.rs	4	WebSocket connections to the backends the operator configured
+src/capability/executor/client.rs	Client::builder=1	calls a capability file makes, to the URL written in that file
+src/commands/config_export/mod.rs	TcpStream::connect=1	`config export`: a TCP connect to the local gateway's health address
+src/commands/dashboard_link.rs	Client::builder=1	`dashboard`: reads the local gateway
+src/commands/doctor.rs	Client::builder=1	`doctor`: probes configured HTTP backends
+src/commands/doctor/health.rs	Client::builder=1	`doctor`: probes the local gateway runtime
+src/commands/doctor/npm_pin.rs	Client::builder=1	`doctor`: asks registry.npmjs.org about npx packages enabled stdio backends pin; off with --no-registry-check, MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK or security.posture: hardened
+src/commands/doctor/ws_reach.rs	TcpStream::connect=1	`doctor`: reachability of configured WebSocket backends
+src/commands/skills.rs	Client::builder=1	`skills` given an http(s) URL: fetches that URL
+src/commands/stats.rs	Client::builder=1	`stats`: reads the local gateway
+src/events/client.rs	Client::builder=1	event deliveries, when events are on (off by default), to callback URLs authenticated clients registered
+src/gateway/router/accounts/bridge.rs	Client::builder=1	personal-account bridge to the provider the operator configured
+src/gateway/ui/import.rs	Client::builder=1	web UI import: fetches the URL the operator enters
+src/identity_propagation/token_exchange.rs	Client::builder=1	token exchange with the identity provider the operator configured
+src/key_server/oidc_jwks_cache.rs	Client::builder=2	signing keys (JWKS) of the token issuers the operator configured
+src/oauth/client/destination.rs	Client::builder=4	OAuth discovery and token endpoints of the servers the operator configured
+src/security/ssrf/mod.rs	Client::builder=1	shared client for untrusted destinations (DNS pinned, no environment proxy): used by `cap install --from-github`, `import-url`, the UI import, personal-account providers, capability calls
+src/transport/http/client.rs	Client::builder=2	HTTP connections to the backends the operator configured (A2A included)
+src/transport/websocket_pinned.rs	TcpStream::connect=1 client_async_tls=1 connect_async=2	WebSocket connections to the backends the operator configured

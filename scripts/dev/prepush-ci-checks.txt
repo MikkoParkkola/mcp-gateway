@@ -111,6 +111,8 @@ python3 scripts/release/upgrading_fragments.py assemble --dry-run > <TMP>/UPGRAD
 python3 scripts/release/upgrading_fragments.py check	1	closed
 python3 scripts/release/upgrading_fragments.py check --base <BASE_TIP> --head <HEAD>	1	closed
 "$GATE_PY" scripts/dev/test_cfg_items.py	1	closed
+"$GATE_PY" scripts/dev/check-outbound-clients.py	20	closed
+"$GATE_PY" scripts/dev/test_check_outbound_clients.py	1	closed
 python3 scripts/dev/test_gate_env_python.py	1	closed
 scripts/ci/changed-scope.sh --self-test	0	closed
 scripts/ci/check-capability-pin-counts.sh	1	closed

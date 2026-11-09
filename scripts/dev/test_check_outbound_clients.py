@@ -37,8 +37,8 @@ def tree(root: Path, files: dict[str, str]) -> None:
         path.write_text(body, encoding="utf-8")
 
 
-def listing(rows: dict[str, int]) -> str:
-    return "file\tsites\tpurpose\n" + "".join(f"{f}\t{n}\tpurpose of {f}\n" for f, n in rows.items())
+def listing(rows: dict[str, str]) -> str:
+    return "file\tsites\tpurpose\n" + "".join(f"{f}\t{k}\tpurpose of {f}\n" for f, k in rows.items())
 
 
 def privacy(*files: str) -> str:
@@ -49,8 +49,8 @@ BASE = {
     "src/lib.rs": "mod fetch;\n#[cfg(test)]\nmod fetch_tests;\n",
     "src/fetch.rs": CLIENT,
     "src/fetch_tests.rs": CLIENT,
-    "scripts/dev/outbound-sites.tsv": listing({"src/fetch.rs": 1}),
-    "PRIVACY.md": privacy("src/fetch.rs"),
+    "scripts/dev/outbound-sites.tsv": listing({"src/fetch.rs": "Client::builder=1"}),
+    "docs/PRIVACY.md": privacy("src/fetch.rs"),
 }
 
 
@@ -90,10 +90,18 @@ class Sites(unittest.TestCase):
         commented = CLIENT + "// reqwest::Client::new() would be wrong here\n"
         self.assertEqual(self.run_check({**BASE, "src/fetch.rs": commented}), (0, ""))
 
-    def test_a_listed_file_missing_from_privacy_md_fails(self):
-        code, err = self.run_check({**BASE, "PRIVACY.md": privacy()})
+    def test_one_kind_of_client_replacing_another_fails(self):
+        # Same count per file, different connection: a TCP connect where the HTTP client was.
+        swapped = 'fn get() { let _c = std::net::TcpStream::connect("x:1"); }\n'
+        code, err = self.run_check({**BASE, "src/fetch.rs": swapped})
         self.assertEqual(code, 1)
-        self.assertIn("PRIVACY.md does not name src/fetch.rs", err)
+        self.assertIn("src/fetch.rs", err)
+        self.assertIn("TcpStream::connect", err)
+
+    def test_a_listed_file_missing_from_privacy_md_fails(self):
+        code, err = self.run_check({**BASE, "docs/PRIVACY.md": privacy()})
+        self.assertEqual(code, 1)
+        self.assertIn("docs/PRIVACY.md does not name src/fetch.rs", err)
 
     def test_every_constructor_shape_counts(self):
         for shape in (

@@ -1862,6 +1862,13 @@ jobs:
         run: uv sync --locked --project scripts/gate-env
       - name: Check the cfg item finder marks what it claims to
         run: scripts/gate-env/.venv/bin/python scripts/dev/test_cfg_items.py
+      # docs/PRIVACY.md lists every place product code can open an outbound
+      # connection; a new one, or one kind replacing another, fails here until
+      # scripts/dev/outbound-sites.tsv and docs/PRIVACY.md list it.
+      - name: Check docs/PRIVACY.md lists every outbound client site
+        run: scripts/gate-env/.venv/bin/python scripts/dev/check-outbound-clients.py
+      - name: Check the outbound client guard catches what it claims to
+        run: scripts/gate-env/.venv/bin/python scripts/dev/test_check_outbound_clients.py
       - name: Check the gate environment check refuses without installing
         run: python3 scripts/dev/test_gate_env_python.py
       - name: MCP events OAuth shim rows
