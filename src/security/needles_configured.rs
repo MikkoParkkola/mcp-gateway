@@ -133,10 +133,114 @@ impl NeedleSet {
 /// current when it was stored. A refusal from any set replaces the answer
 /// with the fixed refusal, its id kept. Run on the delivering call's task,
 /// so that call's record says what was done.
+///
+/// A provenance seal in the answer goes out only when nothing is removed:
+/// each seal was made over the stored bytes, and its readable payload
+/// carries their unsalted digest, so next to a redacted body it would let a
+/// client test guesses of the removed value, and it no longer covers what is
+/// served. The seals come off before the scrub, which can rename the keys
+/// that hold them, and the stored answer, seals included, is put back
+/// whole when the scrub removes nothing. Receipts stay: they hold no digest
+/// of the result.
 pub(crate) fn scrub_stored(
     sets: &[std::sync::Arc<NeedleSet>],
     response: &mut JsonRpcResponse,
 ) -> Scrubbed {
+    let sealed = response
+        .result
+        .as_ref()
+        .filter(|result| holds_seal(result))
+        .cloned();
+    let removed = match (&sealed, response.result.as_mut()) {
+        (Some(_), Some(result)) => drop_seals(result),
+        _ => Vec::new(),
+    };
+    let outcome = scrub_unsealed(sets, response);
+    let Some(original) = sealed else {
+        return outcome;
+    };
+    if outcome != Scrubbed::Clean {
+        return outcome;
+    }
+    if removed.iter().all(|seal| {
+        sets.iter()
+            .all(|set| holds_no_needle(seal, &set.snapshot()))
+    }) {
+        response.result = Some(original);
+        return Scrubbed::Clean;
+    }
+    // A held value inside a seal itself: the seal stays off, and the answer
+    // is no longer the stored one.
+    crate::gateway::delivery_facts::echo_redacted();
+    Scrubbed::Redacted
+}
+
+/// Whether `value` may hold a provenance seal: a `public_signature` member
+/// of a `_meta.provenance`, or text naming one (a chain or playbook answer
+/// carries its steps' sealed results as JSON text). Only cheap: a false
+/// positive costs one copy of the answer.
+fn holds_seal(value: &Value) -> bool {
+    let mut pending = vec![value];
+    while let Some(next) = pending.pop() {
+        match next {
+            Value::Object(object) => {
+                if object
+                    .get("_meta")
+                    .and_then(|meta| meta.get("provenance"))
+                    .is_some_and(|provenance| provenance.get("public_signature").is_some())
+                {
+                    return true;
+                }
+                pending.extend(object.values());
+            }
+            Value::Array(items) => pending.extend(items),
+            Value::String(text) if text.contains("public_signature") => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Remove every provenance seal from `value`, at any depth and inside JSON
+/// text, and return the removed signatures. Text holding a seal is parsed,
+/// unsealed and written back compact (it goes out only in an answer the scrub
+/// changed). Iterative over each value; text inside text recurses once per
+/// level of escaping, and each level doubles the escapes, so the depth stays
+/// a few dozen at most.
+fn drop_seals(value: &mut Value) -> Vec<Value> {
+    let mut removed = Vec::new();
+    let mut pending = vec![value];
+    while let Some(next) = pending.pop() {
+        match next {
+            Value::Object(object) => {
+                if let Some(seal) = object
+                    .get_mut("_meta")
+                    .and_then(|meta| meta.get_mut("provenance"))
+                    .and_then(Value::as_object_mut)
+                    .and_then(|provenance| provenance.remove("public_signature"))
+                {
+                    removed.push(seal);
+                }
+                pending.extend(object.values_mut());
+            }
+            Value::Array(items) => pending.extend(items.iter_mut()),
+            Value::String(text) if text.contains("public_signature") => {
+                if let Ok(mut inner) = serde_json::from_str::<Value>(text) {
+                    let seals = drop_seals(&mut inner);
+                    if !seals.is_empty() {
+                        *text = inner.to_string();
+                        removed.extend(seals);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    removed
+}
+
+/// [`scrub_stored`] once its seals are off.
+fn scrub_unsealed(sets: &[std::sync::Arc<NeedleSet>], response: &mut JsonRpcResponse) -> Scrubbed {
     use crate::gateway::delivery_facts::{echo_redacted, echo_refusal_built};
     let mut outcome = Scrubbed::Clean;
     for set in sets {
@@ -178,39 +282,8 @@ pub(crate) fn scrub_stored(
             echo_refusal_built();
             return Scrubbed::Refuse;
         }
-        if let Some(result) = response.result.as_mut() {
-            drop_seals(result);
-        }
     }
     outcome
-}
-
-/// Remove the public signature from every `_meta.provenance` in `value`, at
-/// any depth: a stored tool result carries its receipt in its own `_meta`, a
-/// stored task in its `result`. Each seal was made over the bytes before the
-/// redaction, so it no longer covers what is served, and its payload carries
-/// those bytes' unsalted digest: a client could test guesses of the removed
-/// value against it. The receipt stays; it holds no digest of the result.
-/// The same rule as `delivered_wire`. Iterative, so a deep answer cannot
-/// exhaust the stack.
-fn drop_seals(value: &mut Value) {
-    let mut pending = vec![value];
-    while let Some(next) = pending.pop() {
-        match next {
-            Value::Object(object) => {
-                if let Some(provenance) = object
-                    .get_mut("_meta")
-                    .and_then(|meta| meta.get_mut("provenance"))
-                    .and_then(Value::as_object_mut)
-                {
-                    provenance.remove("public_signature");
-                }
-                pending.extend(object.values_mut());
-            }
-            Value::Array(items) => pending.extend(items.iter_mut()),
-            _ => {}
-        }
-    }
 }
 
 /// The first set one of whose values the scrub formed in `parts`: each set

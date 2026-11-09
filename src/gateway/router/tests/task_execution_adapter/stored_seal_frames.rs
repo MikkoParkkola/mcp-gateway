@@ -69,7 +69,30 @@ fn assert_sealed_bound(result: &Value, what: &str) {
     std::assert_eq!(verified.status, VerifyStatus::Bound, "{what}");
 }
 
-/// Redacted, with no seal anywhere in what was served, and its receipt kept.
+/// Every seal in `served`, each with the value it seals.
+fn seals_in(served: &Value) -> Vec<(Value, Value)> {
+    let mut found = Vec::new();
+    let mut pending = vec![served];
+    while let Some(next) = pending.pop() {
+        match next {
+            Value::Object(object) => {
+                if let Some(provenance) = next.pointer("/_meta/provenance")
+                    && provenance.get("public_signature").is_some()
+                {
+                    found.push((provenance.clone(), next.clone()));
+                }
+                pending.extend(object.values());
+            }
+            Value::Array(items) => pending.extend(items),
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Redacted, its receipt kept, and no seal made over other bytes: a seal the
+/// serve site minted afresh over the redacted bytes verifies Bound against
+/// them; one kept from the stored result does not.
 fn assert_redacted_unsealed(served: &Value, what: &str) {
     let text = served.to_string();
     assert!(
@@ -81,14 +104,21 @@ fn assert_redacted_unsealed(served: &Value, what: &str) {
         "{what}: the value was not redacted: {served}"
     );
     assert!(
-        !text.contains("public_signature"),
-        "{what}: a result redacted at serve kept the seal made over its \
-         unredacted bytes: {served}"
-    );
-    assert!(
         text.contains("\"provenance\""),
         "{what}: the receipt stays: {served}"
     );
+    let signer = ProvenancePublicSigner::from_seed_for_test(SEED, KID);
+    let jwk = serde_json::to_string(&signer.public_jwk()).expect("jwk serializes");
+    let trust = TrustSet::from_json(&jwk).expect("trust loads");
+    for (provenance, sealed) in seals_in(served) {
+        let bound = verify_public(&provenance, &trust, Some(&sealed))
+            .is_ok_and(|verified| verified.status == VerifyStatus::Bound);
+        assert!(
+            bound,
+            "{what}: a result redacted at serve kept the seal made over its \
+             unredacted bytes: {served}"
+        );
+    }
 }
 
 /// A completed task's stored result, sealed while plain.

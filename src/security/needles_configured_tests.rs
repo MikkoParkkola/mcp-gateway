@@ -340,16 +340,26 @@ async fn a_stored_answer_where_one_set_forms_anothers_value_is_refused() {
     );
 }
 
-/// A stored answer sealed at two depths (a tool result's own `_meta` and a
-/// task wire's `result`), with `value` in its text.
+/// A seal as the gateway writes it, signature `sig`.
+fn provenance(sig: &str) -> serde_json::Value {
+    serde_json::json!({ "receipt": { "tool": "t" }, "public_signature": { "payload": "p", "sig": sig } })
+}
+
+/// A stored answer sealed four ways (a tool result's own `_meta`, a task
+/// wire's `result`, an array element, and a chain answer's steps carried as
+/// JSON text), with `value` in its text and in the steps' text.
 fn sealed_answer(value: &str) -> crate::protocol::JsonRpcResponse {
-    let provenance = serde_json::json!({ "receipt": { "tool": "t" }, "public_signature": { "payload": "p", "sig": "s" } });
+    let steps = serde_json::json!({ "results": [
+        { "result": { "text": format!("step {value}"), "_meta": { "provenance": provenance("s") } } },
+    ] });
     crate::protocol::JsonRpcResponse::success(
         crate::protocol::RequestId::Number(1),
         serde_json::json!({
+            "content": [{ "type": "text", "text": steps.to_string() }],
             "text": format!("answer {value}"),
-            "_meta": { "provenance": provenance.clone() },
-            "result": { "_meta": { "provenance": provenance } },
+            "_meta": { "provenance": provenance("s") },
+            "result": { "_meta": { "provenance": provenance("s") } },
+            "items": [[{ "_meta": { "provenance": provenance("s") } }]],
         }),
     )
 }
@@ -364,10 +374,11 @@ fn holding(value: &str) -> Arc<NeedleSet> {
 }
 
 /// A redaction drops every provenance seal in the stored answer, at any
-/// depth, and keeps each receipt: the seals were made over the unredacted
-/// bytes, and their payload carries those bytes' digest.
+/// depth, in arrays and inside JSON text, and keeps each receipt: the seals
+/// were made over the unredacted bytes, and their payload carries those
+/// bytes' digest.
 #[tokio::test(start_paused = true)]
-async fn a_redacted_stored_answer_keeps_no_seal_at_any_depth() {
+async fn a_redacted_stored_answer_keeps_no_seal_anywhere() {
     let mut answer = sealed_answer("held-secret-value");
     let outcome = super::scrub_stored(&[holding("held-secret-value")], &mut answer);
     let wire = serde_json::to_string(&answer).expect("serializes");
@@ -378,14 +389,43 @@ async fn a_redacted_stored_answer_keeps_no_seal_at_any_depth() {
         "a seal was kept: {wire}"
     );
     assert_eq!(
-        wire.matches("\"receipt\"").count(),
-        2,
+        wire.matches("receipt").count(),
+        4,
         "a receipt was dropped: {wire}"
     );
 }
 
+/// The scrub renames a key holding a marked value; a seal under a renamed
+/// key is gone too, since the seals come off before the scrub.
+#[tokio::test(start_paused = true)]
+async fn a_seal_under_a_key_the_scrub_renames_is_dropped() {
+    let mut answer = sealed_answer("plain-text");
+    let outcome = super::scrub_stored(&[holding("provenance")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_eq!(outcome, Scrubbed::Redacted, "{wire}");
+    assert!(
+        !wire.contains("public_signature"),
+        "a seal was kept: {wire}"
+    );
+}
+
+/// A held value inside a seal itself: nothing else is removed, but the seal
+/// stays off and the answer counts as redacted.
+#[tokio::test(start_paused = true)]
+async fn a_seal_holding_a_held_value_is_dropped() {
+    let mut answer = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({ "text": "plain", "_meta": { "provenance": provenance("sig-held-secret-value") } }),
+    );
+    let outcome = super::scrub_stored(&[holding("held-secret-value")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_eq!(outcome, Scrubbed::Redacted, "{wire}");
+    assert!(!wire.contains("held-secret-value"), "{wire}");
+    assert!(wire.contains("receipt"), "the receipt stays: {wire}");
+}
+
 /// Control: a scrub that removes nothing leaves the answer byte-identical,
-/// seals included.
+/// seals included, the ones in JSON text too.
 #[tokio::test(start_paused = true)]
 async fn a_clean_stored_answer_keeps_its_seals() {
     let mut answer = sealed_answer("plain-text");
