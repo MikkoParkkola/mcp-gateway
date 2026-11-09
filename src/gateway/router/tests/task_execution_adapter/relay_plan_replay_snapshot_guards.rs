@@ -56,15 +56,27 @@ async fn settle_unread(rig: &Rig, key: &str) -> String {
     task
 }
 
-/// Arm the write-time hook to publish `action` when the delivery's write
-/// commits: a read judged under one action and written under another.
-fn switch_at_write(rig: &Rig, action: CollusionAction) {
-    let state = Arc::clone(&rig.state);
-    crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::arm(move || {
-        let mut config = (*state.live_config.get()).clone();
-        config.security.firewall.collusion.action = action;
-        state.live_config.set(config);
-    });
+/// Alice's tasks/get of `task`, judged and built under the action
+/// published now, then `action` published, then its body read: the write
+/// (the body's first chunk) commits under `action`.
+async fn read_switched_at_write(
+    state: &Arc<AppState>,
+    task: &str,
+    action: CollusionAction,
+) -> Value {
+    use tower::ServiceExt as _;
+    let body = task_method(7_002, "tasks/get", json!({ "taskId": task }));
+    let response = create_router(Arc::clone(state))
+        .oneshot(http_request(Some("key-a"), &body))
+        .await
+        .expect("the router must answer");
+    let mut config = (*state.live_config.get()).clone();
+    config.security.firewall.collusion.action = action;
+    state.live_config.set(config);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("the body must read");
+    serde_json::from_slice(&bytes).expect("the body is JSON")
 }
 
 /// Alice reads `task`; the reply.
@@ -107,7 +119,7 @@ async fn k1_k6_no_completed_revision_is_readable_without_its_snapshot() {
 }
 
 /// K25: a read judged under off and written under block (a trackable
-/// snapshot): the write's action decides, the entry is kept, bob refused.
+/// snapshot; the body read after the switch): the write's action decides, the entry is kept, bob refused.
 /// Mutant: rebuild only when the read starts under a non-off action.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn k25_a_read_judged_under_off_and_written_under_block_is_kept() {
@@ -115,15 +127,8 @@ async fn k25_a_read_judged_under_off_and_written_under_block_is_kept() {
     let task = settle_unread(&rig, "k25").await;
     rig.lapse().await;
     publish(&rig, CollusionAction::Off);
-    switch_at_write(&rig, CollusionAction::Block);
-    let before = crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::reached();
-    let reply = read(&rig, &task).await;
+    let reply = read_switched_at_write(&rig.state, &task, CollusionAction::Block).await;
     assert_eq!(status_of(&reply), "completed", "{reply}");
-    assert_eq!(
-        crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::reached(),
-        before + 1,
-        "premise: the switch ran at the write"
-    );
     assert!(entry_held(&rig, &task), "the block write did not keep it");
     assert!(rig.refused("key-b", 2501, PROSE).await);
 }
@@ -274,20 +279,8 @@ async fn k21_limit_an_untrackable_read_switched_to_block_mid_read_is_delivered()
     let mut config = (*state.live_config.get()).clone();
     config.security.firewall.collusion.action = CollusionAction::Off;
     state.live_config.set(config);
-    let switched = Arc::clone(&state);
-    crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::arm(move || {
-        let mut config = (*switched.live_config.get()).clone();
-        config.security.firewall.collusion.action = CollusionAction::Block;
-        switched.live_config.set(config);
-    });
-    let before = crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::reached();
-    let reply = get_task(&state, "key-a", &task).await;
+    let reply = read_switched_at_write(&state, &task, CollusionAction::Block).await;
     assert_eq!(status_of(&reply), "completed", "{reply}");
-    assert_eq!(
-        crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::reached(),
-        before + 1,
-        "premise: the switch ran at the write"
-    );
 }
 
 /// Every string leaf of `value`.

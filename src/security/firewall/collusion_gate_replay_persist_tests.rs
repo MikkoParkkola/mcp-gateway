@@ -231,3 +231,45 @@ fn an_undelivered_rebuilt_entry_is_swept_after_its_retention() {
     );
     assert_eq!(fw.replay_entries_for_test(), 1);
 }
+
+/// A snapshot the replay store's caps would refuse is untrackable from the
+/// start: the settle stores the marker, and a snapshot persisted under
+/// larger caps is untrackable to a process with smaller ones, both at the
+/// read's start and at its rebuild, so a block read refuses it before
+/// delivering anything.
+/// Mutant: the size left out of the shared classifier.
+#[test]
+fn a_snapshot_over_the_replay_caps_is_untrackable() {
+    let small = firewall(CollusionAction::Block).with_replay_budget_for_test(4 * 1024, 128);
+    assert_eq!(
+        persisted(&small, &digest(ANSWER), &json!(ANSWER)),
+        Some(json!(SNAPSHOT_UNTRACKABLE)),
+        "an over-cap snapshot was persisted as trackable"
+    );
+    let full = firewall(CollusionAction::Block);
+    let value = persisted(&full, &digest(ANSWER), &json!(ANSWER)).expect("a snapshot");
+    assert_ne!(
+        value,
+        json!(SNAPSHOT_UNTRACKABLE),
+        "premise: fits the full caps"
+    );
+    assert!(
+        matches!(
+            small.adopt_replay(&key("t7"), Some(&value), hour()),
+            Adopted::Untrackable
+        ),
+        "an over-cap snapshot was rebuilt or read as absent"
+    );
+    let generation = small.paired_generation_for_test();
+    assert!(
+        small
+            .untrackable_read(
+                generation.collusion_view(),
+                Some(&value),
+                ("gateway", "tasks/get"),
+                ("s", "alice"),
+            )
+            .is_some_and(|verdict| !verdict.allowed),
+        "a block read of an over-cap snapshot was not refused at its start"
+    );
+}

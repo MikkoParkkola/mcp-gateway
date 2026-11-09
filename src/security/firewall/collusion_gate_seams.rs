@@ -165,4 +165,14 @@ impl Firewall {
         let mut frozen = self.relay.frozen.lock();
         *frozen = Some(frozen.unwrap_or_else(Instant::now) + by);
     }
+
+    /// This firewall with a replay store whose total and per-entry caps are
+    /// `total` and `entry` bytes, so a row crosses a cap cheaply (tests only).
+    #[cfg(test)]
+    pub(crate) fn with_replay_budget_for_test(mut self, total: usize, entry: usize) -> Self {
+        self.relay.replay = std::sync::Arc::new(
+            super::super::collusion::replay::ReplayReceipts::with_budget_for_test(total, entry),
+        );
+        self
+    }
 }

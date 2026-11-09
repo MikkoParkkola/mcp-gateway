@@ -499,6 +499,18 @@ impl ReplayReceipts {
         Acquired::pair(entry, handle)
     }
 
+    /// Whether an entry of these parts fits the per-entry and total caps, as
+    /// an insertion would admit it.
+    pub(in super::super) fn fits(
+        &self,
+        receipts: &[ReplayReceipt],
+        calls: &ReplayCalls,
+        answer_digest: &str,
+    ) -> bool {
+        let bytes = entry_bytes(receipts, calls, answer_digest);
+        bytes <= self.entry_cap && bytes <= self.total_cap
+    }
+
     /// [`Self::acquire`] for a stored task read that holds the entry's
     /// persisted parts: a live entry under `key` is acquired as it is;
     /// otherwise the parts are inserted pending with this read as its one

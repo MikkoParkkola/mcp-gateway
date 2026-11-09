@@ -212,13 +212,21 @@ impl Firewall {
         let Some(delivered) = Delivered::of_parts(leaves, values) else {
             return untrackable;
         };
-        let mut persisted = Vec::with_capacity(snapshots.len());
+        let mut kept = Vec::with_capacity(snapshots.len());
         for snapshot in snapshots {
             if !snapshot.delivered_by(&delivered) {
                 return untrackable;
             }
-            let Some(receipt) = PersistedReceipt::of(&snapshot.with_join_fingerprints(detector))
-            else {
+            kept.push(snapshot.with_join_fingerprints(detector));
+        }
+        // One the replay store would refuse is untrackable from the start, so
+        // a read refuses it at its start, never after delivering it untracked.
+        if !self.relay.replay.fits(&kept, calls, answer_digest) {
+            return untrackable;
+        }
+        let mut persisted = Vec::with_capacity(kept.len());
+        for receipt in &kept {
+            let Some(receipt) = PersistedReceipt::of(receipt) else {
                 return untrackable;
             };
             persisted.push(receipt);
@@ -247,20 +255,14 @@ impl Firewall {
             return Adopted::NoSnapshot;
         }
         let Some(snapshot) = snapshot else {
+            // A row with nothing to rebuild from replays nothing, counted as a
+            // missing entry always was.
+            count_replay_skipped("absent");
             return Adopted::NoSnapshot;
         };
-        let Ok(persisted) = serde_json::from_value::<Persisted>(snapshot.clone()) else {
+        let Some(parts) = self.trackable_parts(snapshot) else {
             return Adopted::Untrackable;
         };
-        if persisted.epoch != replay_epoch() {
-            return Adopted::Untrackable;
-        }
-        let receipts = persisted
-            .receipts
-            .into_iter()
-            .map(PersistedReceipt::into_receipt)
-            .collect();
-        let parts = (receipts, persisted.calls, persisted.answer_digest);
         let Some(acquired) = self
             .relay
             .replay
@@ -274,6 +276,29 @@ impl Firewall {
 }
 
 impl Firewall {
+    /// The parts of a persisted `snapshot` this process can track: one it
+    /// can read, made under this process's epoch, that the replay store's
+    /// caps admit. `None` is untrackable. The one classifier a read's start
+    /// and its rebuild share, so a snapshot judged trackable is rebuilt.
+    fn trackable_parts(
+        &self,
+        snapshot: &Value,
+    ) -> Option<(Vec<ReplayReceipt>, ReplayCalls, String)> {
+        let persisted = serde_json::from_value::<Persisted>(snapshot.clone()).ok()?;
+        if persisted.epoch != replay_epoch() {
+            return None;
+        }
+        let receipts: Vec<ReplayReceipt> = persisted
+            .receipts
+            .into_iter()
+            .map(PersistedReceipt::into_receipt)
+            .collect();
+        self.relay
+            .replay
+            .fits(&receipts, &persisted.calls, &persisted.answer_digest)
+            .then_some((receipts, persisted.calls, persisted.answer_digest))
+    }
+
     /// The verdict on a stored task read whose persisted snapshot this
     /// process cannot track (the marker, another epoch, a form it cannot
     /// read), under `view`, the collusion view published when the read
@@ -291,8 +316,7 @@ impl Firewall {
         audit: (&str, &str),
     ) -> Option<super::super::FirewallVerdict> {
         self.relay_detector()?;
-        let trackable = serde_json::from_value::<Persisted>(snapshot?.clone())
-            .is_ok_and(|persisted| persisted.epoch == replay_epoch());
+        let trackable = self.trackable_parts(snapshot?).is_some();
         if trackable || view.action() == super::CollusionAction::Off {
             return None;
         }
