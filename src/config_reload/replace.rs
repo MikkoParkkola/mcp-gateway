@@ -1,8 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Shared audited byte writer for settings saves and history restores.
-//! A refused reload restores the old bytes; the next lock holder recovers crashes.
-//! Lock order: reload, config sidecar, then vault when writing secrets.
+//! The shared byte writer for gateway.yaml (ADR-024): exact bytes, written
+//! under the config lock pair, then one reload, and the old bytes back on
+//! disk whenever that reload refuses.
+//!
+//! Web UI settings saves (a spliced file) and configuration-history restores
+//! (stored bytes) both write through [`replace_audited`]. It refuses a write
+//! made from a stale view of the file, keeps the original in a private copy
+//! with a journal ([`crate::config_persistence::journal`]) until a reload has
+//! accepted the new bytes, and puts the original back on a refused reload or
+//! a failed write. A crash anywhere is recovered by the next holder of the
+//! config lock.
+//!
+//! Lock order, for every holder: the reload lock, then the config sidecar
+//! lock, then (for a save that also writes secrets) the vault lock. Nothing
+//! ranked earlier is taken while a later one is held: the config sidecar
+//! before the vault, never the reverse.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,29 +33,8 @@ use crate::secret_store::{
 use crate::config_persistence::keyedit::Template;
 
 use super::ReloadContext;
-use super::lock_api::{ReloadRefusal, ReloadRefusalKind};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RefusalClass {
-    Posture,
-    Invalid,
-    ShuttingDown,
-    Internal,
-}
-
-/// Only the typed reload refusal establishes a posture refusal.
-pub(super) fn post_write_class(refusal: &ReloadRefusal) -> RefusalClass {
-    use crate::config_reload::{ReloadFailure, reload_failure};
-    match refusal.kind {
-        ReloadRefusalKind::Posture => RefusalClass::Posture,
-        ReloadRefusalKind::Other
-            if reload_failure(&refusal.text) == ReloadFailure::ShuttingDown =>
-        {
-            RefusalClass::ShuttingDown
-        }
-        ReloadRefusalKind::Other => RefusalClass::Internal,
-    }
-}
+pub(crate) use super::replace_refusal::RefusalClass;
+pub(super) use super::replace_refusal::post_write_class;
 
 // The revision type lives with the config commit primitive, which every
 // build compiles; the replace path names it from there.

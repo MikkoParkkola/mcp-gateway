@@ -194,7 +194,7 @@ fn slot(id: FieldId, param: &Param) -> SlotId {
     SlotId(segments.collect())
 }
 
-/// The answer to a write that did not complete; the detail goes to the log.
+/// The fixed answer to a write that did not complete.
 const FAILED: &str =
     "the save did not complete; gateway.yaml may have changed, so preview it again before retrying";
 
@@ -249,16 +249,18 @@ fn map_error(error: ReplaceError, halt: Option<Halt>) -> Mapped {
         ReplaceError::NoConfigFile => UiRefused::Preview(PreviewRefused::NoConfigFile),
         ReplaceError::ConfigRefused(why) => UiRefused::Preview(PreviewRefused::Unread(why)),
         ReplaceError::Unsupported(why) => UiRefused::Preview(PreviewRefused::Untrusted(why)),
-        failure @ (ReplaceError::Stage(_)
-        | ReplaceError::Write(_)
-        | ReplaceError::Failed(_)
-        | ReplaceError::RollbackFailed { .. }
-        | ReplaceError::Unconfirmed { .. }) => {
-            tracing::warn!(error = ?failure, "settings save: the config write did not complete");
-            UiRefused::Failed(FAILED.to_owned())
-        }
+        ReplaceError::Stage(_) => write_failed("stage"),
+        ReplaceError::Write(_) => write_failed("write"),
+        ReplaceError::Failed(_) => write_failed("failed"),
+        ReplaceError::RollbackFailed { .. } => write_failed("rollback_failed"),
+        ReplaceError::Unconfirmed { .. } => write_failed("unconfirmed"),
     };
     Mapped::Refusal(refusal)
+}
+
+fn write_failed(variant: &'static str) -> UiRefused {
+    tracing::warn!(variant, "settings save: the config write did not complete");
+    UiRefused::Failed(FAILED.to_owned())
 }
 
 #[cfg(test)]

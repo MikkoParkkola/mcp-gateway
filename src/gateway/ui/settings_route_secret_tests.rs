@@ -10,6 +10,72 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+#[derive(Clone, Default)]
+struct LogSink(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogSink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log sink").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Capture the calling thread, runtime workers and blocking pool for the whole save.
+fn capture_runtime<T>(run: impl std::future::Future<Output = T>) -> (T, String) {
+    crate::test_log_capture::keep_interest_open();
+    let sink = LogSink::default();
+    let writer = sink.clone();
+    let capture = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .json()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || writer.clone())
+            .finish(),
+    );
+    let on_start = capture.clone();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .on_thread_start(move || std::mem::forget(tracing::dispatcher::set_default(&on_start)))
+        .build()
+        .expect("runtime");
+    let result = tracing::dispatcher::with_default(&capture, || {
+        runtime.block_on(async {
+            let caller = std::thread::current().id();
+            tokio::spawn(async move {
+                assert_ne!(std::thread::current().id(), caller);
+                tracing::trace!("capture worker control");
+            })
+            .await
+            .expect("worker control");
+            tokio::task::spawn_blocking(move || {
+                assert_ne!(std::thread::current().id(), caller);
+                tracing::trace!("capture blocking control");
+            })
+            .await
+            .expect("blocking control");
+            run.await
+        })
+    });
+    runtime.shutdown_timeout(std::time::Duration::from_secs(5));
+    let logs = String::from_utf8(sink.0.lock().expect("log sink").clone()).expect("UTF-8 logs");
+    assert!(
+        logs.contains("capture worker control"),
+        "worker capture missing"
+    );
+    assert!(
+        logs.contains("capture blocking control"),
+        "blocking capture missing"
+    );
+    (result, logs)
+}
+
 pub(super) struct Recording {
     inner: FilesStore,
     calls: AtomicUsize,
@@ -69,14 +135,13 @@ pub(super) fn recording(route: &Route, fail: Option<bool>) -> Arc<Recording> {
 }
 
 /// S18: red oracle is a successful reload, stored bytes, a file reference, and no response/log leak.
-#[tokio::test(flavor = "multi_thread")]
-async fn s18_secret_save() {
-    let mut route = Route::new(BASE).await;
-    let store = recording(&route, None);
-    route.store = Some(SettingsStoreForTest::Store(store.clone()));
-    let mut result = None;
-    let ((), logs) = crate::test_log_capture::capture_at(tracing::Level::TRACE, || {
-        result = Some(futures::executor::block_on(async {
+#[test]
+fn s18_secret_save() {
+    let ((route, store, result), logs) = capture_runtime(async {
+        let mut route = Route::new(BASE).await;
+        let store = recording(&route, None);
+        route.store = Some(SettingsStoreForTest::Store(store.clone()));
+        let result = async {
             let request = route.saved_body(&json!([secret("secret-save-canary")]));
             let response = route
                 .response(true, &request.to_string(), client(true))
@@ -92,9 +157,11 @@ async fn s18_secret_save() {
             );
             let body: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON answer");
             (status, body)
-        }));
+        }
+        .await;
+        (route, store, result)
     });
-    let (status, body) = result.expect("answer");
+    let (status, body) = result;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["revision"], route.revision());
     assert_eq!(body["changed"], true);
@@ -346,54 +413,60 @@ fn assert_config_preview(case: &str, body: &serde_json::Value, config_mark: &str
 }
 
 // Each canary case is a separate test so a stub cannot hide later cases.
-async fn canary_case(case: &str) {
-    use rand::RngExt as _;
-    let nonce: u64 = rand::rng().random();
-    let secret_mark = format!("secret-{nonce:x}");
-    let backend_mark = format!("backend-{nonce:x}");
-    let id_mark = format!("unknown-{nonce:x}");
-    let config_mark = format!("config-{nonce:x}");
-    let text = if case == "unprovable" {
-        BASE.replace("environment: \"dev\"", "environment: &env \"dev\"")
-    } else {
-        BASE.into()
-    };
-    let mut route = Route::new(&text).await;
-    let store = recording(&route, if case == "store" { Some(false) } else { None });
-    route.store = Some(SettingsStoreForTest::Store(store.clone()));
-    let fields = match case {
-        "bad_param" => {
-            json!([{"field":"backends.owner","backend":backend_mark,"value":{"set":config_mark}}])
-        }
-        "unknown" => json!([set(&id_mark, &json!(config_mark))]),
-        _ => json!([
-            set("environment", &json!(config_mark)),
-            secret(&secret_mark)
-        ]),
-    };
-    let mut body = route.saved_body(&fields);
-    if case == "stale" {
-        route.write(&text.replace("\"dev\"", "\"outside\""));
-    }
-    if case == "posture" {
-        route.write(&format!(
-            "{text}server:\n  public_url: https://{config_mark}.example.test\n"
-        ));
-        body["base_revision"] = json!(route.revision());
-    }
-    if case == "invalid" {
-        route.write(&format!("{text}server:\n  port: {config_mark}\n"));
-        body["base_revision"] = json!(route.revision());
-    }
-    let before = route.text();
-    let mut result = None;
-    let ((), logs) = crate::test_log_capture::capture_at(tracing::Level::TRACE, || {
-        result = Some(futures::executor::block_on(route.raw(
-            true,
-            &body.to_string(),
-            client(true),
-        )));
-    });
+fn canary_case(case: &str) {
+    let ((route, store, before, result, secret_mark, backend_mark, id_mark, config_mark), logs) =
+        capture_runtime(async {
+            use rand::RngExt as _;
+            let nonce: u64 = rand::rng().random();
+            let secret_mark = format!("secret-{nonce:x}");
+            let backend_mark = format!("backend-{nonce:x}");
+            let id_mark = format!("unknown-{nonce:x}");
+            let config_mark = format!("config-{nonce:x}");
+            let text = if case == "unprovable" {
+                BASE.replace("environment: \"dev\"", "environment: &env \"dev\"")
+            } else {
+                BASE.into()
+            };
+            let mut route = Route::new(&text).await;
+            let store = recording(&route, if case == "store" { Some(false) } else { None });
+            route.store = Some(SettingsStoreForTest::Store(store.clone()));
+            let fields = match case {
+                "bad_param" => {
+                    json!([{"field":"backends.owner","backend":backend_mark,"value":{"set":config_mark}}])
+                }
+                "unknown" => json!([set(&id_mark, &json!(config_mark))]),
+                _ => json!([
+                    set("environment", &json!(config_mark)),
+                    secret(&secret_mark)
+                ]),
+            };
+            let mut body = route.saved_body(&fields);
+            if case == "stale" {
+                route.write(&text.replace("\"dev\"", "\"outside\""));
+            }
+            if case == "posture" {
+                route.write(&format!(
+                    "{text}server:\n  public_url: https://{config_mark}.example.test\n"
+                ));
+                body["base_revision"] = json!(route.revision());
+            }
+            if case == "invalid" {
+                route.write(&format!("{text}server:\n  port: {config_mark}\n"));
+                body["base_revision"] = json!(route.revision());
+            }
+            let before = route.text();
+            let result = route.raw(true, &body.to_string(), client(true)).await;
+            (
+                route,
+                store,
+                before,
+                result,
+                secret_mark,
+                backend_mark,
+                id_mark,
+                config_mark,
+            )
+        });
     let (status, code) = match case {
         "stale" => (StatusCode::CONFLICT, "stale"),
         "posture" => (StatusCode::CONFLICT, "posture_refused"),
@@ -404,14 +477,11 @@ async fn canary_case(case: &str) {
         "store" => (StatusCode::UNPROCESSABLE_ENTITY, ""),
         _ => unreachable!("test case"),
     };
-    let result = result.expect("answer");
     let body = if case == "store" {
         assert_eq!(result.0, status, "{}", result.1);
-        // The store refusal contracts fixed text, without prescribing a code.
-        assert!(
-            result.1["error"]
-                .as_str()
-                .is_some_and(|text| !text.is_empty())
+        assert_eq!(
+            result.1,
+            json!({"error": "the secret store refused the value"})
         );
         result.1
     } else {
@@ -436,39 +506,39 @@ async fn canary_case(case: &str) {
 }
 
 /// S26: red oracle is invalid without leaking any canary through body or logs.
-#[tokio::test(flavor = "multi_thread")]
-async fn s26_invalid() {
-    canary_case("invalid").await;
+#[test]
+fn s26_invalid() {
+    canary_case("invalid");
 }
 /// S26: red oracle is `posture_refused` without exposing the publication value.
-#[tokio::test(flavor = "multi_thread")]
-async fn s26_posture() {
-    canary_case("posture").await;
+#[test]
+fn s26_posture() {
+    canary_case("posture");
 }
 /// S26: red oracle allows the non-secret canary only in the fresh stale diff.
-#[tokio::test(flavor = "multi_thread")]
-async fn s26_stale() {
-    canary_case("stale").await;
+#[test]
+fn s26_stale() {
+    canary_case("stale");
 }
 /// S26: red oracle allows the non-secret canary only in a patch set value.
-#[tokio::test(flavor = "multi_thread")]
-async fn s26_unprovable() {
-    canary_case("unprovable").await;
+#[test]
+fn s26_unprovable() {
+    canary_case("unprovable");
 }
 /// S26: red oracle is `bad_param` without the backend-name marker.
-#[tokio::test(flavor = "multi_thread")]
-async fn s26_bad_param() {
-    canary_case("bad_param").await;
+#[test]
+fn s26_bad_param() {
+    canary_case("bad_param");
 }
 /// S26: red oracle is `unknown_field` without the submitted id marker.
-#[tokio::test(flavor = "multi_thread")]
-async fn s26_unknown() {
-    canary_case("unknown").await;
+#[test]
+fn s26_unknown() {
+    canary_case("unknown");
 }
 /// S26: red oracle is a store refusal with no store detail, secret, or config marker.
-#[tokio::test(flavor = "multi_thread")]
-async fn s26_store() {
-    canary_case("store").await;
+#[test]
+fn s26_store() {
+    canary_case("store");
 }
 
 /// S27: red oracle is `invalid_body` after an escaped secret was accepted and a later member fails.

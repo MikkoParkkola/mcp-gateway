@@ -168,7 +168,12 @@ impl ReloadContext {
         if self.reload_owed.load(SeqCst)
             && let Err(error) = self.reload_outcome_locked_at(target).await
         {
-            tracing::warn!(error = %error.text, path = %target.display(), "the reload owed after restoring gateway.yaml failed; it is retried on the next one");
+            let class = match crate::config_reload::reload_failure(&error.text) {
+                crate::config_reload::ReloadFailure::ShuttingDown => "shutting_down",
+                crate::config_reload::ReloadFailure::PostureRefused
+                | crate::config_reload::ReloadFailure::Internal => "internal",
+            };
+            tracing::warn!(kind = ?error.kind, class, "the reload owed after restoring gateway.yaml failed; it is retried on the next one");
         }
     }
 

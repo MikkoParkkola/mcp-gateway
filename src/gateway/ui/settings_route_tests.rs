@@ -386,7 +386,10 @@ async fn s15_store_open_timeout() {
     ));
     let (status, body) = route.save(json!([secret("open-timeout-canary")])).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
-    assert!(body["error"].as_str().is_some_and(|s| !s.is_empty()));
+    assert_eq!(
+        body,
+        json!({"error": "the secret store did not answer; retry"})
+    );
     assert!(!body.to_string().contains("open-timeout-canary"));
     assert_eq!(route.text(), BASE);
 }

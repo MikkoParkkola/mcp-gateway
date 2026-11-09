@@ -25,6 +25,9 @@ mod lock_api;
 #[path = "replace.rs"]
 pub(crate) mod replace;
 
+#[path = "replace_refusal.rs"]
+mod replace_refusal;
+
 #[path = "reload_context_evaluate.rs"]
 mod evaluate;
 

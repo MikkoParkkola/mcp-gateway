@@ -98,13 +98,11 @@ fn retry(mut response: Response) -> Response {
 }
 
 fn unavailable() -> Response {
-    retry(
-        flat_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Config reload is not enabled on this gateway",
-        )
-        .into_response(),
+    flat_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Config reload is not enabled on this gateway",
     )
+    .into_response()
 }
 
 fn field_error(id: FieldId, code: &'static str, reason: &str) -> Response {
@@ -400,6 +398,16 @@ fn bad_value(id: FieldId, reason: &str) -> Response {
 }
 
 fn answer(refusal: UiRefused) -> Response {
+    let retryable = matches!(
+        &refusal,
+        UiRefused::Busy
+            | UiRefused::StaleUnpreviewable(_)
+            | UiRefused::Preview(PreviewRefused::Recovering)
+            | UiRefused::SecretsRefused { timeout: true }
+            | UiRefused::ReloadRefused {
+                class: RefusalClass::ShuttingDown
+            }
+    );
     let error = |status, code, text| structured_error(status, code, text).into_response();
     let response = match refusal {
         UiRefused::WrongKind(id) => field_error(
@@ -491,11 +499,7 @@ fn answer(refusal: UiRefused) -> Response {
         .into_response(),
         UiRefused::Failed(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
     };
-    if response.status() == StatusCode::SERVICE_UNAVAILABLE {
-        retry(response)
-    } else {
-        response
-    }
+    if retryable { retry(response) } else { response }
 }
 
 fn restart_fields(fields: &[&str], reload: &ReloadOutcome) -> Vec<String> {

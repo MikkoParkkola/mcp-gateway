@@ -25,9 +25,10 @@ fn patch() -> Patch {
         }],
     }
 }
-async fn check(refusal: UiRefused, status: StatusCode, code: Option<&str>, retry: bool) {
+async fn check(refusal: UiRefused, status: StatusCode, code: &str, retry: bool) {
     let response = answer(refusal);
     assert_eq!(response.status(), status, "shared answer status");
+    assert_eq!(response.headers().contains_key(RETRY_AFTER), retry);
     if retry {
         let header = response.headers().get(RETRY_AFTER).expect("Retry-After");
         assert!(
@@ -40,13 +41,15 @@ async fn check(refusal: UiRefused, status: StatusCode, code: Option<&str>, retry
         );
     }
     let (_, body) = decode(response).await;
-    if let Some(code) = code {
-        assert_eq!(body["error"], code, "{body}");
-    } else {
-        assert!(
-            body["error"].as_str().is_some_and(|s| !s.is_empty()),
-            "fixed error text: {body}"
-        );
+    assert_eq!(body["error"], code, "{body}");
+    if matches!(
+        code,
+        "the config write is recovering; retry"
+            | "the config is being written; retry"
+            | "the secret store did not answer; retry"
+            | "the secret store refused the value"
+    ) {
+        assert_eq!(body, json!({"error": code}));
     }
     assert!(
         !body.to_string().contains(CANARY),
@@ -64,28 +67,28 @@ row!(
     wrong_kind,
     UiRefused::WrongKind(field()),
     UNPROCESSABLE_ENTITY,
-    Some("wrong_kind"),
+    "wrong_kind",
     false
 );
 row!(
     bad_value,
     UiRefused::BadValue(field(), CANARY.into()),
     UNPROCESSABLE_ENTITY,
-    Some("bad_value"),
+    "bad_value",
     false
 );
 row!(
     bad_param,
     UiRefused::BadParam(field(), CANARY.into()),
     UNPROCESSABLE_ENTITY,
-    Some("bad_param"),
+    "bad_param",
     false
 );
 row!(
     invalid,
     UiRefused::Invalid(CANARY.into()),
     UNPROCESSABLE_ENTITY,
-    Some("invalid"),
+    "invalid",
     false
 );
 row!(
@@ -94,7 +97,7 @@ row!(
         class: RefusalClass::Posture
     },
     CONFLICT,
-    Some("posture_refused"),
+    "posture_refused",
     false
 );
 row!(
@@ -103,7 +106,7 @@ row!(
         class: RefusalClass::Invalid
     },
     UNPROCESSABLE_ENTITY,
-    Some("invalid"),
+    "invalid",
     false
 );
 row!(
@@ -112,7 +115,7 @@ row!(
         class: RefusalClass::ShuttingDown
     },
     SERVICE_UNAVAILABLE,
-    Some("shutting_down"),
+    "shutting_down",
     true
 );
 row!(
@@ -121,28 +124,28 @@ row!(
         class: RefusalClass::Internal
     },
     INTERNAL_SERVER_ERROR,
-    Some("failed"),
+    "failed",
     false
 );
 row!(
     unsupported,
     UiRefused::Unsupported(CANARY.into()),
     CONFLICT,
-    Some("unsupported"),
+    "unsupported",
     false
 );
 row!(
     no_audit_log,
     UiRefused::NoAuditLog,
     SERVICE_UNAVAILABLE,
-    Some("audit_log_required"),
+    "audit_log_required",
     false
 );
 row!(
     unprovable,
     UiRefused::Unprovable(patch()),
     UNPROCESSABLE_ENTITY,
-    Some("not_in_place"),
+    "not_in_place",
     false
 );
 row!(
@@ -152,64 +155,70 @@ row!(
         shown: Shown::Patch(patch())
     })),
     CONFLICT,
-    Some("stale"),
+    "stale",
     false
 );
 row!(
     stale_unpreviewable,
     UiRefused::StaleUnpreviewable(CANARY.into()),
     SERVICE_UNAVAILABLE,
-    Some("stale"),
+    "stale",
     true
 );
 row!(
     recovering,
     UiRefused::Preview(PreviewRefused::Recovering),
     SERVICE_UNAVAILABLE,
-    None,
+    "the config write is recovering; retry",
     true
 );
 row!(
     no_config_file,
     UiRefused::Preview(PreviewRefused::NoConfigFile),
     CONFLICT,
-    Some("no_config_file"),
+    "no_config_file",
     false
 );
 row!(
     untrusted,
     UiRefused::Preview(PreviewRefused::Untrusted(CANARY.into())),
     SERVICE_UNAVAILABLE,
-    Some("gateway.yaml could not be loaded"),
+    "gateway.yaml could not be loaded",
     false
 );
 row!(
     unread,
     UiRefused::Preview(PreviewRefused::Unread(CANARY.into())),
     SERVICE_UNAVAILABLE,
-    Some("gateway.yaml could not be loaded"),
+    "gateway.yaml could not be loaded",
     false
 );
-row!(busy, UiRefused::Busy, SERVICE_UNAVAILABLE, None, true);
+row!(
+    busy,
+    UiRefused::Busy,
+    SERVICE_UNAVAILABLE,
+    "the config is being written; retry",
+    true
+);
 row!(
     secret_timeout,
     UiRefused::SecretsRefused { timeout: true },
     SERVICE_UNAVAILABLE,
-    None,
-    false
+    "the secret store did not answer; retry",
+    true
 );
 row!(
     secret_refused,
     UiRefused::SecretsRefused { timeout: false },
     UNPROCESSABLE_ENTITY,
-    None,
+    "the secret store refused the value",
     false
 );
 row!(
     failed,
     UiRefused::Failed(CANARY.into()),
     INTERNAL_SERVER_ERROR,
-    Some("failed"),
+    "failed",
     false
 );
 
@@ -217,7 +226,17 @@ async fn constructor(why: super::super::secret_slots::Unopened, status: StatusCo
     let Err(response) = secret_target(Err(why)) else {
         panic!("a failed open produced a target");
     };
+    assert_eq!(
+        response.headers().contains_key(RETRY_AFTER),
+        status == StatusCode::SERVICE_UNAVAILABLE,
+    );
     let (got, body) = decode(*response).await;
+    if status == StatusCode::SERVICE_UNAVAILABLE {
+        assert_eq!(
+            body,
+            json!({"error": "the secret store did not answer; retry"})
+        );
+    }
     assert_eq!(got, status, "{body}");
     assert!(!body.to_string().contains(CANARY));
 }
@@ -263,4 +282,16 @@ async fn vault_failed() {
     let (status, body) = decode(*response).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(!body.to_string().contains(CANARY));
+}
+
+#[tokio::test]
+async fn reload_not_enabled() {
+    let response = unavailable();
+    assert!(!response.headers().contains_key(RETRY_AFTER));
+    let (status, body) = decode(response).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        body,
+        json!({"error": "Config reload is not enabled on this gateway"})
+    );
 }
