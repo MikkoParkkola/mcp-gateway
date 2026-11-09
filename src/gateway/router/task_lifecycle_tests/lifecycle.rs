@@ -329,12 +329,12 @@ async fn lifecycle_2_a_task_whose_client_vanished_still_runs_to_completion() {
 /// re-settle — what is asserted is that the RESULT was retained.
 #[tokio::test]
 async fn lifecycle_2_a_task_survives_a_gateway_restart_and_stays_private() {
-    let store_dir = tempfile::tempdir().expect("a task store the test owns");
+    let store_dir = std::sync::Arc::new(tempfile::tempdir().expect("a task store the test owns"));
 
     // Scoped so the first gateway — its custody lease, its executor and its
     // loopback listener — is gone before the second one opens.
     let (task_id, before) = {
-        let fixture = state_over(store_dir.path()).await;
+        let fixture = state_over(&store_dir).await;
         let (_, created) = post_against(
             Arc::clone(&fixture.state),
             "key-a",
@@ -353,7 +353,7 @@ async fn lifecycle_2_a_task_survives_a_gateway_restart_and_stays_private() {
         (task_id, before)
     };
 
-    let restarted = state_over(store_dir.path()).await;
+    let restarted = state_over(&store_dir).await;
 
     let (_, recovered) = post_against(
         Arc::clone(&restarted.state),
@@ -388,9 +388,9 @@ async fn lifecycle_2_a_task_survives_a_gateway_restart_and_stays_private() {
 /// id would satisfy the restart row completely.
 #[tokio::test]
 async fn lifecycle_2_a_fresh_store_answers_the_same_task_as_absent() {
-    let store_dir = tempfile::tempdir().expect("a task store the test owns");
+    let store_dir = std::sync::Arc::new(tempfile::tempdir().expect("a task store the test owns"));
     let task_id = {
-        let fixture = state_over(store_dir.path()).await;
+        let fixture = state_over(&store_dir).await;
         let (_, created) = post_against(
             Arc::clone(&fixture.state),
             "key-a",
@@ -403,8 +403,8 @@ async fn lifecycle_2_a_fresh_store_answers_the_same_task_as_absent() {
         task_id
     };
 
-    let empty_dir = tempfile::tempdir().expect("a second, empty task store");
-    let fresh = state_over(empty_dir.path()).await;
+    let empty_dir = std::sync::Arc::new(tempfile::tempdir().expect("a second, empty task store"));
+    let fresh = state_over(&empty_dir).await;
 
     refused_identically(&fresh.state, "key-a", 95, "tasks/get", &task_id).await;
     // Both verbs, as on the row this one falsifies: a control path that

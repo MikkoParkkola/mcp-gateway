@@ -6,13 +6,13 @@ use super::*;
 
 /// A verified OIDC identity distinguished only by its subject.
 fn verified(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@example.test"),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example.test".to_string(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        subject.to_string(),
+        format!("{subject}@example.test"),
+        None,
+        Vec::new(),
+        "https://issuer.example.test".to_string(),
+    )
 }
 
 /// MIK-7408, production path. The helper-level forgery tests pin how the

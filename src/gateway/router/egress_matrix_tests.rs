@@ -108,13 +108,13 @@ async fn post_as(
     if let Some(subject) = subject {
         request
             .extensions_mut()
-            .insert(crate::key_server::oidc::VerifiedIdentity {
-                subject: subject.to_string(),
-                email: format!("{subject}@example.invalid"),
-                name: None,
-                groups: vec![],
-                issuer: "https://a.example.invalid".to_string(),
-            });
+            .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+                subject.to_string(),
+                format!("{subject}@example.invalid"),
+                None,
+                vec![],
+                "https://a.example.invalid".to_string(),
+            ));
     }
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();

@@ -768,13 +768,13 @@ async fn modern_meta_tools_call_is_inspected_once_by_the_router_instance() {
         .unwrap();
     request
         .extensions_mut()
-        .insert(crate::key_server::oidc::VerifiedIdentity {
-            subject: "alice".to_string(),
-            email: "alice@t6.test".to_string(),
-            name: None,
-            groups: Vec::new(),
-            issuer: "https://idp.t6.test".to_string(),
-        });
+        .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+            "alice".to_string(),
+            "alice@t6.test".to_string(),
+            None,
+            Vec::new(),
+            "https://idp.t6.test".to_string(),
+        ));
     let response = create_router(state).oneshot(request).await.unwrap();
     let status = response.status();
     let body: Value =
