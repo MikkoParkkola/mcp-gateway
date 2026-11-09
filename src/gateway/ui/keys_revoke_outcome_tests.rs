@@ -51,13 +51,17 @@ fn a_keychain_backed_target_revokes_by_its_resolved_digest() {
         let overlay = Arc::new(EnvOverlay::from_paths(&[env_path.clone()]));
         let env = Arc::new(LiveEnv::new(
             overlay,
-            ResolvedEnvFiles::new(vec![env_path], false),
+            ResolvedEnvFiles::new(vec![env_path.clone()], false),
         ));
         let text = fx
             .text()
             .replace(&spec("target-secret"), &reference)
             .replace(&spec(ROOT), "env:MCPGW_R4_ROOT");
-        std::fs::write(fx.path(), &text).unwrap();
+        let text = format!(
+            "env_files:\n  - {}\n{text}",
+            serde_json::to_string(&env_path.to_string_lossy().as_ref()).unwrap()
+        );
+        crate::gateway::test_helpers::write_owner_only(&fx.path(), &text).unwrap();
         let ctx = ReloadContext::new(
             fx.path(),
             fx.live.clone(),
