@@ -101,6 +101,8 @@ fn write_atomic_observed(
         cleanup(&scratch);
         return Err(e);
     }
+    #[cfg(test)]
+    let staged = super::crash_fs::stage(&target, &scratch, bytes);
     observe(&file);
     #[cfg(unix)]
     if matches!(mode, FileMode::Inherit)
@@ -116,6 +118,10 @@ fn write_atomic_observed(
     if let Err(e) = super::rename_with_retry(&scratch, &target) {
         cleanup(&scratch);
         return Err(e);
+    }
+    #[cfg(test)]
+    if let Some(staged) = staged {
+        super::crash_fs::bind(&target, staged);
     }
     Ok(())
 }
