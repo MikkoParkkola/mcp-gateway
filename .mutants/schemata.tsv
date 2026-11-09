@@ -1,0 +1,22 @@
+head_sha	f95588145e722f9c990ea06769ca4b3eabbb9945
+#mutant flush-removed
+mcp_gateway	config_persistence::commit_tests::verify_flushes_bytes_written_without_sync	src/config_persistence_commit_tests.rs:609
+#mutant dirsync-noop
+mcp_gateway	config_persistence::crash_fs_tests::a_dir_sync_makes_the_rename_survive_drop_all	src/config_persistence_crash_fs_tests.rs:70
+mcp_gateway	config_persistence::commit_tests::a_token_survives_power_loss_in_every_mode	src/config_persistence_commit_tests.rs:567
+#mutant stage-noop
+mcp_gateway	config_persistence::crash_fs_tests::keep_rename_drop_data_keeps_names_and_synced_data	src/config_persistence_crash_fs_tests.rs:138
+#mutant dropall-current
+mcp_gateway	config_persistence::crash_fs_tests::an_unsynced_rename_is_lost_under_drop_all	src/config_persistence_crash_fs_tests.rs:52
+#mutant keepall-snapshot
+mcp_gateway	config_persistence::crash_fs_tests::keep_all_keeps_an_unsynced_rename	src/config_persistence_crash_fs_tests.rs:81
+#mutant seed-ignored
+mcp_gateway	config_persistence::crash_fs_tests::keep_rename_drop_data_tears_an_unsynced_append	src/config_persistence_crash_fs_tests.rs:118
+#mutant tear-inside
+mcp_gateway	config_persistence::crash_fs_tests::keep_rename_drop_data_tears_an_unsynced_append	src/config_persistence_crash_fs_tests.rs:118
+#mutant verify-refused-repointed
+mcp_gateway	config_persistence::commit_tests::verify_after_a_delete_between_read_back_and_recheck_is_refused	src/config_persistence_commit_tests.rs:627
+#mutant unarmed-noop
+mcp_gateway	config_persistence::crash_fs_tests::cut_on_an_unarmed_dir_panics_by_name	src/config_persistence_crash_fs_tests.rs:152
+#mutant exclude-ignored
+mcp_gateway	config_persistence::crash_fs_tests::the_config_lock_sidecar_is_left_untouched_by_a_cut	src/config_persistence_crash_fs_tests.rs:258
