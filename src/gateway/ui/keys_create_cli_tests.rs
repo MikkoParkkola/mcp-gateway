@@ -137,9 +137,12 @@ fn a_cli_key_caller_cannot_create_a_key() {
 
 #[test]
 fn a_named_admin_and_the_static_bearer_still_create() {
+    // One fixture per caller: each create answers the fixture's one known
+    // secret, so a second create in the same file would share its digest.
     let fx = with_cli_key();
     let sent = fx.post(Call::new(&fx.body("by-root")));
     assert_eq!(sent.status, StatusCode::CREATED, "{}", sent.body);
+    let fx = with_cli_key();
     let mut bearer = Call::new(&fx.body("by-bearer"));
     bearer.client.credential_kind = CredentialKind::StaticBearer;
     bearer.client.name = "bearer".into();
