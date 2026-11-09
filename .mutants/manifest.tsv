@@ -1,0 +1,4 @@
+head_sha	719ee0a611f293c5703a7a860bdb3aaf864faf36
+# sidecar exclusion: each mutant must turn its Windows row red
+read-error-skipped	windows	read-error-skipped.patch	--lib --all-features -- config_persistence::crash_fs_tests::a_foreign_locked_file_is_refused_by_name --exact
+exclude-ignored-win	windows	exclude-ignored-win.patch	--lib --all-features -- config_persistence::commit_tests::a_token_survives_power_loss_in_every_mode --exact
