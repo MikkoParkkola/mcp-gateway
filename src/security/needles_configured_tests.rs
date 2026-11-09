@@ -542,3 +542,25 @@ async fn a_held_number_inside_a_seal_is_not_served() {
         "a seal was kept: {wire}"
     );
 }
+
+/// JSON text that names a seal but holds none is left byte for byte: only
+/// text a seal came out of is written back, so nothing else in it, such as a
+/// number past `f64` precision, is rewritten.
+#[tokio::test(start_paused = true)]
+async fn json_text_with_no_seal_in_it_is_left_as_stored() {
+    let text = r#"{"note": "public_signature", "n": 1.000000000000000000001}"#;
+    let mut answer = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({ "content": [{ "type": "text", "text": text }] }),
+    );
+    let outcome = super::scrub_stored(&[holding("held-secret-value")], &mut answer);
+    assert_eq!(outcome, Scrubbed::Clean);
+    assert_eq!(
+        answer
+            .result
+            .as_ref()
+            .and_then(|r| r.pointer("/content/0/text")),
+        Some(&serde_json::Value::from(text)),
+        "the text was rewritten"
+    );
+}

@@ -150,12 +150,21 @@ pub(crate) fn scrub_stored(
     response: &mut JsonRpcResponse,
 ) -> Scrubbed {
     let armed = sets.iter().any(|set| !set.snapshot().is_empty());
-    let stripped = match response.result.as_mut() {
+    let strip = match response.result.as_mut() {
         Some(result) if armed => drop_seals(result),
-        _ => true,
+        // A value added after the check above can still redact this answer:
+        // nothing was stripped, so a redaction is refused below.
+        Some(_) => Strip {
+            complete: false,
+            removed: false,
+        },
+        None => Strip {
+            complete: true,
+            removed: false,
+        },
     };
     let outcome = scrub_unsealed(sets, response);
-    if outcome == Scrubbed::Redacted && !stripped {
+    if outcome == Scrubbed::Redacted && !strip.complete {
         use crate::gateway::delivery_facts::echo_refusal_built;
         let message = sets
             .first()
@@ -167,13 +176,27 @@ pub(crate) fn scrub_stored(
     outcome
 }
 
+/// What [`drop_seals`] did: whether every seal it could see came off, and
+/// whether it removed any.
+#[derive(Clone, Copy)]
+struct Strip {
+    complete: bool,
+    removed: bool,
+}
+
 /// Remove every provenance seal from `value`, at any depth and inside JSON
-/// text. Text naming a seal is parsed, unsealed and written back compact;
-/// false when such text did not parse, so a seal may remain in it. Iterative over each value; text inside text recurses once per
-/// level of escaping, and each level doubles the escapes, so the depth stays
-/// a few dozen at most.
-fn drop_seals(value: &mut Value) -> bool {
-    let mut stripped = true;
+/// text. Seals in text are the gateway's own chain and playbook steps,
+/// written by `serde_json`, so text naming `public_signature` is parsed,
+/// unsealed and, only when a seal came off, written back compact (lossless
+/// for text `serde_json` wrote). Such text that will not parse makes the
+/// strip incomplete. Iterative over each value; text inside text recurses
+/// once per level of escaping, and each level doubles the escapes, so the
+/// depth stays a few dozen at most.
+fn drop_seals(value: &mut Value) -> Strip {
+    let mut strip = Strip {
+        complete: true,
+        removed: false,
+    };
     let mut pending = vec![value];
     while let Some(next) = pending.pop() {
         match next {
@@ -183,7 +206,7 @@ fn drop_seals(value: &mut Value) -> bool {
                     .and_then(|meta| meta.get_mut("provenance"))
                     .and_then(Value::as_object_mut)
                 {
-                    provenance.remove("public_signature");
+                    strip.removed |= provenance.remove("public_signature").is_some();
                 }
                 pending.extend(object.values_mut());
             }
@@ -191,16 +214,20 @@ fn drop_seals(value: &mut Value) -> bool {
             Value::String(text) if text.contains("public_signature") => {
                 match serde_json::from_str::<Value>(text) {
                     Ok(mut inner) => {
-                        stripped &= drop_seals(&mut inner);
-                        *text = inner.to_string();
+                        let inside = drop_seals(&mut inner);
+                        strip.complete &= inside.complete;
+                        if inside.removed {
+                            *text = inner.to_string();
+                            strip.removed = true;
+                        }
                     }
-                    Err(_) => stripped = false,
+                    Err(_) => strip.complete = false,
                 }
             }
             _ => {}
         }
     }
-    stripped
+    strip
 }
 
 /// [`scrub_stored`] once its seals are off.
