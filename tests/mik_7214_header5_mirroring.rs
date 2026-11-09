@@ -269,3 +269,57 @@ fn only_losslessly_renderable_values_are_mirrored() {
         "a float, an out-of-range integer and a control character must be dropped"
     );
 }
+
+#[test]
+fn nested_annotated_property_is_mirrored_and_spaced_value_is_encoded() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "owner": {"type": "string", "x-mcp-header": "Owner"},
+            "filter": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "x-mcp-header": "Repo"}
+                }
+            }
+        }
+    });
+    let arguments = json!({
+        "owner": "unity",
+        "filter": {"repo": "two words"}
+    });
+
+    let mirrored = mirror_headers(&schema, &arguments);
+
+    assert_eq!(
+        mirrored,
+        vec![
+            ("Mcp-Param-Owner".to_string(), "unity".to_string()),
+            (
+                "Mcp-Param-Repo".to_string(),
+                "=?base64?dHdvIHdvcmRz?=".to_string()
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn cold_tool_cache_is_discovered_before_mirroring() {
+    let (url, captured) = start_mock().await;
+    let backend = backend_for(&url);
+
+    // No tools/list first: the gateway was just restarted.
+    backend
+        .request(
+            "tools/call",
+            Some(json!({"name": "echo", "arguments": {"tenant": "acme"}})),
+        )
+        .await
+        .expect("tools/call");
+
+    assert_eq!(
+        captured_header(&captured, "Mcp-Param-Tenant").as_deref(),
+        Some("acme"),
+        "a cold cache must be filled so the call still carries its mirror"
+    );
+}
