@@ -29,10 +29,12 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub(crate) fn new() -> Self {
-        let dir = tempfile::tempdir().expect("temp dir");
+        // Registered, so the logger sees a kept dir when it opens (an
+        // unregistered one prints a line the mutant harness misreads).
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("audit.jsonl");
         Self {
-            dir: Some(Arc::new(dir)),
+            dir: Some(dir),
             path,
         }
     }
