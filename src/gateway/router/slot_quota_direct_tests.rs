@@ -248,13 +248,13 @@ async fn meta_call(fx: &Fx, server: &str, subject: &str) -> Value {
         .unwrap();
     request
         .extensions_mut()
-        .insert(crate::key_server::oidc::VerifiedIdentity {
-            subject: subject.to_string(),
-            email: format!("{subject}@example.invalid"),
-            name: None,
-            groups: vec![],
-            issuer: "https://a.example.invalid".to_string(),
-        });
+        .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+            subject.to_string(),
+            format!("{subject}@example.invalid"),
+            None,
+            vec![],
+            "https://a.example.invalid".to_string(),
+        ));
     let response = tower::ServiceExt::oneshot(fx.router.clone(), request)
         .await
         .unwrap();

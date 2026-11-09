@@ -662,13 +662,13 @@ mod principal_tests {
 
         // An identity whose actor id spells the stdio preimage's tail still
         // hashes under `agent:`, so the two can only meet on a SHA-256 collision.
-        let identity = crate::key_server::oidc::VerifiedIdentity {
-            subject: String::from_utf8_lossy(&nonce).into_owned(),
-            email: String::new(),
-            name: None,
-            groups: Vec::new(),
-            issuer: "stdio".to_owned(),
-        };
+        let identity = crate::key_server::oidc::VerifiedIdentity::for_test(
+            String::from_utf8_lossy(&nonce).into_owned(),
+            String::new(),
+            None,
+            Vec::new(),
+            "stdio".to_owned(),
+        );
         let agent = principal_fingerprint(Some(&identity));
         assert!(agent.is_some());
         assert_ne!(agent, stdio);

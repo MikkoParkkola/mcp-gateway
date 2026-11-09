@@ -66,7 +66,7 @@ async fn stdio_initialize_records_requested_revision() {
 
 #[tokio::test]
 async fn a_saved_stdio_observation_is_operator_readable() {
-    let data_dir = tempfile::tempdir().expect("temporary data directory");
+    let data_dir = crate::test_dir_keep::kept_tempdir();
     let sink = super::super::StdioTelemetry::new(Some(
         crate::protocol_revision_telemetry::DurableTelemetrySink::open(data_dir.path())
             .expect("open durable telemetry sink"),

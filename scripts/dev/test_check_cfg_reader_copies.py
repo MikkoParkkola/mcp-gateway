@@ -258,6 +258,34 @@ class BaseRevision(unittest.TestCase):
         listed, _ = C.base_allowances("line")
         self.assertEqual(listed, C.HEADER)
 
+    # Merge-base mode (pull requests, lanes): a branch is judged on its own change. The tip dropped
+    # the row after the branch was cut; the branch never touched it, so the branch point's list is
+    # the one it is compared with. Base mode (above) keeps the tip's.
+    def test_merge_base_mode_reads_the_list_at_the_branch_point(self):
+        self.commit({"src/a.rs": READER_RS, C.LIST: C.HEADER + ROW})
+        self.git("branch", "-M", "line")
+        self.git("checkout", "-q", "-b", "feature")
+        self.git("checkout", "-q", "line")
+        self.commit({C.LIST: C.HEADER})
+        self.git("checkout", "-q", "feature")
+        listed, _ = C.base_allowances("line", C.Compare.MERGE_BASE)
+        self.assertEqual(listed, C.HEADER + ROW)
+        # When HEAD contains the base, both modes read the same list.
+        self.git("merge", "-q", "line")
+        self.assertEqual(C.base_allowances("line", C.Compare.MERGE_BASE), C.base_allowances("line"))
+
+    def test_an_unknown_base_or_no_branch_point_refuses(self):
+        self.commit({"src/a.rs": READER_RS, C.LIST: C.HEADER + ROW})
+        self.git("branch", "-M", "line")
+        with self.assertRaisesRegex(RuntimeError, "not in this clone"):
+            C.base_allowances("no-such-rev", C.Compare.MERGE_BASE)
+        self.git("checkout", "-q", "--orphan", "unrelated")
+        self.git("rm", "-rq", "--cached", ".")
+        self.commit({C.LIST: C.HEADER})
+        self.git("checkout", "-q", "-f", "line")
+        with self.assertRaisesRegex(RuntimeError, "fetch full history"):
+            C.base_allowances("unrelated", C.Compare.MERGE_BASE)
+
 
 if __name__ == "__main__":
     unittest.main()

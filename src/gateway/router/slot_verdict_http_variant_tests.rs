@@ -403,13 +403,13 @@ async fn keyed_invoke_as_alpha(gw: &Gateway, key: &str, task: bool) -> (StatusCo
         .unwrap();
     request
         .extensions_mut()
-        .insert(crate::key_server::oidc::VerifiedIdentity {
-            subject: "alpha".to_string(),
-            email: "alpha@example.invalid".to_string(),
-            name: None,
-            groups: vec![],
-            issuer: "https://issuer.example.invalid".to_string(),
-        });
+        .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+            "alpha".to_string(),
+            "alpha@example.invalid".to_string(),
+            None,
+            vec![],
+            "https://issuer.example.invalid".to_string(),
+        ));
     let response = tower::ServiceExt::oneshot(gw.router.clone(), request)
         .await
         .unwrap();
@@ -520,13 +520,13 @@ async fn keyed_direct_call_as_alpha(gw: &Gateway, key: &str) -> (StatusCode, Val
         .unwrap();
     request
         .extensions_mut()
-        .insert(crate::key_server::oidc::VerifiedIdentity {
-            subject: "alpha".to_string(),
-            email: "alpha@example.invalid".to_string(),
-            name: None,
-            groups: vec![],
-            issuer: "https://issuer.example.invalid".to_string(),
-        });
+        .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+            "alpha".to_string(),
+            "alpha@example.invalid".to_string(),
+            None,
+            vec![],
+            "https://issuer.example.invalid".to_string(),
+        ));
     let response = tower::ServiceExt::oneshot(gw.router.clone(), request)
         .await
         .unwrap();

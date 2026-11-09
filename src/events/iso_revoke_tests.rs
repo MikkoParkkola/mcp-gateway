@@ -16,13 +16,13 @@ const SIGNED: &str = "backends:\n  signed:\n    http_url: https://h/mcp\n    \
     session_mode: per_user\n";
 
 fn person(subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.into(),
-        email: format!("{subject}@example.com"),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp".into(),
-    }
+    VerifiedIdentity::for_test(
+        subject,
+        format!("{subject}@example.com"),
+        None,
+        Vec::new(),
+        "https://idp",
+    )
 }
 
 /// `subject`'s `resource_updated` row for `uri`, as a subscribe commits it.

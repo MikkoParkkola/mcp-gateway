@@ -114,13 +114,13 @@ impl crate::transport::Transport for AlphaOnlyWire {
 }
 
 fn alpha() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example.invalid".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alpha".to_string(),
+        "alpha@example.invalid".to_string(),
+        None,
+        Vec::new(),
+        "https://issuer.example.invalid".to_string(),
+    )
 }
 
 /// The durable audit record every mint requires; without one the resolver

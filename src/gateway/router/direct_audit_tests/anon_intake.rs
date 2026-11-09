@@ -103,7 +103,7 @@ fn compared(raw: &Raw, drop_header: Option<&str>) -> Compared {
 }
 
 /// Register `dead`: an HTTP backend whose socket is bound but never listening,
-/// so connecting is refused (as `tests/mik_7272_sub4_adr012_acs.rs`
+/// so connecting is refused (as `src/gateway/router/direct_adr012_tests.rs`
 /// `pre_dispatch_failure_releases_its_key` builds it). The socket is returned
 /// so it stays bound, and no parallel test can take the port, for the whole
 /// row (MIK-7984).

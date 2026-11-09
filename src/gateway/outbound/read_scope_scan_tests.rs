@@ -4,7 +4,9 @@
 //! judge exposes, found by parsing it, bar two named ones), the judge holds no
 //! item the check cannot see through, and the frame-level check asks the same
 //! gate in its one shape, so the verdict decides whether to judge in one
-//! place. Everything is read as syntax, never as text. That only the judge reaches the read history is pinned by the
+//! place. The judge's read token keeps one shape and is built only in its one
+//! read chain (`token_check`). Everything is read as syntax, never as text.
+//! That only the judge reaches the read history is pinned by the
 //! production-node scan in `meta_mcp::boundary_pins::read_history_access`.
 
 const SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
@@ -283,9 +285,13 @@ fn entries(file: &syn::File, found: &mut Entries) {
         found.unsupported.push("an inner attribute".to_owned());
     }
     let mut test_modules = 0;
+    let mut token_seen = false;
     for item in &file.items {
         let name = |ident: &syn::Ident| plain(ident);
         let refused = match item {
+            // Test-only code is not in a product build: the read history's
+            // own tests take their token from here.
+            syn::Item::Fn(f) if cfg_test_fn(&f.attrs) => None,
             syn::Item::Fn(f) => {
                 found.check(f);
                 None
@@ -326,6 +332,11 @@ fn entries(file: &syn::File, found: &mut Entries) {
                 _ => "impl".to_owned(),
             }),
             syn::Item::Trait(t) => Some(format!("trait {}", name(&t.ident))),
+            // The read token, in its one shape, once.
+            syn::Item::Struct(s) if token_struct(s) && !token_seen => {
+                token_seen = true;
+                None
+            }
             syn::Item::Struct(s) => Some(format!("struct {}", name(&s.ident))),
             syn::Item::Enum(e) => Some(format!("enum {}", name(&e.ident))),
             syn::Item::Static(s) => Some(format!("static {}", name(&s.ident))),
@@ -372,6 +383,11 @@ fn every_judge_entry_opens_with_the_judging_gate() {
         "these take a firewall and are reachable from outside the judge, but do not open \
          with `let Some(..) = judging(firewall) else ..`: {:?}",
         found.ungated
+    );
+    assert_eq!(
+        token_findings(&file),
+        Vec::<String>::new(),
+        "the judge builds the read token only in its one read chain"
     );
     for entry in ["delivered", "admit", "admit_stream_item"] {
         assert!(
@@ -581,3 +597,10 @@ fn chain_check(chain: &[(&str, &str)]) -> Result<(), String> {
 /// refuse.
 #[path = "read_scope_scan_rows_tests.rs"]
 mod rows;
+
+#[path = "read_scope_token_check_tests.rs"]
+mod token_check;
+use token_check::{cfg_test_fn, token_findings, token_struct};
+
+#[path = "read_scope_token_rows_tests.rs"]
+mod token_rows;

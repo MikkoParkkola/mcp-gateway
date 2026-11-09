@@ -27,13 +27,13 @@ use crate::key_server::oidc::VerifiedIdentity;
 const OWN_TOOL: &str = "own_note";
 
 fn alpha() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alpha".to_string(),
+        "alpha@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://issuer.example.invalid".to_string(),
+    )
 }
 
 fn cert() -> crate::mtls::CertIdentity {

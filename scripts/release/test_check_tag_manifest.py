@@ -705,9 +705,14 @@ HANDOFF_RETENTION_DAYS = 90
 # A re-run of the grade job alone after they expire fails (the merge refuses a
 # missing bundle); re-running all jobs rebuilds them.
 COVERAGE_BUNDLE = ("7", "rerunning all jobs rebuilds them; multi-GB bundles per PR run")
+# The macOS lib test binary lib-b hands to int in the same run: a
+# rerun of int alone within the day reuses it, after that int builds its half
+# itself; nothing published depends on it.
+MACOS_LIB_BINARY = ("1", "int rebuilds its half when it is gone; a large test binary per run")
 SHORT_HANDOFFS = {  # (workflow, artifact name) -> (retention-days, reason)
     ("coverage-probe.yml", "cov-shard-sdk"): COVERAGE_BUNDLE,
     ("coverage-probe.yml", "cov-shard-${{ matrix.part }}"): COVERAGE_BUNDLE,
+    ("ci.yml", "macos-lib-tests"): MACOS_LIB_BINARY,
 }
 
 
@@ -2831,9 +2836,10 @@ class WorkflowWiring(unittest.TestCase):
         # release.yml's binaries, ci.yml's and docker.yml's image digests. One
         # missing means the scan stopped seeing a handoff, not that it went
         # away; a count across all workflows would let a new one elsewhere
-        # hide the loss.
+        # hide the loss. Short-lived exempt handoffs (SHORT_HANDOFFS) do not
+        # count: ci.yml's lib test binary must not stand in for its digests.
         for workflow in ("release.yml", "ci.yml", "docker.yml"):
-            self.assertIn(workflow, {h[0] for h in handoffs}, handoffs)
+            self.assertIn(workflow, {h[0] for h in handoffs if (h[0], h[2]) not in SHORT_HANDOFFS}, handoffs)
         wrong = wrong_handoffs(handoffs)
         self.assertEqual(
             wrong, [], f"handoff retention is not the repository's {HANDOFF_RETENTION_DAYS} days"
@@ -2854,13 +2860,15 @@ class WorkflowWiring(unittest.TestCase):
         cases = [
             (("release.yml", step, "dist", ["7"]), True),
             (("release.yml", step, "dist", ["90"]), False),
-            *[((w, step, n, ["7"]), False) for w, n in SHORT_HANDOFFS],
+            *[((w, step, n, [days]), False) for (w, n), (days, _why) in SHORT_HANDOFFS.items()],
             *[((w, step, n, []), True) for w, n in SHORT_HANDOFFS],
             *[((w, step, n, ["90"]), True) for w, n in SHORT_HANDOFFS],
             (("coverage-probe.yml", step, "cov-shard-sdk", ["3"]), True),
             (("coverage-probe.yml", step, "coverage-linux", ["7"]), True),
             (("coverage-probe.yml", step, "cov-shard-other", ["7"]), True),
             (("ci.yml", step, "cov-shard-sdk", ["7"]), True),
+            (("ci.yml", step, "macos-lib-tests", ["7"]), True),
+            (("coverage-probe.yml", step, "macos-lib-tests", ["1"]), True),
         ]
         for handoff, flagged in cases:
             self.assertEqual(bool(wrong_handoffs([handoff])), flagged, handoff)

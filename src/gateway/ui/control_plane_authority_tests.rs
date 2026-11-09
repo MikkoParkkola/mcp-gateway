@@ -156,13 +156,13 @@ fn store_audit_events_still_reach_the_view() {
 #[test]
 fn a_caller_with_no_identity_or_key_has_no_grant_subject() {
     assert_eq!(super::caller_grant_subject(None, None), None);
-    let nameless = crate::key_server::oidc::VerifiedIdentity {
-        subject: "dev-1".to_string(),
-        email: "dev-1@example.test".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: String::new(),
-    };
+    let nameless = crate::key_server::oidc::VerifiedIdentity::for_test(
+        "dev-1".to_string(),
+        "dev-1@example.test".to_string(),
+        None,
+        vec![],
+        String::new(),
+    );
     assert_eq!(super::caller_grant_subject(None, Some(&nameless)), None);
 }
 
@@ -170,13 +170,13 @@ fn a_caller_with_no_identity_or_key_has_no_grant_subject() {
 /// included: the snapshot calls the same conversion.
 #[test]
 fn a_verified_identity_gets_dispatchs_grant_subject() {
-    let identity = crate::key_server::oidc::VerifiedIdentity {
-        subject: "dev-1".to_string(),
-        email: "dev-1@example.test".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer-matrix".to_string(),
-    };
+    let identity = crate::key_server::oidc::VerifiedIdentity::for_test(
+        "dev-1".to_string(),
+        "dev-1@example.test".to_string(),
+        None,
+        vec![],
+        "https://issuer-matrix".to_string(),
+    );
     let dispatch = crate::gateway::grant_subject_from_verified_identity(&identity);
     let snapshot = super::caller_grant_subject(None, Some(&identity));
     // Field by field: `GrantSubject` equality ignores the label.
@@ -213,13 +213,13 @@ fn api_key_client(name: &str) -> crate::gateway::auth::AuthenticatedClient {
 
 /// A verified identity with `issuer`.
 fn identity_from(issuer: &str) -> crate::key_server::oidc::VerifiedIdentity {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: "dev-1".to_string(),
-        email: "dev-1@example.test".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: issuer.to_string(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        "dev-1".to_string(),
+        "dev-1@example.test".to_string(),
+        None,
+        vec![],
+        issuer.to_string(),
+    )
 }
 
 /// A caller carrying both a verified identity and an API key owns grants

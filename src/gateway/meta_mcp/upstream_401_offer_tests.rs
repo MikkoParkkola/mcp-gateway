@@ -105,13 +105,13 @@ impl JourneyService for OfferingJourneys {
 
 /// A caller the bridged adapter vouches for: its issuer is the adapter's.
 fn bridged_caller() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@a11.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: crate::gateway::openwebui_adapter::adapter_issuer(INSTALLATION),
-    }
+    VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@a11.invalid".to_string(),
+        None,
+        vec![],
+        crate::gateway::openwebui_adapter::adapter_issuer(INSTALLATION),
+    )
 }
 
 /// The live config offers read: the managed descriptor, one Open `WebUI`

@@ -110,13 +110,13 @@ impl crate::transport::Transport for Wire {
 }
 
 fn person(subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@example.invalid"),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example.invalid".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        subject.to_string(),
+        format!("{subject}@example.invalid"),
+        None,
+        Vec::new(),
+        "https://issuer.example.invalid".to_string(),
+    )
 }
 
 /// R7 (invoke level): the shared slot declares `TOOL` read-only; bob's own

@@ -203,13 +203,13 @@ fn api_key_caller() -> Caller {
 }
 
 fn oidc_caller() -> Caller {
-    let identity = VerifiedIdentity {
-        subject: "123".to_string(),
-        email: "x@corp.com".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://a.example".to_string(),
-    };
+    let identity = VerifiedIdentity::for_test(
+        "123".to_string(),
+        "x@corp.com".to_string(),
+        None,
+        vec![],
+        "https://a.example".to_string(),
+    );
     let actor = identity.stable_actor_id();
     Caller {
         principal: crate::gateway::auth::principal_of(&actor)

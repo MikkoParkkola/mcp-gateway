@@ -26,13 +26,13 @@ const CONFIG: &str = "backends:\n  \
      strategy: signed_assertion\n      audience: https://agent\n      session_mode: per_user\n";
 
 fn person(subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.into(),
-        email: format!("{subject}@mail.test"),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp".into(),
-    }
+    VerifiedIdentity::for_test(
+        subject,
+        format!("{subject}@mail.test"),
+        None,
+        Vec::new(),
+        "https://idp",
+    )
 }
 
 fn token(exp: Option<u64>) -> Zeroizing<String> {

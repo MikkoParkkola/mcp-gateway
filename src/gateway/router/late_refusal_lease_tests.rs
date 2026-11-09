@@ -51,7 +51,7 @@ fn switch_off_after_next_send(fx: &Fx) -> Arc<AtomicBool> {
 /// `alpha/read`), recording deliveries in its own log.
 async fn fixture() -> (
     Fx,
-    tempfile::TempDir,
+    std::sync::Arc<tempfile::TempDir>,
     Arc<crate::security::TransparencyLogger>,
 ) {
     let (dir, log) = temp_log(None);

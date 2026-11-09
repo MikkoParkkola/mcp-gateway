@@ -265,18 +265,23 @@ async fn a_refusal_after_the_tenant_read_record_releases_the_frame() {
         asked: AtomicUsize::new(0),
     });
     hub.register_source(Arc::clone(&source) as Arc<dyn crate::events::EventSource>);
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            tenant_guard: TenantGuardConfig {
-                arg_keys: vec!["repo".to_owned()],
-                cross_tenant_reads: CrossTenantReads::Observe,
-                ..TenantGuardConfig::default()
+    // The history is built first and handed in, as the gateway does, so the
+    // test observes it without reaching through the firewall's accessor.
+    let reads = crate::security::tenant_reads::ReadHistory::shared();
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                tenant_guard: TenantGuardConfig {
+                    arg_keys: vec!["repo".to_owned()],
+                    cross_tenant_reads: CrossTenantReads::Observe,
+                    ..TenantGuardConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
-    let reads = Arc::clone(firewall.reads());
+            None,
+        )
+        .with_reads(Arc::clone(&reads)),
+    );
     let mut services = logged_services(dir.path());
     services.firewall = Some(firewall);
     let (port, accepted) = counting_callback().await;
