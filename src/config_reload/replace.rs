@@ -200,8 +200,9 @@ async fn spawn_locked(
     replace: Replace,
     audit: Audit,
     wait: Duration,
-) -> Result<ReplaceOutcome, ReplaceError> {
-    tokio::spawn(async move { ctx.replace_locked(replace, audit, wait).await })
+    receipt: Option<receipt::RevokeCheck>,
+) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
+    tokio::spawn(async move { ctx.replace_locked(replace, audit, wait, receipt).await })
         .await
         .unwrap_or_else(|e| {
             Err(ReplaceError::Failed(format!(
@@ -216,6 +217,8 @@ pub(crate) mod order;
 
 #[path = "replace_audit.rs"]
 mod audit;
+#[path = "replace_receipt.rs"]
+mod receipt;
 pub(crate) use audit::{Audit, Intent, IntentSink, startup_recovery_intent};
 pub(crate) use audit::{AuditPosture, GatewayAuth};
 #[cfg(feature = "webui")]
@@ -453,7 +456,8 @@ impl ReloadContext {
         replace: Replace,
         mut audit: Audit,
         wait: Duration,
-    ) -> Result<ReplaceOutcome, ReplaceError> {
+        receipt: Option<receipt::RevokeCheck>,
+    ) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
         let deadline = Instant::now() + wait;
         // The reload lock, then the config sidecar lock: the order every
         // holder takes them in (module docs).
@@ -566,12 +570,44 @@ impl ReloadContext {
             Err(refused) => Err(refused),
         };
         let result = result.map(|outcome| with_references(outcome, fields, &entries));
+        let how = settle_for(&result);
+        #[cfg(test)]
+        let recording_receipt = receipt.is_some();
+        let result = result.and_then(|outcome| {
+            #[cfg(test)]
+            if recording_receipt {
+                order::record(&target, "reload");
+            }
+            let checked = receipt
+                .map(|check| {
+                    check.confirm(
+                        outcome
+                            .revision
+                            .clone()
+                            .unwrap_or_else(|| FileRevision::of(&current)),
+                    )
+                })
+                .transpose()
+                .map_err(ReplaceError::Failed)?;
+            #[cfg(test)]
+            if checked.is_some() {
+                order::record(&target, "receipt");
+            }
+            Ok((outcome, checked))
+        });
         // The config locks go before any store call: a discard's keychain
         // deletes must not hold up the next writer. A death in between is
         // the `Entries` guard's.
         drop(locked);
+        #[cfg(test)]
+        if recording_receipt {
+            order::record(&target, "file_unlock");
+        }
         drop(reload_guard);
-        let how = settle_for(&result);
+        #[cfg(test)]
+        if recording_receipt {
+            order::record(&target, "reload_unlock");
+        }
         entries.settle(how).await;
         result
     }
@@ -622,8 +658,6 @@ impl ReloadContext {
                 secrets: Vec::new(),
             });
         }
-        #[cfg(test)]
-        order::record(target, "commit");
         self.commit(target, current, &new, replaced, entries).await
     }
     /// Stage, journal, write, reload; then keep the new bytes or put the
@@ -676,6 +710,8 @@ impl ReloadContext {
                 ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
             ));
         }
+        #[cfg(test)]
+        order::record(target, "commit");
         let reloaded = self.reload_outcome_locked_at(target).await;
         // The reload reads gateway.yaml through its configured path. If a
         // symlink there moved meanwhile, it loaded some other file: put ours
