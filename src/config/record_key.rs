@@ -138,35 +138,6 @@ pub(crate) fn publish_new_file(
     sync_dir(dir)
 }
 
-/// Replace `target` with `content`: a private temp file, synced, renamed
-/// over `target`, then a directory sync. For a caller that holds the lock
-/// guarding `target`, so no other writer races the rename; a reader sees
-/// the old file or the new one, never a partial one.
-pub(crate) fn replace_file(target: &Path, content: &[u8]) -> std::io::Result<()> {
-    use rand::RngExt as _;
-    let dir = target.parent().unwrap_or(Path::new("."));
-    let nonce: [u8; 8] = rand::rng().random();
-    let mut temp_name = target.file_name().unwrap_or_default().to_owned();
-    temp_name.push(format!(
-        ".{}.{}.tmp",
-        std::process::id(),
-        hex::encode(nonce)
-    ));
-    let temp = dir.join(temp_name);
-    let written = (|| {
-        let mut file = crate::config_persistence::create_new_private(&temp)?;
-        file.write_all(content)?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&temp, target)
-    })();
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    written?;
-    sync_dir(dir)
-}
-
 #[cfg(test)]
 #[path = "record_key_tests.rs"]
 mod tests;

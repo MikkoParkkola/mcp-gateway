@@ -307,7 +307,15 @@ fn load(file: &Path, configured: Option<&str>) -> Result<(EmailHashKey, Envelope
 fn rewrite(file: &Path, envelope: &Envelope) -> Result<(), String> {
     use zeroize::Zeroize as _;
     let mut json = serde_json::to_vec_pretty(envelope).map_err(|e| e.to_string())?;
-    let written = crate::config::replace_file(file, &json);
+    // An owner-only atomic replace under the held lock. A power loss can
+    // bring back the old envelope: an unset recorded flag then re-checks the
+    // log (no second record), and a reverted mode switch keeps the same key.
+    let written = crate::config_persistence::write_atomic(
+        file,
+        &json,
+        crate::config_persistence::FileMode::Private,
+        crate::config_persistence::Symlink::Replace,
+    );
     json.zeroize();
     written.map_err(|e| format!("{}: cannot rewrite it: {e}", file.display()))
 }
