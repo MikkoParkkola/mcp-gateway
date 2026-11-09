@@ -1572,26 +1572,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A pull request is judged against its branch point, which needs history.
+          fetch-depth: 0
       # The exemption must not become the way to grow a file with code. Run
       # first: a failing tree check would otherwise hide which rule broke.
       - name: Check the gate refuses what it claims to
         run: python3 scripts/dev/test_check_file_size.py
-      # The base: the PR's base on a pull request, the previous tip on a push,
-      # and the parent commit when a push has no previous tip (a new branch or
-      # a tag). An unreadable base fails the gate; it is never skipped.
-      - name: Check the 800-line ceiling
+      # The base: the previous tip on a push, or the parent commit when a push
+      # has no previous tip (a new branch or a tag). An unreadable base fails
+      # the gate; it is never skipped.
+      - name: Check the 800-line ceiling against the previous tip
+        if: github.event_name != 'pull_request'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          set -euo pipefail
-          base="${BASE_SHA:-}"
-          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
-            git fetch --no-tags --depth=2 origin "$GITHUB_SHA"
-            base="$(git rev-parse HEAD^)"
-          else
-            git fetch --no-tags --depth=1 origin "$base"
+          base="$BEFORE"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD^"
           fi
           python3 scripts/dev/check-file-size.py --base "$base"
+      # A pull request: against where it left the base, so a baseline shrink
+      # that landed on the base afterwards is not read as this change.
+      - name: Check the 800-line ceiling against the branch point
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/dev/check-file-size.py --base "$BASE_SHA" --compare merge-base
 
   event-source-scope:
     name: Event source leaves the events core alone (MIK-7720 U10)
@@ -1649,7 +1656,7 @@ jobs:
           scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "$base"
       - name: Check the tree and the allowlist against the base
         if: github.event_name == 'pull_request'
-        run: scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}" --compare merge-base
 
   request-panics:
     name: No new request-path panic site without an invariant (MIK-8691)
@@ -1688,7 +1695,7 @@ jobs:
           scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "$base"
       - name: The baseline only shrinks against the base
         if: github.event_name == 'pull_request'
-        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}" --compare merge-base
 
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)
@@ -1736,7 +1743,7 @@ jobs:
           python3 scripts/dev/check_cfg_reader_copies.py --base "$base"
       - name: The cfg reader copies list only shrinks against the base
         if: github.event_name == 'pull_request'
-        run: python3 scripts/dev/check_cfg_reader_copies.py --base "origin/${{ github.base_ref }}"
+        run: python3 scripts/dev/check_cfg_reader_copies.py --base "origin/${{ github.base_ref }}" --compare merge-base
       # The shared cfg item finder the Rust-reading gates use: tree-sitter,
       # from the gates' own hash-locked environment.
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
