@@ -9,8 +9,8 @@
 //! read), refuses while a crashed write awaits recovery, and takes no lock:
 //! the save rechecks the revision under the writer's lock.
 #![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "first caller: the settings diff route (U8 PR c)")
+    not(any(test, feature = "webui")),
+    expect(dead_code, reason = "settings routes require webui")
 )]
 
 use std::fmt::Write as _;

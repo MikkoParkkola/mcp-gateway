@@ -297,9 +297,11 @@ pub(crate) use reload_context::replace::{
 };
 // The settings routes' reach into the save core: these named items only, each
 // already pub(crate) in its module; the rest of the two modules stays private.
+#[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::ui_diff::{
-    Patch, PatchStep, PreviewRefused, Shown, UiPreview, UiRefused, UnifiedDiff, ui_diff,
+    Patch, PatchStep, PreviewRefused, Shown, UiPreview, UiRefused, UnifiedDiff, path_text, ui_diff,
 };
+#[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::ui_save::{
     SaveEdit, SaveValue, SecretTarget, UiSaved, ui_save,
 };

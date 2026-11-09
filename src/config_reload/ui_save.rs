@@ -9,8 +9,8 @@
 //! answers with the preview's patch. Either way nothing is written and no
 //! secret entry exists.
 #![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "first caller: the settings save route (U8 PR c)")
+    not(any(test, feature = "webui")),
+    expect(dead_code, reason = "settings routes require webui")
 )]
 
 use std::sync::Arc;

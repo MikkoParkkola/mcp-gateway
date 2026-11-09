@@ -24,6 +24,16 @@ use super::{FileMode, Symlink, write_atomic};
 pub(crate) struct FileRevision(String);
 
 impl FileRevision {
+    /// Parse the lowercase SHA-256 text returned by a settings preview.
+    #[cfg(feature = "webui")]
+    pub(crate) fn from_text(text: &str) -> Option<Self> {
+        (text.len() == 64
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+        .then(|| Self(text.to_owned()))
+    }
+
     /// The revision of `bytes`.
     #[must_use]
     pub(crate) fn of(bytes: &[u8]) -> Self {
