@@ -23,7 +23,7 @@ const ALLOWANCE: Duration = Duration::from_secs(5);
 const CLOSE_BOUND: Duration = Duration::from_millis(300);
 
 struct Rig {
-    dir: tempfile::TempDir,
+    dir: std::sync::Arc<tempfile::TempDir>,
     seal: Arc<AtomicBool>,
     served: Arc<AtomicU64>,
     shutdown: tokio::sync::broadcast::Sender<()>,
@@ -32,7 +32,7 @@ struct Rig {
 impl Rig {
     fn new() -> Self {
         Self {
-            dir: tempfile::tempdir().expect("tempdir"),
+            dir: crate::test_dir_keep::kept_tempdir(),
             seal: Arc::new(AtomicBool::new(false)),
             served: Arc::new(AtomicU64::new(0)),
             shutdown: tokio::sync::broadcast::channel(1).0,

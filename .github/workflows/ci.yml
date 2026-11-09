@@ -47,12 +47,18 @@ on:
         type: boolean
         default: false
 
-# A new push to a pull request cancels that PR's superseded run. Every other
-# event (branch push, tag, dispatch) gets a group of its own run id, so it is
-# never cancelled, and never queued behind or replaced by another run.
+# A new push to a pull request cancels that PR's superseded run. A new push to
+# the release line cancels the run of the tip it replaced: a merge train lands
+# its PRs one by one, and a run per intermediate commit queued about 250 jobs
+# behind every PR's CI. The train already tested the exact landed tree; to find
+# which merge broke a red tip, bisect that train's merges. Do not re-run a
+# superseded release-line push run: it would join this group and cancel the
+# newest tip's run. Every other event (another branch, a tag, a dispatch, which
+# is how the release freeze runs the line) gets a group of its own run id, so
+# it is never cancelled, queued behind or replaced by another run.
 concurrency:
-  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || (github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line' && 'release-line-push') || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
 
 permissions:
   contents: read
@@ -531,6 +537,14 @@ jobs:
           cargo clippy --release --lib --bins --no-default-features -- -D warnings
       - name: The registry lint still bites (MIK-8387)
         run: scripts/dev/check_registry_lint.sh --self-test
+      # Only the judge can build the read token that Firewall::reads and
+      # ReadHistory::reserve take. The probe build must fail with exactly the
+      # pinned error in each forgery and nowhere else, so a widened token, a
+      # loosened signature or a leaked test constructor turns the job red.
+      - name: Only the judge can build a read token
+        run: |
+          python3 scripts/ci/check-reads-token.py --self-test
+          python3 scripts/ci/check-reads-token.py
       # The command preview's test seams must never compile into a build
       # without debug assertions. This build must fail, and on the guard's
       # own message, so deleting or breaking the guard turns the job red.
@@ -583,7 +597,7 @@ jobs:
       fail-fast: false
       matrix:
         # Selections and floors: scripts/ci/shard_tests.py.
-        shard: [lib-a, lib-b, int-a, int-b]
+        shard: [lib-a, lib-b, lib-c, int-a, int-b]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -710,14 +724,22 @@ jobs:
 
   # The required name. Green only when every Windows shard and the clippy job
   # succeeded: a skipped or cancelled one is red (scripts/ci/check_needs.py).
-  # always() so a failed shard still yields a verdict; the skip guards are the
-  # shards' own, so a throwaway PR or a post-merge push skips this as before;
+  # !cancelled() so a failed shard still yields a verdict, but a cancelled run
+  # (superseded by a newer push) creates no aggregate job: always() ran these
+  # after the cancel and held the run, and the newer run behind it, for a
+  # runner. A superseded run still stuck "queued" (an older ci.yml, or a job
+  # that ignores the cancel) frees only with
+  # `gh api -X POST repos/{owner}/{repo}/actions/runs/<id>/force-cancel`;
+  # a plain `gh run cancel` leaves always() jobs alive. Cancelling a PR's newest run with no newer one behind it leaves
+  # these skipped, and branch protection reads a skipped required check as
+  # passing: merge only through the train, which reads it red. The skip guards
+  # are the shards' own, so a throwaway PR or a post-merge push skips this as before;
   # a lane PR into the release line runs it with them, and heavy-gate judges
   # it on the train.
   windows-check:
     name: Windows check
     needs: [windows-shards, windows-clippy]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -744,7 +766,7 @@ jobs:
   heavy-gate:
     name: Heavy checks (merge train)
     needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal, feature-combos-pr]
-    if: ${{ always() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -840,11 +862,12 @@ jobs:
 
   # Gated like its shards: on a pull request that is not a train it is
   # skipped, never red, and no required check needs it. On a train it runs
-  # with always(), so a failed or skipped shard fails it.
+  # with !cancelled(), so a failed or skipped shard fails it; a cancelled run
+  # creates no aggregate (see windows-check).
   macos-check:
     name: macOS check
     needs: [macos-shards]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
     runs-on: ubuntu-latest
     # Read this run's job timings for the limit watch below.
     permissions:
@@ -930,7 +953,7 @@ jobs:
   test:
     name: Tests
     needs: [test-shards]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1572,26 +1595,61 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A pull request is judged against its branch point, which needs history.
+          fetch-depth: 0
       # The exemption must not become the way to grow a file with code. Run
       # first: a failing tree check would otherwise hide which rule broke.
       - name: Check the gate refuses what it claims to
         run: python3 scripts/dev/test_check_file_size.py
-      # The base: the PR's base on a pull request, the previous tip on a push,
-      # and the parent commit when a push has no previous tip (a new branch or
-      # a tag). An unreadable base fails the gate; it is never skipped.
-      - name: Check the 800-line ceiling
+      # The base: the previous tip on a push, or the parent commit when a push
+      # has no previous tip (a new branch or a tag). An unreadable base fails
+      # the gate; it is never skipped.
+      - name: Check the 800-line ceiling against the previous tip
+        if: github.event_name != 'pull_request'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          set -euo pipefail
-          base="${BASE_SHA:-}"
-          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
-            git fetch --no-tags --depth=2 origin "$GITHUB_SHA"
-            base="$(git rev-parse HEAD^)"
-          else
-            git fetch --no-tags --depth=1 origin "$base"
+          base="$BEFORE"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD^"
+          elif ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            # A force push: the tip it replaced is on no branch, so full history lacks it.
+            git fetch --no-tags origin "$base"
           fi
           python3 scripts/dev/check-file-size.py --base "$base"
+      # A pull request: against where it left the base, so a baseline shrink
+      # that landed on the base afterwards is not read as this change.
+      - name: Check the 800-line ceiling against the branch point
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/dev/check-file-size.py --base "$BASE_SHA" --compare merge-base
+
+  doc-backticks:
+    name: Doc comments name code in backticks
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # A cheap pre-filter for clippy's doc_markdown lint: a word with `_` or
+    # `::` in a `///` comment under src/, outside backticks, fails here in a
+    # second instead of failing a clippy run after a full build. CamelCase is
+    # only printed, since clippy accepts known words this check cannot list.
+    # The rows pin what clippy flags and what it accepts.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check the check flags what clippy flags, and nothing it accepts
+        run: python3 scripts/dev/test_check_doc_backticks.py
+      - name: Check this change's doc comments
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/dev/check-doc-backticks.py --base "$BASE_SHA"
+      - name: Check every doc comment
+        if: github.event_name != 'pull_request'
+        run: python3 scripts/dev/check-doc-backticks.py
 
   event-source-scope:
     name: Event source leaves the events core alone (MIK-7720 U10)
@@ -1649,7 +1707,7 @@ jobs:
           scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "$base"
       - name: Check the tree and the allowlist against the base
         if: github.event_name == 'pull_request'
-        run: scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}" --compare merge-base
 
   request-panics:
     name: No new request-path panic site without an invariant (MIK-8691)
@@ -1688,7 +1746,7 @@ jobs:
           scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "$base"
       - name: The baseline only shrinks against the base
         if: github.event_name == 'pull_request'
-        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}" --compare merge-base
 
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)
@@ -1736,7 +1794,7 @@ jobs:
           python3 scripts/dev/check_cfg_reader_copies.py --base "$base"
       - name: The cfg reader copies list only shrinks against the base
         if: github.event_name == 'pull_request'
-        run: python3 scripts/dev/check_cfg_reader_copies.py --base "origin/${{ github.base_ref }}"
+        run: python3 scripts/dev/check_cfg_reader_copies.py --base "origin/${{ github.base_ref }}" --compare merge-base
       # The shared cfg item finder the Rust-reading gates use: tree-sitter,
       # from the gates' own hash-locked environment.
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2

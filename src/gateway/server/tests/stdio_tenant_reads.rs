@@ -100,7 +100,7 @@ pub(super) struct Session {
     client: tokio::io::DuplexStream,
     lines: tokio::io::Lines<BufReader<tokio::io::DuplexStream>>,
     task: tokio::task::JoinHandle<()>,
-    dir: tempfile::TempDir,
+    dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 /// Whether the session's gateway keeps a transparency log.
@@ -128,7 +128,7 @@ impl Session {
     /// A session whose `security:` block holds `firewall` (YAML indented
     /// under it) and, with [`Log::On`], the transparency log.
     pub(super) async fn open_security(backend_url: &str, log: Log, firewall: &str) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("gateway.yaml");
         let quoted = |name: &str| {
             serde_json::to_string(&dir.path().join(name).display().to_string())
