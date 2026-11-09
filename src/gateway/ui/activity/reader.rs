@@ -166,6 +166,26 @@ impl LogTail {
         })
     }
 
+    /// One complete line at `offset` (`above` is the end it was read below):
+    /// a JSON object is an entry, anything else is unreadable.
+    fn item_of(&self, bytes: &[u8], offset: u64, above: u64) -> Item {
+        match serde_json::from_slice::<Value>(bytes) {
+            Ok(entry) if entry.is_object() => Item::Entry(
+                Line {
+                    log: self.which,
+                    entry,
+                    segment: self.segment,
+                },
+                above - offset,
+            ),
+            _ => Item::Unreadable(Unreadable {
+                log: self.which,
+                segment: self.segment,
+                offset,
+            }),
+        }
+    }
+
     /// The next line, newest first. `Ok(None)` is the log's oldest kept line
     /// passed (`done`) or the budget spent (not `done`).
     fn next(&mut self, spent: &mut u64, budget: u64) -> io::Result<Option<(Item, u64)>> {
@@ -180,21 +200,7 @@ impl LogTail {
                 if std::mem::take(&mut self.skip_head) {
                     continue;
                 }
-                let item = match serde_json::from_slice::<Value>(&bytes) {
-                    Ok(entry) if entry.is_object() => Item::Entry(
-                        Line {
-                            log: self.which,
-                            entry,
-                            segment: self.segment,
-                        },
-                        above - offset,
-                    ),
-                    _ => Item::Unreadable(Unreadable {
-                        log: self.which,
-                        segment: self.segment,
-                        offset,
-                    }),
-                };
+                let item = self.item_of(&bytes, offset, above);
                 self.advanced = true;
                 return Ok(Some((item, above)));
             }
