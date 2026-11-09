@@ -24,21 +24,48 @@ const RAW: [&str; 2] = ["VerifiedIdentity", "TemporaryToken"];
 /// Types whose derived `Debug` would print the raw email.
 const NO_DERIVED_DEBUG: [&str; 2] = ["VerifiedIdentity", "IdTokenClaims"];
 
-/// Scan one production file, `file` relative to the crate root.
-pub(super) fn scan_file(file: &str, parsed: &syn::File, scan: &mut Scan) {
+/// Scan one production file, `file` relative to the crate root, whose text
+/// is `source`. Each owner with a `read` row also gets a `body` row: the
+/// SHA-256 of its source lines, so a reviewed reader's body cannot change
+/// (say, to forward the email to a logging helper) while its count holds.
+pub(super) fn scan_file(file: &str, source: &str, parsed: &syn::File, scan: &mut Scan) {
     let mut visitor = Visitor {
         file,
         owner: Vec::new(),
+        spans: std::collections::BTreeMap::new(),
         scan,
     };
     for item in &parsed.items {
         visitor.item(item);
+    }
+    let lines: Vec<&str> = source.lines().collect();
+    let readers: Vec<String> = visitor
+        .scan
+        .rows
+        .keys()
+        .filter(|(f, _, kind)| f == file && kind == "read")
+        .map(|(_, owner, _)| owner.clone())
+        .collect();
+    for owner in readers {
+        let Some(&(first, last)) = visitor.spans.get(&owner) else {
+            continue;
+        };
+        let body = lines
+            .get(first.saturating_sub(1)..last.min(lines.len()))
+            .unwrap_or_default()
+            .join("\n");
+        visitor.scan.rows.insert(
+            (file.to_owned(), owner, "body".to_owned()),
+            crate::hashing::sha256_hex(body.as_bytes()),
+        );
     }
 }
 
 struct Visitor<'a> {
     file: &'a str,
     owner: Vec<String>,
+    /// Each owner's first and last source line.
+    spans: std::collections::BTreeMap<String, (usize, usize)>,
     scan: &'a mut Scan,
 }
 
@@ -89,8 +116,17 @@ impl Visitor<'_> {
             _ => {}
         }
         self.owner.push(item_name(item));
+        self.mark(syn::spanned::Spanned::span(item));
         syn::visit::visit_item(self, item);
         self.owner.pop();
+    }
+
+    /// Record the current owner's source lines (the first sighting wins).
+    fn mark(&mut self, span: proc_macro2::Span) {
+        let owner = self.owner();
+        self.spans
+            .entry(owner)
+            .or_insert((span.start().line, span.end().line));
     }
 
     fn impl_block(&mut self, block: &syn::ItemImpl) {
@@ -115,6 +151,7 @@ impl Visitor<'_> {
             }
             self.instrument(&f.attrs, &f.sig);
             self.owner.push(format!("{ty}::{}", name(&f.sig.ident)));
+            self.mark(syn::spanned::Spanned::span(f));
             syn::visit::visit_impl_item_fn(self, f);
             self.owner.pop();
         }
@@ -278,7 +315,10 @@ struct Files(Scan);
 
 impl Sink for Files {
     fn file(&mut self, at: &Place, file: &syn::File) {
-        scan_file(&at.file, file, &mut self.0);
+        let path = crate_root().join(&at.file);
+        let source =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        scan_file(&at.file, &source, file, &mut self.0);
     }
 }
 

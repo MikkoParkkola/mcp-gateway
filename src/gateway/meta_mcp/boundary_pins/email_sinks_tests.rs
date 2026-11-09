@@ -14,6 +14,7 @@ fn scanned(source: &str) -> Scan {
     let mut scan = Scan::default();
     scan_file(
         FILE,
+        source,
         &syn::parse_file(source).expect("fixture parses"),
         &mut scan,
     );
@@ -134,4 +135,29 @@ fn every_email_read_and_sink_is_a_reviewed_row() {
         wrong.len(),
         wrong.join("\n")
     );
+}
+
+fn body(source: &str, owner: &str) -> Option<String> {
+    scanned(source)
+        .rows
+        .get(&(FILE.to_owned(), owner.to_owned(), "body".to_owned()))
+        .cloned()
+}
+
+/// A reviewed reader's body is pinned: forwarding the email to a helper
+/// changes the hash while the read count stays one.
+#[test]
+fn an_edited_reader_body_changes_its_pin_while_the_count_holds() {
+    let reviewed = "fn f(i: &I) -> bool {\n    i.email().is_empty()\n}\n";
+    let edited = "fn f(i: &I) -> bool {\n    log_it(i.email()).is_empty()\n}\n";
+    assert_eq!(count(reviewed, "f", "read"), count(edited, "f", "read"));
+    let (before, after) = (body(reviewed, "f"), body(edited, "f"));
+    assert!(before.is_some(), "a reader has a body row");
+    assert_ne!(before, after, "the edit changes the pinned body");
+}
+
+/// Only readers are pinned: a fn with no email read has no body row.
+#[test]
+fn a_fn_without_an_email_read_has_no_body_row() {
+    assert_eq!(body("fn g(n: u8) -> u8 { n + 1 }", "g"), None);
 }
