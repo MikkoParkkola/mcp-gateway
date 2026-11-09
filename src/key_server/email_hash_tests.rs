@@ -17,7 +17,7 @@ const TEXT_HASH: &str = "6c86c6aac5fb24bcf5d9939cb7d7d5645ce39418f449e03b262dd4f
 const DOMAIN: &str = concat!("@", "example", ".com");
 /// HMAC-SHA256(bytes 0x00..0x1f, "email-v1\0" + normalized) for each input,
 /// with the normalized bytes in hex (Python `unicodedata` NFC, `str.lower`).
-const VECTORS: [(&str, &str, &str); 6] = [
+const VECTORS: [(&str, &str, &str); 8] = [
     (
         "Ada.Lovelace+Audit",
         "6164612e6c6f76656c6163652b6175646974406578616d706c652e636f6d",
@@ -47,6 +47,19 @@ const VECTORS: [(&str, &str, &str); 6] = [
         "file",
         "66696c65406578616d706c652e636f6d",
         "ed954cc5a5e2070b6513e643395a76a5d1f89791109f9db17f26056dd7e4cf14",
+    ),
+    // Lowercasing makes t + U+0308, which the final NFC composes to U+1E97.
+    (
+        "T\u{308}om",
+        "e1ba976f6d406578616d706c652e636f6d",
+        "5d6b150ffd8a1170cace0ea8ee8cd597166fc98dcecc424cb3564b12d40ad43d",
+    ),
+    // U+0130 lowercases to i + U+0307 ahead of U+0316, which the final NFC
+    // reorders by combining class.
+    (
+        "\u{130}\u{316}nci",
+        "69cc96cc876e6369406578616d706c652e636f6d",
+        "b9d01598097fcdfe2d0b600f14fa663a2d5fb2291c9b49068f854205ca2e4fc9",
     ),
 ];
 
@@ -151,5 +164,42 @@ fn the_key_debug_shows_no_bytes() {
     assert!(
         !shown.contains("0102") && !shown.contains(KEY_HEX),
         "{shown}"
+    );
+}
+
+/// The final NFC pass matters: without it these two give other bytes.
+#[test]
+fn the_final_nfc_pass_composes_and_reorders() {
+    let one = super::normalize(&format!("T\u{308}om{DOMAIN}"));
+    assert!(one.starts_with('\u{1e97}'), "{:?}", one);
+    let two = super::normalize(&format!("\u{130}\u{316}nci{DOMAIN}"));
+    assert!(two.starts_with("i\u{316}\u{307}"), "{:?}", two);
+}
+
+/// Drift detector for normalization v1: every code point U+0020..U+2FFFF
+/// (no surrogates) normalized and hashed in order. The expected value was
+/// computed with Python's `unicodedata` at Unicode 16.0.0 (194528 points).
+/// A toolchain whose case or composition tables differ fails here, and
+/// changing them means a new normalization version.
+#[test]
+fn normalization_v1_matches_unicode_16_over_every_code_point() {
+    use sha2::Digest as _;
+    let mut hasher = sha2::Sha256::new();
+    let mut points = 0_usize;
+    for cp in 0x20_u32..0x30000 {
+        let Some(c) = char::from_u32(cp) else {
+            continue;
+        };
+        hasher.update(super::normalize(&c.to_string()).as_bytes());
+        hasher.update([0_u8]);
+        points += 1;
+    }
+    assert_eq!(points, 194_528);
+    assert_eq!(
+        hex::encode(hasher.finalize()),
+        "fb587c1239655fae66cbf19edea48ded5be7ad8ef3845b98c689f78aba13cec5",
+        "this toolchain's Unicode tables differ from normalization v1's (Unicode 16.0.0); \
+         char::UNICODE_VERSION is {:?}",
+        char::UNICODE_VERSION
     );
 }
