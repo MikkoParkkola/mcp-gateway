@@ -378,13 +378,13 @@ async fn one_clock_reading_judges_a_key_server_token() {
         .insert(crate::key_server::TemporaryToken {
             jti: "j1".into(),
             token: "mcpgw_t".into(),
-            identity: crate::key_server::oidc::VerifiedIdentity {
-                subject: "u".into(),
-                email: "u@corp.example".into(),
-                name: None,
-                groups: Vec::new(),
-                issuer: "https://idp".into(),
-            },
+            identity: crate::key_server::oidc::VerifiedIdentity::for_test(
+                "u",
+                "u@corp.example",
+                None,
+                Vec::new(),
+                "https://idp",
+            ),
             scopes: crate::key_server::store::TokenScopes {
                 backends: vec!["x".into()],
                 tools: Vec::new(),
@@ -431,13 +431,13 @@ async fn one_clock_reading_judges_a_key_server_token() {
 async fn key_server_credentials_are_rechecked_where_they_were_issued() {
     use crate::security::audit::CredentialKind as Kind;
     let ks = key_server(false);
-    let identity = crate::key_server::oidc::VerifiedIdentity {
-        subject: "u".into(),
-        email: "u@corp.example".into(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp".into(),
-    };
+    let identity = crate::key_server::oidc::VerifiedIdentity::for_test(
+        "u",
+        "u@corp.example",
+        None,
+        Vec::new(),
+        "https://idp",
+    );
     let now = u64::try_from(chrono::Utc::now().timestamp()).expect("now");
     ks.store
         .insert(crate::key_server::TemporaryToken {

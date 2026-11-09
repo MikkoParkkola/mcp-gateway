@@ -243,13 +243,13 @@ async fn order_unbindable_caller_with_a_withheld_tool_answers_absence() {
                 }]),
         );
     let router = super::create_router(Arc::clone(&state));
-    let nobody = VerifiedIdentity {
-        subject: String::new(),
-        email: "nobody@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(),
-    };
+    let nobody = VerifiedIdentity::for_test(
+        String::new(),
+        "nobody@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://issuer.example.invalid".to_string(),
+    );
     let mut tasked = json!({"name": "gateway_invoke",
         "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}},
         "_meta": modern_meta()});

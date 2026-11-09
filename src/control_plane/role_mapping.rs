@@ -248,13 +248,13 @@ mod tests {
     use super::*;
 
     fn identity(issuer: &str, email: &str, groups: &[&str]) -> VerifiedIdentity {
-        VerifiedIdentity {
-            subject: "sub-1".to_string(),
-            email: email.to_string(),
-            name: None,
-            groups: groups.iter().map(|g| (*g).to_string()).collect(),
-            issuer: issuer.to_string(),
-        }
+        VerifiedIdentity::for_test(
+            "sub-1".to_string(),
+            email.to_string(),
+            None,
+            groups.iter().map(|g| (*g).to_string()).collect(),
+            issuer.to_string(),
+        )
     }
 
     fn rule(

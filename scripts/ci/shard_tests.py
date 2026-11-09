@@ -101,7 +101,7 @@ KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
      "an audit write that outlives its test's temp dir "
      "(transparency_log::bounded_tests, identity_propagation::audit_fail_closed, "
      "signing_allocation_tests::withheld_parity_stdio, hardened_signing_e2e, "
-     "mik_7272_task_1_acs)"),
+     "gateway::router::task_lifecycle_tests)"),
 ]
 # Written out, not derived from the list above: an entry added there and not
 # here, or a count raised past its ceiling, fails the self-test, so the list

@@ -22,8 +22,9 @@
 //! `#[ignore]`d, with a comment naming what it waits on, rather than faked
 //! green or faked red.
 
-#[path = "common/record_key.rs"]
-mod record_key;
+/// The record key the router's auth config is built with: a self-describing
+/// test value, never a deployment's key.
+const RECORD_KEY: &str = "test-record-key-not-a-secret-0123456789abcdef";
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -36,21 +37,19 @@ use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
-use mcp_gateway::backend::{Backend, BackendRegistry};
-use mcp_gateway::config::{BackendConfig, Config, FailsafeConfig, TransportConfig};
-use mcp_gateway::gateway::auth::ResolvedAuthConfig;
-use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
-use mcp_gateway::gateway::proxy::ProxyManager;
-use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
-use mcp_gateway::gateway::test_helpers::{
-    AppState, MetaMcp, StoreLimits, auth_state, open_runtime,
-};
-use mcp_gateway::idempotency::{
+use crate::backend::{Backend, BackendRegistry};
+use crate::config::{BackendConfig, Config, FailsafeConfig, TransportConfig};
+use crate::gateway::auth::ResolvedAuthConfig;
+use crate::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
+use crate::gateway::proxy::ProxyManager;
+use crate::gateway::streaming::NotificationMultiplexer;
+use crate::gateway::subscription_registry::SubscriptionRegistry;
+use crate::gateway::test_helpers::{AppState, MetaMcp, StoreLimits, auth_state, open_runtime};
+use crate::idempotency::{
     CheckOutcome, GuardOutcome, IN_FLIGHT_TIMEOUT, IdempotencyCache, IdempotencyReservation,
     enforce,
 };
-use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
+use crate::mtls::{MtlsConfig, MtlsPolicy};
 
 /// A mutation. Carries no annotations at all, which under amendment A1 is the
 /// same answer as `readOnlyHint: false`: deny.
@@ -122,7 +121,7 @@ async fn mcp_handler(State(mock): State<Arc<Mutex<Mock>>>, Json(body): Json<Valu
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
-                    "protocolVersion": mcp_gateway::protocol::PROTOCOL_VERSION,
+                    "protocolVersion": crate::protocol::PROTOCOL_VERSION,
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "sub4-mock", "version": "0"}
                 }
@@ -307,7 +306,7 @@ const ROUTE_BACKEND: &str = "sub4-route";
 /// The `TempDir` is returned because the task store holds its directory for the
 /// life of the service: dropping it here would delete the records under a state
 /// the test is still posting to. Callers bind it for the whole test.
-async fn route_state() -> (Arc<AppState>, tempfile::TempDir) {
+async fn route_state() -> (Arc<AppState>, Arc<tempfile::TempDir>) {
     let config = Config::default();
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -319,7 +318,7 @@ async fn route_state() -> (Arc<AppState>, tempfile::TempDir) {
     let mut meta = MetaMcp::new(Arc::clone(&backends));
     meta.enable_idempotency(
         Arc::new(IdempotencyCache::new()),
-        mcp_gateway::idempotency::CLEANUP_INTERVAL,
+        crate::idempotency::CLEANUP_INTERVAL,
     );
     let meta_mcp = Arc::new(meta);
     let continuation = meta_mcp.continuation();
@@ -329,9 +328,9 @@ async fn route_state() -> (Arc<AppState>, tempfile::TempDir) {
     // no client here is on.
     let subscriptions = Arc::new(SubscriptionRegistry::new(
         64,
-        auth_state(&config.auth, crate::record_key::RECORD_KEY),
+        auth_state(&config.auth, RECORD_KEY),
     ));
-    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let store_dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,
@@ -340,6 +339,9 @@ async fn route_state() -> (Arc<AppState>, tempfile::TempDir) {
     )
     .await
     .expect("the fixture task store opens");
+    // The task worker outlives no store directory: the test's share of it
+    // keeps the directory until the worker's last write lands.
+    tasks.keep_test_dir(Arc::clone(&store_dir));
 
     let state = Arc::new(AppState {
         process: std::sync::Arc::default(),
@@ -361,20 +363,17 @@ async fn route_state() -> (Arc<AppState>, tempfile::TempDir) {
         config_path: None,
         #[cfg(feature = "firewall")]
         firewall: None,
-        agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
+        agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
-            mcp_gateway::gateway::test_helpers::flags_off(config.clone()),
-            Arc::new(ResolvedAuthConfig::from_config(
-                &config.auth,
-                crate::record_key::RECORD_KEY,
-            )),
+        live_config: Arc::new(crate::gateway::test_helpers::live_config(
+            crate::gateway::test_helpers::flags_off(config.clone()),
+            Arc::new(ResolvedAuthConfig::from_config(&config.auth, RECORD_KEY)),
         )),
         export_status: None,
         transparency_log: None,
         governance_log: None,
-        dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+        dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tasks,
         task_executor,
         subscriptions,
@@ -392,7 +391,6 @@ fn register_route_backend(state: &Arc<AppState>, url: &str, arm: ForwardArm) {
     );
 }
 
-#[path = "mik_7272_sub4_adr012_acs/direct.rs"]
 mod direct;
 use direct::{keyed_call, post_direct};
 
@@ -606,8 +604,6 @@ fn assert_told_uncertain(first: &Value, second: &Value) {
     assert_eq!(second["error"]["code"], first["error"]["code"], "{second}");
 }
 
-#[path = "mik_7272_sub4_adr012_acs/resend.rs"]
 mod resend;
 
-#[path = "mik_7272_sub4_adr012_acs/live_owner_and_sweep.rs"]
 mod live_owner_and_sweep;
