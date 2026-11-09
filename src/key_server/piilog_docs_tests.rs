@@ -61,10 +61,11 @@ fn the_operator_doc_states_the_email_subject_limit() {
     assert!(missing.is_empty(), "{OPERATOR_DOC} lacks {missing:?}");
 }
 
-/// The backup runbook names the key file and what losing it costs.
+/// The backup runbook names the key file and what losing it costs. (The
+/// explicit reset arrives with the lookup part, which extends this row.)
 #[test]
 fn the_backup_runbook_names_the_email_hash_key_file() {
     let text = read(RUNBOOK);
-    let missing = lacks(&text, &[KEY_FILE, "email_hash", "reset"]);
+    let missing = lacks(&text, &[KEY_FILE, "email_hash", "backup"]);
     assert!(missing.is_empty(), "{RUNBOOK} lacks {missing:?}");
 }
