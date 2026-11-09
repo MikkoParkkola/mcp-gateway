@@ -44,7 +44,7 @@ impl<'a> Check<'a> {
         Self {
             secret,
             inv: load(inv),
-            gov: gov.map(load),
+            gov: gov.map(|g| load(mutant!("q18", inv, g))),
             checked: RefCell::default(),
             legacy_faults: RefCell::default(),
         }
@@ -54,7 +54,7 @@ impl<'a> Check<'a> {
     /// loaded when a record first needs placing: a signed record that
     /// verifies never consults it, so a live frame for one reads nothing.
     pub(super) fn one(secret: Option<&'a [u8]>, which: Which, path: &Path) -> Self {
-        let lazy = (path.to_path_buf(), OnceCell::new());
+        let lazy = (path.to_path_buf(), mutant!("q46", OnceCell::from(sigstart::load(path, secret)), OnceCell::new()));
         let (inv, gov) = match which {
             Which::Invocation => (lazy, None),
             Which::Governance => ((PathBuf::new(), OnceCell::from(Anchor::Absent)), Some(lazy)),
@@ -122,7 +122,7 @@ impl<'a> Check<'a> {
                 },
                 None => LinePos::Newest,
             };
-            let placed = anchor.place(path, pos, &line.entry, &mut self.checked.borrow_mut());
+            let placed = mutant!("q3", sigstart::Placed::Invalid("sig_missing"), anchor.place(path, pos, &line.entry, &mut self.checked.borrow_mut()));
             if let sigstart::Placed::Invalid(why) = placed
                 && why.starts_with("legacy_")
             {
@@ -265,10 +265,10 @@ pub(super) fn row(line: &Line, check: &Check<'_>) -> Option<Value> {
         "signature".into(),
         serde_json::to_value(judged.state).unwrap_or(Value::Null),
     );
-    if let Some(why) = judged.integrity {
+    if let Some(why) = mutant!("q15", None, judged.integrity) {
         row.insert("integrity".into(), why.into());
     }
-    if judged.unanchored {
+    if mutant!("q29", false, judged.unanchored) {
         row.insert("unanchored".into(), true.into());
     }
     match kind {

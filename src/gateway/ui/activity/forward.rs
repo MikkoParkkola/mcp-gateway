@@ -221,7 +221,7 @@ pub(in crate::gateway::ui) fn rows_after(
                     entry,
                     segment: at.seq,
                     // The anchor's length includes the newline.
-                    span: at.anchor.map(|a| (a.start, a.len.saturating_sub(1))),
+                    span: at.anchor.map(|a| (mutant!("q36", 0, a.start), a.len.saturating_sub(1))),
                 };
                 if let Some(row) = served(log, access, &line, &check) {
                     page.rows.push(row);
@@ -379,7 +379,7 @@ pub(in crate::gateway::ui) fn frame(
         log: log.kind.log(),
         entry: entry.clone(),
         segment: 0,
-        span: None,
+        span: mutant!("q13", Some((0, 1)), None),
     };
     // A signed record that verifies never loads the anchor (`Check::one` is
     // lazy); only an unsigned one, which with signing on is an edit, reads
