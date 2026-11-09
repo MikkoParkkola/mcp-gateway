@@ -59,3 +59,21 @@ fn first_line_of_a_file_of_blank_lines_is_none() {
     let dir = tempfile::tempdir().unwrap();
     assert_eq!(read(&file_with(&dir, b"\n \n\r\n")), None);
 }
+
+#[test]
+fn first_line_keeps_a_bare_carriage_return_at_eof() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(read(&file_with(&dir, b"abc\r")).as_deref(), Some("abc\r"));
+}
+
+#[test]
+fn first_line_keeps_a_carriage_return_at_the_window_cap_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    // The window ends on the `\r`; its `\n` lies beyond the cap, so the cap
+    // cut the line and no terminating newline was removed.
+    let mut body = vec![b'a'; WINDOW - 1];
+    body.extend_from_slice(b"\r\nnext\n");
+    let line = read(&file_with(&dir, &body)).unwrap();
+    assert_eq!(line.len(), WINDOW);
+    assert!(line.ends_with('\r'));
+}

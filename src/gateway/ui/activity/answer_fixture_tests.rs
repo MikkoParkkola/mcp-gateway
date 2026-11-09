@@ -165,6 +165,18 @@ impl Fixture {
         read_lines(&self.path)
     }
 
+    /// Every kept line: the sealed segments oldest first, then the active file.
+    pub(super) fn every_line(&self) -> Vec<Value> {
+        use crate::security::transparency_log::segments::{list_segments, sealed_path};
+        let mut all: Vec<Value> = list_segments(&self.path)
+            .unwrap()
+            .iter()
+            .flat_map(|s| read_lines(&sealed_path(&self.path, s.seq)))
+            .collect();
+        all.extend(self.lines());
+        all
+    }
+
     /// Rewrite line `index` (0-based) through `edit`, leaving the rest.
     pub(super) fn edit(&self, index: usize, edit: impl FnOnce(&mut Value)) {
         let mut lines = self.lines();

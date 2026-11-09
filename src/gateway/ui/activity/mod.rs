@@ -614,6 +614,9 @@ mod answer_profile_tests;
 #[path = "answer_receipt2_tests.rs"]
 mod answer_receipt2_tests;
 #[cfg(test)]
+#[path = "answer_receipt3_tests.rs"]
+mod answer_receipt3_tests;
+#[cfg(test)]
 #[path = "answer_receipt_tests.rs"]
 mod answer_receipt_tests;
 #[cfg(test)]

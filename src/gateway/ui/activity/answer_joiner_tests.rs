@@ -5,7 +5,7 @@
 
 use serde_json::{Map, json};
 
-use super::answer::{Joined, Searched};
+use super::answer::{Effect, Findings, Joined, Searched};
 use super::answer_fixture::{Dl, Fixture};
 use super::answer_list_tests::{get, row_of};
 use super::joiner::{Joiner, Seen};
@@ -96,4 +96,82 @@ fn r45_read_ahead_is_charged_to_the_budget() {
         "{}",
         scan.pulled()
     );
+}
+
+/// An unsigned delivery record line for `trace`, with `findings`.
+fn delivery_line(trace: &str, findings: serde_json::Value) -> Line {
+    Line {
+        log: Which::Invocation,
+        entry: json!({
+            "counter": 2, "trace_id": trace, "event": "response_delivery_attempt",
+            "response_stage": "transport_finalized", "response_effect": "annotated",
+            "response_findings": findings,
+        }),
+        segment: 0,
+    }
+}
+
+/// Guard (passes before the fixes): a found record is complete by the writer
+/// contract, so an unfinished window never downgrades it.
+#[test]
+fn r7c_a_found_record_stays_found_when_the_window_is_unfinished() {
+    let mut joiner = Joiner::new(None);
+    assert!(joiner.observe(&delivery_line("gw-t", json!([]))));
+    let near = Seen {
+        above: 10,
+        head_covered: false,
+    };
+    let joined = joiner.join(&call_line(), near);
+    joiner.count(&joined);
+    assert_eq!(joined.effect(), Effect::Annotated, "{joined:?}");
+    assert!(matches!(joined, Joined::Found(_)), "{joined:?}");
+    assert_eq!(joiner.join_incomplete, 0);
+}
+
+fn listed(joined: Joined) -> Vec<serde_json::Value> {
+    match joined {
+        Joined::Found(d) => match d.findings {
+            Findings::Scanned { list, .. } => list,
+            other => panic!("not scanned: {other:?}"),
+        },
+        other => panic!("not found: {other:?}"),
+    }
+}
+
+#[test]
+fn findings_are_projected_through_kind_severity_and_where_only() {
+    let mut joiner = Joiner::new(None);
+    let findings = json!([
+        {"kind": "k", "severity": "low", "where": "text", "payload": "a pasted secret"},
+        {"kind": {"deep": "object"}, "severity": "high", "where": "text"},
+        "not an object",
+    ]);
+    joiner.observe(&delivery_line("gw-t", findings));
+    let seen = Seen {
+        above: 0,
+        head_covered: true,
+    };
+    let list = listed(joiner.join(&call_line(), seen));
+    assert_eq!(
+        list,
+        [
+            json!({"kind": "k", "severity": "low", "where": "text"}),
+            json!({"severity": "high", "where": "text"}),
+        ]
+    );
+}
+
+#[test]
+fn a_finding_field_is_capped_so_the_projection_stays_bounded() {
+    let mut joiner = Joiner::new(None);
+    let long = "k".repeat(10_000);
+    let findings = json!([{"kind": long, "severity": "low", "where": "text"}]);
+    joiner.observe(&delivery_line("gw-t", findings));
+    let seen = Seen {
+        above: 0,
+        head_covered: true,
+    };
+    let list = listed(joiner.join(&call_line(), seen));
+    let kind = list[0]["kind"].as_str().unwrap();
+    assert!(kind.len() <= 128, "{}", kind.len());
 }

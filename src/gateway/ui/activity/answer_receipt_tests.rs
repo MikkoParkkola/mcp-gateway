@@ -17,7 +17,7 @@ pub(super) fn rcpt(fx: &Fixture, trace: &str) -> Value {
 }
 
 pub(super) fn rcpt_with(fx: &Fixture, trace: &str, secret: Option<&[u8]>) -> Value {
-    let lines = fx.lines();
+    let lines = fx.every_line();
     let e = lines
         .iter()
         .find(|l| l["trace_id"] == trace && l.get("request_hash").is_some())

@@ -81,8 +81,12 @@ fn r38b_continuity_is_checked_across_the_window() {
     broken_by_edit.call("gw-x");
     let x = broken_by_edit.lines().len() - 1;
     broken_by_edit.edit(x, |e| e["prev_entry_hash"] = json!("sha256:00"));
-    assert_eq!(rcpt(&broken_by_edit, "gw-t")["chain"]["window"], "broken");
-    assert_eq!(rcpt(&deleted_record(), "gw-t")["chain"]["window"], "broken");
+    let edited = rcpt(&broken_by_edit, "gw-t");
+    assert_eq!(edited["chain"]["window"], "broken");
+    assert_eq!(edited["effect"], "unknown", "{edited}");
+    let deleted = rcpt(&deleted_record(), "gw-t");
+    assert_eq!(deleted["chain"]["window"], "broken");
+    assert_eq!(deleted["effect"], "no_record", "{deleted}");
     let intact = Fixture::new(None);
     intact.call("gw-t");
     intact.delivery("gw-t", &Dl::effect("refused"));

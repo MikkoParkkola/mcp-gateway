@@ -60,4 +60,10 @@ async fn r0_a_direct_refusal_writes_one_record() {
     let counts = per_trace(&fx);
     assert_eq!(counts.len(), 1, "{counts:?}");
     assert!(counts.values().all(|n| *n == 1), "{counts:?}");
+    // Guard (passes before the fixes): the record sits under the trace of the
+    // invocation the refusal belongs to, not under some other trace.
+    let calls = invocations(&fx);
+    assert_eq!(calls.len(), 1, "premise: the call is recorded: {calls:?}");
+    let trace = calls[0]["trace_id"].as_str().expect("a trace");
+    assert_eq!(counts.get(trace), Some(&1), "{counts:?} vs {trace}");
 }

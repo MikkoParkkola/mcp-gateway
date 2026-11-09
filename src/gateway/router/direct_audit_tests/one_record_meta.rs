@@ -111,4 +111,12 @@ async fn r0_a_seal_failure_writes_one_record_for_the_replacing_refusal() {
         counts.keys().all(|t| traces.contains(t)),
         "{counts:?} vs {traces:?}"
     );
+    // Guard (passes before the fixes): the one record is the replacing
+    // refusal's, not the answer the slot's failure replaced.
+    let delivery: Vec<Value> = rows(&fx)
+        .into_iter()
+        .filter(|e| e["event"] == "response_delivery_attempt")
+        .collect();
+    assert_eq!(delivery.len(), 1, "{delivery:?}");
+    assert_eq!(delivery[0]["response_effect"], "refused", "{delivery:?}");
 }
