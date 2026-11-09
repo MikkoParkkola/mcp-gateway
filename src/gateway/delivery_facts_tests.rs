@@ -604,7 +604,8 @@ fn the_delivery_scope_holds_its_future_once() {
 fn no_async_fn_holds_the_future_it_scopes_twice() {
     use syn::visit::Visit;
     // (file, function, why it stays an `async fn`): each reads or joins
-    // task-local state, which must happen in the task that polls it.
+    // task-local state, which must happen in the task that polls it, or (the
+    // public trace scope) must drop an unpolled future outside the scope.
     const DELIBERATE: &[(&str, &str, &str)] = &[
         (
             "src/oauth/login_gate/scopes.rs",
@@ -641,10 +642,16 @@ fn no_async_fn_holds_the_future_it_scopes_twice() {
             "scoped",
             "joins holds already open",
         ),
+        (
+            "src/gateway/trace.rs",
+            "with_trace_id",
+            "public: an unpolled future must drop under the caller's own trace id",
+        ),
     ];
     struct Scan<'a> {
         path: &'a str,
         found: Vec<String>,
+        async_fns: Vec<(String, String)>,
     }
     fn is_future(bound: &syn::TypeParamBound) -> bool {
         matches!(bound, syn::TypeParamBound::Trait(t)
@@ -706,8 +713,9 @@ fn no_async_fn_holds_the_future_it_scopes_twice() {
             if sig.asyncness.is_none() {
                 return;
             }
-            let params = takes_a_future(sig);
             let name = sig.ident.to_string();
+            self.async_fns.push((self.path.to_owned(), name.clone()));
+            let params = takes_a_future(sig);
             if !params.is_empty()
                 && scopes_it(block, &params)
                 && !DELIBERATE
@@ -727,26 +735,49 @@ fn no_async_fn_holds_the_future_it_scopes_twice() {
             self.check(&f.sig, &f.block);
             syn::visit::visit_impl_item_fn(self, f);
         }
+        fn visit_trait_item_fn(&mut self, f: &'ast syn::TraitItemFn) {
+            if let Some(block) = &f.default {
+                self.check(&f.sig, block);
+            }
+            syn::visit::visit_trait_item_fn(self, f);
+        }
     }
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut found = Vec::new();
+    let mut async_fns = Vec::new();
     for path in crate::mutant_scan::tracked_rs_files(root).expect("list the sources") {
         if !path.starts_with("src/") || path.ends_with("_tests.rs") || path.contains("/tests/") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(root.join(&path)) else {
-            continue;
-        };
-        let Ok(file) = syn::parse_file(&text) else {
-            continue;
-        };
+        // An unreadable or unparsable file fails the row: a file it could
+        // not inspect must not pass for one with no such wrapper.
+        let text = std::fs::read_to_string(root.join(&path))
+            .unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let file = syn::parse_file(&text).unwrap_or_else(|e| panic!("parse {path}: {e}"));
         let mut scan = Scan {
             path: &path,
             found: Vec::new(),
+            async_fns: Vec::new(),
         };
         scan.visit_file(&file);
         found.extend(scan.found);
+        async_fns.extend(scan.async_fns);
     }
+    // Every listed exception still names an async fn: a stale row, or one
+    // converted without leaving the list, fails here.
+    let stale: Vec<&str> = DELIBERATE
+        .iter()
+        .filter(|(file, name, _)| {
+            !async_fns
+                .iter()
+                .any(|(f, n)| f.as_str() == *file && n.as_str() == *name)
+        })
+        .map(|(_, name, _)| *name)
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "listed exceptions that are no longer an async fn there: {stale:?}"
+    );
     assert!(
         found.is_empty(),
         "async fns that hold the future they scope twice (make each a plain fn returning \
