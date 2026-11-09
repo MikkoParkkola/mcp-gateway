@@ -67,6 +67,8 @@ fn fields() -> Vec<(&'static str, Pin)> {
         principal: _,
         previous_key_sha256: _,
         previous_expires_at: _,
+        approved_by: _,
+        cli_host: _,
     } = ApiKeyConfig::default();
     vec![
         (
@@ -147,6 +149,17 @@ fn fields() -> Vec<(&'static str, Pin)> {
         (
             "previous_expires_at",
             Pin::Row(KEYS, "k5_a_rotation_written_by_reload_honours_its_grace"),
+        ),
+        (
+            "approved_by",
+            Pin::Row(
+                KEYS,
+                "k5_a_reload_removing_a_cli_keys_approver_ends_it_on_the_next_call",
+            ),
+        ),
+        (
+            "cli_host",
+            Pin::Exempt("display only: shown on the Keys screen, never read by a decision"),
         ),
     ]
 }
