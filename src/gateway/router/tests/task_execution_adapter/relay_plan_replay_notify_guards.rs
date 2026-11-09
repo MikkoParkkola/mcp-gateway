@@ -165,3 +165,82 @@ async fn g27b_a_withheld_notify_frame_commits_nothing() {
         "the withheld frame committed a receipt"
     );
 }
+
+/// [`settled_with_listener`], without any tasks/get: the store row
+/// is polled and the worker joined, so only the frame reads the task.
+async fn settled_unread_with_listener(key: &str) -> (Rig, String, Frames) {
+    let (beta, mut gate) = MockBackend::holding(Answer::Sequence(vec![text(OTHER_PROSE)]));
+    let rig = rig_with_mocks(answering(PROSE), beta, None, Sensitivity::Rule).await;
+    let created = post(
+        &rig.state,
+        "key-a",
+        task_call(1, key, "gateway_execute", &chain()),
+    )
+    .await;
+    let task = task_id(&created);
+    gate.wait_for_dispatch().await;
+    let frames = open_listen(&rig.state, 7101, &task).await;
+    gate.release_all();
+    let joined = rig
+        .state
+        .task_executor
+        .drain(std::time::Duration::from_secs(10))
+        .await;
+    assert!(joined.is_clean(), "the worker must finish: {joined:?}");
+    (rig, task, frames)
+}
+
+/// Whether `task`'s settled row has an in-memory replay entry.
+fn entry_held(rig: &Rig, task: &str) -> bool {
+    let row = super::relay_plan_replay_guards::committed(&rig.state, task);
+    rig.relay
+        .replay_digests(&super::relay_plan_replay_guards::task_key(
+            task,
+            row.revision,
+        ))
+        .is_some()
+}
+
+/// Publish `action` on the rig's live config.
+fn publish(rig: &Rig, action: crate::security::firewall::CollusionAction) {
+    let mut config = (*rig.state.live_config.get()).clone();
+    config.security.firewall.collusion.action = action;
+    rig.state.live_config.set(config);
+}
+
+/// K14: a delivered frame rebuilds the entry from the row and
+/// settles it at its write: under block it is kept; under off it goes.
+/// Mutants: settle at storage; frames read the plain lookup (no rebuild).
+#[tokio::test]
+async fn k14_a_delivered_frame_settles_the_rebuilt_entry_by_its_action() {
+    use crate::security::firewall::CollusionAction;
+    for (action, kept) in [
+        (CollusionAction::Block, true),
+        (CollusionAction::Off, false),
+    ] {
+        let (rig, task, mut frames) = settled_unread_with_listener("k14").await;
+        assert!(
+            !entry_held(&rig, &task),
+            "premise: nothing held before the frame"
+        );
+        publish(&rig, action);
+        let frame = frames.completed_frame(&task).await;
+        assert!(frame.to_string().contains(PROSE), "{action:?}: {frame}");
+        assert_eq!(entry_held(&rig, &task), kept, "{action:?}");
+    }
+}
+
+/// K14: a withheld frame (minimal, no output) rebuilds and
+/// settles nothing.
+/// Mutant: rebuild before the stored-read gate.
+#[tokio::test]
+async fn k14_a_withheld_frame_rebuilds_nothing() {
+    let (rig, task, mut frames) = settled_unread_with_listener("k14w").await;
+    delist(&rig.state, ALPHA);
+    let frame = frames.completed_frame(&task).await;
+    assert!(!frame.to_string().contains(PROSE), "premise: {frame}");
+    assert!(
+        !entry_held(&rig, &task),
+        "a withheld frame rebuilt the entry"
+    );
+}

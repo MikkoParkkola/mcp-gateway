@@ -95,6 +95,12 @@ const FORBIDDEN_SITES: &[(&str, usize)] = &[
         "gateway::meta_mcp::task_replay::judging::MetaMcp::authorize_stored",
         1,
     ),
+    // A stored task read this process cannot track, refused under `block`
+    // when the read starts: a stored result, no send.
+    (
+        "gateway::meta_mcp::task_replay::receipts::MetaMcp::untrackable_refusal",
+        1,
+    ),
     // An admin-only capability refused to a non-admin, before dispatch.
     (
         "gateway::meta_mcp::visibility::MetaMcp::admin_capability_rule",

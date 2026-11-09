@@ -617,3 +617,51 @@ fn r25_a_handle_is_refused_for_another_entry() {
         "control: a's own pair is accepted"
     );
 }
+
+/// The size check a stored task read is judged by (`fits`) and the store's
+/// own admission agree at the exact caps: an entry of exactly either cap
+/// fits and is stored; one byte less of either cap, per entry or in
+/// total, and it neither fits nor is stored.
+#[test]
+fn fits_agrees_with_admission_at_both_caps() {
+    let calls: crate::security::ReplayCalls = vec![(Some(1), "s".to_owned(), "t".to_owned())];
+    let now = Instant::now();
+    let probe = Arc::new(ReplayReceipts::new());
+    let _ = probe.insert_pending(
+        key("size"),
+        vec![receipt(1, 8)],
+        calls.clone(),
+        String::new(),
+        now,
+        hour(),
+    );
+    let bytes = probe.bytes_for_test();
+    assert!(bytes > 0, "premise: the entry was stored and counted");
+    for (total, entry, admitted) in [
+        (bytes * 4, bytes, true),
+        (bytes, bytes * 4, true),
+        (bytes * 4, bytes - 1, false),
+        (bytes - 1, bytes * 4, false),
+    ] {
+        let store = Arc::new(ReplayReceipts::with_budget_for_test(total, entry));
+        assert_eq!(
+            store.fits(&[receipt(1, 8)], &calls, ""),
+            admitted,
+            "fits at total {total}, entry {entry} for {bytes} bytes"
+        );
+        let stored = store
+            .insert_pending(
+                key("size"),
+                vec![receipt(1, 8)],
+                calls.clone(),
+                String::new(),
+                now,
+                hour(),
+            )
+            .is_some();
+        assert_eq!(
+            stored, admitted,
+            "admission at total {total}, entry {entry}"
+        );
+    }
+}
