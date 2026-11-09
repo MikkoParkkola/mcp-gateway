@@ -236,3 +236,5 @@ static AVAILABILITY: tokio::sync::OnceCell<Result<(), Refusal>> =
 pub async fn availability() -> &'static Result<(), Refusal> {
     AVAILABILITY.get_or_init(probe).await
 }
+
+mod fetch_output;
