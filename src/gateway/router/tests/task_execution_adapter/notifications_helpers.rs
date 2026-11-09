@@ -144,13 +144,13 @@ fn listen_request(principal: &str, body: &Value) -> axum::http::Request<axum::bo
     };
     request
         .extensions_mut()
-        .insert(crate::key_server::oidc::VerifiedIdentity {
-            subject: subject.to_string(),
-            email: format!("{subject}@adapter.test"),
-            name: None,
-            groups: Vec::new(),
-            issuer: "https://idp.adapter.test".to_string(),
-        });
+        .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+            subject.to_string(),
+            format!("{subject}@adapter.test"),
+            None,
+            Vec::new(),
+            "https://idp.adapter.test".to_string(),
+        ));
     request
 }
 

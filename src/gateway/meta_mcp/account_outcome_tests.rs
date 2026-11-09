@@ -178,13 +178,13 @@ fn a_binding_the_slot_rule_refuses_is_no_view() {
 #[tokio::test]
 async fn an_unbindable_principal_reads_unavailable_without_a_custody_read() {
     let (strategy, custody) = vault(Answer::Lease { revision: REVISION });
-    let nameless = VerifiedIdentity {
-        subject: String::new(),
-        email: "nobody@example.invalid".into(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".into(),
-    };
+    let nameless = VerifiedIdentity::for_test(
+        String::new(),
+        "nobody@example.invalid",
+        None,
+        vec![],
+        "https://issuer.example.invalid",
+    );
     let classified = strategy
         .view_binding_classified(Principal::Verified(&nameless))
         .await;

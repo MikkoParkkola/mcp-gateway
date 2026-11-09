@@ -76,6 +76,7 @@ impl MetaMcp {
             args.get("tool").and_then(Value::as_str),
             &AuditWho::from_caller(caller),
             notes.counted(notes.outcome(outcome), firewall),
+            notes.backend_sample(),
         );
     }
 }

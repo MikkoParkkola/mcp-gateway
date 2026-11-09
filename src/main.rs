@@ -4,10 +4,24 @@
 //!
 //! Single-port multiplexing with a compact Meta-MCP tool surface.
 
-// First, so every module below prints through the broken-pipe-safe macros.
+// The `mutant!` macros, for mutant proofs whose sites sit in the binary's
+// modules. The first module: macro_rules! is textually scoped.
+#[macro_use]
+mod mutant_macro;
+
+// Next, so every module below prints through the broken-pipe-safe macros.
 #[macro_use]
 #[path = "cli/stdout.rs"]
 mod stdout;
+
+// The switch the mutant! macros call: src/mutant.rs compiled again here as
+// this crate's own module, as clock.rs is; a normal build has no switch in it.
+// ponytail: a second private copy of the switch; if the operator approves
+// widening the library's API, export `mutant::on` under cfg(mutants) and
+// drop this module.
+#[path = "mutant.rs"]
+#[allow(dead_code, reason = "a scratch commit's sites are its only users")]
+mod mutant;
 
 mod allocator;
 // The library's wall-clock reader, compiled again for the CLI commands
@@ -138,6 +152,16 @@ async fn run(cli: Cli) -> ExitCode {
         #[cfg(not(feature = "webui"))]
         Some(Command::Events(_)) => {
             eprintln!("events: this build has no web UI (cargo feature `webui`)");
+            ExitCode::FAILURE
+        }
+        #[cfg(feature = "webui")]
+        Some(Command::Api(args)) => {
+            let load = || Config::load(config_path.as_deref()).map_err(|e| e.to_string());
+            commands::run_api_command(args, load, port_override, host_override.as_deref()).await
+        }
+        #[cfg(not(feature = "webui"))]
+        Some(Command::Api(_)) => {
+            eprintln!("api: this build has no web UI (cargo feature `webui`)");
             ExitCode::FAILURE
         }
         Some(Command::Validate {

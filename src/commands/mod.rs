@@ -8,6 +8,8 @@
 mod accounts;
 #[cfg(feature = "webui")]
 mod add_remove;
+#[cfg(feature = "webui")]
+mod api;
 mod api_key_rewrite;
 mod audit;
 mod backend_url_keys;
@@ -46,6 +48,8 @@ pub use add_remove::{
     AddValues, run_add_command, run_get_command, run_list_available_command, run_list_command,
     run_remove_command,
 };
+#[cfg(feature = "webui")]
+pub use api::run_api_command;
 pub use audit::run_audit_command;
 pub use cap::run_cap_command;
 #[cfg(feature = "config-export")]
@@ -556,6 +560,9 @@ fn read_ca_files(
         })?;
     Ok((cert, key))
 }
+#[cfg(all(test, feature = "webui"))]
+#[path = "api_tests.rs"]
+mod api_tests;
 #[cfg(all(test, feature = "webui"))]
 mod dashboard_link_tls_tests;
 #[cfg(test)]

@@ -59,13 +59,13 @@ fn backend() -> BackendDescriptor {
 
 /// A verified caller, exactly as `key_server::oidc` produces one.
 fn identity() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alice-subject-8f21".into(),
-        email: "alice@example.com".into(),
-        name: Some("Alice Example".into()),
-        groups: vec!["engineering".into()],
-        issuer: "https://identity.example".into(),
-    }
+    VerifiedIdentity::for_test(
+        "alice-subject-8f21",
+        "alice@example.com",
+        Some("Alice Example".into()),
+        vec!["engineering".into()],
+        "https://identity.example",
+    )
 }
 
 /// The account key a principal actually addresses. Built by the production
