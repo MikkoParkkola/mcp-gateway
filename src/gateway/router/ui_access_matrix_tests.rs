@@ -793,6 +793,10 @@ fn every_ui_api_path_is_in_the_matrix() {
 #[path = "ui_access_matrix_known_tests.rs"]
 mod known;
 
+/// What a cell must and must not notice in a body.
+#[path = "ui_access_matrix_pin_tests.rs"]
+mod pin;
+
 /// Who reads which identity grants in the control-plane snapshot.
 #[path = "ui_control_plane_scope_tests.rs"]
 mod control_plane_scope;
