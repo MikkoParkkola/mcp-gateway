@@ -92,10 +92,10 @@ pub(super) async fn refused_like_sync(row: &Armed, sync: Value, task: Value) -> 
     // A withheld call's own record is written after its answer, on the slot's
     // task, and no caller waits for it: every count here waits for the grant
     // writes started so far, so each record lands in its own call's window.
-    settled().await;
+    grant_writes_settled().await;
     let before = decisions(&row.dir).len();
     let (sync_status, sync_answer) = post_full(&row.state, "key-a", sync).await;
-    settled().await;
+    grant_writes_settled().await;
     assert!(
         sync_answer.get("error").is_some(),
         "the sync call is refused: {sync_answer}"
@@ -104,7 +104,7 @@ pub(super) async fn refused_like_sync(row: &Armed, sync: Value, task: Value) -> 
     let (rows, before) = (committed(row), decisions(&row.dir).len());
 
     let (status, answer) = post_full(&row.state, "key-a", task.clone()).await;
-    settled().await;
+    grant_writes_settled().await;
 
     assert!(
         answer.pointer("/result/taskId").is_none(),
@@ -354,6 +354,6 @@ async fn non_admin_webhook_submit_is_refused_like_the_sync_call() {
 }
 
 /// Wait until every grant-record write this thread's slots started has landed.
-async fn settled() {
+async fn grant_writes_settled() {
     crate::gateway::meta_mcp::grant_audit::seams::grant_writes_settled_for_test().await;
 }
