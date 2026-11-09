@@ -109,7 +109,11 @@ impl<'a> Check<'a> {
                 },
                 None => LinePos::Newest,
             };
-            let placed = mutant!("q3", sigstart::Placed::Invalid("sig_missing"), anchor.place(path, pos, &line.entry, &mut self.checked.borrow_mut()));
+            let placed = mutant!(
+                "q3",
+                sigstart::Placed::Invalid("sig_missing"),
+                anchor.place(path, pos, &line.entry, &mut self.checked.borrow_mut())
+            );
             if let sigstart::Placed::Invalid(why) = placed
                 && why.starts_with("legacy_")
             {
