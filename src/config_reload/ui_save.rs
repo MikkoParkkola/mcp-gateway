@@ -259,3 +259,7 @@ fn map_error(error: ReplaceError, halt: Option<Halt>) -> Mapped {
 #[cfg(test)]
 #[path = "ui_save_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ui_policy_fields_tests.rs"]
+mod policy_field_tests;

@@ -33,6 +33,10 @@ fn index(at: usize) -> Param {
     }
 }
 
+/// The firewall on: relay detection's action applies on reload only while
+/// it is (ADR-029, amended).
+const FIREWALL_ON: &str = "security:\n  firewall:\n    enabled: true\n";
+
 /// A minimal gateway.yaml holding `field` with a valid value (an alert with
 /// both of its required fields, an owner under a real backend).
 fn file_with(field: &str) -> String {
@@ -52,6 +56,24 @@ fn file_with(field: &str) -> String {
             "backends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    owner: \"Team A\"\n"
                 .to_owned()
         }
+        // Non-default values, so F3's two sides differ in the field.
+        "security.tool_policy.enabled" => {
+            "security:\n  tool_policy:\n    enabled: false\n".to_owned()
+        }
+        "security.tool_policy.default_action" => {
+            "security:\n  tool_policy:\n    default_action: \"deny\"\n".to_owned()
+        }
+        "security.tool_policy.use_default_deny" => {
+            "security:\n  tool_policy:\n    use_default_deny: false\n".to_owned()
+        }
+        "security.firewall.credential_redaction" => {
+            "security:\n  firewall:\n    credential_redaction: false\n".to_owned()
+        }
+        "security.firewall.collusion.action" => {
+            format!("{FIREWALL_ON}    collusion:\n      action: \"block\"\n")
+        }
+        "security.sanitize_input" => "security:\n  sanitize_input: false\n".to_owned(),
+        "security.ssrf_protection" => "security:\n  ssrf_protection: false\n".to_owned(),
         other => panic!("no fixture for {other}: add one with the field"),
     }
 }
@@ -177,10 +199,19 @@ fn each_fields_apply_matches_the_reload_classifier() {
                 GOVERNED.to_owned(),
                 format!("{GOVERNED}  alerts:\n    - at_percent: 50\n      action: \"log\"\n"),
             ),
+            "security.firewall.collusion.action" => (FIREWALL_ON.to_owned(), file_with(field.id)),
             other => (String::new(), file_with(other)),
         };
         let base = Config::from_file_text(&before).expect("extracts");
         let changed = Config::from_file_text(&after).expect("extracts");
+        // Premise: the edit changes the resolved config, so a Live row is
+        // never passed by an edit to its default value.
+        assert_ne!(
+            serde_json::to_value(&base).expect("serializes"),
+            serde_json::to_value(&changed).expect("serializes"),
+            "{}: the fixture changes nothing",
+            field.id
+        );
         let pending = crate::config_reload::diff::pending_restart_fields(&base, &changed);
         assert_eq!(
             field.apply == Apply::Restart,
