@@ -44,7 +44,9 @@ fn a_duplicate_name_is_refused_without_removal() {
 }
 
 /// A file that does not load (here: a duplicate name) has no A12 revision,
-/// so no revoke can take the write path: refused, nothing written.
+/// so no revoke can take the write path: the shared answer every config
+/// writing route gives (503, "gateway.yaml could not be loaded"), nothing
+/// written.
 #[test]
 fn an_unloadable_file_takes_no_revoke() {
     let mut setup = target_setup();
@@ -55,8 +57,16 @@ fn an_unloadable_file_takes_no_revoke() {
         "premise: no revision for an unloadable file"
     );
     let sent = delete(&fx, "target", Call::new(&json!({"revision": "any"})), None);
-    assert!(sent.status.is_client_error(), "{}", sent.body);
-    assert_ne!(sent.json()["revoked"], true);
+    assert_eq!(
+        sent.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        sent.body
+    );
+    assert_eq!(
+        sent.json(),
+        json!({"error": "gateway.yaml could not be loaded"})
+    );
 }
 
 #[test]
@@ -82,18 +92,14 @@ fn a_bound_tag_under_another_name_is_refused() {
     }
 }
 
+/// A running gateway cannot hold a digest shared with another key's current
+/// or previous slot or with the bearer: each such table is refused at load.
+/// So `identity_in_use` is defensive, and its refusal is judged on the pure
+/// selection in `keys_revoke_select_tests`.
 #[test]
-fn a_tag_colliding_with_another_key_or_the_bearer_is_identity_in_use() {
-    // A valid file cannot share a digest between keys or with the bearer, so
-    // the collision lives in the running table, over a valid file.
-    let mut exercised = 0;
+fn no_identity_collision_can_be_running() {
     for slot in ["current", "previous", "bearer"] {
         let mut setup = target_setup();
-        setup.text = yaml_of(&[
-            root_item(),
-            item("target", "target-secret", ""),
-            item("other", "other-secret", ""),
-        ]);
         let mut other = setup.running.api_keys[1].clone();
         other.name = "other".into();
         match slot {
@@ -109,26 +115,13 @@ fn a_tag_colliding_with_another_key_or_the_bearer_is_identity_in_use() {
             }
         }
         setup.running.api_keys.push(other);
-        // A table the gateway itself refuses cannot be running: that slot's
-        // collision is unreachable, and the revoke check stays defensive.
-        let reachable = crate::gateway::auth::ResolvedAuthConfig::try_from_config(
+        let built = crate::gateway::auth::ResolvedAuthConfig::try_from_config(
             &setup.running,
             &crate::config::EnvOverlay::none(),
             crate::gateway::record_principal::TEST_RECORD_KEY,
-        )
-        .is_ok();
-        if !reachable {
-            continue;
-        }
-        exercised += 1;
-        let sent = refuse(setup, "target", None);
-        assert_eq!(sent.status, StatusCode::CONFLICT, "{slot}: {}", sent.body);
-        assert_eq!(sent.json(), json!({"error": "identity_in_use"}), "{slot}");
+        );
+        assert!(built.is_err(), "{slot}: a colliding table loaded");
     }
-    assert!(
-        exercised > 0,
-        "no collision slot can be running: this row tests nothing"
-    );
 }
 
 #[test]
