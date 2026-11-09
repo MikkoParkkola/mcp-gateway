@@ -64,6 +64,12 @@ impl VerifiedIdentity {
         })
     }
 
+    /// The actor id an identity with this `issuer` and `subject` would have,
+    /// without building one: `None` when the pair names no one.
+    pub(crate) fn stable_actor_id_for(issuer: &str, subject: &str) -> Option<String> {
+        crate::identity_grants::names_someone(issuer, subject).then(|| actor_id(issuer, subject))
+    }
+
     /// Stable, collision-safe actor identifier derived from `issuer` + `subject`.
     ///
     /// A naive `format!("oidc:{issuer}:{subject}")` collides when an issuer
@@ -75,13 +81,7 @@ impl VerifiedIdentity {
     /// not the id), but it prevents audit / user-identity row collisions.
     #[must_use]
     pub fn stable_actor_id(&self) -> String {
-        format!(
-            "oidc:{}:{}:{}:{}",
-            self.issuer.len(),
-            self.issuer,
-            self.subject.len(),
-            self.subject
-        )
+        actor_id(&self.issuer, &self.subject)
     }
 
     /// The OIDC `sub` claim (opaque user id).
@@ -113,6 +113,11 @@ impl VerifiedIdentity {
     pub fn issuer(&self) -> &str {
         &self.issuer
     }
+}
+
+/// The one formula behind both actor-id functions, so they cannot drift.
+fn actor_id(issuer: &str, subject: &str) -> String {
+    format!("oidc:{}:{issuer}:{}:{subject}", issuer.len(), subject.len())
 }
 
 #[cfg(test)]

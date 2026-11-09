@@ -27,9 +27,16 @@ read-back check still refuse a nameless identity wherever it is used.
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import sys
 from pathlib import Path
+
+# The one shared test-only judgement (MIK-9387.TCFG.2).
+_READER = Path(__file__).resolve().parents[2] / "scripts/dev/check-orphan-test-modules.py"
+_spec = importlib.util.spec_from_file_location("check_orphan_test_modules", _READER)
+_orphan = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_orphan)
 
 # `GrantSubject::new` is the fallible constructor (names_someone), so each
 # production call is checked; each site stays listed until this rule is
@@ -117,33 +124,12 @@ MOD_DECL = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?mod\s+(?:r#)?(\w+)\s*;")
 ATTR_BLOCK = re.compile(r"(?:#\[[^\]]*\]\s*)+$")
 
 
-def requires_test(cond: str) -> bool:
-    """Whether a `cfg(..)` condition can hold only under `test`: `test`
-    itself, or an `all(..)` with `test` among its top-level terms. `any(test,
-    unix)` or `not(test)` also compile outside tests, so they are production."""
-    cond = cond.strip()
-    if cond == "test":
-        return True
-    m = re.fullmatch(r"all\((.*)\)", cond, re.S)
-    if not m:
-        return False
-    depth, term, terms = 0, "", []
-    for ch in m.group(1):
-        depth += (ch == "(") - (ch == ")")
-        if ch == "," and depth == 0:
-            terms.append(term)
-            term = ""
-        else:
-            term += ch
-    terms.append(term)
-    return any(requires_test(t) for t in terms)
-
-
 def gated_spans(code: str) -> list[tuple[int, int]]:
-    """Spans of items under `#[cfg(test)]` (or any cfg naming `test`)."""
+    """Spans of items whose `#[cfg(..)]` compiles only under test (the shared
+    reader: `all(test, ..)` yes, `any(test, unix)` no)."""
     spans = []
     for m in re.finditer(r"#\[cfg\(([^\]]*)\)\]", code):
-        if not requires_test(m.group(1)):
+        if not _orphan.cfg_is_test(m.group(1)):
             continue
         k = m.end()
         while (a := re.match(r"\s*#\[[^\]]*\]", code[k:])):
@@ -162,6 +148,11 @@ def module_files(root: Path) -> dict[Path, bool]:
         # Skip a revisit unless it upgrades a test-only file to production:
         # production reachability wins, whatever order the walk finds it in.
         if not path.exists() or (path in seen and (test or not seen[path])):
+            continue
+        # A file whose leading inner attributes make it test-only, and so its
+        # children (the shared reader's rule).
+        test = test or _orphan.file_is_test(path)
+        if path in seen and (test or not seen[path]):
             continue
         seen[path] = test
         code = mask(path.read_text(encoding="utf-8"))
