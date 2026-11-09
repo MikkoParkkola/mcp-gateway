@@ -96,7 +96,7 @@ async fn r32_a_stripped_signature_under_a_secret_never_delivers() {
     fx.delivery("gw-t", &Dl::effect("refused"));
     let at = fx.delivery_index("gw-t");
     fx.edit(at, |e| {
-        forge(e, "response_effect", json!("delivered"), true)
+        forge(e, "response_effect", json!("delivered"), true);
     });
     let (_, page) = get(&fx, &[]).await;
     let r = row_of(&page, "gw-t");

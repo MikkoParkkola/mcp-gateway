@@ -44,8 +44,8 @@ pub(super) fn scan(fx: &Fixture, fold: bool) {
         if fold {
             let mut j = joiner.borrow_mut();
             if !j.observe(line) && kind_of(line).is_some() {
-                let joined = j.join(line, seen);
-                j.count(&joined);
+                let answer = j.join(line, seen);
+                j.count(&answer);
             }
         }
         false
@@ -107,7 +107,7 @@ fn m2_profile_passes_and_row_build() {
     let (mut cursor, mut per_pass, mut kept) = (None, Vec::new(), Vec::new());
     let mut examined: Vec<u64> = Vec::new();
     loop {
-        let joined = RefCell::new(Vec::<Joined>::new());
+        let answers = RefCell::new(Vec::<Joined>::new());
         let limits = Limits {
             matches: 100,
             bytes: 512 << 20,
@@ -119,7 +119,7 @@ fn m2_profile_passes_and_row_build() {
             }
             let this = j.join(line, seen);
             j.count(&this);
-            joined.borrow_mut().push(this);
+            answers.borrow_mut().push(this);
             true
         };
         let (page, m) = measure(|| {
@@ -136,7 +136,7 @@ fn m2_profile_passes_and_row_build() {
         per_pass.push(m);
         examined.push(page.bytes_examined);
         carried = page.above_end;
-        kept.extend(page.lines.iter().cloned().zip(joined.into_inner()));
+        kept.extend(page.lines.iter().cloned().zip(answers.into_inner()));
         match page.next {
             Some(next) => cursor = Some(next),
             None => break,
@@ -167,8 +167,8 @@ fn m2_profile_passes_and_row_build() {
     );
     let rows = kept.len() as u64;
     let ((), m) = measure(|| {
-        for (line, joined) in &kept {
-            drop(super::rows::row(line, None, joined));
+        for (line, answer) in &kept {
+            drop(super::rows::row(line, None, answer));
         }
     });
     report("row() over the kept lines", 1, m, rows);
@@ -178,7 +178,7 @@ fn m2_profile_passes_and_row_build() {
         .collect();
     let ((), m) = measure(|| {
         for r in &built {
-            drop(ndjson_size(r));
+            let _ = ndjson_size(r);
         }
     });
     report("ndjson_size over the rows", 1, m, rows);

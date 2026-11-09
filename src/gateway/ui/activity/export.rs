@@ -97,7 +97,7 @@ pub(super) fn collect(
     size: impl Fn(&Value) -> usize,
 ) -> std::io::Result<Collected> {
     let joiner = std::cell::RefCell::new(Joiner::new(secret));
-    let joined = std::cell::RefCell::new(Vec::<Joined>::new());
+    let answers = std::cell::RefCell::new(Vec::<Joined>::new());
     let mut keep = |line: &Line, seen: Seen| {
         let mut j = joiner.borrow_mut();
         if j.observe(line) {
@@ -119,7 +119,7 @@ pub(super) fn collect(
         }
         let hit = filter.matches(line, kind, &this);
         if hit {
-            joined.borrow_mut().push(this);
+            answers.borrow_mut().push(this);
         }
         hit
     };
@@ -152,7 +152,7 @@ pub(super) fn collect(
         let look = Look::Carried(carried);
         let page = read_page_joined(inv, gov, cursor.as_ref(), limits, look, &mut keep)?;
         carried = page.above_end;
-        let pass_joined = joined.take();
+        let pass_answers = answers.take();
         {
             let j = joiner.borrow();
             c.join_incomplete = j.join_incomplete;
@@ -168,11 +168,11 @@ pub(super) fn collect(
         }
         scanned += page.bytes_examined;
         c.unreadable += page.unreadable.len();
-        for (line, joined) in page.lines.iter().zip(&pass_joined) {
+        for (line, answer) in page.lines.iter().zip(&pass_answers) {
             let Some(kind) = kind_of(line) else { continue };
             // A matched record that cannot be projected (no counter or hash)
             // is counted, never dropped silently.
-            let Some(r) = export_row(line, kind, secret, joined) else {
+            let Some(r) = export_row(line, kind, secret, answer) else {
                 c.unreadable += 1;
                 continue;
             };

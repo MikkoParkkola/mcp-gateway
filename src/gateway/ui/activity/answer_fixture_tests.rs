@@ -58,7 +58,7 @@ impl Dl {
 }
 
 pub(super) struct Fixture {
-    pub(super) dir: Arc<tempfile::TempDir>,
+    pub(super) _dir: Arc<tempfile::TempDir>,
     pub(super) path: PathBuf,
     pub(super) logger: TransparencyLogger,
     pub(super) secret: Option<&'static str>,
@@ -89,7 +89,7 @@ impl Fixture {
         .unwrap();
         logger.keep_test_dir(Arc::clone(&dir));
         Self {
-            dir,
+            _dir: dir,
             path,
             logger,
             secret,
@@ -104,6 +104,10 @@ impl Fixture {
         }
     }
 
+    #[expect(
+        clippy::unused_self,
+        reason = "a fixture reads as `fx.access()`; every row here reads as an admin"
+    )]
     pub(super) fn access(&self) -> Access {
         Access::All
     }

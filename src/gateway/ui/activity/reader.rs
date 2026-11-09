@@ -437,19 +437,8 @@ pub(super) fn read_page_joined(
         }
     }
 
-    // A head read but not taken is unread: resume above it.
-    let resume = |tail: &Option<LogTail>, head: &Option<(Item, u64)>| -> Option<LogPos> {
-        let t = tail.as_ref()?;
-        match head {
-            Some((item, above)) => Some(LogPos {
-                segment: item_segment(item),
-                offset: *above,
-            }),
-            None => t.pos(),
-        }
-    };
-    let inv_pos = resume(&inv_tail, &heads[0]);
-    let gov_pos = resume(&gov_tail, &heads[1]);
+    let inv_pos = resume_pos(&inv_tail, &heads[0]);
+    let gov_pos = resume_pos(&gov_tail, &heads[1]);
     let next = (inv_pos.is_some() || gov_pos.is_some()).then(|| Cursor {
         inv: inv_pos,
         gov: gov_pos,
@@ -539,6 +528,19 @@ fn fold_line(bytes: &[u8], segment: u64, fold: &mut dyn FnMut(&Line)) {
             entry,
             segment,
         });
+    }
+}
+
+/// Where a later page resumes in `tail`: a head read but not taken is unread,
+/// so resume above it.
+fn resume_pos(tail: &Option<LogTail>, head: &Option<(Item, u64)>) -> Option<LogPos> {
+    let t = tail.as_ref()?;
+    match head {
+        Some((item, above)) => Some(LogPos {
+            segment: item_segment(item),
+            offset: *above,
+        }),
+        None => t.pos(),
     }
 }
 

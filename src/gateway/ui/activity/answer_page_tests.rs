@@ -75,7 +75,11 @@ async fn r29_sixty_four_concurrent_calls_join_across_pages() {
     }
     for k in 0..64 {
         let i = (k * 37) % 64;
-        let e = if i % 2 == 0 { "delivered" } else { "refused" };
+        let e = if i.is_multiple_of(2) {
+            "delivered"
+        } else {
+            "refused"
+        };
         fx.delivery(&format!("gw-{i}"), &Dl::effect(e));
     }
     let pages = drain(&fx, &[("limit", "10")]).await;
@@ -86,7 +90,11 @@ async fn r29_sixty_four_concurrent_calls_join_across_pages() {
             let i: usize = r["trace_id"].as_str().unwrap()[3..].parse().unwrap();
             assert_eq!(
                 r["effect"],
-                if i % 2 == 0 { "delivered" } else { "refused" }
+                if i.is_multiple_of(2) {
+                    "delivered"
+                } else {
+                    "refused"
+                }
             );
         }
     }

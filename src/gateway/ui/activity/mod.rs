@@ -293,11 +293,11 @@ fn time(
 
 fn parse(q: &ListQuery) -> Result<Parsed, Early> {
     let outcome = match q.outcome.as_deref() {
-        None => None,
+        // `cleaned` filters on the joined effect, not on a call's outcome.
+        None | Some("cleaned") => None,
         Some("ok") => Some(FeedOutcome::Ok),
         Some("failed") => Some(FeedOutcome::Failed),
         Some("blocked") => Some(FeedOutcome::Blocked),
-        Some("cleaned") => None,
         Some(_) => {
             return Err(Box::new(bad_request(json!({
                 "error": "outcome not supported",
@@ -360,7 +360,7 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         bytes: PAGE_SCAN_BYTES,
     };
     let joiner = std::cell::RefCell::new(Joiner::new(logs.secret.as_deref()));
-    let mut joined: Vec<Joined> = Vec::new();
+    let mut answers: Vec<Joined> = Vec::new();
     let mut fold = |line: &reader::Line| {
         joiner.borrow_mut().observe(line);
     };
@@ -385,7 +385,7 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         }
         let hit = parsed.filter.matches(line, kind, &this);
         if hit {
-            joined.push(this);
+            answers.push(this);
         }
         hit
     };
@@ -415,11 +415,11 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
             .into_response();
         }
     };
-    debug_assert_eq!(joined.len(), page.lines.len());
+    debug_assert_eq!(answers.len(), page.lines.len());
     let rows: Vec<Value> = page
         .lines
         .iter()
-        .zip(&joined)
+        .zip(&answers)
         .filter_map(|(line, j)| row(line, logs.secret.as_deref(), j))
         .collect();
     let counts = joiner.into_inner();

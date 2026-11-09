@@ -73,10 +73,15 @@ fn r44b_the_window_is_finished_by_carried_bytes_not_by_a_reset() {
 
 #[test]
 fn r45_read_ahead_is_charged_to_the_budget() {
+    use std::fmt::Write as _;
+
     use super::strict_scan::{Forward, Next};
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lines.jsonl");
-    let body: String = (0..30_000).map(|i| format!("{{\"n\":{i}}}\n")).collect();
+    let mut body = String::new();
+    for i in 0..30_000 {
+        writeln!(body, "{{\"n\":{i}}}").unwrap();
+    }
     assert!(body.len() > 300 * 1024);
     std::fs::write(&path, body).unwrap();
     let budget = 70 * 1024;

@@ -80,7 +80,7 @@ pub(super) fn scan(
     let mut prev = found.entry.clone();
     let (mut seq, mut offset, mut crossed) = (found.segment, found.end, false);
     let mut total = 0_usize;
-    'segments: loop {
+    loop {
         let Some(file) = open_segment(log, seq, || {})? else {
             (out.stopped, out.finished) = ("missing segment", false);
             break;
