@@ -234,21 +234,36 @@ pub fn is_param_header(name: &str) -> bool {
 /// The `Mcp-Param-*` headers one `tools/call` must carry, derived from the
 /// tool's own `inputSchema` and that call's arguments (HEADER.5).
 ///
-/// Traversal is top-level `properties` only, identical to [`mirrored_params`]:
-/// whatever the sender traverses the validator must traverse too, or the two
-/// disagree about which declarations are real. A schema that violates a
-/// constraint mirrors nothing — such a tool is already excluded from
-/// `tools/list`, so no call should reach here naming one.
+/// Traversal covers the top-level `properties` and every nested object
+/// property, as a validating peer's does: a peer that walks nested properties
+/// and finds an annotated one with no mirror rejects the call. A level whose
+/// declarations violate a constraint mirrors nothing — such a tool is already
+/// excluded from `tools/list`, so no call should reach here naming one.
+///
+/// A string value is sentinel-encoded unless it is already plain visible
+/// ASCII, so a value with a space or non-ASCII text still mirrors losslessly.
 #[must_use]
 pub fn mirror_headers(input_schema: &Value, arguments: &Value) -> Vec<(String, String)> {
-    let Ok(declared) = mirrored_params(input_schema) else {
-        return Vec::new();
+    let mut out = Vec::new();
+    collect_mirrors(input_schema, arguments, &mut out);
+    out
+}
+
+fn collect_mirrors(schema: &Value, arguments: &Value, out: &mut Vec<(String, String)>) {
+    if let Ok(declared) = mirrored_params(schema) {
+        for param in declared {
+            if let Some(value) = arguments.get(&param.property).and_then(header_value_for) {
+                let value = crate::protocol::headers::encode_header_value(&value);
+                out.push((param.header_name, value));
+            }
+        }
+    }
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return;
     };
-    declared
-        .into_iter()
-        .filter_map(|param| {
-            let value = arguments.get(&param.property)?;
-            Some((param.header_name, header_value_for(value)?))
-        })
-        .collect()
+    for (name, property) in properties {
+        if let Some(nested) = arguments.get(name).filter(|value| value.is_object()) {
+            collect_mirrors(property, nested, out);
+        }
+    }
 }
