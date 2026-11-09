@@ -189,13 +189,13 @@ async fn a_failed_mint_audit_refuses_the_credential_without_the_error_text() {
 }
 
 fn who(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: subject.to_owned(),
-        email: String::new(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.invalid".to_owned(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        subject.to_owned(),
+        String::new(),
+        None,
+        Vec::new(),
+        "https://issuer.invalid".to_owned(),
+    )
 }
 
 fn installed(

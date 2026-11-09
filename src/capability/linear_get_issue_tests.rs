@@ -69,7 +69,7 @@ async fn get_issue() -> (
         .with_state(Arc::clone(&seen));
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let mut executor = CapabilityExecutor::new();
-    executor.client = crate::test_fixture_host::fixture_client(Duration::from_secs(2));
+    executor.client = crate::test_fixture_host::fixture_client(Duration::from_secs(2)).into();
     let text = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("capabilities/linear/linear_get_issue.yaml"),

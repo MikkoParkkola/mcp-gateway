@@ -54,13 +54,13 @@ async fn t1a_key_server_token_has_no_api_key_identity() {
         .insert(crate::key_server::TemporaryToken {
             jti: "jti-mik-8659".to_owned(),
             token: "mcpgw_mik_8659_token".to_owned(),
-            identity: crate::key_server::oidc::VerifiedIdentity {
-                subject: "alice".to_owned(),
-                email: "alice@example.com".to_owned(),
-                name: None,
-                groups: vec![],
-                issuer: "https://issuer.invalid".to_owned(),
-            },
+            identity: crate::key_server::oidc::VerifiedIdentity::for_test(
+                "alice".to_owned(),
+                "alice@example.com".to_owned(),
+                None,
+                vec![],
+                "https://issuer.invalid".to_owned(),
+            ),
             scopes: crate::key_server::store::TokenScopes::default(),
             iat: 0,
             exp: u64::MAX,
@@ -161,13 +161,13 @@ fn t4_api_key_gives_credential_quota_on_both_routes() {
 /// fails here.
 #[test]
 fn t4_oidc_gives_identity_quota_when_an_identity_is_passed() {
-    let identity = crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".to_owned(),
-        email: String::new(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp.example".to_owned(),
-    };
+    let identity = crate::key_server::oidc::VerifiedIdentity::for_test(
+        "alice".to_owned(),
+        String::new(),
+        None,
+        vec![],
+        "https://idp.example".to_owned(),
+    );
     let client = crate::gateway::auth::AuthenticatedClient {
         name: "alice".to_owned(),
         rate_limit: 0,
@@ -203,13 +203,13 @@ fn t4_oidc_gives_identity_quota_when_an_identity_is_passed() {
 /// `None`; stdio beats everything on the meta route.
 #[test]
 fn t4_quota_precedence_and_fallthrough() {
-    let identity = crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".to_owned(),
-        email: String::new(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp.example".to_owned(),
-    };
+    let identity = crate::key_server::oidc::VerifiedIdentity::for_test(
+        "alice".to_owned(),
+        String::new(),
+        None,
+        vec![],
+        "https://idp.example".to_owned(),
+    );
     let subject = crate::identity_grants::GrantSubject::for_test("proxy", "bob", None);
     let nonce = crate::gateway::StdioNonce::leaked_for_test();
     // Identity + subject + principal + name -> identity.
