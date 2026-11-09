@@ -231,11 +231,11 @@ impl Filter {
             return false;
         }
         if let Some(want) = self.effect
-            && (!kind.is_call() || joined.effect() != want)
+            && (kind != Kind::Call || joined.effect() != want)
         {
             return false;
         }
-        if self.cleaned && (!kind.is_call() || !joined.effect().is_cleaned()) {
+        if self.cleaned && (kind != Kind::Call || !joined.effect().is_cleaned()) {
             return false;
         }
         if let Some(server) = &self.server {

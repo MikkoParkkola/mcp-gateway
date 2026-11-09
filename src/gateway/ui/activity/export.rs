@@ -106,7 +106,8 @@ pub(super) fn collect(
         let Some(kind) = kind_of(line) else {
             return false;
         };
-        let this = if kind.is_call() {
+        // Only a call has an answer to join; a refusal has none.
+        let this = if kind == Kind::Call {
             j.join(line, seen)
         } else {
             NOT_A_CALL
@@ -114,7 +115,7 @@ pub(super) fn collect(
         if !access.admits(line, kind) {
             return false;
         }
-        if kind.is_call() {
+        if kind == Kind::Call {
             j.count(&this);
         }
         let hit = filter.matches(line, kind, &this);

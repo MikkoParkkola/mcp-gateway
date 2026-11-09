@@ -37,7 +37,7 @@ use self::access::{Access, Refused};
 use self::answer::{Effect, Joined, SCOPE_LABEL, SUPPORTED_EFFECTS};
 use self::joiner::Joiner;
 use self::reader::{Limits, Look, read_page_joined};
-use self::rows::{FeedOutcome, Filter, NOT_A_CALL, kind_of, row};
+use self::rows::{FeedOutcome, Filter, Kind, NOT_A_CALL, kind_of, row};
 use super::AppState;
 use super::errors::{auth_required, flat_error};
 use super::guard::Guard;
@@ -372,7 +372,8 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         let Some(kind) = kind_of(line) else {
             return false;
         };
-        let this = if kind.is_call() {
+        // Only a call has an answer to join; a refusal has none.
+        let this = if kind == Kind::Call {
             j.join(line, seen)
         } else {
             NOT_A_CALL
@@ -380,7 +381,7 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         if !access.admits(line, kind) {
             return false;
         }
-        if kind.is_call() {
+        if kind == Kind::Call {
             j.count(&this);
         }
         let hit = parsed.filter.matches(line, kind, &this);

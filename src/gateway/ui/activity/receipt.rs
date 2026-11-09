@@ -140,8 +140,9 @@ pub(super) fn receipt(
     if !access.admits(&line, kind) {
         return Ok(None);
     }
-    // A call looks forward for its delivery record; no other kind has one.
-    let scanned = if kind.is_call() && id.log == Which::Invocation {
+    // A call looks forward for its delivery record; no other kind has one,
+    // a refusal included.
+    let scanned = if kind == Kind::Call && id.log == Which::Invocation {
         Some(scan(log, &found, &line, secret)?)
     } else {
         None
