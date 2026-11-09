@@ -48,13 +48,13 @@ async fn signed_direct(
         .expect("request");
     request
         .extensions_mut()
-        .insert(crate::key_server::oidc::VerifiedIdentity {
-            subject: SUBJECT.to_string(),
-            email: format!("{SUBJECT}@example.invalid"),
-            name: None,
-            groups: vec![],
-            issuer: "https://a.example.invalid".to_string(),
-        });
+        .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+            SUBJECT.to_string(),
+            format!("{SUBJECT}@example.invalid"),
+            None,
+            vec![],
+            "https://a.example.invalid".to_string(),
+        ));
     let response = tower::ServiceExt::oneshot(fx.router.clone(), request)
         .await
         .expect("response");

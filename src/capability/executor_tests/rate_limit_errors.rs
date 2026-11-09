@@ -49,7 +49,8 @@ async fn loopback_status_backend() -> (CapabilityExecutor, String) {
     let mut executor = CapabilityExecutor::new();
     executor.client = crate::test_fixture_host::fixture_client_builder()
         .build()
-        .unwrap();
+        .unwrap()
+        .into();
     (executor, crate::test_fixture_host::fixture_url(port))
 }
 

@@ -25,13 +25,18 @@ const CACHEABLE: [&str; 5] = [
 
 /// One request to `/mcp/{backend}`, modern or legacy, with request id `id`
 /// and `meta` merged into `params._meta`.
-async fn post(
+async fn post(fx: &Fx, route: (&str, &str), era: (bool, i64), params: Value, meta: Value) -> Value {
+    post_status(fx, route, era, params, meta).await.1
+}
+
+/// [`post`], with the HTTP status the answer came with.
+async fn post_status(
     fx: &Fx,
     (backend, method): (&str, &str),
     (modern, id): (bool, i64),
     mut params: Value,
     meta: Value,
-) -> Value {
+) -> (axum::http::StatusCode, Value) {
     let mut merged = meta.as_object().cloned().unwrap_or_default();
     if modern {
         merged.insert(
@@ -70,8 +75,9 @@ async fn post(
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
     let response = fx.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap()
+    (status, serde_json::from_slice(&bytes).unwrap())
 }
 
 /// Request id 7, never the fixture transport's own 1, so a dropped restore

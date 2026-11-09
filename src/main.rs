@@ -4,10 +4,24 @@
 //!
 //! Single-port multiplexing with a compact Meta-MCP tool surface.
 
-// First, so every module below prints through the broken-pipe-safe macros.
+// The `mutant!` macros, for mutant proofs whose sites sit in the binary's
+// modules. The first module: macro_rules! is textually scoped.
+#[macro_use]
+mod mutant_macro;
+
+// Next, so every module below prints through the broken-pipe-safe macros.
 #[macro_use]
 #[path = "cli/stdout.rs"]
 mod stdout;
+
+// The switch the mutant! macros call: src/mutant.rs compiled again here as
+// this crate's own module, as clock.rs is; a normal build has no switch in it.
+// ponytail: a second private copy of the switch; if the operator approves
+// widening the library's API, export `mutant::on` under cfg(mutants) and
+// drop this module.
+#[path = "mutant.rs"]
+#[allow(dead_code, reason = "a scratch commit's sites are its only users")]
+mod mutant;
 
 mod allocator;
 // The library's wall-clock reader, compiled again for the CLI commands

@@ -24,7 +24,7 @@ src/identity_grants/subject.rs	<file>	file	b82e0e526510a970d8a202bae32223af079c2
 src/identity_grants/subject.rs	GrantSubject::new	literal	1	the one literal, in the checked constructor
 src/identity_grants/subject.rs	GrantSubject::try_from	new	1	deserialize goes through new (grant files and stored records)
 src/key_server/oidc.rs	OidcVerifier::verify_inner	checked	1	the OIDC verifier, after the token's signature and claims are verified
-src/key_server/oidc/verified.rs	<file>	file	8296cf1aa8046146e5094bf626ae925266695fe779a7493059d41f0d45adfa6e	defining module: any edit is a reviewed change of this row
+src/key_server/oidc/verified.rs	<file>	file	e935d9cdd5ac3b9805b8be768a95b99d757c5a249d48993bd68964f03adb119a	defining module: any edit is a reviewed change of this row
 src/key_server/oidc/verified.rs	VerifiedIdentity::checked	literal	1	the one literal, in the checked constructor
 src/mtls/identity/cert.rs	<file>	file	a205d5bd599a0c173b876f84bd4d45ef9b18d0e62d3f092a0acfb0c2740cbd9a	defining module: any edit is a reviewed change of this row
 src/mtls/identity/cert.rs	CertIdentity::from_der	parse	1	from_der parses, then refuses a certificate that names no one

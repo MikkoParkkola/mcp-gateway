@@ -172,8 +172,8 @@ async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused(
         .in_flight()
         .hold(
             &payload.backend_id,
-            &mcp_gateway::protocol::continuation::QuotaKey::new(
-                mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+            &crate::protocol::continuation::QuotaKey::new(
+                crate::protocol::continuation::QuotaSource::KeyName("test"),
             ),
             now_secs() + 60,
             now_secs(),

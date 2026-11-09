@@ -166,8 +166,8 @@ async fn blank_verified_identity_does_not_suppress_admitted_cf_subject() {
         ("blank subject", verified_oidc()),
     ] {
         match case {
-            "blank issuer" => blank.issuer.clear(),
-            _ => blank.subject.clear(),
+            "blank issuer" => blank = blank.with_issuer(""),
+            _ => blank = blank.with_subject(""),
         }
         let subject = caller_grant_subject(
             Some(&blank),

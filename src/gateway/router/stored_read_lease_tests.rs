@@ -316,13 +316,13 @@ async fn send_as(gw: &Gateway, subject: &str, method: &str, name: &str, params: 
         .expect("a request");
     request
         .extensions_mut()
-        .insert(crate::key_server::oidc::VerifiedIdentity {
-            subject: subject.to_string(),
-            email: format!("{subject}@example.invalid"),
-            name: None,
-            groups: vec![],
-            issuer: "https://issuer.example.invalid".to_string(),
-        });
+        .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+            subject.to_string(),
+            format!("{subject}@example.invalid"),
+            None,
+            vec![],
+            "https://issuer.example.invalid".to_string(),
+        ));
     let response = gw.router.clone().oneshot(request).await.expect("an answer");
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
