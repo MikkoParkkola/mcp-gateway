@@ -12,7 +12,6 @@
 //! |-------|------|
 //! | `token.issued` | A new temporary token is successfully issued |
 //! | `token.used` | A temporary token is validated for a request |
-//! | `token.expired` | A token is rejected because its `exp` has passed |
 //! | `token.revoked` | A token is explicitly revoked via `DELETE /auth/token/{jti}` |
 //! | `token.denied` | OIDC verification or policy matching failed |
 //! | `token.invalid` | The token string is structurally invalid |
