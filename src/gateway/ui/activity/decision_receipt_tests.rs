@@ -22,6 +22,7 @@ fn receipt_of(decision: Option<Value>) -> Value {
         log: Which::Invocation,
         entry: entries[0].clone(),
         segment: 0,
+        span: None,
     };
     let id = parse_id(&row_id(&line).unwrap()).unwrap();
     let body = receipt(&path, &id, &Access::All, &Check::bare(None))
