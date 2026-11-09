@@ -200,7 +200,8 @@ impl<'a> Settling<'a> {
                 crate::gateway::meta_mcp::invoke::relay::persisted_task_replay(
                     self.state.meta_mcp(),
                     result,
-                );
+                )
+                .map(Box::new);
         }
         let stored = self
             .executor

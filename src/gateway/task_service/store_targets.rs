@@ -299,7 +299,7 @@ impl Shared {
             replay_snapshot: targets
                 .replay_snapshot
                 .as_ref()
-                .map(|_| serde_json::Value::from(SNAPSHOT_UNTRACKABLE)),
+                .map(|_| Box::new(serde_json::Value::from(SNAPSHOT_UNTRACKABLE))),
             ..targets.clone()
         };
         if targets.replay_snapshot.is_some() {
@@ -438,7 +438,7 @@ fn settled(
         record.version = record.version.max(TARGET_VERSION);
     }
     if let Some(targets) = targets.targets {
-        merge_targets(&mut record, targets);
+        merge_targets(&mut record, targets.into_vec());
     }
     // The bindings a settle carries (MIK-8407). The row's version is not
     // raised for them: only creation marks a row as recording bindings, so a
@@ -454,7 +454,10 @@ fn settled(
     }
     // The replay snapshot rides only a completed result that holds backend
     // output; any other outcome, and an output-free row, stores none.
-    record.replay_snapshot = targets.replay_snapshot.filter(|_| completes && !discard);
+    record.replay_snapshot = targets
+        .replay_snapshot
+        .filter(|_| completes && !discard)
+        .map(|snapshot| *snapshot);
     if record.replay_snapshot.is_some() {
         record.version = record.version.max(SNAPSHOT_VERSION);
     }

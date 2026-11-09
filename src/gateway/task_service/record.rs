@@ -372,20 +372,22 @@ pub(super) struct Record {
 /// creation) and the binding each call ran under (MIK-8407).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Provenance {
-    pub(crate) targets: Option<Vec<Target>>,
+    /// A boxed slice, as `replay_snapshot` is boxed: a settle's provenance
+    /// rides its future by value, under the dispatch futures' fixed budget.
+    pub(crate) targets: Option<Box<[Target]>>,
     pub(crate) bindings: Vec<crate::gateway::meta_mcp::admission::StepBinding>,
     /// Whether the settling round of a single call was refused before its
     /// backend: its answer is then the gateway's own (`ErrorAuthor::Gateway`).
     pub(crate) pre_send: crate::gateway::meta_mcp::dispatch_log::PreSend,
     /// The relay replay snapshot to store with a completed result
     /// ([`Record::replay_snapshot`]); dropped by any other outcome.
-    pub(crate) replay_snapshot: Option<Value>,
+    pub(crate) replay_snapshot: Option<Box<Value>>,
 }
 
 impl From<Option<Vec<Target>>> for Provenance {
     fn from(targets: Option<Vec<Target>>) -> Self {
         Self {
-            targets,
+            targets: targets.map(Vec::into_boxed_slice),
             ..Self::default()
         }
     }

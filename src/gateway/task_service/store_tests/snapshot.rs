@@ -29,7 +29,7 @@ fn result() -> Value {
 
 fn carrying(snapshot: Option<Value>) -> Provenance {
     Provenance {
-        replay_snapshot: snapshot,
+        replay_snapshot: snapshot.map(Box::new),
         ..Provenance::default()
     }
 }
