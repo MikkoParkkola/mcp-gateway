@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import enum
 import os
 import re
 import subprocess
@@ -54,9 +55,18 @@ class Unsupported(Exception):
     """Source this scanner cannot read with certainty; the caller reports it unresolved."""
 
 
-def blank(source: str) -> str:
+class Wipe(enum.Enum):
+    """What `blank` replaces with spaces."""
+
+    COMMENTS_AND_LITERALS = "comments and literals"
+    # Literals kept: for a scan whose patterns include string literals.
+    COMMENTS = "comments"
+
+
+def blank(source: str, mode: Wipe = Wipe.COMMENTS_AND_LITERALS) -> str:
     """`source` with every comment and string, raw string, byte string and char literal
-    replaced by spaces, newlines kept, so offsets and line numbers are unchanged."""
+    replaced by spaces (only comments with Wipe.COMMENTS), newlines kept, so offsets and
+    line numbers are unchanged."""
     out = list(source)
     i, n = 0, len(source)
 
@@ -64,6 +74,10 @@ def blank(source: str) -> str:
         for k in range(a, b):
             if out[k] != "\n":
                 out[k] = " "
+
+    def wipe_literal(a: int, b: int) -> None:
+        if mode is Wipe.COMMENTS_AND_LITERALS:
+            wipe(a, b)
 
     while i < n:
         c = source[i]
@@ -90,7 +104,7 @@ def blank(source: str) -> str:
             j = source.find(close, m.end())
             if j < 0:
                 raise Unsupported("unterminated raw string")
-            wipe(i, j + len(close))
+            wipe_literal(i, j + len(close))
             i = j + len(close)
         elif c == '"':  # a b"..." or c"..." prefix is just an identifier character before it
             j = i + 1
@@ -98,12 +112,12 @@ def blank(source: str) -> str:
                 j += 2 if source[j] == "\\" else 1
             if j >= n:
                 raise Unsupported("unterminated string")
-            wipe(i, j + 1)
+            wipe_literal(i, j + 1)
             i = j + 1
         elif c == "'":
             m = re.compile(r"'(?:\\(?:u\{[0-9a-fA-F]{1,6}\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'").match(source, i)
             if m:
-                wipe(i, m.end())
+                wipe_literal(i, m.end())
                 i = m.end()
             else:
                 i += 1  # a lifetime or label: 'a

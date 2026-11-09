@@ -22,6 +22,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # Features that exist only for tests: never in a release build.
 TEST_ONLY = frozenset({"sandbox-fixtures"})
+# Features that select a different product, not a capability of the full one:
+# `client-cli` builds the client-only download, checked by its own build.
+PRODUCT_MARKERS = frozenset({"client-cli"})
 
 
 def enabled(features: dict, name: str) -> set[str]:
@@ -58,7 +61,7 @@ def release_features(manifest: dict) -> list[str]:
     gone = TEST_ONLY.difference(features)
     if features and gone:
         raise SystemExit(f"release-features: test-only features missing from Cargo.toml: {sorted(gone)}")
-    picked = sorted(f for f in features if f != "default" and f not in TEST_ONLY)
+    picked = sorted(f for f in features if f != "default" and f not in TEST_ONLY | PRODUCT_MARKERS)
     if not picked:
         raise SystemExit("release-features: no features found in Cargo.toml")
     # A release feature (or `default`) that switches a test-only one on would
@@ -67,6 +70,9 @@ def release_features(manifest: dict) -> list[str]:
         reached = TEST_ONLY.intersection(enabled(features, f))
         if reached:
             raise SystemExit(f"release-features: {f} enables test-only {sorted(reached)}")
+        marked = PRODUCT_MARKERS.intersection(enabled(features, f))
+        if marked:
+            raise SystemExit(f"release-features: {f} enables product marker {sorted(marked)}")
     return picked
 
 
