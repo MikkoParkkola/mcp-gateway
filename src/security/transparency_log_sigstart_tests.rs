@@ -477,7 +477,7 @@ fn active_seq(fx: &Fixture) -> u64 {
         .expect("an open record")
 }
 
-/// R15 (b): a first start's predicted seq is the seq reopen_tail gives the
+/// R15 (b): a first start's predicted seq is the seq `reopen_tail` gives the
 /// new active file, for a genesis and for a log whose active file is gone
 /// (q17).
 #[test]
