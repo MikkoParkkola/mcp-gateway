@@ -339,3 +339,58 @@ async fn a_stored_answer_where_one_set_forms_anothers_value_is_refused() {
         "the formed value left: {wire}"
     );
 }
+
+/// A stored answer sealed at two depths (a tool result's own `_meta` and a
+/// task wire's `result`), with `value` in its text.
+fn sealed_answer(value: &str) -> crate::protocol::JsonRpcResponse {
+    let provenance = serde_json::json!({ "receipt": { "tool": "t" }, "public_signature": { "payload": "p", "sig": "s" } });
+    crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({
+            "text": format!("answer {value}"),
+            "_meta": { "provenance": provenance.clone() },
+            "result": { "_meta": { "provenance": provenance } },
+        }),
+    )
+}
+
+fn holding(value: &str) -> Arc<NeedleSet> {
+    let set = Arc::new(NeedleSet::with_grace(GRACE));
+    set.pin_configured(
+        "a",
+        &ConfiguredSecrets::of(vec![explicit("headers.A", value)]),
+    );
+    set
+}
+
+/// A redaction drops every provenance seal in the stored answer, at any
+/// depth, and keeps each receipt: the seals were made over the unredacted
+/// bytes, and their payload carries those bytes' digest.
+#[tokio::test(start_paused = true)]
+async fn a_redacted_stored_answer_keeps_no_seal_at_any_depth() {
+    let mut answer = sealed_answer("held-secret-value");
+    let outcome = super::scrub_stored(&[holding("held-secret-value")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_eq!(outcome, Scrubbed::Redacted, "{wire}");
+    assert!(!wire.contains("held-secret-value"), "{wire}");
+    assert!(
+        !wire.contains("public_signature"),
+        "a seal was kept: {wire}"
+    );
+    assert_eq!(
+        wire.matches("\"receipt\"").count(),
+        2,
+        "a receipt was dropped: {wire}"
+    );
+}
+
+/// Control: a scrub that removes nothing leaves the answer byte-identical,
+/// seals included.
+#[tokio::test(start_paused = true)]
+async fn a_clean_stored_answer_keeps_its_seals() {
+    let mut answer = sealed_answer("plain-text");
+    let before = serde_json::to_string(&answer).expect("serializes");
+    let outcome = super::scrub_stored(&[holding("held-secret-value")], &mut answer);
+    assert_eq!(outcome, Scrubbed::Clean);
+    assert_eq!(serde_json::to_string(&answer).expect("serializes"), before);
+}
