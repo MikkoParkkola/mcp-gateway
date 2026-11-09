@@ -212,7 +212,7 @@ impl MetaMcp {
         // is: a refusal here is the step the resumed chain ends on.
         // Boxed: the checks hold a credential resolution and a record write,
         // and inline they would make every caller's future large.
-        crate::gateway::delivery_facts::step(Box::pin(async {
+        let judged = Box::pin(async {
             // MIK-8387 S6: a scoped key's pending step whose backend is absent,
             // by this request's record first, is refused with the backend miss
             // and its one invocation record, before anything resolves for it.
@@ -236,6 +236,9 @@ impl MetaMcp {
                 if reason.is_policy() {
                     crate::gateway::delivery_facts::withheld();
                 }
+                // Recorded as the absence branch above records its refusal.
+                self.record_withheld(server, tool, reason, caller, session_id)
+                    .await;
                 return Err(crate::gateway::meta_mcp::visible::absent::absent_name(tool));
             }
             self.check_invocation_policy(
@@ -244,7 +247,14 @@ impl MetaMcp {
                 caller,
             )?;
             self.step_fingerprint(caller, (server, tool)).await
-        }))
+        });
+        // Under a trace id of the step's own: its decision notes are traced, so
+        // they are kept beside another step's traced note for the same target,
+        // and listed when no invocation record lands for that id.
+        let step_trace = crate::gateway::trace::generate();
+        crate::gateway::delivery_facts::step(Box::pin(crate::gateway::trace::with_trace_id(
+            step_trace, judged,
+        )))
         .await
     }
 }

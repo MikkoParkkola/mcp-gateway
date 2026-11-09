@@ -27,6 +27,12 @@ from pathlib import Path
 SBOM = ".spdx.json"
 BUNDLE = ".sigstore.json"
 SUMS = "SHA256SUMS.txt"
+# The client-only download's binaries; checked before the full product's
+# broader `mcp-gateway-` prefix. Their SBOM root is the release's recorded
+# client root: `mcp-gateway` when the client is a second bin of the same
+# package, `mcp-gateway-cli` when it is its own crate.
+CLIENT_PREFIX = "mcp-gateway-cli-"
+FULL_ROOT = "mcp-gateway"
 
 
 def is_sidecar(name: str) -> bool:
@@ -43,7 +49,11 @@ def binaries(directory: Path) -> list[str]:
     )
 
 
-def sbom_problems(path: Path, version: str) -> list[str]:
+def root_for(name: str, client_root: str) -> str:
+    return client_root if name.startswith(CLIENT_PREFIX) else FULL_ROOT
+
+
+def sbom_problems(path: Path, version: str, root: str = FULL_ROOT) -> list[str]:
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -62,8 +72,8 @@ def sbom_problems(path: Path, version: str) -> list[str]:
     if not cargo:
         # No crate list at all: the binary was not built with cargo auditable.
         problems.append(f"{path.name}: lists no pkg:cargo package (binary not built with cargo auditable?)")
-    elif f"pkg:cargo/mcp-gateway@{version}" not in cargo:
-        problems.append(f"{path.name}: does not describe mcp-gateway {version}")
+    elif f"pkg:cargo/{root}@{version}" not in cargo:
+        problems.append(f"{path.name}: does not describe {root} {version}")
     return problems
 
 
@@ -76,7 +86,7 @@ def sums_listed(path: Path) -> set[str]:
     return listed
 
 
-def problems(directory: Path, version: str, expected: list[str]) -> list[str]:
+def problems(directory: Path, version: str, expected: list[str], client_root: str = FULL_ROOT) -> list[str]:
     found = []
     present = {p.name for p in directory.iterdir() if p.is_file()}
     bins = binaries(directory)
@@ -86,13 +96,16 @@ def problems(directory: Path, version: str, expected: list[str]) -> list[str]:
         if name not in bins:
             found.append(f"{name}: expected binary is missing")
     for name in bins:
+        if name not in expected:
+            found.append(f"{name}: not an expected binary")
+    for name in bins:
         for suffix in (SBOM, BUNDLE):
             if name + suffix not in present:
                 found.append(f"{name}: no {suffix}")
         if name + SBOM in present:
             if name + SBOM + BUNDLE not in present:
                 found.append(f"{name}{SBOM}: no {BUNDLE}")
-            found.extend(sbom_problems(directory / (name + SBOM), version))
+            found.extend(sbom_problems(directory / (name + SBOM), version, root_for(name, client_root)))
     if SUMS not in present:
         found.append(f"{SUMS}: missing")
     else:
@@ -116,18 +129,28 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="check only that each named binary's SBOM describes this crate (per-target build check)",
     )
+    parser.add_argument(
+        "--client-root",
+        choices=[FULL_ROOT, "mcp-gateway-cli"],
+        default=FULL_ROOT,
+        help="the crate the client binaries' SBOMs must name (recorded per release)",
+    )
     args = parser.parse_args(argv)
     if args.sbom_only:
         found = []
         for name in args.expected:
             path = args.directory / (name + SBOM)
-            found.extend(sbom_problems(path, args.version) if path.is_file() else [f"{name}: no {SBOM}"])
+            found.extend(
+                sbom_problems(path, args.version, root_for(name, args.client_root))
+                if path.is_file()
+                else [f"{name}: no {SBOM}"]
+            )
         for line in found:
             print(line)
         if not found:
             print(f"{args.directory}: SBOM of each of {len(args.expected)} binaries lists its crates")
         return 1 if found else 0
-    found = problems(args.directory, args.version, args.expected)
+    found = problems(args.directory, args.version, args.expected, args.client_root)
     for line in found:
         print(line)
     if found:
