@@ -503,6 +503,24 @@ const ROWS: &[Row] = &[
         Payload::Json("{}"),
         [401, 403, 403, 422],
     ),
+    // src/gateway/ui/settings.rs (settings_save; `{}` lacks required fields,
+    // so the admin's answer is the fixed invalid_body refusal)
+    row(
+        "/ui/api/settings",
+        Method::POST,
+        "/ui/api/settings",
+        Payload::Json("{}"),
+        [401, 403, 403, 422],
+    ),
+    // src/gateway/ui/settings.rs (settings_diff; `{}` lacks required fields,
+    // so the admin's answer is the fixed invalid_body refusal)
+    row(
+        "/ui/api/settings/diff",
+        Method::POST,
+        "/ui/api/settings/diff",
+        Payload::Json("{}"),
+        [401, 403, 403, 422],
+    ),
     // src/gateway/ui/policies.rs (read_policies; read-only, from the
     // published config, so the admin is served)
     row(
