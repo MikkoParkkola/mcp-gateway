@@ -105,7 +105,7 @@ fn child() {
         return;
     };
     let format = match case.as_str() {
-        "json" | "delegated" | "denials" => NoticeFormat::Json,
+        "json" | "delegated" | "denials" | "email_subject" => NoticeFormat::Json,
         "text" => NoticeFormat::Text,
         other => panic!("unknown case {other}"),
     };
@@ -146,6 +146,7 @@ fn child() {
             "json" | "text" => exchange_and_use(&h, &claims).await,
             "delegated" => delegated(&h, &claims).await,
             "denials" => denials(&h, &claims).await,
+            "email_subject" => email_subjects(&h).await,
             other => panic!("unknown case {other}"),
         };
         tokio::spawn(async { tracing::info!("piilog-sentinel-task") })
@@ -183,6 +184,13 @@ fn child() {
             text.contains(marker),
             "{case}: no {marker:?} in the capture:\n{text}"
         );
+    }
+    // Email-shaped subjects reach audit lines by design (the stated limit);
+    // what this case checks is the warning itself.
+    if case == "email_subject" {
+        email_subject_checks(&text);
+        println!("piilog {case} child ok");
+        return;
     }
     for marker in forbidden {
         assert!(
@@ -290,4 +298,52 @@ fn a_delegated_sign_in_logs_no_email_and_mints_nothing() {
 #[test]
 fn refusals_and_the_identity_debug_carry_no_email() {
     in_child("denials");
+}
+
+const SUBJECT_WARNING: &str = "this identity provider's subjects are email addresses";
+
+/// Provider A sends two email-shaped subjects, one of them twice; provider B
+/// sends one and is refused by policy (the warning comes before policy).
+async fn email_subjects(h: &Harness) -> Markers {
+    let second = concat!("grace", "@", "example", ".org");
+    for subject in [EMAIL, EMAIL, second] {
+        let (status, body) = h.exchange(&h.mint(ISS_A, subject, &json!({}))).await;
+        assert_eq!(status, 200, "{subject}: {body}");
+    }
+    let (status, body) = h.exchange(&h.mint(ISS_B, EMAIL, &json!({}))).await;
+    assert_eq!(status, 403, "no rule for issuer B: {body}");
+    (&[SUBJECT_WARNING], &[])
+}
+
+/// Exactly one warning per provider, each carrying the subject's hash and
+/// never the subject's text.
+fn email_subject_checks(text: &str) {
+    let warnings: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains(SUBJECT_WARNING))
+        .collect();
+    assert_eq!(
+        warnings.len(),
+        2,
+        "one warning per provider:\n{}",
+        warnings.join("\n")
+    );
+    let hash = crate::key_server::email_hash::EmailHashKey::for_test().hash(EMAIL);
+    for issuer in [ISS_A, ISS_B] {
+        let mine: Vec<&&str> = warnings.iter().filter(|l| l.contains(issuer)).collect();
+        assert_eq!(mine.len(), 1, "{issuer}: {warnings:?}");
+        assert!(
+            mine[0].contains(&hash),
+            "{issuer}: the warning carries the subject's hash"
+        );
+        assert!(
+            !mine[0].to_lowercase().contains(&EMAIL.to_lowercase()),
+            "{issuer}: the warning prints the subject"
+        );
+    }
+}
+
+#[test]
+fn email_shaped_subjects_warn_once_per_provider_with_only_a_hash() {
+    in_child("email_subject");
 }

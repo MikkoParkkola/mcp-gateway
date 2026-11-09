@@ -208,6 +208,7 @@ async fn exchange_token(
             );
         }
     };
+    ks.note_email_subject(&identity);
 
     // Parse requested scopes from scope string
     let requested = parse_scope_string(&body.scope);
