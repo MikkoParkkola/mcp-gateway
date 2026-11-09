@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use super::MetaMcp;
 use super::grant_audit_fixture::{
-    CAPS, DECISION_KIND, Endpoint, PERSONAL, capability_backend, decisions, grant, grants, logger,
+    CAPS, DECISION_KIND, Endpoint, PERSONAL, capability_backend, grant, grants, logger,
+    wait_for_decisions,
 };
 use super::grant_decision_audit_tests::{api_key, context, gateway};
 use crate::protocol::RequestId;
@@ -96,8 +97,33 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
     let withheld = surfaced(withheld);
     let absent = denied_gateway(&endpoint, &absent_dir).0;
     log.fail_next_append_of_kind_for_test(DECISION_KIND);
-    let (answered, warnings) =
-        crate::test_log_capture::capture_warnings(|| runtime.block_on(call(&withheld)));
+    // The failed record is written after the call settles, on the slot's own
+    // task ("withheld notes are owned by their slot"): wait for its warning.
+    let (answered, warnings) = crate::test_log_capture::capture_warnings(|| {
+        runtime.block_on(async {
+            let answer = call(&withheld).await;
+            // The record is appended after the call settles: wait for the
+            // attempt, then let its failure be logged.
+            let attempts = crate::gateway::meta_mcp::grant_audit::seams::appends_for_test();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while crate::gateway::meta_mcp::grant_audit::seams::appends_for_test() == attempts
+                && std::time::Instant::now() < deadline
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            // The attempt has started: wait for its blocking write to finish,
+            // then let the detached task log the failure.
+            let drained = Arc::clone(&log);
+            let _ = tokio::task::spawn_blocking(move || {
+                drained.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
+            })
+            .await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            answer
+        })
+    });
     let expected = runtime.block_on(call(&absent));
     assert_eq!(
         answered, expected,
@@ -111,7 +137,7 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
     // same kind succeeds.
     runtime.block_on(call(&withheld));
     assert_eq!(
-        decisions(&dir).len(),
+        runtime.block_on(wait_for_decisions(&dir, 1)).len(),
         1,
         "row 7: the next decision record did not append"
     );
@@ -125,8 +151,9 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
 /// MIK-8340 row 7b (A5.1): the best-effort write covers the withheld call's
 /// own decision only. In one grant slot (one request), a decision noted
 /// before the withheld record, whose request-end write fails under
-/// `FailClosed`, still answers -32005; the withheld record was written at
-/// once. Catches a `note_withheld_best_effort` that takes every note in the slot.
+/// `FailClosed`, still answers -32005; the withheld record is written after
+/// the call settles (design: "withheld notes are owned by their slot").
+/// Catches a `note_withheld_best_effort` that takes every note in the slot.
 #[tokio::test]
 async fn row7b_another_decision_in_the_request_still_fails_closed() {
     let endpoint = Endpoint::start(false).await;
@@ -135,7 +162,7 @@ async fn row7b_another_decision_in_the_request_still_fails_closed() {
     let meta = surfaced(meta);
     let who = api_key("bob");
     let caller = context(&who);
-    let (own_written, verdict, _) =
+    let ((), verdict, _) =
         super::grant_audit::with_grant_slot(meta.transparency_logger.as_ref(), async {
             // Another decision in the same request, noted first.
             let other = meta.identity_grant_rule(
@@ -149,15 +176,14 @@ async fn row7b_another_decision_in_the_request_still_fails_closed() {
                 meta.withheld_surfaced(CAPS, PERSONAL, &caller, None)
             })
             .await;
-            let written_at_once = decisions(&dir).len();
             // Fail the request-end write, which holds only the other one.
             log.fail_next_append_of_kind_for_test(DECISION_KIND);
-            written_at_once
         })
         .await;
     assert_eq!(
-        own_written, 1,
-        "row 7b: the withheld record was not written at once"
+        wait_for_decisions(&dir, 1).await.len(),
+        1,
+        "row 7b: the withheld record was not written after the call settled"
     );
     assert!(
         matches!(verdict, Err(crate::Error::AuditUnavailable)),
@@ -204,8 +230,11 @@ fn row7c_a_cancelled_withheld_call_still_logs_its_failed_record() {
             .await
         });
         hold.held().await;
+        // The slot's work returned before its record's task was spawned, so
+        // the caller may already be done: either way it is gone, and the
+        // detached writer alone logs the warning.
         caller.abort();
-        assert!(caller.await.is_err(), "premise: the caller was cancelled");
+        let _ = caller.await;
         hold.release();
         let logged = tokio::time::timeout(
             std::time::Duration::from_secs(10),

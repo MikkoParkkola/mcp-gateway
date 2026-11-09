@@ -122,6 +122,91 @@ fn each_test_item_shape_is_blanked_by_its_own_extent() {
     }
 }
 
+/// MIK-9387.TCFG.1: every predicate in the shared case table, the Rust column.
+/// An item is blanked exactly when its cfg is false whenever `test` is.
+#[test]
+fn shared_cfg_cases_follow_the_rust_column() {
+    let table = include_str!("test_source_text_cases.tsv");
+    let mut rows = 0;
+    let mut wrong = Vec::new();
+    for line in table
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
+        let cells: Vec<&str> = line.split('\t').collect();
+        let [expr, _python, rust] = cells[..] else {
+            panic!("bad row: {line:?}");
+        };
+        let source = format!("#[cfg({expr})]\nfn probe() {{}}\nfn product() {{}}\n");
+        let out = production_text(&source);
+        assert!(
+            out.contains("fn product()"),
+            "{expr}: the next item is lost"
+        );
+        let blanked = !out.contains("probe");
+        if blanked != (rust == "yes") {
+            wrong.push(format!("{expr}: blanked {blanked}, table says {rust}"));
+        }
+        rows += 1;
+    }
+    assert!(rows > 20, "only {rows} rows");
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// MIK-9387.TCFG.1: an inner cfg counts in the leading attribute run of its own
+/// file or inline module, and nowhere else.
+#[test]
+fn an_inner_cfg_counts_only_in_the_leading_run_of_its_scope() {
+    let blanked: &[&str] = &[
+        "#![cfg(test)]\nfn probe() {}\n",
+        "//! docs\n// note\n#![doc = \"x\"]\n#![cfg(all(test, unix))]\nfn probe() {}\n",
+    ];
+    for source in blanked {
+        assert!(
+            !production_text(source).contains("probe"),
+            "kept: {source:?}"
+        );
+    }
+    let module = "mod t {\n    #![cfg(test)]\n    fn probe() {}\n}\nfn product() {}\n";
+    let out = production_text(module);
+    assert!(!out.contains("probe"), "{out:?}");
+    assert!(out.contains("fn product()"), "{out:?}");
+    let kept: &[&str] = &[
+        "ignore!(#![cfg(test)]);\nfn product() {}\n",
+        "mod outer { fn f() {} #![cfg(test)] fn product() {} }\n",
+        "fn f() {}\n#![cfg(test)]\nfn product() {}\n",
+        // A `mod` inside a macro's tokens is input the macro may drop.
+        "emit! { mod m { #![cfg(test)] fn product() {} } }\n",
+        "emit!( mod m { #![cfg(test)] fn product() {} } );\n",
+        "emit![ mod m { #![cfg(test)] fn product() {} } ];\n",
+        "macro_rules! m { () => { mod x { #![cfg(test)] fn product() {} } }; }\n",
+        "emit !{ mod m { #![cfg(test)] fn product() {} } }\n",
+        "宏!{ mod m { #![cfg(test)] fn product() {} } }\n",
+        "macro_rules! r#m { () => { mod x { #![cfg(test)] fn product() {} } }; }\n",
+        "macro_rules! 宏 { () => { mod x { #![cfg(test)] fn product() {} } }; }\n",
+    ];
+    for source in kept {
+        assert!(
+            production_text(source).contains("fn product()"),
+            "lost: {source:?}"
+        );
+    }
+    // A real module after a macro call still leads its own scope.
+    let after = "emit! { x }\nmod t {\n    #![cfg(test)]\n    fn probe() {}\n}\nfn product() {}\n";
+    let out = production_text(after);
+    assert!(!out.contains("probe"), "{out:?}");
+    assert!(out.contains("fn product()"), "{out:?}");
+}
+
+/// A predicate that does not parse keeps its item (the scan sees more).
+#[test]
+fn an_unparseable_predicate_keeps_its_item() {
+    for gate in ["any(test +)", "all(test, +)", "any(test,, unix)"] {
+        let source = format!("#[cfg({gate})]\nfn product() {{}}\n");
+        assert!(production_text(&source).contains("fn product()"), "{gate}");
+    }
+}
+
 /// An item whose block never closes stays (a scan sees more, never less),
 /// and an earlier, well-formed test item is still blanked.
 #[test]
@@ -172,7 +257,11 @@ fn no_production_identifier_is_blanked_anywhere_in_the_tree() {
         let file = syn::parse_file(&text)
             .unwrap_or_else(|e| panic!("{} does not parse: {e}", path.display()));
         let mut parsed = ProductionIdents::default();
-        syn::visit::Visit::visit_file(&mut parsed, &file);
+        // A file whose leading inner cfg holds only under test has no
+        // production names at all.
+        if !test_only(&file.attrs) {
+            syn::visit::Visit::visit_file(&mut parsed, &file);
+        }
         let code = sanitize(&out);
         let kept = words(&code);
         for (ident, want) in parsed.counts {
@@ -279,13 +368,46 @@ fn doc_attribute_end(cursor: syn::buffer::Cursor) -> Option<syn::buffer::Cursor>
     is_doc.then_some(after)
 }
 
-/// An outer `#[cfg(test)]`, exactly the mark the helper looks for.
+/// A `cfg` attribute, outer or inner, that cannot hold outside tests. Kept
+/// independent of `test_source_text::eval` on purpose: it tracks whether a
+/// predicate can be true and whether it can be false with `test` false, and
+/// an operand list that does not parse can be either.
 fn test_only(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        matches!(a.style, syn::AttrStyle::Outer)
-            && a.path().is_ident("cfg")
-            && matches!(&a.meta, syn::Meta::List(l) if l.tokens.to_string() == "test")
-    })
+    fn can(meta: &syn::Meta) -> (bool, bool) {
+        match meta {
+            syn::Meta::Path(p) if p.is_ident("test") => (false, true),
+            syn::Meta::List(l) if ["all", "any", "not"].iter().any(|k| l.path.is_ident(k)) => {
+                let Ok(ops) = l.parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                ) else {
+                    return (true, true);
+                };
+                let ops: Vec<(bool, bool)> = ops.iter().map(can).collect();
+                if l.path.is_ident("not") {
+                    return match ops[..] {
+                        [(t, f)] => (f, t),
+                        _ => (true, true),
+                    };
+                }
+                let all = l.path.is_ident("all");
+                let can_true = if all {
+                    ops.iter().all(|o| o.0)
+                } else {
+                    ops.iter().any(|o| o.0)
+                };
+                let can_false = if all {
+                    ops.iter().any(|o| o.1)
+                } else {
+                    ops.iter().all(|o| o.1)
+                };
+                (can_true, can_false)
+            }
+            _ => (true, true),
+        }
+    }
+    attrs
+        .iter()
+        .any(|a| a.path().is_ident("cfg") && a.parse_args::<syn::Meta>().is_ok_and(|m| !can(&m).0))
 }
 
 fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
