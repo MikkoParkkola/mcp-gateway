@@ -247,7 +247,7 @@ fn policy_write_without_store(role: ControlPlaneRole) -> axum::response::Respons
 fn decision_without_store(
     role: ControlPlaneRole,
     target_kind: ControlPlaneDecisionTargetKind,
-) -> StatusCode {
+) -> axum::response::Response {
     super::resolve_decision_core(
         Err("store unavailable".to_string()),
         &actor(role),
@@ -259,29 +259,36 @@ fn decision_without_store(
             rollback: rollback(),
         },
     )
-    .status()
 }
 
-#[tokio::test]
-async fn a_policy_write_with_no_store_is_still_refused_by_config() {
-    let resp = policy_write_without_store(ControlPlaneRole::Admin);
+/// The policy refusal, whole: every key from ADR-029's table in its order,
+/// and that the store is not enforced.
+const POLICY_REFUSAL: &str = "Policies are enforced from gateway config: security.tool_policy, \
+    security.firewall.rules, security.firewall.credential_redaction, security.firewall.collusion, \
+    security.sanitize_input and security.ssrf_protection. This store is not enforced.";
+
+async fn assert_policy_refusal(resp: axum::response::Response) {
     assert_eq!(resp.status(), StatusCode::CONFLICT);
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(body["reason_code"], "policies_managed_in_gateway_config");
+    assert_eq!(body["reason"], POLICY_REFUSAL);
 }
 
-#[test]
-fn a_policy_decision_with_no_store_is_still_refused_by_config() {
-    assert_eq!(
-        decision_without_store(
-            ControlPlaneRole::Admin,
-            ControlPlaneDecisionTargetKind::Policy
-        ),
-        StatusCode::CONFLICT
-    );
+#[tokio::test]
+async fn a_policy_write_with_no_store_is_still_refused_by_config() {
+    assert_policy_refusal(policy_write_without_store(ControlPlaneRole::Admin)).await;
+}
+
+#[tokio::test]
+async fn a_policy_decision_with_no_store_is_still_refused_by_config() {
+    assert_policy_refusal(decision_without_store(
+        ControlPlaneRole::Admin,
+        ControlPlaneDecisionTargetKind::Policy,
+    ))
+    .await;
 }
 
 #[test]
@@ -294,7 +301,8 @@ fn a_non_admin_policy_write_with_no_store_gets_rbac() {
         decision_without_store(
             ControlPlaneRole::Auditor,
             ControlPlaneDecisionTargetKind::Policy
-        ),
+        )
+        .status(),
         StatusCode::FORBIDDEN
     );
 }
@@ -305,7 +313,8 @@ fn an_unsupported_decision_kind_with_no_store_answers_422() {
         decision_without_store(
             ControlPlaneRole::Admin,
             ControlPlaneDecisionTargetKind::RuntimeHealth
-        ),
+        )
+        .status(),
         StatusCode::UNPROCESSABLE_ENTITY
     );
 }
