@@ -284,6 +284,8 @@ fn test_api_key_validation() {
                 personal: false,
                 explicit_principal: None,
                 previous: None,
+                approved_by: None,
+                cli_host: None,
             },
             ResolvedApiKey {
                 digest: test_digest("key2"),
@@ -298,6 +300,8 @@ fn test_api_key_validation() {
                 personal: false,
                 explicit_principal: None,
                 previous: None,
+                approved_by: None,
+                cli_host: None,
             },
         ],
         public_paths: vec![],
@@ -626,6 +630,8 @@ fn admin_key(admin: bool) -> ResolvedApiKey {
         personal: false,
         explicit_principal: None,
         previous: None,
+        approved_by: None,
+        cli_host: None,
     }
 }
 
