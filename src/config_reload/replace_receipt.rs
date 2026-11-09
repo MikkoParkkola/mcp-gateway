@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Revoke's postcondition, inspected only inside the shared writer's locks.
-#![expect(dead_code, reason = "revoke handler wiring follows in the next slice")]
+#![cfg_attr(
+    not(feature = "webui"),
+    expect(dead_code, reason = "revoke requires webui")
+)]
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};

@@ -219,6 +219,8 @@ pub(crate) mod order;
 mod audit;
 #[path = "replace_receipt.rs"]
 mod receipt;
+#[cfg(feature = "webui")]
+pub(crate) use audit::replace_audited_revoke;
 pub(crate) use audit::{Audit, Intent, IntentSink, startup_recovery_intent};
 pub(crate) use audit::{AuditPosture, GatewayAuth};
 #[cfg(feature = "webui")]
@@ -227,6 +229,8 @@ pub(crate) use audit::{BackendOp, NO_AUDIT_LOG};
 pub(crate) use audit::{IntentId, replace_detached};
 #[cfg(any(test, feature = "webui"))]
 pub(crate) use audit::{IntentKind, replace_audited};
+#[cfg(feature = "webui")]
+pub(crate) use receipt::RevokeCheck;
 
 #[path = "replace_slots.rs"]
 mod slots;
@@ -520,6 +524,10 @@ impl ReloadContext {
         };
         // The new bytes are computed, and their slots checked against the
         // secrets, before any entry exists: a refusal creates nothing.
+        #[cfg(test)]
+        if receipt.is_some() {
+            order::record(&target, "target_compute");
+        }
         let template = (replace.compute)(&current).map_err(ReplaceError::Refused)?;
         let step = replace.secrets.filter(|step| !step.values.is_empty());
         let fields = step_fields(step.as_ref());

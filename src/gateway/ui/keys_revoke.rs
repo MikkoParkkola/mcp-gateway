@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `DELETE /ui/api/keys/{name}`: admit, revision-check and select exact targets.
-//! Valid selections await the audited writer and cannot report success.
+//! Success requires the shared audited writer's lock-held absence receipt.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
@@ -17,7 +17,11 @@ use sha2::{Digest, Sha256};
 use super::config_file::{Gateway, read_gateway};
 use super::errors::{flat_error, stale, structured_error};
 use super::guard::Guard;
-use crate::config_reload::Generation;
+use crate::config_persistence::keyedit::{Change, FieldPath, Segment, edit_in_place};
+use crate::config_reload::{
+    AuditPosture, Expected, GatewayAuth, Generation, IntentKind, RELOAD_LOCK_WAIT, Replace,
+    ReplaceError, Replaced, RevokeCheck, refuse_multi_user_flip, replace_audited_revoke,
+};
 use crate::gateway::auth::digest_tag_of;
 use crate::gateway::router::AppState;
 
@@ -70,7 +74,125 @@ pub(super) async fn revoke_key(
     let Some(context) = state.meta_mcp.reload_context() else {
         return super::errors::config_refusal().into_response();
     };
-    let overlay = context.live_env().get();
+    if let Err(error) = select_config(
+        &config,
+        &context.live_env().get(),
+        &generation,
+        &name,
+        body.expected_key_tag.as_deref(),
+    ) {
+        return flat_error(StatusCode::CONFLICT, error).into_response();
+    }
+    let Some(log) = state.transparency_log.clone() else {
+        return flat_error(StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable").into_response();
+    };
+    let who =
+        super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
+    let audit = match AuditPosture::of(
+        Some(log),
+        GatewayAuth::of(state.live_config.running().auth.enabled),
+    )
+    .key_write(IntentKind::KeyRevoke, who, &name)
+    {
+        Ok(audit) => audit,
+        Err(error) => return refused(error),
+    };
+    let tags = Arc::new(OnceLock::new());
+    let check = RevokeCheck {
+        name: name.clone(),
+        tags: tags.clone(),
+        live: state.live_config.clone(),
+    };
+    let live = state.live_config.clone();
+    let env = context.live_env().clone();
+    let replace = Replace {
+        expected: Expected::Revision(revision),
+        replaced: Replaced::Discard,
+        secrets: None,
+        compute: Box::new(move |bytes| {
+            let text = std::str::from_utf8(bytes).map_err(|_| "config_refused".to_owned())?;
+            let mut config: crate::config::Config =
+                crate::yaml::from_str(text).map_err(|_| "config_refused".to_owned())?;
+            let selected = select_config(
+                &config,
+                &env.get(),
+                &live.generation(),
+                &name,
+                body.expected_key_tag.as_deref(),
+            )?;
+            let at = config.auth.api_keys.iter().position(|key| key.name == name);
+            config.auth.api_keys.retain(|key| key.name != name);
+            refuse_multi_user_flip(live.running(), &config.auth)
+                .map_err(|_| "restart_required".to_owned())?;
+            let changes: Vec<_> = at
+                .into_iter()
+                .map(|at| {
+                    (
+                        FieldPath(vec![
+                            Segment::Key("auth".into()),
+                            Segment::Key("api_keys".into()),
+                            Segment::Index(at),
+                        ]),
+                        Change::Remove,
+                    )
+                })
+                .collect();
+            let template = edit_in_place(text, &changes).map_err(|_| "not_written".to_owned())?;
+            tags.set(selected)
+                .map_err(|_| "target_changed".to_owned())?;
+            Ok(template)
+        }),
+    };
+    match replace_audited_revoke(context, replace, audit, RELOAD_LOCK_WAIT, check).await {
+        Ok(receipt) => (
+            StatusCode::OK,
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
+            Json(serde_json::json!({"name": receipt.name, "revoked": true, "revision": receipt.revision.as_str()})),
+        ).into_response(),
+        Err(error) => refused(error),
+    }
+}
+
+/// Only the receipt proves success; never infer it from disk or reauthenticate.
+fn refused(error: ReplaceError) -> Response {
+    let (status, message) = match error {
+        ReplaceError::Stale { current } => return stale(&current).into_response(),
+        ReplaceError::Busy => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the config is being written; retry",
+        ),
+        ReplaceError::AuditRefused(_) | ReplaceError::NoAuditLog => {
+            (StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable")
+        }
+        ReplaceError::NoConfigFile => (StatusCode::CONFLICT, "no_config_file"),
+        ReplaceError::ConfigRefused(_) => return super::errors::config_refusal().into_response(),
+        ReplaceError::Refused(error) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": error, "revoked": false})),
+            )
+                .into_response();
+        }
+        ReplaceError::Unsupported(_)
+        | ReplaceError::Stage(_)
+        | ReplaceError::Write(_)
+        | ReplaceError::Secrets(_) => (StatusCode::INTERNAL_SERVER_ERROR, "not_written"),
+        ReplaceError::ReloadRefused(_)
+        | ReplaceError::RollbackFailed { .. }
+        | ReplaceError::Unconfirmed { .. }
+        | ReplaceError::Failed(_) => (StatusCode::INTERNAL_SERVER_ERROR, "state_uncertain"),
+    };
+    flat_error(status, message).into_response()
+}
+
+/// Resolve the exact file and live identities, both at admission and under locks.
+fn select_config(
+    config: &crate::config::Config,
+    overlay: &crate::config::EnvOverlay,
+    generation: &Generation,
+    name: &str,
+    expected: Option<&str>,
+) -> Result<BTreeSet<String>, String> {
     let file = config
         .auth
         .api_keys
@@ -78,14 +200,12 @@ pub(super) async fn revoke_key(
         .map(|key| {
             Ok(KeyIdentity {
                 name: key.name.as_str(),
-                current: key.resolve_digest(&overlay)?,
-                previous: key.resolve_previous_digest(&overlay)?,
+                current: key.resolve_digest(overlay)?,
+                previous: key.resolve_previous_digest(overlay)?,
             })
         })
         .collect::<crate::Result<Vec<_>>>();
-    let Ok(file) = file else {
-        return super::errors::config_refusal().into_response();
-    };
+    let file = file.map_err(|_| "config_refused".to_owned())?;
     let running = generation.auth().api_keys();
     let live: Vec<_> = running
         .iter()
@@ -95,16 +215,13 @@ pub(super) async fn revoke_key(
             previous: key.previous.as_ref().map(|slot| slot.digest),
         })
         .collect();
-    if let Err(error) = select_target(
+    select_target(
         &file,
         &live,
-        &name,
-        body.expected_key_tag.as_deref(),
+        name,
+        expected,
         generation.auth().bearer_token.as_deref(),
-    ) {
-        return flat_error(StatusCode::CONFLICT, error).into_response();
-    }
-    flat_error(StatusCode::NOT_IMPLEMENTED, "not_implemented").into_response()
+    )
 }
 
 /// Digest-only inputs keep selection independent of secret-reference I/O.
@@ -122,7 +239,7 @@ impl KeyIdentity<'_> {
     }
 }
 
-/// Pure A52 selection, to be repeated under the writer locks in chunk 3.
+/// Pure A52 selection, repeated under the writer locks before editing.
 /// Duplicate names refuse with the name rather than picking an arbitrary row.
 /// Different file/live current digests or a binding missing from either
 /// selected record refuse as target_changed: neither may retarget a replacement.

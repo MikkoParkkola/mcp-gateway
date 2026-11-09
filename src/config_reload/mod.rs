@@ -293,7 +293,8 @@ pub(crate) use reload_context::replace::order as write_order;
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::{
     AuditPosture, BackendOp, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG,
-    Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
+    Replace, ReplaceError, ReplaceOutcome, Replaced, RevokeCheck, SecretStep, replace_audited,
+    replace_audited_revoke,
 };
 #[cfg(test)]
 use reload_context::{
