@@ -32,7 +32,7 @@ async fn gateway_with(auth: bool, enabled: Option<bool>, dir: &tempfile::TempDir
 
 #[tokio::test]
 async fn audit_log_open_failure_refuses_serve_with_auth() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let gateway = gateway(true, &dir).await;
     assert!(
         gateway.build_meta_mcp().await.is_err(),
@@ -45,7 +45,7 @@ async fn audit_log_open_failure_refuses_serve_with_auth() {
 /// succeed and this would fail.
 #[tokio::test]
 async fn an_unset_audit_switch_opens_the_log_with_auth() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let gateway = gateway_with(true, None, &dir).await;
     let err = match gateway.build_meta_mcp().await {
         Ok(_) => panic!("auth is on and the switch unset, so the log must open (and fail here)"),
@@ -60,7 +60,7 @@ async fn an_unset_audit_switch_opens_the_log_with_auth() {
 /// Positive control: auth off keeps today's warn-and-continue.
 #[tokio::test]
 async fn audit_log_open_failure_with_auth_off_still_starts() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let gateway = gateway(false, &dir).await;
     assert!(gateway.build_meta_mcp().await.is_ok());
 }
@@ -74,7 +74,7 @@ fn refused_while_leased(auth: bool) -> std::pin::Pin<Box<impl std::future::Futur
 }
 
 async fn refused_while_leased_unboxed(auth: bool) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let held = crate::security::transparency_log::TransparencyLogConfig {
         enabled: true,
@@ -153,7 +153,7 @@ fn audit_log_maps_every_configured_field() {
 /// is writable, so a start that opened the log would create the file.
 #[tokio::test]
 async fn an_unset_audit_switch_without_auth_writes_no_log() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit").join("audit.jsonl");
     let mut config = Config::default();
     config.security.transparency_log.path = path.to_string_lossy().into_owned();

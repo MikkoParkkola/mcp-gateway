@@ -19,6 +19,9 @@ pub(super) enum Extra {
     /// Every backend request is counted, then never answered, so a stage
     /// that waits on a backend before answering never answers.
     Hang,
+    /// Every `tools/call` is counted, then never answered; lists answer, so a
+    /// call reaches its send and waits there.
+    HangCall,
     /// `beta` is a `passthrough: true` backend.
     BetaPassthrough,
     /// `security.posture: hardened` (auth stays off).

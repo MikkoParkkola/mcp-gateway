@@ -36,6 +36,8 @@ pub(super) struct Refused<'a> {
     session_id: &'a str,
     /// The request firewall refused it, for the web UI's counters.
     firewall: bool,
+    /// The trace the route stage authorized the refused target under.
+    trace: Option<String>,
 }
 
 /// What a refusal records: its outcome and the target resolved before it.
@@ -62,7 +64,14 @@ impl<'a> Refused<'a> {
             who: AuditWho::from_request(client, grant_subject, record_key),
             session_id,
             firewall: false,
+            trace: None,
         }
+    }
+
+    /// Record the refusal under `trace`, the one its decision note carries.
+    pub(super) fn with_trace(mut self, trace: Option<String>) -> Self {
+        self.trace = trace;
+        self
     }
 
     /// Mark this refusal as the request firewall's.
@@ -279,6 +288,8 @@ impl<'a> Refused<'a> {
                 firewall: self.firewall,
                 cache_hit: false,
             },
+            // A router refusal: no send began.
+            None,
         );
         let log = state.transparency_log.as_ref()?;
         let otel_trace_id = self
@@ -286,8 +297,13 @@ impl<'a> Refused<'a> {
             .get("_meta")
             .and_then(crate::protocol::trace::TraceContext::from_meta)
             .and_then(|tc| tc.trace_id().map(str::to_string));
-        let trace_id =
-            crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
+        // The trace the refusal's decision note was taken under, when the route
+        // stage minted one (a step's authorization), so the two are one call.
+        let trace_id = self
+            .trace
+            .clone()
+            .or_else(crate::gateway::trace::current)
+            .unwrap_or_else(crate::gateway::trace::generate);
         let envelope = AuditEnvelope {
             trace_id: Some(trace_id.clone()),
             otel_trace_id: otel_trace_id.clone(),
@@ -315,13 +331,16 @@ impl<'a> Refused<'a> {
         ));
         let session = self.session_id.to_string();
         let recorded = trace_id.clone();
+        // Taken here: the blocking append below has no task-locals. Run only
+        // after the append returned Ok, so a failed write marks nothing.
+        let landed = crate::gateway::meta_mcp::grant_audit::invocation_landing();
         // The meta writer's correlation ladder; a modern call's session is
         // `""`, so it falls to the minted trace id (MIK-7640).
         let written = log
             .append_bounded(move |log| {
                 let key =
                     CorrelationKey::ladder(otel_trace_id.as_deref(), Some(&session), &trace_id);
-                log.log_invocation_attributed(
+                let appended = log.log_invocation_attributed(
                     key,
                     &envelope,
                     InvocationTarget {
@@ -333,7 +352,11 @@ impl<'a> Refused<'a> {
                     None,
                     attribution,
                     Some(decision.as_ref()),
-                )
+                );
+                if appended.is_ok() {
+                    landed.land(&trace_id);
+                }
+                appended
             })
             .await;
         Some(written.map(|()| recorded).map_err(Into::into))

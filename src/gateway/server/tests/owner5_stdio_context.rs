@@ -140,7 +140,7 @@ async fn stdio_refuses_an_account_dependent_call_and_serves_a_local_mutation() {
             ..BackendConfig::default()
         },
     );
-    let data_dir = tempfile::tempdir().expect("tempdir");
+    let data_dir = crate::test_dir_keep::kept_tempdir();
     // The builder publishes nothing: the line is the fixture's own config.
     let line = crate::config_reload::LiveConfig::new(config.clone()).generation();
     let built = Gateway::new(config)

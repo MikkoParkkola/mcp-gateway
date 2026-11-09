@@ -255,13 +255,13 @@ async fn rig(mode: ChainMode, release: Release) -> Rig {
 /// identity, rendered the way `route_task_owner` renders it, so the
 /// router-POST cancel below is judged the task's owner.
 fn owner() -> String {
-    VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@adapter.test".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp.adapter.test".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@adapter.test".to_string(),
+        None,
+        Vec::new(),
+        "https://idp.adapter.test".to_string(),
+    )
     .stable_actor_id()
 }
 

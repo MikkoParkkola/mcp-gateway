@@ -20,7 +20,9 @@ use tracing::warn;
 
 use crate::clock::ClockBeforeEpoch;
 use crate::config::ProtocolRevisionWindow;
-use crate::protocol_revision_telemetry::window::{HttpSegmentSink, SegmentCounts, WriterIdentity};
+use crate::protocol_revision_telemetry::window::{
+    HttpSegmentSink, Kept, SegmentCounts, WriterIdentity,
+};
 #[cfg(test)]
 use crate::protocol_revision_telemetry::window::{stall_seam, window_paths};
 
@@ -112,9 +114,53 @@ struct Writers {
     /// can tell whether a write it started is still running.
     #[cfg(test)]
     seam_path: Option<PathBuf>,
+    /// Test support: when armed (`hold_next_work`), the next writer thread
+    /// signals as it starts and waits for release before any of its work
+    /// runs, so a row can act after the spawn and before the work.
+    #[cfg(test)]
+    hold_work: Mutex<Option<WorkGate>>,
+}
+
+/// The thread side of a `hold_next_work` gate.
+#[cfg(test)]
+struct WorkGate {
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+/// The row side of a `hold_next_work` gate. `entered` signals once the
+/// thread waits. Dropping this releases the thread too, so a row that fails
+/// first never strands it.
+#[cfg(test)]
+struct HeldWork {
+    entered: std::sync::mpsc::Receiver<()>,
+    release: std::sync::mpsc::Sender<()>,
+}
+
+#[cfg(test)]
+impl HeldWork {
+    /// Let the held thread run its work.
+    fn release(self) {
+        let _ = self.release.send(());
+    }
 }
 
 impl Writers {
+    /// Hold the next writer thread before its work (test support).
+    #[cfg(test)]
+    fn hold_next_work(&self) -> HeldWork {
+        let (entered_tx, entered) = std::sync::mpsc::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        *self
+            .hold_work
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(WorkGate {
+            entered: entered_tx,
+            release: release_rx,
+        });
+        HeldWork { entered, release }
+    }
+
     /// Run `work` on a writer thread named `name` that this count covers.
     fn spawn(
         self: &Arc<Self>,
@@ -127,6 +173,12 @@ impl Writers {
         let started_by = self.spawner.clone();
         #[cfg(test)]
         let counted = self.seam_path.as_deref().map(stall_seam::live);
+        #[cfg(test)]
+        let gate = self
+            .hold_work
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         let thread = move || {
             let _running = Running(writers);
             // Dropped before `_running`, so a drained saver leaves none live.
@@ -134,6 +186,12 @@ impl Writers {
             let _live = counted;
             #[cfg(test)]
             crate::test_late_write::writing_for(started_by);
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                let _ = gate.entered.send(());
+                // Released by a send, or by the row dropping its side.
+                let _ = gate.release.recv();
+            }
             work();
         };
         #[cfg(test)]
@@ -327,11 +385,12 @@ fn open_detached(
 ) -> impl std::future::Future<Output = Result<bool, tokio::sync::oneshot::error::RecvError>> {
     let (done, opened) = tokio::sync::oneshot::channel();
     let (sink, data_dir, identity) = (Arc::clone(sink), data_dir.to_path_buf(), identity.clone());
+    let kept = kept_at_spawn(&data_dir);
     let spawned = writers.spawn("protocol-revision window open", move || {
         let mut held = sink
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _ = done.send(open_into(&mut held, &data_dir, identity, clock_ms));
+        let _ = done.send(open_into(&mut held, &data_dir, identity, clock_ms, kept));
     });
     if let Err(error) = spawned {
         warn!(%error, "the window open could not start a thread");
@@ -339,13 +398,29 @@ fn open_detached(
     opened
 }
 
+/// The temp dirs a detached open must keep, taken when its thread is
+/// spawned, while the test that started the write still holds its share.
+/// Looked up on the thread instead, a late open would find the test's dir
+/// already gone and recreate it.
+#[cfg(test)]
+fn kept_at_spawn(data_dir: &std::path::Path) -> Kept {
+    crate::test_dir_keep::kept_dirs_for(data_dir)
+}
+
+/// Nothing to keep in a release build.
+#[cfg(not(test))]
+fn kept_at_spawn(_data_dir: &std::path::Path) -> Kept {
+    Kept
+}
+
 /// Open into `held` unless already open. `true` once a sink is held; never
-/// after the seal.
+/// after the seal. `kept` is what the spawner captured (`kept_at_spawn`).
 fn open_into(
     held: &mut SinkState,
     data_dir: &std::path::Path,
     identity: WriterIdentity,
     clock_ms: fn() -> Result<u64, ClockBeforeEpoch>,
+    kept: Kept,
 ) -> bool {
     match held {
         SinkState::Open(_) => return true,
@@ -355,7 +430,7 @@ fn open_into(
     let Ok(now_ms) = clock_ms() else {
         return false;
     };
-    match HttpSegmentSink::open(data_dir, identity, now_ms / 1_000) {
+    match HttpSegmentSink::open_with(data_dir, identity, now_ms / 1_000, kept) {
         Ok(opened) => {
             *held = SinkState::Open(opened);
             true
@@ -380,6 +455,7 @@ fn checkpoint_detached(
 ) {
     let (sink, data_dir, identity) = (Arc::clone(sink), data_dir.to_path_buf(), identity.clone());
     let counts = Arc::clone(counts);
+    let kept = kept_at_spawn(&data_dir);
     let spawned = writers.spawn("protocol-revision window checkpoint", move || {
         #[cfg(test)]
         let seam_path = window_paths(&data_dir).0;
@@ -391,7 +467,7 @@ fn checkpoint_detached(
                 Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
                 Err(std::sync::TryLockError::WouldBlock) => return,
             };
-            if !open_into(&mut held, &data_dir, identity, clock_ms) {
+            if !open_into(&mut held, &data_dir, identity, clock_ms, kept) {
                 return;
             }
             let (SinkState::Open(sink), Ok(now_ms)) = (&mut *held, clock_ms()) else {
@@ -415,3 +491,7 @@ fn checkpoint_detached(
 #[cfg(test)]
 #[path = "window_saver_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "window_saver_keep_tests.rs"]
+mod keep_tests;

@@ -37,7 +37,7 @@ struct Served {
     stdout: Stdout,
     seen: Seen,
     task: JoinHandle<crate::Result<()>>,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 async fn spawn_backend() -> (String, Seen) {
@@ -86,7 +86,7 @@ async fn spawn_backend() -> (String, Seen) {
 /// A gateway serving stdio against the recording backend, past its handshake.
 async fn serve() -> Served {
     let (backend_url, seen) = spawn_backend().await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     let yaml = format!(
         "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\ntasks:\n  store_dir: {}\n",

@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 use crate::security::audit::{AuditOutcome, CredentialKind};
 
 use crate::local_day as day;
+mod latency;
+// The latency readers serve the web UI, as `view` does.
+#[cfg(any(test, feature = "webui"))]
+mod latency_view;
 pub(crate) mod persist;
 mod ring;
 mod snapshot;
@@ -30,6 +34,17 @@ mod sums;
 #[cfg(any(test, feature = "webui"))]
 mod view;
 
+pub(crate) use latency::End;
+#[cfg(test)]
+pub(crate) use latency_view::LatPoint;
+#[cfg(feature = "webui")]
+pub(crate) use latency_view::ServerLatency;
+
+/// The value a series reports for a send of `elapsed`: its bin's midpoint.
+#[cfg(test)]
+pub(crate) fn latency_bin_ms(elapsed: std::time::Duration) -> u64 {
+    latency::bin_ms(latency::bin_of(elapsed))
+}
 pub(crate) use ring::Series;
 // Named only by the web UI's routes; the module's own tests use it in place.
 #[cfg(feature = "webui")]
@@ -315,6 +330,22 @@ impl<K: Hash + Eq + Clone> Dimension<K> {
         }
         swept
     }
+
+    /// Record one call's backend send time on `key`'s series, or on the
+    /// overflow when `key` is `None` or holds no slot (it was counted there).
+    fn sample(
+        &mut self,
+        key: Option<&K>,
+        at: u64,
+        day: Option<u64>,
+        sample: (std::time::Duration, End),
+    ) {
+        let series = match key.and_then(|k| self.labels.get_mut(k)) {
+            Some(series) => series,
+            None => &mut self.overflow,
+        };
+        series.latency.add(at, day, sample.0, sample.1);
+    }
 }
 
 /// Everything one store holds, cloned whole for a save.
@@ -423,7 +454,21 @@ impl CounterStore {
     }
 
     /// Count `call`, finished at unix second `at`, on `zone`'s days.
+    #[cfg(test)]
     pub(crate) fn record<Tz: TimeZone>(&self, call: &Call<'_>, at: u64, zone: &Tz) {
+        self.record_timed(call, at, zone, None);
+    }
+
+    /// [`Self::record`], plus the call's backend send time when a send began:
+    /// one sample per counted call, under the same lock, in the
+    /// same bucket and on the same server label as its count.
+    pub(crate) fn record_timed<Tz: TimeZone>(
+        &self,
+        call: &Call<'_>,
+        at: u64,
+        zone: &Tz,
+        sample: Option<(std::time::Duration, End)>,
+    ) {
         if call.tally.is_empty() {
             return;
         }
@@ -438,6 +483,7 @@ impl CounterStore {
         };
         let caller = normalize(call.caller);
         let pair = server.clone().map(|server| (caller.clone(), server));
+        let sampled = sample.map(|sample| (server.clone(), sample));
         let mut inner = self.inner.lock();
         let day = Some(inner.day_of(at, zone));
         inner.global.add(at, day, counts);
@@ -448,6 +494,10 @@ impl CounterStore {
             inner.caller_server.add(pair, at, day, counts),
         ];
         inner.sweeps += swept.iter().map(|&s| u64::from(s)).sum::<u64>();
+        if let Some((server, sample)) = sampled {
+            inner.global.latency.add(at, day, sample.0, sample.1);
+            inner.server.sample(server.as_ref(), at, day, sample);
+        }
     }
 
     /// Record a marker at unix second `at`.
@@ -503,7 +553,21 @@ impl CounterStore {
     /// serialized after it is released.
     #[cfg(test)]
     pub(crate) fn encode(&self, binary_version: &str, saved_at: u64) -> Vec<u8> {
-        snapshot::encode(&self.snapshot(), binary_version, saved_at)
+        snapshot::encode(&self.saved_snapshot(saved_at), binary_version, saved_at)
+    }
+
+    /// The copy of the store a save at `saved_at` writes: half-hour latency
+    /// slots the clock has left are closed, not saved as live histograms
+    /// (the live store closes them on its next record). Every save path
+    /// takes it, so what a test encodes is what the gateway writes.
+    pub(crate) fn saved_snapshot(&self, saved_at: u64) -> Inner {
+        let mut inner = self.snapshot();
+        inner.global.latency.finalize(saved_at, None);
+        inner.server.overflow.latency.finalize(saved_at, None);
+        for series in inner.server.labels.values_mut() {
+            series.latency.finalize(saved_at, None);
+        }
+        inner
     }
 
     /// Restore from `bytes` at `now`, re-applying every bound. Returns the

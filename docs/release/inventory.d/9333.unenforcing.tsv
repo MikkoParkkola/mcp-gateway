@@ -1,0 +1,1 @@
+src/gateway/server/window_saver.rs	kept_at_spawn	2	The release-build form returns the empty Kept marker and decides nothing about access; test builds use the other form to take the temp dirs a detached telemetry open keeps

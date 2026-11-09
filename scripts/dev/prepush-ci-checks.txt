@@ -9,9 +9,10 @@ python3 scripts/ci/check-gateway-spawns.py	0	closed
 python3 scripts/ci/check-gateway-spawns.py --self-test	0	closed
 python3 scripts/ci/check-pick-then-bind.py	13	closed
 python3 scripts/ci/check-pick-then-bind.py --self-test	0	closed
+python3 scripts/ci/check-reads-token.py --self-test	0	closed
 python3 scripts/ci/check-pipefail-grep-q.py	0	closed
 "$GATE_PY" scripts/ci/check-request-panics.py	9	closed
-"$GATE_PY" scripts/ci/check-request-panics.py --base <BASE_TIP>	1	closed
+"$GATE_PY" scripts/ci/check-request-panics.py --base <BASE_TIP> --compare merge-base	1	closed
 "$GATE_PY" scripts/ci/check-request-panics.py --self-test	18	closed
 python3 scripts/ci/check_advisory_exceptions.py	0	closed
 python3 scripts/ci/check_advisory_exceptions.py --self-test	0	closed
@@ -34,16 +35,22 @@ python3 scripts/ci/test_os_label_routing.py	1	closed
 python3 scripts/ci/test_mingw_debs.py	1	closed
 python3 scripts/ci/test_release_features.py	0	closed
 python3 scripts/ci/test_throwaway_routing.py	1	closed
+python3 scripts/dev/check-doc-backticks.py	1	closed
+python3 scripts/dev/check-doc-backticks.py --base <BASE_TIP>	1	closed
 python3 scripts/dev/check-event-source-scope.py <BASE_TIP>	1	closed
-python3 scripts/dev/check-file-size.py --base <BASE_TIP>	1	closed
+python3 scripts/dev/check-file-size.py --base <BASE_TIP> --compare merge-base	1	closed
 python3 scripts/dev/check-orphan-test-modules.py	22	closed
+python3 scripts/dev/check_cfg_reader_copies.py	1	closed
+python3 scripts/dev/check_cfg_reader_copies.py --base <BASE_TIP> --compare merge-base	1	closed
 python3 scripts/dev/check-registry-packages.py --offline	1	closed
-"$GATE_PY" scripts/dev/check-timing-asserts.py --base <BASE_TIP>	1	closed
+"$GATE_PY" scripts/dev/check-timing-asserts.py --base <BASE_TIP> --compare merge-base	1	closed
 python3 scripts/dev/cwe532-leak-lint.py src crates	5	closed
 python3 scripts/dev/test_check_control_drift.py	7	closed
+python3 scripts/dev/test_check_doc_backticks.py	1	closed
 python3 scripts/dev/test_check_event_source_scope.py	3	closed
 python3 scripts/dev/test_check_file_size.py	4	closed
 python3 scripts/dev/test_check_orphan_test_modules.py	22	closed
+python3 scripts/dev/test_check_cfg_reader_copies.py	3	closed
 python3 scripts/dev/test_check_owasp_citations.py	38	closed
 python3 scripts/dev/test_check_registry_packages.py	0	closed
 python3 scripts/dev/test_check_registry_content.py	0	closed
@@ -78,6 +85,7 @@ python3 scripts/release/test_check_known_issues.py	1	closed
 python3 scripts/release/test_check_macos_exclusions.py	4	closed
 python3 scripts/release/test_check_nfr_demo_1_recordings.py	1	closed
 python3 scripts/release/test_check_release_assets.py	1	closed
+python3 scripts/release/test_check_release_assets_client.py	1	closed
 python3 scripts/release/test_check_security_fragments.py	1	closed
 # Surface inventory: non-cli tables and row format for all tables. The cli table's membership
 # gate is tests/cli_surface_inventory.rs (cargo, CI only), not this cargo-free step.

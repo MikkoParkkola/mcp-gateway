@@ -173,13 +173,13 @@ pub(super) fn settled(status: crate::protocol::tasks::TaskStatus) -> bool {
 }
 
 pub(super) fn alice() -> String {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@adapter.test".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp.adapter.test".to_string(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@adapter.test".to_string(),
+        None,
+        Vec::new(),
+        "https://idp.adapter.test".to_string(),
+    )
     .stable_actor_id()
 }
 
@@ -221,7 +221,17 @@ async fn a_grant_revoked_after_submit_is_still_refused_by_the_worker() {
         tokio::task::yield_now().await;
     };
     let error = stored.task.error().expect("the worker's refusal is stored");
-    let records = decisions(&row.dir);
+    // The worker's refusal is a withheld note: written after the task settles,
+    // on the slot's own task (design: "withheld notes are owned by their
+    // slot"), so the denied record is waited for, with a bound.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut records = decisions(&row.dir);
+    while !records.iter().any(|r| r["outcome"] == json!("denied"))
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::task::yield_now().await;
+        records = decisions(&row.dir);
+    }
     std::assert_eq!(row.endpoint.arrivals(), 0, "the backend saw a call");
     assert!(
         records.iter().any(|r| r["outcome"] == json!("denied")),

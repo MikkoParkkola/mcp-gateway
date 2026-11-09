@@ -41,7 +41,7 @@ async fn cacheable_counting_executor()
     });
 
     let mut executor = CapabilityExecutor::new();
-    executor.client = crate::test_fixture_host::fixture_client(Duration::from_secs(2));
+    executor.client = crate::test_fixture_host::fixture_client(Duration::from_secs(2)).into();
     let base_url = crate::test_fixture_host::fixture_url(port);
     let capability = crate::capability::parse_capability(&format!(
         r"
@@ -163,7 +163,7 @@ async fn cache_4_executor_loopback_context_is_not_cached() {
     });
 
     let mut executor = CapabilityExecutor::new();
-    executor.client = finite_http_client();
+    executor.client = finite_http_client().into();
     let capability = crate::capability::parse_capability(&format!(
         r"
 name: loopback_probe

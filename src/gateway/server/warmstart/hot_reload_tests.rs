@@ -179,7 +179,7 @@ impl Drop for Running {
 /// discovery call, as one present at boot is.
 #[tokio::test]
 async fn a_backend_added_by_hot_reload_is_warmed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let boot = mock("boot_tool").await;
     let path = write_config(dir.path(), &http_backend("boot", &boot));
     let mut gw = Running::start(dir.path(), path).await;
@@ -212,7 +212,7 @@ async fn a_backend_added_by_hot_reload_is_warmed() {
 /// boot warm-start already finished, so nothing else fills the new instance.
 #[tokio::test]
 async fn a_backend_replaced_by_hot_reload_is_warmed_again() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let first = mock("first_tool").await;
     let path = write_config(dir.path(), &http_backend("svc", &first));
     let mut gw = Running::start(dir.path(), path).await;
@@ -234,7 +234,7 @@ async fn a_backend_replaced_by_hot_reload_is_warmed_again() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
 async fn http_a_backend_added_by_a_watched_edit_is_warmed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let boot = mock("boot_tool").await;
     let path = write_config(dir.path(), &http_backend("boot", &boot));
     let mut config = Config::load(Some(&path)).expect("the fixture config loads");

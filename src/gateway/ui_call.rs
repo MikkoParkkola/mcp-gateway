@@ -179,8 +179,8 @@ pub(crate) fn note_dispatched(_step: (&str, &str)) {
 /// broader "cannot have acted" list is not used here.
 ///
 /// Known gap: a backend retired between retry attempts raises
-/// `BackendNotFound` on the later attempt (backend/lifecycle.rs), so a call
-/// whose first attempt reached the backend can still read as not run. The
+/// `BackendNotFound` on the later attempt (`backend/lifecycle/entry_start.rs`), so
+/// a call whose first attempt reached the backend can still read as not run. The
 /// retry loops are to carry "an attempt may have reached the backend" out as
 /// a non-pre-dispatch error; this check then becomes `is_pre_dispatch()`.
 pub(crate) fn note_send_error(catalogue_miss: bool) {

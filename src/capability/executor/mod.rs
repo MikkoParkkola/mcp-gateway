@@ -45,7 +45,7 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use reqwest::{Client, Method};
+use reqwest::Method;
 use serde_json::Value;
 
 use super::{
@@ -67,7 +67,7 @@ const CAPABILITY_CACHE_MAX_ENTRIES: usize = 10_000;
 
 /// Executor for capability REST calls
 pub struct CapabilityExecutor {
-    pub(super) client: Client,
+    pub(super) client: client::CapabilityClient,
     /// The client provider OAuth refreshes go through (MIK-8020).
     refresh: client::RefreshClient,
     pub(super) cache: ResponseCache,
@@ -202,8 +202,8 @@ impl CapabilityExecutor {
     /// production path can reach it.
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_test_http_client(mut self, client: Client) -> Self {
-        self.client = client;
+    pub(crate) fn with_test_http_client(mut self, client: reqwest::Client) -> Self {
+        self.client = client::CapabilityClient::uncounted(client);
         self
     }
 
@@ -533,6 +533,7 @@ impl CapabilityExecutor {
         let idempotent = matches!(method_upper.as_str(), "GET" | "HEAD" | "OPTIONS" | "TRACE");
         let response = send_with_retry(
             request.timeout(timeout),
+            &self.client.redirects,
             "Request",
             idempotent,
             &self.health,
@@ -566,6 +567,8 @@ mod redirect_tests;
 
 #[cfg(test)]
 mod proxy_ssrf_tests;
+#[cfg(test)]
+mod send_latency_tests;
 #[cfg(test)]
 mod ssrf_denial_tests;
 

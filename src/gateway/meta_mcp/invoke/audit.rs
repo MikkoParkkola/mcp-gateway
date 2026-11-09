@@ -96,8 +96,31 @@ pub(crate) struct DispatchNotes {
     /// [`MAX_PROCESS_NOTES`], and how many there were.
     process: Vec<ProcessNote>,
     process_total: usize,
+    /// This call's backend send time, summed over its rounds, and
+    /// how its last round ended. `None`: no send began.
+    backend: Option<(std::time::Duration, crate::counters::End)>,
     /// MIK-8914.API2A.1: which check decided this call.
     decision: crate::security::decision_record::Noted,
+}
+
+/// A backend send of this call took `elapsed` and ended `end`. A
+/// bridged retry's rounds add up; the last round's end is the call's.
+pub(crate) fn note_backend(elapsed: std::time::Duration, end: crate::counters::End) {
+    note(|notes| {
+        let total = notes
+            .backend
+            .map_or(elapsed, |(sum, _)| sum.saturating_add(elapsed));
+        notes.backend = Some((total, end));
+    });
+}
+
+impl DispatchNotes {
+    /// The latency sample this call's count carries, if a send began.
+    pub(crate) const fn backend_sample(
+        &self,
+    ) -> Option<(std::time::Duration, crate::counters::End)> {
+        self.backend
+    }
 }
 
 #[path = "audit_decision.rs"]
@@ -648,9 +671,12 @@ impl MetaMcp {
             .request_hash()
             .map_or_else(|| sha256_of(args), str::to_owned);
         let (srv, tl) = (server.to_string(), tool.to_string());
+        // The open slot's set, taken here: the blocking op below has no task-locals.
+        let recorded = super::super::grant_audit::open_slot_recorded();
+        let call_trace = trace_id.to_string();
         let written = log
             .append_bounded(move |log| {
-                log.log_invocation_attributed(
+                let landed = log.log_invocation_attributed(
                     CorrelationKey {
                         id: &key_id,
                         source: key_source,
@@ -661,7 +687,16 @@ impl MetaMcp {
                     response_hash.as_deref(),
                     attribution,
                     Some(decision.as_ref()),
-                )
+                );
+                // Inside the op, after the write returned Ok: a caller timeout
+                // cannot skip it, and a failed write never adds the id. The
+                // call's grant decisions read this set in their own later append.
+                if landed.is_ok()
+                    && let Some(recorded) = &recorded
+                {
+                    recorded.add(&call_trace);
+                }
+                landed
             })
             .await;
         match written {

@@ -82,13 +82,13 @@ pub(super) fn install_minting(
 }
 
 pub(super) fn identity(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@example.invalid"),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example.invalid".to_string(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        subject.to_string(),
+        format!("{subject}@example.invalid"),
+        None,
+        Vec::new(),
+        "https://issuer.example.invalid".to_string(),
+    )
 }
 
 /// A transport that answers `tools/list` with a catalogue chosen by the

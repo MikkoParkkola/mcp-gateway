@@ -62,7 +62,7 @@ struct Session {
     lines: tokio::io::Lines<BufReader<tokio::io::DuplexStream>>,
     backends: Arc<crate::backend::BackendRegistry>,
     task: tokio::task::JoinHandle<()>,
-    dir: tempfile::TempDir,
+    dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 impl Drop for Session {
@@ -79,7 +79,7 @@ impl Session {
     /// [`Self::open`] with `extra` appended to the gateway's config, `{DIR}`
     /// in it standing for the session's own directory.
     async fn open_with(backend_url: &str, extra: &str) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let extra = extra.replace("{DIR}", &dir.path().display().to_string());
         let path = dir.path().join("gateway.yaml");
         let store = serde_json::to_string(&dir.path().join("tasks").display().to_string())

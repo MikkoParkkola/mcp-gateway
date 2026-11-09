@@ -8,21 +8,24 @@
 
 use super::*;
 use crate::gateway::meta_mcp::grant_audit_fixture::{
-    CAPS, DECISION_KIND, PERSONAL, capability_backend, decisions, grant, grants, logger,
+    CAPS, DECISION_KIND, PERSONAL, capability_backend, grant, grants, logger, wait_for_decisions,
 };
 use crate::security::audit::AuditFailurePolicy;
+
+/// The documented warning of a withheld record that could not be written.
+const WARNING: &str = "The audit record of a withheld surfaced call could not be written";
 
 const ALICE: (&str, &str) = ("https://idp.example.invalid", "alice-sub");
 const BOB: (&str, &str) = ("https://idp.example.invalid", "bob-sub");
 
 fn verified((issuer, subject): (&str, &str)) -> crate::key_server::oidc::VerifiedIdentity {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@example.invalid"),
-        name: None,
-        groups: vec![],
-        issuer: issuer.to_string(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        subject.to_string(),
+        format!("{subject}@example.invalid"),
+        None,
+        vec![],
+        issuer.to_string(),
+    )
 }
 
 /// The capability owned by alice, granted to alice only, logging under
@@ -90,18 +93,42 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
         1,
         "premise: the withheld call ran: {refused}"
     );
-    let one = decisions(&counted_dir).len();
+    // Written after the call settles, on the slot's own task.
+    let one = runtime.block_on(wait_for_decisions(&counted_dir, 1)).len();
     // Under a failing decision record.
     let dir = Arc::new(tempfile::tempdir().unwrap());
     let absent_dir = Arc::new(tempfile::tempdir().unwrap());
     let (withheld, log) = runtime.block_on(gateway(endpoint.port, &dir, true));
     let (absent, _) = runtime.block_on(gateway(endpoint.port, &absent_dir, false));
     log.fail_next_append_of_kind_for_test(DECISION_KIND);
-    let (answered, warnings) =
-        crate::test_log_capture::capture_warnings(|| runtime.block_on(call(&withheld, BOB)));
+    let (answered, warnings) = crate::test_log_capture::capture_warnings(|| {
+        runtime.block_on(async {
+            let answer = call(&withheld, BOB).await;
+            // The record is appended after the call settles: wait for the
+            // attempt, then let its failure be logged.
+            let attempts = crate::gateway::meta_mcp::grant_audit::seams::appends_for_test();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while crate::gateway::meta_mcp::grant_audit::seams::appends_for_test() == attempts
+                && std::time::Instant::now() < deadline
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            // The attempt has started: wait for its blocking write to finish,
+            // then let the detached task log the failure.
+            let drained = Arc::clone(&log);
+            let _ = tokio::task::spawn_blocking(move || {
+                drained.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
+            })
+            .await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            answer
+        })
+    });
     let expected = runtime.block_on(call(&absent, BOB));
     runtime.block_on(call(&withheld, BOB));
-    let after = decisions(&dir).len();
+    let after = runtime.block_on(wait_for_decisions(&dir, 1)).len();
     assert_eq!(
         (one, &answered, after),
         (1, &expected, 1),
@@ -110,7 +137,7 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
     );
     assert!(
         // The text, as the upgrade note documents it for operators.
-        warnings.contains("The audit record of a withheld surfaced call could not be written"),
+        warnings.contains(WARNING),
         "row 7 http: the failed decision write was not logged as documented:\n{warnings}"
     );
 }

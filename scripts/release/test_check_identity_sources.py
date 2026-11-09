@@ -55,6 +55,16 @@ class Shapes(unittest.TestCase):
                     "mod a;\n")
         self.assertIn("src/a.rs:1", cis.violations(root)[0])
 
+    def test_a_literal_in_the_old_checked_constructor_file_fails(self):
+        # The allow-list names the constructor's new file only; the same fn
+        # name in the file it moved out of is no longer a listed site.
+        root = tree({"src/key_server/oidc.rs": "mod verified;\npub use verified::VerifiedIdentity;\n"
+                                               "#[path = \"oidc_identity.rs\"]\nmod identity;\n",
+                     "src/key_server/oidc_identity.rs": ORACLE.replace("Self {", "VerifiedIdentity {")})
+        found = cis.violations(root)
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("src/key_server/oidc_identity.rs:3", found[0])
+
     def test_a_type_alias_fails(self):
         root = tree({"src/a.rs": "type Vi = VerifiedIdentity;\nfn f() -> Vi { Vi { subject: s } }\n"},
                     "mod a;\n")
@@ -178,6 +188,19 @@ class CodeReviewBypasses(unittest.TestCase):
 
     def test_a_cfg_all_with_test_is_test_code(self):
         root = tree({"src/a.rs": "#[cfg(all(test, unix))]\n" + self.LIT}, "mod a;\n")
+        self.assertEqual(cis.violations(root), [])
+
+    # MIK-9387.TCFG.2: the shared reader decides (scripts/dev/check-orphan-test-modules.py).
+    def test_an_any_whose_every_operand_needs_test_is_test_code(self):
+        root = tree({"src/a.rs": "#[cfg(any(test, all(test, unix)))]\n" + self.LIT}, "mod a;\n")
+        self.assertEqual(cis.violations(root), [])
+
+    def test_a_quoted_comma_is_not_an_operand(self):
+        root = tree({"src/a.rs": '#[cfg(all(feature = "a,test,b"))]\n' + self.LIT}, "mod a;\n")
+        self.assertEqual(len(cis.violations(root)), 1, cis.violations(root))
+
+    def test_a_child_of_an_inner_test_file_is_test_code(self):
+        root = tree({"src/a.rs": "#![cfg(test)]\nmod child;\n", "src/a/child.rs": self.LIT}, "mod a;\n")
         self.assertEqual(cis.violations(root), [])
 
     def test_production_reachability_wins_whatever_the_walk_order(self):
