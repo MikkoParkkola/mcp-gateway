@@ -235,7 +235,7 @@ AGGREGATES = ("test", "windows-check", "macos-check", HEAVY_GATE)
 
 
 def aggregate_cancel_errors(jobs: dict) -> list[str]:
-    """MIK-9417: on a train PR (where all four run) each aggregate runs after a
+    """On a train PR (where all four run) each aggregate runs after a
     failed, skipped or green shard, but a cancelled run creates no aggregate:
     always() created them after the cancel and left the run queued for a runner,
     holding the newer run in the concurrency group behind it."""
