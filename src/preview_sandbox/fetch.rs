@@ -61,7 +61,7 @@ pub(crate) fn plan(target: &Target) -> Result<Phases, Refusal> {
     let spec = spec
         .to_str()
         .ok_or_else(|| refuse("not a registry package: a non-UTF-8 argument"))?;
-    if spec.starts_with('-') {
+    if mutant!("q7", false, spec.starts_with('-')) {
         return Err(refuse("an npx/uvx option before the package"));
     }
     let fetch = if npm {
@@ -102,7 +102,7 @@ fn npm_spec(spec: &str) -> Result<(), Refusal> {
         && npm_name_part(name)
         && name_len <= NPM_NAME_MAX
         && version.is_none_or(|v| !v.is_empty() && v.chars().all(npm_version_char));
-    if ok { Ok(()) } else { Err(not_registry(spec)) }
+    if mutant!("q8", true, ok) { Ok(()) } else { Err(not_registry(spec)) }
 }
 
 fn npm_name_part(part: &str) -> bool {
@@ -125,7 +125,7 @@ fn pypi_spec(spec: &str) -> Result<(), Refusal> {
         Some((name, version)) => (name, Some(version)),
         None => (spec, None),
     };
-    if name.contains('[') {
+    if mutant!("q16", false, name.contains('[')) {
         return Err(refuse("PyPI extras are not previewed"));
     }
     let ok = name.starts_with(|c: char| c.is_ascii_alphanumeric())
@@ -138,7 +138,7 @@ fn pypi_spec(spec: &str) -> Result<(), Refusal> {
                 && v.chars()
                     .all(|c| c.is_ascii_alphanumeric() || ".!+-_*".contains(c))
         });
-    if ok { Ok(()) } else { Err(not_registry(spec)) }
+    if mutant!("q30", true, ok) { Ok(()) } else { Err(not_registry(spec)) }
 }
 
 #[cfg(test)]
