@@ -409,7 +409,8 @@ async fn field_split_findings_vs_answer_findings() {
     let dir = tempfile::tempdir().unwrap();
     let l = logs(&dir);
     let request = finding("pii", "high", "arguments.q");
-    let answer = finding("injection", "critical", "response.text");
+    // A delivery record writes its findings in the writer's shape.
+    let answer = json!({"kind": "injection", "severity": "critical", "where": "response.text"});
     let mut d = decision(Some("r1"));
     d["request_findings"] = json!([request.clone()]);
     let mut c = dcall("srv", "t", Some(d));
