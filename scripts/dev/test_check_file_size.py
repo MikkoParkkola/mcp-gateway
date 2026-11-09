@@ -219,6 +219,67 @@ class Ratchet(unittest.TestCase):
 
 
 class RatchetThroughGit(unittest.TestCase):
+    def branch_after_a_tip_shrink(self, root: Path):
+        """A repo where `line` dropped src/b.rs's row after `feature` was cut; HEAD is `feature`,
+        which never touched it. Returns (git, baseline path)."""
+        git = lambda *a: subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *a], cwd=root, check=True, capture_output=True)
+        git("init", "-q")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        (root / "src").mkdir()
+        (root / "scripts/dev").mkdir(parents=True)
+        baseline = root / "scripts/dev/file-size-baseline.txt"
+        (root / "src/a.rs").write_text(body(805), encoding="utf-8")
+        (root / "src/b.rs").write_text(body(801), encoding="utf-8")
+        baseline.write_text("805 src/a.rs\n801 src/b.rs\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-qm", "branch point")
+        git("branch", "-M", "line")
+        git("branch", "feature")
+        (root / "src/b.rs").write_text(body(700), encoding="utf-8")
+        baseline.write_text("805 src/a.rs\n", encoding="utf-8")
+        git("commit", "-qam", "the tip shrinks b.rs")
+        git("checkout", "-q", "feature")
+        return git, baseline
+
+    def judged(self, root: Path, baseline: Path, argv: list[str]) -> tuple[int, str]:
+        gate = load_gate(root)
+        gate.BASELINE = baseline
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            return gate.main(argv), out.getvalue()
+
+    # A branch is judged on its own change in merge-base mode; base mode keeps the tip's list.
+    def test_r9_a_branch_untouched_by_a_tip_shrink_passes_against_its_branch_point(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _git, baseline = self.branch_after_a_tip_shrink(root)
+            status, out = self.judged(root, baseline, ["--base", "line", "--compare", "merge-base"])
+            self.assertEqual(status, 0, out)
+            status, out = self.judged(root, baseline, ["--base", "line"])
+            self.assertEqual(status, 1, out)
+
+    def test_r10_a_real_addition_still_fails_against_the_branch_point(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _git, baseline = self.branch_after_a_tip_shrink(root)
+            (root / "src/c.rs").write_text(body(802), encoding="utf-8")
+            baseline.write_text("805 src/a.rs\n801 src/b.rs\n802 src/c.rs\n", encoding="utf-8")
+            status, out = self.judged(root, baseline, ["--base", "line", "--compare", "merge-base"])
+            self.assertEqual(status, 1, out)
+            self.assertIn("src/c.rs", out)
+
+    def test_r11_no_branch_point_refuses(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git, baseline = self.branch_after_a_tip_shrink(root)
+            git("checkout", "-q", "--orphan", "unrelated")
+            git("commit", "-qm", "unrelated history")
+            git("checkout", "-q", "-f", "feature")
+            status, out = self.judged(root, baseline, ["--base", "unrelated", "--compare", "merge-base"])
+            self.assertEqual(status, 1, out)
+            self.assertIn("fetch-depth", out)
+
     def test_r7_a_raised_allowance_through_base_is_refused(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
