@@ -36,6 +36,8 @@ mod os {
     }
 }
 
+mod install;
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -125,6 +127,8 @@ pub enum Refusal {
     Unsupported,
     /// A sandbox step failed; the text names the step and the error.
     Step(String),
+    /// The typed command is not one a preview runs; the text says why.
+    Command(String),
 }
 
 impl std::fmt::Display for Refusal {
@@ -148,6 +152,7 @@ impl std::fmt::Display for Refusal {
                 "command previews need a sandbox this platform does not have in 4.0.0".to_owned()
             }
             Self::Step(step) => format!("the command preview sandbox failed at {step}"),
+            Self::Command(reason) => format!("this command cannot be previewed: {reason}"),
         };
         write!(f, "{text}; the server can still be added without a preview")
     }
