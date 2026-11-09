@@ -82,7 +82,7 @@ fn calls(store: &CounterStore) -> u64 {
 
 #[tokio::test]
 async fn t13_a_counted_call_survives_a_restart_and_the_restart_is_marked() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     run_once(dir.path(), true).await;
     let first = saved(dir.path());
     assert_eq!(calls(&first), 1, "the shutdown save holds the call");

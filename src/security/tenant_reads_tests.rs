@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use super::*;
+use crate::gateway::outbound::test_token;
 
 const KEY: &str = "api_key:one";
 const WINDOW: Duration = Duration::from_secs(3600);
@@ -24,7 +25,7 @@ fn unread() -> ReadAttribution {
 
 fn reserve(history: &Arc<ReadHistory>, read: &ReadAttribution) -> Reservation {
     history
-        .reserve(KEY, read, WINDOW, false)
+        .reserve(&test_token(), KEY, read, WINDOW, false)
         .expect("room for the principal")
 }
 
@@ -60,7 +61,9 @@ fn one_tenant_repeated_is_ordinary() {
 fn a_refused_frame_reserves_nothing() {
     let history = ReadHistory::shared();
     let _a = reserve(&history, &tenant("a"));
-    let b = history.reserve(KEY, &tenant("b"), WINDOW, true).unwrap();
+    let b = history
+        .reserve(&test_token(), KEY, &tenant("b"), WINDOW, true)
+        .unwrap();
     assert!(b.over);
     assert!(b.ticket.is_none());
     assert_eq!(history.tenants_held(KEY), (0, 1), "only A is pending");
@@ -145,11 +148,16 @@ fn overflow_conflicts() {
 fn expiry_from_the_last_write() {
     let history = ReadHistory::shared();
     let window = Duration::from_millis(50);
-    let a = history.reserve(KEY, &tenant("a"), window, false).unwrap();
+    let a = history
+        .reserve(&test_token(), KEY, &tenant("a"), window, false)
+        .unwrap();
     a.ticket.as_ref().unwrap().emitted();
     drop(a);
-    std::thread::sleep(Duration::from_millis(80));
-    let b = history.reserve(KEY, &tenant("b"), window, false).unwrap();
+    // Past the window from the last write, on the history's own test clock.
+    history.advance_for_test(Duration::from_millis(80));
+    let b = history
+        .reserve(&test_token(), KEY, &tenant("b"), window, false)
+        .unwrap();
     assert!(!b.over, "A expired");
 }
 
@@ -181,7 +189,13 @@ fn fill_live(history: &Arc<ReadHistory>, n: usize) -> Vec<Reservation> {
     (0..n)
         .map(|i| {
             history
-                .reserve(&format!("live-{i}"), &tenant("a"), WINDOW, false)
+                .reserve(
+                    &test_token(),
+                    &format!("live-{i}"),
+                    &tenant("a"),
+                    WINDOW,
+                    false,
+                )
                 .expect("room below the cap")
         })
         .collect()
@@ -203,7 +217,13 @@ fn concurrent_new_principals_never_pass_the_cap() {
                 let (history, start) = (Arc::clone(&history), Arc::clone(&start));
                 std::thread::spawn(move || {
                     start.wait();
-                    history.reserve(&format!("new-{n}"), &tenant("a"), WINDOW, false)
+                    history.reserve(
+                        &test_token(),
+                        &format!("new-{n}"),
+                        &tenant("a"),
+                        WINDOW,
+                        false,
+                    )
                 })
             })
             .collect();

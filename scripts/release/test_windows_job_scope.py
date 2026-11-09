@@ -33,26 +33,58 @@ def shard_table():
 
 
 def test_the_job_runs_every_test_target_skipping_only_the_full_burst():
-    # Since MIK-8482 the suite is four shards; together they are exactly
+    # Since MIK-8482 the suite is sharded (five shards, three of them lib); together they are exactly
     # `cargo test --all-features --tests --no-fail-fast -- --skip mik_7479_full_burst`.
     job = windows_job()
     # Exact match on purpose: any change to the command must revisit this guard.
     assert "python scripts/ci/shard_tests.py run windows ${{ matrix.shard }}" in job
-    assert "shard: [lib-a, lib-b, int-a, int-b]" in job
+    assert "shard: [lib-a, lib-b, lib-c, int-a, int-b]" in job
     assert "cargo test" not in job.split("Privileged owner-only rows")[0], "a suite command outside the runner"
     st = shard_table()
     assert st.BASE == ["test", "--all-features", "--no-fail-fast"]
     shards = st.SHARDS["windows"]
-    assert sorted(shards) == ["int-a", "int-b", "lib-a", "lib-b"], sorted(shards)
+    assert sorted(shards) == ["int-a", "int-b", "lib-a", "lib-b", "lib-c"], sorted(shards)
     cmds = {name: [(a, t) for _, a, t, _ in steps] for name, steps in shards.items()}
     assert cmds == {
         "lib-a": [(["--lib"], ["gateway::"])],
-        "lib-b": [(["--lib"], ["--skip", "gateway::"])],
+        "lib-b": [(["--lib"], ["--skip", "gateway::", *(x for m in LIB_C for x in ("--skip", m))])],
+        "lib-c": [(["--lib"], [*LIB_C, "--skip", "gateway::"])],
         "int-a": [(["--bins", "--test", "[a-l]*"], [])],
         "int-b": [(["--test", "[!a-l]*"], [])],
     }, cmds
     # Any spelling of a skip counts; only the ruled one may appear, once.
     assert st.SKIPS["windows"] == ["--skip", "mik_7479_full_burst"], st.SKIPS["windows"]
+
+
+# Windows lib-b ran about 23 min of tests after about 22 min of build (run 42493724287); these
+# top-level modules move to lib-c, about half its tests (4,727 of 9,251 in that run).
+LIB_C = ["security::", "capability::", "events::", "backend::", "transport::", "oauth::"]
+
+
+def libtest_selects(name, args):
+    """libtest's rule: positive filters (any substring) unless none, then no --skip substring."""
+    filters, skips, it = [], [], iter(args)
+    for a in it:
+        if a == "--skip":
+            skips.append(next(it))
+        else:
+            filters.append(a)
+    return (not filters or any(f in name for f in filters)) and not any(s in name for s in skips)
+
+
+def test_the_windows_lib_shards_split_the_library_exactly_once():
+    st = shard_table()
+    lib = {n: steps[0][2] for n, steps in st.SHARDS["windows"].items() if n.startswith("lib-")}
+    assert sorted(lib) == ["lib-a", "lib-b", "lib-c"], sorted(lib)
+    names = [
+        "gateway::server::tests::a", "gateway::security::x", "security::firewall::t", "capability::parser::t",
+        "events::bus::t", "backend::http::t", "transport::stdio::t", "oauth::storage::t",
+        "config::tests::t", "config_reload::events::t", "personal_accounts::t", "protocol::t", "trust::t",
+        "cost_accounting::t", "x::transport::y", "eventsource::t", "security::transport::tests::x",
+    ]
+    for name in names:
+        hits = [n for n, args in lib.items() if libtest_selects(name, args)]
+        assert len(hits) == 1, f"{name} runs in {hits}, not exactly one Windows lib shard"
 
 
 def test_no_met_criterion_cites_windows_execution_evidence():
@@ -66,5 +98,6 @@ def test_no_met_criterion_cites_windows_execution_evidence():
 
 if __name__ == "__main__":
     test_the_job_runs_every_test_target_skipping_only_the_full_burst()
+    test_the_windows_lib_shards_split_the_library_exactly_once()
     test_no_met_criterion_cites_windows_execution_evidence()
     print("ok")

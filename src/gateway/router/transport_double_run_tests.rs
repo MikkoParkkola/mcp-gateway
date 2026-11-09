@@ -18,13 +18,13 @@ const KEY: &str = "k-question";
 const UNAVAILABLE: &str = "Secured execution result is unavailable";
 
 fn alice() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://a.example.invalid".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://a.example.invalid".to_string(),
+    )
 }
 
 fn form() -> Value {

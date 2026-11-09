@@ -59,6 +59,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "third-party MCP client config JSON edited to add the gateway entry; no gateway secret",
     ),
     (
+        "src/commands/api.rs",
+        "operator-named request body for one api call (--data @FILE), read size-capped at 16 MiB and sent as given; not a config or secret file",
+    ),
+    (
         "src/commands/dashboard_link.rs",
         "operator-named client cert, key and CA for one request (#1832); the mode-checked read is lib-internal, widening it was declined",
     ),

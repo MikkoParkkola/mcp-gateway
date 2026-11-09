@@ -152,7 +152,7 @@ fn api_key(name: &str, secret: &[u8]) -> ApiKeyConfig {
 /// The production sequence: real install, then a real resolve against the
 /// one declared, never-connected descriptor. Returns the refusal text.
 async fn resolve_under(mode: ServeMode, auth: AuthConfig, caller: CallerProof<'_>) -> String {
-    let root = tempfile::TempDir::new().expect("fixture tempdir");
+    let root = crate::test_dir_keep::kept_tempdir();
     let custody = empty_custody(root.path());
     let config = Config {
         auth,
@@ -249,13 +249,13 @@ const E2E_ARRIVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// A tempdir holding the config, its env file, the capability and the store.
 struct E2eFixture {
-    _temp: tempfile::TempDir,
+    _temp: std::sync::Arc<tempfile::TempDir>,
     root: std::path::PathBuf,
 }
 
 impl E2eFixture {
     fn new() -> Self {
-        let temp = tempfile::TempDir::new().expect("fixture tempdir");
+        let temp = crate::test_dir_keep::kept_tempdir();
         let root = temp.path().canonicalize().expect("fixture root resolves");
         let key = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, STORE_KEY);
         crate::gateway::test_helpers::write_owner_only(

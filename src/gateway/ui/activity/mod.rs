@@ -315,11 +315,6 @@ fn parse(q: &ListQuery) -> Result<Parsed, Early> {
             }))));
         }
     };
-    if q.rule.is_some() {
-        return Err(Box::new(bad_request(
-            json!({"error": "rules are not recorded by this gateway version"}),
-        )));
-    }
     let limit = match q.limit.as_deref() {
         None => DEFAULT_LIMIT,
         Some(l) => match l.parse::<usize>() {
@@ -340,6 +335,7 @@ fn parse(q: &ListQuery) -> Result<Parsed, Early> {
             server: q.server.clone(),
             caller: q.caller.clone(),
             q: q.q.clone(),
+            rule: q.rule.clone(),
             from: time("from", q.from.as_deref())?,
             to: time("to", q.to.as_deref())?,
         },
@@ -450,7 +446,7 @@ struct ExportQuery {
 fn filters_sent(q: &ListQuery) -> Value {
     json!({
         "outcome": q.outcome, "effect": q.effect, "server": q.server, "caller": q.caller,
-        "q": q.q, "from": q.from, "to": q.to,
+        "q": q.q, "rule": q.rule, "from": q.from, "to": q.to,
     })
 }
 
@@ -629,6 +625,15 @@ mod answer_segment_tests;
 #[cfg(test)]
 #[path = "answer_stream_tests.rs"]
 mod answer_stream_tests;
+#[cfg(test)]
+#[path = "decision_export_tests.rs"]
+mod decision_export_tests;
+#[cfg(test)]
+#[path = "decision_fixtures_tests.rs"]
+mod decision_fixtures;
+#[cfg(test)]
+#[path = "decision_receipt_tests.rs"]
+mod decision_receipt_tests;
 #[cfg(test)]
 #[path = "list_tests.rs"]
 mod list_tests;

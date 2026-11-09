@@ -153,7 +153,7 @@ fn stdio_eof_cancels_a_task_that_outlasts_the_drain() {
 
 async fn eof_with_a_held_task() {
     let (url, mut arrived, release) = held_backend().await;
-    let store = Arc::new(tempfile::tempdir().expect("store root"));
+    let store = crate::test_dir_keep::kept_tempdir();
     let mut config = store_config(store.path());
     config.server.shutdown_timeout = Duration::from_secs(1);
     config.backends.insert(
@@ -168,7 +168,7 @@ async fn eof_with_a_held_task() {
             ..BackendConfig::default()
         },
     );
-    let data = tempfile::tempdir().expect("data dir");
+    let data = crate::test_dir_keep::kept_tempdir();
     let gateway = Gateway::new(config.clone())
         .await
         .expect("gateway boots")

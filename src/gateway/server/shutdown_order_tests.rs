@@ -29,7 +29,7 @@ fn config(dir: &std::path::Path) -> Config {
 
 #[tokio::test]
 async fn a_triggered_shutdown_drains_then_stops_the_backends_and_returns_ok() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut gateway = Gateway::new(config(dir.path()))
         .await
         .unwrap()

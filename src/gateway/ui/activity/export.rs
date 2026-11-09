@@ -273,7 +273,7 @@ pub(super) fn ndjson(
 }
 
 /// The CSV columns, in order.
-const COLUMNS: [&str; 35] = [
+const COLUMNS: [&str; 36] = [
     "id",
     "kind",
     "counter",
@@ -305,6 +305,7 @@ const COLUMNS: [&str; 35] = [
     "decision",
     "reach",
     "findings",
+    "findings_truncated",
     // API2.10: the delivery record joined to the call.
     "effect",
     "answer_findings",

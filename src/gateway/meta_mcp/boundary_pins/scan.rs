@@ -9,7 +9,36 @@ use std::path::{Path, PathBuf};
 use syn::visit::Visit;
 
 // The cfg judgement is the crate's one shared reader (MIK-9387.TCFG.1).
-pub(super) use crate::test_source_text::{Cfg, eval, test_only};
+pub(super) use crate::test_source_text::{Cfg, eval};
+
+/// Whether `attrs` mark a node no product build compiles: test-only by the
+/// shared reader, or gated on the read token's must-fail probe. That cfg is
+/// set only by `scripts/ci/check-reads-token.py`, whose build exists to fail,
+/// so the pins must not read its deliberate violation as production. Kept
+/// here, not in the shared reader: other scanners count probe code, on the
+/// side that sees more.
+pub(super) fn test_only(attrs: &[syn::Attribute]) -> bool {
+    crate::test_source_text::test_only(attrs)
+        || attrs.iter().any(|attr| {
+            attr.path().is_ident("cfg")
+                && attr
+                    .parse_args::<syn::Meta>()
+                    .is_ok_and(|meta| probe_only(&meta))
+        })
+}
+
+/// `reads_token_probe`, alone or as one operand of an `all(..)`.
+fn probe_only(meta: &syn::Meta) -> bool {
+    match meta {
+        syn::Meta::Path(path) => path.is_ident("reads_token_probe"),
+        syn::Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|args| args.iter().any(probe_only)),
+        _ => false,
+    }
+}
 
 /// What the walk reports: every production node, with where it sits.
 pub(super) trait Sink {

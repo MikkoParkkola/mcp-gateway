@@ -8,7 +8,7 @@ use crate::config::Config;
 
 #[tokio::test]
 async fn http_start_with_keyless_anomaly_detection_is_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut config = Config::default();
     config.auth.enabled = false;
     config.security.firewall.enabled = true;

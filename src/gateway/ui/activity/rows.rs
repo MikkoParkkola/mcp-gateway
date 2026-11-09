@@ -11,11 +11,8 @@ use serde_json::{Map, Value};
 use super::answer::{Effect, Joined, Searched};
 use super::reader::{Line, Which};
 use crate::gateway::authz::BackendGrant;
+use crate::security::decision_record::{Decision, read};
 use crate::security::transparency_log::signature::signature_state;
-
-/// Until findings are recorded with the call, a row says so; an empty list
-/// would read as "nothing was found".
-pub(super) const FINDINGS_NOT_RECORDED: &str = "findings not recorded by this gateway version";
 
 /// The kinds Activity lists. Other records (identity-propagation mints and
 /// refusals, event lifecycle, segment housekeeping) carry free text U2 has
@@ -171,7 +168,11 @@ pub(super) fn row(line: &Line, secret: Option<&[u8]>, joined: &Joined) -> Option
                 );
             }
             row.insert("who".into(), who.into());
-            row.insert("findings".into(), FINDINGS_NOT_RECORDED.into());
+            let decision = read::decision_evidence(e);
+            row.insert("findings".into(), findings_value(decision.as_ref()));
+            if decision.is_some_and(|d| d.request_findings_truncated) {
+                row.insert("findings_truncated".into(), true.into());
+            }
             joined.write_into(&mut row);
         }
         Kind::Refusal => {
@@ -206,6 +207,20 @@ pub(super) fn row(line: &Line, secret: Option<&[u8]>, joined: &Joined) -> Option
     Some(row.into())
 }
 
+/// A call's request-side findings, from its decision record alone: the
+/// reader's line when there is no list to show, else the list. A record with
+/// no decision predates them. The row and the receipt's decision both read
+/// findings here, so the two always agree.
+pub(super) fn findings_value(decision: Option<&Decision>) -> Value {
+    let Some(decision) = decision else {
+        return read::NOT_RECORDED_BY_VERSION.into();
+    };
+    read::findings_line(decision).map_or_else(
+        || serde_json::to_value(&decision.request_findings).unwrap_or(Value::Null),
+        Value::from,
+    )
+}
+
 /// The list's filters, AND-ed. `None` is no filter on that field.
 #[derive(Debug, Default, Clone)]
 pub(super) struct Filter {
@@ -213,6 +228,8 @@ pub(super) struct Filter {
     pub(super) server: Option<String>,
     pub(super) caller: Option<String>,
     pub(super) q: Option<String>,
+    /// Exact `decision.rule_id`; a record with no readable decision has none.
+    pub(super) rule: Option<String>,
     pub(super) from: Option<DateTime<FixedOffset>>,
     pub(super) to: Option<DateTime<FixedOffset>>,
     pub(super) effect: Option<Effect>,
@@ -264,6 +281,11 @@ impl Filter {
             if !hit {
                 return false;
             }
+        }
+        if let Some(rule) = &self.rule
+            && !read::matches_rule(e, rule)
+        {
+            return false;
         }
         if self.from.is_some() || self.to.is_some() {
             // An untimed row is outside every time range.

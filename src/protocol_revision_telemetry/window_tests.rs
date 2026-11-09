@@ -39,7 +39,7 @@ fn counts(http_requests: u64) -> SegmentCounts {
 
 #[test]
 fn a_v1_window_is_refused_and_left_byte_identical() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     // A frozen v1 file, as 4.0.0 prereleases wrote it (not through today's
     // sink, which writes v2).
     let path = window_paths(dir.path()).0;
@@ -75,7 +75,7 @@ fn a_v1_window_is_refused_and_left_byte_identical() {
 
 #[test]
 fn two_process_lifetimes_keep_separate_exact_segments() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut first = HttpSegmentSink::open(dir.path(), identity(1_000), 10).expect("open first");
     first.checkpoint(&counts(3), 11).expect("checkpoint");
     first.close(&counts(4), 12, 12_500).expect("close first");
@@ -103,7 +103,7 @@ fn two_process_lifetimes_keep_separate_exact_segments() {
 
 #[test]
 fn nothing_writes_a_segment_after_its_close() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut sink = HttpSegmentSink::open(dir.path(), identity(1_000), 10).expect("open");
     sink.close(&counts(5), 11, 11_000).expect("close");
     sink.checkpoint(&counts(1), 12)
@@ -123,7 +123,7 @@ fn nothing_writes_a_segment_after_its_close() {
 
 #[test]
 fn an_idle_interval_still_writes_a_checkpoint_and_an_empty_close_lands() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut sink = HttpSegmentSink::open(dir.path(), identity(1_000), 10).expect("open");
     sink.checkpoint(&SegmentCounts::empty(), 15)
         .expect("idle checkpoint");
@@ -140,7 +140,7 @@ fn an_idle_interval_still_writes_a_checkpoint_and_an_empty_close_lands() {
 
 #[test]
 fn a_failed_write_followed_by_a_success_loses_no_count() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut sink = HttpSegmentSink::open(dir.path(), identity(1_000), 10).expect("open");
     let blocker = block_the_temporary_file(dir.path());
     let failed = sink.checkpoint(&counts(3), 11);
@@ -169,7 +169,7 @@ fn a_failed_write_followed_by_a_success_loses_no_count() {
 #[test]
 fn a_seal_time_without_a_close_is_rejected_on_read() {
     let mut window = WindowV2::empty(1);
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut sink = HttpSegmentSink::open(dir.path(), identity(1_000), 1).expect("open");
     sink.checkpoint(&SegmentCounts::empty(), 1)
         .expect("checkpoint");
@@ -183,7 +183,7 @@ fn the_stdio_sink_writes_only_stdio_counts_into_the_v2_window() {
     // Row 15: the MIK-8364 saver and the signal-stop persist both reach
     // `persist_registry` / `persist_global`; HTTP traffic in the same
     // process never lands in `stdio`.
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut sink = crate::protocol_revision_telemetry::DurableTelemetrySink::open(dir.path())
         .expect("stdio sink");
     let mut registry = crate::protocol_revision_telemetry::Registry::new();
@@ -204,7 +204,7 @@ fn the_stdio_sink_writes_only_stdio_counts_into_the_v2_window() {
 fn a_failed_close_leaves_the_segment_open_for_a_retried_close() {
     // `closed` is set only once the sealed write has landed: a close that
     // fails must not turn the sink into a no-op, or the retry seals nothing.
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut sink = HttpSegmentSink::open(dir.path(), identity(1_000), 10).expect("open");
     let blocker = block_the_temporary_file(dir.path());
     let failed = sink.close(&counts(3), 11, 11_000);

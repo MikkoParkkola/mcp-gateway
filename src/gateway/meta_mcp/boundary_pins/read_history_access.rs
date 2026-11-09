@@ -20,10 +20,12 @@
 //! A macro that assembles the call from token fragments
 //! (`$f $dot $name $args`) or stores a path argument and calls it later
 //! (`let f = $m; f($v)`) is out of model: the call exists only after
-//! expansion, which a syntax scan of the source cannot see. The compiler can:
-//! closing that is a type-level restriction on who may call
-//! `Firewall::reads`, tracked separately. This scan stays as the second line
-//! of defence.
+//! expansion, which a syntax scan of the source cannot see. The compiler can,
+//! and does: the first line of defence is a type-level restriction.
+//! `Firewall::reads` and `ReadHistory::reserve` take a read token that only
+//! the judge can build (`outbound::ReadsToken`), so any other caller, however
+//! a macro assembles it, fails to compile; a must-fail probe build pins that
+//! in CI. This scan stays as the second line of defence.
 
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, walk};
@@ -234,7 +236,9 @@ impl Sink for Access {
         match expr {
             syn::Expr::MethodCall(call) => {
                 let name = call.method.unraw().to_string();
-                if name == "reserve" || (name == "reads" && call.args.is_empty()) {
+                // With or without arguments: the judge's own call carries the
+                // read token, so an argument count is no reason to look away.
+                if name == "reserve" || name == "reads" {
                     self.found(at, &name);
                 }
             }
@@ -358,8 +362,8 @@ fn a_macro_that_splices_a_call_is_reported() {
     }
 }
 
-/// A listed macro is pinned to its body: changing the receiver of its call,
-/// or anything else in it, changes the fingerprint, so the inventory fails.
+/// A listed macro is pinned to its body: another receiver in its call changes
+/// the fingerprint, so the inventory fails; spacing does not change it.
 #[test]
 fn a_changed_macro_body_changes_its_fingerprint() {
     let print = |body: &str| {
@@ -403,6 +407,10 @@ impl<'ast> syn::visit::Visit<'ast> for Mirror<'_> {
 fn macro_wrapped_and_path_calls_are_seen() {
     for (source, readers, reservers) in [
         ("assert!(firewall.reads().len() > 0)", 1, 0),
+        // The token-bearing call: arguments do not hide a reader.
+        ("firewall.reads(&t)", 1, 0),
+        ("firewall.reads(&ReadsToken(Cell::new(())))", 1, 0),
+        ("m!(f.reads(&t))", 1, 0),
         ("Firewall::reads(&firewall)", 1, 0),
         ("ReadHistory::reserve(&history, key)", 0, 1),
         ("debug_assert!(history.reserve(key).is_ok())", 0, 1),

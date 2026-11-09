@@ -64,7 +64,7 @@ pub(super) struct Routes {
     _store: std::sync::Arc<tempfile::TempDir>,
     /// The gateway's config and data directory. Declared last, so it drops
     /// after everything above that writes into it (fields drop in order).
-    pub(super) dir: tempfile::TempDir,
+    pub(super) dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 impl Routes {
@@ -75,7 +75,7 @@ impl Routes {
     }
 
     pub(super) async fn build(setup: Setup) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         for sub in ["safe", "outside"] {
             std::fs::create_dir(dir.path().join(sub)).expect("mkdir");
         }

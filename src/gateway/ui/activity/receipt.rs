@@ -13,8 +13,9 @@ use super::access::Access;
 use super::answer::{CHAIN_CHECKED, CHAIN_UNFINISHED, Joined, Searched};
 use super::reader::{Line, Which};
 use super::receipt_scan::{answer_block, scan};
-use super::rows::{Kind, kind_of, row};
+use super::rows::{Kind, findings_value, kind_of, row};
 use super::seek::{Reads, oldest_counter, seek};
+use crate::security::decision_record::{Decision, read};
 use crate::security::transparency_log::recompute_entry_hash;
 
 /// What a receipt says for evidence this gateway version does not record.
@@ -88,8 +89,51 @@ fn recorded(entry: &Value, key: &str) -> Value {
     }
 }
 
+/// The receipt's decision object: the reader's line wherever it has one, else
+/// the recorded value. Revisions are copied only when the record has them.
+fn decision_projection(decision: Option<&Decision>) -> Value {
+    let Some(d) = decision else {
+        return read::NOT_RECORDED_BY_VERSION.into();
+    };
+    let mut out = Map::new();
+    out.insert("v".into(), d.v.into());
+    out.insert("kind".into(), json!(d.kind));
+    out.insert("rule".into(), rule_value(d));
+    out.insert(
+        "grant".into(),
+        d.grant_id
+            .as_deref()
+            .unwrap_or(read::NOT_RECORDED_FOR_CALL)
+            .into(),
+    );
+    out.insert("flags".into(), read::flags_line(d).into());
+    out.insert("findings".into(), findings_value(Some(d)));
+    out.insert("effect".into(), effect_value(d));
+    out.insert("decided".into(), read::decided_line(d).into());
+    if d.request_findings_truncated {
+        out.insert("findings_truncated".into(), true.into());
+    }
+    for (key, rev) in [
+        ("config_revision", &d.config_revision),
+        ("running_revision", &d.running_revision),
+    ] {
+        if let Some(rev) = rev {
+            out.insert(key.into(), rev.as_str().into());
+        }
+    }
+    out.into()
+}
+
+fn rule_value(d: &Decision) -> Value {
+    read::rule_line(d).map_or_else(|| json!(d.rule_id), Value::from)
+}
+
+fn effect_value(d: &Decision) -> Value {
+    read::effect_line(d).map_or_else(|| json!(d.declared_effect), Value::from)
+}
+
 /// What a receipt and an export row add to a list row: for a call, the
-/// decision evidence (not recorded yet); for a config change, whether a
+/// decision evidence read from its record; for a config change, whether a
 /// reason and a rollback summary were recorded, never their text.
 pub(super) fn add_evidence(body: &mut Map<String, Value>, kind: Kind, e: &Value) {
     match kind {
@@ -98,7 +142,10 @@ pub(super) fn add_evidence(body: &mut Map<String, Value>, kind: Kind, e: &Value)
             body.insert("rollback_summary".into(), recorded(e, "rollback_summary"));
         }
         Kind::Call => {
-            body.insert("decision".into(), NOT_RECORDED.into());
+            body.insert(
+                "decision".into(),
+                decision_projection(read::decision_evidence(e).as_ref()),
+            );
             body.insert("reach".into(), NOT_RECORDED.into());
         }
         // The row already carries the refusing decision (reason, scope,

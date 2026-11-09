@@ -7,8 +7,8 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 
 use super::answer_fixture::{Dl, Fixture};
-use super::rows::FINDINGS_NOT_RECORDED;
 use super::{ListQuery, list_page};
+use crate::security::decision_record_read::NOT_RECORDED_BY_VERSION;
 
 pub(super) fn q(pairs: &[(&str, &str)]) -> ListQuery {
     let mut q = ListQuery::default();
@@ -175,7 +175,7 @@ async fn r12_answer_findings_never_fills_findings() {
     );
     let (_, page) = get(&fx, &[]).await;
     let r = row_of(&page, "gw-t1");
-    assert_eq!(r["findings"], FINDINGS_NOT_RECORDED);
+    assert_eq!(r["findings"], NOT_RECORDED_BY_VERSION);
     assert_eq!(r["answer_findings"], found);
     for key in ["rule_id", "decision", "revision"] {
         assert!(r["answer_findings"][0].get(key).is_none(), "{key}");
