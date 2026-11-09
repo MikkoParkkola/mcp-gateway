@@ -7,7 +7,7 @@
 //! the bytes as delivered. The receipt stays (it holds no digest of the
 //! result), as when `delivered_wire` drops a seal.
 //!
-//! Each row runs the real `/mcp` route with both provenance signers
+//! Each row runs a real MCP route with both provenance signers
 //! installed, then marks the backend's answer text secret after the result
 //! was stored, and reads one serve site back. A child of `notifications`, so
 //! the notification row reads the same stream helpers.
@@ -30,10 +30,19 @@ const KID: &str = "prov-scrub-1";
 async fn sealing_state(
     mock: &Arc<MockBackend>,
 ) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
+    sealing_state_with(mock, |meta| meta).await
+}
+
+/// Configure the stores before the fixture shares its dual-signed gateway.
+async fn sealing_state_with(
+    mock: &Arc<MockBackend>,
+    configure: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = super::super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,
-        |mut meta| {
+        |meta| {
+            let mut meta = configure(meta);
             meta.enable_provenance_stamping(
                 BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
                     .with_audience("test-gateway")
@@ -242,4 +251,136 @@ async fn a_keyed_sync_replay_redacted_at_serve_carries_no_seal() {
     let replay = post(&state, "key-a", call(3)).await;
     assert_redacted_unsealed(&replay, "the keyed sync replay");
     std::assert_eq!(mock.calls(), 1, "premise: every replay came from the store");
+}
+
+/// A read's response-cache hit is scrubbed after storage, with a fresh
+/// receipt naming the hit rather than a seal over the plain answer.
+#[tokio::test]
+async fn a_response_cache_hit_redacted_at_serve_carries_no_stale_seal() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = sealing_state_with(&mock, |meta| {
+        MetaMcp::with_features(
+            Arc::clone(meta.registry().for_test()),
+            Some(Arc::new(crate::cache::ResponseCache::new())),
+            None,
+            None,
+            Duration::from_secs(300),
+        )
+    })
+    .await;
+    let backend = state.backends.get(BACKEND).expect("the mock is registered");
+    // Warm the listing before seeding its read declaration: a cold fill
+    // of the mock's unannotated listing would revoke that declaration.
+    backend.get_tools().await.expect("the mock lists its tool");
+    backend.set_read_only_declared_for_test(&[TOOL]);
+    let first = post(&state, "key-a", sync_invoke(1, json!({}))).await;
+    assert!(
+        first.to_string().contains(OUTPUT),
+        "stored while plain: {first}"
+    );
+    assert_sealed_bound(&first["result"], "the response-cache miss");
+    std::assert_eq!(mock.calls(), 1, "premise: the first call dispatched");
+
+    mark(&state, OUTPUT);
+    let served = post(&state, "key-a", sync_invoke(2, json!({}))).await;
+    std::assert_eq!(
+        mock.calls(),
+        1,
+        "premise: the response cache served the repeat"
+    );
+    std::assert_eq!(
+        served.pointer("/result/_meta/provenance/receipt/cache"),
+        Some(&json!("hit")),
+        "premise: the served receipt names CacheOutcome::Hit: {served}"
+    );
+    assert_redacted_unsealed(&served, "the response-cache hit");
+}
+
+/// The inner idempotency cache answers after retention reclaims the outer
+/// admission entry, as in `context_integrity_effect_tests`.
+#[tokio::test]
+async fn an_idempotency_cache_hit_redacted_at_serve_carries_no_stale_seal() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = sealing_state_with(&mock, |mut meta| {
+        meta.enable_idempotency(
+            Arc::new(crate::idempotency::IdempotencyCache::new()),
+            Duration::from_secs(300),
+        );
+        meta
+    })
+    .await;
+    let call = |id| keyed(sync_invoke(id, json!({})), "seal-idempotency-cache");
+    let first = post(&state, "key-a", call(1)).await;
+    assert!(
+        first.to_string().contains(OUTPUT),
+        "stored while plain: {first}"
+    );
+    assert_sealed_bound(&first["result"], "the idempotency-cache miss");
+    std::assert_eq!(mock.calls(), 1, "premise: the first call dispatched");
+    std::assert_eq!(
+        state
+            .meta_mcp
+            .execution_admission()
+            .reclaim_all_dated_for_test(),
+        1,
+        "premise: retention reclaimed the admission entry"
+    );
+
+    mark(&state, OUTPUT);
+    let served = post(&state, "key-a", call(2)).await;
+    std::assert_eq!(
+        mock.calls(),
+        1,
+        "premise: with admission gone and no response cache, the idempotency cache served the repeat"
+    );
+    std::assert_eq!(
+        served.pointer("/result/_meta/provenance/receipt/cache"),
+        Some(&json!("hit")),
+        "premise: the cached result was served: {served}"
+    );
+    assert_redacted_unsealed(&served, "the idempotency-cache hit");
+}
+
+/// The direct route's stage-7b keyed replay scans the stored answer using
+/// the current marks; both signers come from the same Meta-MCP as `/mcp`.
+#[tokio::test]
+async fn a_direct_keyed_replay_redacted_at_serve_carries_no_stale_seal() {
+    use crate::gateway::router::backend_handlers::direct_lease_seams;
+
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = sealing_state(&mock).await;
+    let call = |id| {
+        keyed(
+            modern(
+                id,
+                "tools/call",
+                json!({ "name": TOOL, "arguments": {} }),
+                false,
+            ),
+            "seal-direct-replay",
+        )
+    };
+    let uri = format!("/mcp/{BACKEND}");
+    let first = post_at(&state, "key-a", &uri, call(1)).await;
+    assert!(
+        first.to_string().contains(OUTPUT),
+        "stored while plain: {first}"
+    );
+    assert_sealed_bound(&first["result"], "the direct call's first answer");
+    std::assert_eq!(mock.calls(), 1, "premise: the first call dispatched");
+
+    mark(&state, OUTPUT);
+    let _ = direct_lease_seams::served();
+    let served = post_at(&state, "key-a", &uri, call(2)).await;
+    std::assert_eq!(
+        mock.calls(),
+        1,
+        "premise: the direct repeat came from the store"
+    );
+    std::assert_eq!(
+        direct_lease_seams::served(),
+        Some(direct_lease_seams::Served::Execution),
+        "premise: stage 7b served the direct repeat"
+    );
+    assert_redacted_unsealed(&served, "the direct keyed replay");
 }
