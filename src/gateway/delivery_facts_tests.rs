@@ -597,16 +597,51 @@ fn the_delivery_scope_holds_its_future_once() {
 
 /// Every `async fn` whose body ends in `<task local>.scope(.., future).await`
 /// on a future it takes holds that future twice, as the delivery scope did. The
-/// plain `fn .. -> impl Future` form holds it once. Listed exceptions read a
-/// task-local before scoping, which must happen when the future is first
-/// polled, not when it is made.
+/// plain `fn .. -> impl Future` form holds it once. Listed exceptions read or
+/// join task-local state before scoping, which must happen when the future is
+/// first polled, not when it is made.
 #[test]
 fn no_async_fn_holds_the_future_it_scopes_twice() {
     use syn::visit::Visit;
-    const DELIBERATE: &[(&str, &str)] = &[(
-        "non_interactive",
-        "reads the caller's contention class when first polled",
-    )];
+    // (file, function, why it stays an `async fn`): each reads or joins
+    // task-local state, which must happen in the task that polls it.
+    const DELIBERATE: &[(&str, &str, &str)] = &[
+        (
+            "src/oauth/login_gate/scopes.rs",
+            "non_interactive",
+            "reads the caller's contention class",
+        ),
+        (
+            "src/oauth/login_gate/scopes.rs",
+            "scope",
+            "captures the gate's cohort before it can queue on a start lock",
+        ),
+        (
+            "src/gateway/meta_mcp/invoke/relay_staging.rs",
+            "plan_step",
+            "reads the outer plan step",
+        ),
+        (
+            "src/gateway/meta_mcp/visible/memo.rs",
+            "with_judged",
+            "reads the worker's judged names",
+        ),
+        (
+            "src/gateway/meta_mcp/visible/memo.rs",
+            "with_visibility_memo",
+            "joins a memo already open",
+        ),
+        (
+            "src/gateway/meta_mcp/hiding.rs",
+            "with_caller_slot",
+            "joins a caller slot already open",
+        ),
+        (
+            "src/gateway/meta_mcp/sealed_hold.rs",
+            "scoped",
+            "joins holds already open",
+        ),
+    ];
     struct Scan<'a> {
         path: &'a str,
         found: Vec<String>,
@@ -675,7 +710,9 @@ fn no_async_fn_holds_the_future_it_scopes_twice() {
             let name = sig.ident.to_string();
             if !params.is_empty()
                 && scopes_it(block, &params)
-                && !DELIBERATE.iter().any(|(n, _)| *n == name)
+                && !DELIBERATE
+                    .iter()
+                    .any(|(file, n, _)| *file == self.path && *n == name)
             {
                 self.found.push(format!("{}: {name}", self.path));
             }
