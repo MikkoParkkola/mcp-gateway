@@ -382,7 +382,7 @@ fn settle_anchor(
     if let Some(body) = anchor
         .as_mut()
         .filter(|b| b.offset == 0 && b.state == sigstart::State::Open)
-        && body.segment_seq != state.seg.seq
+        && mutant!("q17", false, body.segment_seq != state.seg.seq)
         && matches!(plan, sigstart::Plan::FirstStart)
     {
         body.segment_seq = state.seg.seq;

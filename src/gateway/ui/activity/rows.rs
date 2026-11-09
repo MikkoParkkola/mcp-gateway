@@ -33,7 +33,7 @@ impl<'a> Check<'a> {
         Self {
             secret,
             inv: load(inv),
-            gov: gov.map(load),
+            gov: gov.map(|g| load(mutant!("q18", inv, g))),
             checked: RefCell::default(),
         }
     }
@@ -92,7 +92,7 @@ impl<'a> Check<'a> {
                 },
                 None => LinePos::Newest,
             };
-            anchor.place(path, pos, &mut self.checked.borrow_mut())
+            mutant!("q3", sigstart::Placed::Invalid("sig_missing"), anchor.place(path, pos, &mut self.checked.borrow_mut()))
         })
     }
 }
@@ -229,10 +229,10 @@ pub(super) fn row(line: &Line, check: &Check<'_>) -> Option<Value> {
         "signature".into(),
         serde_json::to_value(judged.state).unwrap_or(Value::Null),
     );
-    if let Some(why) = judged.integrity {
+    if let Some(why) = mutant!("q15", None, judged.integrity) {
         row.insert("integrity".into(), why.into());
     }
-    if judged.unanchored {
+    if mutant!("q29", false, judged.unanchored) {
         row.insert("unanchored".into(), true.into());
     }
     match kind {

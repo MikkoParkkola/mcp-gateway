@@ -93,7 +93,7 @@ pub(super) fn collect(
         sources: Vec::new(),
         unreadable: 0,
         truncated: Truncated::None,
-        signing_anchor: [Which::Invocation, Which::Governance].map(|w| check.report(w)),
+        signing_anchor: mutant!("q22", ["ok"; 2], [Which::Invocation, Which::Governance].map(|w| check.report(w))),
     };
     let done = |mut c: Collected, truncated| {
         c.truncated = truncated;

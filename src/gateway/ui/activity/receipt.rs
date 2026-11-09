@@ -130,7 +130,7 @@ pub(super) fn receipt(
         log: id.log,
         entry: found.entry,
         segment: found.segment,
-        span: Some((found.offset, found.len)),
+        span: Some((mutant!("q14", 0, found.offset), found.len)),
     };
     let Some(kind) = kind_of(&line) else {
         return Ok(None);

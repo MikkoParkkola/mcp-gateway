@@ -379,7 +379,7 @@ pub(in crate::gateway::ui) fn frame(
         log: log.kind.log(),
         entry: entry.clone(),
         segment: 0,
-        span: None,
+        span: mutant!("q13", Some((0, 1)), None),
     };
     // ponytail: loads the anchor per announced record; hold one per
     // connection if the live stream's sidecar reads ever show up.
