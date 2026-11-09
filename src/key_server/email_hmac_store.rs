@@ -193,13 +193,13 @@ fn take_lock(lock: &Path, wait: Duration) -> Result<crate::fs_lock::ExclusiveFil
 
 /// Write the first envelope: the configured key, else a new random one.
 fn create(file: &Path, configured: Option<&str>) -> Result<(), String> {
-    let (mode, key_hex) = match configured {
-        Some(text) => (Mode::Configured, text.trim_end_matches('\n').to_owned()),
-        None => {
-            use rand::RngExt as _;
-            let bytes: [u8; 32] = rand::rng().random();
-            (Mode::Generated, hex::encode(bytes))
-        }
+    use rand::RngExt as _;
+    use zeroize::Zeroize as _;
+    let (mode, key_hex) = if let Some(text) = configured {
+        (Mode::Configured, text.trim_end_matches('\n').to_owned())
+    } else {
+        let bytes: [u8; 32] = rand::rng().random();
+        (Mode::Generated, hex::encode(bytes))
     };
     let key = EmailHashKey::from_hex(&key_hex)
         .map_err(|e| format!("key_server.audit_email_hmac_secret_ref: {e}"))?;
@@ -210,7 +210,6 @@ fn create(file: &Path, configured: Option<&str>) -> Result<(), String> {
         key_hex: if mode == Mode::Generated {
             Some(key_hex)
         } else {
-            use zeroize::Zeroize as _;
             let mut copy = key_hex;
             copy.zeroize();
             None
@@ -218,7 +217,6 @@ fn create(file: &Path, configured: Option<&str>) -> Result<(), String> {
         previous_key_ids: Vec::new(),
         creation_recorded: false,
     };
-    use zeroize::Zeroize as _;
     let mut json = serde_json::to_vec_pretty(&envelope).map_err(|e| e.to_string())?;
     let published =
         crate::config::publish_new_file(file, &json, |from, to| std::fs::hard_link(from, to));
@@ -264,7 +262,7 @@ fn load(file: &Path, configured: Option<&str>) -> Result<(EmailHashKey, Envelope
         }
     };
     let given = configured
-        .map(|t| EmailHashKey::from_hex(t))
+        .map(EmailHashKey::from_hex)
         .transpose()
         .map_err(|e| format!("key_server.audit_email_hmac_secret_ref: {e}"))?;
     let key = match (stored, given) {

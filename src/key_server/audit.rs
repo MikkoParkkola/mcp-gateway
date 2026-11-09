@@ -119,21 +119,6 @@ impl AuditEvent {
         }
     }
 
-    /// Construct a `token.expired` event.
-    #[must_use]
-    pub(crate) fn expired(jti: &str, identity: &VerifiedIdentity, key: &EmailHashKey) -> Self {
-        Self {
-            event: "token.expired",
-            identity: Some(SafeIdentity::of(identity, key)),
-            token_jti: Some(jti.to_string()),
-            backends: None,
-            tools: None,
-            rate_limit: None,
-            client_ip: None,
-            reason: None,
-        }
-    }
-
     /// Construct a `token.revoked` event.
     #[must_use]
     pub fn revoked(jti: &str, identity: Option<SafeIdentity>) -> Self {

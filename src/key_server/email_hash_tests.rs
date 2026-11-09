@@ -171,13 +171,13 @@ fn the_key_debug_shows_no_bytes() {
 #[test]
 fn the_final_nfc_pass_composes_and_reorders() {
     let one = super::normalize(&format!("T\u{308}om{DOMAIN}"));
-    assert!(one.starts_with('\u{1e97}'), "{:?}", one);
+    assert!(one.starts_with('\u{1e97}'), "{one:?}");
     let two = super::normalize(&format!("\u{130}\u{316}nci{DOMAIN}"));
-    assert!(two.starts_with("i\u{316}\u{307}"), "{:?}", two);
+    assert!(two.starts_with("i\u{316}\u{307}"), "{two:?}");
 }
 
-/// Normalization v1's tables are pinned (lead ruling 2026-11-09): lowercase
-/// from the standard library at Unicode 17.0.0, NFC from icu_normalizer_data
+/// Normalization v1's tables are pinned: lowercase from the standard
+/// library at Unicode 17.0.0, NFC from `icu_normalizer_data`
 /// 2.3.0 (built from ICU 78). A toolchain or lock-file change that moves
 /// either fails here, and moving them means a new normalization version.
 #[test]
