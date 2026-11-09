@@ -26,6 +26,7 @@ pub mod control_plane;
 mod dashboard;
 pub(in crate::gateway) mod decisions;
 mod discovery;
+mod settings;
 mod errors;
 mod events;
 mod gateway_status;
@@ -106,6 +107,8 @@ const INDEX_HTML: &str = include_str!("index.html");
 /// Build the authenticated `/ui/api/*` and `/dashboard` sub-router.
 pub fn api_router() -> Router<Arc<AppState>> {
     let router = Router::new()
+        .route(routes::UI_SETTINGS_DIFF, post(settings::settings_diff))
+        .route(routes::UI_SETTINGS, post(settings::settings_save))
         .route(routes::UI_STATUS, get(status::status))
         .route(routes::UI_OVERVIEW, get(overview::overview))
         .route(routes::UI_TOOLS, get(tools))

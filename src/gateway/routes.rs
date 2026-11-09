@@ -84,6 +84,8 @@ owned_routes! {
     /// Servers named in other MCP clients' config files on this host.
     UI_DISCOVERY = "/ui/api/discovery",
     /// One of those servers made a disabled backend.
+    UI_SETTINGS_DIFF = "/ui/api/settings/diff",
+    UI_SETTINGS = "/ui/api/settings",
     UI_DISCOVERY_ADOPT = "/ui/api/discovery/adopt",
     /// The decisions an admin has open.
     UI_DECISIONS = "/ui/api/decisions",
