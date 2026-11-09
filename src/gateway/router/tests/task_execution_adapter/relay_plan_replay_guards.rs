@@ -442,7 +442,9 @@ async fn g46b_a_refused_read_with_an_absent_entry_counts_no_absent_lookup() {
 /// expired counts `expired == 0` exactly and leaves the entry in
 /// place (expiry is lazy, on an authorized lookup): alice's later
 /// authorized re-read of the same task counts `expired == 1`
-/// exactly, and renews nothing. Mutant (planted bug) killed: "stage
+/// exactly, and renews: the lapsed entry is rebuilt from the snapshot the
+/// task's row still holds (the in-memory entry is a cache of the row).
+/// Mutant (planted bug) killed: "stage
 /// before the gate inside `refuse_stored`" — a call to
 /// `stage_stored_receipt` at the top of `refuse_stored` would count
 /// the expiry on the refused read and evict the entry there, so the
@@ -498,8 +500,8 @@ async fn g46b_a_refused_read_with_an_expired_entry_leaves_it_for_the_authorized_
         "the authorized re-read did not count the lazy expiry exactly once"
     );
     assert!(
-        !rig.refused("key-b", 463, PROSE).await,
-        "the expired entry renewed a receipt"
+        rig.refused("key-b", 463, PROSE).await,
+        "the re-read did not rebuild the lapsed entry from its row"
     );
 }
 

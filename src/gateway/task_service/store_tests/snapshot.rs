@@ -45,9 +45,7 @@ async fn settle(
     stale: u64,
 ) -> (PathBuf, String, Result<(), StoreError>) {
     let path = root.join("tasks");
-    // Created under the default budget, settled under `limits`: a tight
-    // budget is about the settle, not the admission.
-    let store = TaskStore::open(&path, StoreLimits::default())
+    let store = TaskStore::open(&path, limits)
         .await
         .expect("the store opens");
     let one = task();
@@ -55,10 +53,6 @@ async fn settle(
         .create(PreparedTask::for_test(&one, OWNER, 1))
         .await
         .expect("the task is created");
-    store.close().await.unwrap();
-    let store = TaskStore::open(&path, limits)
-        .await
-        .expect("the store reopens under the settle's budget");
     let settled = store
         .settle_bounded_by(
             OWNER,
@@ -139,32 +133,21 @@ fn a_snapshot_row_is_beyond_an_older_loader() {
     );
 }
 
-/// The advisor's room row: a result that fits without its snapshot but not
-/// with it still completes and serves, the snapshot replaced by the
-/// untrackable marker, never the result by the bounded failure.
+/// The room row: a result that fits the default record budget on its own,
+/// with a snapshot that does not, still completes and serves, the snapshot
+/// replaced by the untrackable marker, never the result by the bounded
+/// failure.
 #[tokio::test]
 async fn a_snapshot_with_no_room_leaves_the_marker_not_a_failure() {
-    let bare = tempfile::tempdir().unwrap();
-    let (bare_path, bare_id, settled) = settle(
-        bare.path(),
-        StoreLimits::default(),
-        TaskTransition::Complete(result()),
-        carrying(None),
-        0,
-    )
-    .await;
-    settled.unwrap();
-    let room = encoded_len(&record_file(&bare_path, &bare_id));
-    let tight = StoreLimits {
-        record_bytes: room + 64,
-        ..StoreLimits::default()
-    };
+    let budget = StoreLimits::default().record_bytes;
+    // Two bytes per element ("1,"), so this snapshot alone is over budget.
+    let over = snapshot(budget / 2 + 1);
     let dir = tempfile::tempdir().unwrap();
     let (path, id, settled) = settle(
         dir.path(),
-        tight,
+        StoreLimits::default(),
         TaskTransition::Complete(result()),
-        carrying(Some(snapshot(400))),
+        carrying(Some(over)),
         0,
     )
     .await;
@@ -258,31 +241,52 @@ async fn a_lost_compare_and_set_stores_no_snapshot() {
     assert_eq!(row["model"]["task"]["status"], "working", "{row}");
 }
 
-/// The boundary below the room row: the result fits on its own but not
-/// with even the marker. Pinned as today's outcome: the cascade goes on to
-/// the bounded failure (a register row names the window), never to a
-/// completed row that holds no snapshot, which a read would serve untracked.
+/// The boundary below the room row: a result sized so its completed row
+/// is four bytes under the default budget fits on its own but not with even
+/// the marker. Pinned as today's outcome: the cascade goes on to the
+/// bounded failure (a register row names the window), never to a completed
+/// row that holds no snapshot, which a read would serve untracked.
 #[tokio::test]
 async fn a_row_with_no_room_for_the_marker_settles_as_the_bounded_failure() {
-    let bare = tempfile::tempdir().unwrap();
-    let (bare_path, bare_id, settled) = settle(
-        bare.path(),
+    let budget = StoreLimits::default().record_bytes;
+    let text = |n: usize| json!({"content": [{"type": "text", "text": "x".repeat(n)}]});
+    let probe = tempfile::tempdir().unwrap();
+    let (probe_path, probe_id, settled) = settle(
+        probe.path(),
         StoreLimits::default(),
-        TaskTransition::Complete(result()),
+        TaskTransition::Complete(text(10)),
         carrying(None),
         0,
     )
     .await;
     settled.unwrap();
-    let room = encoded_len(&record_file(&bare_path, &bare_id));
+    let probe_bytes = encoded_len(&record_file(&probe_path, &probe_id));
+    let sized = text(10 + budget - probe_bytes - 4);
+    let bare = tempfile::tempdir().unwrap();
+    let (bare_path, bare_id, settled) = settle(
+        bare.path(),
+        StoreLimits::default(),
+        TaskTransition::Complete(sized.clone()),
+        carrying(None),
+        0,
+    )
+    .await;
+    settled.unwrap();
+    let bare_row = record_file(&bare_path, &bare_id);
+    assert_eq!(
+        bare_row["model"]["task"]["status"], "completed",
+        "premise: fits alone"
+    );
+    assert_eq!(
+        encoded_len(&bare_row),
+        budget - 4,
+        "premise: four bytes under"
+    );
     let dir = tempfile::tempdir().unwrap();
     let (path, id, settled) = settle(
         dir.path(),
-        StoreLimits {
-            record_bytes: room + 4,
-            ..StoreLimits::default()
-        },
-        TaskTransition::Complete(result()),
+        StoreLimits::default(),
+        TaskTransition::Complete(sized),
         carrying(Some(snapshot(4))),
         0,
     )
