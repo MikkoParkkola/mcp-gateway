@@ -421,6 +421,10 @@ async fn a_seal_holding_a_held_value_is_dropped() {
     let wire = serde_json::to_string(&answer).expect("serializes");
     assert_eq!(outcome, Scrubbed::Redacted, "{wire}");
     assert!(!wire.contains("held-secret-value"), "{wire}");
+    assert!(
+        !wire.contains("public_signature"),
+        "a seal was kept: {wire}"
+    );
     assert!(wire.contains("receipt"), "the receipt stays: {wire}");
 }
 
