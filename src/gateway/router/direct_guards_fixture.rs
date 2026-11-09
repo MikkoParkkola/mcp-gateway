@@ -463,6 +463,10 @@ async fn fixture_inner(
     #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
     build: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fx {
+    // Taken before the first await, so no other fixture on this thread can
+    // take a flag set for this one (`keep_every_kgram_next`).
+    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))]
+    let every = EVERY_KGRAM.with(|e| e.replace(false));
     let (mut state, store) = fixture_state().await;
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
@@ -538,7 +542,6 @@ async fn fixture_inner(
         };
         // A row whose verdict must not depend on the per-process hash key keeps
         // every k-gram instead of the keyed sample (`keep_every_kgram_next`).
-        let every = EVERY_KGRAM.with(|e| e.replace(false));
         let keyed = |fw: Firewall| if every { fw.keeping_every_kgram() } else { fw };
         let firewall = Arc::new(keyed(
             Firewall::from_config(config.clone(), tracker.clone())
@@ -593,7 +596,8 @@ pub(crate) fn reload_for_test(
     }
 }
 
-/// The next fixture built on this thread keeps every k-gram for relay
+/// The next fixture built on this thread (a thread-local flag, like `RELAY`,
+/// taken at the fixture's first line) keeps every k-gram for relay
 /// detection, so a relay row's verdict does not depend on the per-process hash
 /// key: with the keyed 1-in-4 sample, a short text is missed for a small,
 /// documented share of keys.
