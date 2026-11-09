@@ -128,13 +128,6 @@ pub(crate) struct ReplaceOutcome {
     /// The kept copy, for [`Replaced::KeepBeside`].
     pub(crate) kept_beside: Option<PathBuf>,
     /// The reload that accepted it.
-    #[cfg_attr(
-        all(test, not(feature = "webui")),
-        expect(
-            dead_code,
-            reason = "first callers: the web UI settings save and the configuration-history restore"
-        )
-    )]
     pub(crate) reload: ReloadOutcome,
     /// Each stored secret's field and the reference the written file holds for
     /// it, in the secret step's order; empty without one. Read from this write
@@ -242,6 +235,10 @@ mod validate;
 /// writer does.
 #[path = "ui_diff.rs"]
 pub(crate) mod ui_diff;
+/// The settings save (U8): the writer's caller for a UI edit.
+#[cfg(any(test, feature = "webui"))]
+#[path = "ui_save.rs"]
+pub(crate) mod ui_save;
 use slots::{fill_secrets, fits_when_filled, same_fields};
 
 /// What happens to a replacement's new store entries.
