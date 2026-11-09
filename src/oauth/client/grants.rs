@@ -122,7 +122,12 @@ impl OAuthClient {
         let token = token_from_answer(&auth_meta.token_endpoint, token_response, now)?;
 
         self.save_issued(&token).await?;
-        self.cache_if_current(token.clone());
+        // A sign-in confirmed under another issuer while this grant was in
+        // flight: its answer is not this backend's credential any more, so
+        // nothing is cached and nothing renewed is reported.
+        if !self.cache_if_current(token.clone()) {
+            return Err(self.issuer_wait());
+        }
 
         info!(backend = %self.backend_name, "Token renewed via client_credentials");
         Ok(token.access_token)

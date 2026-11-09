@@ -77,6 +77,10 @@ impl OAuthClient {
         self.renewal_pause.pause().await;
         match self.try_client_credentials(allowed).await {
             Ok(_) => Renewal::Renewed,
+            // A sign-in under another issuer landed while the grant was in
+            // flight: as at the entry check above, nothing is renewed and the
+            // token step re-discovers. Not exhausted: no new sign-in is due.
+            Err(_) if self.issuer_differs() => Renewal::Deferred,
             Err(e) if is_ssrf_refusal(&e) => self.refused(&e),
             // Its save met the busy lease: deferred, not exhausted, so no
             // misleading re-authorization warning follows.
