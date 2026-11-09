@@ -255,10 +255,15 @@ impl Firewall {
             return Adopted::NoSnapshot;
         }
         let Some(snapshot) = snapshot else {
-            // A row with nothing to rebuild from replays nothing, counted as a
-            // missing entry always was.
-            count_replay_skipped("absent");
-            return Adopted::NoSnapshot;
+            // Nothing to rebuild from: an entry already held is served as a
+            // lookup serves it; a miss is counted by the store, as always.
+            return match self.relay.replay.acquire(key, self.relay.now()) {
+                Some(acquired) => {
+                    let (entry, handle) = acquired.into_parts();
+                    Adopted::Held(replayed(&entry), entry.calls.clone(), handle)
+                }
+                None => Adopted::NoSnapshot,
+            };
         };
         let Some(parts) = self.trackable_parts(snapshot) else {
             return Adopted::Untrackable;

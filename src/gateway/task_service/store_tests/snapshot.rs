@@ -45,7 +45,9 @@ async fn settle(
     stale: u64,
 ) -> (PathBuf, String, Result<(), StoreError>) {
     let path = root.join("tasks");
-    let store = TaskStore::open(&path, limits)
+    // Created under the default budget, settled under `limits`: a tight
+    // budget is about the settle, not the admission.
+    let store = TaskStore::open(&path, StoreLimits::default())
         .await
         .expect("the store opens");
     let one = task();
@@ -53,6 +55,10 @@ async fn settle(
         .create(PreparedTask::for_test(&one, OWNER, 1))
         .await
         .expect("the task is created");
+    store.close().await.unwrap();
+    let store = TaskStore::open(&path, limits)
+        .await
+        .expect("the store reopens under the settle's budget");
     let settled = store
         .settle_bounded_by(
             OWNER,

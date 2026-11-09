@@ -328,11 +328,25 @@ async fn k20_the_record_holds_no_text_beyond_its_stored_result() {
                 "a persisted segment is not in the stored result: {text:?}"
             );
         }
-        for name in [&receipt["server"], &receipt["tool"]] {
-            assert!(
-                names.contains(&name.as_str().unwrap_or("")),
-                "a persisted name is not a target: {name}"
-            );
+        // A seam receipt names its contributing `server:tool`s; any other
+        // names its own server and tool.
+        if let Some(sources) = receipt["seamSources"].as_array() {
+            for source in sources {
+                let pair = source.as_str().unwrap_or("");
+                assert!(
+                    targets
+                        .iter()
+                        .any(|t| format!("{}:{}", t.server, t.tool) == pair),
+                    "a persisted seam source is not a target: {pair}"
+                );
+            }
+        } else {
+            for name in [&receipt["server"], &receipt["tool"]] {
+                assert!(
+                    names.contains(&name.as_str().unwrap_or("")),
+                    "a persisted name is not a target: {name}"
+                );
+            }
         }
         assert!(
             receipt["joins"].get("text").is_none(),

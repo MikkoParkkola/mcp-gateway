@@ -532,9 +532,14 @@ impl ReplayReceipts {
         retention: Duration,
     ) -> Option<Acquired> {
         let bytes = entry_bytes(&parts.0, &parts.1, &parts.2);
+        let mut lapsed = false;
         let (found, evicted) = {
             let mut inner = self.inner.lock();
-            if let Some(found) = acquire_locked(&mut inner, key, now).0 {
+            let (live, missed) = acquire_locked(&mut inner, key, now);
+            // A lapsed entry is counted as a lookup counts it; an absent one
+            // is not a miss here, the parts rebuild it.
+            lapsed = missed == Some("expired");
+            if let Some(found) = live {
                 (Some(found), 0)
             } else {
                 let (seq, evicted) = self.insert_locked(
@@ -556,6 +561,9 @@ impl ReplayReceipts {
                 (entry, evicted)
             }
         };
+        if lapsed {
+            count_replay_skipped("expired");
+        }
         self.count_insert(found.is_none(), evicted);
         let (entry, seq) = found?;
         let handle = seq.map(|seq| self.handle(key.clone(), seq));
