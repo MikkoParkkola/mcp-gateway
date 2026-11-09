@@ -69,6 +69,10 @@ async fn r39_after_a_closed_rebuild_every_unsigned_record_is_invalid() {
 /// R8 (condition 4c) with legacy history: log B's sidecar, valid under the
 /// same secret and with its own legacy digests, copied over log A's, and A's
 /// open record rewritten to B's id: A's legacy bytes fail B's digests.
+/// The row reads `tool_0`: B's anchor falls just after B's `tool_1`, so
+/// whether A's `tool_1` ends inside B's frozen range (`legacy_edited`) or
+/// past it (`legacy_unlisted`) turns on timestamp lengths; `tool_0` ends a
+/// whole record inside it on every clock.
 #[tokio::test]
 async fn r8_a_copied_sidecar_with_legacy_digests_exempts_nothing() {
     let a = turned_on_midway();
@@ -83,7 +87,7 @@ async fn r8_a_copied_sidecar_with_legacy_digests_exempts_nothing() {
         }
         hit
     });
-    let s = seen(&a, "tool_1").await;
+    let s = seen(&a, "tool_0").await;
     assert_invalid(&s, "legacy_edited");
 }
 
