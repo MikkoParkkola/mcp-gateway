@@ -86,6 +86,7 @@ fn a_bound_tag_under_another_name_is_refused() {
 fn a_tag_colliding_with_another_key_or_the_bearer_is_identity_in_use() {
     // A valid file cannot share a digest between keys or with the bearer, so
     // the collision lives in the running table, over a valid file.
+    let mut exercised = 0;
     for slot in ["current", "previous", "bearer"] {
         let mut setup = target_setup();
         setup.text = yaml_of(&[
@@ -119,10 +120,15 @@ fn a_tag_colliding_with_another_key_or_the_bearer_is_identity_in_use() {
         if !reachable {
             continue;
         }
+        exercised += 1;
         let sent = refuse(setup, "target", None);
         assert_eq!(sent.status, StatusCode::CONFLICT, "{slot}: {}", sent.body);
         assert_eq!(sent.json(), json!({"error": "identity_in_use"}), "{slot}");
     }
+    assert!(
+        exercised > 0,
+        "no collision slot can be running: this row tests nothing"
+    );
 }
 
 #[test]
