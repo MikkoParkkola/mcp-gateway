@@ -605,6 +605,10 @@ mod rotation_tests;
 #[path = "auth_limit_state_tests.rs"]
 mod limit_state_tests;
 
+#[cfg(test)]
+#[path = "auth_approval_binding_tests.rs"]
+mod approval_binding_tests;
+
 /// SIGNING.5 row 44: which nonce-quota authority a dashboard session carries.
 ///
 /// Every identity here is produced by [`auth_middleware`] itself, from a handle
