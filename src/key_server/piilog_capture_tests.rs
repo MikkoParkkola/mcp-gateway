@@ -100,7 +100,10 @@ impl Write for Captured {
 
 #[test]
 #[ignore = "run by the cases below, in a child process"]
-#[allow(clippy::too_many_lines, reason = "one arm per capture case, each a few lines")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm per capture case, each a few lines"
+)]
 fn child() {
     let Ok(case) = std::env::var(CASE) else {
         return;

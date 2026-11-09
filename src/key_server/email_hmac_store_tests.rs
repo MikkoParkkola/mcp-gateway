@@ -13,12 +13,18 @@ const KEY_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1
 const KEY2_HEX: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
 const KEY_ID: &str = "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd";
 
-#[allow(clippy::unnecessary_wraps, reason = "the history-scan callback's signature")]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the history-scan callback's signature"
+)]
 fn none() -> Result<bool, String> {
     Ok(false)
 }
 
-#[allow(clippy::unnecessary_wraps, reason = "the creation-record callback's signature")]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the creation-record callback's signature"
+)]
 fn recorded(_: &str) -> Result<(), String> {
     Ok(())
 }
