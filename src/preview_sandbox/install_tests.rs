@@ -379,3 +379,18 @@ fn zero_or_two_matching_dist_infos_refuse() {
             .contains("installed metadata")
     );
 }
+
+/// A console script whose name is a path, not one file in `bin/`, refuses.
+#[test]
+fn a_script_name_with_a_path_refuses() {
+    for name in ["../x", "a/b", ".."] {
+        let entry_points = format!("[console_scripts]\n{name} = m:main\n");
+        let env = uv_env(&[("srv-1.0.dist-info", entry_points.as_str())], &[]);
+        // Each name points at a real file, so only the name check refuses it.
+        std::fs::write(env.path().join("x"), "").expect("outside bin");
+        std::fs::create_dir_all(env.path().join("bin/a")).expect("bin/a");
+        std::fs::write(env.path().join("bin/a/b"), "").expect("nested");
+        let text = entry_of(&env, "srv").expect_err("path name");
+        assert!(text.contains("no single entry point"), "{name}: {text}");
+    }
+}
