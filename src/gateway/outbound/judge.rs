@@ -10,6 +10,7 @@
 //! JSON-shaped id cannot refuse itself.
 
 use crate::error::rpc_codes::INTERNAL_ERROR;
+use std::cell::Cell;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,6 +27,21 @@ pub(super) const REFUSAL_CODE: i32 = INTERNAL_ERROR;
 /// Its text: fixed, carrying no backend content.
 pub(super) const REFUSAL_TEXT: &str =
     "Response withheld: this caller already read another tenant's data inside the window";
+
+/// The capability to reach the process's read history: `Firewall::reads` and
+/// `ReadHistory::reserve` take one. Its field is private to this module, so
+/// only the judge builds a token, and only as an argument of its one read
+/// call in `assess`. The field is a `Cell` so no module can implement `Copy`
+/// for it (a trait impl is not privacy-checked) and a borrowed token is never
+/// promoted to `'static`; no derive, so it is never `Clone` or `Default`.
+pub(crate) struct ReadsToken(std::cell::Cell<()>);
+
+/// A token for the read history's own tests, which reserve directly. Absent
+/// from every non-test build; the probe check pins that.
+#[cfg(test)]
+pub(crate) fn test_token() -> ReadsToken {
+    ReadsToken(Cell::new(()))
+}
 
 /// Whether this firewall judges at all: attribution configured and the mode
 /// not `off`. The fast path is everything else.
@@ -154,9 +170,15 @@ fn assess(
         );
     }
     let window = Duration::from_secs(guard.config().window_secs);
-    let reservation = key
-        .filter(|k| !k.is_empty())
-        .and_then(|k| firewall.reads().reserve(k, &attribution, window, block));
+    let reservation = key.filter(|k| !k.is_empty()).and_then(|k| {
+        firewall.reads(&ReadsToken(Cell::new(()))).reserve(
+            &ReadsToken(Cell::new(())),
+            k,
+            &attribution,
+            window,
+            block,
+        )
+    });
     let (verdict, ticket) = match reservation {
         None => (Some(ReadVerdict::Unattributable), None),
         Some(r) if r.over && block => (Some(ReadVerdict::Blocked), None),
@@ -341,6 +363,55 @@ pub(crate) fn admit_stream_item(
 
 #[cfg(test)]
 mod emitted_document_tests {
+    use std::cell::Cell;
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::ReadsToken;
+    use crate::security::firewall::{Firewall, FirewallConfig};
+    use crate::security::tenant_reads::{ReadAttribution, ReadHistory};
+
+    /// The probe's forgeries, verbatim, compile here: each is well-typed but
+    /// for where it is written, so outside the judge it can fail only on the
+    /// token's privacy. A token bound to a local is accepted too, so neither
+    /// call demands a `'static` token.
+    #[test]
+    fn the_probe_forgeries_compile_inside_the_judge() {
+        macro_rules! later {
+            ($m:path, $($a:expr),*) => {{
+                let f = $m;
+                f($($a),*)
+            }};
+        }
+        macro_rules! frag {
+            ($f:expr, $dot:tt, $name:ident, $args:tt) => {
+                $f $dot $name $args
+            };
+        }
+        const WINDOW: Duration = Duration::from_secs(60);
+        let firewall = Firewall::from_config(FirewallConfig::default(), None);
+        let history: Arc<ReadHistory> = ReadHistory::shared();
+        let attr = ReadAttribution::of(BTreeSet::new(), false);
+        let _ = firewall.reads(&ReadsToken(Cell::new(())));
+        let _ = history.reserve(&ReadsToken(Cell::new(())), "k", &attr, WINDOW, false);
+        let _ = later!(Firewall::reads, &firewall, &ReadsToken(Cell::new(())));
+        let _ = later!(
+            ReadHistory::reserve,
+            &history,
+            &ReadsToken(Cell::new(())),
+            "k",
+            &attr,
+            WINDOW,
+            false
+        );
+        let _ = frag!(firewall, ., reads, (&ReadsToken(Cell::new(()))));
+        let _ = frag!(history, ., reserve, (&ReadsToken(Cell::new(())), "k", &attr, WINDOW, false));
+        let local = ReadsToken(Cell::new(()));
+        let _ = firewall.reads(&local);
+        let _ = history.reserve(&local, "k", &attr, WINDOW, false);
+    }
+
     use serde_json::{Value, json};
 
     use super::{Payload, emitted_document};
