@@ -114,13 +114,13 @@ async fn open_get(state: &Arc<AppState>, receipt: AdapterAssertion) -> (BodyFram
         .expect("a fixture request builds");
     request
         .extensions_mut()
-        .insert(crate::key_server::oidc::VerifiedIdentity {
-            subject: "alice".to_string(),
-            email: "alice@adapter.test".to_string(),
-            name: None,
-            groups: Vec::new(),
-            issuer: "https://idp.adapter.test".to_string(),
-        });
+        .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+            "alice".to_string(),
+            "alice@adapter.test".to_string(),
+            None,
+            Vec::new(),
+            "https://idp.adapter.test".to_string(),
+        ));
     request.extensions_mut().insert(receipt);
     let response = create_router(Arc::clone(state))
         .oneshot(request)

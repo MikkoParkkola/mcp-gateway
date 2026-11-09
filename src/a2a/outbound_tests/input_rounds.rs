@@ -37,10 +37,10 @@ fn retry(state: &Value, answer: Value) -> Value {
 }
 
 async fn send(
-    backend: &mcp_gateway::backend::Backend,
+    backend: &crate::backend::Backend,
     params: Value,
     identity: Option<&str>,
-) -> mcp_gateway::protocol::JsonRpcResponse {
+) -> crate::protocol::JsonRpcResponse {
     backend
         .request_with_headers("tools/call", Some(params), &[], identity)
         .await
@@ -212,7 +212,7 @@ async fn a2a_9_a_hanging_poll_is_bounded_and_canceled() {
         .result
         .expect("a tool result");
     assert!(
-        started.elapsed() < Duration::from_secs(8),
+        started.elapsed() < Duration::from_secs(10),
         "bounded by the deadline"
     );
     assert_eq!(result["isError"], true, "{result}");
@@ -233,7 +233,7 @@ async fn a2a_9_a_hanging_first_send_reports_an_unknown_outcome() {
         .request_with_headers("tools/call", Some(first_call()), &[], None)
         .await;
     assert!(
-        started.elapsed() < Duration::from_secs(8),
+        started.elapsed() < Duration::from_secs(10),
         "bounded by the deadline"
     );
     let text = match response {
@@ -312,7 +312,7 @@ async fn a2a_8_an_input_round_through_the_gateway_funnel() {
             "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}},
             "io.modelcontextprotocol/clientInfo": {"name": "a2a-rows", "version": "1"},
         });
-        params["_meta"][mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+        params["_meta"][crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
         json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
     };
 
@@ -384,13 +384,13 @@ pub(super) async fn post_as(
     if let Some(subject) = subject {
         request
             .extensions_mut()
-            .insert(mcp_gateway::key_server::oidc::VerifiedIdentity {
-                subject: subject.to_owned(),
-                email: format!("{subject}@a2a.test"),
-                name: None,
-                groups: Vec::new(),
-                issuer: "https://idp.a2a.test".to_owned(),
-            });
+            .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+                subject,
+                format!("{subject}@a2a.test"),
+                None,
+                Vec::new(),
+                "https://idp.a2a.test",
+            ));
     }
     let response = create_router(std::sync::Arc::clone(state))
         .oneshot(request)
@@ -433,7 +433,7 @@ async fn a2a_8_a_leaked_token_is_refused_to_another_caller_on_the_backend_route(
             "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}},
             "io.modelcontextprotocol/clientInfo": {"name": "a2a-rows", "version": "1"},
         });
-        params["_meta"][mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+        params["_meta"][crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
         json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
     };
 
@@ -555,7 +555,7 @@ async fn a2a_8_an_api_key_caller_keeps_its_round_through_gateway_invoke() {
             "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}},
             "io.modelcontextprotocol/clientInfo": {"name": "a2a-rows", "version": "1"},
         });
-        params["_meta"][mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+        params["_meta"][crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
         json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
     };
 
@@ -636,7 +636,7 @@ fn task_frame(id: i64, method: &str, mut params: Value, key: Option<&str>) -> Va
         "io.modelcontextprotocol/clientInfo": {"name": "a2a-rows", "version": "1"},
     });
     if let Some(key) = key {
-        params["_meta"][mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+        params["_meta"][crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
     }
     json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
 }

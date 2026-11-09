@@ -526,13 +526,13 @@ async fn post_to_raw(
         .unwrap();
     if matches!(caller, Caller::Oidc | Caller::ModernOidc) {
         // Auth is off in the OIDC cells, so the middleware leaves it in place.
-        request.extensions_mut().insert(VerifiedIdentity {
-            subject: "1".to_string(),
-            email: "one@example.invalid".to_string(),
-            name: None,
-            groups: vec![],
-            issuer: "https://a.example.invalid".to_string(),
-        });
+        request.extensions_mut().insert(VerifiedIdentity::for_test(
+            "1".to_string(),
+            "one@example.invalid".to_string(),
+            None,
+            vec![],
+            "https://a.example.invalid".to_string(),
+        ));
     }
     insert_identity(&mut request, caller);
     let response = fx.router.clone().oneshot(request).await.unwrap();

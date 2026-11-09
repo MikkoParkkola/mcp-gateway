@@ -38,13 +38,13 @@ use crate::key_server::oidc::VerifiedIdentity;
 /// task on `VerifiedIdentity::stable_actor_id`. Rendering the id any other way
 /// here would test a second identity scheme rather than the route's own.
 fn alice() -> String {
-    VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@adapter.test".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp.adapter.test".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@adapter.test".to_string(),
+        None,
+        Vec::new(),
+        "https://idp.adapter.test".to_string(),
+    )
     .stable_actor_id()
 }
 

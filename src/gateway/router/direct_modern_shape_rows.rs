@@ -5,7 +5,9 @@
 use serde_json::{Value, json};
 
 use super::super::direct_guards_fixture::{Answer, fixture, fixture_modern_off};
-use super::{BACKENDS, CACHEABLE, call_params, legacy, missing, modern, params_for, post};
+use super::{
+    BACKENDS, CACHEABLE, call_params, legacy, missing, modern, params_for, post, post_status,
+};
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 
 /// DIRECT.1: a modern listing from a legacy backend carries all three fields.
@@ -297,6 +299,44 @@ async fn a_replayed_public_scope_is_private_on_the_wire() {
                 "{backend} #{id}: {body}"
             );
         }
+    }
+}
+
+/// A replay of a stored answer whose backend claimed `"public"` is served
+/// from the store, not dispatched again, and neither the first answer nor the
+/// replay carries a `cacheScope`; the replay's content is the first's.
+#[tokio::test]
+async fn a_public_scope_replay_does_not_dispatch_again() {
+    // Both request eras: the row this replaces sent legacy requests.
+    for (backend, modern) in BACKENDS.into_iter().flat_map(|b| [(b, false), (b, true)]) {
+        let fx = fixture(Answer::PublicScope, |_| {}).await;
+        let meta = json!({ IDEMPOTENCY_KEY_META: "replayed" });
+        let route = (backend, "tools/call");
+        let (first_status, first) =
+            post_status(&fx, route, (modern, 1), call_params(), meta.clone()).await;
+        let (replay_status, replay) =
+            post_status(&fx, route, (modern, 2), call_params(), meta).await;
+        assert_eq!(
+            (first_status, replay_status),
+            (axum::http::StatusCode::OK, axum::http::StatusCode::OK),
+            "{backend} modern={modern}: both answers are 200"
+        );
+        assert_eq!(
+            fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "{backend} modern={modern}: the replay must not dispatch"
+        );
+        for body in [&first, &replay] {
+            assert!(body.get("error").is_none(), "{backend}: {body}");
+            assert!(
+                body["result"].get("cacheScope").is_none(),
+                "{backend}: {body}"
+            );
+        }
+        assert_eq!(
+            replay["result"]["content"], first["result"]["content"],
+            "{backend}"
+        );
     }
 }
 

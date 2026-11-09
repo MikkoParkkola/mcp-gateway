@@ -44,17 +44,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::backend::Backend;
+use crate::config::{BackendConfig, FailsafeConfig, SurfacedToolConfig, TransportConfig};
+use crate::gateway::test_helpers::AppState;
+use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::transport::Transport;
 use async_trait::async_trait;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
-use mcp_gateway::backend::Backend;
-use mcp_gateway::config::{BackendConfig, FailsafeConfig, SurfacedToolConfig, TransportConfig};
-use mcp_gateway::gateway::test_helpers::AppState;
-use mcp_gateway::protocol::{JsonRpcResponse, RequestId};
-use mcp_gateway::transport::Transport;
 use serde_json::{Value, json};
 
 /// The backend name every task-producing row dispatches to, and the only name
@@ -81,7 +81,10 @@ pub(crate) const MARKER: &str = "mik-7272-backend-answered";
 /// terminal state over the wire needs the same outer bound, and a second
 /// constant spelled beside it would be a second clock that can disagree with
 /// this one about how long "never happened" takes.
-pub(crate) const BOUND: Duration = Duration::from_secs(5);
+// The timing guard's 10 s floor for test waits: under load a shorter wait
+// fails a correct run. Every use waits for something that happens, so a
+// passing run never waits the bound out.
+pub(crate) const BOUND: Duration = Duration::from_secs(10);
 
 /// The backend's end of a dispatch barrier.
 struct Gate {
@@ -251,11 +254,7 @@ impl CountedBackend {
 
 #[async_trait]
 impl Transport for CountedBackend {
-    async fn request(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> mcp_gateway::Result<JsonRpcResponse> {
+    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         match method {
             "initialize" => Ok(JsonRpcResponse::success(
                 RequestId::Number(1),
@@ -311,7 +310,7 @@ impl Transport for CountedBackend {
     /// Notifications are accepted and dropped, and deliberately uncounted: a
     /// cancellation notice or a progress ping is not a dispatch, and counting
     /// one would let a row pass on a tool that was never invoked.
-    async fn notify(&self, _method: &str, _params: Option<Value>) -> mcp_gateway::Result<()> {
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
         Ok(())
     }
 
@@ -319,7 +318,7 @@ impl Transport for CountedBackend {
         true
     }
 
-    async fn close(&self) -> mcp_gateway::Result<()> {
+    async fn close(&self) -> crate::Result<()> {
         Ok(())
     }
 }

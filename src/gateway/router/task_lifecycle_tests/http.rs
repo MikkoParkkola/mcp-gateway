@@ -11,24 +11,24 @@ pub const SUBSCRIPTION_CAPACITY: usize = 64;
 
 use std::sync::Arc;
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use mcp_gateway::backend::BackendRegistry;
-use mcp_gateway::config::{ApiKeyConfig, AuthConfig, Config};
-use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
-use mcp_gateway::gateway::proxy::ProxyManager;
-use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
-use mcp_gateway::gateway::test_helpers::{
+use crate::backend::BackendRegistry;
+use crate::config::{ApiKeyConfig, AuthConfig, Config};
+use crate::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
+use crate::gateway::proxy::ProxyManager;
+use crate::gateway::streaming::NotificationMultiplexer;
+use crate::gateway::subscription_registry::SubscriptionRegistry;
+use crate::gateway::test_helpers::{
     AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
 };
-use mcp_gateway::key_server::oidc::VerifiedIdentity;
-use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-use mcp_gateway::protocol::headers::mcp_name_body_field;
+use crate::key_server::oidc::VerifiedIdentity;
+use crate::mtls::{MtlsConfig, MtlsPolicy};
+use crate::protocol::headers::mcp_name_body_field;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use crate::fixture::{self, CountedBackend, GateHandle, ServerGuard};
+use super::fixture::{self, CountedBackend, GateHandle, ServerGuard};
 
 pub(super) const TASKS: &str = "io.modelcontextprotocol/tasks";
 
@@ -52,7 +52,7 @@ pub(super) const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
 fn two_principal_auth() -> AuthConfig {
     let key = |k: &str, name: &str| ApiKeyConfig {
         key: None,
-        key_sha256: Some(mcp_gateway::config::api_key_digest_spec(k.as_bytes())),
+        key_sha256: Some(crate::config::api_key_digest_spec(k.as_bytes())),
         expires_at: None,
         name: name.to_string(),
         rate_limit: 0,
@@ -60,7 +60,7 @@ fn two_principal_auth() -> AuthConfig {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
-        kind: mcp_gateway::config::ApiKeyKind::Shared,
+        kind: crate::config::ApiKeyKind::Shared,
         ..Default::default()
     };
     AuthConfig {
@@ -98,7 +98,7 @@ pub(super) struct Fixture {
     /// `None` when the TEST owns the directory, which is how one store
     /// outlives one gateway: a reconnect fixture opens a second state over
     /// a directory the test keeps alive across both.
-    _store_dir: Option<tempfile::TempDir>,
+    _store_dir: Option<Arc<tempfile::TempDir>>,
 }
 
 /// The suite's standard gateway: authentication on, two principals, one
@@ -150,8 +150,8 @@ pub(super) async fn state_from(auth: AuthConfig) -> Fixture {
 }
 
 pub(super) async fn state_from_with(auth: AuthConfig, backend: Arc<CountedBackend>) -> Fixture {
-    let store_dir = tempfile::tempdir().expect("a private task-store directory");
-    let fixture = state_in(auth, backend, store_dir.path()).await;
+    let store_dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
+    let fixture = state_in(auth, backend, &store_dir).await;
     Fixture {
         _store_dir: Some(store_dir),
         ..fixture
@@ -167,14 +167,14 @@ pub(super) async fn state_from_with(auth: AuthConfig, backend: Arc<CountedBacken
 /// finishing at that instant, so the open is retried to [`fixture::BOUND`]
 /// rather than raced. A lease that never frees fails here by name instead of
 /// surfacing as an unrelated store error inside a task assertion.
-pub(super) async fn state_over(store_root: &std::path::Path) -> Fixture {
-    state_in(two_principal_auth(), CountedBackend::open(), store_root).await
+pub(super) async fn state_over(store: &Arc<tempfile::TempDir>) -> Fixture {
+    state_in(two_principal_auth(), CountedBackend::open(), store).await
 }
 
 async fn state_in(
     auth: AuthConfig,
     backend: Arc<CountedBackend>,
-    store_root: &std::path::Path,
+    store: &Arc<tempfile::TempDir>,
 ) -> Fixture {
     let mut config = Config::default();
     config.server.modern_protocol = true;
@@ -188,10 +188,10 @@ async fn state_in(
 
     // One registry, shared between the state the router reads and the
     // executor that publishes through it.
-    let authorizer = auth_state(&config.auth, crate::record_key::RECORD_KEY);
+    let authorizer = auth_state(&config.auth, super::RECORD_KEY);
     let auth_config = Arc::clone(authorizer.live_config.generation().auth());
     let subscriptions = Arc::new(SubscriptionRegistry::new(SUBSCRIPTION_CAPACITY, authorizer));
-    let tasks_dir = store_root.join("tasks");
+    let tasks_dir = store.path().join("tasks");
     let deadline = tokio::time::Instant::now() + fixture::BOUND;
     let (tasks, task_executor) = loop {
         match open_runtime(
@@ -221,10 +221,13 @@ async fn state_in(
             ),
         }
     };
+    // The task worker outlives no store directory: the test's share of it
+    // keeps the directory until the worker's last write lands.
+    tasks.keep_test_dir(Arc::clone(store));
 
     let state = Arc::new(AppState {
         process: std::sync::Arc::default(),
-        continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         session_lifecycle: None,
         env: None,
         meta_mcp: Arc::new(
@@ -245,17 +248,17 @@ async fn state_in(
         config_path: None,
         #[cfg(feature = "firewall")]
         firewall: None,
-        agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
+        agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
-            mcp_gateway::gateway::test_helpers::flags_off(config.clone()),
+        live_config: Arc::new(crate::gateway::test_helpers::live_config(
+            crate::gateway::test_helpers::flags_off(config.clone()),
             auth_config,
         )),
         export_status: None,
         transparency_log: None,
         governance_log: None,
-        dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+        dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tasks,
         task_executor,
         subscriptions,
@@ -593,13 +596,13 @@ async fn send_to(
     if let Some(principal) = principal
         && let Some(subject) = verified_subject(principal)
     {
-        request.extensions_mut().insert(VerifiedIdentity {
-            subject: subject.to_string(),
-            email: format!("{subject}@task-1.test"),
-            name: None,
-            groups: Vec::new(),
-            issuer: "https://idp.task-1.test".to_string(),
-        });
+        request.extensions_mut().insert(VerifiedIdentity::for_test(
+            subject,
+            format!("{subject}@task-1.test"),
+            None,
+            Vec::new(),
+            "https://idp.task-1.test",
+        ));
     }
     create_router(state)
         .oneshot(request)

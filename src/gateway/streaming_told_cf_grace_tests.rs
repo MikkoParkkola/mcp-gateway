@@ -12,13 +12,13 @@ use crate::key_server::oidc::{OidcError, OidcVerifier, VerifiedIdentity};
 use crate::key_server::oidc_test_harness::{AUD, Harness, ISS_A, config_yaml};
 
 fn identity() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@example.invalid".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: ISS_A.to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@example.invalid".to_string(),
+        None,
+        Vec::new(),
+        ISS_A.to_string(),
+    )
 }
 
 #[test]

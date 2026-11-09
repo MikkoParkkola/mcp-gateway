@@ -125,13 +125,13 @@ impl LiveServer {
 }
 
 fn identity(email: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alice-subject".to_string(),
-        email: email.to_string(),
-        name: None,
-        groups: vec!["eng".to_string()],
-        issuer: "https://corp-idp.example".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alice-subject".to_string(),
+        email.to_string(),
+        None,
+        vec!["eng".to_string()],
+        "https://corp-idp.example".to_string(),
+    )
 }
 
 /// Issuer-only: the gateway's own assertion carries no `email_verified`, so

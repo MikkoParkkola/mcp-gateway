@@ -143,13 +143,13 @@ fn extract_unverified_claims_rejects_malformed_token() {
 #[test]
 fn verified_identity_serializes_to_json() {
     // GIVEN: a verified identity
-    let identity = VerifiedIdentity {
-        subject: "12345".to_string(),
-        email: "alice@company.com".to_string(),
-        name: Some("Alice".to_string()),
-        groups: vec!["ml-engineers".to_string()],
-        issuer: "https://accounts.google.com".to_string(),
-    };
+    let identity = VerifiedIdentity::for_test(
+        "12345".to_string(),
+        "alice@company.com".to_string(),
+        Some("Alice".to_string()),
+        vec!["ml-engineers".to_string()],
+        "https://accounts.google.com".to_string(),
+    );
 
     // WHEN: serialized to JSON
     let json = serde_json::to_string(&identity).unwrap();
@@ -163,20 +163,20 @@ fn verified_identity_serializes_to_json() {
 // contains ':' (the naive "oidc:{issuer}:{subject}" form would collide).
 #[test]
 fn stable_actor_id_is_collision_safe() {
-    let a = VerifiedIdentity {
-        subject: "b:c".to_string(),
-        email: "x@y".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp/a".to_string(),
-    };
-    let b = VerifiedIdentity {
-        subject: "c".to_string(),
-        email: "x@y".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp/a:b".to_string(),
-    };
+    let a = VerifiedIdentity::for_test(
+        "b:c".to_string(),
+        "x@y".to_string(),
+        None,
+        vec![],
+        "https://idp/a".to_string(),
+    );
+    let b = VerifiedIdentity::for_test(
+        "c".to_string(),
+        "x@y".to_string(),
+        None,
+        vec![],
+        "https://idp/a:b".to_string(),
+    );
     // Naive format collides: "oidc:https://idp/a:b:c" for both.
     assert_eq!(
         format!("oidc:{}:{}", a.issuer(), a.subject()),

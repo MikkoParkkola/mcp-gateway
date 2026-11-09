@@ -43,13 +43,13 @@ async fn send(gw: &Gateway, id: i64, method: &str, name: &str, params: Value) ->
         .header("mcp-name", name)
         .body(axum::body::Body::from(body.to_string()))
         .expect("a request");
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(),
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        "alpha".to_string(),
+        "alpha@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://issuer.example.invalid".to_string(),
+    ));
     let response = gw.router.clone().oneshot(request).await.expect("an answer");
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
@@ -388,13 +388,13 @@ async fn f3_an_evicted_caller_slot_read_as_never_populated_is_retryable() {
         .unpool_per_user_slot_for_test(BINDING)
         .expect("alpha's pooled slot");
     // The request's own identity, as `send` presents it.
-    let alpha = VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(),
-    };
+    let alpha = VerifiedIdentity::for_test(
+        "alpha".to_string(),
+        "alpha@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://issuer.example.invalid".to_string(),
+    );
     assert!(
         backend(&gw)
             .caller_slot_held(&alpha.stable_actor_id())

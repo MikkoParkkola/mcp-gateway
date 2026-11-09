@@ -62,13 +62,13 @@ fn oidc_token() -> TemporaryToken {
     TemporaryToken {
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
-        identity: VerifiedIdentity {
-            subject: "t10-subject".to_string(),
-            email: "t10@example.test".to_string(),
-            name: None,
-            groups: vec!["devs".to_string()],
-            issuer: "https://idp.example.test".to_string(),
-        },
+        identity: VerifiedIdentity::for_test(
+            "t10-subject".to_string(),
+            "t10@example.test".to_string(),
+            None,
+            vec!["devs".to_string()],
+            "https://idp.example.test".to_string(),
+        ),
         scopes: crate::key_server::store::TokenScopes {
             backends: vec!["*".to_string()],
             tools: vec![],

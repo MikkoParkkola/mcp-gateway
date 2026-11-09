@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A stub A2A 1.0 agent (JSON-RPC binding) that validates every request
-//! strictly and records it. Included by `#[path]` from `a2a_outbound.rs`.
+//! strictly and records it. Part of the A2A outbound rows.
 //!
 //! Strict on purpose: a request the A2A 1.0 specification (tag v1.0.1) would
 //! not accept is answered `-32602`, so a gateway that speaks an older dialect
