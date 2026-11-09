@@ -180,6 +180,28 @@ pub enum ActivateError {
 /// across async tasks. A token becomes active only through
 /// [`reserve`](Self::reserve) then [`activate`](Self::activate): there is no
 /// way to insert one past the identity's cap.
+///
+/// There is no `insert`:
+///
+/// ```compile_fail,E0599
+/// fn seed(
+///     store: &dyn mcp_gateway::key_server::TokenStore,
+///     token: mcp_gateway::key_server::TemporaryToken,
+/// ) {
+///     let _ = store.insert(token);
+/// }
+/// ```
+///
+/// Reserving a slot through the same trait compiles:
+///
+/// ```
+/// fn reserve(
+///     store: &dyn mcp_gateway::key_server::TokenStore,
+///     request: mcp_gateway::key_server::store::ReservationRequest,
+/// ) {
+///     let _ = store.reserve(request, 0);
+/// }
+/// ```
 #[async_trait::async_trait]
 pub trait TokenStore: Send + Sync + 'static {
     /// Reserve one slot for `request` at `now` (seconds since the epoch) if
