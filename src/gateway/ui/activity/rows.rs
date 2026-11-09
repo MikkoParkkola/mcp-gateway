@@ -65,6 +65,12 @@ impl<'a> Check<'a> {
         }
     }
 
+    /// Whether this request has loaded its anchor yet (always, today).
+    #[cfg(test)]
+    pub(super) fn anchor_loaded(&self) -> bool {
+        true
+    }
+
     /// Rows judged as if every unsigned record predated signing: for rows
     /// tests that build entries by hand, with no log on disk.
     #[cfg(test)]

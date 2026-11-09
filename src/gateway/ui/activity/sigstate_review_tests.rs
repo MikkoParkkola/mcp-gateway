@@ -259,3 +259,30 @@ async fn r37_one_logs_verified_chunk_never_vouches_for_the_other() {
     assert_eq!(find("target_id", "t_1")["signature"], "invalid");
     assert_eq!(find("target_id", "t_1")["integrity"], "legacy_edited");
 }
+
+/// R43 (code review): the live path loads the anchor only when a record
+/// needs placing; a valid signed frame reads no sidecar.
+#[test]
+fn r43_a_valid_live_frame_does_not_load_the_anchor() {
+    use super::super::reader::{Line, Which};
+    use super::super::rows::Check;
+    use crate::security::transparency_log::signature::SignatureState as State;
+    let fx = Fixture::new();
+    let log = fx.open(true, 0);
+    Fixture::calls(&log, 0, 2);
+    drop(log);
+    let newest = fx.records().last().unwrap().1.clone();
+    let line = |entry: Value| Line {
+        log: Which::Invocation,
+        entry,
+        segment: 0,
+        span: None,
+    };
+    let check = Check::one(Some(SECRET.as_bytes()), Which::Invocation, &fx.path);
+    assert_eq!(check.judge(&line(newest.clone())).state, State::Valid);
+    assert!(!check.anchor_loaded(), "a valid record needs no anchor");
+    let mut forged = newest;
+    strip_sig(&mut forged);
+    assert_ne!(check.judge(&line(forged)).state, State::Valid);
+    assert!(check.anchor_loaded(), "an unsigned record is placed");
+}
