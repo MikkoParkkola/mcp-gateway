@@ -16,7 +16,7 @@ use crate::security::{TransparencyLogConfig, TransparencyLogger};
 
 pub(super) const SECRET: &str = "a-test-secret-that-is-at-least-32-bytes!!";
 
-/// What a delivery record says (the writer's fields, delivery_facts.rs).
+/// What a delivery record says (the writer's fields in `delivery_facts.rs`).
 #[derive(Clone)]
 pub(super) struct Dl {
     pub(super) stage: &'static str,

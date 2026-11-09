@@ -129,7 +129,7 @@ impl Joiner {
         }
     }
 
-    /// A believed transport_finalized record: a second one for a trace is
+    /// A believed `transport_finalized` record: a second one for a trace is
     /// tamper, whether the first is held or was evicted.
     fn hold_record(&mut self, trace: &str, delivery: Delivery) {
         if let Some(reason) = self.evicted.get_mut(trace) {

@@ -114,7 +114,7 @@ pub(super) enum Why {
     Invalid,
     /// Unsigned under a configured secret.
     Unsigned,
-    /// More than one transport_finalized record for the trace.
+    /// More than one `transport_finalized` record for the trace.
     Duplicate,
 }
 
