@@ -842,3 +842,67 @@ fn r28_readers_keep_the_running_secret_across_a_reload() {
         Some(SECRET.as_bytes())
     );
 }
+
+/// Governance records `target_id` = `t_<i>`, unsigned then signed, so the log
+/// has legacy history like an invocation log turned on midway.
+fn governance_midway(fx: &Fixture) {
+    let gov_event = |log: &crate::security::TransparencyLogger, i: usize| {
+        let mut f = serde_json::Map::new();
+        f.insert("kind".into(), "control_plane_audit".into());
+        f.insert("actor_id".into(), "alice".into());
+        f.insert("target_id".into(), format!("t_{i}").into());
+        f.insert("action".into(), "mutate_grant".into());
+        log.append_event(f, &crate::security::audit::AuditEnvelope::gateway())
+            .unwrap();
+    };
+    let plain = fx.open(false, 0);
+    (0..2).for_each(|i| gov_event(&plain, i));
+    drop(plain);
+    let log = fx.open(true, 0);
+    (2..4).for_each(|i| gov_event(&log, i));
+}
+
+/// R37 (code review C1): two logs whose legacy bytes share segment and chunk
+/// coordinates; only the governance log's are edited. One export reads both:
+/// the invocation log's verified chunk must not vouch for the governance one.
+#[tokio::test]
+async fn r37_one_logs_verified_chunk_never_vouches_for_the_other() {
+    let inv = turned_on_midway();
+    let gov = Fixture::new();
+    governance_midway(&gov);
+    rewrite(&gov.path, |v| {
+        let hit = v["target_id"] == "t_1";
+        if hit {
+            v["action"] = "read_grant".into();
+            strip_sig(v);
+        }
+        hit
+    });
+    let logs = Logs {
+        invocation: inv.path.clone(),
+        governance: Some(gov.path.clone()),
+        secret: Some(SECRET.as_bytes().to_vec()),
+    };
+    let s = signer();
+    let nd = json_body(export_response(
+        &logs,
+        &Access::All,
+        &ExportQuery::default(),
+        Some(&s),
+    ))
+    .await;
+    let rows: Vec<Value> = String::from_utf8(nd)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let find = |key: &str, val: &str| {
+        rows.iter()
+            .find(|r| r[key] == val)
+            .unwrap_or_else(|| panic!("{val} exported"))
+            .clone()
+    };
+    assert_eq!(find("tool", "tool_0")["signature"], "unsigned");
+    assert_eq!(find("target_id", "t_1")["signature"], "invalid");
+    assert_eq!(find("target_id", "t_1")["integrity"], "legacy_edited");
+}
