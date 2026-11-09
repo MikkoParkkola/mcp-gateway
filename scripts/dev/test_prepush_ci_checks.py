@@ -907,6 +907,12 @@ class Rows(unittest.TestCase):
         scanned = workflow_shell._heredoc_scan(block.splitlines(), shell)
         self.assertEqual([t for t, r in scanned if r is workflow_shell.Role.BODY], ["\\"])
         self.assertEqual([e.script for e in workflow_shell.executions(block)], ["scripts/ci/y.py"])
+        # `<<` inside an arithmetic command is a shift: the python line after it is read, and a real
+        # heredoc after the arithmetic still opens.
+        self.assertEqual([e.script for e in workflow_shell.executions(f'((x = 1 << "$shift"))\n{y}')],
+                         ["scripts/ci/y.py"])
+        block = f"((x = 1 << 2)); cat <<'EOF'\npython3 scripts/ci/b.py\nEOF\n{y}"
+        self.assertEqual([e.script for e in workflow_shell.executions(block)], ["scripts/ci/y.py"])
         # And `E\` + `OF` joins to `EOF`: that ends the body too.
         block = f"cat <<EOF\nE\\\nOF\n{y}"
         self.assertEqual([e.script for e in workflow_shell.executions(block)], ["scripts/ci/y.py"])

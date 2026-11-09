@@ -469,12 +469,30 @@ def _comment_dropped(text, state):
 _WORD_END = frozenset(" \t\n;&|()<>")
 
 
+def _arithmetic_spans(command, top):
+    """(start, end) of each top-level `(( … ))` arithmetic command (`$(( ))` is a substitution
+    and never top-level). An unclosed one runs to the end: nothing after it opens a heredoc."""
+    spans, i = [], 0
+    while i < len(command) - 1:
+        if top[i] and top[i + 1] and command.startswith("((", i) and (i == 0 or command[i - 1] != "$"):
+            end = next((k for k in range(i + 2, len(command) - 1)
+                        if top[k] and top[k + 1] and command.startswith("))", k)), len(command))
+            spans.append((i, end))
+            i = end + 2
+            continue
+        i += 1
+    return spans
+
+
 def _openers(command):
     """The heredocs `command` opens, in the order bash reads their bodies. A delimiter is the
     whole word after `<<`/`<<-`; quoting anywhere in it makes the body data and is removed."""
     top, _ = _lex(command)
-    found, i = [], 0
+    found, i, arithmetic = [], 0, _arithmetic_spans(command, top)
     while i < len(command) - 1:
+        if any(a <= i < b for a, b in arithmetic):
+            i += 1  # `((x = 1 << n))`: a shift, not an opener
+            continue
         if command.startswith("<<<", i):
             i += 3  # a here-string, not an opener (and its last two `<` are not one either)
             continue
