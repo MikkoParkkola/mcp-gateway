@@ -287,7 +287,9 @@ fn load(file: &Path, configured: Option<&str>) -> Result<(EmailHashKey, Envelope
                 ));
             }
             envelope.mode = Mode::Configured;
-            envelope.key_hex = None;
+            if let Some(mut hex) = envelope.key_hex.take() {
+                zeroize::Zeroize::zeroize(&mut hex);
+            }
             rewrite(file, &envelope)?;
             given
         }
