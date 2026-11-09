@@ -168,11 +168,9 @@ async fn exchange_token(
     let client_ip: Option<IpAddr> = extract_client_ip(&headers);
 
     if body.grant_type != "urn:ietf:params:oauth:grant-type:token-exchange" {
-        warn!(grant_type = %body.grant_type, "Invalid grant_type");
-        let ev = AuditEvent::invalid(
-            format!("invalid grant_type: {}", body.grant_type),
-            client_ip,
-        );
+        // The submitted value is caller input: the record names the refusal only.
+        warn!("Invalid grant_type");
+        let ev = AuditEvent::invalid("invalid_grant_type", client_ip);
         audit::emit(&ev);
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -198,8 +196,8 @@ async fn exchange_token(
     let identity = match ks.oidc.verify(&body.subject_token, &oidc_config).await {
         Ok(id) => id,
         Err(e) => {
-            warn!(error = %e, "OIDC verification failed");
-            let ev = AuditEvent::denied(e.to_string(), client_ip);
+            warn!(reason = e.reason_code(), "OIDC verification failed");
+            let ev = AuditEvent::denied(e.reason_code(), client_ip);
             audit::emit(&ev);
             return error_response(
                 StatusCode::UNAUTHORIZED,

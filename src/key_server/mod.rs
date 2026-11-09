@@ -258,7 +258,10 @@ impl KeyServer {
                 return KeyServerLookup::Nameless;
             }
             Err(e) => {
-                debug!(error = %e, "Delegated OIDC bearer verification failed");
+                debug!(
+                    reason = e.reason_code(),
+                    "Delegated OIDC bearer verification failed"
+                );
                 return KeyServerLookup::Absent;
             }
         };

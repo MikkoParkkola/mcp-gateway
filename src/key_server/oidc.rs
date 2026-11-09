@@ -123,6 +123,31 @@ pub enum OidcError {
     ClientUnavailable,
 }
 
+impl OidcError {
+    /// A fixed code for the refusal, for audit reasons and logs. The error's
+    /// text can carry token-supplied strings (an issuer, a key id, a domain),
+    /// so a refusal record names the kind only.
+    #[must_use]
+    pub(crate) fn reason_code(&self) -> &'static str {
+        match self {
+            Self::JwtError(_) => "jwt_invalid",
+            Self::UnknownIssuer(_) => "unknown_issuer",
+            Self::MissingKeyId => "missing_key_id",
+            Self::UnknownKeyId(_) => "unknown_key_id",
+            Self::DomainNotAllowed(_) => "domain_not_allowed",
+            Self::NoPolicyMatch(_) => "no_policy_match",
+            Self::HttpError(_) => "jwks_fetch_failed",
+            Self::TokenTooOld { .. } => "token_too_old",
+            Self::IssuerMismatch { .. } => "issuer_mismatch",
+            Self::InsecureJwksUri(_) => "insecure_jwks_uri",
+            Self::InsecureIssuer => "insecure_issuer",
+            Self::InsecureFetch => "insecure_fetch",
+            Self::DiscoveryStatus(_) => "discovery_status",
+            Self::ClientUnavailable => "client_unavailable",
+        }
+    }
+}
+
 /// Keep a built client, or log once and keep none: a fallback client would
 /// drop the redirect and proxy policy the builder carries.
 fn built(client: reqwest::Result<reqwest::Client>) -> Option<reqwest::Client> {
