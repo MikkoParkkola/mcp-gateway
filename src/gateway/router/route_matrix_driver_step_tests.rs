@@ -132,13 +132,13 @@ pub(crate) async fn playbook_minting(
             .expect("the request builds");
         request
             .extensions_mut()
-            .insert(crate::key_server::oidc::VerifiedIdentity {
-                subject: "alice".to_string(),
-                email: "alice@example.invalid".to_string(),
-                name: None,
-                groups: vec![],
-                issuer: "https://a.example.invalid".to_string(),
-            });
+            .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+                "alice".to_string(),
+                "alice@example.invalid".to_string(),
+                None,
+                vec![],
+                "https://a.example.invalid".to_string(),
+            ));
         let response = tower::ServiceExt::oneshot(fx.router.clone(), request)
             .await
             .expect("the router answers");

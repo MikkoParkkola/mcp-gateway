@@ -311,13 +311,13 @@ async fn distinct_identities_get_distinct_cache_bindings() {
         .await
         .expect("alice")
         .cache_binding;
-    let bob_identity = VerifiedIdentity {
-        subject: "bob".to_string(),
-        email: "bob@corp".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp".to_string(),
-    };
+    let bob_identity = VerifiedIdentity::for_test(
+        "bob".to_string(),
+        "bob@corp".to_string(),
+        None,
+        vec![],
+        "https://idp".to_string(),
+    );
     let bob = m
         .resolve_caller_credential("memory", &idp_cfg(true), Some(&bob_identity))
         .await

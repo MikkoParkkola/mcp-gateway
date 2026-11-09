@@ -43,13 +43,13 @@ fn subject_pair(subject: Option<GrantSubject>) -> Option<(String, String)> {
 }
 
 fn verified_oidc() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "oidc-subject".to_string(),
-        email: "owner@corp.example".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "oidc-subject".to_string(),
+        "owner@corp.example".to_string(),
+        None,
+        Vec::new(),
+        "https://issuer.example".to_string(),
+    )
 }
 
 // ── trusted_proxy ───────────────────────────────────────────────────────────

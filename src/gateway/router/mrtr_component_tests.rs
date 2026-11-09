@@ -37,35 +37,32 @@
     reason = "test code reads the host clock (MIK-8202 AC.14)"
 )]
 
-#[path = "mik_7212_mrtr_component_acs/arrival.rs"]
 mod arrival;
-#[path = "mik_7212_mrtr_component_acs/forgery_and_bounds.rs"]
 mod forgery_and_bounds;
-#[path = "mik_7212_mrtr_component_acs/principal_and_single_use.rs"]
 mod principal_and_single_use;
-#[path = "common/record_key.rs"]
-mod record_key;
-#[path = "mik_7212_mrtr_component_acs/replicas.rs"]
+/// The record key the router's auth config is built with: a self-describing
+/// test value, never a deployment's key.
+const RECORD_KEY: &str = "test-record-key-not-a-secret-0123456789abcdef";
 mod replicas;
 
 use std::sync::Arc;
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use mcp_gateway::backend::{Backend, BackendRegistry};
-use mcp_gateway::config::{BackendConfig, Config, FailsafeConfig, TransportConfig};
-use mcp_gateway::gateway::auth::ResolvedAuthConfig;
-use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
-use mcp_gateway::gateway::proxy::ProxyManager;
-use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
-use mcp_gateway::gateway::test_helpers::{
+use crate::backend::{Backend, BackendRegistry};
+use crate::config::{BackendConfig, Config, FailsafeConfig, TransportConfig};
+use crate::gateway::auth::ResolvedAuthConfig;
+use crate::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
+use crate::gateway::proxy::ProxyManager;
+use crate::gateway::streaming::NotificationMultiplexer;
+use crate::gateway::subscription_registry::SubscriptionRegistry;
+use crate::gateway::test_helpers::{
     AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
 };
-use mcp_gateway::key_server::oidc::VerifiedIdentity;
-use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-use mcp_gateway::protocol::continuation::{ContinuationError, ContinuationState, Payload};
-use mcp_gateway::protocol::mrtr::{original_request_digest, principal_fingerprint};
+use crate::key_server::oidc::VerifiedIdentity;
+use crate::mtls::{MtlsConfig, MtlsPolicy};
+use crate::protocol::continuation::{ContinuationError, ContinuationState, Payload};
+use crate::protocol::mrtr::{original_request_digest, principal_fingerprint};
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -96,7 +93,7 @@ const CALLER_B: &str = "bob";
 /// directory for as long as the service lives, so a directory dropped here
 /// would be deleted under a gateway still answering. A fresh one per call keeps
 /// the two-replica cases below two processes rather than one.
-async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
+async fn app_state() -> (Arc<AppState>, Arc<tempfile::TempDir>) {
     let config = Config::default();
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -116,9 +113,9 @@ async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
     // One registry, shared with the executor that publishes through it.
     let subscriptions = Arc::new(SubscriptionRegistry::new(
         64,
-        auth_state(&config.auth, crate::record_key::RECORD_KEY),
+        auth_state(&config.auth, RECORD_KEY),
     ));
-    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let store_dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,
@@ -127,6 +124,9 @@ async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
     )
     .await
     .expect("the fixture task store opens");
+    // The task worker outlives no store directory: the test's share of it
+    // keeps the directory until the worker's last write lands.
+    tasks.keep_test_dir(Arc::clone(&store_dir));
 
     let state = Arc::new(AppState {
         process: std::sync::Arc::default(),
@@ -147,20 +147,17 @@ async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
         config_path: None,
         #[cfg(feature = "firewall")]
         firewall: None,
-        agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
+        agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
-            mcp_gateway::gateway::test_helpers::flags_off(config.clone()),
-            Arc::new(ResolvedAuthConfig::from_config(
-                &config.auth,
-                crate::record_key::RECORD_KEY,
-            )),
+        live_config: Arc::new(crate::gateway::test_helpers::live_config(
+            crate::gateway::test_helpers::flags_off(config.clone()),
+            Arc::new(ResolvedAuthConfig::from_config(&config.auth, RECORD_KEY)),
         )),
         export_status: None,
         transparency_log: None,
         governance_log: None,
-        dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+        dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tasks,
         task_executor,
         subscriptions,
@@ -188,13 +185,13 @@ fn now_secs() -> u64 {
 /// from; auth is disabled in this `AppState`, so no middleware overwrites it
 /// (the same seam `src/gateway/router/tests.rs:1179` uses).
 fn caller(subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@corp"),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        subject,
+        format!("{subject}@corp"),
+        None,
+        Vec::new(),
+        "https://idp",
+    )
 }
 
 /// The fingerprint production derives for `subject`.
@@ -244,7 +241,7 @@ async fn mint_for(
 /// Every case that needs a minted handle needs a backend to mint against, now
 /// that the handle comes from the production path rather than a hand-built
 /// payload.
-async fn state_with_fixture() -> (Arc<AppState>, Received, tempfile::TempDir) {
+async fn state_with_fixture() -> (Arc<AppState>, Received, Arc<tempfile::TempDir>) {
     let (state, store_dir) = app_state().await;
     let (url, received) = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);

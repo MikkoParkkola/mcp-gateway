@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `GET /ui/api/overview` rows S1-S12: the call totals, server ranking, top
-//! flows, chart markers, server state and the invalid-config and refused
-//! rows. Every counter row pins the clock to 2026-06-15T12:00:00Z (a date
+//! `GET /ui/api/overview` rows S1-S13: the call totals, server ranking, top
+//! flows, chart markers, last-hour latency, server state and the
+//! invalid-config and refused rows. Every counter row pins the clock to 2026-06-15T12:00:00Z (a date
 //! with no daylight-saving change) and records calls relative to it. The
 //! clock seam is per thread, so each row runs on a current-thread runtime.
 
@@ -37,6 +37,18 @@ fn record(store: &CounterStore, caller: &str, server: &str, at: u64, tally: Tall
         tally,
     };
     store.record(&call, at, &crate::local_day::host_zone());
+}
+
+/// One call to `server` at `at` whose backend send took `ms`.
+fn timed(store: &CounterStore, server: &str, at: u64, ms: u64) {
+    let call = Call {
+        caller: "key:a",
+        server: Label::Known(server),
+        tool: Label::Untrusted,
+        tally: Tally::default(),
+    };
+    let sample = (Duration::from_millis(ms), crate::counters::End::Answered);
+    store.record_timed(&call, at, &crate::local_day::host_zone(), Some(sample));
 }
 
 /// `count` plain calls to `server` just before the pinned instant.
@@ -328,6 +340,7 @@ fn assert_no_counter_fields(body: &Value) {
     assert!(body.get("edges").is_none(), "edges: {body}");
     assert!(body.get("markers").is_none(), "markers: {body}");
     assert!(body["checklist"].get("tool_tried").is_none(), "{body}");
+    assert!(body.get("latency").is_none(), "latency: {body}");
 }
 
 /// S8: no counter store, so the counter fields are absent and nothing is
@@ -371,6 +384,7 @@ async fn s8b_an_unreadable_clock_degrades_the_counter_fields() {
         "edges",
         "markers",
         "checklist.tool_tried",
+        "latency",
     ];
     want.sort_unstable();
     assert_eq!(degraded, want, "{body}");
@@ -475,11 +489,11 @@ async fn s12_only_the_newest_invalid_config_is_shown() {
     assert_eq!(body["needs_you"]["rows"][1]["subject"], "edited", "{body}");
 }
 
-/// S10: one read takes the store's lock exactly seven times (three KPI
-/// series, the server sums, the pairs, the markers, the 30-day series),
-/// whatever the server count.
+/// S10: one read takes the store's lock exactly eight times (three KPI
+/// series, the server sums, the pairs, the markers, the 30-day series, the
+/// latency hour), whatever the server count.
 #[tokio::test]
-async fn s10_a_read_takes_the_store_lock_seven_times() {
+async fn s10_a_read_takes_the_store_lock_eight_times() {
     let _clock = test_clock::at_secs(NOW);
     for servers in [10, 140] {
         let (state, _dir) = fixture(servers, false).await;
@@ -489,7 +503,7 @@ async fn s10_a_read_takes_the_store_lock_seven_times() {
 
         let _ = overview(&state).await;
 
-        assert_eq!(store.reads_for_test() - before, 7, "{servers} servers");
+        assert_eq!(store.reads_for_test() - before, 8, "{servers} servers");
     }
 }
 
@@ -666,7 +680,10 @@ async fn s9_the_full_body_stays_under_the_extended_ceiling() {
         + SERVER_ROWS * (2 + reason.len() + 64)
         + NEEDS_YOU_ROWS * (2 + fix.len() + 64)
         + 48 * (2 * LABEL + 192)
-        + 50 * (LABEL + 192);
+        + 50 * (LABEL + 192)
+        // Latency: a row per server shown plus the slowest, name and numbers.
+        + (SERVER_ROWS + 1) * (LABEL + 64)
+        + 128;
     let (state, _dir, _clock) = worst_case().await;
     let store = with_store(&state, 0);
     register_denied(&state, &store, SERVER_ROWS, BUDGET_NOW - 600);
@@ -680,6 +697,11 @@ async fn s9_the_full_body_stays_under_the_extended_ceiling() {
                 BUDGET_NOW - 600,
                 Tally::default(),
             );
+        }
+    }
+    for server in 0..30 {
+        for _ in 0..21 {
+            timed(&store, &heavy(server), BUDGET_NOW - 600, 30_000);
         }
     }
     for i in 0..55 {
@@ -708,6 +730,12 @@ async fn s9_the_full_body_stays_under_the_extended_ceiling() {
         body["needs_you"]["rows"].as_array().map(Vec::len),
         Some(NEEDS_YOU_ROWS)
     );
+    assert_eq!(
+        body["latency"]["servers"].as_array().map(Vec::len),
+        Some(SERVER_ROWS),
+        "latency"
+    );
+    assert!(body["latency"]["slowest"].is_object(), "latency.slowest");
     assert_eq!(body["servers"]["rows"][0]["reason"], reason.as_str());
     let refused = body["needs_you"]["rows"][0]["detail"]["cause"].as_str();
     assert_eq!(refused.map(str::len), Some(256), "{refused:?}");
@@ -722,4 +750,40 @@ async fn s9_the_full_body_stays_under_the_extended_ceiling() {
         "{} bytes is not near the {ceiling}-byte worst case",
         raw.len()
     );
+}
+
+/// S13 (latency rows 38, 39): with no sample in the last hour the latency
+/// member is present and empty; the slowest server is found over every
+/// server, even one outside the capped rows: 24 servers with too few calls to
+/// name rank above it.
+#[tokio::test]
+async fn s13_latency_names_the_slowest_beyond_the_rows() {
+    let _clock = test_clock::at_secs(NOW);
+    let (state, _dir) = fixture(1, false).await;
+    let store = with_store(&state, 0);
+    calls(&store, "name-000", 1);
+    let body = overview(&state).await;
+    assert_eq!(body["latency"]["servers"], serde_json::json!([]), "{body}");
+    assert!(body["latency"]["slowest"].is_null(), "{body}");
+
+    for i in 0..24 {
+        for _ in 0..20 {
+            timed(&store, &format!("hot-{i:02}"), NOW - 600, 60_000);
+        }
+    }
+    for _ in 0..21 {
+        timed(&store, "steady", NOW - 600, 2_000);
+    }
+    let body = overview(&state).await;
+    let names: Vec<&str> = body["latency"]["servers"]
+        .as_array()
+        .expect("latency rows")
+        .iter()
+        .filter_map(|row| row["name"].as_str())
+        .collect();
+    assert_eq!(names.len(), 24, "{body}");
+    assert!(!names.contains(&"steady"), "{names:?}");
+    assert_eq!(body["latency"]["more"]["count"], 1, "{body}");
+    assert_eq!(body["latency"]["slowest"]["name"], "steady", "{body}");
+    assert_eq!(body["latency"]["slowest"]["calls"], 21, "{body}");
 }

@@ -19,13 +19,13 @@ const ALICE: (&str, &str) = ("https://idp.example.invalid", "alice-sub");
 const BOB: (&str, &str) = ("https://idp.example.invalid", "bob-sub");
 
 fn verified((issuer, subject): (&str, &str)) -> crate::key_server::oidc::VerifiedIdentity {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@example.invalid"),
-        name: None,
-        groups: vec![],
-        issuer: issuer.to_string(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        subject.to_string(),
+        format!("{subject}@example.invalid"),
+        None,
+        vec![],
+        issuer.to_string(),
+    )
 }
 
 /// The capability owned by alice, granted to alice only, logging under

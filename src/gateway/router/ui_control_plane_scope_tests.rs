@@ -15,13 +15,13 @@ use crate::identity_grants::{
 const FOREIGN_ISSUER: &str = "https://issuer-foreign";
 
 fn subject(issuer: &str, subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@example.test"),
-        name: None,
-        groups: vec![],
-        issuer: issuer.to_string(),
-    }
+    VerifiedIdentity::for_test(
+        subject.to_string(),
+        format!("{subject}@example.test"),
+        None,
+        vec![],
+        issuer.to_string(),
+    )
 }
 
 /// Every seeded grant: (grant id, authority, subject, label).

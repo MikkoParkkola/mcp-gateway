@@ -106,13 +106,13 @@ fn client(admin: bool, authenticated: bool) -> AuthenticatedClient {
 }
 
 fn identity(issuer: &str, subject: &str, group: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.into(),
-        email: format!("{subject}@corp"),
-        name: None,
-        groups: vec![group.into()],
-        issuer: issuer.into(),
-    }
+    VerifiedIdentity::for_test(
+        subject,
+        format!("{subject}@corp"),
+        None,
+        vec![group.into()],
+        issuer,
+    )
 }
 
 fn mapping() -> ControlPlaneRoleMappingConfig {

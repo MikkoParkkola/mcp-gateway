@@ -97,13 +97,13 @@ async fn rig(endpoint: &Endpoint, policy: AuditFailurePolicy, surface: bool, den
 }
 
 fn identity() -> crate::key_server::oidc::VerifiedIdentity {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: SUBJECT.to_string(),
-        email: format!("{SUBJECT}@example.invalid"),
-        name: None,
-        groups: vec![],
-        issuer: ISSUER.to_string(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        SUBJECT.to_string(),
+        format!("{SUBJECT}@example.invalid"),
+        None,
+        vec![],
+        ISSUER.to_string(),
+    )
 }
 
 /// One `tools/call` of `name` by the caller, over `/mcp`.

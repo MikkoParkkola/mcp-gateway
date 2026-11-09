@@ -22,13 +22,13 @@ async fn modern(
     client: &Client,
     retry: &RetryFields,
 ) -> crate::Result<Value> {
-    let alice = crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@example.invalid".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example.invalid".to_string(),
-    };
+    let alice = crate::key_server::oidc::VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@example.invalid".to_string(),
+        None,
+        Vec::new(),
+        "https://issuer.example.invalid".to_string(),
+    );
     let declared = crate::protocol::meta::classify_request(
         Some(&json!({"_meta": {
             crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",

@@ -309,6 +309,7 @@ impl MetaMcp {
                 args.get("tool").and_then(Value::as_str),
                 &crate::security::audit::AuditWho::from_caller(caller),
                 crate::counters::Outcome::AdmissionRefused,
+                None,
             );
             // Before the notes scope opens: refused before its backend.
             return super::Invoked {
@@ -392,6 +393,7 @@ impl MetaMcp {
                 Some(tool),
                 &crate::security::audit::AuditWho::from_caller(caller),
                 crate::counters::Outcome::AdmissionRefused,
+                None,
             );
             return refused;
         }

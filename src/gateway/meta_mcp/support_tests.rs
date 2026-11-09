@@ -27,13 +27,13 @@ fn caller(principal: &str) -> CachePrincipal {
 
 /// A verified OIDC identity distinguished only by its subject.
 fn verified(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@example.test"),
-        name: None,
-        groups: Vec::new(),
-        issuer: "i".to_string(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        subject.to_string(),
+        format!("{subject}@example.test"),
+        None,
+        Vec::new(),
+        "i".to_string(),
+    )
 }
 
 /// MIK-7408. Identity propagation ON: the retry entry is tagged with the

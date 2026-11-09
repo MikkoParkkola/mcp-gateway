@@ -26,13 +26,13 @@ fn client(admin: bool) -> AuthenticatedClient {
 }
 
 fn identity(issuer: &str, groups: &[&str]) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "s".to_string(),
-        email: "a@corp".to_string(),
-        name: None,
-        groups: groups.iter().map(|g| (*g).to_string()).collect(),
-        issuer: issuer.to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "s".to_string(),
+        "a@corp".to_string(),
+        None,
+        groups.iter().map(|g| (*g).to_string()).collect(),
+        issuer.to_string(),
+    )
 }
 
 // MIK-6688.ROLE.3 — no verified identity -> legacy admin-key projection.
@@ -95,9 +95,9 @@ fn actor_id_is_collision_safe() {
     // issuer "https://idp/a" + subject "b:c" vs issuer "https://idp/a:b" +
     // subject "c" both render "oidc:https://idp/a:b:c" under the naive form.
     let mut a = identity("https://idp/a", &[]);
-    a.subject = "b:c".to_string();
+    a = a.with_subject("b:c");
     let mut b = identity("https://idp/a:b", &[]);
-    b.subject = "c".to_string();
+    b = b.with_subject("c");
     // Precondition: the naive format genuinely collides for this pair.
     assert_eq!(
         format!("oidc:{}:{}", a.issuer(), a.subject()),

@@ -304,13 +304,13 @@ mod tests {
     use super::*;
 
     fn identity(subject: &str, email: &str, issuer: &str) -> VerifiedIdentity {
-        VerifiedIdentity {
-            subject: subject.to_string(),
-            email: email.to_string(),
-            name: None,
-            groups: vec![],
-            issuer: issuer.to_string(),
-        }
+        VerifiedIdentity::for_test(
+            subject.to_string(),
+            email.to_string(),
+            None,
+            vec![],
+            issuer.to_string(),
+        )
     }
 
     #[test]

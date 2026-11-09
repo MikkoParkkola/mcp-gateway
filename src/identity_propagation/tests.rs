@@ -43,13 +43,13 @@ async fn debug_redacts_the_token() {
 }
 
 fn identity(subject: &str, issuer: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@corp"),
-        name: None,
-        groups: vec!["eng".to_string()],
-        issuer: issuer.to_string(),
-    }
+    VerifiedIdentity::for_test(
+        subject.to_string(),
+        format!("{subject}@corp"),
+        None,
+        vec!["eng".to_string()],
+        issuer.to_string(),
+    )
 }
 
 fn strategy() -> SignedAssertionStrategy {
