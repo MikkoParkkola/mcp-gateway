@@ -144,3 +144,65 @@ fn r43b_a_page_that_has_advanced_keeps_the_strict_budget() {
     assert!(p.bytes_examined <= budget, "{}", p.bytes_examined);
     assert!(p.scan_exhausted && p.next.is_some());
 }
+
+/// Append `bytes` to the log file as they are, outside the logger.
+fn raw_append(fx: &Fixture, bytes: &[u8]) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&fx.path)
+        .unwrap();
+    f.write_all(bytes).unwrap();
+}
+
+#[test]
+fn r43f_two_unadvanced_logs_peak_at_budget_plus_one_cap_each() {
+    let inv = Fixture::new(None);
+    let gov = Fixture::new(None);
+    inv.call("gw-c");
+    max_record(&inv);
+    max_record(&gov);
+    let budget = 2 * MIB;
+    let p = page(&inv, Some(&gov.path), None, budget);
+    assert!(!p.lines.is_empty(), "the page made no progress");
+    assert!(
+        p.bytes_examined <= budget + 2 * ASSEMBLY_WINDOW,
+        "{}",
+        p.bytes_examined
+    );
+}
+
+#[test]
+fn r43g_an_incomplete_newest_line_does_not_buy_a_second_assembly() {
+    let fx = Fixture::new(None);
+    fx.call("gw-c");
+    max_record(&fx);
+    raw_append(&fx, &vec![b'x'; (4 << 20) - 1]);
+    let budget = 2 * MIB;
+    let p = page(&fx, None, None, budget);
+    assert!(
+        p.bytes_examined <= budget + ASSEMBLY_WINDOW,
+        "one log assembled twice: {}",
+        p.bytes_examined
+    );
+}
+
+#[test]
+fn r43h_an_assembled_record_over_the_cap_is_unreadable() {
+    let fx = Fixture::new(None);
+    std::fs::write(&fx.path, b"").unwrap();
+    let body = "x".repeat(ASSEMBLY_WINDOW as usize - 9);
+    let line = format!("{{\"a\":\"{body}\"}}\n");
+    assert_eq!(
+        line.len() as u64,
+        ASSEMBLY_WINDOW,
+        "premise: cap plus one byte"
+    );
+    raw_append(&fx, line.as_bytes());
+    let p = page(&fx, None, None, 2 * MIB);
+    assert!(
+        p.lines.is_empty(),
+        "an over-cap record was read as an entry"
+    );
+    assert_eq!(p.unreadable.len(), 1, "{:?}", p.unreadable.len());
+}
