@@ -14,7 +14,6 @@ impl SigningInvocationContext {
             nonce: CapturedNonce::Missing,
             request_id: None,
             prepared_target: None,
-            prepared_allow: std::sync::Mutex::new(None),
             admitted: false,
             nonce_stamp: None,
             refund: NonceRefund::default(),
@@ -29,7 +28,6 @@ impl SigningInvocationContext {
             nonce: captured(nonce.map(|value| Value::String(value.to_owned()))),
             request_id: None,
             prepared_target: None,
-            prepared_allow: std::sync::Mutex::new(None),
             admitted: true,
             nonce_stamp: None,
             refund: NonceRefund::default(),
@@ -40,7 +38,7 @@ impl SigningInvocationContext {
     /// `server`'s `tool`, as `prepare_signing_invocation` leaves it.
     pub(crate) fn prepared_for_test(server: &str, tool: &str) -> Self {
         Self {
-            prepared_target: Some((server.to_owned(), tool.to_owned())),
+            prepared_target: Some(super::Prepared::new(server.to_owned(), tool.to_owned())),
             ..Self::external_for_test(None)
         }
     }
@@ -52,7 +50,6 @@ impl SigningInvocationContext {
             nonce: CapturedNonce::Invalid,
             request_id: None,
             prepared_target: None,
-            prepared_allow: std::sync::Mutex::new(None),
             admitted: true,
             nonce_stamp: None,
             refund: NonceRefund::default(),

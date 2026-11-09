@@ -66,16 +66,34 @@ enum Origin {
     ToolCall,
 }
 
+/// A target signing prepared, and the allow its policy check noted, taken
+/// once by the dispatch that skips its own check, so no later call or request
+/// inherits it.
+struct Prepared {
+    server: String,
+    tool: String,
+    allow: std::sync::Mutex<Option<crate::security::decision_record::Allow>>,
+}
+
+impl Prepared {
+    fn new(server: String, tool: String) -> Box<Self> {
+        Box::new(Self {
+            server,
+            tool,
+            allow: std::sync::Mutex::new(None),
+        })
+    }
+}
+
 pub(crate) struct SigningInvocationContext {
     origin: Origin,
     scope: SigningScope,
     nonce: CapturedNonce,
     request_id: Option<Value>,
-    prepared_target: Option<(String, String)>,
-    /// The allow signing's policy check noted for `prepared_target`, taken
-    /// once by the dispatch that skips its own check, so no later call or
-    /// request inherits it.
-    prepared_allow: std::sync::Mutex<Option<crate::security::decision_record::Allow>>,
+    /// The target signing prepared, with the allow its policy check noted.
+    /// Boxed: the context is held across a stdio delivery's awaits, whose
+    /// boxed dispatch futures carry a fixed allocation budget.
+    prepared_target: Option<Box<Prepared>>,
     /// The nonce passed admission. Only an admitted context signs, so a
     /// response is never signed over a nonce the store did not register.
     admitted: bool,
@@ -208,7 +226,6 @@ impl SigningInvocationContext {
             nonce: CapturedNonce::Missing,
             request_id: None,
             prepared_target: None,
-            prepared_allow: std::sync::Mutex::new(None),
             admitted: false,
             nonce_stamp: None,
             refund: NonceRefund::default(),
@@ -296,7 +313,9 @@ impl SigningInvocationContext {
         &self,
         allow: Option<crate::security::decision_record::Allow>,
     ) {
-        if let Ok(mut held) = self.prepared_allow.lock() {
+        if let Some(prepared) = &self.prepared_target
+            && let Ok(mut held) = prepared.allow.lock()
+        {
             *held = allow;
         }
     }
@@ -304,13 +323,13 @@ impl SigningInvocationContext {
     /// The prepared target's signing-time allow, taken: a second read finds
     /// nothing.
     pub(crate) fn take_prepared_allow(&self) -> Option<crate::security::decision_record::Allow> {
-        self.prepared_allow.lock().ok()?.take()
+        self.prepared_target.as_ref()?.allow.lock().ok()?.take()
     }
 
     pub(crate) fn prepared_for(&self, server: &str, tool: &str) -> bool {
         self.prepared_target
             .as_ref()
-            .is_some_and(|(s, t)| s == server && t == tool)
+            .is_some_and(|prepared| prepared.server == server && prepared.tool == tool)
     }
 
     /// A signed context whose nonce has not passed admission. Dispatch refuses
@@ -642,7 +661,7 @@ impl super::MetaMcp {
         // stays unprepared, so admission and the grant stamp run the whole
         // policy for it should it ever get past the gate.
         if context.origin == Origin::GatewayInvoke && !skipped {
-            context.prepared_target = Some((
+            context.prepared_target = Some(Prepared::new(
                 extract_required_str(arguments, "server")?.to_owned(),
                 extract_required_str(arguments, "tool")?.to_owned(),
             ));
