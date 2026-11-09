@@ -121,25 +121,17 @@ enum KeyCheck<'a> {
     ThisRequest { name: &'a str, principal: &'a str },
 }
 
-/// Whether the secret fingerprinted `tag` still authenticates as key `k`:
-/// it is the key's current digest, or its previous one before the grace ends
-/// (ADR-022). A rotation that drops the old secret at once leaves no digest
-/// with that fingerprint, so whatever that secret opened stops here. A key
-/// whose digest is a reference this config read cannot resolve matches no
-/// fingerprint (fail closed).
+/// Whether the holder's secret is current or still inside previous-digest grace.
 fn secret_still_valid(
-    k: &crate::config::ApiKeyConfig,
+    k: &crate::gateway::auth::ResolvedApiKey,
     tag: &str,
-    now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
+    now: Option<DateTime<Utc>>,
 ) -> bool {
-    let digest = |spec: Option<&str>| spec.and_then(crate::config::parse_api_key_digest);
-    let current = digest(k.key_sha256.as_deref());
-    let previous = digest(k.previous_key_sha256.as_deref()).zip(k.previous_expires_at);
     crate::gateway::auth::tag_still_valid(
         tag,
-        current.as_ref(),
-        previous.as_ref().map(|(d, end)| (d, *end)),
-        |end| now.is_ok_and(|now| !crate::config::api_key_expired(Some(end), now)),
+        Some(&k.digest),
+        k.previous.as_ref().map(|p| (&p.digest, p.expires_at)),
+        |end| now.is_some_and(|now| !crate::config::api_key_expired(Some(end), now)),
     )
 }
 
@@ -172,8 +164,8 @@ impl Services {
 
     /// As [`Self::admits`]; `None` asks only that the key be live, for
     /// owner-scoped events that need no backend grant.
-    /// A key with an expiry is judged on `now`, and refused on a clock that
-    /// cannot be read (MIK-8202).
+    /// Keys are judged on `now`, and refused on an unreadable clock.
+    /// A CLI holder also needs its approving key to retain standing.
     fn admits_grant(
         &self,
         key: Option<KeyCheck<'_>>,
@@ -187,29 +179,29 @@ impl Services {
             KeyCheck::Holder(r) => (r.name.as_str(), r.principal.as_str()),
             KeyCheck::ThisRequest { name, principal } => (name, principal),
         };
-        self.live
-            .get()
-            .auth
-            .api_keys
-            .iter()
-            .find(|k| k.name == name)
-            .filter(|k| k.expires_at.is_none() || now.is_ok_and(|now| !k.is_expired_at(now)))
-            .filter(|k| {
-                k.key_sha256
-                    .as_deref()
-                    .and_then(crate::config::parse_api_key_digest)
-                    .is_some_and(|digest| k.principal_for(&digest).storage_form() == principal)
-            })
-            .filter(|k| match key {
+        // An unreadable clock keeps today's rule for an ordinary key: one with
+        // no expiry is still judged, any dated check refuses. A CLI key gets no
+        // reading and so is refused (binding_live).
+        let now = now.ok();
+        let generation = self.live.generation();
+        let auth = generation.auth();
+        let keys = auth.api_keys();
+        let mut matching = keys.iter().filter(|k| k.name == name);
+        let (Some(k), None) = (matching.next(), matching.next()) else {
+            return false;
+        };
+        (k.expires_at.is_none()
+            || now.is_some_and(|now| !crate::config::api_key_expired(k.expires_at, now)))
+            && k.principal().storage_form() == principal
+            && auth.binding_live(k, now)
+            && match key {
                 KeyCheck::Holder(r) => r
                     .digest_tag
                     .as_deref()
                     .is_some_and(|tag| secret_still_valid(k, tag, now)),
                 KeyCheck::ThisRequest { .. } => true,
-            })
-            .is_some_and(|k| {
-                backend.is_none_or(|backend| k.backends.iter().any(|b| b == "*" || b == backend))
-            })
+            }
+            && backend.is_none_or(|backend| k.backends.iter().any(|b| b == "*" || b == backend))
     }
 
     /// Whether stored subscription `sub` may still receive an event of

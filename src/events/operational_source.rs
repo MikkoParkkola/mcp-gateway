@@ -40,20 +40,20 @@ struct Standing {
 /// principal fails closed rather than taking whichever matched first
 /// (MIK-8062). Every key's expiry is judged on the one reading `now`, so a
 /// clock that fails and recovers during the scan cannot expire a live key
-/// (MIK-8202).
+/// (MIK-8202). A CLI key loses standing when its approver does.
 fn standing(
     services: &Services,
     principal: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<Standing> {
     let bearer = services.credentials.bearer_principal.as_deref() == Some(principal);
-    let config = services.live.get();
-    let mut keys = config.auth.api_keys.iter().filter(|k| {
-        !k.is_expired_at(now)
-            && k.key_sha256
-                .as_deref()
-                .and_then(crate::config::parse_api_key_digest)
-                .is_some_and(|digest| k.principal_for(&digest).storage_form() == principal)
+    let generation = services.live.generation();
+    let auth = generation.auth();
+    let table = auth.api_keys();
+    let mut keys = table.iter().filter(|k| {
+        !crate::config::api_key_expired(k.expires_at, now)
+            && k.principal().storage_form() == principal
+            && auth.binding_live(k, Some(now))
     });
     match (bearer, keys.next(), keys.next()) {
         (true, None, _) => Some(Standing {

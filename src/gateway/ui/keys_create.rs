@@ -10,11 +10,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use axum::Json;
 use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::{Extension, Json};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
@@ -31,6 +31,7 @@ use crate::config_reload::{
     RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced, refuse_multi_user_flip,
     replace_audited,
 };
+use crate::gateway::auth::NamedApiKey;
 use crate::gateway::router::AppState;
 
 /// Under test, a request may carry the secret the route hands out, so a row
@@ -500,9 +501,12 @@ fn refused_write(
 }
 
 /// `POST /ui/api/keys`.
+/// A CLI key must not mint an unbound successor that outlives its approver.
 pub(super) async fn create_key(
     State(state): State<std::sync::Arc<AppState>>,
     guard: Guard,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    named: Option<Extension<NamedApiKey>>,
     #[cfg(test)] known: Option<axum::Extension<KnownSecret>>,
     #[cfg(test)] before_lock: Option<axum::Extension<BeforeLock>>,
     #[cfg(test)] inject: Option<axum::Extension<InjectWriter>>,
@@ -510,6 +514,15 @@ pub(super) async fn create_key(
 ) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
+    }
+    if named.is_some_and(|Extension(named)| {
+        generation
+            .auth()
+            .api_keys()
+            .iter()
+            .any(|key| key.name == named.name() && key.approved_by.is_some())
+    }) {
+        return super::guard::Refused::Forbidden.into_response();
     }
     let Ok(Json(mut body)) = body else {
         return invalid_body();

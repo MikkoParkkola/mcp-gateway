@@ -311,7 +311,8 @@ impl Fixture {
             .method("POST")
             .uri(URI)
             .header("content-type", "application/json")
-            .extension(call.client);
+            .extension(call.client)
+            .extension(self.live.generation());
         if let Some(known) = call.known {
             request = request.extension(KnownSecret(known));
         }
