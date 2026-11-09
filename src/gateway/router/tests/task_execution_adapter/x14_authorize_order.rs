@@ -166,6 +166,42 @@ async fn the_x14_count_waits_for_the_withheld_record_it_started() {
     }
 }
 
+/// The helper's in-flight count belongs to the row's log, not to a thread,
+/// and a write leaves it however it ends: a write that panics or is
+/// cancelled, polled on any worker thread, leaves nothing for the next count
+/// to wait on (a stuck count would turn into a 10 s failure of its own).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_that_panics_or_is_cancelled_still_leaves_the_count_at_zero() {
+    use crate::gateway::meta_mcp::grant_audit::seams::{
+        grant_writes_settled_for_test as settled, write_spawned, writes_in_flight_for_test as count,
+    };
+    let row = armed(false, false, AuditFailurePolicy::BestEffort, surfaced).await;
+    let write = write_spawned(&row.log);
+    let panicked = tokio::spawn(async move {
+        let _write = write;
+        panic!("a grant-record write panics");
+    });
+    assert!(panicked.await.expect_err("the write panicked").is_panic());
+    std::assert_eq!(count(&row.log), 0, "a panicked write left the count");
+    let write = write_spawned(&row.log);
+    let cancelled = tokio::spawn(async move {
+        let _write = write;
+        std::future::pending::<()>().await;
+    });
+    std::assert_eq!(count(&row.log), 1, "a running write counts");
+    cancelled.abort();
+    assert!(
+        cancelled
+            .await
+            .expect_err("the write was cancelled")
+            .is_cancelled()
+    );
+    std::assert_eq!(count(&row.log), 0, "a cancelled write left the count");
+    tokio::time::timeout(std::time::Duration::from_secs(5), settled(&row.log))
+        .await
+        .expect("the count settles at once");
+}
+
 #[tokio::test]
 async fn a_non_admin_surfaced_task_call_of_an_admin_capability_is_refused_before_x14() {
     non_admin_refusal("x14-ga-admin").await;

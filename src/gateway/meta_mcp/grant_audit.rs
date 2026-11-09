@@ -268,8 +268,11 @@ fn spawn_write(
     };
     let logger = Arc::clone(logger);
     #[cfg(test)]
-    seams::write_spawned();
+    let in_flight = seams::write_spawned(&logger);
     handle.spawn(async move {
+        // Off the count when the task ends, panics or is cancelled.
+        #[cfg(test)]
+        let _in_flight = in_flight;
         if !notes.is_empty()
             && let Err(error) = write_records(&logger, &notes).await
         {
@@ -283,8 +286,6 @@ fn spawn_write(
                 tracing::warn!(server = server.as_deref(), %error, "{WITHHELD_RECORD_FAILED}");
             }
         }
-        #[cfg(test)]
-        seams::write_finished();
     });
 }
 

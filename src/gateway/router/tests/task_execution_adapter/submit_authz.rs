@@ -346,14 +346,14 @@ async fn non_admin_webhook_submit_is_refused_like_the_sync_call() {
 /// started so far has landed, before the call and after it, so each record
 /// counts in its own call's window.
 pub(super) async fn post_counted(row: &Armed, body: Value) -> (StatusCode, Value, usize) {
-    grant_writes_settled().await;
+    grant_writes_settled(row).await;
     let before = decisions(&row.dir).len();
     let (status, answer) = post_full(&row.state, "key-a", body).await;
-    grant_writes_settled().await;
+    grant_writes_settled(row).await;
     (status, answer, decisions(&row.dir).len() - before)
 }
 
-/// Wait until every grant-record write this thread's slots started has landed.
-async fn grant_writes_settled() {
-    crate::gateway::meta_mcp::grant_audit::seams::grant_writes_settled_for_test().await;
+/// Wait until every grant-record write to the row's log has landed.
+async fn grant_writes_settled(row: &Armed) {
+    crate::gateway::meta_mcp::grant_audit::seams::grant_writes_settled_for_test(&row.log).await;
 }
