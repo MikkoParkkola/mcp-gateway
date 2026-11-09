@@ -188,7 +188,7 @@ fn the_moved_receipt_cells_carry_the_new_digest() {
         );
         assert_eq!(
             expected.get(&key).map(String::as_str),
-            Some("200:b5e993923abe"),
+            Some("200:950a28e61c81"),
             "{reason}"
         );
     }

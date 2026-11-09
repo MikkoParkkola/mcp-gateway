@@ -416,6 +416,7 @@ async fn field_split_findings_vs_answer_findings() {
     c["trace_id"] = "trace-1".into();
     let delivery = json!({
         "event": "response_delivery_attempt", "trace_id": "trace-1", "tool": "t",
+        "response_stage": "transport_finalized", "response_effect": "annotated",
         "response_findings": [answer.clone()],
     });
     write_dec(&l.invocation, &mut [c, delivery]);
@@ -426,9 +427,7 @@ async fn field_split_findings_vs_answer_findings() {
     assert_eq!(rows[0]["findings"], json!([request]));
     let text = rows[0]["findings"].to_string();
     assert!(!text.contains("injection") && !text.contains("response.text"));
-    if let Some(got) = rows[0].get("answer_findings") {
-        assert_eq!(got, &json!([answer]));
-    }
+    assert_eq!(rows[0]["answer_findings"], json!([answer]));
 }
 
 #[tokio::test]
