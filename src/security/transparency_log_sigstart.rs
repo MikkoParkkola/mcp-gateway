@@ -213,12 +213,16 @@ pub(crate) enum Placed {
 const KEPT_CHUNKS: usize = 4;
 
 #[cfg(feature = "webui")]
+/// A verified chunk's key: the log's path, the segment and the chunk index.
+type ChunkKey = (std::path::PathBuf, u64, u64);
+
+#[cfg(feature = "webui")]
 /// Per-request memory of verified chunks: their bytes, keyed by log path,
 /// segment and chunk (the two logs share coordinates), so a record is
 /// compared with the bytes that verified, not re-read ones. Bounded: at most [`KEPT_CHUNKS`], the oldest re-read when evicted.
 #[derive(Debug, Default)]
 pub(crate) struct Checked {
-    kept: std::collections::VecDeque<((std::path::PathBuf, u64, u64), std::rc::Rc<Vec<u8>>)>,
+    kept: std::collections::VecDeque<(ChunkKey, std::rc::Rc<Vec<u8>>)>,
     hashed: usize,
 }
 
