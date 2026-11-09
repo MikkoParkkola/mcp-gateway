@@ -30,7 +30,9 @@ pub(crate) fn check_lock(lock: &Value) -> Result<(), Refusal> {
         if !key.is_empty() {
             let bundled = entry.get("inBundle").and_then(Value::as_bool) == Some(true);
             let resolved = entry.get("resolved").and_then(Value::as_str);
-            let registry = resolved.is_some_and(|r| r.starts_with(REGISTRY) && r.ends_with(".tgz"));
+            let registry = resolved.is_some_and(|r| {
+                r.starts_with(REGISTRY) && r.rsplit_once('.').is_some_and(|(_, ext)| ext == "tgz")
+            });
             let linked = entry.get("link").and_then(Value::as_bool) == Some(true);
             if linked || !(registry || (bundled && resolved.is_none())) {
                 return Err(not_registry(key));
