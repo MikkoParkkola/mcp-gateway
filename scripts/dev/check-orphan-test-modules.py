@@ -250,6 +250,13 @@ def declarations_with_cfg(source: Path, owns_dir: bool) -> set[tuple[Path, bool,
     return _scan(source, owns_dir)[0]
 
 
+def bindings(source: Path, owns_dir: bool) -> list[tuple[Path, bool, tuple[str, ...]]]:
+    """Each file-backed declaration in `source` with the module names it
+    binds below `source`'s own module: enclosing inline modules, then the
+    declared name. test-module-path.py builds libtest paths from these."""
+    return _scan(source, owns_dir)[2]
+
+
 def file_is_test(source: Path) -> bool:
     """Whether `source` opens with an inner `#![cfg(test)]`: the whole file
     then compiles only under test."""
@@ -281,11 +288,14 @@ def macro_spans(code: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _scan(source: Path, owns_dir: bool) -> tuple[set[tuple[Path, bool, bool]], bool]:
+def _scan(source: Path, owns_dir: bool) -> tuple[set[tuple[Path, bool, bool]], bool, list[tuple[Path, bool, tuple[str, ...]]]]:
     code, literals = blank(source.read_text(encoding="utf-8", errors="replace"))
     macros = macro_spans(code)
     base = module_dir(source, owns_dir)
     declared: set[tuple[Path, bool, bool]] = set()
+    # Each file-backed declaration's module names from this file down: the
+    # enclosing inline modules, then the declared name.
+    bindings: list[tuple[Path, bool, tuple[str, ...]]] = []
     # Each open brace: the inline module name it opens (None for any other
     # block) and whether that block compiles only under test.
     inline: list[tuple[str | None, bool]] = []
@@ -330,10 +340,12 @@ def _scan(source: Path, owns_dir: bool) -> tuple[set[tuple[Path, bool, bool]], b
             elif pending_path is not None:
                 start = base.joinpath(*nested) if nested else source.parent
                 declared.add(((start / pending_path).resolve(), True, test))
+                bindings.append(((start / pending_path).resolve(), True, (*nested, m.group("name"))))
             else:
                 directory = base.joinpath(*nested)
-                declared.add(((directory / f"{m.group('name')}.rs").resolve(), False, test))
-                declared.add(((directory / m.group("name") / "mod.rs").resolve(), False, test))
+                for candidate in (directory / f"{m.group('name')}.rs", directory / m.group("name") / "mod.rs"):
+                    declared.add((candidate.resolve(), False, test))
+                    bindings.append((candidate.resolve(), False, (*nested, m.group("name"))))
             pending_path, pending_test = None, False
         elif m.group("open"):
             inline.append((None, pending_test or enclosing_test))
@@ -346,7 +358,7 @@ def _scan(source: Path, owns_dir: bool) -> tuple[set[tuple[Path, bool, bool]], b
             pending_path, pending_test = None, False
         elif m.group("semi"):
             pending_path, pending_test = None, False
-    return declared, file_test
+    return declared, file_test, bindings
 
 
 def attribute_end(code: str, start: int) -> int:
@@ -702,7 +714,7 @@ def compiled_outside_tests() -> set[Path]:
         path, owns_dir = stack.pop()
         if (path, owns_dir) in seen or not path.is_file():
             continue
-        declared, file_test = _scan(path, owns_dir)
+        declared, file_test, _ = _scan(path, owns_dir)
         if file_test:
             continue
         seen.add((path, owns_dir))
