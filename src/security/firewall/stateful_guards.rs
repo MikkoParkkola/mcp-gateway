@@ -30,8 +30,12 @@ impl Firewall {
         self
     }
 
-    /// The process's cross-tenant read history.
-    pub(crate) const fn reads(&self) -> &Arc<tenant_reads::ReadHistory> {
+    /// The process's cross-tenant read history. Only the outbound judge holds
+    /// a [`ReadsToken`](crate::gateway::outbound::ReadsToken).
+    pub(crate) const fn reads(
+        &self,
+        _token: &crate::gateway::outbound::ReadsToken,
+    ) -> &Arc<tenant_reads::ReadHistory> {
         &self.reads
     }
 
