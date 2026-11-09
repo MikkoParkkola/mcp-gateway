@@ -224,9 +224,11 @@ async fn relay_action_needs_the_firewall_and_is_live_only_with_the_running_detec
     // Firewall off: the loader refuses a relay action other than `off`, so
     // the save is refused and the file is unchanged.
     let (_dir, path, ctx) = gateway(COMMENTED);
-    save(&ctx, &path, "security.firewall.collusion.action", block())
+    let refused = save(&ctx, &path, "security.firewall.collusion.action", block())
         .await
         .expect_err("needs security.firewall.enabled");
+    // The loader's validation refusal, not some other failure.
+    assert!(matches!(refused, UiRefused::Invalid(_)), "{refused:?}");
     assert_eq!(read(&path), COMMENTED);
 
     // Firewall on, detector unchanged: live.
@@ -249,4 +251,21 @@ async fn relay_action_needs_the_firewall_and_is_live_only_with_the_running_detec
         .await
         .expect("saves");
     assert!(pending(&saved), "detector changed: {:?}", saved.reload);
+}
+
+/// P1b: every row also saves in place: the key lands with its value, the
+/// operator's comment stays.
+#[tokio::test]
+async fn each_policy_row_saves_in_place_on_a_commented_file() {
+    for (name, value, line) in rows() {
+        let base = base_for(name);
+        let (_dir, path, ctx) = gateway(base);
+        let saved = save(&ctx, &path, name, value)
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert!(saved.changed, "{name}: {saved:?}");
+        let text = read(&path);
+        assert!(text.contains(line), "{name}: {text}");
+        assert!(text.starts_with("# operator's note\n"), "{name}: {text}");
+    }
 }
