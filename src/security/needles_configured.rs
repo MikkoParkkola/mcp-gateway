@@ -152,7 +152,7 @@ pub(crate) fn scrub_stored(
         .filter(|result| holds_seal(result))
         .cloned();
     let removed = match (&sealed, response.result.as_mut()) {
-        (Some(_), Some(result)) => drop_seals(result),
+        (Some(_), Some(result)) => mutant!("seal_nodrop", Vec::new(), drop_seals(result)),
         _ => Vec::new(),
     };
     let outcome = scrub_unsealed(sets, response);
@@ -162,10 +162,14 @@ pub(crate) fn scrub_stored(
     if outcome != Scrubbed::Clean {
         return outcome;
     }
-    if removed.iter().all(|seal| {
-        sets.iter()
-            .all(|set| holds_no_needle(seal, &set.snapshot()))
-    }) {
+    if mutant!(
+        "seal_needle",
+        true,
+        removed.iter().all(|seal| {
+            sets.iter()
+                .all(|set| holds_no_needle(seal, &set.snapshot()))
+        })
+    ) {
         response.result = Some(original);
         return Scrubbed::Clean;
     }
@@ -224,7 +228,9 @@ fn drop_seals(value: &mut Value) -> Vec<Value> {
                 pending.extend(object.values_mut());
             }
             Value::Array(items) => pending.extend(items.iter_mut()),
-            Value::String(text) if text.contains("public_signature") => {
+            Value::String(text)
+                if mutant!("seal_text", false, text.contains("public_signature")) =>
+            {
                 if let Ok(mut inner) = serde_json::from_str::<Value>(text) {
                     let seals = drop_seals(&mut inner);
                     if !seals.is_empty() {
@@ -355,4 +361,69 @@ pub(crate) fn scrub_stored_text(
         }
     }
     Ok(outcome)
+}
+
+/// Mutant-only: run `scrub`, then put back every object seal `value` held
+/// before it, at the same path (a serve site that keeps its seals).
+#[cfg(mutants)]
+fn seal_paths(value: &Value) -> Vec<(String, Value)> {
+    let mut out = Vec::new();
+    let mut pending = vec![(String::new(), value)];
+    while let Some((path, next)) = pending.pop() {
+        match next {
+            Value::Object(object) => {
+                if let Some(seal) = object
+                    .get("_meta")
+                    .and_then(|meta| meta.get("provenance"))
+                    .and_then(|provenance| provenance.get("public_signature"))
+                {
+                    out.push((path.clone(), seal.clone()));
+                }
+                for (key, item) in object {
+                    let key = key.replace('~', "~0").replace('/', "~1");
+                    pending.push((format!("{path}/{key}"), item));
+                }
+            }
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    pending.push((format!("{path}/{index}"), item));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+#[cfg(mutants)]
+fn put_seals_back(value: &mut Value, seals: Vec<(String, Value)>) {
+    for (path, seal) in seals {
+        if let Some(provenance) = value
+            .pointer_mut(&format!("{path}/_meta/provenance"))
+            .and_then(Value::as_object_mut)
+        {
+            provenance.insert("public_signature".to_owned(), seal);
+        }
+    }
+}
+
+#[cfg(mutants)]
+pub(crate) fn keep_seals_value<T>(value: &mut Value, scrub: impl FnOnce(&mut Value) -> T) -> T {
+    let seals = seal_paths(value);
+    let out = scrub(value);
+    put_seals_back(value, seals);
+    out
+}
+
+#[cfg(mutants)]
+pub(crate) fn keep_seals_response<T>(
+    response: &mut JsonRpcResponse,
+    scrub: impl FnOnce(&mut JsonRpcResponse) -> T,
+) -> T {
+    let seals = response.result.as_ref().map(seal_paths).unwrap_or_default();
+    let out = scrub(response);
+    if let Some(result) = response.result.as_mut() {
+        put_seals_back(result, seals);
+    }
+    out
 }

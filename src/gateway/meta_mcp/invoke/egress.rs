@@ -636,7 +636,12 @@ impl MetaMcp {
         frame: &mut JsonRpcResponse,
     ) {
         let refused = frame.result.as_mut().is_some_and(|value| {
-            self.scan_stored_task(task, reader, value) == EgressOutcome::Refused
+            mutant!(
+                "seal_get",
+                crate::security::needles::keep_seals_value(value, |v| self
+                    .scan_stored_task(task, reader, v)),
+                self.scan_stored_task(task, reader, value)
+            ) == EgressOutcome::Refused
         });
         if refused {
             *frame =

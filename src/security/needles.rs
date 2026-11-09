@@ -22,6 +22,8 @@ use crate::security::secret_redaction::Compiled;
 #[path = "needles_configured.rs"]
 mod configured;
 pub(crate) use configured::{holds, scrub_stored, scrub_stored_text, scrub_stored_value};
+#[cfg(mutants)]
+pub(crate) use configured::{keep_seals_response, keep_seals_value};
 
 /// The most sent values one backend name may hold inside their grace. Past
 /// it every frame from that backend is refused rather than a value dropped.

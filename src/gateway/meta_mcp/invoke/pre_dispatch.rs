@@ -215,7 +215,13 @@ impl MetaMcp {
                     // Scrubbed on the way out against the values current now:
                     // a value marked secret after this answer was stored is
                     // removed; a refusal is this call's answer instead.
-                    self.backends.scrub_stored_value(&mut cached)?;
+                    mutant!(
+                        "seal_idem",
+                        crate::security::needles::keep_seals_value(&mut cached, |v| self
+                            .backends
+                            .scrub_stored_value(v)),
+                        self.backends.scrub_stored_value(&mut cached)
+                    )?;
                     audit::counting::note_replay();
                     // A stored side-effect notice is the gateway's own text;
                     // its first call delivered no read either (MIK-7991).
@@ -473,8 +479,7 @@ impl MetaMcp {
             // scrub serves no hit, and the call goes to the backend.
             && let Some((cached, read, writes)) =
                 cache.get_read(&cache_key).and_then(|(mut cached, read, writes)| {
-                    self.backends
-                        .scrub_stored_value(&mut cached)
+                    mutant!("seal_cache", crate::security::needles::keep_seals_value(&mut cached, |v| self.backends.scrub_stored_value(v)), self.backends.scrub_stored_value(&mut cached))
                         .ok()
                         .map(|_| (cached, read, writes))
                 })

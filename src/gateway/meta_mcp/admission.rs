@@ -280,7 +280,13 @@ impl MetaMcp {
     /// fixed refusal the answer.
     fn serve_stored(&self, response: &mut JsonRpcResponse, id: &RequestId) {
         response.id = Some(id.clone());
-        let _ = self.backends.scrub_stored(response);
+        let _ = mutant!(
+            "seal_admit",
+            crate::security::needles::keep_seals_response(response, |r| self
+                .backends
+                .scrub_stored(r)),
+            self.backends.scrub_stored(response)
+        );
     }
 
     pub(crate) fn read_only_target(&self, server: &str, tool: &str) -> bool {

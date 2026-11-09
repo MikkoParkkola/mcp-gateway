@@ -199,7 +199,13 @@ impl MetaMcp {
         let mut answer = BeginOutcome::Existing(held).into_response(id);
         // A repeated keyed task serves stored output: scrubbed on the way
         // out against the values current now.
-        let _ = self.backends.scrub_stored(&mut answer);
+        let _ = mutant!(
+            "seal_repeat",
+            crate::security::needles::keep_seals_response(&mut answer, |r| self
+                .backends
+                .scrub_stored(r)),
+            self.backends.scrub_stored(&mut answer)
+        );
         answer
     }
 
