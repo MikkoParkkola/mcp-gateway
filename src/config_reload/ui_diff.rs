@@ -155,8 +155,8 @@ pub(crate) enum PreviewRefused {
     Unread(String),
 }
 
-/// Why `ui_diff` gave no preview. The save adds its own variants (PR b2).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Why `ui_diff` gave no preview, or `ui_save` wrote nothing.
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum UiRefused {
     WrongKind(FieldId),
     BadValue(FieldId, String),
@@ -165,6 +165,24 @@ pub(crate) enum UiRefused {
     /// The loader or the reload would refuse the result.
     Invalid(String),
     Unsupported(String),
+    /// Save: auth is on and no audit log is configured, or the audit log
+    /// refused this save's intent; nothing was written either way.
+    NoAuditLog,
+    /// Save: the edit cannot be proven in place; the change as steps.
+    Unprovable(Patch),
+    /// Save: the file changed since the preview; the preview of it now.
+    Stale(Box<UiPreview>),
+    /// Save: the file changed, and its fresh preview refused.
+    StaleUnpreviewable(String),
+    /// Save: another write held the config past the wait.
+    Busy,
+    /// Save: the secret store refused; no file was written. A timed-out
+    /// create may still land an entry, listed as unused.
+    SecretsRefused {
+        timeout: bool,
+    },
+    /// Save: the write did not complete; fixed text, the detail is logged.
+    Failed(String),
 }
 
 impl From<EditRefused> for UiRefused {
@@ -185,16 +203,7 @@ pub(crate) async fn ui_diff(
     let edit = crate::config_reload::ui_fields::checked(edit)?;
     let (target, text) = read(ctx)?;
     let revision = FileRevision::of(text.as_bytes());
-    let doc = match crate::yaml::from_str::<Value>(&text) {
-        Ok(Value::Null) => Value::Mapping(crate::yaml::Mapping::new()),
-        Ok(doc) => doc,
-        Err(e) => {
-            return Err(UiRefused::Invalid(format!(
-                "gateway.yaml does not parse: {e}"
-            )));
-        }
-    };
-    let changes = resolve(&edit, &doc)?;
+    let changes = changes_for(&edit, &text)?;
     let secrets: Vec<FieldPath> = edit
         .fields
         .iter()
@@ -242,6 +251,25 @@ pub(crate) async fn ui_diff(
         }
     };
     Ok(UiPreview { revision, shown })
+}
+
+/// The editor's changes for a checked `edit` on `text`, the bytes being
+/// edited (an empty file is the empty root). The save computes on the
+/// locked bytes through this, so preview and save resolve alike.
+pub(super) fn changes_for(
+    edit: &PreviewEdit,
+    text: &str,
+) -> Result<Vec<(FieldPath, Change)>, UiRefused> {
+    let doc = match crate::yaml::from_str::<Value>(text) {
+        Ok(Value::Null) => Value::Mapping(crate::yaml::Mapping::new()),
+        Ok(doc) => doc,
+        Err(e) => {
+            return Err(UiRefused::Invalid(format!(
+                "gateway.yaml does not parse: {e}"
+            )));
+        }
+    };
+    resolve(edit, &doc)
 }
 
 /// Each entry as the editor's change at its path, the path's parameters

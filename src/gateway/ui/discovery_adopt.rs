@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::super::errors::{
-    config_path_unavailable, config_refusal, flat_error, no_config_file, structured_error,
+    config_path_unavailable, config_refusal, flat_error, no_config_file, stale, structured_error,
 };
 use super::super::guard::Guard;
 use super::super::secret_slots::{self, Store, Unopened};
@@ -30,8 +30,7 @@ use crate::config::SecretStoreChoice;
 use crate::config_persistence::keyedit::{SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
-    Expected, FileRevision, IntentKind, NO_AUDIT_LOG, Replace, ReplaceError, ReplaceOutcome,
-    Replaced, SecretStep,
+    Expected, IntentKind, NO_AUDIT_LOG, Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
@@ -84,14 +83,6 @@ fn not_adoptable(reasons: &[(&'static str, String)]) -> Response {
         .into_response()
 }
 
-fn stale(current: &FileRevision) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(json!({"error": "stale", "current": current.as_str()})),
-    )
-        .into_response()
-}
-
 fn fixed(status: StatusCode, message: &'static str) -> Response {
     flat_error(status, message).into_response()
 }
@@ -124,7 +115,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
             .into_response(),
         // An add always changes the bytes; unchanged ones mean nothing was added.
         Ok(ReplaceOutcome { revision: None, .. }) => failed("unchanged"),
-        Err(ReplaceError::Stale { current }) => stale(&current),
+        Err(ReplaceError::Stale { current }) => stale(&current).into_response(),
         Err(ReplaceError::Busy) => fixed(
             StatusCode::SERVICE_UNAVAILABLE,
             "the config is being written; retry",
@@ -342,7 +333,7 @@ pub(super) async fn adopt_discovery(
         return no_config_file().into_response();
     };
     if revision.as_str() != body.revision {
-        return stale(revision);
+        return stale(revision).into_response();
     }
     let Some(context) = state.meta_mcp.reload_context() else {
         return fixed(
