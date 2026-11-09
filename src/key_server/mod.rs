@@ -118,7 +118,10 @@ impl KeyServer {
     /// its audit records hash emails with.
     #[must_use]
     pub(crate) fn new(config: KeyServerConfig, email_key: Arc<email_hash::EmailHashKey>) -> Self {
-        let store = Arc::new(InMemoryTokenStore::new());
+        let store = Arc::new(InMemoryTokenStore::new(
+            config.max_tokens_per_identity as usize,
+            config.token_ttl_secs,
+        ));
         let oidc = Arc::new(OidcVerifier::new(config.oidc.clone()));
         let policy = Arc::new(PolicyEngine::new(config.policies.clone()));
 
