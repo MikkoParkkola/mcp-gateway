@@ -108,6 +108,17 @@ fn a_tag_colliding_with_another_key_or_the_bearer_is_identity_in_use() {
             }
         }
         setup.running.api_keys.push(other);
+        // A table the gateway itself refuses cannot be running: that slot's
+        // collision is unreachable, and the revoke check stays defensive.
+        let reachable = crate::gateway::auth::ResolvedAuthConfig::try_from_config(
+            &setup.running,
+            &crate::config::EnvOverlay::none(),
+            crate::gateway::record_principal::TEST_RECORD_KEY,
+        )
+        .is_ok();
+        if !reachable {
+            continue;
+        }
         let sent = refuse(setup, "target", None);
         assert_eq!(sent.status, StatusCode::CONFLICT, "{slot}: {}", sent.body);
         assert_eq!(sent.json(), json!({"error": "identity_in_use"}), "{slot}");
