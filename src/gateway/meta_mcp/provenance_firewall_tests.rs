@@ -16,11 +16,15 @@ fn canary() -> String {
 /// The credentials-only warning rule permits delivery after the credential
 /// redactor rewrites the answer. Redaction is a policy switch, not an action.
 fn install_firewall(meta: &mut MetaMcp, redacts: bool) {
+    install_firewall_with_scan(meta, redacts, true);
+}
+
+fn install_firewall_with_scan(meta: &mut MetaMcp, redacts: bool, scan_responses: bool) {
     let firewall = Firewall::from_config(
         FirewallConfig {
             enabled: true,
             scan_requests: false,
-            scan_responses: true,
+            scan_responses,
             credential_redaction: redacts,
             prompt_injection_detection: false,
             rules: vec![FirewallRule {
@@ -145,9 +149,18 @@ fn assert_no_stale_seal(result: &Value, claim: &str) {
 /// scan cannot erase the canary before the step seal is made. This models a
 /// stricter policy at delivery; finalize_routed runs the real egress scan.
 async fn delivered_chain(redacts: bool) -> Value {
+    delivered_chain_with_scan(redacts, true, &canary()).await
+}
+
+async fn delivered_chain_with_scan(redacts: bool, scan_responses: bool, text: &str) -> Value {
     with_minted_receipts(Box::pin(async {
-        let mut meta = sealing_meta();
-        let response = meta
+        let mut meta = MetaMcp::new(answering_backend(json!({
+            "content": [{"type": "text", "text": text}],
+            "isError": false,
+        })))
+        .with_code_mode(true);
+        dual_signed_meta(&mut meta);
+        let mut response = meta
             .handle_tools_call(
                 RequestId::Number(9428),
                 "gateway_execute",
@@ -162,12 +175,17 @@ async fn delivered_chain(redacts: bool) -> Value {
         let plain = parsed_answer(response.result.as_ref().expect("a chain answer"));
         for step in chain_steps(&plain) {
             assert!(
-                step.to_string().contains(&canary()),
-                "premise: the step seal covers the plain canary"
+                step.to_string().contains(text),
+                "premise: the step seal covers the original text"
             );
             assert_sealed_bound(step, "premise: the chain step seal before the firewall");
         }
-        install_firewall(&mut meta, redacts);
+        // Chain dispatch mints only step receipts. Give this fixture a fresh
+        // outer receipt too, so delivery can prove it seals the final bytes.
+        let result = response.result.take().expect("the chain result to stamp");
+        response.result =
+            Some(meta.stamp_direct_result(result, "remote_docs", "search", Some("alice")));
+        install_firewall_with_scan(&mut meta, redacts, scan_responses);
         let targets = Vec::new();
         meta.finalize_routed(
             response,
@@ -370,4 +388,359 @@ async fn the_top_level_seal_is_bound_after_firewall_redaction() {
         assert_sealed_bound(&served, "the top-level seal made after firewall redaction");
     }))
     .await;
+}
+
+/// Walk every key, including objects encoded in JSON text, not just receipts
+/// in their conventional position.
+fn assert_no_public_signature(value: &Value, claim: &str) {
+    match value {
+        Value::Object(object) => {
+            assert!(
+                !object.contains_key("public_signature"),
+                "{claim}: a public_signature remains: {value}"
+            );
+            for child in object.values() {
+                assert_no_public_signature(child, claim);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                assert_no_public_signature(child, claim);
+            }
+        }
+        Value::String(text) => {
+            if let Ok(inner) = serde_json::from_str::<Value>(text) {
+                assert_no_public_signature(&inner, claim);
+            } else {
+                assert!(
+                    !text.contains("public_signature"),
+                    "{claim}: unparseable text may retain a seal: {text}"
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn sealed_result(meta: &MetaMcp) -> Value {
+    let result = with_minted_receipts(Box::pin(async {
+        meta.recover_task_result(
+            "remote_docs",
+            "search",
+            None,
+            "seal-firewall",
+            json!({"content": [{"type": "text", "text": canary()}]}),
+        )
+    }))
+    .await
+    .expect("the result settles before the redacting policy is installed");
+    assert_sealed_bound(&result, "premise: a real seal covers the original bytes");
+    result
+}
+
+fn completed_task(result: &Value) -> crate::gateway::task_service::CommittedTask {
+    let mut task = crate::protocol::tasks::Task::create("gateway_invoke").expect("a task");
+    task.complete(result).expect("the sealed task completes");
+    crate::gateway::task_service::CommittedTask {
+        task,
+        revision: 1,
+        targets: vec![crate::gateway::task_service::Target {
+            server: "remote_docs".into(),
+            tool: "search".into(),
+        }],
+        targets_recorded: true,
+        output_free: false,
+        error_author: None,
+        owner_digest: String::new(),
+        gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
+        bindings: Vec::new(),
+        bindings_recorded: true,
+    }
+}
+
+/// A notification's stored-task scan has no request and removes a creation
+/// seal before rewriting the stored result for its subscriber.
+#[tokio::test]
+async fn a_task_notification_the_firewall_redacts_keeps_no_seal() {
+    let mut meta = sealing_meta();
+    let original = sealed_result(&meta).await;
+    let stored = completed_task(&original);
+    let mut delivered = stored.delivered_wire();
+    install_firewall(&mut meta, true);
+    assert_eq!(
+        meta.scan_stored_task(&stored, None, &mut delivered),
+        crate::gateway::meta_mcp::invoke::egress::EgressOutcome::Rewritten,
+        "the notification scan with no request redacts the stored result"
+    );
+    assert_redacted(
+        &delivered,
+        "the task notification redacts its stored result",
+    );
+    assert_no_public_signature(&delivered, "the task notification keeps no creation seal");
+    assert_sealed_bound(
+        &original,
+        "notification delivery leaves the stored original bound",
+    );
+}
+
+/// The existing-task branch used by keyed repeats returns the stored answer
+/// through delivery egress, which removes its seal before firewall redaction.
+#[tokio::test]
+async fn a_repeated_keyed_task_the_firewall_redacts_keeps_no_seal() {
+    let mut meta = sealing_meta();
+    let original = sealed_result(&meta).await;
+    let stored = completed_task(&original);
+    let targets = stored.targets.clone();
+    install_firewall(&mut meta, true);
+    let served = with_minted_receipts(Box::pin(async {
+        let caller = allow_all_ctx_named(Some("alice"), None);
+        let response = meta
+            .defer_or_serve_existing(
+                RequestId::Number(71),
+                "gateway_invoke",
+                &targets,
+                crate::gateway::meta_mcp::sealed_hold::Held::new(
+                    stored,
+                    crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+                ),
+                &caller,
+            )
+            .await;
+        let before = response
+            .result
+            .as_ref()
+            .expect("the keyed repeat serves the task");
+        assert_eq!(
+            before["resultType"],
+            json!("task"),
+            "the keyed repeat takes the existing-task branch"
+        );
+        assert_sealed_bound(
+            &before["result"],
+            "premise: the repeat still carries the creation seal before egress",
+        );
+        meta.finalize_routed(
+            response,
+            &delivery_ctx(&[], "tools/call", "gateway_invoke"),
+            None,
+        )
+    }))
+    .await;
+    let delivered = served.result.expect("the repeated task is delivered");
+    assert_redacted(
+        &delivered["result"],
+        "the keyed repeat redacts its stored result at delivery",
+    );
+    assert_no_public_signature(&delivered, "the keyed repeat keeps no creation seal");
+}
+
+/// Even without a matching credential, a redacting policy pays the documented
+/// cost of stripping step seals; the newly minted outer seal stays bound.
+#[tokio::test]
+async fn a_redacting_policy_that_matches_nothing_still_strips_step_seals() {
+    let served = delivered_chain_with_scan(true, true, "ordinary search result").await;
+    for step in chain_steps(&parsed_answer(&served)) {
+        assert_eq!(
+            step["content"][0]["text"],
+            json!("ordinary search result"),
+            "the nonmatching redactor preserves step text"
+        );
+        assert_no_public_signature(
+            step,
+            "a redacting policy strips step seals even without a match",
+        );
+    }
+    assert_sealed_bound(
+        &served,
+        "the nonmatching redacting policy leaves the fresh outer seal Bound",
+    );
+}
+
+/// Disabling response scanning also disables the redaction-time strip, even
+/// with credential redaction configured and a matching value in each step.
+#[tokio::test]
+async fn seals_stay_when_response_scanning_is_off() {
+    let served = delivered_chain_with_scan(true, false, &canary()).await;
+    for step in chain_steps(&parsed_answer(&served)) {
+        assert_eq!(
+            step["content"][0]["text"],
+            json!(canary()),
+            "response scanning off leaves the credential untouched"
+        );
+        assert_sealed_bound(step, "response scanning off keeps each step seal Bound");
+    }
+}
+
+const UNPARSEABLE_SEAL_TEXT: &str = "{\"public_signature\":";
+
+fn firewall_at<'a>(
+    meta: &'a MetaMcp,
+    delivery: &'a ResponseDeliveryContext<'a>,
+) -> crate::gateway::meta_mcp::invoke::egress::Egress<'a> {
+    crate::gateway::meta_mcp::invoke::egress::Egress {
+        content: crate::gateway::meta_mcp::invoke::egress::ContentChecks::Dispatched,
+        targets: delivery.targets,
+        correlation: &delivery.correlation,
+        api_key_name: None,
+        firewall: meta.firewall.as_deref(),
+        generation: None,
+    }
+}
+
+fn scan_seal_text(
+    redact: bool,
+) -> (
+    crate::gateway::meta_mcp::invoke::egress::EgressOutcome,
+    JsonRpcResponse,
+) {
+    let mut meta = sealing_meta();
+    install_firewall(&mut meta, true);
+    let value = json!({"content": [
+        {"type": "text", "text": UNPARSEABLE_SEAL_TEXT},
+        {"type": "text", "text": if redact { canary() } else { "ordinary text".into() }},
+    ]});
+    let mut frame = JsonRpcResponse::success(RequestId::Number(72), value);
+    let targets = [ResponsePolicyTarget::routed("remote_docs", "search")];
+    let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
+    let outcome = meta.scan_egress(&mut frame, &firewall_at(&meta, &delivery));
+    (outcome, frame)
+}
+
+/// An incomplete strip alone does not refuse an answer the firewall leaves
+/// unchanged: refusal requires an actual rewrite after the strip.
+#[tokio::test]
+async fn an_unchanged_answer_with_unparseable_seal_text_is_delivered() {
+    let (outcome, frame) = scan_seal_text(false);
+    assert_eq!(
+        outcome,
+        crate::gateway::meta_mcp::invoke::egress::EgressOutcome::Delivered,
+        "unparseable seal text without a rewrite is delivered"
+    );
+    let result = frame
+        .result
+        .expect("the unchanged answer is delivered, not refused");
+    assert_eq!(
+        result["content"][0]["text"],
+        json!(UNPARSEABLE_SEAL_TEXT),
+        "the unchanged answer preserves its unparseable seal text"
+    );
+    assert!(
+        frame.error.is_none(),
+        "the unchanged answer has no delivery refusal"
+    );
+}
+
+/// Rewriting any value while seal-naming text remains unparseable replaces
+/// the whole answer with the standard delivery refusal.
+#[tokio::test]
+async fn a_rewritten_answer_with_unparseable_seal_text_is_refused() {
+    let (outcome, frame) = scan_seal_text(true);
+    assert_eq!(
+        outcome,
+        crate::gateway::meta_mcp::invoke::egress::EgressOutcome::Refused,
+        "a rewrite over unparseable seal text is refused"
+    );
+    assert!(
+        frame.result.is_none(),
+        "the refused answer serves no result bytes"
+    );
+    assert_eq!(
+        frame
+            .error
+            .expect("the rewritten answer is a delivery refusal")
+            .message,
+        crate::gateway::meta_mcp::invoke::egress::REFUSAL,
+        "the rewritten answer uses the standard delivery refusal"
+    );
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RedactionPoint {
+    StoredScrub,
+    EgressFirewall,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SealSite {
+    TopLevel,
+    StoredTask,
+    ChainStep,
+    PlaybookStep,
+}
+
+impl SealSite {
+    fn wrap(self, sealed: Value) -> Value {
+        match self {
+            Self::TopLevel => sealed,
+            Self::StoredTask => completed_task(&sealed).delivered_wire(),
+            Self::ChainStep => json!({"content": [{"type": "text", "text":
+                json!({"results": [{"result": sealed}]}).to_string()}]}),
+            Self::PlaybookStep => json!({"content": [{"type": "text", "text":
+                json!({"output": {"first": sealed}}).to_string()}]}),
+        }
+    }
+}
+
+/// Every redaction point strips every seal site, including composite results
+/// encoded as JSON text. Exhaustive matches require handling new variants.
+#[tokio::test]
+async fn every_redaction_point_strips_every_seal_site() {
+    use crate::gateway::meta_mcp::invoke::egress::EgressOutcome;
+    use crate::security::needles::{NeedleSet, Scrubbed, scrub_stored};
+
+    let mut meta = sealing_meta();
+    let sealed = sealed_result(&meta).await;
+    install_firewall(&mut meta, true);
+    for point in [RedactionPoint::StoredScrub, RedactionPoint::EgressFirewall] {
+        for site in [
+            SealSite::TopLevel,
+            SealSite::StoredTask,
+            SealSite::ChainStep,
+            SealSite::PlaybookStep,
+        ] {
+            let claim = format!("{point:?} at {site:?} strips every seal before redaction");
+            let mut value = site.wrap(sealed.clone());
+            assert_eq!(
+                seals_in(&value).len(),
+                1,
+                "{claim}: premise: the cell carries one real seal"
+            );
+            assert_no_stale_seal(
+                &value,
+                &format!("{claim}: premise: the original seal is Bound"),
+            );
+            match point {
+                RedactionPoint::StoredScrub => {
+                    let held = Arc::new(NeedleSet::default());
+                    held.insert("remote_docs", &canary());
+                    let mut frame = JsonRpcResponse::success(RequestId::Number(73), value);
+                    assert_eq!(
+                        scrub_stored(&[held], &mut frame),
+                        Scrubbed::Redacted,
+                        "{claim}: the stored scrub rewrites the held value"
+                    );
+                    value = frame.result.expect("the scrub delivers the redacted cell");
+                    assert!(
+                        value.to_string().contains("[redacted]"),
+                        "{claim}: the held value is redacted"
+                    );
+                }
+                RedactionPoint::EgressFirewall => {
+                    let targets = [ResponsePolicyTarget::routed("remote_docs", "search")];
+                    let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
+                    assert_eq!(
+                        meta.firewall_result(&mut value, &firewall_at(&meta, &delivery)),
+                        EgressOutcome::Rewritten,
+                        "{claim}: the firewall rewrites the matching value"
+                    );
+                    assert_redacted(&value, &claim);
+                }
+            }
+            assert!(
+                !value.to_string().contains(&canary()),
+                "{claim}: no original credential remains"
+            );
+            assert_no_public_signature(&value, &claim);
+        }
+    }
 }
