@@ -20,8 +20,10 @@ pub(crate) const KEY_ID: &str = "sigstart";
 
 /// A log under a temp dir, kept alive by the struct.
 pub(crate) struct Fixture {
-    /// Holds the temp dir for the fixture's lifetime.
-    _dir: tempfile::TempDir,
+    /// The temp dir holding the log, handed to each logger opened over it
+    /// (`keep_test_dir`), as every audit-log test does; `None` for a crash
+    /// row's child, whose parent owns the directory.
+    dir: Option<Arc<tempfile::TempDir>>,
     pub(crate) path: PathBuf,
 }
 
@@ -29,17 +31,16 @@ impl Fixture {
     pub(crate) fn new() -> Self {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("audit.jsonl");
-        Self { _dir: dir, path }
+        Self {
+            dir: Some(Arc::new(dir)),
+            path,
+        }
     }
 
     /// A fixture over an existing path, for a crash row's child: the parent
-    /// owns that directory, so this one holds only an empty one inside it.
+    /// owns that directory.
     pub(crate) fn at(path: PathBuf) -> Self {
-        let parent = path.parent().expect("a parent").to_path_buf();
-        let dir = tempfile::Builder::new()
-            .tempdir_in(parent)
-            .expect("temp dir");
-        Self { _dir: dir, path }
+        Self { dir: None, path }
     }
 
     /// The `.sigstart` sidecar beside the log.
@@ -64,14 +65,18 @@ impl Fixture {
                 on_disk_full: OnDiskFull::ExpireOldest,
             };
         }
-        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+        let log = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
             path: self.path.to_string_lossy().into_owned(),
             key_id: KEY_ID.into(),
             shared_secret: if signed { SECRET.into() } else { String::new() },
             rotation,
         }))
-        .expect("logger opens")
+        .expect("logger opens");
+        if let Some(dir) = &self.dir {
+            log.keep_test_dir(Arc::clone(dir));
+        }
+        log
     }
 
     /// Append `n` invocation records named `tool_<first + i>`.
