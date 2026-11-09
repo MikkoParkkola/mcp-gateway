@@ -288,7 +288,10 @@ fn an_empty_string_argument_mirrors_as_an_empty_value() {
     }});
     let mirrored = mirror_headers(&schema, &json!({"tenant": ""}));
 
-    assert_eq!(mirrored, vec![("Mcp-Param-Tenant".to_string(), String::new())]);
+    assert_eq!(
+        mirrored,
+        vec![("Mcp-Param-Tenant".to_string(), String::new())]
+    );
     assert_eq!(decode_header_value(&mirrored[0].1).as_deref(), Some(""));
 }
 

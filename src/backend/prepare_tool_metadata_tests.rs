@@ -86,7 +86,10 @@ fn a_nested_duplicate_header_name_excludes_the_tool() {
     );
 
     assert_eq!(
-        tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+        tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
         ["keep"]
     );
 }
@@ -114,7 +117,10 @@ fn a_nested_invalid_declaration_excludes_the_tool() {
     );
 
     assert_eq!(
-        tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+        tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
         ["keep"]
     );
 }
