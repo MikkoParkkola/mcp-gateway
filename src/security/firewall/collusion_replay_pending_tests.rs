@@ -619,8 +619,8 @@ fn r25_a_handle_is_refused_for_another_entry() {
 }
 
 /// The size check a stored task read is judged by (`fits`) and the store's
-/// own admission agree at the exact caps: an entry of exactly the per-entry
-/// cap fits and is stored; one byte less of either cap, per entry or in
+/// own admission agree at the exact caps: an entry of exactly either cap
+/// fits and is stored; one byte less of either cap, per entry or in
 /// total, and it neither fits nor is stored.
 #[test]
 fn fits_agrees_with_admission_at_both_caps() {
@@ -639,6 +639,7 @@ fn fits_agrees_with_admission_at_both_caps() {
     assert!(bytes > 0, "premise: the entry was stored and counted");
     for (total, entry, admitted) in [
         (bytes * 4, bytes, true),
+        (bytes, bytes * 4, true),
         (bytes * 4, bytes - 1, false),
         (bytes - 1, bytes * 4, false),
     ] {
