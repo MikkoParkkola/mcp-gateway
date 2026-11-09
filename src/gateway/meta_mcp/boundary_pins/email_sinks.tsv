@@ -10,6 +10,7 @@ src/gateway/ui/control_plane/mutations.rs	actor_from_client	read	1	UI actor disp
 src/identity_propagation/mod.rs	SignedAssertionStrategy::mint	read	1	email copied into the signed backend assertion; propagation only, never an audit or tracing record
 src/key_server/oidc.rs	OidcVerifier::verify_inner	read	1	verification and domain authorization of the token's email claim
 src/key_server/oidc/verified.rs	VerifiedIdentity::email	read	1	the accessor itself
+src/key_server/oidc/verified.rs	VerifiedIdentity::fmt	read	1	the redacting Debug: reads the email only to show whether one is present, never its text
 src/key_server/policy.rs	matches_rule	read	4	policy matching on the email and its domain; no log field
 src/projection/engine.rs	build_actor	read	1	reads ActorSpec.email, a projection setting naming where an email sits in a record; not a verified identity's email
 src/key_server/audit.rs	SafeIdentity::of	read	1	hashes the email into email_hash for the audit record; the email itself is not written
@@ -27,5 +28,6 @@ src/key_server/audit.rs	SafeIdentity::of	body	3682be3a2ce6577de0b6e9047ae7fc6752
 src/key_server/oidc.rs	IdTokenClaims::fmt	body	20e52ac4d21ab0845373fc853d902fddab754ad4d9e93ba387ede183621be73c	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
 src/key_server/oidc.rs	OidcVerifier::verify_inner	body	e37c8d6bf731a44acb7393aacd6bad953c3a573354afe8c54e301bbe5b4f6a3f	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
 src/key_server/oidc/verified.rs	VerifiedIdentity::email	body	58bff4ccc869a59e7b8f50813360995f5ce458cdbe50c3dce7fc56e5028cf50a	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/key_server/oidc/verified.rs	VerifiedIdentity::fmt	body	f6081a86c3bcd4b55ea8dc1350cb81e647f2dfbd5f10c266135122242af10763	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
 src/key_server/policy.rs	matches_rule	body	c3e07abfa48821b9290711b167a2b7dd2bb5ea42e9482ff0a790395be71f1f1c	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
 src/projection/engine.rs	build_actor	body	ea58c069e9f6eb262a41aaa2a8747815325227aeb803ca444cd56734e7b456e6	the reviewed body of the reader in the read row above; an edit to it is a reviewed change

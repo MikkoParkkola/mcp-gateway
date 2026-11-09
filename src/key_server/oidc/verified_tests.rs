@@ -175,6 +175,7 @@ fn each_privacy_doc_test_fails_only_on_privacy() {
         fences,
         [
             "compile_fail,E0277",
+            "compile_fail,E0277",
             "",
             "compile_fail,E0451",
             "compile_fail,E0451",
