@@ -61,12 +61,21 @@ pub(super) fn label(path: &str, mut body: Value) -> Option<String> {
         match value {
             Value::Object(map) => {
                 for (key, child) in map {
-                    let path = if at.is_empty() { key.clone() } else { format!("{at}.{key}") };
+                    let path = if at.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{at}.{key}")
+                    };
                     let top = if at.is_empty() { key.as_str() } else { top };
                     let scalar = !(child.is_object() || child.is_array());
-                    if scalar && (CLASS_FIELDS.contains(&key.as_str()) || CLASS_OBJECTS.contains(&top)) {
+                    if scalar
+                        && (CLASS_FIELDS.contains(&key.as_str()) || CLASS_OBJECTS.contains(&top))
+                    {
                         out.insert(format!("{path}={child}"));
-                    } else if at.is_empty() && CLASS_LISTS.contains(&key.as_str()) && child.is_array() {
+                    } else if at.is_empty()
+                        && CLASS_LISTS.contains(&key.as_str())
+                        && child.is_array()
+                    {
                         for item in child.as_array().into_iter().flatten() {
                             out.insert(format!("{path}[]={item}"));
                         }
@@ -75,7 +84,9 @@ pub(super) fn label(path: &str, mut body: Value) -> Option<String> {
                     }
                 }
             }
-            Value::Array(items) => items.iter().for_each(|item| walk(item, &format!("{at}[]"), top, out)),
+            Value::Array(items) => items
+                .iter()
+                .for_each(|item| walk(item, &format!("{at}[]"), top, out)),
             Value::String(text) => {
                 for marker in SCOPE_MARKERS.iter().filter(|m| text.contains(**m)) {
                     out.insert((*marker).to_string());
@@ -93,14 +104,17 @@ pub(super) fn label(path: &str, mut body: Value) -> Option<String> {
         }
     }
     walk(&body, "", "", &mut out);
-    let label = out.into_iter().collect::<Vec<_>>().join(",").replace(['\t', '\n'], " ");
+    let label = out
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(",")
+        .replace(['\t', '\n'], " ");
     match label.len() {
         0 => None,
         n if n > LABEL_SHOWN_MAX => Some(format!("L{}", hash12(label.as_bytes()))),
         _ => Some(label),
     }
 }
-
 
 /// One cell's label pin beside its whole-body pin.
 pub(super) struct Pins {
@@ -120,8 +134,14 @@ pub(super) fn no_two_distinct_answers_share_a_label(pins: &[Pins]) {
     let mut by_label = Groups::new();
     let mut by_old = Groups::new();
     for pin in pins {
-        by_label.entry((pin.path, &pin.new)).or_default().insert(&pin.old);
-        by_old.entry((pin.path, &pin.old)).or_default().insert(&pin.new);
+        by_label
+            .entry((pin.path, &pin.new))
+            .or_default()
+            .insert(&pin.old);
+        by_old
+            .entry((pin.path, &pin.old))
+            .or_default()
+            .insert(&pin.new);
     }
     for ((path, old), labels) in by_old.iter().filter(|(_, labels)| labels.len() > 1) {
         println!("refined: {path} {old} -> {labels:?}");
@@ -130,9 +150,9 @@ pub(super) fn no_two_distinct_answers_share_a_label(pins: &[Pins]) {
     let hashed: std::collections::BTreeSet<&str> = pins
         .iter()
         .filter(|pin| {
-            pin.new
-                .split_once(':')
-                .is_some_and(|(_, pin)| pin.len() == 12 && pin.bytes().all(|b| b.is_ascii_hexdigit()))
+            pin.new.split_once(':').is_some_and(|(_, pin)| {
+                pin.len() == 12 && pin.bytes().all(|b| b.is_ascii_hexdigit())
+            })
         })
         .map(|pin| pin.path)
         .collect();
@@ -159,7 +179,8 @@ pub(super) fn cell(path: &str, status: StatusCode, body: &[u8]) -> String {
         && SCOPED.contains(&path)
         && path != routes::UI_ACTIVITY
         && path != routes::UI_ACTIVITY_EXPORT;
-    if (refused || scoped) && !body.is_empty()
+    if (refused || scoped)
+        && !body.is_empty()
         && let Some(label) = serde_json::from_slice::<Value>(body)
             .ok()
             .and_then(|value| label(path, value))

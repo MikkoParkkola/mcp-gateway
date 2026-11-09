@@ -119,7 +119,13 @@ fn planted(body: &[u8], plant: impl FnOnce(&mut Value)) -> Vec<u8> {
 }
 
 /// One planted change the cell must notice.
-async fn moves(caller: Caller, req: (&str, &str, &str), store: bool, want: StatusCode, plant: impl FnOnce(&mut Value)) {
+async fn moves(
+    caller: Caller,
+    req: (&str, &str, &str),
+    store: bool,
+    want: StatusCode,
+    plant: impl FnOnce(&mut Value),
+) {
     let (status, body) = answer(caller, req, store).await;
     premise(req, want, status, &body);
     let changed = planted(&body, plant);
@@ -145,7 +151,10 @@ fn swap_strings(value: &mut Value, from: &str, to: &str) {
 #[tokio::test]
 async fn a_receipt_showing_another_callers_record_moves_its_cell() {
     let req = ("GET", routes::UI_ACTIVITY_RECEIPT, "other-receipt");
-    moves(Caller::AdminKey, req, false, StatusCode::OK, |v| swap_strings(v, OTHER_DEV, DEV)).await;
+    moves(Caller::AdminKey, req, false, StatusCode::OK, |v| {
+        swap_strings(v, OTHER_DEV, DEV)
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -165,7 +174,9 @@ async fn an_action_allowed_flip_moves_the_snapshot_cell() {
             .as_object_mut()
             .and_then(|actions| actions.values_mut().next())
             .expect("the snapshot lists its actions");
-        let allowed = first["allowed"].as_bool().expect("an action says whether it is allowed");
+        let allowed = first["allowed"]
+            .as_bool()
+            .expect("an action says whether it is allowed");
         first["allowed"] = json!(!allowed);
     })
     .await;
@@ -174,21 +185,33 @@ async fn an_action_allowed_flip_moves_the_snapshot_cell() {
 #[tokio::test]
 async fn status_reporting_admin_moves_its_cell() {
     let req = ("GET", routes::UI_STATUS, "plain");
-    moves(Caller::StandardKey, req, false, StatusCode::OK, |v| v["auth"]["admin"] = json!(true)).await;
+    moves(Caller::StandardKey, req, false, StatusCode::OK, |v| {
+        v["auth"]["admin"] = json!(true)
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn status_showing_the_full_view_moves_its_cell() {
     let req = ("GET", routes::UI_STATUS, "plain");
-    moves(Caller::StandardKey, req, false, StatusCode::OK, |v| v["servers"] = json!([])).await;
+    moves(Caller::StandardKey, req, false, StatusCode::OK, |v| {
+        v["servers"] = json!([])
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn a_refusal_naming_another_reason_moves_its_cell() {
     let req = ("GET", routes::UI_ACTIVITY, "plain");
-    moves(Caller::StandardKey, req, false, StatusCode::FORBIDDEN, |v| {
-        v["error"] = json!("Authentication required");
-    })
+    moves(
+        Caller::StandardKey,
+        req,
+        false,
+        StatusCode::FORBIDDEN,
+        |v| {
+            v["error"] = json!("Authentication required");
+        },
+    )
     .await;
 }
 
@@ -206,7 +229,11 @@ async fn a_duplicated_activity_row_moves_its_cell() {
     let req = ("GET", routes::UI_ACTIVITY, "plain");
     moves(Caller::OidcDeveloper, req, false, StatusCode::OK, |v| {
         let rows = v["rows"].as_array_mut().expect("the list has rows");
-        let first = rows.iter().find(|row| row["tool"].as_str().is_some_and(|t| t.starts_with("tool_"))).cloned().expect("a seeded row");
+        let first = rows
+            .iter()
+            .find(|row| row["tool"].as_str().is_some_and(|t| t.starts_with("tool_")))
+            .cloned()
+            .expect("a seeded row");
         rows.push(first);
     })
     .await;

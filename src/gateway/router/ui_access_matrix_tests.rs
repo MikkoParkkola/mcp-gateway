@@ -587,7 +587,6 @@ async fn send(router: &axum::Router, request: Request<Body>) -> (StatusCode, Vec
 
 type Matrix = BTreeMap<String, String>;
 
-
 /// Every cell, computed against today's code, and beside it each cell's
 /// whole-body pin ([`cell_hash`]) for the strength check.
 async fn compute() -> (Matrix, Vec<Pins>) {
@@ -645,7 +644,11 @@ async fn compute() -> (Matrix, Vec<Pins>) {
                                 shape.to_string()
                             };
                             let key = format!("{path}\t{method}\t{variant}\t{caller:?}");
-                            pins.push(Pins { path, old, new: value.clone() });
+                            pins.push(Pins {
+                                path,
+                                old,
+                                new: value.clone(),
+                            });
                             matrix.insert(key, value);
                         }
                     }
