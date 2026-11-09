@@ -24,11 +24,16 @@ const PROTOCOL_VERSION: &str = "2025-11-25";
 const READY_BOUND: Duration = Duration::from_secs(60);
 /// How long a gateway's stop may take before its leaves must be gone: above the 30 s parent timeout, with slack for a loaded host.
 const STOP_BOUND: Duration = Duration::from_secs(45);
-const LEAF_SCRIPT: &str = r#"import json, os, signal, sys, time
+const LEAF_SCRIPT: &str = r#"import json, os, signal, subprocess, sys, time
 name = sys.argv[1]
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 with open("leaf-" + name + ".pid", "w") as f:
     f.write(str(os.getpid()))
+# A descendant in the leaf's process group. It inherits the ignored SIGTERM,
+# so only the gateway's kill of the whole group ends it.
+grandchild = subprocess.Popen(["sleep", "600"])
+with open("leaf-" + name + ".grandchild.pid", "w") as f:
+    f.write(str(grandchild.pid))
 for line in sys.stdin:
     msg = json.loads(line)
     if "id" not in msg:
@@ -268,10 +273,18 @@ async fn run(seconds: u64, leaves: &[&str]) {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    // Each leaf and its grandchild: the grandchild is gone only if the
+    // gateway killed the leaf's whole process group.
     let leaves: Vec<u32> = leaves
         .iter()
-        .map(|name| {
-            std::fs::read_to_string(root.join(format!("leaf-{name}.pid")))
+        .flat_map(|name| {
+            [
+                format!("leaf-{name}.pid"),
+                format!("leaf-{name}.grandchild.pid"),
+            ]
+        })
+        .map(|file| {
+            std::fs::read_to_string(root.join(file))
                 .expect("leaf pid")
                 .trim()
                 .parse()
@@ -389,9 +402,14 @@ async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
         .trim()
         .parse()
         .expect("pid");
+    let grandchild: u32 = std::fs::read_to_string(root.join("leaf-leaf.grandchild.pid"))
+        .expect("grandchild pid")
+        .trim()
+        .parse()
+        .expect("pid");
     assert!(
-        pids::alive(leaf),
-        "leaf must be live at stop\n{}",
+        pids::alive(leaf) && pids::alive(grandchild),
+        "leaf and its grandchild must be live at stop\n{}",
         logs(root)
     );
     // The action under test: a plain SIGTERM to the gateway alone. Reaped
@@ -408,10 +426,10 @@ async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
         .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
         .expect("gateway exit");
     let leaf_deadline = Instant::now() + Duration::from_secs(10);
-    while pids::alive(leaf) {
+    while pids::alive(leaf) || pids::alive(grandchild) {
         assert!(
             Instant::now() < leaf_deadline,
-            "leaf {leaf} still running after gateway exited\n{}",
+            "leaf {leaf} or its grandchild {grandchild} still running after gateway exited\n{}",
             logs(root)
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
