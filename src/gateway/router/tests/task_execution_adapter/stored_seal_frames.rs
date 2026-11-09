@@ -69,7 +69,7 @@ fn assert_sealed_bound(result: &Value, what: &str) {
     std::assert_eq!(verified.status, VerifyStatus::Bound, "{what}");
 }
 
-/// Every seal in `served`, each with the value it seals.
+/// Every seal in `served`, each with the value it seals, JSON text included.
 fn seals_in(served: &Value) -> Vec<(Value, Value)> {
     let mut found = Vec::new();
     let mut pending = vec![served];
@@ -84,6 +84,11 @@ fn seals_in(served: &Value) -> Vec<(Value, Value)> {
                 pending.extend(object.values());
             }
             Value::Array(items) => pending.extend(items),
+            // A chain answer carries its steps' sealed results as JSON text.
+            Value::String(text) if text.contains("public_signature") => {
+                let inner = serde_json::from_str(text).expect("seal text parses");
+                found.extend(seals_in(&inner));
+            }
             _ => {}
         }
     }
