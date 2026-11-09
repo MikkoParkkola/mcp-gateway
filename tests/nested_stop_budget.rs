@@ -212,6 +212,18 @@ impl Drop for KillGroup {
         }
     }
 }
+/// The action under test: a plain SIGTERM to the gateway alone. Reaped
+/// signals nothing; it only reaps after the assertions.
+fn sigterm(pid: u32) {
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .expect("kill")
+            .success()
+    );
+}
+
 async fn run(seconds: u64, leaves: &[&str]) {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path().to_path_buf();
@@ -297,15 +309,7 @@ async fn run(seconds: u64, leaves: &[&str]) {
         "leaves must be live at stop"
     );
     let deadline = Instant::now() + STOP_BOUND;
-    // The action under test: a plain SIGTERM to the gateway alone. Reaped
-    // signals nothing here; it only reaps after the assertions.
-    assert!(
-        std::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
-            .expect("kill")
-            .success()
-    );
+    sigterm(pid);
     tokio::time::timeout_at(deadline, reaped.child_mut().wait())
         .await
         .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
@@ -412,15 +416,7 @@ async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
         "leaf and its grandchild must be live at stop\n{}",
         logs(root)
     );
-    // The action under test: a plain SIGTERM to the gateway alone. Reaped
-    // signals nothing here; it only reaps after the assertions.
-    assert!(
-        std::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
-            .expect("kill")
-            .success()
-    );
+    sigterm(pid);
     tokio::time::timeout(Duration::from_secs(60), reaped.child_mut().wait())
         .await
         .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
