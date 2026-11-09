@@ -31,7 +31,7 @@ pub(crate) enum Seg {
     all(test, not(feature = "cost-governance")),
     expect(
         dead_code,
-        reason = "the integer, number and word fields are all cost governance fields"
+        reason = "the integer, number and free-text fields are all cost governance fields"
     )
 )]
 pub(crate) enum ValueKind {
@@ -67,6 +67,13 @@ impl FieldSpec {
 
 #[cfg(feature = "cost-governance")]
 const ALERT_ACTIONS: &[&str] = &["log", "notify", "block"];
+
+/// `PolicyAction`'s serde names (lowercase).
+const POLICY_ACTIONS: &[&str] = &["allow", "deny"];
+
+/// `CollusionAction`'s serde names (snake case).
+#[cfg(feature = "firewall")]
+const COLLUSION_ACTIONS: &[&str] = &["off", "observe", "block"];
 
 /// Every setting the UI may change, in the order an edit applies them.
 /// `apply` is what a reload does with a change to that field alone (row F3
@@ -147,6 +154,75 @@ pub(crate) const FIELDS: &[FieldSpec] = &[
         kind: Some(ValueKind::Str {
             max_chars: Some(200),
         }),
+        apply: Apply::Live,
+    },
+    // The Policies screen's scalar settings (ADR-029). Each applies on reload:
+    // the restart comparison masks them (`diff.rs`, `security_restart_only_json`).
+    // Relay detection's action is live only while the detector runs as asked;
+    // otherwise the reload itself reports `security` pending.
+    FieldSpec {
+        id: "security.tool_policy.enabled",
+        path: &[
+            Seg::Key("security"),
+            Seg::Key("tool_policy"),
+            Seg::Key("enabled"),
+        ],
+        kind: Some(ValueKind::Bool),
+        apply: Apply::Live,
+    },
+    FieldSpec {
+        id: "security.tool_policy.default_action",
+        path: &[
+            Seg::Key("security"),
+            Seg::Key("tool_policy"),
+            Seg::Key("default_action"),
+        ],
+        kind: Some(ValueKind::Enum(POLICY_ACTIONS)),
+        apply: Apply::Live,
+    },
+    FieldSpec {
+        id: "security.tool_policy.use_default_deny",
+        path: &[
+            Seg::Key("security"),
+            Seg::Key("tool_policy"),
+            Seg::Key("use_default_deny"),
+        ],
+        kind: Some(ValueKind::Bool),
+        apply: Apply::Live,
+    },
+    #[cfg(feature = "firewall")]
+    FieldSpec {
+        id: "security.firewall.credential_redaction",
+        path: &[
+            Seg::Key("security"),
+            Seg::Key("firewall"),
+            Seg::Key("credential_redaction"),
+        ],
+        kind: Some(ValueKind::Bool),
+        apply: Apply::Live,
+    },
+    #[cfg(feature = "firewall")]
+    FieldSpec {
+        id: "security.firewall.collusion.action",
+        path: &[
+            Seg::Key("security"),
+            Seg::Key("firewall"),
+            Seg::Key("collusion"),
+            Seg::Key("action"),
+        ],
+        kind: Some(ValueKind::Enum(COLLUSION_ACTIONS)),
+        apply: Apply::Live,
+    },
+    FieldSpec {
+        id: "security.sanitize_input",
+        path: &[Seg::Key("security"), Seg::Key("sanitize_input")],
+        kind: Some(ValueKind::Bool),
+        apply: Apply::Live,
+    },
+    FieldSpec {
+        id: "security.ssrf_protection",
+        path: &[Seg::Key("security"), Seg::Key("ssrf_protection")],
+        kind: Some(ValueKind::Bool),
         apply: Apply::Live,
     },
 ];
