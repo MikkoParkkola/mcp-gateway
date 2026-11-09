@@ -348,7 +348,9 @@ fn a_held_lock_past_the_wait_refuses_naming_the_envelope() {
     let dir = tempfile::tempdir().expect("tempdir");
     let lock = dir.path().join(".key-server-email-hmac.lock");
     let _held = take_lock(&lock, std::time::Duration::ZERO).expect("first holder");
-    let err = take_lock(&lock, std::time::Duration::ZERO).expect_err("busy");
+    let Err(err) = take_lock(&lock, std::time::Duration::ZERO) else {
+        panic!("a second holder took a held lock");
+    };
     assert!(
         err.contains("the key-server email HMAC envelope")
             && err.contains(&lock.display().to_string()),
