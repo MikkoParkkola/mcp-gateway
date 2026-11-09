@@ -11,13 +11,13 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::answer::{
     DELIVERY_WINDOW, Delivery, Effect, Findings, Joined, MAX_EVICTED, MAX_PENDING, Searched, Why,
 };
 use super::reader::{Line, Which};
-use super::rows::kind_of;
+use super::rows::{kind_of, str_field};
 use crate::security::transparency_log::signature::{SignatureState, signature_state};
 
 pub(super) use super::reader::Seen;
@@ -43,13 +43,29 @@ pub(super) struct Joiner {
     pub(super) answer_integrity_failed: usize,
 }
 
-fn str_of<'a>(entry: &'a Value, key: &str) -> Option<&'a str> {
-    entry.get(key).and_then(Value::as_str)
+/// The longest a finding's text field is kept: the writer's kinds and parts
+/// are short closed sets, so a longer value is not one of them.
+const FINDING_FIELD_MAX: usize = 128;
+
+/// One finding as the writer shapes it, and no more: `kind`, `severity` and
+/// `where`, each only when it is a string, so a record carrying anything else
+/// (a payload, a nested object) never reaches a row or a manifest.
+fn project_finding(finding: &Value) -> Option<Value> {
+    let object = finding.as_object()?;
+    let kept: Map<String, Value> = ["kind", "severity", "where"]
+        .into_iter()
+        .filter_map(|key| {
+            let text = object.get(key)?.as_str()?;
+            let capped: String = text.chars().take(FINDING_FIELD_MAX).collect();
+            Some((key.to_string(), Value::String(capped)))
+        })
+        .collect();
+    Some(Value::Object(kept))
 }
 
 /// The bounded projection of a delivery record.
 fn project(entry: &Value, unverifiable: bool) -> Delivery {
-    let effect = match str_of(entry, "response_effect").and_then(Effect::parse) {
+    let effect = match str_field(entry, "response_effect").and_then(Effect::parse) {
         Some(e @ (Effect::Delivered | Effect::Annotated | Effect::Rewritten | Effect::Refused)) => {
             e
         }
@@ -57,7 +73,7 @@ fn project(entry: &Value, unverifiable: bool) -> Delivery {
     };
     let findings = match entry.get("response_findings") {
         Some(Value::Array(list)) => Findings::Scanned {
-            list: list.iter().take(32).cloned().collect(),
+            list: list.iter().take(32).filter_map(project_finding).collect(),
             total: entry.get("response_findings_total").and_then(Value::as_u64),
         },
         Some(Value::Null) => Findings::NotScanned,
@@ -95,14 +111,15 @@ impl Joiner {
         if line.log != Which::Invocation || kind_of(line).is_some() {
             return false;
         }
-        let Some(trace) = str_of(&line.entry, "trace_id") else {
+        let Some(trace) = str_field(&line.entry, "trace_id") else {
             return false;
         };
         match self.trust(&line.entry) {
             Err(why) => self.hold_bad(trace, why),
             Ok(unverifiable) => {
-                let is_delivery = str_of(&line.entry, "event") == Some("response_delivery_attempt")
-                    && str_of(&line.entry, "response_stage") == Some("transport_finalized");
+                let is_delivery = str_field(&line.entry, "event")
+                    == Some("response_delivery_attempt")
+                    && str_field(&line.entry, "response_stage") == Some("transport_finalized");
                 if is_delivery {
                     self.hold_record(trace, project(&line.entry, unverifiable));
                 }
@@ -171,7 +188,7 @@ impl Joiner {
 
     /// The join for a call line. Does not count: see [`Self::count`].
     pub(super) fn join(&mut self, line: &Line, seen: Seen) -> Joined {
-        let Some(trace) = str_of(&line.entry, "trace_id") else {
+        let Some(trace) = str_field(&line.entry, "trace_id") else {
             return Joined::NoRecord(Searched::NoTrace);
         };
         if self.overflowed {
