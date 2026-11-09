@@ -1,0 +1,9 @@
+head_sha	55b3693577a385885435f23ad7c16ce04da3933b
+#mutant q7
+mcp_gateway	preview_sandbox::fetch::tests::an_option_before_the_package_refuses	src/preview_sandbox/fetch_tests.rs:72
+#mutant q8
+mcp_gateway	preview_sandbox::fetch::tests::npm_non_registry_specs_refuse	src/preview_sandbox/fetch_tests.rs:23
+#mutant q30
+mcp_gateway	preview_sandbox::fetch::tests::pypi_non_registry_specs_refuse	src/preview_sandbox/fetch_tests.rs:23
+#mutant q16
+mcp_gateway	preview_sandbox::fetch::tests::pypi_extras_are_not_previewed	src/preview_sandbox/fetch_tests.rs:203
