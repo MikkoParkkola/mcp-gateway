@@ -244,7 +244,7 @@ impl UpstreamRecovery for NativeUpstreamTasks {
             };
             // Before the poll: nothing is sent for a task whose secrets
             // changed, so its log never meets an old value.
-            if let Some(withheld) = secrets::withheld(&backend, handle) {
+            if let Some(withheld) = mutant!("M1", None, secrets::withheld(&backend, handle)) {
                 return withheld;
             }
             let deadline = deadline.min(backend.request_timeout());
@@ -265,7 +265,7 @@ impl UpstreamRecovery for NativeUpstreamTasks {
                 // On the terminal answer again: a rotation during the poll.
                 Ok(Ok(response)) => match read_query(response) {
                     answer @ (UpstreamAnswer::Completed(_) | UpstreamAnswer::Failed(_)) => {
-                        secrets::withheld(&backend, handle).unwrap_or(answer)
+                        mutant!("M2", answer, secrets::withheld(&backend, handle).unwrap_or(answer))
                     }
                     answer => answer,
                 },
