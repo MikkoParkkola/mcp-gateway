@@ -47,12 +47,18 @@ on:
         type: boolean
         default: false
 
-# A new push to a pull request cancels that PR's superseded run. Every other
-# event (branch push, tag, dispatch) gets a group of its own run id, so it is
-# never cancelled, and never queued behind or replaced by another run.
+# A new push to a pull request cancels that PR's superseded run. A new push to
+# the release line cancels the run of the tip it replaced: a merge train lands
+# its PRs one by one, and a run per intermediate commit queued about 250 jobs
+# behind every PR's CI. The train already tested the exact landed tree; to find
+# which merge broke a red tip, bisect that train's merges. Do not re-run a
+# superseded release-line push run: it would join this group and cancel the
+# newest tip's run. Every other event (another branch, a tag, a dispatch, which
+# is how the release freeze runs the line) gets a group of its own run id, so
+# it is never cancelled, queued behind or replaced by another run.
 concurrency:
-  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || (github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line' && 'release-line-push') || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
 
 permissions:
   contents: read
