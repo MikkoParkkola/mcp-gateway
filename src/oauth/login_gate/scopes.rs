@@ -52,11 +52,13 @@ tokio::task_local! {
 /// Run a shared metadata fill's `work` with its `mark`: a request the fill
 /// hands to the transport sets it, and every caller that joined the fill reads
 /// it when its own deadline passes (MIK-8046).
-pub(crate) async fn fill_scope<F: std::future::Future>(
+/// A plain function, not an `async fn`: an `async fn` would hold `work` twice
+/// (the argument beside the task-local future that owns it).
+pub(crate) fn fill_scope<F: std::future::Future>(
     mark: Arc<AtomicBool>,
     work: F,
-) -> F::Output {
-    FILL.scope(mark, work).await
+) -> impl std::future::Future<Output = F::Output> {
+    FILL.scope(mark, work)
 }
 
 /// Run the start `work` as one that set out at the gate's cancel `epoch`
@@ -65,12 +67,14 @@ pub(crate) async fn fill_scope<F: std::future::Future>(
 /// task is first scheduled, and shares that cohort's recorded failure at
 /// `begin` instead of opening a second login (MIK-8339). One entry point,
 /// so no start can omit its cohort.
-pub(crate) async fn set_out_with_cohort<F: std::future::Future>(
+/// A plain function, not an `async fn`: an `async fn` would hold `work` twice
+/// (the argument beside the task-local future that owns it).
+pub(crate) fn set_out_with_cohort<F: std::future::Future>(
     epoch: u64,
     cohort: Arc<Cohort>,
     work: F,
-) -> F::Output {
-    SET_OUT.scope((epoch, cohort), work).await
+) -> impl std::future::Future<Output = F::Output> {
+    SET_OUT.scope((epoch, cohort), work)
 }
 
 /// The cohort the current start captured (`None` outside a start). Read
@@ -158,8 +162,12 @@ pub(crate) async fn non_interactive<F: std::future::Future>(work: F) -> F::Outpu
 /// not carry the class either, so a detached step of a Short caller waits the
 /// long budget.
 /// One scope, not two nested ones, so a Short future is no deeper than a non-interactive one.
-pub(crate) async fn short_contention<F: std::future::Future>(work: F) -> F::Output {
-    NON_INTERACTIVE.scope(ContentionClass::Short, work).await
+/// A plain function, not an `async fn`: an `async fn` would hold `work` twice
+/// (the argument beside the task-local future that owns it).
+pub(crate) fn short_contention<F: std::future::Future>(
+    work: F,
+) -> impl std::future::Future<Output = F::Output> {
+    NON_INTERACTIVE.scope(ContentionClass::Short, work)
 }
 
 /// Whether the current task may begin or wait on a login. Read before any

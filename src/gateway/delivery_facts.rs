@@ -281,10 +281,14 @@ fn nested_cell() -> DeliveryFacts {
 }
 
 /// Run `future` with a fresh cell open: one delivery.
-pub(crate) async fn scope<F: std::future::Future>(future: F) -> F::Output {
-    FACTS
-        .scope(RefCell::new(DeliveryFacts::default()), future)
-        .await
+///
+/// A plain function returning the task-local future, not an `async fn`: an
+/// `async fn` would keep `future` beside the task-local future that owns it,
+/// holding the dispatch future twice in every boxed scope.
+pub(crate) fn scope<F: std::future::Future>(
+    future: F,
+) -> impl std::future::Future<Output = F::Output> {
+    FACTS.scope(RefCell::new(DeliveryFacts::default()), future)
 }
 
 /// Run an internal send whose error the caller never receives (a probe that

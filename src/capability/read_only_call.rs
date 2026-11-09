@@ -16,11 +16,13 @@ tokio::task_local! {
 /// Run `call` as a read-only call that also expects, when
 /// `credential_free`, a capability needing no credential: a shared poll
 /// must never run under one sharer's credential.
-pub(crate) async fn read_only_call_as<F: std::future::Future>(
+/// A plain function, not an `async fn`: an `async fn` would hold `call` twice
+/// (the argument beside the task-local future that owns it).
+pub(crate) fn read_only_call_as<F: std::future::Future>(
     credential_free: bool,
     call: F,
-) -> F::Output {
-    READ_ONLY_CALL.scope(credential_free, call).await
+) -> impl std::future::Future<Output = F::Output> {
+    READ_ONLY_CALL.scope(credential_free, call)
 }
 
 /// Whether `capability` has a provider and every one, fallbacks included, is

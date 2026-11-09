@@ -47,8 +47,13 @@ tokio::task_local! {
 }
 
 /// Run `future` with `mark` as this task's submit mark.
-pub(crate) async fn with_submit_mark<F: Future>(mark: Arc<SubmitMark>, future: F) -> F::Output {
-    SUBMIT_MARK.scope(mark, future).await
+/// A plain function, not an `async fn`: an `async fn` would hold `future` twice
+/// (the argument beside the task-local future that owns it).
+pub(crate) fn with_submit_mark<F: Future>(
+    mark: Arc<SubmitMark>,
+    future: F,
+) -> impl Future<Output = F::Output> {
+    SUBMIT_MARK.scope(mark, future)
 }
 
 /// Arm the scoped mark for the task-capability exchange about to be sent. A

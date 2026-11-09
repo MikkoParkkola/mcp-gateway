@@ -467,8 +467,13 @@ pub(crate) fn current_step() -> Option<u32> {
 
 /// Run `future` as playbook step `label` (tests that read `current_step`).
 #[cfg(test)]
-pub(crate) async fn in_step<F: std::future::Future>(label: u32, future: F) -> F::Output {
-    STEP.scope(label, future).await
+/// A plain function, not an `async fn`: an `async fn` would hold `future` twice
+/// (the argument beside the task-local future that owns it).
+pub(crate) fn in_step<F: std::future::Future>(
+    label: u32,
+    future: F,
+) -> impl std::future::Future<Output = F::Output> {
+    STEP.scope(label, future)
 }
 
 /// Build the final output from output mappings or raw step results, and

@@ -435,11 +435,13 @@ tokio::task_local! {
 }
 
 /// Run `future` with `submission` armed for this task and nothing else.
-pub(crate) async fn with_upstream_submission<F: std::future::Future>(
+/// A plain function, not an `async fn`: an `async fn` would hold `future` twice
+/// (the argument beside the task-local future that owns it).
+pub(crate) fn with_upstream_submission<F: std::future::Future>(
     submission: std::sync::Arc<UpstreamSubmission>,
     future: F,
-) -> F::Output {
-    UPSTREAM_SUBMISSION.scope(submission, future).await
+) -> impl std::future::Future<Output = F::Output> {
+    UPSTREAM_SUBMISSION.scope(submission, future)
 }
 
 /// The armed slot for THIS dispatch of `(server, tool)`, or `None`.

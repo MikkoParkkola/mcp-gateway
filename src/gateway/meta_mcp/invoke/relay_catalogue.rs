@@ -48,8 +48,13 @@ tokio::task_local! {
 }
 
 /// Run `read`, a catalogue handler, for `who`.
-pub(crate) async fn as_caller<F: std::future::Future>(who: CatalogueCaller, read: F) -> F::Output {
-    CATALOGUE_CALLER.scope(who, read).await
+/// A plain function, not an `async fn`: an `async fn` would hold `read` twice
+/// (the argument beside the task-local future that owns it).
+pub(crate) fn as_caller<F: std::future::Future>(
+    who: CatalogueCaller,
+    read: F,
+) -> impl std::future::Future<Output = F::Output> {
+    CATALOGUE_CALLER.scope(who, read)
 }
 
 impl MetaMcp {

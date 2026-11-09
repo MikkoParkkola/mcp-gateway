@@ -61,11 +61,13 @@ pub fn current() -> Option<String> {
 ///
 /// Any call to [`current`] from within `future` (or any future it spawns
 /// via `.await`) will return `Some(trace_id.clone())`.
-pub async fn with_trace_id<F, T>(trace_id: String, future: F) -> T
+/// A plain function, not an `async fn`: an `async fn` would hold `future` twice
+/// (the argument beside the task-local future that owns it).
+pub fn with_trace_id<F, T>(trace_id: String, future: F) -> impl std::future::Future<Output = T>
 where
     F: std::future::Future<Output = T>,
 {
-    TRACE_ID.scope(trace_id, future).await
+    TRACE_ID.scope(trace_id, future)
 }
 
 #[cfg(test)]
