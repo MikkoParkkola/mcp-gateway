@@ -1,0 +1,33 @@
+head_sha	b4f4fd724a746e778edde5a7a41147a48ad8d6f2
+#mutant answer-posture-422
+mcp_gateway	gateway::ui::settings::answer_tests::posture	src/gateway/ui/settings_answer_tests.rs:30
+#mutant answer-internal-422
+mcp_gateway	gateway::ui::settings::answer_tests::internal	src/gateway/ui/settings_answer_tests.rs:30
+#mutant answer-shutdown-500
+mcp_gateway	gateway::ui::settings::answer_tests::shutting_down	src/gateway/ui/settings_answer_tests.rs:30
+#mutant postwrite-kind-ignored
+mcp_gateway	config_reload::reload_context::lock_api::tests::k5_posture_kind_with_neutral_text	src/config_reload/reload_context_lock.rs:213
+#mutant beforeapply-posture-mistagged
+mcp_gateway	config_reload::reload_context::refusals::tests::k1_network_posture_kind	src/config_reload/reload_context_refusals.rs:193
+#mutant stale-no-preview
+mcp_gateway	gateway::ui::settings::route_tests::s13_stale	src/gateway/ui/settings_route_tests.rs:352
+#mutant unprovable-no-steps
+mcp_gateway	gateway::ui::settings::route_tests::s6_anchored_key	src/gateway/ui/settings_route_tests.rs:112
+#mutant noauditlog-500
+mcp_gateway	gateway::ui::settings::answer_tests::no_audit_log	src/gateway/ui/settings_answer_tests.rs:30
+mcp_gateway	gateway::ui::settings::route_tests::s14_audit_required	src/gateway/ui/settings_test_support.rs:172
+#mutant restart-no-parent
+mcp_gateway	gateway::ui::settings::route_tests::s8_restart_matches_whole_segments	src/gateway/ui/settings_route_tests.rs:152
+#mutant restart-string-prefix
+mcp_gateway	gateway::ui::settings::route_tests::s8_restart_matches_whole_segments	src/gateway/ui/settings_route_tests.rs:164
+#mutant guard-skipped
+mcp_gateway	gateway::ui::settings::route_tests::s10_non_admin	src/gateway/ui/settings_route_tests.rs:272
+#mutant num-refuses-integer
+mcp_gateway	gateway::ui::settings::route_tests::s12_num_accepts_integer	src/gateway/ui/settings_route_tests.rs:340
+#mutant validate-failed-unsupported
+mcp_gateway	config_reload::reload_context::replace::ui_diff::refusal_tests::k6_failed_is_fixed	src/config_reload/ui_diff_refusal_tests.rs:41
+#mutant store-failed-refused
+mcp_gateway	config_reload::reload_context::replace::ui_save::tests::k7_store_failure_is_failed	src/config_reload/ui_save_tests.rs:613
+mcp_gateway	gateway::ui::settings::route_secret_tests::s28_create_failure	src/gateway/ui/settings_test_support.rs:172
+#mutant busy-no-retry
+mcp_gateway	gateway::ui::settings::answer_tests::busy	src/gateway/ui/settings_answer_tests.rs:31
