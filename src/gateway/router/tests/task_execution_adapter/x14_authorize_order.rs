@@ -133,26 +133,42 @@ async fn an_ungranted_surfaced_task_call_is_refused_before_x14() {
     ungranted_refusal("x14-ga-grant").await;
 }
 
-/// The x14 row's counting, with its timing forced: the withheld sync call's
-/// own record, written after its answer on the slot's task, is parked until
-/// the sync answer is back, then let through. Counting records without
-/// waiting for that write reads the sync record in the task's window.
+/// The x14 row's counting, with CI's timing forced (train 46e and #4753:
+/// `refusal audit records` left 1, right 0). The withheld sync call's own
+/// record, written after its answer on the slot's task, is parked; the task
+/// call's record is parked too, and the sync record is let through only once
+/// the task's is parked, so it lands in the task's window. A count that waits
+/// for the grant writes it started releases each parked write instead, so
+/// every record lands in its own call's window.
 #[tokio::test]
 async fn an_ungranted_refusal_counts_its_late_withheld_record_in_its_own_window() {
+    use crate::gateway::meta_mcp::grant_audit::seams::{
+        hold_next_best_effort_write_for_test as hold_next, settle_waiting_for_test as waiting,
+    };
     let row = armed(false, false, AuditFailurePolicy::BestEffort, surfaced).await;
-    let hold = crate::gateway::meta_mcp::grant_audit::seams::hold_next_best_effort_write_for_test();
-    // Released only while the row's count waits for grant writes to settle:
-    // a count that does not wait reads the sync window with the record parked.
+    let sync_hold = hold_next();
     let release = async {
-        hold.held().await;
-        while !crate::gateway::meta_mcp::grant_audit::seams::settle_waiting_for_test() {
+        sync_hold.held().await;
+        let task_hold = hold_next();
+        // The sync record goes either to a count waiting for it, or into the
+        // task's window once the task's record is parked.
+        while !waiting() && !task_hold.has_held() {
             tokio::task::yield_now().await;
         }
-        hold.release();
+        sync_hold.release();
+        task_hold.held().await;
+        while !waiting() {
+            tokio::task::yield_now().await;
+        }
+        task_hold.release();
+        std::future::pending::<()>().await;
     };
     let (sync, task) = (by_surfaced_name(1, PERSONAL), by_surfaced_name(2, PERSONAL));
     let counted = refused_like_sync(&row, sync, as_task(task, "x14-ga-late"));
-    let ((), _) = tokio::join!(release, counted);
+    tokio::select! {
+        _ = counted => {}
+        () = release => unreachable!("the releaser never finishes"),
+    }
 }
 
 #[tokio::test]
