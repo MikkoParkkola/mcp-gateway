@@ -1,0 +1,434 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! A gateway run as another gateway's stdio backend stops its own stdio backends
+//! when the parent stops, even while a call is still in flight: the parent's dropped call
+//! cancels the inner's dispatch, so the inner is not busy at EOF and stops its backends
+//! in time. Regression pins: a leaf that ignores EOF and SIGTERM must still be gone.
+#![cfg(unix)]
+
+use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
+use serde_json::{Value, json};
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+    time::Duration,
+};
+use tokio::{io::AsyncWriteExt as _, time::Instant};
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+#[path = "common/pids.rs"]
+mod pids;
+#[path = "common/yaml.rs"]
+mod yaml;
+const PROTOCOL_VERSION: &str = "2025-11-25";
+const READY_BOUND: Duration = Duration::from_secs(60);
+/// How long a gateway's stop may take before its leaves must be gone: above the 30 s parent timeout, with slack for a loaded host.
+const STOP_BOUND: Duration = Duration::from_secs(45);
+const LEAF_SCRIPT: &str = r#"import json, os, signal, subprocess, sys, time
+name = sys.argv[1]
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with open("leaf-" + name + ".pid", "w") as f:
+    f.write(str(os.getpid()))
+# A descendant in the leaf's process group. It inherits the ignored SIGTERM,
+# so only the gateway's kill of the whole group ends it.
+grandchild = subprocess.Popen(["sleep", "600"])
+with open("leaf-" + name + ".grandchild.pid", "w") as f:
+    f.write(str(grandchild.pid))
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg:
+        continue
+    method = msg.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {"tools": {}},
+                  "serverInfo": {"name": name, "version": "1"}}
+    elif method == "tools/list":
+        result = {"tools": [{"name": "hold", "inputSchema": {"type": "object"},
+                             "annotations": {"readOnlyHint": True}}]}
+    elif method == "tools/call" and msg["params"]["name"] == "hold":
+        open("called-" + name, "w").close()
+        time.sleep(600)
+        continue
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+time.sleep(600)
+"#;
+
+fn base_config(root: &Path, name: &str) -> Config {
+    let mut config = Config::default();
+    config.auth.enabled = false;
+    config.capabilities.enabled = false;
+    config.cache.default_ttl = Duration::ZERO;
+    config.tasks.store_dir = root.join(format!("{name}-tasks")).display().to_string();
+    config
+}
+fn backend(root: &Path, command: String) -> BackendConfig {
+    BackendConfig {
+        enabled: true,
+        timeout: Duration::from_secs(120),
+        transport: TransportConfig::Stdio {
+            command,
+            cwd: Some(root.display().to_string()),
+            protocol_version: None,
+        },
+        ..BackendConfig::default()
+    }
+}
+fn save(root: &Path, name: &str, config: &Config) -> PathBuf {
+    let path = root.join(name);
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &path,
+        yaml::to_string(config).expect("yaml"),
+    )
+    .expect("config");
+    path
+}
+fn write_inner_config(root: &Path, leaves: &[&str]) -> PathBuf {
+    std::fs::write(root.join("leaf.py"), LEAF_SCRIPT).expect("leaf script");
+    let mut config = base_config(root, "inner");
+    config.server.shutdown_timeout = Duration::from_secs(8);
+    for name in leaves {
+        config.backends.insert(
+            (*name).into(),
+            backend(root, format!("python3 -u leaf.py {name}")),
+        );
+    }
+    save(root, "inner.yaml", &config)
+}
+fn write_outer_config(root: &Path, inner: &Path, seconds: u64) -> PathBuf {
+    // Record the inner before exec so cleanup also covers failure during warm start.
+    std::fs::write(root.join("inner.py"), "import os, sys\nwith open('inner.pid', 'w') as f: f.write(str(os.getpid()))\nos.execv(sys.argv[1], sys.argv[1:])\n").expect("launcher");
+    let mut config = base_config(root, "outer");
+    config.server.host = "127.0.0.1".into();
+    config.server.port = gateway_bin::ANY_PORT;
+    config.server.shutdown_timeout = Duration::from_secs(seconds);
+    let mut inner_backend = backend(
+        root,
+        format!(
+            "python3 inner.py \"{}\" --config \"{}\" serve --stdio",
+            gateway_bin::path(),
+            inner.display()
+        ),
+    );
+    std::fs::create_dir_all(root.join("inner-home")).expect("inner home");
+    inner_backend
+        .env
+        .insert("HOME".into(), root.join("inner-home").display().to_string());
+    config.backends.insert("inner".into(), inner_backend);
+    save(root, "gateway.yaml", &config)
+}
+fn logs(root: &Path) -> String {
+    std::fs::read_to_string(root.join("gateway.log")).unwrap_or_default()
+}
+async fn post(
+    client: &reqwest::Client,
+    base: &str,
+    session: Option<&str>,
+    body: &Value,
+) -> Result<(String, Option<String>), String> {
+    let mut request = client
+        .post(format!("{base}/mcp"))
+        .header("content-type", "application/json")
+        .header("accept", "application/json")
+        .header("mcp-protocol-version", PROTOCOL_VERSION);
+    if let Some(id) = session {
+        request = request.header("mcp-session-id", id);
+    }
+    let response = request.json(body).send().await.map_err(|e| e.to_string())?;
+    let session = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    Ok((response.text().await.map_err(|e| e.to_string())?, session))
+}
+fn initialize() -> Value {
+    json!({"jsonrpc":"2.0", "id":0, "method":"initialize", "params": {
+    "protocolVersion":PROTOCOL_VERSION, "capabilities":{}, "clientInfo":{"name":"StopBudgetTest", "version":"1"}}})
+}
+async fn open_session(client: &reqwest::Client, base: &str, root: &Path) -> String {
+    let (body, session) = post(client, base, None, &initialize())
+        .await
+        .expect("initialize");
+    let session = session.unwrap_or_else(|| panic!("no session: {body}\n{}", logs(root)));
+    post(
+        client,
+        base,
+        Some(&session),
+        &json!({"jsonrpc":"2.0", "method":"notifications/initialized"}),
+    )
+    .await
+    .expect("initialized");
+    session
+}
+async fn ready_port(client: &reqwest::Client, root: &Path) -> u16 {
+    let deadline = Instant::now() + READY_BOUND;
+    loop {
+        if let Some(port) = gateway_bin::logged_port(&root.join("gateway.log"))
+            && client
+                .get(format!("http://127.0.0.1:{port}/health"))
+                .timeout(Duration::from_secs(10))
+                .send()
+                .await
+                .is_ok()
+        {
+            return port;
+        }
+        assert!(Instant::now() < deadline, "not ready\n{}", logs(root));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+fn invoke(name: &str, id: usize) -> Value {
+    let args = json!({"server":name, "tool":"hold", "arguments":{}});
+    let args = json!({"server":"inner", "tool":"gateway_invoke", "arguments":args});
+    json!({"jsonrpc":"2.0", "id":id, "method":"tools/call", "params":{"name":"gateway_invoke", "arguments":args}})
+}
+// Groups are isolated by the transport, so guard each recorded group as well.
+// Only for a red row: a row that saw every process gone forgets it, so no
+// signal goes to a pid or group the system may since have reused.
+struct KillGroup {
+    pid: u32,
+    root: PathBuf,
+}
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        let kill = |pid: u32| {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", "--", &format!("-{pid}")])
+                .stderr(Stdio::null())
+                .status();
+        };
+        kill(self.pid);
+        for name in [
+            "inner.pid",
+            "leaf-leaf.pid",
+            "leaf-leaf_a.pid",
+            "leaf-leaf_b.pid",
+        ] {
+            if let Ok(text) = std::fs::read_to_string(self.root.join(name))
+                && let Ok(pid) = text.trim().parse()
+            {
+                kill(pid);
+                drop(pids::KillPid(pid));
+            }
+        }
+    }
+}
+fn read_pid(root: &Path, file: &str) -> u32 {
+    let text = std::fs::read_to_string(root.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+    text.trim()
+        .parse()
+        .unwrap_or_else(|e| panic!("{file}: {e}"))
+}
+/// The action under test: a plain SIGTERM to the gateway alone. Reaped
+/// signals nothing; it only reaps after the assertions.
+fn sigterm(pid: u32) {
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .expect("kill")
+            .success()
+    );
+}
+
+async fn run(seconds: u64, leaves: &[&str]) {
+    let temp = tempfile::tempdir().expect("temp root");
+    let root = temp.path().to_path_buf();
+    let root = root.as_path();
+    let inner = write_inner_config(root, leaves);
+    let config = write_outer_config(root, &inner, seconds);
+    let log = std::fs::File::create(root.join("gateway.log")).expect("log");
+    let mut command = tokio::process::Command::from(gateway_bin::command(
+        &root.join("home"),
+        gateway_bin::Inherit::Environment,
+    ));
+    command
+        .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
+        .current_dir(root)
+        .arg("--config")
+        .arg(config);
+    let child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(log.try_clone().expect("log handle")))
+        .stderr(Stdio::from(log))
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn() // spawn-check: waits for exit: the SIGTERM under test, then a bounded child wait; Reaped reaps after; KillGroup covers panic
+        .expect("gateway");
+    let mut reaped = gateway_bin::Reaped::new(child);
+    let pid = reaped.child_mut().id().expect("pid");
+    let cleanup = KillGroup {
+        pid,
+        root: root.into(),
+    };
+    let stdin = reaped.child_mut().stdin.take().expect("stdin");
+    let mut calls = tokio::task::JoinSet::new();
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{}", ready_port(&client, root).await);
+    let session = tokio::time::timeout(READY_BOUND, open_session(&client, &base, root))
+        .await
+        .unwrap_or_else(|_| panic!("session open deadline\n{}", logs(root)));
+    for (id, name) in leaves.iter().enumerate() {
+        let (client, base, session, message) = (
+            client.clone(),
+            base.clone(),
+            session.clone(),
+            invoke(name, id + 1),
+        );
+        calls.spawn(async move { post(&client, &base, Some(&session), &message).await });
+    }
+    let ready_by = Instant::now() + READY_BOUND;
+    while leaves
+        .iter()
+        .any(|name| !root.join(format!("called-{name}")).exists())
+    {
+        assert!(
+            Instant::now() < ready_by,
+            "hold never started\n{}",
+            logs(root)
+        );
+        assert!(
+            calls.try_join_next().is_none(),
+            "call returned before stop\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // The inner gateway, each leaf and its grandchild: the grandchild is gone
+    // only if the gateway killed the leaf's whole process group.
+    let leaves: Vec<u32> = std::iter::once("inner.pid".to_owned())
+        .chain(leaves.iter().flat_map(|name| {
+            [
+                format!("leaf-{name}.pid"),
+                format!("leaf-{name}.grandchild.pid"),
+            ]
+        }))
+        .map(|file| read_pid(root, &file))
+        .collect();
+    assert!(calls.try_join_next().is_none(), "hold returned before stop");
+    assert!(
+        leaves.iter().all(|pid| pids::alive(*pid)),
+        "inner and leaves must be live at stop"
+    );
+    let deadline = Instant::now() + STOP_BOUND;
+    sigterm(pid);
+    tokio::time::timeout_at(deadline, reaped.child_mut().wait())
+        .await
+        .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
+        .expect("gateway exit");
+    while leaves.iter().any(|pid| pids::alive(*pid)) {
+        assert!(
+            Instant::now() < deadline,
+            "inner or leaf outlived parent stop budget: {leaves:?}\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Safety net only: the gateway has already exited, so this sends no signal.
+    reaped.reap().await;
+    std::mem::forget(cleanup);
+    drop(stdin);
+}
+
+/// A busy inner stops its leaf within the 9 s parent budget plus slack.
+/// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
+#[tokio::test]
+async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
+    run(9, &["leaf"]).await;
+}
+/// The same ownership claim holds with a 30 s parent budget.
+/// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
+#[tokio::test]
+async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it_30s() {
+    run(30, &["leaf"]).await;
+}
+/// Both busy leaves stop within one 9 s parent budget plus 15 s slack.
+/// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
+#[tokio::test]
+async fn a_busy_nested_gateway_stops_two_leaves_within_one_deadline() {
+    run(9, &["leaf_a", "leaf_b"]).await;
+}
+
+/// A SIGTERM to a stdio-mode gateway (what systemd or docker stop sends) leaves no
+/// backend running once the gateway has exited, even a backend that ignores EOF
+/// and SIGTERM and has a call in flight. Red if the gateway's teardown stops killing
+/// what its backends' graceful stop left.
+#[tokio::test]
+async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
+    let temp = tempfile::tempdir().expect("temp root");
+    let root = temp.path().to_path_buf();
+    let root = root.as_path();
+    let config = write_inner_config(root, &["leaf"]);
+    let log = std::fs::File::create(root.join("gateway.log")).expect("log");
+    let child = tokio::process::Command::from(gateway_bin::command(
+        &root.join("home"),
+        gateway_bin::Inherit::Environment,
+    ))
+    .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
+    .current_dir(root)
+    .arg("--config")
+    .arg(config)
+    .args(["serve", "--stdio"])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::from(log.try_clone().expect("log handle")))
+    .stderr(Stdio::from(log))
+    .process_group(0)
+    .kill_on_drop(true)
+    .spawn() // spawn-check: waits for exit: the SIGTERM under test, then a bounded child wait; Reaped reaps after; KillGroup covers panic
+    .expect("gateway");
+    let mut reaped = gateway_bin::Reaped::new(child);
+    let pid = reaped.child_mut().id().expect("pid");
+    let cleanup = KillGroup {
+        pid,
+        root: root.into(),
+    };
+    let mut stdin = reaped.child_mut().stdin.take().expect("stdin");
+    for message in [
+        initialize(),
+        json!({"jsonrpc":"2.0", "method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{
+            "name":"gateway_invoke", "arguments":{"server":"leaf", "tool":"hold", "arguments":{}}
+        }}),
+    ] {
+        stdin
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .expect("write stdio");
+    }
+    let ready_by = Instant::now() + READY_BOUND;
+    while !root.join("called-leaf").exists() {
+        assert!(
+            Instant::now() < ready_by,
+            "hold never started\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let leaf = read_pid(root, "leaf-leaf.pid");
+    let grandchild = read_pid(root, "leaf-leaf.grandchild.pid");
+    assert!(
+        pids::alive(leaf) && pids::alive(grandchild),
+        "leaf and its grandchild must be live at stop\n{}",
+        logs(root)
+    );
+    let deadline = Instant::now() + STOP_BOUND;
+    sigterm(pid);
+    tokio::time::timeout_at(deadline, reaped.child_mut().wait())
+        .await
+        .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
+        .expect("gateway exit");
+    while pids::alive(leaf) || pids::alive(grandchild) {
+        assert!(
+            Instant::now() < deadline,
+            "leaf {leaf} or its grandchild {grandchild} still running after gateway exited\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Safety net only: the gateway has already exited, so this sends no signal.
+    reaped.reap().await;
+    std::mem::forget(cleanup);
+    drop(stdin);
+}
