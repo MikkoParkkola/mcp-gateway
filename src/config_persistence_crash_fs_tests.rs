@@ -216,3 +216,27 @@ fn an_unhooked_replacement_then_flush_keeps_the_flushed_bytes() {
     crash_fs::cut(dir.path(), Mode::KeepRenameDropData { seed: 3 });
     assert_eq!(std::fs::read(&path).expect("read"), FLUSHED);
 }
+
+/// C10: red oracle: a byte-range lock on a file that is not the gateway's
+/// lock sidecar stops arming by name; a harness that skipped every locked
+/// file would arm silently and fail this assertion.
+#[cfg(windows)]
+#[test]
+fn a_foreign_locked_file_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let foreign = dir.path().join("other.yaml");
+    std::fs::write(&foreign, OLD).expect("seed");
+    let held = std::fs::File::open(&foreign).expect("open");
+    held.lock().expect("byte-range lock");
+    let path = dir.path().to_path_buf();
+    let caught = std::panic::catch_unwind(move || drop(crash_fs::arm(&path)));
+    let message = caught
+        .err()
+        .and_then(|e| e.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    assert!(
+        message.contains("other.yaml"),
+        "arm over a foreign locked file: {message:?}"
+    );
+    drop(held);
+}

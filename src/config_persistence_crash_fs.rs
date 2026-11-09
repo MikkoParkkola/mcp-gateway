@@ -10,8 +10,8 @@
 //! A file never data-synced or snapshotted is absent under `DropAll`. Arming
 //! treats existing bytes as durable. A new, unhooked file at a directory
 //! snapshot is assumed data-synced, as the crate's other writers are.
-//! A file the OS will not let us read because a byte-range lock is held on
-//! it (the config lock file on Windows) is outside the model: it is never
+//! The gateway's own config lock sidecar, unreadable on Windows while its
+//! byte-range lock is held, is outside the model: it is never
 //! projected, removed or rewritten.
 //!
 //! Generations use handle identity: (dev, ino) on Unix and
@@ -77,12 +77,30 @@ fn key(dir: &Path) -> PathBuf {
 /// Windows `ERROR_LOCK_VIOLATION`: a byte-range lock is held on the file.
 const LOCK_VIOLATION: i32 = 33;
 
-/// The file's bytes, or `None` when a byte-range lock forbids the read.
-fn read_unlocked(file: &File) -> Option<Vec<u8>> {
+/// Whether `path` is the gateway's own lock sidecar for a config file in the
+/// same directory (`lock::lock_path`), the one file the overlay may find
+/// locked.
+fn is_config_lock(path: &Path) -> bool {
+    let Some(config) = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix('.'))
+        .and_then(|n| n.strip_suffix(".lock"))
+    else {
+        return false;
+    };
+    let config = path.with_file_name(config);
+    config.is_file() && super::lock::lock_path(&config) == path
+}
+
+/// The file's bytes, or `None` for the gateway's own lock sidecar while its
+/// byte-range lock forbids the read. Any other unreadable file panics by
+/// name, so a real config file another process holds is never dropped.
+fn read_unlocked(file: &File, path: &Path) -> Option<Vec<u8>> {
     match read_bytes(file) {
         Ok(bytes) => Some(bytes),
-        Err(e) if e.raw_os_error() == Some(LOCK_VIOLATION) => None,
-        Err(e) => panic!("crash_fs: read file: {e:?}"),
+        Err(e) if e.raw_os_error() == Some(LOCK_VIOLATION) && is_config_lock(path) => None,
+        Err(e) => panic!("crash_fs: read {}: {e:?}", path.display()),
     }
 }
 
@@ -107,9 +125,10 @@ pub(crate) fn arm(dir: &Path) -> Armed {
             .file_name()
             .into_string()
             .expect("crash_fs: UTF-8 name");
-        let file = File::open(entry.path()).expect("crash_fs: open file");
+        let path = entry.path();
+        let file = File::open(&path).expect("crash_fs: open file");
         let generation = file_id(&file).expect("crash_fs: file identity");
-        let Some(bytes) = read_unlocked(&file) else {
+        let Some(bytes) = read_unlocked(&file, &path) else {
             continue;
         };
         overlay.names.insert(name.clone(), generation);
@@ -142,9 +161,10 @@ pub(crate) fn cut(dir: &Path, mode: Mode) {
                 .file_name()
                 .into_string()
                 .expect("crash_fs: UTF-8 name");
-            let file = File::open(entry.path()).expect("crash_fs: open file");
+            let path = entry.path();
+            let file = File::open(&path).expect("crash_fs: open file");
             let generation = file_id(&file).expect("crash_fs: file identity");
-            let Some(bytes) = read_unlocked(&file) else {
+            let Some(bytes) = read_unlocked(&file, &path) else {
                 continue;
             };
             durable.current.insert(name.clone(), generation);
@@ -215,10 +235,11 @@ pub(super) fn note_dir_synced(dir: &Path) {
             .file_name()
             .into_string()
             .expect("crash_fs: UTF-8 name");
-        let file = File::open(entry.path()).expect("crash_fs: open file");
+        let path = entry.path();
+        let file = File::open(&path).expect("crash_fs: open file");
         let generation = file_id(&file).expect("crash_fs: file identity");
         if let std::collections::btree_map::Entry::Vacant(entry) = overlay.data.entry(generation) {
-            let Some(bytes) = read_unlocked(&file) else {
+            let Some(bytes) = read_unlocked(&file, &path) else {
                 continue;
             };
             entry.insert(bytes);
