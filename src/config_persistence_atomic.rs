@@ -102,7 +102,7 @@ fn write_atomic_observed(
         return Err(e);
     }
     #[cfg(test)]
-    let staged = super::crash_fs::stage(&target, &scratch, bytes);
+    let staged = mutant!("stage-noop", None, super::crash_fs::stage(&target, &scratch, bytes));
     observe(&file);
     #[cfg(unix)]
     if matches!(mode, FileMode::Inherit)
