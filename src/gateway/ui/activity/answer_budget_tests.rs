@@ -43,10 +43,15 @@ fn r43_an_unadvanced_page_may_pass_its_budget_by_the_record_cap_at_most() {
     assert!(first.bytes_examined <= 3 * MIB + ASSEMBLY_WINDOW);
     let mut cursor = first.next;
     let mut reached_call = first.lines.iter().any(|l| l.entry["trace_id"] == "gw-c");
-    while let Some(c) = cursor {
+    for _ in 0..64 {
+        let Some(c) = cursor.take() else { break };
         let next = page(&fx, Some(&c), 8 * MIB);
         reached_call |= next.lines.iter().any(|l| l.entry["trace_id"] == "gw-c");
+        assert!(
+            !next.lines.is_empty() || next.next.as_ref() != Some(&c),
+            "a page returned no row and the same cursor"
+        );
         cursor = next.next;
     }
-    assert!(reached_call);
+    assert!(cursor.is_none() && reached_call);
 }
