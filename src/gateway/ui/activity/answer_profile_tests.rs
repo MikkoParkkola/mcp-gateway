@@ -30,7 +30,7 @@ fn report(name: &str, run: u32, m: Measured, rows: u64) {
 }
 
 /// The whole log read newest first, `keep` deciding nothing is a match.
-fn scan(fx: &Fixture, fold: bool) {
+pub(super) fn scan(fx: &Fixture, fold: bool) {
     let joiner = RefCell::new(Joiner::new(None));
     let limits = Limits {
         matches: 100,
