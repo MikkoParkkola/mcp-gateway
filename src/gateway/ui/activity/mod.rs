@@ -109,7 +109,7 @@ fn logs(state: &AppState) -> Option<Logs> {
 /// reload changes the configured key, not the running logger's, so a key
 /// loaded but not yet running would read every row as invalid.
 fn verification_secret(live: &crate::config_reload::LiveConfig) -> Option<Vec<u8>> {
-    let secret = &live.running().security.transparency_log.shared_secret;
+    let secret = &mutant!("q43", live.generation().config().security.transparency_log.shared_secret.clone(), live.running().security.transparency_log.shared_secret.clone());
     (!secret.is_empty()).then(|| secret.clone().into_bytes())
 }
 
@@ -387,7 +387,7 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         "rows": rows,
         // Log-wide, even when every row here is valid.
         "signing_anchor": {
-            "invocation": check.report(reader::Which::Invocation),
+            "invocation": mutant!("q42", "ok", check.report(reader::Which::Invocation)),
             "governance": check.report(reader::Which::Governance),
         },
         "next_cursor": page.next.as_ref().map(cursor::encode),
