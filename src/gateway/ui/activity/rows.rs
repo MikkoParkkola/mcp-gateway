@@ -92,7 +92,11 @@ impl<'a> Check<'a> {
                 },
                 None => LinePos::Newest,
             };
-            mutant!("q3", sigstart::Placed::Invalid("sig_missing"), anchor.place(path, pos, &mut self.checked.borrow_mut()))
+            mutant!(
+                "q3",
+                sigstart::Placed::Invalid("sig_missing"),
+                anchor.place(path, pos, &mut self.checked.borrow_mut())
+            )
         })
     }
 }
