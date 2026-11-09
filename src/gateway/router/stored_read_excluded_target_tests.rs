@@ -180,13 +180,13 @@ fn backend(gw: &Gateway) -> std::sync::Arc<crate::backend::Backend> {
 }
 
 fn identity() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alpha".to_string(),
+        "alpha@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://issuer.example.invalid".to_string(),
+    )
 }
 
 /// Drop the slot by a real idle eviction and re-attach its upstream, so the

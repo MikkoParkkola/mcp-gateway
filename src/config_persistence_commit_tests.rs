@@ -542,3 +542,90 @@ fn a_target_deleted_after_the_read_back_is_repointed() {
         "{got:?}"
     );
 }
+
+/// Each power-loss mode gets its own fixture and armed directory.
+fn crash_modes() -> [super::crash_fs::Mode; 3] {
+    use super::crash_fs::Mode;
+    [
+        Mode::DropAll,
+        Mode::KeepAll,
+        Mode::KeepRenameDropData { seed: 3 },
+    ]
+}
+
+/// A22: red oracle: token bytes survive every mode; restoring the immutable
+/// arming snapshot would return OLD instead of the token's NEW bytes.
+#[test]
+fn a_token_survives_power_loss_in_every_mode() {
+    for mode in crash_modes() {
+        let (_dir, path) = config();
+        let held = lock(&path);
+        let _armed = super::crash_fs::arm_config(&held.target);
+        let token = commit(&held, &path, Action::Forward, NEW).expect("token");
+        super::crash_fs::cut(held.target.parent().unwrap(), mode);
+        let bytes = std::fs::read(&path).expect("read after cut");
+        assert_eq!(bytes, NEW, "{mode:?}");
+        assert_eq!(&FileRevision::of(&bytes), token.revision(), "{mode:?}");
+    }
+}
+
+/// A23: red oracle: a no-op cut wrongly keeps NEW under `DropAll`; restoring
+/// the arming snapshot wrongly loses NEW in either keep mode.
+#[test]
+fn a_sync_failure_is_lost_under_drop_all_kept_under_keep_all() {
+    for mode in crash_modes() {
+        let (_dir, path) = config();
+        let held = lock(&path);
+        let _armed = super::crash_fs::arm_config(&held.target);
+        let _fault = fault::set(&path, Fault::FailDirSync(SyncKey::Commit(Action::Forward)));
+        let got = commit(&held, &path, Action::Forward, NEW);
+        assert!(matches!(got, Err(NotDurable::Sync(_))), "{got:?}");
+        assert_eq!(fault::fired(&path), 1, "sync failure reached");
+        super::crash_fs::cut(held.target.parent().unwrap(), mode);
+        let expected = match mode {
+            super::crash_fs::Mode::DropAll => OLD,
+            _ => NEW,
+        };
+        assert_eq!(
+            std::fs::read(&path).expect("read after cut"),
+            expected,
+            "{mode:?}"
+        );
+    }
+}
+
+/// A24: red oracle: verified in-place bytes survive all modes; the immutable
+/// arming-snapshot stub loses them. Removing flush must lose them in the model.
+#[test]
+fn verify_flushes_bytes_written_without_sync() {
+    for mode in crash_modes() {
+        let (_dir, path) = config();
+        let held = lock(&path);
+        let _armed = super::crash_fs::arm_config(&held.target);
+        std::fs::write(&path, NEW).expect("unsynced in-place write");
+        let token = verify(&held, &path, &FileRevision::of(NEW)).expect("token");
+        super::crash_fs::cut(held.target.parent().unwrap(), mode);
+        let bytes = std::fs::read(&path).expect("read after cut");
+        assert_eq!(bytes, NEW, "{mode:?}");
+        assert_eq!(&FileRevision::of(&bytes), token.revision(), "{mode:?}");
+    }
+}
+
+/// A25 (register 1167): red oracle: deletion at `BeforeRecheck` is
+/// Refused(Other) naming "deleted", never Repointed because verify wrote nothing.
+#[test]
+fn verify_after_a_delete_between_read_back_and_recheck_is_refused() {
+    let (_dir, path) = config();
+    let held = lock(&path);
+    let _armed = fault::set(
+        &path,
+        hook(HookAt::BeforeRecheck, |t| {
+            std::fs::remove_file(t).expect("delete");
+        }),
+    );
+    let got = verify(&held, &path, &FileRevision::of(OLD));
+    assert!(
+        matches!(&got, Err(NotDurable::Refused(Refusal::Other(why))) if why.contains("deleted")),
+        "{got:?}"
+    );
+}

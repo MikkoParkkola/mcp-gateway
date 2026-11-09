@@ -25,6 +25,11 @@ pub(crate) use meta_mcp::admission::EXECUTION_DIRECTIVES;
 /// Where the CLI runner notes a child it started for the call's invocation
 /// record (MIK-7926.FIX.2), without `meta_mcp` becoming crate-visible.
 pub(crate) use meta_mcp::invoke::audit::note_process;
+/// Test seams for the send timer's rows outside `gateway`.
+/// Times one backend send for the web UI's latency history.
+pub(crate) use meta_mcp::invoke::send_timer::SendTimer;
+#[cfg(test)]
+pub(crate) use meta_mcp::invoke::send_timer::seam as send_timer_seam;
 /// The per-delivery write record, shared with the response and idempotency
 /// caches that store it beside an answer (MIK-7991).
 pub(crate) mod delivery_facts;
@@ -87,6 +92,8 @@ mod router;
 pub(crate) mod routes;
 #[cfg(test)]
 mod routes_tests;
+#[cfg(all(test, feature = "webui"))]
+mod stable_ui_routes_tests;
 /// The one constructor that turns a verified identity into a grant subject,
 /// re-exported so the `MIK-7334.CATALOGUE.1` prefix cells can drive it WITHOUT
 /// `router` itself becoming crate-visible. Same shape as

@@ -48,7 +48,7 @@ fn failures(answers: &[(&str, Raw)], drop_header: Option<&str>, id: i64) -> Vec<
 /// P0 (ORDER.1/.2 kill-or-proceed): the direct route, three targets.
 /// (a) `alpha`, a counting backend; (b) `dead`, an HTTP backend whose socket
 /// is bound but never listening, so connecting is refused (as
-/// `tests/mik_7272_sub4_adr012_acs.rs` `pre_dispatch_failure_releases_its_key`
+/// `src/gateway/router/direct_adr012_tests.rs` `pre_dispatch_failure_releases_its_key`
 /// builds it); (c) `nope`, no backend. Kill: all three byte-identical
 /// (status, every header, body), -32003 / 400 / id 7, and (a) counted zero
 /// backend requests. Anything else proceeds. The fixture is the auth-off

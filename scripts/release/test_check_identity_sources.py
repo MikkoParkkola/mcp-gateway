@@ -55,6 +55,16 @@ class Shapes(unittest.TestCase):
                     "mod a;\n")
         self.assertIn("src/a.rs:1", cis.violations(root)[0])
 
+    def test_a_literal_in_the_old_checked_constructor_file_fails(self):
+        # The allow-list names the constructor's new file only; the same fn
+        # name in the file it moved out of is no longer a listed site.
+        root = tree({"src/key_server/oidc.rs": "mod verified;\npub use verified::VerifiedIdentity;\n"
+                                               "#[path = \"oidc_identity.rs\"]\nmod identity;\n",
+                     "src/key_server/oidc_identity.rs": ORACLE.replace("Self {", "VerifiedIdentity {")})
+        found = cis.violations(root)
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("src/key_server/oidc_identity.rs:3", found[0])
+
     def test_a_type_alias_fails(self):
         root = tree({"src/a.rs": "type Vi = VerifiedIdentity;\nfn f() -> Vi { Vi { subject: s } }\n"},
                     "mod a;\n")
