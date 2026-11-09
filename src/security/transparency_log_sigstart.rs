@@ -141,6 +141,7 @@ fn mac(body: &SigStart, secret: &[u8]) -> io::Result<String> {
     // The log has one secret and no key rotation, so no key id is bound;
     // the domain prefix keeps this MAC apart from the entry and `.hwm` ones.
     let digest = sha256_raw(format!("sigstart|{canonical}").as_bytes());
+    // invariant: HMAC-SHA256 takes a key of any length, so this cannot fail.
     let mut m = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
     m.update(&digest);
     Ok(hex::encode(m.finalize().into_bytes()))
