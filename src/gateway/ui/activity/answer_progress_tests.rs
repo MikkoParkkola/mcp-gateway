@@ -14,10 +14,17 @@ use crate::security::transparency_log::pager::ASSEMBLY_WINDOW;
 const MIB: u64 = 1 << 20;
 
 fn page(fx: &Fixture, gov: Option<&std::path::Path>, cursor: Option<&Cursor>, bytes: u64) -> Page {
-    let limits = Limits {
-        matches: 10_000,
-        bytes,
-    };
+    page_of(fx, gov, cursor, bytes, 10_000)
+}
+
+fn page_of(
+    fx: &Fixture,
+    gov: Option<&std::path::Path>,
+    cursor: Option<&Cursor>,
+    bytes: u64,
+    matches: usize,
+) -> Page {
+    let limits = Limits { matches, bytes };
     let look = Look::Carried(Seen {
         above: 0,
         head_covered: true,
@@ -80,9 +87,10 @@ fn r43c_two_logs_with_a_big_newest_record_page_to_the_end() {
 #[test]
 fn r43e_a_resume_with_under_five_mib_still_advances() {
     let fx = Fixture::new(None);
-    fx.call("gw-c");
     pad(&fx);
-    let first = page(&fx, None, None, 3 * MIB);
+    fx.call("gw-c");
+    // One row, so the cursor sits just above the 2 MiB record.
+    let first = page_of(&fx, None, None, 8 * MIB, 1);
     let cursor = first.next.expect("resumable");
     let second = page(&fx, None, Some(&cursor), 4 * MIB + MIB / 2);
     assert!(

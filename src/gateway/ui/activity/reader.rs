@@ -235,20 +235,24 @@ impl LogTail {
             };
             // One page budget. The window and the pager's re-read for a line
             // longer than the window are charged together, so assembly runs
-            // only when both fit what is left. A log this page has taken
-            // nothing from may overshoot instead, so paging always advances:
-            // it reads one window of ASSEMBLY_WINDOW (the record cap plus a
-            // newline) at once, so its peak is at most that past the budget
-            // already spent, per log. Past that, the page ends resumable.
+            // up front only when both fit what is left. A log this page has
+            // taken nothing from reads the window within what is left and,
+            // when that holds no line start, assembles the one record anyway:
+            // paging always advances. The peak is the window within the
+            // budget left plus one ASSEMBLY_WINDOW (the record cap plus a
+            // newline): at most that past the budget, per log. A log that has
+            // advanced keeps the strict budget and the page ends resumable.
             let remaining = budget.saturating_sub(*spent);
             let assemble = remaining >= WINDOW + ASSEMBLY_WINDOW;
-            let (tail, read) = if assemble {
-                tail_window_assembled(file, self.end, WINDOW)?
-            } else if self.advanced {
-                tail_window_in(file, self.end, WINDOW.min(remaining))?
-            } else {
-                tail_window_assembled(file, self.end, ASSEMBLY_WINDOW)?
+            let (mut tail, mut read) = match (assemble, remaining) {
+                (true, _) => tail_window_assembled(file, self.end, WINDOW)?,
+                (false, 0) => (Tail::LineTooLong, 0),
+                (false, left) => tail_window_in(file, self.end, WINDOW.min(left))?,
             };
+            if !assemble && !self.advanced && matches!(tail, Tail::LineTooLong) {
+                let (whole, more) = tail_window_assembled(file, self.end, ASSEMBLY_WINDOW)?;
+                (tail, read) = (whole, read + more);
+            }
             *spent += read;
             if self.advanced && !assemble && matches!(tail, Tail::LineTooLong) {
                 return Ok(None);
