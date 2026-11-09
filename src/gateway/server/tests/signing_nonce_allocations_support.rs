@@ -276,6 +276,22 @@ impl Fixture {
         .await
     }
 
+    /// [`Self::start_audited`] with a nonce required on every call, so a
+    /// `gateway_invoke` is signed.
+    pub(super) async fn start_audited_signed(log: &std::path::Path) -> Self {
+        let log = log.to_string_lossy().into_owned();
+        Self::start_with(
+            move |url, require_nonce| {
+                let mut config = signing_config_for(url, require_nonce, Target::MutatingUncached);
+                config.security.transparency_log.enabled = Some(true);
+                config.security.transparency_log.path = log;
+                config
+            },
+            true,
+        )
+        .await
+    }
+
     /// `server.idempotency_key` under test (F10), on either target shape.
     pub(super) async fn start_keyed_mode(
         target: Target,
