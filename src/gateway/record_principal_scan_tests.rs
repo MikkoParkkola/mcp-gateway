@@ -275,6 +275,7 @@ fn g_logsites_every_production_logger_is_keyed_or_never_keys() {
         "src/gateway/router/stored_replay_liveness_idp_fixture.rs", // its _tests.rs
         "src/gateway/server/tools_changed/audience_fixture.rs", // tools_changed.rs
         "src/gateway/ui/backends/signin_fixture.rs", // ui/backends/signin.rs
+        "src/security/transparency_log_sigstart_fixture.rs", // transparency_log.rs
     ];
     // Startup's recovery preview opens the surviving config's log for one
     // gateway-envelope intent, which names no caller, so it never keys.

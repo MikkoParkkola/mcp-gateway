@@ -187,6 +187,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "writability probe",
     ),
     (
+        "src/security/transparency_log_sigstart.rs",
+        "reads the audit log's own files: its signing anchor, `.hwm` and segments, to judge unsigned entries; no secret",
+    ),
+    (
         "src/transport/stdio_cache.rs",
         "writability probe for a backend's package cache: creates, writes and removes its own marker; reads nothing",
     ),

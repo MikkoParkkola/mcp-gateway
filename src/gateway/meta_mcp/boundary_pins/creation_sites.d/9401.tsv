@@ -1,0 +1,2 @@
+# file	function	kind	count	class	reason
+src/security/transparency_log_sigstart.rs	publish	file-create	1	no-secret	audit log signing anchor (a temp file renamed over .sigstart)
