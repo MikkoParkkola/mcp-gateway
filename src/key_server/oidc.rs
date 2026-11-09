@@ -152,8 +152,26 @@ pub(crate) fn email_domain(email: &str) -> Option<&str> {
     (!local.is_empty() && !domain.is_empty() && !domain.contains('@')).then_some(domain)
 }
 
-/// Raw claims extracted from an OIDC ID token.
-#[derive(Debug, Deserialize)]
+impl std::fmt::Debug for IdTokenClaims {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let shown = |present: bool| if present { "<present>" } else { "<absent>" };
+        f.debug_struct("IdTokenClaims")
+            .field("iss", &self.iss)
+            .field("sub", &self.sub)
+            .field("aud", &self.aud)
+            .field("exp", &self.exp)
+            .field("iat", &self.iat)
+            .field("email", &shown(self.email.is_some()))
+            .field("email_verified", &self.email_verified)
+            .field("name", &shown(self.name.is_some()))
+            .field("groups", &shown(self.groups.is_some()))
+            .finish()
+    }
+}
+
+/// Raw claims extracted from an OIDC ID token. Its `Debug` names the email,
+/// name and groups only by presence: a stray `?claims` cannot log them.
+#[derive(Deserialize)]
 struct IdTokenClaims {
     /// Issuer
     iss: String,
