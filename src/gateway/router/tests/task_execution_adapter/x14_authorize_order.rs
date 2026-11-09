@@ -197,9 +197,8 @@ async fn a_write_that_panics_or_is_cancelled_still_leaves_the_count_at_zero() {
             .is_cancelled()
     );
     std::assert_eq!(count(&row.log), 0, "a cancelled write left the count");
-    tokio::time::timeout(std::time::Duration::from_secs(5), settled(&row.log))
-        .await
-        .expect("the count settles at once");
+    // Bounded by the settle itself (10 s, then a named panic).
+    settled(&row.log).await;
 }
 
 #[tokio::test]
