@@ -65,7 +65,7 @@ impl FeedOutcome {
     }
 }
 
-pub(super) fn str_field<'a>(entry: &'a Value, key: &str) -> Option<&'a str> {
+fn str_field<'a>(entry: &'a Value, key: &str) -> Option<&'a str> {
     entry.get(key).and_then(Value::as_str)
 }
 
