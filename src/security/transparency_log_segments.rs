@@ -494,3 +494,7 @@ mod hwm_mac_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "transparency_log_first_line_tests.rs"]
+mod first_line_tests;
