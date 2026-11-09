@@ -48,6 +48,7 @@ async fn gateway(
 ) -> (Arc<AppState>, Arc<crate::key_server::KeyServer>, impl Sized) {
     let key_server = Arc::new(crate::key_server::KeyServer::new(
         crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
     key_server.store.insert(token).await;
     let auth = AuthConfig {

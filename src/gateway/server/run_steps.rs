@@ -216,8 +216,18 @@ impl Gateway {
             // Resolve admin token (expand env:VAR_NAME)
             ks_config.admin_token = ks_config.resolve_admin_token(self.env.startup())?;
 
+            let configured = ks_config.resolve_audit_email_hmac(self.env.startup())?;
+            // No retained store holds hashed audit records yet, so a missing
+            // key file has no history behind it to protect.
+            let email_key = crate::key_server::email_hmac_store::resolve(
+                &crate::config_persistence::gateway_data_dir(),
+                configured.as_deref(),
+                || Ok(false),
+            )
+            .map_err(crate::Error::ConfigValidation)?;
+
             let cleanup_interval = std::time::Duration::from_secs(ks_config.cleanup_interval_secs);
-            let ks = Arc::new(KeyServer::new(ks_config));
+            let ks = Arc::new(KeyServer::new(ks_config, Arc::new(email_key)));
 
             spawn_reaper(
                 Arc::clone(&ks.store),

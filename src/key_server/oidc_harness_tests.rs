@@ -71,6 +71,7 @@ impl Harness {
             )),
             policy: Arc::new(PolicyEngine::new(config.policies.clone())),
             config,
+            email_key: crate::key_server::email_hash::EmailHashKey::for_test(),
         });
         let jwks = Router::new()
             .route("/.well-known/jwks.json", get(jwks_handler))

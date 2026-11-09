@@ -88,6 +88,7 @@ fn token(group: &str) -> crate::key_server::TemporaryToken {
 async fn gateway() -> (Arc<AppState>, Vec<(&'static str, String)>, impl Sized) {
     let key_server = Arc::new(crate::key_server::KeyServer::new(
         crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
     let mut bearers = Vec::new();
     for group in ["g-admin", "g-auditor", "g-developer"] {

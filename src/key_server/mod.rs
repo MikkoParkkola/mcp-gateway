@@ -98,12 +98,15 @@ pub struct KeyServer {
     pub policy: Arc<PolicyEngine>,
     /// Key server configuration
     pub config: KeyServerConfig,
+    /// The installation key behind every audit record's `email_hash`.
+    pub(crate) email_key: Arc<email_hash::EmailHashKey>,
 }
 
 impl KeyServer {
-    /// Create a new key server from configuration.
+    /// Create a new key server from configuration and the installation key
+    /// its audit records hash emails with.
     #[must_use]
-    pub fn new(config: KeyServerConfig) -> Self {
+    pub(crate) fn new(config: KeyServerConfig, email_key: Arc<email_hash::EmailHashKey>) -> Self {
         let store = Arc::new(InMemoryTokenStore::new());
         let oidc = Arc::new(OidcVerifier::new(config.oidc.clone()));
         let policy = Arc::new(PolicyEngine::new(config.policies.clone()));
@@ -113,6 +116,7 @@ impl KeyServer {
             oidc,
             policy,
             config,
+            email_key,
         }
     }
 
@@ -171,7 +175,7 @@ impl KeyServer {
             credential_kind: crate::security::audit::CredentialKind::KeyServerToken,
         };
 
-        let ev = AuditEvent::used(&temp, None);
+        let ev = AuditEvent::used(&temp, &self.email_key, None);
         audit::emit(&ev);
 
         KeyServerLookup::Valid((client, temp))
@@ -363,7 +367,10 @@ mod tests {
     /// Mutant: the read-back check removed from the lookup.
     #[tokio::test]
     async fn a_stored_token_whose_identity_names_nobody_is_refused() {
-        let ks = KeyServer::new(KeyServerConfig::default());
+        let ks = KeyServer::new(
+            KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
+        );
         for (bearer, subject, issuer) in [
             ("mcpgw_nameless_subject", "", "https://issuer.invalid"),
             ("mcpgw_nameless_issuer", "sub", ""),
@@ -391,7 +398,10 @@ mod tests {
     async fn oidc_token_with_empty_backends_reaches_none() {
         // BACKENDGRANT.1: the token's scopes are copied as-is, and an empty
         // backend list means none, never "all".
-        let ks = KeyServer::new(KeyServerConfig::default());
+        let ks = KeyServer::new(
+            KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
+        );
         let token = TemporaryToken {
             jti: "jti-empty".to_string(),
             token: "mcpgw_empty_backends".to_string(),
@@ -414,7 +424,10 @@ mod tests {
     /// a static bearer configured with the same text is another caller.
     #[tokio::test]
     async fn key_server_token_principal_is_outside_the_configured_space() {
-        let ks = KeyServer::new(KeyServerConfig::default());
+        let ks = KeyServer::new(
+            KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
+        );
         let text = "mcpgw_runtime_principal";
         ks.store
             .insert(TemporaryToken {

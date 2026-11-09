@@ -264,7 +264,10 @@ fn key_server_with(
         }]
     }))
     .expect("key server config");
-    Arc::new(crate::key_server::KeyServer::new(config))
+    Arc::new(crate::key_server::KeyServer::new(
+        config,
+        crate::key_server::email_hash::EmailHashKey::for_test(),
+    ))
 }
 
 /// Design F9 (MIK-7769): the running static bearer must be the one the

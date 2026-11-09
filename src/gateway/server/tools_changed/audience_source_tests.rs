@@ -61,6 +61,7 @@ async fn t2_live_trusted_proxy_mode_refuses_an_untrusted_peer() {
     };
     let key_server = Arc::new(crate::key_server::KeyServer::new(
         crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
     let world = World::start_on(
         key_server,

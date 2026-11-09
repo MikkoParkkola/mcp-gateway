@@ -129,6 +129,7 @@ fn cert(ou: Option<&str>, san_uris: &[&str]) -> CertIdentity {
 async fn g_cert_1_two_certificates_of_one_key_differ_only_in_ou() {
     let key_server = Arc::new(crate::key_server::KeyServer::new(
         crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
     let w = World::start_on(
         key_server,

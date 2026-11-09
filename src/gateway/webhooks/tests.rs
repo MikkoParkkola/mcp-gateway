@@ -683,6 +683,7 @@ fn temporary_token(backends: &[&str]) -> crate::key_server::TemporaryToken {
 async fn a_session_whose_token_was_revoked_receives_no_webhook_data() {
     let key_server = Arc::new(crate::key_server::KeyServer::new(
         crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
     let kept = temporary_token(&["capabilities"]);
     let revoked = temporary_token(&["capabilities"]);

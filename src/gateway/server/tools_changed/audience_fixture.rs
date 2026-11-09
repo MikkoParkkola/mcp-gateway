@@ -320,7 +320,10 @@ impl World {
 
     /// As [`Self::start`], with `configure` applied to the Meta-MCP last.
     pub(super) async fn start_with(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
-        let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
+        let key_server = Arc::new(KeyServer::new(
+            crate::config::KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
+        ));
         Self::start_on(
             key_server,
             None,
@@ -364,7 +367,10 @@ impl World {
             env.display().to_string().replace('\'', "''")
         ))
         .expect("adapter config parses");
-        let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
+        let key_server = Arc::new(KeyServer::new(
+            crate::config::KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
+        ));
         Self::start_on(key_server, Some((config, dir)), configure, access).await
     }
 

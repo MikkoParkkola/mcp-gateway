@@ -49,7 +49,10 @@ fn t1a_context_readers_agree_over_gateway_mints() {
 /// key on any F0 reader.
 #[tokio::test]
 async fn t1a_key_server_token_has_no_api_key_identity() {
-    let ks = crate::key_server::KeyServer::new(crate::config::KeyServerConfig::default());
+    let ks = crate::key_server::KeyServer::new(
+        crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
+    );
     ks.store
         .insert(crate::key_server::TemporaryToken {
             jti: "jti-mik-8659".to_owned(),

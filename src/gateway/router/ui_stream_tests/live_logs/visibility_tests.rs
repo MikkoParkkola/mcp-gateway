@@ -28,6 +28,7 @@ async fn keyed(
     let (bearer, me) = (tok.token.clone(), tok.identity.clone());
     let key_server = Arc::new(crate::key_server::KeyServer::new(
         crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
     key_server.store.insert(tok).await;
     let dir = crate::test_dir_keep::kept_tempdir();

@@ -81,6 +81,7 @@ async fn closed_listen_body(revoke: bool) -> String {
 
     let key_server = Arc::new(crate::key_server::KeyServer::new(
         crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
     let token = temporary_token();
     let (credential, jti) = (bearer(&token.token), token.jti.clone());

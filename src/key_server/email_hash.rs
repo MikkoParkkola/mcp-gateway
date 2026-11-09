@@ -94,5 +94,16 @@ impl EmailHashKey {
 }
 
 #[cfg(test)]
+impl EmailHashKey {
+    /// A fixed key (bytes 0x00..0x1f) for rows that need a key server.
+    pub(crate) fn for_test() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(
+            Self::from_hex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+                .expect("a valid fixed key"),
+        )
+    }
+}
+
+#[cfg(test)]
 #[path = "email_hash_tests.rs"]
 mod tests;

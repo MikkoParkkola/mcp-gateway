@@ -300,7 +300,7 @@ pub(super) async fn issue(
         jti: token.jti.clone(),
     };
 
-    let ev = AuditEvent::issued(&token);
+    let ev = AuditEvent::issued(&token, &ks.email_key);
     audit::emit(&ev);
     ks.store.insert(token).await;
 
@@ -522,10 +522,13 @@ mod tests {
     fn empty_admin_token_never_authenticates() {
         // Defence in depth behind the load-time refusal: a KeyServer built in
         // code with an empty admin token must not accept an empty bearer.
-        let ks = KeyServer::new(crate::config::KeyServerConfig {
-            admin_token: Some(String::new()),
-            ..crate::config::KeyServerConfig::default()
-        });
+        let ks = KeyServer::new(
+            crate::config::KeyServerConfig {
+                admin_token: Some(String::new()),
+                ..crate::config::KeyServerConfig::default()
+            },
+            crate::key_server::email_hash::EmailHashKey::for_test(),
+        );
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer ".parse().expect("header"));
         assert!(check_admin_auth(&ks, &headers).is_err());
