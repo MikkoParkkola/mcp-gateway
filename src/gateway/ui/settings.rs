@@ -567,5 +567,5 @@ mod route_secret_tests;
 #[path = "settings_route_tests.rs"]
 mod route_tests;
 #[cfg(test)]
-#[path = "settings_test_support.rs"]
+#[path = "settings_support_tests.rs"]
 mod test_support;

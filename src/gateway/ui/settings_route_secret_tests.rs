@@ -184,7 +184,8 @@ fn s18_secret_save() {
         std::fs::read(stored_path).expect("stored bytes"),
         b"secret-save-canary\n"
     );
-    assert!(route.text().contains(&values[0].0));
+    let written = crate::config::Config::load_literal(Some(&route.path())).expect("written config");
+    assert_eq!(written.auth.bearer_token.as_ref(), Some(&values[0].0));
     // The reload names the changed secret input by its store reference, never
     // by the secret itself.
     let pending = body["reload"]["pending_restart_fields"]
