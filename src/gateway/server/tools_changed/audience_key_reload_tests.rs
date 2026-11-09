@@ -331,7 +331,7 @@ async fn file_reload_k_std(w: &World, edit: impl Fn(&mut crate::config::ApiKeyCo
         "security": { "sanitize_input": false, "ssrf_protection": false },
         "auth": auth,
     });
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(&path, doc.to_string()).expect("write");
     crate::config_reload::ReloadContext::new(

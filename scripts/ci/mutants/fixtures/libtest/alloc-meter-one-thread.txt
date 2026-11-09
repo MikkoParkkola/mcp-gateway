@@ -1,0 +1,9 @@
+
+running 1 test
+test gateway::router::stored_read_account_tests::http_nonce_alloc::a_refused_meta_call_costs_its_parse_plus_a_fixed_cap ... 
+alloc-meter: INTAKE.2(a) size=1048576 parse=3980860 refusal=4077174 over_parse=96314 cap=98304 margin=1990
+alloc-meter: INTAKE.2(a) size=3145728 parse=12056396 refusal=12152710 over_parse=96314 cap=98304 margin=1990
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 17739 filtered out; finished in 0.62s
+

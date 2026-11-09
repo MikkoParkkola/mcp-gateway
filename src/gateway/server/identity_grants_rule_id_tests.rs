@@ -35,7 +35,7 @@ fn published(
 
 #[tokio::test]
 async fn a_grant_store_published_by_set_identity_grants_is_keyed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     // The startup read needs a grant file.
     apply_change(&grants_path(dir.path()), true, add(row("g0", "r")))
         .await
@@ -53,7 +53,7 @@ async fn a_grant_store_published_by_set_identity_grants_is_keyed() {
 
 #[tokio::test]
 async fn a_grant_store_published_at_startup_is_keyed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let g1 = row("g1", "r");
     apply_change(&grants_path(dir.path()), true, add(g1.clone()))
         .await
@@ -68,7 +68,7 @@ async fn a_grant_store_published_at_startup_is_keyed() {
 
 #[tokio::test]
 async fn a_grant_store_published_by_a_file_reload_is_keyed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = config(dir.path(), true);
     let g1 = row("g1", "r");
     apply_change(&grants_path(dir.path()), true, add(g1.clone()))

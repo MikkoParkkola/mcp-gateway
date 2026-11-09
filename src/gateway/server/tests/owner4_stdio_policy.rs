@@ -95,7 +95,7 @@ struct Stdio {
     denying: Arc<crate::config_reload::Generation>,
     mtls: Arc<crate::mtls::MtlsPolicy>,
     calls: Calls,
-    data_dir: tempfile::TempDir,
+    data_dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 async fn stdio(signing: Signing) -> Stdio {
@@ -128,7 +128,7 @@ async fn stdio_tuned(signing: Signing, tune: impl FnOnce(&mut Config, &std::path
             ..BackendConfig::default()
         },
     );
-    let data_dir = tempfile::tempdir().expect("tempdir");
+    let data_dir = crate::test_dir_keep::kept_tempdir();
     tune(&mut config, data_dir.path());
     let built = Gateway::new(config)
         .await

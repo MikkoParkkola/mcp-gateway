@@ -107,13 +107,13 @@ fn governance_event_carries_envelope() {
     let path = dir.path().join("audit.jsonl");
     let store =
         FileControlPlaneStore::open(dir.path().join("store"), Arc::new(logger(&path))).unwrap();
-    let actor = crate::key_server::oidc::VerifiedIdentity {
-        subject: "123".to_string(),
-        email: "x@corp.com".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://a.example".to_string(),
-    }
+    let actor = crate::key_server::oidc::VerifiedIdentity::for_test(
+        "123".to_string(),
+        "x@corp.com".to_string(),
+        None,
+        vec![],
+        "https://a.example".to_string(),
+    )
     .stable_actor_id();
     store
         .append_audit(&ControlPlaneAuditEvent {

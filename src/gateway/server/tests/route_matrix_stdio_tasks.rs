@@ -161,7 +161,7 @@ pub(crate) async fn served_sanitizing_call(passthrough: bool, call: Value) -> (V
     use std::time::Duration;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let (url, calls) = backend().await;
-    let store = tempfile::tempdir().expect("store root");
+    let store = crate::test_dir_keep::kept_tempdir();
     let mut config = crate::config::Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.security.sanitize_input = true;
@@ -178,7 +178,7 @@ pub(crate) async fn served_sanitizing_call(passthrough: bool, call: Value) -> (V
             ..crate::config::BackendConfig::default()
         },
     );
-    let data = tempfile::tempdir().expect("data dir");
+    let data = crate::test_dir_keep::kept_tempdir();
     let gateway = super::super::Gateway::new(config)
         .await
         .expect("gateway boots")

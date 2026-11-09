@@ -85,14 +85,14 @@ async fn a_well_formed_chain_nonce_is_not_refused() {
 
 /// A `MetaMcp` with message signing on, built by the production constructor
 /// and builder.
-async fn signing_meta() -> (Arc<MetaMcp>, tempfile::TempDir) {
+async fn signing_meta() -> (Arc<MetaMcp>, std::sync::Arc<tempfile::TempDir>) {
     let mut config = crate::config::Config::default();
     config.server.modern_protocol = true;
     let signing = &mut config.security.message_signing;
     signing.enabled = true;
     signing.shared_secret = "a-signing-secret-that-is-at-least-32-bytes!!!!".to_string();
     signing.key_id = "cov3-stdio".to_string();
-    let data_dir = tempfile::tempdir().expect("tempdir");
+    let data_dir = crate::test_dir_keep::kept_tempdir();
     let built = super::super::Gateway::new(config)
         .await
         .expect("the config is valid")

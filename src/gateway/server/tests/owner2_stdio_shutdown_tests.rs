@@ -12,7 +12,7 @@ use super::*;
 async fn stdio_eof_releases_the_store_lease_before_returning() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let (url, _rounds) = backend().await;
-    let store = Arc::new(tempfile::tempdir().expect("store root"));
+    let store = crate::test_dir_keep::kept_tempdir();
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.backends.insert(
@@ -27,7 +27,7 @@ async fn stdio_eof_releases_the_store_lease_before_returning() {
             ..BackendConfig::default()
         },
     );
-    let data = tempfile::tempdir().expect("data dir");
+    let data = crate::test_dir_keep::kept_tempdir();
     let gateway = Gateway::new(config.clone())
         .await
         .expect("gateway boots")
@@ -83,7 +83,7 @@ async fn stdio_eof_releases_the_store_lease_before_returning() {
 async fn eof_drains_a_running_task_before_returning() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let (url, mut arrived, release) = held_backend().await;
-    let store = Arc::new(tempfile::tempdir().expect("store root"));
+    let store = crate::test_dir_keep::kept_tempdir();
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.server.shutdown_timeout = Duration::from_secs(20);
@@ -99,7 +99,7 @@ async fn eof_drains_a_running_task_before_returning() {
             ..BackendConfig::default()
         },
     );
-    let data = tempfile::tempdir().expect("data dir");
+    let data = crate::test_dir_keep::kept_tempdir();
     let gateway = Gateway::new(config.clone())
         .await
         .expect("gateway boots")
@@ -179,7 +179,7 @@ async fn eof_drains_a_running_task_before_returning() {
 #[tokio::test]
 async fn an_unresolvable_auth_config_leaves_the_stdio_store_open() {
     let fixture = Box::pin(fixture(None)).await;
-    let store = tempfile::tempdir().expect("store root");
+    let store = crate::test_dir_keep::kept_tempdir();
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.auth.bearer_token = Some("env:MIK_7638_UNSET_FIXTURE_TOKEN".to_string());

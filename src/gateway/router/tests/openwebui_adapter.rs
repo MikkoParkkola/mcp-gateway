@@ -169,13 +169,13 @@ accounts:
         if label == "conflicting identity" {
             request
                 .extensions_mut()
-                .insert(crate::key_server::oidc::VerifiedIdentity {
-                    subject: "another-user".into(),
-                    email: String::new(),
-                    name: None,
-                    groups: Vec::new(),
-                    issuer: "https://identity.invalid".into(),
-                });
+                .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+                    "another-user",
+                    String::new(),
+                    None,
+                    Vec::new(),
+                    "https://identity.invalid",
+                ));
         }
         let response = router.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), expected, "{label}");

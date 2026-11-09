@@ -54,7 +54,7 @@ fn seed(costs: &Path) {
 #[tokio::test]
 async fn http_saves_spend_periodically_while_serving() {
     let (listening, saved, still_serving, global) = Box::pin(same_utc_day_async(|| async {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let costs = dir.path().join("costs.json");
         seed(&costs);
         let yaml = format!(

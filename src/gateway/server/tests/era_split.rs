@@ -171,8 +171,8 @@ async fn served_batch(
     use std::time::Duration;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let count = batch.as_array().map_or(0, Vec::len);
-    let store = tempfile::tempdir().expect("store root");
-    let data = tempfile::tempdir().expect("data dir");
+    let store = crate::test_dir_keep::kept_tempdir();
+    let data = crate::test_dir_keep::kept_tempdir();
     let mut config = crate::config::Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.server.modern_protocol = modern_protocol;

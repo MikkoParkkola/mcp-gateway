@@ -87,7 +87,7 @@ fn configured(fx: &Fx, edit: fn(&mut Config)) -> Config {
 struct Logged {
     fx: Fx,
     log: std::sync::Arc<crate::security::TransparencyLogger>,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 impl std::ops::Deref for Logged {

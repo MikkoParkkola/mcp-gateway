@@ -18,7 +18,10 @@ use pretty_assertions::assert_eq;
 struct Fixture {
     state: Arc<AppState>,
     log: Arc<crate::security::TransparencyLogger>,
-    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
+    _dirs: (
+        std::sync::Arc<tempfile::TempDir>,
+        crate::gateway::router::tests::FixtureDir,
+    ),
 }
 
 async fn fixture(contract: Option<ResponseContractConfig>) -> Fixture {

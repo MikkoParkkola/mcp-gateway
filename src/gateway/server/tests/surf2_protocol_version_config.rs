@@ -88,7 +88,7 @@ async fn spawn_backend(seen: Arc<Mutex<Seen>>) -> (String, tokio::task::JoinHand
 async fn call_through_config(extra: &str) -> Seen {
     let seen = Arc::new(Mutex::new(Seen::default()));
     let (url, server) = spawn_backend(Arc::clone(&seen)).await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     let store = serde_json::to_string(&dir.path().join("tasks").display().to_string())
         .expect("a JSON string");

@@ -617,13 +617,13 @@ mod tests {
         let token = TemporaryToken {
             jti: "jti".to_string(),
             token: "mcpgw_test".to_string(),
-            identity: VerifiedIdentity {
-                subject: "sub".to_string(),
-                email: "alice@example.com".to_string(),
-                name: None,
-                groups: Vec::new(),
-                issuer: "https://accounts.google.com".to_string(),
-            },
+            identity: VerifiedIdentity::for_test(
+                "sub".to_string(),
+                "alice@example.com".to_string(),
+                None,
+                Vec::new(),
+                "https://accounts.google.com".to_string(),
+            ),
             scopes: TokenScopes::default(),
             iat: now,
             exp: now + 3600,
@@ -651,13 +651,13 @@ mod tests {
         let token = TemporaryToken {
             jti: "jti".to_string(),
             token: "mcpgw_test".to_string(),
-            identity: VerifiedIdentity {
-                subject: "sub".to_string(),
-                email: "alice@example.com".to_string(),
-                name: None,
-                groups: Vec::new(),
-                issuer: "https://accounts.google.com".to_string(),
-            },
+            identity: VerifiedIdentity::for_test(
+                "sub".to_string(),
+                "alice@example.com".to_string(),
+                None,
+                Vec::new(),
+                "https://accounts.google.com".to_string(),
+            ),
             scopes: TokenScopes {
                 backends: vec!["tavily".to_string()],
                 tools: vec!["tavily-search".to_string()],
