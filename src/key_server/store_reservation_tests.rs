@@ -561,10 +561,11 @@ async fn revoking_pending_mints_over_the_routes_signals_once() {
     assert_eq!(signals(), 2, "no signal for an empty bulk revoke");
 }
 
-/// The trait's `compile_fail` block fails for the missing method (E0599) on
-/// the real trait path, and its compiling twin calls `reserve` on that same
-/// path: a typo in the path would fail the block for another reason, and it
-/// would pass.
+/// The trait's `compile_fail` block and its compiling twin are the same
+/// function on the real trait path, differing only in the call: `insert`
+/// fails, `reserve` compiles. Stable rustdoc ignores the block's error code,
+/// so this sameness is what makes the block fail for the missing method and
+/// nothing else.
 #[test]
 fn token_store_has_no_insert_on_its_real_path() {
     let source = include_str!("store.rs");
@@ -573,28 +574,31 @@ fn token_store_has_no_insert_on_its_real_path() {
         .next()
         .and_then(|before| before.rsplit("\n\n").next())
         .expect("the trait and its doc comment");
-    let path = "store: &dyn mcp_gateway::key_server::TokenStore,";
-    for (fence, call, arg) in [
-        (
-            "/// ```compile_fail,E0599\n",
-            "let _ = store.insert(token);",
-            "token: mcp_gateway::key_server::TemporaryToken,",
-        ),
-        (
-            "/// Reserving a slot through the same trait compiles:\n///\n/// ```\n",
-            "let _ = store.reserve(request, 0);",
-            "request: mcp_gateway::key_server::store::ReservationRequest,",
-        ),
-    ] {
-        let body: Vec<&str> = doc
-            .split(fence)
+    let block = |fence: &str| -> Vec<String> {
+        doc.split(fence)
             .nth(1)
             .and_then(|rest| rest.split("/// ```\n").next())
             .unwrap_or_else(|| panic!("doc test {fence:?}"))
             .lines()
-            .map(|line| line.trim_start_matches("///").trim())
-            .collect();
-        assert_eq!(body[1..=2], [path, arg], "{fence:?}: the real trait path");
-        assert_eq!(body[4], call, "{fence:?}");
-    }
+            .map(|line| line.trim_start_matches("///").trim().to_owned())
+            .collect()
+    };
+    let failing = block("/// ```compile_fail,E0599\n");
+    let twin = block("/// check the error code):\n///\n/// ```\n");
+    let head = [
+        "fn seed(",
+        "store: &dyn mcp_gateway::key_server::TokenStore,",
+        "token: mcp_gateway::key_server::TemporaryToken,",
+        "request: mcp_gateway::key_server::store::ReservationRequest,",
+        ") {",
+    ];
+    assert_eq!(failing[..5], head, "the failing block's signature");
+    assert_eq!(twin[..5], head, "the twin's signature");
+    assert_eq!(failing[5], "let _ = (request, store.insert(token));");
+    assert_eq!(twin[5], "let _ = (token, store.reserve(request, 0));");
+    assert_eq!(
+        (failing.len(), twin.len()),
+        (7, 7),
+        "nothing else in either block"
+    );
 }

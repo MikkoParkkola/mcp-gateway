@@ -187,19 +187,23 @@ pub enum ActivateError {
 /// fn seed(
 ///     store: &dyn mcp_gateway::key_server::TokenStore,
 ///     token: mcp_gateway::key_server::TemporaryToken,
+///     request: mcp_gateway::key_server::store::ReservationRequest,
 /// ) {
-///     let _ = store.insert(token);
+///     let _ = (request, store.insert(token));
 /// }
 /// ```
 ///
-/// Reserving a slot through the same trait compiles:
+/// The same function with `reserve` in place of `insert` compiles, so the
+/// block above fails only for the missing method (stable rustdoc does not
+/// check the error code):
 ///
 /// ```
-/// fn reserve(
+/// fn seed(
 ///     store: &dyn mcp_gateway::key_server::TokenStore,
+///     token: mcp_gateway::key_server::TemporaryToken,
 ///     request: mcp_gateway::key_server::store::ReservationRequest,
 /// ) {
-///     let _ = store.reserve(request, 0);
+///     let _ = (token, store.reserve(request, 0));
 /// }
 /// ```
 #[async_trait::async_trait]
