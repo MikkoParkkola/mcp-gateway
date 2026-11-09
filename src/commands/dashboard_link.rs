@@ -14,6 +14,26 @@ use mcp_gateway::cli::dashboard_link::DashboardLinkTls;
 /// The environment variable the admin credential is read from.
 pub(crate) const TOKEN_ENV: &str = "MCP_GATEWAY_TOKEN";
 
+/// A missing credential and an explicitly blank setting have different exits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TokenError {
+    Missing,
+    Blank,
+}
+
+impl std::fmt::Display for TokenError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => write!(
+                formatter,
+                "{TOKEN_ENV} is not set. Export the gateway's bearer token or an admin API \
+                 key in {TOKEN_ENV}; it is never read from the command line."
+            ),
+            Self::Blank => write!(formatter, "{TOKEN_ENV} is empty."),
+        }
+    }
+}
+
 /// What the link request trusts and presents.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct LinkTls {
@@ -28,18 +48,15 @@ pub struct LinkTls {
 ///
 /// # Errors
 ///
-/// A message naming [`TOKEN_ENV`] when it is unset or blank.
-pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<String, String> {
+/// Distinguishes an unset [`TOKEN_ENV`] from an explicitly blank value.
+pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<String, TokenError> {
     // Not trimmed: credentials compare byte for byte, so rewriting one would
-    // turn a valid key into a refused one. Only a blank value is missing.
-    lookup(TOKEN_ENV)
-        .filter(|t| !t.trim().is_empty())
-        .ok_or_else(|| {
-            format!(
-                "{TOKEN_ENV} is not set. Export the gateway's bearer token or an admin API \
-                 key in {TOKEN_ENV}; it is never read from the command line."
-            )
-        })
+    // turn a valid key into a refused one.
+    match lookup(TOKEN_ENV) {
+        None => Err(TokenError::Missing),
+        Some(token) if token.trim().is_empty() => Err(TokenError::Blank),
+        Some(token) => Ok(token),
+    }
 }
 
 /// The gateway to ask: `--url` when given, otherwise the listener the config
@@ -172,14 +189,210 @@ pub(crate) async fn admin_call(
     token: &str,
     tls: &LinkTls,
 ) -> Result<serde_json::Value, String> {
-    check_target(base)?;
     let endpoint = format!("{}{path}", base.trim_end_matches('/'));
+    let response = send_admin_request(
+        method,
+        &endpoint,
+        token,
+        tls,
+        None,
+        None,
+        &AdminClientOptions::default(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let response = read_admin_response(response, &endpoint, tls)
+        .await
+        .map_err(|error| match error.kind {
+            AdminFailureKind::ResponseTooLarge => "the gateway answer exceeded 16 MiB".to_string(),
+            _ => error.to_string(),
+        })?;
+    let status = response.status;
+    let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
+    if !status.is_success() {
+        let reason = gateway_reason(&body).unwrap_or("no reason given");
+        // A gateway that echoes the bearer in its message must not put it on
+        // the terminal: the same shared redactor as `api`.
+        let reason = mcp_gateway::cli::redact::text(reason, &[token.to_string()]);
+        return Err(format!("the gateway answered {status}: {reason}"));
+    }
+    if body.is_null() {
+        return Err(format!("the gateway answered {status} with no JSON body"));
+    }
+    Ok(body)
+}
+
+/// The server's reason across its structured, JSON-RPC and flat error shapes.
+pub(crate) fn gateway_reason(body: &serde_json::Value) -> Option<&str> {
+    body["message"]
+        .as_str()
+        .or_else(|| body["error"]["message"].as_str())
+        .or_else(|| body["error"].as_str())
+        .or_else(|| body["reason"].as_str())
+}
+
+/// Classifications retained before transport errors become diagnostic strings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AdminFailureKind {
+    Target,
+    LocalIo,
+    Settings,
+    Dns,
+    Connect,
+    Tls,
+    ResponseLost,
+    ResponseTooLarge,
+}
+
+/// A transport failure and any response metadata received before it failed.
+#[derive(Debug)]
+pub(crate) struct AdminCallError {
+    pub(crate) kind: AdminFailureKind,
+    pub(crate) detail: String,
+    pub(crate) status: Option<reqwest::StatusCode>,
+    pub(crate) request_id: Option<String>,
+}
+
+impl AdminCallError {
+    fn new(kind: AdminFailureKind, detail: String) -> Self {
+        Self {
+            kind,
+            detail,
+            status: None,
+            request_id: None,
+        }
+    }
+}
+
+impl std::fmt::Display for AdminCallError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+/// The status and unmodified body, including an unsuccessful HTTP answer.
+pub(crate) struct AdminResponse {
+    pub(crate) status: reqwest::StatusCode,
+    pub(crate) headers: reqwest::header::HeaderMap,
+    pub(crate) body: Vec<u8>,
+}
+
+pub(crate) struct AdminClientOptions {
+    pub(crate) connect_timeout: std::time::Duration,
+}
+
+impl Default for AdminClientOptions {
+    fn default() -> Self {
+        Self {
+            connect_timeout: std::time::Duration::from_secs(10),
+        }
+    }
+}
+
+/// Send the exact URL the caller validated, optionally carrying a JSON body.
+///
+/// # Errors
+///
+/// A refused target, TLS setup failure, or failure to send or read the answer.
+pub(crate) async fn admin_call_url(
+    method: reqwest::Method,
+    endpoint: reqwest::Url,
+    token: &str,
+    tls: &LinkTls,
+    body: Option<&serde_json::Value>,
+    if_match: Option<&reqwest::header::HeaderValue>,
+) -> Result<AdminResponse, AdminCallError> {
+    admin_call_url_with_options(
+        method,
+        endpoint,
+        token,
+        tls,
+        body,
+        if_match,
+        &AdminClientOptions::default(),
+    )
+    .await
+}
+
+pub(crate) async fn admin_call_url_with_options(
+    method: reqwest::Method,
+    endpoint: reqwest::Url,
+    token: &str,
+    tls: &LinkTls,
+    body: Option<&serde_json::Value>,
+    if_match: Option<&reqwest::header::HeaderValue>,
+    options: &AdminClientOptions,
+) -> Result<AdminResponse, AdminCallError> {
+    let response = send_admin_request(
+        method,
+        endpoint.as_str(),
+        token,
+        tls,
+        body,
+        if_match,
+        options,
+    )
+    .await?;
+    read_admin_response(response, endpoint.as_str(), tls).await
+}
+
+async fn read_admin_response(
+    mut response: reqwest::Response,
+    endpoint: &str,
+    tls: &LinkTls,
+) -> Result<AdminResponse, AdminCallError> {
+    let status = response.status();
+    let headers = response.headers().clone();
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| AdminCallError {
+        kind: AdminFailureKind::ResponseLost,
+        detail: transport_error(endpoint, error, tls),
+        status: Some(status),
+        request_id: headers
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string),
+    })? {
+        if chunk.len() > 16 * 1024 * 1024 - body.len() {
+            return Err(AdminCallError {
+                kind: AdminFailureKind::ResponseTooLarge,
+                detail: "Gateway response exceeded 16 MiB.".to_string(),
+                status: Some(status),
+                request_id: headers
+                    .get("x-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+            });
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(AdminResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+/// Share target checks and TLS policy across admin callers.
+async fn send_admin_request(
+    method: reqwest::Method,
+    endpoint: &str,
+    token: &str,
+    tls: &LinkTls,
+    body: Option<&serde_json::Value>,
+    if_match: Option<&reqwest::header::HeaderValue>,
+    options: &AdminClientOptions,
+) -> Result<reqwest::Response, AdminCallError> {
+    check_target(endpoint)
+        .map_err(|detail| AdminCallError::new(AdminFailureKind::Target, detail))?;
     // Direct, never through an environment proxy: an HTTP_PROXY would carry the
     // credential off this machine even to a loopback URL. No redirects either:
     // `check_target` vetted only this URL, and a same-host, same-port hop
     // (https to http) would keep the bearer.
     let mut builder = reqwest::Client::builder()
+        .connect_timeout(options.connect_timeout)
         .no_proxy()
+        .retry(reqwest::retry::never())
         .redirect(reqwest::redirect::Policy::none());
     // A named CA is the only root (#1832); the test roots join only the
     // default roots, so a named CA replaces them too.
@@ -190,29 +403,54 @@ pub(crate) async fn admin_call(
     if let Some((cert, key)) = &tls.identity {
         builder = builder.identity(read_identity(cert, key)?);
     }
-    let client = builder
-        .build()
-        .map_err(|e| format!("could not build the HTTP client: {e}"))?;
-    let response = client
-        .request(method, &endpoint)
+    let client = builder.build().map_err(|error| {
+        AdminCallError::new(
+            AdminFailureKind::Settings,
+            format!("could not build the HTTP client: {error}"),
+        )
+    })?;
+    let mut request = client
+        .request(method, endpoint)
         .timeout(std::time::Duration::from_secs(30))
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|e| transport_error(base, e, tls))?;
-    let status = response.status();
-    let body: serde_json::Value = response.json().await.unwrap_or_default();
-    if !status.is_success() {
-        let reason = body["reason"]
-            .as_str()
-            .or_else(|| body["error"].as_str())
-            .unwrap_or("no reason given");
-        return Err(format!("the gateway answered {status}: {reason}"));
+        .bearer_auth(token);
+    if let Some(body) = body {
+        request = request.json(body);
     }
-    if body.is_null() {
-        return Err(format!("the gateway answered {status} with no JSON body"));
+    if let Some(value) = if_match {
+        request = request.header(reqwest::header::IF_MATCH, value);
     }
-    Ok(body)
+    request.send().await.map_err(|error| {
+        AdminCallError::new(
+            send_failure_kind(&error),
+            transport_error(endpoint, error, tls),
+        )
+    })
+}
+
+/// Connect errors precede HTTP dispatch; other send failures may follow it.
+fn send_failure_kind(error: &reqwest::Error) -> AdminFailureKind {
+    if error.is_builder() {
+        return AdminFailureKind::Settings;
+    }
+    if error.is_dns() {
+        return AdminFailureKind::Dns;
+    }
+    if !error.is_connect() {
+        return AdminFailureKind::ResponseLost;
+    }
+    let mut cause = std::error::Error::source(error);
+    while let Some(inner) = cause {
+        let tls_error = inner.is::<rustls::Error>()
+            || inner
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                .is_some_and(<dyn std::error::Error + Send + Sync>::is::<rustls::Error>);
+        if tls_error {
+            return AdminFailureKind::Tls;
+        }
+        cause = inner.source();
+    }
+    AdminFailureKind::Connect
 }
 
 /// `mcp-gateway events dead-letters`: the request the arguments describe.
@@ -306,7 +544,7 @@ async fn run_dead_letters_command(
     args: &mcp_gateway::cli::events::DeadLettersArgs,
 ) -> ExitCode {
     let result = match (
-        read_token(|name| std::env::var(name).ok()),
+        read_token(|name| std::env::var(name).ok()).map_err(|error| error.to_string()),
         dead_letters_request(args),
     ) {
         (Ok(token), Ok((method, path))) => admin_call(method, base, &path, &token, tls).await,
@@ -327,31 +565,46 @@ async fn run_dead_letters_command(
     }
 }
 
-fn read_file(path: &Path) -> Result<Vec<u8>, String> {
-    std::fs::read(path).map_err(|e| format!("could not read {}: {e}", path.display()))
+fn read_file(path: &Path) -> Result<Vec<u8>, AdminCallError> {
+    std::fs::read(path).map_err(|error| {
+        AdminCallError::new(
+            AdminFailureKind::LocalIo,
+            format!("could not read {}: {error}", path.display()),
+        )
+    })
 }
 
 /// The CA bundle at `path`, which must hold at least one certificate.
-fn read_roots(path: &Path) -> Result<Vec<reqwest::Certificate>, String> {
-    let roots = reqwest::Certificate::from_pem_bundle(&read_file(path)?)
-        .map_err(|e| format!("{}: not a PEM certificate bundle ({e})", path.display()))?;
+fn read_roots(path: &Path) -> Result<Vec<reqwest::Certificate>, AdminCallError> {
+    let roots = reqwest::Certificate::from_pem_bundle(&read_file(path)?).map_err(|error| {
+        AdminCallError::new(
+            AdminFailureKind::Settings,
+            format!("{}: not a PEM certificate bundle ({error})", path.display()),
+        )
+    })?;
     if roots.is_empty() {
-        return Err(format!("{}: holds no PEM certificate", path.display()));
+        return Err(AdminCallError::new(
+            AdminFailureKind::Settings,
+            format!("{}: holds no PEM certificate", path.display()),
+        ));
     }
     Ok(roots)
 }
 
 /// The client identity from a PEM certificate file and a PEM key file.
-fn read_identity(cert: &Path, key: &Path) -> Result<reqwest::Identity, String> {
+fn read_identity(cert: &Path, key: &Path) -> Result<reqwest::Identity, AdminCallError> {
     let mut pem = read_file(cert)?;
     // Two files that each lack a final newline still concatenate to PEM.
     pem.push(b'\n');
     pem.extend(read_file(key)?);
-    reqwest::Identity::from_pem(&pem).map_err(|e| {
-        format!(
-            "{} with {}: not a PEM certificate and private key ({e})",
-            cert.display(),
-            key.display()
+    reqwest::Identity::from_pem(&pem).map_err(|error| {
+        AdminCallError::new(
+            AdminFailureKind::Settings,
+            format!(
+                "{} with {}: not a PEM certificate and private key ({error})",
+                cert.display(),
+                key.display()
+            ),
         )
     })
 }
@@ -391,7 +644,7 @@ fn transport_error(base: &str, error: reqwest::Error, tls: &LinkTls) -> String {
 pub async fn run_dashboard_link_command(base: &str, tls: &LinkTls) -> ExitCode {
     let result = match read_token(|name| std::env::var(name).ok()) {
         Ok(token) => fetch_link(base, &token, tls).await,
-        Err(message) => Err(message),
+        Err(error) => Err(error.to_string()),
     };
     match result {
         Ok(link) => {
@@ -407,209 +660,5 @@ pub async fn run_dashboard_link_command(base: &str, tls: &LinkTls) -> ExitCode {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{DashboardLinkTls, LinkTls, TOKEN_ENV, read_token};
-
-    fn no_flags() -> DashboardLinkTls {
-        DashboardLinkTls::default()
-    }
-
-    /// No TLS material: the pre-#1832 request.
-    async fn fetch_link(base: &str, token: &str) -> Result<String, String> {
-        super::fetch_link(base, token, &LinkTls::default()).await
-    }
-
-    #[test]
-    fn the_base_url_never_falls_back_past_a_config_that_failed_to_load() {
-        use super::dashboard_link_base;
-        let explicit = dashboard_link_base(
-            Some("http://h:1".into()),
-            no_flags(),
-            || Err("x".into()),
-            None,
-            None,
-        );
-        assert_eq!(
-            explicit.map(|(base, _)| base).as_deref(),
-            Ok("http://h:1"),
-            "--url wins without a load"
-        );
-
-        let failed = dashboard_link_base(None, no_flags(), || Err("bad yaml".into()), None, None)
-            .expect_err("a config that fails to load is not replaced by defaults");
-        assert!(
-            failed.contains("bad yaml") && failed.contains("--url"),
-            "{failed}"
-        );
-
-        let mut config = mcp_gateway::config::Config::default();
-        config.server.port = 4100;
-        let plain = dashboard_link_base(None, no_flags(), || Ok(config.clone()), None, None);
-        assert_eq!(
-            plain.map(|(base, _)| base).as_deref(),
-            Ok("http://127.0.0.1:4100")
-        );
-        config.mtls.enabled = true;
-        config.mtls.require_client_cert = false;
-        let tls = dashboard_link_base(None, no_flags(), || Ok(config.clone()), Some(4200), None);
-        assert_eq!(
-            tls.map(|(base, _)| base).as_deref(),
-            Ok("https://127.0.0.1:4200")
-        );
-    }
-
-    /// E5-T21: the credential never goes out in cleartext to the network.
-    #[test]
-    fn cleartext_is_refused_off_loopback() {
-        use super::check_target;
-        for refused in [
-            "http://10.0.0.5:39400",
-            "http://gateway.example",
-            "HTTP://192.0.2.1:1",
-        ] {
-            let err = check_target(refused).expect_err(refused);
-            assert!(err.contains("cleartext"), "{refused}: {err}");
-        }
-        for allowed in [
-            "http://127.0.0.1:39400",
-            "http://localhost:39400/",
-            "http://[::1]:39400",
-            "https://gateway.example",
-        ] {
-            assert_eq!(check_target(allowed), Ok(()), "{allowed}");
-        }
-        let odd = check_target("ftp://127.0.0.1:1").expect_err("an unknown scheme");
-        assert!(odd.contains("unsupported scheme"), "{odd}");
-    }
-
-    /// E5-T21b: `fetch_link` refuses before sending anything: 192.0.2.1 is a
-    /// documentation address, so a request would hang, not answer.
-    #[tokio::test]
-    async fn fetch_link_refuses_cleartext_before_sending() {
-        let out = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            fetch_link("http://192.0.2.1:9", "tok"),
-        )
-        .await
-        .expect("refused at once, no connection attempted");
-        let err = out.expect_err("cleartext target");
-        assert!(err.contains("cleartext"), "{err}");
-    }
-
-    #[test]
-    fn the_token_comes_from_the_named_variable_only() {
-        let token = read_token(|name| (name == TOKEN_ENV).then(|| "tok".to_string()));
-        assert_eq!(token.as_deref(), Ok("tok"));
-
-        let missing = read_token(|_| None).expect_err("no variable, no token");
-        assert!(missing.contains(TOKEN_ENV), "{missing}");
-
-        let blank = read_token(|_| Some("  ".to_string())).expect_err("blank is unset");
-        assert!(blank.contains(TOKEN_ENV), "{blank}");
-
-        let padded = read_token(|_| Some(" tok ".to_string()));
-        assert_eq!(
-            padded.as_deref(),
-            Ok(" tok "),
-            "a credential is passed as given"
-        );
-    }
-
-    /// An in-process gateway stand-in: answers the link only for `tok`.
-    async fn stand_in() -> String {
-        use axum::http::{HeaderMap, StatusCode};
-        let app = axum::Router::new().route(
-            "/ui/api/dashboard-link",
-            axum::routing::post(|headers: HeaderMap| async move {
-                let ok = headers.get("authorization").and_then(|v| v.to_str().ok())
-                    == Some("Bearer tok");
-                if ok {
-                    Ok(axum::Json(serde_json::json!({
-                        "link": "http://127.0.0.1:39400/dashboard?bootstrap=abc"
-                    })))
-                } else {
-                    Err(StatusCode::FORBIDDEN)
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        tokio::spawn(async move { axum::serve(listener, app).await });
-        format!("http://{addr}")
-    }
-
-    /// A `--url` carrying userinfo or a query token must not reach stderr.
-    #[tokio::test]
-    async fn errors_never_echo_url_credentials() {
-        for base in [
-            "http://user:PW1@10.0.0.5:9/x?token=Q1",
-            "http://user:PW1@127.0.0.1:1/x?token=Q1",
-            "ftp://user:PW1@h/x?token=Q1",
-        ] {
-            let err = fetch_link(base, "tok").await.expect_err(base);
-            assert!(!err.contains("PW1") && !err.contains("Q1"), "{err}");
-        }
-        let err = super::check_target("not a url:PW1@?token=Q1").expect_err("unparseable");
-        assert!(!err.contains("PW1") && !err.contains("Q1"), "{err}");
-    }
-
-    #[tokio::test]
-    async fn the_link_is_fetched_with_the_credential_as_a_bearer() {
-        let base = stand_in().await;
-        assert_eq!(
-            fetch_link(&base, "tok").await.as_deref(),
-            Ok("http://127.0.0.1:39400/dashboard?bootstrap=abc")
-        );
-        let refused = fetch_link(&format!("{base}/"), "wrong")
-            .await
-            .expect_err("a refused credential is an error");
-        assert!(refused.contains("403"), "{refused}");
-    }
-
-    /// A redirect is never followed: the next hop was not checked by
-    /// `check_target`, and a same-host, same-port hop keeps the bearer.
-    #[tokio::test]
-    async fn a_redirect_is_not_followed() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let hits = Arc::new(AtomicUsize::new(0));
-        let seen = Arc::clone(&hits);
-        let hop = axum::Router::new().fallback(move || {
-            let seen = Arc::clone(&seen);
-            async move {
-                seen.fetch_add(1, Ordering::SeqCst);
-                axum::Json(serde_json::json!({ "link": "http://127.0.0.1:1/dashboard" }))
-            }
-        });
-        let hop_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let hop_url = format!(
-            "http://{}/ui/api/dashboard-link",
-            hop_listener.local_addr().expect("addr")
-        );
-        tokio::spawn(async move { axum::serve(hop_listener, hop).await });
-        let redirector = axum::Router::new().fallback(move || {
-            let location = hop_url.clone();
-            async move {
-                (
-                    axum::http::StatusCode::TEMPORARY_REDIRECT,
-                    [(axum::http::header::LOCATION, location)],
-                )
-            }
-        });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let base = format!("http://{}", listener.local_addr().expect("addr"));
-        tokio::spawn(async move { axum::serve(listener, redirector).await });
-
-        let refused = fetch_link(&base, "tok")
-            .await
-            .expect_err("a redirect is an error, not a link");
-        assert!(refused.contains("307"), "{refused}");
-        assert_eq!(hits.load(Ordering::SeqCst), 0, "the redirect was followed");
-    }
-}
+#[path = "dashboard_link_tests.rs"]
+mod tests;

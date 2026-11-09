@@ -8,7 +8,7 @@ stateless path, identity, all 17 MIK-7272 criteria (RESULT/ERROR/ORDER, then SUB
 the MIK-7246 destructive-confirmation gate, and the MIK-7217 discovery/era group. Every requirement ID
 in `RELEASE-4.0.0-requirements.md` now has a row, functional and non-functional alike.
 
-Coverage: 149 criteria, 193 rows, 193 met or non-blocking, 0 blocking.
+Coverage: 156 criteria, 200 rows, 196 met or non-blocking, 4 blocking.
 
 That line is the only place in this file that states totals, and it is not maintained by hand.
 `scripts/release/count-release-criteria.py --check` recounts the blocking column of every table
@@ -606,3 +606,18 @@ The order matters for the fix: NEG.1 alone makes the reported backend work, beca
 accepts the proposal at HTTP 200 and downgrades in the result. NEG.3 alone does not, because
 nothing rejects. Neither is sufficient, because a backend that rejects at 400 and a backend that
 downgrades in the result are different servers.
+
+## CLIAUTH — signed-in CLI for live administration, 3 of 7
+
+The `api` command, the environment token and the stable route list land first; login, logout,
+`auth status`, the approval page and the keychain profile follow, so their rows stay blocking until then.
+
+| ID | criterion | status | evidence | blocking |
+|---|---|---|---|---|
+| MIK-9367.CLIAUTH.1 | `login` by browser approval and device code, credential approved by an admin, stored in the OS keychain | ABSENT | not built yet; it follows the `api` command | yes |
+| MIK-9367.CLIAUTH.2 | a CLI credential expires, appears on the Keys screen, and attributes its calls in Activity | ABSENT | not built yet; it follows the `api` command | yes |
+| MIK-9367.CLIAUTH.3 | `logout` revokes on the gateway; a revoked or expired credential fails with a non-zero exit | ABSENT | not built yet; the exit for a refused credential (3) is already pinned by the `api` rows | yes |
+| MIK-9367.CLIAUTH.4 | `api METHOD PATH` reaches any allowed `/ui/api/` route, takes JSON data, prints the JSON answer, exits non-zero on errors | MET | `src/commands/api.rs`; rows in `tests/cli_api.rs` and `src/commands/api_tests*.rs` pin the path check, the target check, every exit code and token absence on both streams | no |
+| MIK-9367.CLIAUTH.5 | a non-blank `MCP_GATEWAY_TOKEN` takes precedence over the stored credential, and `auth status` names the source | PARTIAL | the variable is the `api` command's only credential and a blank one is refused (exit 2); the stored credential and `auth status` are not built yet | yes |
+| MIK-9367.CLIAUTH.6 | superseded by MIK-9367.CLIAUTH.6a | N/A | the gateway serves no OpenAPI document of its own | no |
+| MIK-9367.CLIAUTH.6a | a committed list of stable `/ui/api/` route methods and templates, with tests that fail on a removed, renamed or unregistered route | MET | `docs/api/stable-ui-routes.md`; `src/gateway/stable_ui_routes_tests.rs` checks every listed route against the router, and the list ships in the crate | no |

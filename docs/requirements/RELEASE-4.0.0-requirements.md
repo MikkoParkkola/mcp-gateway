@@ -260,6 +260,22 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 | MIK-6865.SCHEMA.1b | Tool schemas exposed by the gateway MUST remain valid under JSON Schema 2020-12. | MIK-6865; spec §10 minor | T, M |
 | MIK-6865.SCHEMA.1c | Tool schemas exposed by the gateway MUST stay within the revision's `$ref` and composition bounds. | MIK-6865; spec §10 minor | T, M |
 
+### 3.12 Live administration from the CLI
+
+These are release requirements. The first part delivers `api`, environment-token credentials and
+the stable-route contract; login, logout, stored credentials, approval and `auth status` remain
+requirements for the second part.
+
+| ID | Requirement | Source | Verify |
+|---|---|---|---|
+| MIK-9367.CLIAUTH.1 | `mcp-gateway login` MUST support browser approval and a device-code flow, mint a credential approved by a gateway admin, and store it in the client's OS keychain rather than a plain dotfile. | operator 2026-11-06 | T |
+| MIK-9367.CLIAUTH.2 | A CLI credential MUST have an expiry, appear on the Keys screen, and attribute its calls in Activity to the credential and its approving admin identity. | operator 2026-11-06 | T |
+| MIK-9367.CLIAUTH.3 | `mcp-gateway logout` MUST revoke the credential on the gateway. Every live-administration command using a revoked or expired credential MUST fail with a non-zero exit and a message naming `mcp-gateway login`. | operator 2026-11-06 | T |
+| MIK-9367.CLIAUTH.4 | `mcp-gateway api METHOD PATH` MUST reach any `/ui/api/` route its credential allows, accept JSON request data, print the gateway's JSON response, and exit non-zero on HTTP errors. | operator 2026-11-06 | T |
+| MIK-9367.CLIAUTH.5 | A non-blank `MCP_GATEWAY_TOKEN` MUST take precedence over the stored credential for the gateway URL, and `mcp-gateway auth status` MUST name the credential source. Credential values MUST NOT be printed or logged. | operator 2026-11-06 | T |
+| MIK-9367.CLIAUTH.6 | **Superseded by MIK-9367.CLIAUTH.6a.** The gateway serves no OpenAPI document of its own; its OpenAPI support imports other services' specifications. A served document is deferred until a consumer needs one. | operator 2026-11-06 | T |
+| MIK-9367.CLIAUTH.6a | The gateway MUST commit a documented list of stable `/ui/api/` route methods and path templates, with automated tests that fail when a listed route is removed, renamed or loses a listed method. Unlisted routes MUST be documented as unstable by default. | operator 2026-11-06 | T |
+
 ---
 
 ## 4. Non-functional requirements
