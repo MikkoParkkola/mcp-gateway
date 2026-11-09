@@ -17,26 +17,25 @@
 //! count alone: a count of one with the second caller's body would be a
 //! different defect wearing the same number.
 
-#[path = "common/record_key.rs"]
-mod record_key;
+/// The record key the router's auth config is built with: a self-describing
+/// test value, never a deployment's key.
+const RECORD_KEY: &str = "test-record-key-not-a-secret-0123456789abcdef";
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::backend::{Backend, BackendRegistry};
+use crate::config::{BackendConfig, Config, FailsafeConfig, TransportConfig};
+use crate::gateway::auth::ResolvedAuthConfig;
+use crate::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
+use crate::gateway::proxy::ProxyManager;
+use crate::gateway::streaming::NotificationMultiplexer;
+use crate::gateway::test_helpers::{AppState, MetaMcp, StoreLimits, create_router, open_runtime};
+use crate::key_server::oidc::VerifiedIdentity;
+use crate::mtls::{MtlsConfig, MtlsPolicy};
+use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use mcp_gateway::backend::{Backend, BackendRegistry};
-use mcp_gateway::config::{BackendConfig, Config, FailsafeConfig, TransportConfig};
-use mcp_gateway::gateway::auth::ResolvedAuthConfig;
-use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
-use mcp_gateway::gateway::proxy::ProxyManager;
-use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-use mcp_gateway::gateway::test_helpers::{
-    AppState, MetaMcp, StoreLimits, create_router, open_runtime,
-};
-use mcp_gateway::key_server::oidc::VerifiedIdentity;
-use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-use mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -153,7 +152,7 @@ fn register_backend(state: &Arc<AppState>, url: &str) {
 /// The `TempDir` is returned because the task store holds its directory for the
 /// life of the service: dropping it here would delete the records under a state
 /// the test is still posting to. Callers bind it for the whole test.
-async fn state_with_idempotency() -> (Arc<AppState>, tempfile::TempDir) {
+async fn state_with_idempotency() -> (Arc<AppState>, Arc<tempfile::TempDir>) {
     let config = Config::default();
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -164,8 +163,8 @@ async fn state_with_idempotency() -> (Arc<AppState>, tempfile::TempDir) {
 
     let mut meta = MetaMcp::new(Arc::clone(&backends));
     meta.enable_idempotency(
-        Arc::new(mcp_gateway::idempotency::IdempotencyCache::new()),
-        mcp_gateway::idempotency::CLEANUP_INTERVAL,
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        crate::idempotency::CLEANUP_INTERVAL,
     );
     let meta_mcp = Arc::new(meta);
     let continuation = meta_mcp.continuation();
@@ -174,15 +173,12 @@ async fn state_with_idempotency() -> (Arc<AppState>, tempfile::TempDir) {
     // that publishes: two would send a task's notifications to a listener set
     // no client here is on.
     let subscriptions = Arc::new(
-        mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(
+        crate::gateway::subscription_registry::SubscriptionRegistry::new(
             64,
-            mcp_gateway::gateway::test_helpers::auth_state(
-                &config.auth,
-                crate::record_key::RECORD_KEY,
-            ),
+            crate::gateway::test_helpers::auth_state(&config.auth, RECORD_KEY),
         ),
     );
-    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let store_dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,
@@ -191,6 +187,9 @@ async fn state_with_idempotency() -> (Arc<AppState>, tempfile::TempDir) {
     )
     .await
     .expect("the fixture task store opens");
+    // The task worker outlives no store directory: the test's share of it
+    // keeps the directory until the worker's last write lands.
+    tasks.keep_test_dir(Arc::clone(&store_dir));
 
     let state = Arc::new(AppState {
         process: std::sync::Arc::default(),
@@ -212,20 +211,17 @@ async fn state_with_idempotency() -> (Arc<AppState>, tempfile::TempDir) {
         config_path: None,
         #[cfg(feature = "firewall")]
         firewall: None,
-        agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
+        agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
-            mcp_gateway::gateway::test_helpers::flags_off(config.clone()),
-            Arc::new(ResolvedAuthConfig::from_config(
-                &config.auth,
-                crate::record_key::RECORD_KEY,
-            )),
+        live_config: Arc::new(crate::gateway::test_helpers::live_config(
+            crate::gateway::test_helpers::flags_off(config.clone()),
+            Arc::new(ResolvedAuthConfig::from_config(&config.auth, RECORD_KEY)),
         )),
         export_status: None,
         transparency_log: None,
         governance_log: None,
-        dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+        dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tasks,
         task_executor,
         subscriptions,
@@ -255,7 +251,7 @@ async fn post_direct(
     identity: Option<VerifiedIdentity>,
 ) -> (StatusCode, Value) {
     // A modern request as `/mcp` requires it, which the direct route now
-    // requires too (MIK-8040): the revision and capabilities in `_meta`, and
+    // requires too: the revision and capabilities in `_meta`, and
     // the method and name headers echoing the body.
     let meta = &mut body["params"]["_meta"];
     meta["io.modelcontextprotocol/protocolVersion"] = json!("2026-07-28");
@@ -292,17 +288,11 @@ async fn post_direct(
 }
 
 fn identity(subject: &str, email: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_string(),
-        email: email.to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example".to_string(),
-    }
+    VerifiedIdentity::for_test(subject, email, None, Vec::new(), "https://issuer.example")
 }
 
 /// The caller of a keyed direct call: a verified execution principal, which
-/// the direct route requires as `/mcp` does (MIK-8154 ANON.1).
+/// the direct route requires as `/mcp` does.
 fn principal() -> VerifiedIdentity {
     identity("keyed", "keyed@id.local")
 }
@@ -401,7 +391,7 @@ async fn direct_route_without_a_key_calls_the_backend_each_time() {
 /// Ignoring it runs the call unprotected, which is precisely the outcome the
 /// client asked to prevent; the meta route already refuses this shape at
 /// `src/gateway/router/handlers.rs:1223`. The caller has a principal: a
-/// keyed call from one with none is refused at intake first (MIK-8382), so
+/// keyed call from one with none is refused at intake first, so
 /// only a principal's malformed key reaches the retry-field check this row
 /// pins. The anonymous half is asserted below.
 #[tokio::test]
@@ -411,7 +401,7 @@ async fn direct_route_refuses_a_malformed_key() {
     let (state, _store_dir) = state_with_idempotency().await;
     register_backend(&state, &url);
 
-    // MIK-8382: the same malformed key from a caller with no principal asked
+    // The same malformed key from a caller with no principal asked
     // for keyed handling, so the intake refuses it -32003 before the key is
     // read, and nothing dispatches.
     let (anonymous_status, anonymous) = post_direct(

@@ -36,17 +36,17 @@
 //! no built-in is relabelled, and every assertion below is the one that was
 //! there before.
 
-#[path = "common/record_key.rs"]
-mod record_key;
+/// The record key the router's auth config is built with: a self-describing
+/// test value, never a deployment's key.
+const RECORD_KEY: &str = "test-record-key-not-a-secret-0123456789abcdef";
 
-#[path = "mik_7272_task_1_acs/fixture.rs"]
 mod fixture;
 
-use mcp_gateway::protocol::JsonRpcError;
-use mcp_gateway::protocol::cacheable::is_final;
-use mcp_gateway::protocol::headers::mcp_name_body_field;
-use mcp_gateway::protocol::meta::ADDED_IN_2026_07_28;
-use mcp_gateway::protocol::tasks::{Task, TaskStatus};
+use crate::protocol::JsonRpcError;
+use crate::protocol::cacheable::is_final;
+use crate::protocol::headers::mcp_name_body_field;
+use crate::protocol::meta::ADDED_IN_2026_07_28;
+use crate::protocol::tasks::{Task, TaskStatus};
 use serde_json::json;
 
 // ===========================================================================
@@ -251,11 +251,11 @@ fn ac_task_1_8_a_task_creation_result_is_never_a_final_answer() {
 mod capabilities {
     use std::sync::Arc;
 
-    use mcp_gateway::backend::BackendRegistry;
-    use mcp_gateway::gateway::test_helpers::{CallerStanding, InvokeScope, MetaMcp};
-    use mcp_gateway::protocol::RequestId;
-    use mcp_gateway::protocol::extensions::ExtensionSet;
-    use mcp_gateway::protocol::meta::{Era, classify_and_observe};
+    use crate::backend::BackendRegistry;
+    use crate::gateway::test_helpers::{CallerStanding, InvokeScope, MetaMcp};
+    use crate::protocol::RequestId;
+    use crate::protocol::extensions::ExtensionSet;
+    use crate::protocol::meta::{Era, classify_and_observe};
     use serde_json::{Value, json};
 
     const TASKS: &str = "io.modelcontextprotocol/tasks";
@@ -263,7 +263,7 @@ mod capabilities {
     fn meta() -> MetaMcp {
         MetaMcp::new(Arc::new(BackendRegistry::new()))
     }
-    fn init(params: &Value, era: Era) -> mcp_gateway::protocol::JsonRpcResponse {
+    fn init(params: &Value, era: Era) -> crate::protocol::JsonRpcResponse {
         let admin = InvokeScope::unscoped(CallerStanding::Admin);
         meta().handle_initialize(RequestId::Number(1), Some(params), None, None, era, admin)
     }
@@ -382,7 +382,6 @@ mod capabilities {
 // *client* receives is not settled by a helper's return value.
 // ===========================================================================
 
-#[path = "mik_7272_task_1_acs/http.rs"]
 mod http;
 
 mod wire {
@@ -571,10 +570,7 @@ mod wire {
     }
 }
 
-#[path = "mik_7272_task_1_acs/dispatch.rs"]
 mod dispatch;
-#[path = "mik_7272_task_1_acs/scope.rs"]
 mod scope;
 
-#[path = "mik_7272_task_1_acs/ownership.rs"]
 mod ownership;

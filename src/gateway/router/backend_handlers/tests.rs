@@ -193,13 +193,13 @@ mod identity_propagation_audit {
     }
 
     fn identity(subject: &str) -> VerifiedIdentity {
-        VerifiedIdentity {
-            subject: subject.to_string(),
-            email: "user@test.invalid".to_string(),
-            name: None,
-            groups: vec![],
-            issuer: "https://idp.test.invalid".to_string(),
-        }
+        VerifiedIdentity::for_test(
+            subject.to_string(),
+            "user@test.invalid".to_string(),
+            None,
+            vec![],
+            "https://idp.test.invalid".to_string(),
+        )
     }
 
     // IDP4.2 — no verified identity resolves to the documented sentinel

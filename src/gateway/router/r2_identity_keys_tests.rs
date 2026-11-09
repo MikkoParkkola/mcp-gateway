@@ -190,13 +190,13 @@ async fn post_as_alpha(router: &axum::Router, uri: &str, body: Value) -> (Status
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
     // Auth is disabled in this state, so the middleware leaves it in place.
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp.example.invalid".to_string(),
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        "alpha".to_string(),
+        "alpha@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://idp.example.invalid".to_string(),
+    ));
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();

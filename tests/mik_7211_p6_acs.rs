@@ -133,6 +133,10 @@ mod source_checks {
             // MIK-8143: the cacheable-field tests, moved out of handlers.rs;
             // they read the key from built responses.
             "src/gateway/router/handlers/cacheable_field_tests.rs",
+            // The task lifecycle rows, moved here from an integration suite: their
+            // fixture and scope rows name the key in requests they assert on.
+            "src/gateway/router/task_lifecycle_tests/fixture.rs",
+            "src/gateway/router/task_lifecycle_tests/scope.rs",
             "src/protocol/cacheable.rs",
             // MIK-8025: the shaper's own module notes the hints it wrote, and
             // the write record names the path to strip it; neither writes it.
@@ -413,41 +417,12 @@ mod fixture {
 
     /// POST `body` to `uri` and return the status and parsed body.
     pub async fn post(state: &Arc<AppState>, uri: &str, body: Value) -> (StatusCode, Value) {
-        send(state, uri, body, None).await
-    }
-
-    /// [`post`] as a verified caller: a keyed direct call needs an execution
-    /// principal (MIK-8154 ANON.1).
-    pub async fn post_verified(
-        state: &Arc<AppState>,
-        uri: &str,
-        body: Value,
-    ) -> (StatusCode, Value) {
-        let who = mcp_gateway::key_server::oidc::VerifiedIdentity {
-            subject: "p6".to_string(),
-            email: "p6@id.local".to_string(),
-            name: None,
-            groups: Vec::new(),
-            issuer: "https://issuer.example".to_string(),
-        };
-        send(state, uri, body, Some(who)).await
-    }
-
-    async fn send(
-        state: &Arc<AppState>,
-        uri: &str,
-        body: Value,
-        identity: Option<mcp_gateway::key_server::oidc::VerifiedIdentity>,
-    ) -> (StatusCode, Value) {
-        let mut request = Request::builder()
+        let request = Request::builder()
             .method("POST")
             .uri(uri)
             .header("content-type", "application/json")
             .body(Body::from(serde_json::to_vec(&body).expect("body")))
             .expect("request");
-        if let Some(identity) = identity {
-            request.extensions_mut().insert(identity);
-        }
         let response = create_router(Arc::clone(state))
             .oneshot(request)
             .await
@@ -465,10 +440,9 @@ mod fixture {
 
 mod routes {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
 
     use axum::http::StatusCode;
-    use mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META;
     use serde_json::{Value, json};
 
     use super::fixture::{
@@ -479,11 +453,8 @@ mod routes {
         format!("/mcp/{BACKEND}")
     }
 
-    fn tool_call(id: u32, key: Option<&str>) -> Value {
-        let mut params = json!({ "name": TOOL, "arguments": { "a": 1 } });
-        if let Some(key) = key {
-            params["_meta"] = json!({ IDEMPOTENCY_KEY_META: key });
-        }
+    fn tool_call(id: u32) -> Value {
+        let params = json!({ "name": TOOL, "arguments": { "a": 1 } });
         json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params })
     }
 
@@ -506,7 +477,7 @@ mod routes {
         let url = spawn_backend(Arc::new(AtomicUsize::new(0))).await;
         let (state, _dir) = fixture::state(false).await;
         register(&state, &url, passthrough);
-        fixture::post(&state, &direct(), tool_call(1, None)).await
+        fixture::post(&state, &direct(), tool_call(1)).await
     }
 
     /// Test 1 (a): the sanitized-dispatch arm.
@@ -521,30 +492,6 @@ mod routes {
     async fn direct_passthrough_tools_call_is_never_delivered_public() {
         let (status, body) = direct_tool_call(true).await;
         assert_scopeless_success(status, &body);
-    }
-
-    /// Test 1 (c) and test 10: a replay of a stored public result, with no
-    /// second dispatch.
-    #[tokio::test]
-    async fn direct_idempotency_replay_is_never_delivered_public() {
-        assert_fixture_is_public();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let url = spawn_backend(Arc::clone(&calls)).await;
-        let (state, _dir) = fixture::state(false).await;
-        register(&state, &url, false);
-
-        let post = fixture::post_verified;
-        let (first_status, first) = post(&state, &direct(), tool_call(1, Some("k"))).await;
-        let (status, replay) = post(&state, &direct(), tool_call(2, Some("k"))).await;
-
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "the replay must not dispatch"
-        );
-        assert_scopeless_success(first_status, &first);
-        assert_scopeless_success(status, &replay);
-        assert_eq!(replay["result"]["content"], first["result"]["content"]);
     }
 
     /// Test 2: direct `resources/read`, which a backend answers itself.
@@ -573,7 +520,7 @@ mod routes {
         let (state, _dir) = fixture::state(true).await;
         register(&state, &url, false);
 
-        let (status, body) = fixture::post(&state, "/mcp", tool_call(6, None)).await;
+        let (status, body) = fixture::post(&state, "/mcp", tool_call(6)).await;
 
         assert_scopeless_success(status, &body);
         assert_eq!(body["result"]["content"][0]["text"], "call-1", "{body}");

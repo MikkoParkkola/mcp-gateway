@@ -13,15 +13,12 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use super::fixture::{self, CountedBackend};
 use super::http::{keyed, modern, post_against, public_mcp_auth, state_from_with, task_id_of};
-use crate::fixture::{self, CountedBackend};
-use mcp_gateway::transport::Transport;
+use crate::transport::Transport;
 
 /// `tasks/get` as `key-a` until the task is terminal, bounded by [`fixture::BOUND`].
-async fn poll_terminal(
-    state: &Arc<mcp_gateway::gateway::test_helpers::AppState>,
-    id: &str,
-) -> Value {
+async fn poll_terminal(state: &Arc<crate::gateway::test_helpers::AppState>, id: &str) -> Value {
     let mut last = Value::Null;
     tokio::time::timeout(fixture::BOUND, async {
         let mut request_id = 80;

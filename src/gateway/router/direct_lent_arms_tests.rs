@@ -149,13 +149,13 @@ async fn post_direct(router: &axum::Router, body: &Value) -> (StatusCode, Value)
         .header("content-type", "application/json")
         .body(axum::body::Body::from(body.to_string()))
         .expect("a request");
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(),
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        "alpha".to_string(),
+        "alpha@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://issuer.example.invalid".to_string(),
+    ));
     let response = router.clone().oneshot(request).await.expect("an answer");
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX)
