@@ -96,7 +96,7 @@ pub(super) fn collect(
         signing_anchor: [Which::Invocation, Which::Governance].map(|w| check.report(w)),
     };
     // The report is taken when the export ends, after every row was judged,
-    // so a legacy fault a row met is in it (code review M3).
+    // so a legacy fault a row met is in it.
     let done = |mut c: Collected, truncated| {
         c.truncated = truncated;
         c.signing_anchor = [Which::Invocation, Which::Governance].map(|w| check.report(w));
@@ -250,7 +250,7 @@ const COLUMNS: [&str; 32] = [
     "http_status",
     "signature",
     "integrity",
-    // A legacy record nothing anchors (code review M4).
+    // A legacy record nothing anchors.
     "unanchored",
     "prev_entry_hash",
     "entry_hash",

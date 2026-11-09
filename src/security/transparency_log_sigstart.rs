@@ -214,9 +214,8 @@ const KEPT_CHUNKS: usize = 4;
 
 #[cfg(feature = "webui")]
 /// Per-request memory of verified chunks: their bytes, keyed by log path,
-/// segment and chunk (round 1 code review C1: two logs share coordinates),
-/// so a record is compared with the bytes that verified, not re-read ones
-/// (C2). Bounded: at most [`KEPT_CHUNKS`], the oldest re-read when evicted.
+/// segment and chunk (the two logs share coordinates), so a record is
+/// compared with the bytes that verified, not re-read ones. Bounded: at most [`KEPT_CHUNKS`], the oldest re-read when evicted.
 #[derive(Debug, Default)]
 pub(crate) struct Checked {
     kept: std::collections::VecDeque<((std::path::PathBuf, u64, u64), std::rc::Rc<Vec<u8>>)>,
@@ -226,7 +225,7 @@ pub(crate) struct Checked {
 #[cfg(feature = "webui")]
 impl Checked {
     /// The verified bytes of `chunk` of segment `seq`, read once through the
-    /// pager (which checks the open record names `seq`, code review M1);
+    /// pager (which checks the open record names `seq`);
     /// `None` when unreadable or its digest differs from `want`.
     fn verified(
         &mut self,
@@ -278,8 +277,7 @@ fn kept(path: &Path) -> io::Result<Vec<(u64, std::path::PathBuf)>> {
     Ok(out)
 }
 
-/// Every kept byte below an `open` anchor is digested (lead condition on
-/// round 3 J4): without it, a sidecar from another log, or one stripped of
+/// Every kept byte below an `open` anchor is digested: without it, a sidecar from another log, or one stripped of
 /// its digests, would exempt this log's records.
 fn covers(path: &Path, body: &SigStart) -> bool {
     if body.state == State::Closed {
@@ -348,7 +346,7 @@ impl Anchor {
         };
         // A sealed file never changes after its seal: any other length is an
         // edit. Checked first, so bytes appended to it read as an edit. The
-        // pager's handle is the file the open record names (code review M1).
+        // pager's handle is the file the open record names.
         if segment != body.segment_seq {
             let len = super::pager::open_segment(path, segment, || {})
                 .ok()
@@ -363,7 +361,7 @@ impl Anchor {
             return Placed::Invalid("legacy_unlisted");
         }
         // The line from the verified chunks themselves, so the record served
-        // is the one that verified (code review C2).
+        // is the one that verified.
         let mut line = Vec::new();
         let last = (offset + len).saturating_sub(1) / CHUNK;
         for chunk in offset / CHUNK..=last {
@@ -410,7 +408,7 @@ pub(super) struct FirstSigned {
 }
 
 /// What an open does about the sidecar, decided before tail repair writes
-/// anything (round 3 J5), so a record the repair signs cannot change it.
+/// anything, so a record the repair signs cannot change it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Plan {
     /// No secret, or a verified sidecar whose event is already written.
@@ -432,8 +430,8 @@ pub(super) enum Plan {
 
 /// Visit each whole line of `file` that parses as a record, with its offset,
 /// until `found` says stop. Streams: a line over the record cap is skipped
-/// without being held whole, and nothing earlier is kept (code review C3:
-/// a v3 file has no size cap). `true` when `found` stopped it.
+/// without being held whole, and nothing earlier is kept (a v3 file has no
+/// size cap). `true` when `found` stopped it.
 fn scan_lines(
     file: &Path,
     mut found: impl FnMut(u64, &serde_json::Value) -> bool,
@@ -675,13 +673,13 @@ pub(super) fn event_of(
 }
 
 /// Housekeeping events, named under the segment prefix so callers cannot
-/// write them (round 2 HI2).
+/// write them.
 pub(crate) const EV_REBUILT: &str = "audit_segment_sigstart_rebuilt";
 pub(crate) const EV_MIGRATED: &str = "audit_segment_sigstart_migrated";
 pub(crate) const EV_UNANCHORED: &str = "audit_segment_sigstart_unanchored";
 pub(crate) const EV_INVALID: &str = "audit_segment_sigstart_invalid";
 
-/// The announce phase, after segment recovery (round 3 J3): write the
+/// The announce phase, after segment recovery: write the
 /// record the plan owes through `write`, then mark the sidecar announced.
 /// A crash between leaves `announced: false`, so the next open retries; a
 /// duplicate record is allowed.

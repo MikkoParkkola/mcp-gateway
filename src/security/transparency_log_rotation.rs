@@ -368,7 +368,7 @@ fn anchor_plan(
 }
 
 /// After segment recovery: correct a first start's predicted seq, then write
-/// the record the plan owes (round 3 J3) and move the mark past it.
+/// the record the plan owes and move the mark past it.
 fn settle_anchor(
     path: &Path,
     config: &TransparencyLogConfig,

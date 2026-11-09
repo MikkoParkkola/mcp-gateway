@@ -25,7 +25,7 @@ pub(super) struct Check<'a> {
     gov: Option<(PathBuf, Anchor)>,
     checked: RefCell<Checked>,
     /// The first legacy fault each log showed (invocation, governance): the
-    /// log-wide report names it once a row met it (code review M3).
+    /// log-wide report names it once a row met it.
     legacy_faults: RefCell<[Option<&'static str>; 2]>,
 }
 
