@@ -468,7 +468,8 @@ def main() -> int:
     if RELEASE_LINE not in (on.get("push") or {}).get("branches", []):
         errors.append(f"ci.yml does not run on a push to {RELEASE_LINE}")
     # A newer release-line tip cancels the push runs of older tips (lead decision 2026-11-09,
-    # superseding MIK-8163's "every merge keeps its own run, so a red one names its merge commit"):
+    # superseding the post-merge rule "every merge keeps its own run, so a red one names its merge
+    # commit"):
     # a 7-merge train queued about 250 push jobs behind every PR's CI. The train already tested the
     # exact landed tree, bisecting one train's merges is local, and every PR's own CI and the train
     # run the shrink gates. Tags, dispatches (the release freeze dispatches on the line), main and
