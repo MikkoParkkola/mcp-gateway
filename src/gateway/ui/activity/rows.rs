@@ -10,19 +10,19 @@ use serde_json::{Map, Value};
 
 use super::reader::{Line, Which};
 use crate::gateway::authz::BackendGrant;
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::path::{Path, PathBuf};
 
 use crate::security::transparency_log::signature::{Judged, judge};
 use crate::security::transparency_log::sigstart::{self, Anchor, Checked, LinePos};
 
 /// How one request checks rows: the running logger's secret and key, each
-/// log's signing anchor (loaded once per request), and the chunks of
+/// log's signing anchor (loaded at most once per request), and the chunks of
 /// pre-signing files already hashed.
 pub(super) struct Check<'a> {
     secret: Option<&'a [u8]>,
-    inv: (PathBuf, Anchor),
-    gov: Option<(PathBuf, Anchor)>,
+    inv: (PathBuf, OnceCell<Anchor>),
+    gov: Option<(PathBuf, OnceCell<Anchor>)>,
     checked: RefCell<Checked>,
     /// The first legacy fault each log showed (invocation, governance): the
     /// log-wide report names it once a row met it.
@@ -37,9 +37,10 @@ fn slot(which: Which) -> usize {
 }
 
 impl<'a> Check<'a> {
-    /// Load the anchors of `inv` and `gov` under `secret`.
+    /// Load the anchors of `inv` and `gov` under `secret`, now: a request
+    /// judges every row against the anchor as it stood when it began.
     pub(super) fn new(secret: Option<&'a [u8]>, inv: &Path, gov: Option<&Path>) -> Self {
-        let load = |p: &Path| (p.to_path_buf(), sigstart::load(p, secret));
+        let load = |p: &Path| (p.to_path_buf(), OnceCell::from(sigstart::load(p, secret)));
         Self {
             secret,
             inv: load(inv),
@@ -49,12 +50,14 @@ impl<'a> Check<'a> {
         }
     }
 
-    /// One log only: the live stream reads one log per source.
+    /// One log only: the live stream reads one log per source. Its anchor is
+    /// loaded when a record first needs placing: a signed record that
+    /// verifies never consults it, so a live frame for one reads nothing.
     pub(super) fn one(secret: Option<&'a [u8]>, which: Which, path: &Path) -> Self {
-        let loaded = (path.to_path_buf(), sigstart::load(path, secret));
+        let lazy = (path.to_path_buf(), OnceCell::new());
         let (inv, gov) = match which {
-            Which::Invocation => (loaded, None),
-            Which::Governance => ((PathBuf::new(), Anchor::Absent), Some(loaded)),
+            Which::Invocation => (lazy, None),
+            Which::Governance => ((PathBuf::new(), OnceCell::from(Anchor::Absent)), Some(lazy)),
         };
         Self {
             secret,
@@ -65,10 +68,10 @@ impl<'a> Check<'a> {
         }
     }
 
-    /// Whether this request has loaded its anchor yet (always, today).
+    /// Whether this request has loaded every anchor it holds.
     #[cfg(test)]
     pub(super) fn anchor_loaded(&self) -> bool {
-        true
+        self.inv.1.get().is_some() && self.gov.as_ref().is_none_or(|g| g.1.get().is_some())
     }
 
     /// Rows judged as if every unsigned record predated signing: for rows
@@ -77,18 +80,22 @@ impl<'a> Check<'a> {
     pub(super) fn bare(secret: Option<&'a [u8]>) -> Self {
         Self {
             secret,
-            inv: (PathBuf::new(), Anchor::NoSecret),
+            inv: (PathBuf::new(), OnceCell::from(Anchor::NoSecret)),
             gov: None,
             checked: RefCell::default(),
             legacy_faults: RefCell::default(),
         }
     }
 
-    fn log(&self, which: Which) -> Option<&(PathBuf, Anchor)> {
-        match which {
+    fn log(&self, which: Which) -> Option<(&Path, &Anchor)> {
+        let (path, anchor) = match which {
             Which::Invocation => Some(&self.inv),
             Which::Governance => self.gov.as_ref(),
-        }
+        }?;
+        Some((
+            path,
+            anchor.get_or_init(|| sigstart::load(path, self.secret)),
+        ))
     }
 
     /// The log-wide anchor state, as the exports and receipts report it;

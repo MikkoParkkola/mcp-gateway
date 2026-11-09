@@ -381,8 +381,9 @@ pub(in crate::gateway::ui) fn frame(
         segment: 0,
         span: None,
     };
-    // ponytail: loads the anchor per announced record; hold one per
-    // connection if the live stream's sidecar reads ever show up.
+    // A signed record that verifies never loads the anchor (`Check::one` is
+    // lazy); only an unsigned one, which with signing on is an edit, reads
+    // the sidecar.
     served(
         log,
         access,
