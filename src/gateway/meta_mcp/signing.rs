@@ -66,33 +66,17 @@ enum Origin {
     ToolCall,
 }
 
-/// A target signing prepared, and the allow its policy check noted, taken
-/// once by the dispatch that skips its own check, so no later call or request
-/// inherits it.
-struct Prepared {
-    server: String,
-    tool: String,
-    allow: std::sync::Mutex<Option<crate::security::decision_record::Allow>>,
-}
-
-impl Prepared {
-    const fn new(server: String, tool: String) -> Self {
-        Self {
-            server,
-            tool,
-            allow: std::sync::Mutex::new(None),
-        }
-    }
-}
+// The prepared target and its allow, in a child module (line ceiling).
+#[path = "signing_prepared.rs"]
+mod prepared;
+use prepared::Prepared;
 
 pub(crate) struct SigningInvocationContext {
     origin: Origin,
     scope: SigningScope,
     nonce: CapturedNonce,
     request_id: Option<Value>,
-    /// The target signing prepared, with the allow its policy check noted.
-    /// Boxed: the context is held across a stdio delivery's awaits, whose
-    /// boxed dispatch futures carry a fixed allocation budget.
+    /// The prepared target and its allow, boxed off the stdio dispatch futures.
     prepared_target: Option<Box<Prepared>>,
     /// The nonce passed admission. Only an admitted context signs, so a
     /// response is never signed over a nonce the store did not register.
@@ -306,30 +290,6 @@ impl SigningInvocationContext {
             take_meta_nonce(request.get_mut("params"));
         }
         Ok(())
-    }
-
-    /// Keep `allow` as the prepared target's signing-time allow.
-    pub(crate) fn store_prepared_allow(
-        &self,
-        allow: Option<crate::security::decision_record::Allow>,
-    ) {
-        if let Some(prepared) = &self.prepared_target
-            && let Ok(mut held) = prepared.allow.lock()
-        {
-            *held = allow;
-        }
-    }
-
-    /// The prepared target's signing-time allow, taken: a second read finds
-    /// nothing.
-    pub(crate) fn take_prepared_allow(&self) -> Option<crate::security::decision_record::Allow> {
-        self.prepared_target.as_ref()?.allow.lock().ok()?.take()
-    }
-
-    pub(crate) fn prepared_for(&self, server: &str, tool: &str) -> bool {
-        self.prepared_target
-            .as_ref()
-            .is_some_and(|prepared| prepared.server == server && prepared.tool == tool)
     }
 
     /// A signed context whose nonce has not passed admission. Dispatch refuses
