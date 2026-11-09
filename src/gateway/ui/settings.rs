@@ -397,9 +397,11 @@ fn bad_value(id: FieldId, reason: &str) -> Response {
     field_error(id, "bad_value", reason)
 }
 
-fn answer(refusal: UiRefused) -> Response {
-    let retryable = matches!(
-        &refusal,
+/// The refusals a client may retry as they are: the design lists Retry-After
+/// for these 503s only; the others need someone to change the config first.
+fn retryable(refusal: &UiRefused) -> bool {
+    matches!(
+        refusal,
         UiRefused::Busy
             | UiRefused::StaleUnpreviewable(_)
             | UiRefused::Preview(PreviewRefused::Recovering)
@@ -407,7 +409,28 @@ fn answer(refusal: UiRefused) -> Response {
             | UiRefused::ReloadRefused {
                 class: RefusalClass::ShuttingDown
             }
-    );
+    )
+}
+
+/// The core's parameter reasons are fixed texts from the field table; any
+/// other text is answered with one fixed sentence, never echoed.
+fn bad_param_reason(reason: &str) -> &'static str {
+    match reason {
+        "needs a backend" => "needs a backend",
+        "takes no backend" => "takes no backend",
+        "needs an index" => "needs an index",
+        "takes no index" => "takes no index",
+        "named twice" => "named twice",
+        "a required alert field" => "a required alert field",
+        "the backend name cannot be edited in place" => {
+            "the backend name cannot be edited in place"
+        }
+        _ => "the field parameters are invalid",
+    }
+}
+
+fn answer(refusal: UiRefused) -> Response {
+    let retryable = retryable(&refusal);
     let error = |status, code, text| structured_error(status, code, text).into_response();
     let response = match refusal {
         UiRefused::WrongKind(id) => field_error(
@@ -416,21 +439,7 @@ fn answer(refusal: UiRefused) -> Response {
             "the operation does not match the field's kind",
         ),
         UiRefused::BadValue(id, reason) => bad_value(id, &reason),
-        UiRefused::BadParam(id, reason) => {
-            let reason = match reason.as_str() {
-                "needs a backend" => "needs a backend",
-                "takes no backend" => "takes no backend",
-                "needs an index" => "needs an index",
-                "takes no index" => "takes no index",
-                "named twice" => "named twice",
-                "a required alert field" => "a required alert field",
-                "the backend name cannot be edited in place" => {
-                    "the backend name cannot be edited in place"
-                }
-                _ => "the field parameters are invalid",
-            };
-            field_error(id, "bad_param", reason)
-        }
+        UiRefused::BadParam(id, reason) => field_error(id, "bad_param", bad_param_reason(&reason)),
         UiRefused::Invalid(_) => error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED),
         UiRefused::ReloadRefused { class } => match class {
             RefusalClass::Posture => error(
