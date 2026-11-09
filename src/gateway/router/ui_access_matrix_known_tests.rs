@@ -132,3 +132,64 @@ fn the_expectation_holds_known_answers() {
         assert_eq!(post(path, "valid+store", "AdminKey"), "409", "{path}");
     }
 }
+
+/// A receipt for a call with no decision object reads the by-version
+/// line in `findings`, not the old placeholder. That text is why the six
+/// `other-receipt` 200 cells (`AdminKey`, `AdminKeyUnmapped`, `Bearer`, `OidcAdmin`,
+/// `OidcAuditor`, `Session`) carry a new digest in `ui_access_matrix.tsv`.
+#[tokio::test]
+async fn matrix_known_receipt_cells_moved_for_findings_line() {
+    let fx = fixture(Gateway::On, false).await;
+    let router = create_router(Arc::clone(&fx.state));
+    let req = ("GET", routes::UI_ACTIVITY_RECEIPT, "other-receipt");
+    let (status, body) = send(&router, request(Caller::AdminKey, req, &fx, None)).await;
+    assert_eq!(status, StatusCode::OK);
+    let receipt: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        receipt["findings"],
+        crate::security::decision_record::read::NOT_RECORDED_BY_VERSION
+    );
+}
+
+/// The six `other-receipt` 200 cells that moved, each with why: the seeded
+/// call has no decision object, so the receipt's `findings` text changed from
+/// the old placeholder to the reader's by-version line.
+const MOVED_FOR_FINDINGS_LINE: [(&str, &str); 6] = [
+    (
+        "AdminKey",
+        "an admin key reads the receipt; its findings line changed",
+    ),
+    (
+        "AdminKeyUnmapped",
+        "an unmapped admin key reads it; findings line changed",
+    ),
+    ("Bearer", "the bearer reads it; its findings line changed"),
+    (
+        "OidcAdmin",
+        "an OIDC admin reads it; its findings line changed",
+    ),
+    (
+        "OidcAuditor",
+        "an auditor reads every receipt; findings line changed",
+    ),
+    (
+        "Session",
+        "a dashboard session reads it; its findings line changed",
+    ),
+];
+
+#[test]
+fn the_moved_receipt_cells_carry_the_new_digest() {
+    let expected = expected();
+    for (caller, reason) in MOVED_FOR_FINDINGS_LINE {
+        let key = format!(
+            "{}\tGET\tother-receipt\t{caller}",
+            routes::UI_ACTIVITY_RECEIPT
+        );
+        assert_eq!(
+            expected.get(&key).map(String::as_str),
+            Some("200:b5e993923abe"),
+            "{reason}"
+        );
+    }
+}
