@@ -208,7 +208,35 @@ fn child() {
         leaks.len(),
         leaks.join("\n")
     );
+    if matches!(case.as_str(), "json" | "text") {
+        safe_identity_checks(&text);
+    }
     println!("piilog {case} child ok");
+}
+
+/// The issued record carries every `SafeIdentity` field with its expected
+/// value: the exact subject and issuer, the email's keyed hash, version 1 and
+/// the key's id. The audit JSON is escaped inside a JSON log line, so the
+/// check reads the text with backslashes removed.
+fn safe_identity_checks(text: &str) {
+    let key = crate::key_server::email_hash::EmailHashKey::for_test();
+    let issued = text
+        .lines()
+        .find(|l| l.contains("token.issued"))
+        .expect("a token.issued line")
+        .replace('\\', "");
+    for field in [
+        format!("\"subject\":\"{SUBJECT}\""),
+        format!("\"issuer\":\"{ISS_A}\""),
+        format!("\"email_hash\":\"{}\"", key.hash(EMAIL)),
+        "\"email_hash_version\":1".to_owned(),
+        format!("\"email_hash_key_id\":\"{}\"", key.key_id()),
+    ] {
+        assert!(issued.contains(&field), "{field} missing from {issued}");
+    }
+    for gone in ["\"email\":", "\"name\":", "\"groups\":"] {
+        assert!(!issued.contains(gone), "{gone} still in {issued}");
+    }
 }
 
 #[test]
