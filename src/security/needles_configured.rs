@@ -134,93 +134,42 @@ impl NeedleSet {
 /// with the fixed refusal, its id kept. Run on the delivering call's task,
 /// so that call's record says what was done.
 ///
-/// A provenance seal in the answer goes out only when nothing is removed:
-/// each seal was made over the stored bytes, and its readable payload
-/// carries their unsalted digest, so next to a redacted body it would let a
-/// client test guesses of the removed value, and it no longer covers what is
-/// served. The seals come off before the scrub, which can rename the keys
-/// that hold them, and the stored answer, seals included, is put back
-/// whole when the scrub removes nothing. Receipts stay: they hold no digest
-/// of the result.
+/// While any set holds a value, a stored answer goes out with no provenance
+/// seal, whether or not the scrub removes anything. Each seal was made over
+/// the stored bytes and its readable payload carries their unsalted digest:
+/// next to a redacted body it would let a client test guesses of the removed
+/// value, and it would no longer cover what is served. The seals come off
+/// before the scrub, which can rename the keys that hold them, in objects
+/// and in JSON text alike. A redacted answer holding text that names a seal
+/// but will not parse, so a seal may remain in it, is refused. Receipts
+/// stay: they hold no digest of the result. Keeping seals on answers the
+/// scrub leaves alone was tried and dropped: every way of proving the answer
+/// unchanged had a hole (numbers, renamed keys, rewritten text).
 pub(crate) fn scrub_stored(
     sets: &[std::sync::Arc<NeedleSet>],
     response: &mut JsonRpcResponse,
 ) -> Scrubbed {
-    let sealed = response
-        .result
-        .as_ref()
-        .filter(|result| holds_seal(result))
-        .cloned();
-    let stripped = match (&sealed, response.result.as_mut()) {
-        (Some(_), Some(result)) => drop_seals(result),
+    let armed = sets.iter().any(|set| !set.snapshot().is_empty());
+    let stripped = match response.result.as_mut() {
+        Some(result) if armed => drop_seals(result),
         _ => true,
     };
     let outcome = scrub_unsealed(sets, response);
-    let Some(original) = sealed else {
-        return outcome;
-    };
-    // Put back only an answer nothing held is in anywhere, its seals, their
-    // key names and the text the strip rewrote included: the stored bytes.
-    let held = sets
-        .iter()
-        .find(|set| !holds_no_needle(&original, &set.snapshot()));
-    match (outcome, held) {
-        (Scrubbed::Clean, None) => {
-            response.result = Some(original);
-            Scrubbed::Clean
-        }
-        // Seal-bearing text that would not parse may still carry its seal:
-        // a changed answer with one is refused rather than sent.
-        (Scrubbed::Clean | Scrubbed::Redacted, held) if !stripped => {
-            use crate::gateway::delivery_facts::{echo_redacted, echo_refusal_built};
-            let message = held
-                .or_else(|| sets.first())
-                .map_or(ECHO_REFUSAL, |set| refusal_message(set));
-            *response = JsonRpcResponse::error(response.id.clone(), REFUSAL_CODE, message);
-            echo_redacted();
-            echo_refusal_built();
-            Scrubbed::Refuse
-        }
-        // A held value only in what the strip removed or rewrote: the seals
-        // stay off, and the answer is no longer the stored one.
-        (Scrubbed::Clean, Some(_)) => {
-            crate::gateway::delivery_facts::echo_redacted();
-            Scrubbed::Redacted
-        }
-        (other, _) => other,
+    if outcome == Scrubbed::Redacted && !stripped {
+        use crate::gateway::delivery_facts::echo_refusal_built;
+        let message = sets
+            .first()
+            .map_or(ECHO_REFUSAL, |set| refusal_message(set));
+        *response = JsonRpcResponse::error(response.id.clone(), REFUSAL_CODE, message);
+        echo_refusal_built();
+        return Scrubbed::Refuse;
     }
-}
-
-/// Whether `value` may hold a provenance seal: a `public_signature` member
-/// of a `_meta.provenance`, or text naming one (a chain or playbook answer
-/// carries its steps' sealed results as JSON text). Only cheap: a false
-/// positive costs one copy of the answer.
-fn holds_seal(value: &Value) -> bool {
-    let mut pending = vec![value];
-    while let Some(next) = pending.pop() {
-        match next {
-            Value::Object(object) => {
-                if object
-                    .get("_meta")
-                    .and_then(|meta| meta.get("provenance"))
-                    .is_some_and(|provenance| provenance.get("public_signature").is_some())
-                {
-                    return true;
-                }
-                pending.extend(object.values());
-            }
-            Value::Array(items) => pending.extend(items),
-            Value::String(text) if text.contains("public_signature") => return true,
-            _ => {}
-        }
-    }
-    false
+    outcome
 }
 
 /// Remove every provenance seal from `value`, at any depth and inside JSON
-/// text. Text naming a seal is parsed, unsealed and written back compact (it
-/// goes out only in an answer the scrub changed); false when such text is
-/// shaped as JSON but did not parse, so a seal may remain in it. Iterative over each value; text inside text recurses once per
+/// text. Text naming a seal is parsed, unsealed and written back compact;
+/// false when such text did not parse, so a seal may remain in it. Iterative over each value; text inside text recurses once per
 /// level of escaping, and each level doubles the escapes, so the depth stays
 /// a few dozen at most.
 fn drop_seals(value: &mut Value) -> bool {
@@ -245,9 +194,7 @@ fn drop_seals(value: &mut Value) -> bool {
                         stripped &= drop_seals(&mut inner);
                         *text = inner.to_string();
                     }
-                    // Prose that names a seal is not one; text shaped as
-                    // JSON that will not parse may carry one.
-                    Err(_) => stripped &= !text.trim_start().starts_with(['{', '[']),
+                    Err(_) => stripped = false,
                 }
             }
             _ => {}

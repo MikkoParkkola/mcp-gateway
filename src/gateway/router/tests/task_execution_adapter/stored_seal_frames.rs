@@ -187,19 +187,39 @@ async fn a_task_notification_redacted_at_serve_carries_no_seal() {
     panic!("no completion frame for task {id}");
 }
 
-/// Control: a scrub that removes nothing keeps the seal, and it still
-/// verifies against the bytes served.
+/// Control: while no value is held, a stored result served again keeps its
+/// seal, and it still verifies against the bytes served.
 #[tokio::test]
-async fn a_stored_result_with_nothing_to_redact_keeps_its_seal() {
+async fn a_stored_result_keeps_its_seal_while_no_value_is_held() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = sealing_state(&mock).await;
     let id = settled_sealed(&state, "seal-control").await;
-    mark(&state, "a-value-the-result-does-not-hold");
     let served = get_task(&state, "key-a", &id).await;
     let result = served
         .pointer("/result/result")
         .expect("a completed tasks/get carries its result");
-    assert_sealed_bound(result, "a result with nothing redacted");
+    assert_sealed_bound(result, "a result served while no value is held");
+}
+
+/// While a value is held, a stored result is served with no seal even when
+/// it holds nothing to redact; its content and receipt are unchanged.
+#[tokio::test]
+async fn a_stored_result_is_served_unsealed_while_a_value_is_held() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = sealing_state(&mock).await;
+    let id = settled_sealed(&state, "seal-held").await;
+    mark(&state, "a-value-the-result-does-not-hold");
+    let served = get_task(&state, "key-a", &id).await;
+    let text = served.to_string();
+    assert!(text.contains(OUTPUT), "the content is unchanged: {served}");
+    assert!(
+        text.contains("\"provenance\""),
+        "the receipt stays: {served}"
+    );
+    assert!(
+        !text.contains("public_signature"),
+        "a stored result kept its seal while a value is held: {served}"
+    );
 }
 
 /// A keyed synchronous call served again from the idempotency store.
