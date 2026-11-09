@@ -257,3 +257,18 @@ fn the_config_lock_sidecar_is_left_untouched_by_a_cut() {
     crash_fs::cut(dir.path(), Mode::DropAll);
     assert_eq!(std::fs::read(&sidecar).expect("sidecar"), b"later");
 }
+
+/// C12: red oracle: a directory sync never brings the excluded sidecar into
+/// the model; a sync that recorded it would restore its synced bytes under
+/// `DropAll`.
+#[test]
+fn a_dir_sync_leaves_the_config_lock_sidecar_out() {
+    let (dir, config) = config();
+    let _armed = crash_fs::arm_config(&config);
+    let sidecar = super::lock::lock_path(&config);
+    std::fs::write(&sidecar, b"synced").expect("create sidecar");
+    sync_dir_of(&config).expect("dir sync");
+    std::fs::write(&sidecar, b"later").expect("rewrite sidecar");
+    crash_fs::cut(dir.path(), Mode::DropAll);
+    assert_eq!(std::fs::read(&sidecar).expect("sidecar"), b"later");
+}
