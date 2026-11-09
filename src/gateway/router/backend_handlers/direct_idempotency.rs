@@ -355,7 +355,11 @@ fn replay_scan(
     // replay) passes here: scrubbed against the values current now, so a
     // value marked secret after it was stored is removed, and a refused
     // scrub makes the fixed refusal the answer.
-    let _ = state.backends.scrub_stored(response);
+    let _ = mutant!(
+        "seal_direct",
+        crate::security::needles::keep_seals_response(response, |r| state.backends.scrub_stored(r)),
+        state.backends.scrub_stored(response)
+    );
     let method = envelope.method.as_str();
     let target = super::direct_dispatch::screen_target(call, method);
     super::super::direct_guards::scan_direct_egress(

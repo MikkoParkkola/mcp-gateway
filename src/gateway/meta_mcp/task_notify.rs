@@ -106,7 +106,12 @@ impl MetaMcp {
                     // the subscriber still hears the task ended.
                     let outcome = match (stored, params.as_mut()) {
                         // A task notification has no request behind it.
-                        (Some(task), Some(value)) => self.scan_stored_task(task, None, value),
+                        (Some(task), Some(value)) => mutant!(
+                            "seal_notify",
+                            crate::security::needles::keep_seals_value(value, |v| self
+                                .scan_stored_task(task, None, v)),
+                            self.scan_stored_task(task, None, value)
+                        ),
                         _ => super::invoke::egress::EgressOutcome::Delivered,
                     };
                     if outcome == super::invoke::egress::EgressOutcome::Refused {
