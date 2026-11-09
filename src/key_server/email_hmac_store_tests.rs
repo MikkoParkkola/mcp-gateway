@@ -7,7 +7,7 @@
 use std::os::unix::fs::PermissionsExt as _;
 use std::sync::{Arc, Barrier};
 
-use super::{CREATED_EVENT, FILE, creation_fields, history_in, resolve};
+use super::{CREATED_EVENT, FILE, LOCK_WAIT, creation_fields, history_in, resolve, take_lock};
 
 const KEY_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const KEY2_HEX: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
@@ -334,4 +334,45 @@ fn a_malformed_envelope_never_quotes_the_key() {
         assert!(!err.contains(KEY_HEX), "{err}");
         assert!(err.contains("line 1"), "{err}");
     }
+}
+
+/// A start waits the vault's 30 seconds for another holding the lock.
+#[test]
+fn a_start_waits_thirty_seconds_for_the_lock() {
+    assert_eq!(LOCK_WAIT, std::time::Duration::from_secs(30));
+}
+
+/// A held lock past the wait refuses, naming the envelope and the lock file.
+#[test]
+fn a_held_lock_past_the_wait_refuses_naming_the_envelope() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let lock = dir.path().join(".key-server-email-hmac.lock");
+    let _held = take_lock(&lock, std::time::Duration::ZERO).expect("first holder");
+    let err = take_lock(&lock, std::time::Duration::ZERO).expect_err("busy");
+    assert!(
+        err.contains("the key-server email HMAC envelope")
+            && err.contains(&lock.display().to_string()),
+        "{err}"
+    );
+}
+
+/// A publish that fails before its link (a crash, an unsupported link)
+/// leaves no key file and no temp, and the next start makes a fresh key.
+#[test]
+fn a_failed_publish_serves_no_key_and_leaves_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join(FILE);
+    let failed = crate::config::publish_new_file(&target, b"{}", |_, _| {
+        Err(std::io::Error::other("power lost before the link"))
+    });
+    assert!(failed.is_err());
+    assert_eq!(
+        std::fs::read_dir(dir.path()).expect("ls").count(),
+        0,
+        "nothing left behind"
+    );
+    assert!(
+        id(dir.path(), None).is_ok(),
+        "the next start creates the key"
+    );
 }

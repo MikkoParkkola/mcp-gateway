@@ -85,3 +85,62 @@ async fn with_the_audit_log_the_key_is_created_and_recorded_once() {
             .exists()
     );
 }
+
+/// The key server off: no audit log needed, no key file, no refusal.
+#[tokio::test]
+async fn a_disabled_key_server_needs_no_audit_log_and_makes_no_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = config(&dir);
+    cfg.key_server.enabled = false;
+    let gateway = Gateway::new(cfg).await.expect("the config is valid");
+    let (tx, _rx) = tokio::sync::broadcast::channel(1);
+    let started = gateway
+        .start_key_server(&tx, dir.path(), None)
+        .expect("no refusal");
+    assert!(started.is_none());
+    assert!(
+        !dir.path()
+            .join(crate::key_server::email_hmac_store::FILE)
+            .exists()
+    );
+}
+
+/// A crash after the creation record but before the file was marked
+/// recorded: the next start finds the record and appends no second one.
+#[tokio::test]
+async fn a_crash_between_record_and_flag_appends_no_second_record() {
+    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let log_path = dir.path().join("audit.jsonl");
+    let logger = Arc::new(
+        crate::security::transparency_log::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: log_path.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+        ))
+        .expect("the log opens"),
+    );
+    logger.keep_test_dir(Arc::clone(&dir));
+    let gateway = Gateway::new(config(&dir))
+        .await
+        .expect("the config is valid");
+    let (tx, _rx) = tokio::sync::broadcast::channel(1);
+    gateway
+        .start_key_server(&tx, dir.path(), Some(&logger))
+        .expect("first start");
+    let file = dir.path().join(crate::key_server::email_hmac_store::FILE);
+    let mut envelope: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).expect("read")).expect("json");
+    envelope["creation_recorded"] = serde_json::json!(false);
+    std::fs::write(&file, serde_json::to_vec(&envelope).expect("json")).expect("write");
+    gateway
+        .start_key_server(&tx, dir.path(), Some(&logger))
+        .expect("restart");
+    let created = std::fs::read_to_string(&log_path)
+        .expect("log")
+        .lines()
+        .filter(|l| l.contains(crate::key_server::email_hmac_store::CREATED_EVENT))
+        .count();
+    assert_eq!(created, 1, "one creation record after the crash window");
+}

@@ -154,7 +154,7 @@ pub(crate) fn resolve(
     record_creation: impl FnOnce(&str) -> Result<(), String>,
 ) -> Result<EmailHashKey, String> {
     let (file, lock) = paths(data_dir);
-    let _held = take_lock(&lock)?;
+    let _held = take_lock(&lock, LOCK_WAIT)?;
     let (key, mut envelope) = match std::fs::symlink_metadata(&file) {
         Ok(_) => load(&file, configured)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -179,13 +179,13 @@ pub(crate) fn resolve(
     Ok(key)
 }
 
-fn take_lock(lock: &Path) -> Result<crate::fs_lock::ExclusiveFileLock, String> {
+fn take_lock(lock: &Path, wait: Duration) -> Result<crate::fs_lock::ExclusiveFileLock, String> {
     use crate::config_persistence::lock::{NotLocked, lock_file_blocking};
-    lock_file_blocking(lock, SUBJECT, Instant::now() + LOCK_WAIT).map_err(|e| match e {
+    lock_file_blocking(lock, SUBJECT, Instant::now() + wait).map_err(|e| match e {
         NotLocked::Busy => format!(
             "another start held {SUBJECT} (lock file {}) for {}s; nothing was read or written",
             lock.display(),
-            LOCK_WAIT.as_secs()
+            wait.as_secs()
         ),
         NotLocked::Failed(why) | NotLocked::Refused(why) => why,
     })
