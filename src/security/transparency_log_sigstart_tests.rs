@@ -72,6 +72,9 @@ fn r25_a_v3_log_migrates_once() {
     assert_eq!(s["state"], "open");
     assert_eq!(s["offset"].as_u64(), Some(first_signed));
     assert_eq!(s["announced"], true);
+    // The anchor's own file is frozen up to the anchor, not to its end: the
+    // signed records above P are judged by their signatures.
+    assert_eq!(s["legacy"][0]["len"].as_u64(), Some(first_signed));
     assert_eq!(all_events(&fx), [0, 1, 0, 0]);
 
     std::fs::remove_file(fx.sidecar()).unwrap();
@@ -482,7 +485,8 @@ fn r13_a_kill_after_the_first_start_sidecar_keeps_it() {
 
 /// R13b (round 1 G5, round 3 J4): a genesis killed after its sidecar and
 /// before its open record re-mints its id on reopen; the sidecar still
-/// verifies (no id in the MAC), so nothing is raised.
+/// verifies (its stored id is never compared with the log's), so nothing is
+/// raised. R14 pins that the id is outside the MAC.
 #[test]
 fn r13b_a_genesis_kill_does_not_break_the_sidecar() {
     let fx = Fixture::new();
