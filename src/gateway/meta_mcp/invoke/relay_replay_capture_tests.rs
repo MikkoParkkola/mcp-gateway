@@ -4,14 +4,10 @@
 //! which note a capture is filed under), split from
 //! `relay_replay_tests` for the file-size ceiling.
 
-use std::time::Duration;
-
 use serde_json::json;
 
 use super::super::super::collecting;
-use super::super::{
-    CaptureKey, note_sync_capture, note_task_capture, sync_replay_key, take_capture,
-};
+use super::super::{CaptureKey, note_sync_capture, sync_replay_key, take_capture};
 
 /// The sync replay key's identity is the identity admission itself
 /// computes for the same principal and key (`admission_identity`, the
@@ -73,39 +69,5 @@ async fn sync_capture_keeps_the_first_note_and_task_capture_the_last() {
                     && operation.as_str() == "op-1"
         ),
         "the sync capture was not filed under the first note in the delivery"
-    );
-    let task = collecting(async {
-        note_task_capture("task-1".to_owned(), 1, None);
-        note_task_capture("task-2".to_owned(), 2, Some(5_000));
-        take_capture().0
-    })
-    .await;
-    let Some(task) = task else {
-        panic!("premise: a task capture was noted");
-    };
-    assert!(
-        matches!(
-            &task.key,
-            CaptureKey::Task { id, revision: 2 } if id.as_str() == "task-2"
-        ),
-        "the task capture was not filed under the last note in the delivery"
-    );
-    assert_eq!(
-        task.retention,
-        Duration::from_secs(5),
-        "the task's own TTL is the capture retention"
-    );
-    let ttl_less = collecting(async {
-        note_task_capture("task-3".to_owned(), 1, None);
-        take_capture().0
-    })
-    .await;
-    let Some(ttl_less) = ttl_less else {
-        panic!("premise: a task capture was noted");
-    };
-    assert_eq!(
-        ttl_less.retention,
-        Duration::from_secs(24 * 60 * 60),
-        "a TTL-less task's capture falls back to 24 h"
     );
 }

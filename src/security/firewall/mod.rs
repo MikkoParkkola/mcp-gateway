@@ -71,15 +71,15 @@ mod collusion_live_tests;
 /// The one replay key: relay replay builds it at capture and lookup, and the
 /// store indexes by it (MIK-8662; the crate-wide path is decision
 /// `mik-8662-vis`).
-pub(crate) use collusion::replay::{CaptureMode, ReplayHandle, StoredKey};
+pub(crate) use collusion::replay::{ReplayHandle, StoredKey};
 #[cfg(test)]
 pub(crate) use collusion_digest::{note_walk_for_test, walks_built};
 #[cfg(test)]
 pub(crate) use collusion_gate::relay_witness_hook;
-pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
 pub(crate) use collusion_gate::{
-    DeliveryDigest, PlanStaging, RelayCaller, ReplaySource, ReplayedDigest,
+    Adopted, DeliveryDigest, PlanStaging, RelayCaller, ReplaySource, ReplayedDigest,
 };
+pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
 mod config;
 pub use config::{FirewallAction, FirewallConfig, FirewallRule, RuleException, ScanType};
 pub mod input_scanner;
