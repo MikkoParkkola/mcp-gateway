@@ -1,0 +1,13 @@
+diff --git a/src/config_persistence_crash_fs.rs b/src/config_persistence_crash_fs.rs
+index f1fbd0f8b1..a57da7c446 100644
+--- a/src/config_persistence_crash_fs.rs
++++ b/src/config_persistence_crash_fs.rs
+@@ -99,7 +99,7 @@ fn is_config_lock(path: &Path) -> bool {
+ fn read_unlocked(file: &File, path: &Path) -> Option<Vec<u8>> {
+     match read_bytes(file) {
+         Ok(bytes) => Some(bytes),
+-        Err(e) if e.raw_os_error() == Some(LOCK_VIOLATION) && is_config_lock(path) => None,
++        Err(e) if e.raw_os_error() == Some(LOCK_VIOLATION) => None,
+         Err(e) => panic!("crash_fs: read {}: {e:?}", path.display()),
+     }
+ }

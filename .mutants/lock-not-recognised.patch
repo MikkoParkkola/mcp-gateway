@@ -1,0 +1,13 @@
+diff --git a/src/config_persistence_crash_fs.rs b/src/config_persistence_crash_fs.rs
+index f1fbd0f8b1..42bf2c48f5 100644
+--- a/src/config_persistence_crash_fs.rs
++++ b/src/config_persistence_crash_fs.rs
+@@ -90,7 +90,7 @@ fn is_config_lock(path: &Path) -> bool {
+         return false;
+     };
+     let config = path.with_file_name(config);
+-    config.is_file() && super::lock::lock_path(&config) == path
++    !config.is_file() && super::lock::lock_path(&config) == path
+ }
+ 
+ /// The file's bytes, or `None` for the gateway's own lock sidecar while its

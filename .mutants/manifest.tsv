@@ -1,0 +1,4 @@
+head_sha	2ebdf1fc0e720889dc20f2901213551f486a7e1e
+# lock-sidecar skip: each mutant must turn its Windows row red
+skip-any-lock	windows	skip-any-lock.patch	--lib --all-features -- config_persistence::crash_fs_tests::a_foreign_locked_file_is_refused_by_name --exact
+lock-not-recognised	windows	lock-not-recognised.patch	--lib --all-features -- config_persistence::commit_tests::a_token_survives_power_loss_in_every_mode --exact
