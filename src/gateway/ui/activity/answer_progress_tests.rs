@@ -15,7 +15,7 @@ const MIB: u64 = 1 << 20;
 
 fn page(fx: &Fixture, gov: Option<&std::path::Path>, cursor: Option<&Cursor>, bytes: u64) -> Page {
     let limits = Limits {
-        matches: 200,
+        matches: 10_000,
         bytes,
     };
     let look = Look::Carried(Seen {
