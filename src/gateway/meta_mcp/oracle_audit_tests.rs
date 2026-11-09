@@ -81,7 +81,11 @@ async fn a1_a2_a_withheld_call_is_recorded_and_an_outage_is_counted_not_answered
     if answered != absent {
         cells.push(format!("A1: withheld {answered} vs undefined {absent}"));
     }
-    if decisions(&dir).is_empty() {
+    // Written after the call settles, on the slot's own task.
+    if super::grant_audit_fixture::wait_for_decisions(&dir, 1)
+        .await
+        .is_empty()
+    {
         cells.push("A1: no decision record was written".to_string());
     }
     // A2: the decision append fails.
@@ -93,6 +97,11 @@ async fn a1_a2_a_withheld_call_is_recorded_and_an_outage_is_counted_not_answered
         cells.push(format!(
             "A2: withheld during the outage {answered} vs undefined {absent}"
         ));
+    }
+    // The failed append happens on the slot's own task, after the answer.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while log.append_failures() == before && std::time::Instant::now() < deadline {
+        tokio::task::yield_now().await;
     }
     let counted = log.append_failures() - before;
     if counted != 1 {
@@ -204,11 +213,21 @@ async fn a3a_a_withheld_steps_failed_record_is_isolated() {
     let (withheld, _log) = mixed(&endpoint, &dir, true);
     // The withheld step's note is written at once, before the request-end
     // flush of the granted step's: the first grant-record append from now.
-    seams::fail_append_at_for_test(1);
+    seams::fail_append_of_tool_for_test(OTHER);
     let answered = chain(&withheld).await;
     assert_eq!(
         answered, absent,
         "A3a: withheld {answered} vs undefined {absent}"
+    );
+    // The withheld step's detached writer must have consumed its injected
+    // fault before the row is judged, or the row could pass untested.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while seams::tool_fault_pending_for_test() && std::time::Instant::now() < deadline {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !seams::tool_fault_pending_for_test(),
+        "A3a: the injected fault was never consumed by the withheld step's write"
     );
     assert!(
         decisions(&dir)
@@ -229,7 +248,7 @@ async fn a3b_another_steps_failed_record_still_fails_closed() {
     let endpoint = Endpoint::start(false).await;
     let dir = Arc::new(tempfile::tempdir().unwrap());
     let (withheld, _log) = mixed(&endpoint, &dir, true);
-    seams::fail_append_at_for_test(2);
+    seams::fail_append_of_tool_for_test(PERSONAL);
     let answered = chain(&withheld).await;
     assert_eq!(
         answered.pointer("/error/code"),

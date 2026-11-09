@@ -24,8 +24,9 @@ pub(crate) enum IntentKind {
     /// Recovering a crashed write, or paying an owed reload, before the
     /// operation that found it pending.
     Recovery,
-    /// A web UI settings save.
-    Save,
+    /// A web UI settings save, naming the fields it edits (their display
+    /// ids, never a value).
+    Save { fields: Vec<String> },
     /// Discovery adopt.
     Adopt,
     /// A configuration-history restore.
@@ -188,7 +189,7 @@ impl IntentSink for LogSink {
     fn append(&mut self, intent: &Intent) -> Result<IntentId, String> {
         let event = match &intent.kind {
             IntentKind::Recovery => "config_recovery_intent",
-            IntentKind::Save => "config_save_intent",
+            IntentKind::Save { .. } => "config_save_intent",
             IntentKind::Adopt => "config_adopt_intent",
             IntentKind::Restore => "config_restore_intent",
             IntentKind::KeyCreate => "config_key_create_intent",
@@ -199,6 +200,9 @@ impl IntentSink for LogSink {
         if let IntentKind::Backend { operation, backend } = &intent.kind {
             fields.insert("operation".into(), operation.as_str().into());
             fields.insert("backend".into(), backend.as_str().into());
+        }
+        if let IntentKind::Save { fields: edited } = &intent.kind {
+            fields.insert("fields".into(), edited.clone().into());
         }
         fields.insert("base_revision".into(), intent.base.as_str().into());
         fields.insert("outside_change".into(), intent.outside_change.into());
