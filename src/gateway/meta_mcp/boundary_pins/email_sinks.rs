@@ -226,22 +226,32 @@ fn skipped_args(meta: &syn::Meta) -> Skipped {
     let syn::Meta::List(list) = meta else {
         return Skipped::Named(Vec::new());
     };
-    let mut tokens = list.tokens.clone().into_iter().peekable();
-    let mut names = Vec::new();
-    while let Some(token) = tokens.next() {
-        let proc_macro2::TokenTree::Ident(ident) = token else {
-            continue;
-        };
-        if ident == "skip_all" {
-            return Skipped::All;
+    // Split the top-level options on commas; an option is a skip directive
+    // only if it is exactly `skip_all`, or `skip` followed by its group. A
+    // `name = value` option (`parent = skip_all`) is neither.
+    let mut options: Vec<Vec<proc_macro2::TokenTree>> = vec![Vec::new()];
+    for token in list.tokens.clone() {
+        match &token {
+            proc_macro2::TokenTree::Punct(p) if p.as_char() == ',' => options.push(Vec::new()),
+            _ => options.last_mut().expect("one option at least").push(token),
         }
-        if ident == "skip"
-            && let Some(proc_macro2::TokenTree::Group(group)) = tokens.peek()
-        {
-            names.extend(group.stream().into_iter().filter_map(|t| match t {
-                proc_macro2::TokenTree::Ident(i) => Some(syn::ext::IdentExt::unraw(&i).to_string()),
-                _ => None,
-            }));
+    }
+    let mut names = Vec::new();
+    for option in &options {
+        match option.as_slice() {
+            [proc_macro2::TokenTree::Ident(i)] if i == "skip_all" => return Skipped::All,
+            [
+                proc_macro2::TokenTree::Ident(i),
+                proc_macro2::TokenTree::Group(group),
+            ] if i == "skip" => {
+                names.extend(group.stream().into_iter().filter_map(|t| match t {
+                    proc_macro2::TokenTree::Ident(i) => {
+                        Some(syn::ext::IdentExt::unraw(&i).to_string())
+                    }
+                    _ => None,
+                }));
+            }
+            _ => {}
         }
     }
     Skipped::Named(names)

@@ -112,12 +112,16 @@ fn instrument_without_skip_on_a_raw_identity_fn_is_refused() {
         "#[instrument(skip(other))] fn f(i: &VerifiedIdentity, other: u8) {}",
         "#[instrument(fields(skipped = 1))] fn f(i: &VerifiedIdentity) {}",
         "#[instrument(skip(i))] fn f(i: &VerifiedIdentity, t: TemporaryToken) {}",
+        "#[instrument(parent = skip_all)] fn f(i: &VerifiedIdentity) {}",
+        "#[instrument(level = \"debug\", fields(skip = 1))] fn f(i: &VerifiedIdentity) {}",
     ] {
         assert_eq!(scanned(refused).refused.len(), 1, "{refused}");
     }
     for allowed in [
         "#[instrument(skip(i))] fn f(i: &VerifiedIdentity) {}",
         "#[instrument(skip_all)] fn f(i: Option<TemporaryToken>) {}",
+        "#[instrument(level = \"debug\", skip_all)] fn f(i: &VerifiedIdentity) {}",
+        "#[instrument(skip(i), fields(n = 1))] fn f(i: &VerifiedIdentity) {}",
         "#[instrument] fn f(n: u8) {}",
     ] {
         assert!(scanned(allowed).refused.is_empty(), "{allowed}");
