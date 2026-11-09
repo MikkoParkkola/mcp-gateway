@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! R5/R6: red until DELETE, KeyRevoke and lock-held receipt markers land.
+//! R5/R6: red until DELETE, `KeyRevoke` and lock-held receipt markers land.
 use super::super::keys_create_fixture_tests::{item, root_item, yaml_of};
 use super::keys_revoke_target_tests::{tag, target_setup};
 use super::*;
@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn revoke(fx: &Fixture, rev: String) -> Sent {
+fn revoke(fx: &Fixture, rev: &str) -> Sent {
     send_delete(
         fx,
         "target",
@@ -62,7 +62,7 @@ fn revoke_writes_through_the_audited_writer() {
                 .contains("config_key_revoke_intent");
         }),
     );
-    let sent = revoke(&fx, revision(&fx));
+    let sent = revoke(&fx, &revision(&fx));
     let steps = write_order::take(&target);
     // RED: missing DELETE and IntentKind::KeyRevoke / config_key_revoke_intent.
     assert_eq!(sent.status, StatusCode::OK, "{}", sent.body);
@@ -93,7 +93,7 @@ fn pending_recovery_runs_before_the_revision_check() {
     journal::begin(&target, fx.revision()).unwrap();
     std::fs::write(&target, format!("{}\n# crashed rename\n", fx.text())).unwrap();
     let stale = revision(&fx);
-    let sent = revoke(&fx, stale);
+    let sent = revoke(&fx, &stale);
     let steps = write_order::take(&target);
     // RED: missing DELETE; recovery must restore bytes before declaring stale.
     assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
@@ -126,7 +126,7 @@ fn an_unchanged_byte_reconciliation_still_audits_and_reloads() {
             .is_some()
     );
     let matched = revision(&fx);
-    let sent = revoke(&fx, matched.clone());
+    let sent = revoke(&fx, &matched);
     // RED: missing DELETE and KeyRevoke; unchanged bytes still require publication.
     assert_eq!(sent.status, StatusCode::OK, "{}", sent.body);
     assert_eq!(
@@ -166,7 +166,7 @@ fn the_receipt_is_taken_with_both_locks_held() {
         }),
     );
     let request = std::thread::spawn(move || {
-        let sent = revoke(&fx, revision(&fx));
+        let sent = revoke(&fx, &revision(&fx));
         (fx, sent)
     });
     let parked = reached.recv_timeout(Duration::from_secs(10)).is_ok();
@@ -220,7 +220,7 @@ fn no_receipt_while_the_published_generation_still_accepts_the_key() {
     let mut setup = target_setup();
     setup.split_live = Some(setup.running.clone());
     let fx = Fixture::new(setup);
-    let sent = revoke(&fx, revision(&fx));
+    let sent = revoke(&fx, &revision(&fx));
     // RED: missing DELETE; require a landed removal so a 404 cannot pass this row.
     assert_eq!(fx.bytes(), yaml_of(&[root_item()]).as_bytes());
     assert!(

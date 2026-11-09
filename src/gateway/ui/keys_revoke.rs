@@ -143,12 +143,20 @@ pub(super) async fn revoke_key(
             Ok(template)
         }),
     };
-    match replace_audited_revoke(context, replace, audit, RELOAD_LOCK_WAIT, check).await {
-        Ok(receipt) => (
+    let result = replace_audited_revoke(context, replace, audit, RELOAD_LOCK_WAIT, check)
+        .await
+        .map(|receipt| serde_json::json!({"name": receipt.name, "revoked": true, "revision": receipt.revision.as_str()}));
+    revoke_response(result)
+}
+
+fn revoke_response(result: Result<serde_json::Value, ReplaceError>) -> Response {
+    match result {
+        Ok(body) => (
             StatusCode::OK,
             [(axum::http::header::CACHE_CONTROL, "no-store")],
-            Json(serde_json::json!({"name": receipt.name, "revoked": true, "revision": receipt.revision.as_str()})),
-        ).into_response(),
+            Json(body),
+        )
+            .into_response(),
         Err(error) => refused(error),
     }
 }
@@ -242,11 +250,11 @@ impl KeyIdentity<'_> {
 /// Pure A52 selection, repeated under the writer locks before editing.
 /// Duplicate names refuse with the name rather than picking an arbitrary row.
 /// Different file/live current digests or a binding missing from either
-/// selected record refuse as target_changed: neither may retarget a replacement.
-/// An absent unbound name refuses as target_binding_required; a bound absent
+/// selected record refuse as `target_changed`: neither may retarget a replacement.
+/// An absent unbound name refuses as `target_binding_required`; a bound absent
 /// name still contributes its tag to S for reconciliation.
 /// Any S tag in another name's current/previous slot or the running static
-/// bearer refuses as identity_in_use, regardless of expiry or caller identity.
+/// bearer refuses as `identity_in_use`, regardless of expiry or caller identity.
 #[cfg(test)]
 #[path = "keys_revoke_select_tests.rs"]
 mod select_tests;

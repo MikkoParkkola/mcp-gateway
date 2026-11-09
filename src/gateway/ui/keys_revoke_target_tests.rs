@@ -6,8 +6,10 @@ use super::*;
 use crate::config::ApiKeyConfig;
 
 pub(super) fn target_setup() -> Setup {
-    let mut setup = Setup::default();
-    setup.text = yaml_of(&[root_item(), item("target", "target-secret", "")]);
+    let mut setup = Setup {
+        text: yaml_of(&[root_item(), item("target", "target-secret", "")]),
+        ..Setup::default()
+    };
     setup.running.api_keys.push(ApiKeyConfig {
         name: "target".into(),
         key_sha256: Some(spec("target-secret")),

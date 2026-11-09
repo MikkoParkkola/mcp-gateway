@@ -4,8 +4,8 @@
 use super::super::keys_create_fixture_tests::{ROOT, spec};
 use super::keys_revoke_target_tests::{tag, target_setup};
 use super::*;
-use crate::config::{EnvOverlay, LiveEnv, ResolvedEnvFiles};
-use crate::config_persistence::journal::{self, fault};
+use crate::config::{EnvOverlay, FailsafeConfig, LiveEnv, ResolvedEnvFiles};
+use crate::config_persistence::journal;
 use crate::config_reload::{ReloadContext, refuse_hook, write_order};
 use std::sync::{Arc, Mutex};
 
@@ -48,7 +48,7 @@ fn a_keychain_backed_target_revokes_by_its_resolved_digest() {
             ),
         )
         .unwrap();
-        let overlay = Arc::new(EnvOverlay::from_paths(&[env_path.clone()]));
+        let overlay = Arc::new(EnvOverlay::from_paths(std::slice::from_ref(&env_path)));
         let env = Arc::new(LiveEnv::new(
             overlay,
             ResolvedEnvFiles::new(vec![env_path.clone()], false),
@@ -61,12 +61,12 @@ fn a_keychain_backed_target_revokes_by_its_resolved_digest() {
             "env_files:\n  - {}\n{text}",
             serde_json::to_string(&env_path.to_string_lossy().as_ref()).unwrap()
         );
-        crate::gateway::test_helpers::write_owner_only(&fx.path(), &text).unwrap();
+        crate::gateway::test_helpers::write_owner_only(fx.path(), &text).unwrap();
         let ctx = ReloadContext::new(
             fx.path(),
             fx.live.clone(),
             fx.state.backends.clone(),
-            Default::default(),
+            FailsafeConfig::default(),
             std::time::Duration::from_secs(60),
         )
         .unwrap()
