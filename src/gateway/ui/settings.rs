@@ -101,7 +101,7 @@ pub(super) async fn settings_save(
 }
 
 // The result and constructor boundaries stay stubbed with the routes.
-fn answer(_refusal: crate::config_reload::ui_diff::UiRefused) -> Response {
+fn answer(_refusal: crate::config_reload::UiRefused) -> Response {
     not_implemented()
 }
 
@@ -117,7 +117,7 @@ fn secret_target(
         ),
         super::secret_slots::Unopened,
     >,
-) -> Result<crate::config_reload::ui_save::SecretTarget, Response> {
+) -> Result<crate::config_reload::SecretTarget, Response> {
     Err(not_implemented())
 }
 

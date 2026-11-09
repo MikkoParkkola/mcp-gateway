@@ -3,11 +3,9 @@
 //! Each refusal has its own test; the first red row cannot hide the rest.
 use super::{test_support::decode, *};
 use crate::config_persistence::keyedit::{GiveUp, Segment};
-use crate::config_reload::ui_diff::{
-    Patch, PatchStep, PreviewRefused, Shown, UiPreview, UiRefused,
-};
 use crate::config_reload::ui_fields::FieldId;
 use crate::config_reload::{FileRevision, RefusalClass};
+use crate::config_reload::{Patch, PatchStep, PreviewRefused, Shown, UiPreview, UiRefused};
 use axum::http::{StatusCode, header::RETRY_AFTER};
 
 const CANARY: &str = "answer-payload-canary";

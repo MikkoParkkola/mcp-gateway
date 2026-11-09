@@ -294,7 +294,14 @@ pub(crate) use reload_context::replace::order as write_order;
 pub(crate) use reload_context::replace::{
     AuditPosture, BackendOp, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG,
     RefusalClass, Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
-    ui_diff, ui_save,
+};
+// The settings routes' reach into the save core: these named items only, each
+// already pub(crate) in its module; the rest of the two modules stays private.
+pub(crate) use reload_context::replace::ui_diff::{
+    Patch, PatchStep, PreviewRefused, Shown, UiPreview, UiRefused, UnifiedDiff, ui_diff,
+};
+pub(crate) use reload_context::replace::ui_save::{
+    SaveEdit, SaveValue, SecretTarget, UiSaved, ui_save,
 };
 #[cfg(test)]
 use reload_context::{
