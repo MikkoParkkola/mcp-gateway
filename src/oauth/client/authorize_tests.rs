@@ -800,7 +800,9 @@ async fn a_callback_after_a_switch_redeems_nothing() {
 
 /// A code exchange already sent when a sign-in under another issuer is
 /// confirmed: the login hands back no token, caches nothing of the old
-/// issuer, and the new sign-in's status stands.
+/// issuer, and the new sign-in's status stands. An issuer switch is
+/// confirmed only through the web UI's sign-in, so the row needs it.
+#[cfg(feature = "webui")]
 #[tokio::test]
 async fn a_switch_while_a_code_exchange_is_in_flight_hands_back_nothing() {
     use super::sign_in::{SignIn, SignInStatus};
