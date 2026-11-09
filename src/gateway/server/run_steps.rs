@@ -210,19 +210,42 @@ impl Gateway {
     pub(super) fn start_key_server(
         &self,
         shutdown_tx: &tokio::sync::broadcast::Sender<()>,
+        data_dir: &std::path::Path,
+        audit_log: Option<&Arc<crate::security::TransparencyLogger>>,
     ) -> Result<Option<Arc<KeyServer>>> {
         let step = if self.config.key_server.enabled {
             let mut ks_config = self.config.key_server.clone();
             // Resolve admin token (expand env:VAR_NAME)
             ks_config.admin_token = ks_config.resolve_admin_token(self.env.startup())?;
 
+            // The audit log is where a lost email-hash key leaves its trace:
+            // without it a missing key file would be replaced silently.
+            let Some(audit_log) = audit_log else {
+                return Err(crate::Error::Config(
+                    "key_server.enabled needs the audit log: set \
+                     security.transparency_log.enabled: true with a writable path (the \
+                     log records the email-hash key, so a lost key file is refused, never \
+                     replaced silently)"
+                        .to_owned(),
+                ));
+            };
             let configured = ks_config.resolve_audit_email_hmac(self.env.startup())?;
-            // No retained store holds hashed audit records yet, so a missing
-            // key file has no history behind it to protect.
+            let log_path = audit_log.path();
             let email_key = crate::key_server::email_hmac_store::resolve(
-                &crate::config_persistence::gateway_data_dir(),
+                data_dir,
                 configured.as_deref(),
-                || Ok(false),
+                || crate::key_server::email_hmac_store::history_in(&log_path),
+                |key_id| {
+                    audit_log
+                        .append_event_synced(
+                            crate::key_server::email_hmac_store::creation_fields(key_id),
+                            &crate::security::audit::AuditEnvelope::gateway(),
+                        )
+                        .map(|_| ())
+                        .map_err(|e| {
+                            format!("cannot record the email-hash key in the audit log: {e}")
+                        })
+                },
             )
             .map_err(crate::Error::ConfigValidation)?;
 

@@ -48,6 +48,41 @@ struct Envelope {
     /// Ids of keys an explicit reset retired, newest last.
     #[serde(default)]
     previous_key_ids: Vec<String>,
+    /// Whether the audit log holds this key's creation record. Written false
+    /// with the file and set once the record is appended, so a crash between
+    /// the two heals on the next start.
+    #[serde(default)]
+    creation_recorded: bool,
+}
+
+/// The audit-log event that marks a key's creation; it carries the key id
+/// only.
+pub(crate) const CREATED_EVENT: &str = "key_server.email_hash_key_created";
+
+/// The fields of the creation record for `key_id`.
+pub(crate) fn creation_fields(key_id: &str) -> serde_json::Map<String, serde_json::Value> {
+    let mut fields = serde_json::Map::new();
+    fields.insert("event".into(), CREATED_EVENT.into());
+    fields.insert("email_hash_key_id".into(), key_id.into());
+    fields
+}
+
+/// Whether any retained segment of the audit log at `log` holds email-hash
+/// history: a creation record, or any record carrying `email_hash` or
+/// `email_hash_key_id`. A segment that cannot be read is an error, never
+/// "no history".
+pub(crate) fn history_in(log: &Path) -> Result<bool, String> {
+    crate::security::transparency_log::log_contains_entry(log, "email-hash history scan", |e| {
+        e.get("event").and_then(|v| v.as_str()) == Some(CREATED_EVENT)
+            || e.get("email_hash").is_some()
+            || e.get("email_hash_key_id").is_some()
+    })
+    .map_err(|e| {
+        format!(
+            "cannot read the audit log {} for email-hash history: {e}",
+            log.display()
+        )
+    })
 }
 
 /// Paths of the key file and its lock under `data_dir`.
@@ -64,11 +99,12 @@ pub(crate) fn resolve(
     data_dir: &Path,
     configured: Option<&str>,
     has_history: impl FnOnce() -> Result<bool, String>,
+    record_creation: impl FnOnce(&str) -> Result<(), String>,
 ) -> Result<EmailHashKey, String> {
     let (file, lock) = paths(data_dir);
     let _held = take_lock(&lock)?;
-    match std::fs::symlink_metadata(&file) {
-        Ok(_) => load(&file, configured),
+    let (key, mut envelope) = match std::fs::symlink_metadata(&file) {
+        Ok(_) => load(&file, configured)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if has_history()? {
                 return Err(format!(
@@ -79,10 +115,16 @@ pub(crate) fn resolve(
                 ));
             }
             create(&file, configured)?;
-            load(&file, configured)
+            load(&file, configured)?
         }
-        Err(e) => Err(format!("{}: {e}", file.display())),
+        Err(e) => return Err(format!("{}: {e}", file.display())),
+    };
+    if !envelope.creation_recorded {
+        record_creation(&envelope.key_id)?;
+        envelope.creation_recorded = true;
+        rewrite(&file, &envelope)?;
     }
+    Ok(key)
 }
 
 fn take_lock(lock: &Path) -> Result<crate::fs_lock::ExclusiveFileLock, String> {
@@ -122,6 +164,7 @@ fn create(file: &Path, configured: Option<&str>) -> Result<(), String> {
             None
         },
         previous_key_ids: Vec::new(),
+        creation_recorded: false,
     };
     use zeroize::Zeroize as _;
     let mut json = serde_json::to_vec_pretty(&envelope).map_err(|e| e.to_string())?;
@@ -136,7 +179,7 @@ fn create(file: &Path, configured: Option<&str>) -> Result<(), String> {
 
 /// Read and check an existing envelope; switch its mode if the operator moved
 /// the same key between the file and a configured reference.
-fn load(file: &Path, configured: Option<&str>) -> Result<EmailHashKey, String> {
+fn load(file: &Path, configured: Option<&str>) -> Result<(EmailHashKey, Envelope), String> {
     let refused = |why: String| format!("{}: {why}; restore it from backup", file.display());
     let text = crate::config::secret_ref::read_file_ref("the key-server email HMAC envelope", file)
         .map_err(|e| refused(e.to_string()))?;
@@ -193,7 +236,7 @@ fn load(file: &Path, configured: Option<&str>) -> Result<EmailHashKey, String> {
     // A configured file whose reference was dropped keeps refusing above; a
     // configured key that the operator now wants in the file is an explicit
     // reset, not a start-time switch.
-    Ok(key)
+    Ok((key, envelope))
 }
 
 /// Replace the envelope under the held lock, wiping the serialised copy.

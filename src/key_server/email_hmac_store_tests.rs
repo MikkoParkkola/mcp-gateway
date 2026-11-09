@@ -7,7 +7,7 @@
 use std::os::unix::fs::PermissionsExt as _;
 use std::sync::{Arc, Barrier};
 
-use super::{FILE, resolve};
+use super::{CREATED_EVENT, FILE, creation_fields, history_in, resolve};
 
 const KEY_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const KEY2_HEX: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
@@ -17,8 +17,12 @@ fn none() -> Result<bool, String> {
     Ok(false)
 }
 
+fn recorded(_: &str) -> Result<(), String> {
+    Ok(())
+}
+
 fn id(dir: &std::path::Path, configured: Option<&str>) -> Result<String, String> {
-    resolve(dir, configured, none).map(|k| k.key_id())
+    resolve(dir, configured, none, recorded).map(|k| k.key_id())
 }
 
 fn envelope(dir: &std::path::Path) -> serde_json::Value {
@@ -88,12 +92,17 @@ fn a_readable_by_others_file_is_refused() {
 fn a_missing_file_with_retained_history_is_refused_even_with_a_configured_key() {
     let dir = tempfile::tempdir().expect("tempdir");
     for configured in [None, Some(KEY_HEX)] {
-        let err = resolve(dir.path(), configured, || Ok(true)).expect_err("refused");
+        let err = resolve(dir.path(), configured, || Ok(true), recorded).expect_err("refused");
         assert!(err.contains("restore") && err.contains(FILE), "{err}");
         assert!(!dir.path().join(FILE).exists(), "no key was created");
     }
-    let err =
-        resolve(dir.path(), None, || Err("segment 3 unreadable".into())).expect_err("refused");
+    let err = resolve(
+        dir.path(),
+        None,
+        || Err("segment 3 unreadable".into()),
+        recorded,
+    )
+    .expect_err("refused");
     assert!(err.contains("segment 3 unreadable"), "{err}");
 }
 
@@ -194,4 +203,83 @@ fn concurrent_first_starts_converge_on_one_key() {
         .map(|h| h.join().expect("start"))
         .collect();
     assert!(ids.windows(2).all(|w| w[0] == w[1]), "{ids:?}");
+}
+
+/// The first start records the new key once; a restart records nothing.
+#[test]
+fn the_first_start_records_the_key_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let calls = std::cell::RefCell::new(Vec::new());
+    let record = |id: &str| {
+        calls.borrow_mut().push(id.to_owned());
+        Ok(())
+    };
+    let first = resolve(dir.path(), None, none, record)
+        .expect("first")
+        .key_id();
+    resolve(dir.path(), None, none, |_| {
+        panic!("a restart records nothing")
+    })
+    .expect("restart");
+    assert_eq!(*calls.borrow(), [first]);
+    assert_eq!(envelope(dir.path())["creation_recorded"], true);
+}
+
+/// A failed record refuses the start and leaves the flag false, so the next
+/// start records it: a crash between publishing and recording heals.
+#[test]
+fn a_failed_record_refuses_and_the_next_start_records_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let err = resolve(dir.path(), None, none, |_| Err("log full".into())).expect_err("refused");
+    assert!(err.contains("log full"), "{err}");
+    assert_eq!(envelope(dir.path())["creation_recorded"], false);
+    let seen = std::cell::Cell::new(false);
+    resolve(dir.path(), None, none, |_| {
+        seen.set(true);
+        Ok(())
+    })
+    .expect("healed");
+    assert!(seen.get(), "the next start recorded the key");
+    assert_eq!(envelope(dir.path())["creation_recorded"], true);
+}
+
+/// The creation record names the key id and nothing else of the key.
+#[test]
+fn the_creation_record_carries_only_the_key_id() {
+    let fields = creation_fields(KEY_ID);
+    assert_eq!(fields.len(), 2, "{fields:?}");
+    assert_eq!(fields["event"], CREATED_EVENT);
+    assert_eq!(fields["email_hash_key_id"], KEY_ID);
+}
+
+/// The scan finds a creation record or any hashed record in the log, and
+/// reports an empty log as no history.
+#[test]
+fn the_history_scan_finds_a_record_or_a_hash() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("audit.jsonl");
+    std::fs::write(&log, "{\"event\":\"tool.invoked\"}\n").expect("write");
+    assert_eq!(history_in(&log), Ok(false));
+    for line in [
+        format!("{{\"event\":\"{CREATED_EVENT}\",\"email_hash_key_id\":\"{KEY_ID}\"}}"),
+        "{\"event\":\"token.issued\",\"email_hash\":\"ab\"}".to_owned(),
+    ] {
+        std::fs::write(&log, format!("{{\"event\":\"tool.invoked\"}}\n{line}\n")).expect("write");
+        assert_eq!(history_in(&log), Ok(true), "{line}");
+    }
+}
+
+/// An unreadable log is an error, never "no history".
+#[test]
+fn an_unreadable_log_is_not_no_history() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("audit.jsonl");
+    std::fs::write(&log, "{}\n").expect("write");
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    let read = history_in(&log);
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o600)).expect("chmod back");
+    // Root reads a mode-0 file; the row is meaningful only for a normal user.
+    if rustix::process::geteuid().as_raw() != 0 {
+        assert!(read.is_err(), "{read:?}");
+    }
 }

@@ -125,6 +125,7 @@ use entry_hash::{chain_line, sha256_raw, sig_message};
 pub use entry_hash::{recompute_entry_hash, verify_entry_sig};
 pub use log_config::TransparencyLogConfig;
 pub(crate) use verify::is_signed_entry;
+pub(crate) use verify::log_contains_entry;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
 pub use verify::{
