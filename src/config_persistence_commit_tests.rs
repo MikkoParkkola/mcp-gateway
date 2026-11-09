@@ -569,7 +569,7 @@ fn a_token_survives_power_loss_in_every_mode() {
     }
 }
 
-/// A23: red oracle: a no-op cut wrongly keeps NEW under DropAll; restoring
+/// A23: red oracle: a no-op cut wrongly keeps NEW under `DropAll`; restoring
 /// the arming snapshot wrongly loses NEW in either keep mode.
 #[test]
 fn a_sync_failure_is_lost_under_drop_all_kept_under_keep_all() {
@@ -611,7 +611,7 @@ fn verify_flushes_bytes_written_without_sync() {
     }
 }
 
-/// A25 (register 1167): red oracle: deletion at BeforeRecheck is
+/// A25 (register 1167): red oracle: deletion at `BeforeRecheck` is
 /// Refused(Other) naming "deleted", never Repointed because verify wrote nothing.
 #[test]
 fn verify_after_a_delete_between_read_back_and_recheck_is_refused() {

@@ -273,7 +273,7 @@ fn hook(target: &Path, at: HookAt) {
 #[cfg(all(test, windows))]
 mod windows_share_tests {
     /// A26 (register 1168): red oracle: both blocked operations report
-    /// ERROR_SHARING_VIOLATION (32), not just any unrelated I/O failure.
+    /// `ERROR_SHARING_VIOLATION` (32), not just any unrelated I/O failure.
     #[test]
     fn the_read_back_handle_blocks_writes_and_replacement_while_held() {
         let dir = tempfile::tempdir().expect("tempdir");

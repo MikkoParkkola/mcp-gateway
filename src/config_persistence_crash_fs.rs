@@ -1,18 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Test-only power-loss overlay for one armed config directory. For a
-//! symlinked target, arm the target's own directory. DropAll restores the
-//! last synced namespace and durable generation data; KeepAll keeps the
-//! observed directory; KeepRenameDropData keeps observed names and synced
-//! data, but tears unsynced tails at seed % unsynced_len.
+//! symlinked target, arm the target's own directory. `DropAll` restores the
+//! last synced namespace and durable generation data; `KeepAll` keeps the
+//! observed directory; `KeepRenameDropData` keeps observed names and synced
+//! data, but tears unsynced tails at `seed % unsynced_len`.
 //!
 //! Only file names and bytes are modelled, not mode or mtime durability.
-//! A file never data-synced or snapshotted is absent under DropAll. Arming
+//! A file never data-synced or snapshotted is absent under `DropAll`. Arming
 //! treats existing bytes as durable. A new, unhooked file at a directory
 //! snapshot is assumed data-synced, as the crate's other writers are.
 //!
 //! Generations use handle identity: (dev, ino) on Unix and
-//! win_acl::file_identity (volume serial, 128-bit file id) on Windows.
+//! `win_acl::file_identity` (volume serial, 128-bit file id) on Windows.
 //! The model keeps an open File for each generation until disarming to
 //! prevent identity reuse after unlink. Those handles allow delete sharing
 //! on Windows and must not block replacement. A flush updates the handle's
@@ -20,8 +20,8 @@
 //! bytes rewinds, reads sequentially, then rewinds again for the hash.
 //!
 //! Trust boundary: durability comes from notifications. An in-process test
-//! cannot detect removal of sync_all if its notification remains. The real
-//! flush notification belongs immediately after successful sync_all; the
+//! cannot detect removal of `sync_all` if its notification remains. The real
+//! flush notification belongs immediately after successful `sync_all`; the
 //! atomic-write notification follows successful scratch sync and rename.
 #![cfg(test)]
 
@@ -43,7 +43,7 @@ pub(crate) enum Mode {
 /// Durable state; rows can construct independent projection inputs.
 #[derive(Default)]
 pub(crate) struct Overlay {
-    /// Name -> generation as of the last directory sync (what DropAll keeps).
+    /// Name -> generation as of the last directory sync (what `DropAll` keeps).
     pub(crate) names: BTreeMap<String, FileId>,
     /// Name -> generation now: a rename binds a new generation here at once,
     /// before any directory sync makes it durable (what the keep modes see).
@@ -145,6 +145,8 @@ pub(crate) fn cut(dir: &Path, mode: Mode) {
     }
 }
 
+// A remainder below a usize length always fits in usize.
+#[allow(clippy::cast_possible_truncation)]
 pub(crate) fn project(
     durable: &Overlay,
     observed: &BTreeMap<String, Vec<u8>>,
@@ -208,12 +210,13 @@ pub(super) fn note_dir_synced(dir: &Path) {
 
 /// The staged scratch's generation; its data and held handle are already in
 /// the overlay, so bind only binds the target's name to it.
+#[derive(Clone, Copy)]
 pub(super) struct Staged {
     generation: FileId,
 }
 
 /// The synced scratch's identity, taken by path (nothing else touches the
-/// scratch), and the exact bytes write_atomic wrote and synced into it.
+/// scratch), and the exact bytes `write_atomic` wrote and synced into it.
 pub(super) fn stage(target: &Path, scratch: &Path, bytes: &[u8]) -> Option<Staged> {
     let dir = key(target.parent()?);
     let mut armed = ARMED
@@ -277,7 +280,7 @@ pub(super) fn bind(target: &Path, staged: Staged) {
     overlay.current.insert(name.to_owned(), now);
 }
 
-/// Trust boundary: this notification follows the real sync_all in flush;
+/// Trust boundary: this notification follows the real `sync_all` in flush;
 /// it cannot prove that sync happened if that call is removed.
 /// Read this handle and rewind before and after reading.
 pub(super) fn note_flushed(target: &Path, file: &mut File) -> io::Result<()> {

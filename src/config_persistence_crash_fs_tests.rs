@@ -70,7 +70,7 @@ fn a_dir_sync_makes_the_rename_survive_drop_all() {
     assert_eq!(std::fs::read(path).expect("read"), NEW);
 }
 
-/// C3: red oracle: KeepAll keeps current bytes, not the arming snapshot.
+/// C3: red oracle: `KeepAll` keeps current bytes, not the arming snapshot.
 #[test]
 fn keep_all_keeps_an_unsynced_rename() {
     let (dir, path) = config();
