@@ -53,13 +53,7 @@ pub(crate) fn config_yaml(allowed_domains_a: &str, extra: &str) -> String {
 
 impl Harness {
     pub(crate) async fn start(yaml: &str) -> Self {
-        Self::start_with_store(yaml, |c| {
-            Arc::new(InMemoryTokenStore::new(
-                c.max_tokens_per_identity as usize,
-                c.token_ttl_secs,
-            ))
-        })
-        .await
+        Self::start_with_store(yaml, |c| Arc::new(InMemoryTokenStore::for_config(c))).await
     }
 
     /// As [`Self::start`], over the token store `store` builds from the

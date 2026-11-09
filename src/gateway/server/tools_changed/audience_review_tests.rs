@@ -100,7 +100,7 @@ async fn r4_a_queued_hint_made_stale_by_a_listing_is_not_written() {
     let w = World::start().await;
     let token = scoped_token("R", &["read", "write", "scan", "fetch"]);
     let bearer = token.token.clone();
-    w.key_server.store.insert(token).await;
+    crate::key_server::store::activate_for_test(w.key_server.store.as_ref(), w.key_server.config.token_ttl_secs, token);
     let mut ear = w.sse(&bearer).await;
     let session = ear.session_id().to_string();
     let (reached, release) = w.state.multiplexer.before_write_check.arm();
@@ -147,7 +147,7 @@ async fn mixed_surfaces(code_first: bool) {
     let w = World::start().await;
     let token = scoped_token("R", &["read", "write", "scan", "fetch"]);
     let bearer = token.token.clone();
-    w.key_server.store.insert(token).await;
+    crate::key_server::store::activate_for_test(w.key_server.store.as_ref(), w.key_server.config.token_ttl_secs, token);
     let code_url = "/mcp?codemode=search_and_execute";
     let (mut code, mut plain);
     if code_first {

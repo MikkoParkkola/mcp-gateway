@@ -306,6 +306,13 @@ impl InMemoryTokenStore {
         }
     }
 
+    /// An empty store frozen at `config`'s per-identity cap and token
+    /// lifetime.
+    #[must_use]
+    pub(crate) fn for_config(config: &crate::config::KeyServerConfig) -> Self {
+        Self::new(config.max_tokens_per_identity as usize, config.token_ttl_secs)
+    }
+
     fn pending(&self) -> std::sync::MutexGuard<'_, Pending> {
         // A panic while holding the lock leaves plain data behind: keep going.
         self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -321,16 +328,6 @@ impl InMemoryTokenStore {
             }
             None => false,
         }
-    }
-
-    /// Put `token` straight into the active indices, past every reservation
-    /// check: for rows that need a stored token the protocol refuses (an
-    /// identity naming nobody, an expired token).
-    #[cfg(test)]
-    pub(crate) fn seed_unchecked(&self, token: TemporaryToken) {
-        let _pending = self.pending();
-        self.by_jti.insert(token.jti.clone(), token.token.clone());
-        self.by_bearer.insert(token.token.clone(), token);
     }
 
     /// Generate a cryptographically random opaque bearer token.
@@ -505,6 +502,27 @@ impl TokenStore for InMemoryTokenStore {
     }
 }
 
+/// Store `token` through the reservation protocol, dated now for `ttl`
+/// seconds (the store's frozen lifetime): the one way test fixtures put a
+/// token in a store.
+#[cfg(test)]
+#[allow(clippy::disallowed_methods, reason = "test fixtures read the host clock")]
+pub(crate) fn activate_for_test(store: &dyn TokenStore, ttl: u64, mut token: TemporaryToken) {
+    let now = crate::clock::unix_secs().expect("a readable clock");
+    // The fixture's own window is replaced: refuse one that was meant to be
+    // expired rather than silently make it live.
+    assert!(token.exp > now, "an expired fixture token cannot be activated");
+    let request = ReservationRequest {
+        issuer: token.identity.issuer().to_string(),
+        subject: token.identity.subject().to_string(),
+        jti: token.jti.clone(),
+    };
+    let id = store.reserve(request, now).expect("a slot under the cap");
+    token.iat = now;
+    token.exp = now + ttl;
+    store.activate(&id, token, now).expect("the reservation activates");
+}
+
 /// Spawn a background task that reaps expired tokens every `interval`.
 ///
 /// The task exits when the `shutdown` receiver fires.
@@ -549,6 +567,15 @@ mod tests {
             Vec::new(),
             "https://accounts.google.com".to_string(),
         )
+    }
+
+    /// Put `token` straight into the active indices, past the reservation
+    /// protocol: these rows exercise reads, revocation and reaping over
+    /// tokens (expired ones too) the protocol would refuse to activate.
+    fn seed(store: &InMemoryTokenStore, token: TemporaryToken) {
+        let _pending = store.pending();
+        store.by_jti.insert(token.jti.clone(), token.token.clone());
+        store.by_bearer.insert(token.token.clone(), token);
     }
 
     fn make_token(subject: &str, email: &str, exp_offset_secs: i64) -> TemporaryToken {
@@ -596,12 +623,12 @@ mod tests {
     #[tokio::test]
     async fn insert_and_get_valid_token() {
         // GIVEN: a token store with one valid token
-        let store = InMemoryTokenStore::new();
+        let store = InMemoryTokenStore::new(5, 3600);
         let token = make_token("sub123", "alice@company.com", 3600);
         let bearer = token.token.clone();
 
         // WHEN: we insert then look it up by bearer
-        store.insert(token).await;
+        seed(&store, token);
         let found = store.get(&bearer).await;
 
         // THEN: the token is returned
@@ -612,7 +639,7 @@ mod tests {
     #[tokio::test]
     async fn get_returns_none_for_unknown_token() {
         // GIVEN: an empty token store
-        let store = InMemoryTokenStore::new();
+        let store = InMemoryTokenStore::new(5, 3600);
 
         // WHEN: we look up a non-existent bearer
         let found = store.get("mcpgw_nonexistent").await;
@@ -624,11 +651,11 @@ mod tests {
     #[tokio::test]
     async fn get_lazy_evicts_expired_token() {
         // GIVEN: a store with an already-expired token (exp = 1 second ago)
-        let store = InMemoryTokenStore::new();
+        let store = InMemoryTokenStore::new(5, 3600);
         let token = make_token("sub123", "alice@company.com", -1);
         let bearer = token.token.clone();
 
-        store.insert(token).await;
+        seed(&store, token);
 
         // WHEN: we try to retrieve it
         let found = store.get(&bearer).await;
@@ -643,11 +670,11 @@ mod tests {
     #[tokio::test]
     async fn revoke_by_jti_removes_token() {
         // GIVEN: a store with one valid token
-        let store = InMemoryTokenStore::new();
+        let store = InMemoryTokenStore::new(5, 3600);
         let token = make_token("sub123", "alice@company.com", 3600);
         let jti = token.jti.clone();
         let bearer = token.token.clone();
-        store.insert(token).await;
+        seed(&store, token);
 
         // WHEN: we revoke by JTI
         let removed = store.revoke_by_jti(&jti).await;
@@ -661,7 +688,7 @@ mod tests {
     #[tokio::test]
     async fn revoke_by_jti_returns_false_for_unknown() {
         // GIVEN: empty store
-        let store = InMemoryTokenStore::new();
+        let store = InMemoryTokenStore::new(5, 3600);
 
         // WHEN: revoke non-existent JTI
         let removed = store.revoke_by_jti("nonexistent-jti").await;
@@ -673,14 +700,14 @@ mod tests {
     #[tokio::test]
     async fn revoke_by_subject_removes_all_tokens() {
         // GIVEN: two tokens for alice, one for bob
-        let store = InMemoryTokenStore::new();
+        let store = InMemoryTokenStore::new(5, 3600);
         let t1 = make_token("alice-sub", "alice@company.com", 3600);
         let t2 = make_token("alice-sub", "alice@company.com", 3600);
         let t3 = make_token("bob-sub", "bob@company.com", 3600);
 
-        store.insert(t1).await;
-        store.insert(t2).await;
-        store.insert(t3).await;
+        seed(&store, t1);
+        seed(&store, t2);
+        seed(&store, t3);
 
         // WHEN: revoke all for alice
         let count = store
@@ -695,14 +722,14 @@ mod tests {
     #[tokio::test]
     async fn count_for_subject_counts_active_tokens() {
         // GIVEN: two valid + one expired token for the same subject
-        let store = InMemoryTokenStore::new();
+        let store = InMemoryTokenStore::new(5, 3600);
         let t1 = make_token("alice-sub", "alice@company.com", 3600);
         let t2 = make_token("alice-sub", "alice@company.com", 3600);
         let t_expired = make_token("alice-sub", "alice@company.com", -1);
 
-        store.insert(t1).await;
-        store.insert(t2).await;
-        store.insert(t_expired).await;
+        seed(&store, t1);
+        seed(&store, t2);
+        seed(&store, t_expired);
 
         // WHEN: count active tokens for alice
         let count = store
@@ -716,13 +743,13 @@ mod tests {
     #[tokio::test]
     async fn revoke_and_count_are_scoped_to_issuer() {
         // GIVEN: sub "123" at two issuers
-        let store = InMemoryTokenStore::new();
+        let store = InMemoryTokenStore::new(5, 3600);
         let at_a = make_token("123", "", 3600);
         let mut at_b = make_token("123", "", 3600);
         at_b.identity = at_b.identity.clone().with_issuer("https://idp-b.example");
         let bearer_b = at_b.token.clone();
-        store.insert(at_a).await;
-        store.insert(at_b).await;
+        seed(&store, at_a);
+        seed(&store, at_b);
 
         // THEN: each issuer counts and revokes only its own identity
         assert_eq!(
@@ -743,14 +770,14 @@ mod tests {
     #[tokio::test]
     async fn reap_expired_removes_only_expired() {
         // GIVEN: one valid + two expired tokens
-        let store = InMemoryTokenStore::new();
+        let store = InMemoryTokenStore::new(5, 3600);
         let valid = make_token("sub1", "alice@company.com", 3600);
         let expired1 = make_token("sub2", "bob@company.com", -1);
         let expired2 = make_token("sub3", "carol@company.com", -10);
 
-        store.insert(valid).await;
-        store.insert(expired1).await;
-        store.insert(expired2).await;
+        seed(&store, valid);
+        seed(&store, expired1);
+        seed(&store, expired2);
 
         // WHEN: reap expired
         let reaped = store.reap_expired().await;
@@ -817,10 +844,10 @@ mod tests {
     /// real clock still admits; it never reads an expiry as still ahead.
     #[tokio::test(flavor = "current_thread")]
     async fn a_clock_before_the_epoch_refuses_a_live_bearer_token() {
-        let store = InMemoryTokenStore::new();
+        let store = InMemoryTokenStore::new(5, 3600);
         let token = make_token("sub", "alice@company.com", 3600);
         let bearer = token.token.clone();
-        store.insert(token).await;
+        seed(&store, token);
         assert!(
             store.get(&bearer).await.is_some(),
             "control: live on the real clock"

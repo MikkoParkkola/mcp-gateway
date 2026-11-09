@@ -118,10 +118,7 @@ impl KeyServer {
     /// its audit records hash emails with.
     #[must_use]
     pub(crate) fn new(config: KeyServerConfig, email_key: Arc<email_hash::EmailHashKey>) -> Self {
-        let store = Arc::new(InMemoryTokenStore::new(
-            config.max_tokens_per_identity as usize,
-            config.token_ttl_secs,
-        ));
+        let store = Arc::new(InMemoryTokenStore::for_config(&config));
         let oidc = Arc::new(OidcVerifier::new(config.oidc.clone()));
         let policy = Arc::new(PolicyEngine::new(config.policies.clone()));
 
@@ -419,8 +416,7 @@ mod tests {
             ("mcpgw_nameless_subject", "", "https://issuer.invalid"),
             ("mcpgw_nameless_issuer", "sub", ""),
         ] {
-            ks.store
-                .insert(TemporaryToken {
+            store::activate_for_test(ks.store.as_ref(), ks.config.token_ttl_secs, TemporaryToken {
                     jti: format!("jti-{bearer}"),
                     token: bearer.to_string(),
                     identity: identity(subject, "u@corp.invalid", issuer),
@@ -428,8 +424,7 @@ mod tests {
                     iat: 0,
                     exp: u64::MAX,
                     client_ip: None,
-                })
-                .await;
+                });
             assert!(ks.store.get(bearer).await.is_some(), "the store holds it");
             assert!(
                 ks.validate_token(bearer).await.is_none(),
@@ -455,7 +450,7 @@ mod tests {
             exp: u64::MAX,
             client_ip: None,
         };
-        ks.store.insert(token).await;
+        store::activate_for_test(ks.store.as_ref(), ks.config.token_ttl_secs, token);
         let (client, _) = ks
             .validate_token("mcpgw_empty_backends")
             .await
@@ -473,8 +468,7 @@ mod tests {
             crate::key_server::email_hash::EmailHashKey::for_test(),
         );
         let text = "mcpgw_runtime_principal";
-        ks.store
-            .insert(TemporaryToken {
+        store::activate_for_test(ks.store.as_ref(), ks.config.token_ttl_secs, TemporaryToken {
                 jti: "jti-runtime".to_string(),
                 token: text.to_string(),
                 identity: identity("sub", "u@corp.invalid", "https://issuer.invalid"),
@@ -482,8 +476,7 @@ mod tests {
                 iat: 0,
                 exp: u64::MAX,
                 client_ip: None,
-            })
-            .await;
+            });
         let (client, _) = ks.validate_token(text).await.expect("token is live");
         let p = client.principal.storage_form();
         assert_ne!(p, crate::gateway::auth::principal_of(text).storage_form());

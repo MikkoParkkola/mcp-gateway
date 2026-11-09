@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 //! The per-identity token cap holds under concurrent mints. A store that
-//! holds every mint at its count until all of them have counted shows the
-//! check-then-insert gap: each sees room, and each inserts.
+//! holds every mint at its count until all of them have counted would show
+//! a check-then-insert gap (each sees room, and each inserts); reservation
+//! counts and claims in one step, so the held count never decides.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,11 +15,15 @@ use tokio::sync::Barrier;
 
 use super::InMemoryTokenStore;
 use super::oidc_test_harness::{Harness, ISS_A, config_yaml};
-use super::store::{TemporaryToken, TokenStore};
+use super::store::{
+    ActivateError, ReservationId, ReservationRequest, ReserveError, TemporaryToken, TokenStore,
+};
 
 const CAP: usize = 2;
 const MINTS: usize = 4;
 const SUBJECT: &str = "cap-race-subject";
+/// The config default token lifetime, which the harness config keeps.
+const TTL: u64 = 3600;
 
 /// The real store, with each of the first [`MINTS`] counts held until all of
 /// them have counted. The wait is bounded, so a mint path that no longer
@@ -31,8 +36,14 @@ struct HeldAtCount {
 
 #[async_trait::async_trait]
 impl TokenStore for HeldAtCount {
-    async fn insert(&self, token: TemporaryToken) {
-        self.inner.insert(token).await;
+    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<ReservationId, ReserveError> {
+        self.inner.reserve(request, now)
+    }
+    fn activate(&self, id: &ReservationId, token: TemporaryToken, now: u64) -> Result<(), ActivateError> {
+        self.inner.activate(id, token, now)
+    }
+    fn abort(&self, id: &ReservationId) {
+        self.inner.abort(id);
     }
     async fn get(&self, bearer: &str) -> Option<TemporaryToken> {
         self.inner.get(bearer).await
@@ -61,7 +72,7 @@ impl TokenStore for HeldAtCount {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_mints_never_pass_the_identity_cap() {
     let store = Arc::new(HeldAtCount {
-        inner: InMemoryTokenStore::new(),
+        inner: InMemoryTokenStore::new(CAP, TTL),
         barrier: Barrier::new(MINTS),
         counts: AtomicUsize::new(0),
     });
@@ -72,7 +83,7 @@ async fn concurrent_mints_never_pass_the_identity_cap() {
              scopes: {{ backends: [\"*\"], tools: [\"*\"], rate_limit: 0 }}\n"
         ),
     );
-    let h = Arc::new(Harness::start_with_store(&yaml, store.clone()).await);
+    let h = Arc::new(Harness::start_with_store(&yaml, |_| -> Arc<dyn TokenStore> { store.clone() }).await);
     let mut mints = Vec::new();
     for _ in 0..MINTS {
         let h = Arc::clone(&h);
