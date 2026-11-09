@@ -197,7 +197,7 @@ fn restored_daily(served_config: &Config, data_dir: &Path) -> (f64, Option<f64>,
 #[tokio::test]
 async fn stdio_exit_saves_todays_spend() {
     let (wrote, (global, tool, _)) = Box::pin(same_utc_day_async(|| async {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let called = Arc::new(AtomicBool::new(false));
         let release = Arc::new(tokio::sync::Notify::new());
         let backend = spawn_backend(Arc::clone(&called), Arc::clone(&release)).await;
@@ -257,7 +257,7 @@ async fn stdio_exit_saves_todays_spend() {
 #[tokio::test]
 async fn stdio_saves_spend_periodically_before_exit() {
     let (rounds, (global, tool, key)) = Box::pin(same_utc_day_async(|| async {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let costs = dir.path().join("costs.json");
         let mut seeded = PersistedCosts {
             saved_at: crate::clock::unix_secs().expect("a readable clock"),

@@ -15,7 +15,7 @@ use crate::security::audit::AuditFailurePolicy;
 /// NOTFOUND.1 and NOTFOUND.3 for stdio (red first).
 #[tokio::test]
 async fn a_stdio_call_to_a_nonexistent_backend_records_not_found() {
-    let dir = std::sync::Arc::new(tempfile::tempdir().expect("a private log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     meta.enable_transparency_log(logger(&dir, AuditFailurePolicy::BestEffort));
     let meta = Arc::new(meta);

@@ -98,9 +98,14 @@ async fn spawn_backend() -> (String, Seen) {
 async fn serve(
     output: DuplexStream,
     gate: Option<Arc<Semaphore>>,
-) -> (DuplexStream, Seen, JoinHandle<()>, tempfile::TempDir) {
+) -> (
+    DuplexStream,
+    Seen,
+    JoinHandle<()>,
+    std::sync::Arc<tempfile::TempDir>,
+) {
     let (backend_url, seen) = spawn_backend().await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     // The task store under the test's own directory, never the default under $HOME.
     let yaml = format!(

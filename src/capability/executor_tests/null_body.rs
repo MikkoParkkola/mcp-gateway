@@ -44,9 +44,10 @@ async fn call_raw(yaml: &str, arguments: serde_json::Value, seen: &Seen) -> (Str
     assert!(validation.is_valid(), "{:?}", validation.violations);
     let mut executor = CapabilityExecutor::new();
     executor.client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
         .build()
-        .unwrap();
+        .unwrap()
+        .into();
     let context = CapabilityExecutionContext::default().with_isolated_loopback_egress();
     executor
         .execute_with_context(&capability, validation.coerced, context)

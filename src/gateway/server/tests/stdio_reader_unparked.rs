@@ -29,7 +29,7 @@ struct Served {
     stdin: DuplexStream,
     stdout: Lines<BufReader<DuplexStream>>,
     task: JoinHandle<crate::Result<()>>,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 /// A gateway with no backends serving stdio, before any handshake. stdin is
@@ -49,8 +49,8 @@ async fn start(output_capacity: usize) -> Served {
 }
 
 /// A gateway with no backends, and the directory its config and data live in.
-async fn gateway() -> (Gateway, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("tempdir");
+async fn gateway() -> (Gateway, std::sync::Arc<tempfile::TempDir>) {
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     let yaml = format!(
         "backends: {{}}\ntasks:\n  store_dir: {}\n",

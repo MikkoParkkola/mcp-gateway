@@ -3,8 +3,6 @@
 //! #2480: a stdio call answered from a completed execution (an idempotent
 //! replay) writes one invocation record, as the HTTP meta route does (#2477).
 
-use std::sync::Arc;
-
 use serde_json::{Value, json};
 
 use super::signing_nonce_allocations_support::{Fixture, SESSION, invoke};
@@ -43,7 +41,7 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
 /// execution's outcome, code and hashes.
 #[tokio::test]
 async fn stdio_replay_writes_an_invocation_record() {
-    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fixture = Fixture::start_audited(&log_path(&dir)).await;
     let first = dispatch(&fixture, keyed_request("r1", "key-2480")).await;
     assert!(first.get("error").is_none(), "{first}");
@@ -72,7 +70,7 @@ async fn stdio_replay_writes_an_invocation_record() {
 #[tokio::test]
 async fn stdio_replay_after_a_refused_delivery_record_stays_withheld() {
     use crate::security::audit::AuditFailurePolicy;
-    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = logger(&dir, AuditFailurePolicy::FailClosed);
     let mut fixture = Fixture::start_mutating().await;
     std::sync::Arc::get_mut(&mut fixture.meta)
@@ -100,7 +98,7 @@ async fn stdio_replay_after_a_refused_delivery_record_stays_withheld() {
 /// so each delivery joins its own invocation record, not the first run's.
 #[tokio::test]
 async fn stdio_replay_delivery_joins_the_replaying_invocation() {
-    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fixture = Fixture::start_audited(&log_path(&dir)).await;
     let first = dispatch(&fixture, keyed_request("r1", "key-join")).await;
     assert!(first.get("error").is_none(), "{first}");

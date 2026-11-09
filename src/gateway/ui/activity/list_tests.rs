@@ -11,6 +11,9 @@ use axum::response::Response;
 use serde_json::{Value, json};
 
 use super::access::{self, Access, Refused};
+use super::decision_fixtures::{
+    assert_no_sentinel, call as dcall, decision, finding, write_chained as write_dec,
+};
 use super::{ListQuery, Logs, list_page};
 use crate::control_plane::ControlPlaneRole;
 use crate::control_plane::role_mapping::{ControlPlaneRoleMappingConfig, ControlPlaneRoleRule};
@@ -82,6 +85,7 @@ fn query(pairs: &[(&str, &str)]) -> ListQuery {
         match *k {
             "outcome" => q.outcome = v,
             "rule" => q.rule = v,
+            "server" => q.server = v,
             "limit" => q.limit = v,
             "cursor" => q.cursor = v,
             other => panic!("no query field {other}"),
@@ -106,13 +110,13 @@ fn client(admin: bool, authenticated: bool) -> AuthenticatedClient {
 }
 
 fn identity(issuer: &str, subject: &str, group: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.into(),
-        email: format!("{subject}@corp"),
-        name: None,
-        groups: vec![group.into()],
-        issuer: issuer.into(),
-    }
+    VerifiedIdentity::for_test(
+        subject,
+        format!("{subject}@corp"),
+        None,
+        vec![group.into()],
+        issuer,
+    )
 }
 
 fn mapping() -> ControlPlaneRoleMappingConfig {
@@ -245,13 +249,181 @@ async fn r3_cleaned_answers_400_with_the_supported_list() {
     );
 }
 
+/// Write decision-carrying calls, given newest first.
+fn write_newest_first(l: &Logs, mut calls: Vec<Value>) {
+    calls.reverse();
+    write_dec(&l.invocation, &mut calls);
+}
+
+fn named(server: &str, tool: &str, rule: &str) -> Value {
+    dcall(server, tool, Some(decision(Some(rule))))
+}
+
 #[tokio::test]
-async fn a_rule_filter_answers_400_until_rules_are_recorded() {
+async fn list_rule_filter_returns_exactly_that_rules_rows() {
     let dir = tempfile::tempdir().unwrap();
-    let logs = fixture(&dir);
-    let (status, v) = body(list_page(&logs, &Access::All, &query(&[("rule", "r1")]))).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(v["error"], "rules are not recorded by this gateway version");
+    let l = logs(&dir);
+    write_newest_first(
+        &l,
+        vec![
+            named("srv", "t_r1", "r1"),
+            named("srv", "t_r2", "r2"),
+            dcall("srv", "t_norule", Some(decision(None))),
+            dcall("srv", "t_nodec", None),
+        ],
+    );
+    let (status, v) = body(list_page(&l, &Access::All, &query(&[("rule", "r1")]))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(tools(&v), BTreeSet::from(["t_r1".to_string()]));
+    assert_no_sentinel(&v.to_string());
+}
+
+/// Page with `limit=1` through `next_cursor`, collecting the tools in order.
+async fn paged_tools(l: &Logs, pairs: &[(&str, &str)]) -> Vec<String> {
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..20 {
+        let mut q = pairs.to_vec();
+        q.push(("limit", "1"));
+        if let Some(c) = &cursor {
+            q.push(("cursor", c));
+        }
+        let (status, v) = body(list_page(l, &Access::All, &query(&q))).await;
+        assert_eq!(status, StatusCode::OK);
+        seen.extend(
+            v["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["tool"].as_str().unwrap().to_string()),
+        );
+        match v["next_cursor"].as_str() {
+            Some(c) => cursor = Some(c.to_string()),
+            None => return seen,
+        }
+    }
+    panic!("the cursor never ended");
+}
+
+#[tokio::test]
+async fn list_rule_filter_ands_with_server_and_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let l = logs(&dir);
+    write_newest_first(
+        &l,
+        vec![
+            named("srv", "a1", "r1"),
+            named("srv", "x1", "r2"),
+            named("other", "o1", "r1"),
+            named("srv", "x2", "r2"),
+            named("srv", "a2", "r1"),
+            named("srv", "x3", "r2"),
+            named("srv", "a3", "r1"),
+        ],
+    );
+    let got = paged_tools(&l, &[("rule", "r1"), ("server", "srv")]).await;
+    assert_eq!(got, ["a1", "a2", "a3"]);
+}
+
+#[tokio::test]
+async fn list_sparse_rule_filter_resumes_past_scan_exhausted() {
+    let dir = tempfile::tempdir().unwrap();
+    let l = logs(&dir);
+    let pad = "z".repeat(400);
+    let mut calls = vec![named("srv", "needle", "r1")];
+    for i in 0..25_000 {
+        let mut c = named("srv", &format!("hay_{i}"), "r2");
+        c["pad"] = pad.clone().into();
+        calls.push(c);
+    }
+    write_dec(&l.invocation, &mut calls);
+    assert!(std::fs::metadata(&l.invocation).unwrap().len() > 9 << 20);
+    let (_, first) = body(list_page(&l, &Access::All, &query(&[("rule", "r1")]))).await;
+    assert!(first["rows"].as_array().unwrap().is_empty());
+    assert_eq!(first["scan_exhausted"], true);
+    // The log is several page budgets long: follow the cursor until the needle.
+    let mut cursor = first["next_cursor"].as_str().map(str::to_string);
+    for _ in 0..8 {
+        let c = cursor.as_deref().expect("a cursor to resume");
+        let (_, next) = body(list_page(
+            &l,
+            &Access::All,
+            &query(&[("rule", "r1"), ("cursor", c)]),
+        ))
+        .await;
+        if !next["rows"].as_array().unwrap().is_empty() {
+            assert_eq!(tools(&next), BTreeSet::from(["needle".to_string()]));
+            return;
+        }
+        cursor = next["next_cursor"].as_str().map(str::to_string);
+    }
+    panic!("the cursor never reached the needle");
+}
+
+async fn rule_tools(l: &Logs, rule: &str) -> BTreeSet<String> {
+    let (status, v) = body(list_page(l, &Access::All, &query(&[("rule", rule)]))).await;
+    assert_eq!(status, StatusCode::OK);
+    tools(&v)
+}
+
+#[tokio::test]
+async fn rule_filter_ignores_the_id_in_another_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let l = logs(&dir);
+    let mut e = named("srv", "rule-1", "r2");
+    e["payload"] = "rule-1".into();
+    write_newest_first(&l, vec![e]);
+    assert!(rule_tools(&l, "rule-1").await.is_empty());
+}
+
+#[tokio::test]
+async fn rule_filter_has_no_prefix_collision() {
+    let dir = tempfile::tempdir().unwrap();
+    let l = logs(&dir);
+    write_newest_first(
+        &l,
+        vec![
+            named("srv", "t_one", "rule-1"),
+            named("srv", "t_ten", "rule-10"),
+        ],
+    );
+    assert_eq!(
+        rule_tools(&l, "rule-1").await,
+        BTreeSet::from(["t_one".to_string()])
+    );
+    assert_eq!(
+        rule_tools(&l, "rule-10").await,
+        BTreeSet::from(["t_ten".to_string()])
+    );
+}
+
+/// Shared with the answer-findings change: it adds the `answer_findings`
+/// half; this change pins that `findings` never reads the answer's.
+#[tokio::test]
+async fn field_split_findings_vs_answer_findings() {
+    let dir = tempfile::tempdir().unwrap();
+    let l = logs(&dir);
+    let request = finding("pii", "high", "arguments.q");
+    let answer = finding("injection", "critical", "response.text");
+    let mut d = decision(Some("r1"));
+    d["request_findings"] = json!([request.clone()]);
+    let mut c = dcall("srv", "t", Some(d));
+    c["trace_id"] = "trace-1".into();
+    let delivery = json!({
+        "event": "response_delivery_attempt", "trace_id": "trace-1", "tool": "t",
+        "response_findings": [answer.clone()],
+    });
+    write_dec(&l.invocation, &mut [c, delivery]);
+    let (status, v) = body(list_page(&l, &Access::All, &ListQuery::default())).await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["findings"], json!([request]));
+    let text = rows[0]["findings"].to_string();
+    assert!(!text.contains("injection") && !text.contains("response.text"));
+    if let Some(got) = rows[0].get("answer_findings") {
+        assert_eq!(got, &json!([answer]));
+    }
 }
 
 #[tokio::test]

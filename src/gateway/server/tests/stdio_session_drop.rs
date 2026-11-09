@@ -24,7 +24,7 @@ use crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL;
 #[tokio::test]
 async fn a_dropped_stdio_session_stops_its_task_workers() {
     let (url, mut arrived, release) = held_backend().await;
-    let store = Arc::new(tempfile::tempdir().expect("store root"));
+    let store = crate::test_dir_keep::kept_tempdir();
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.backends.insert(
@@ -39,7 +39,7 @@ async fn a_dropped_stdio_session_stops_its_task_workers() {
             ..BackendConfig::default()
         },
     );
-    let data = tempfile::tempdir().expect("data dir");
+    let data = crate::test_dir_keep::kept_tempdir();
     let gateway = Gateway::new(config.clone())
         .await
         .expect("gateway boots")
@@ -125,7 +125,7 @@ async fn a_dropped_stdio_session_stops_its_task_workers() {
 /// observed directly.
 #[tokio::test]
 async fn dropping_the_tasks_guard_seals_the_executor() {
-    let store = Arc::new(tempfile::tempdir().expect("store root"));
+    let store = crate::test_dir_keep::kept_tempdir();
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     let (service, executor) = reopen_stdio_store(&config).await.expect("the store opens");

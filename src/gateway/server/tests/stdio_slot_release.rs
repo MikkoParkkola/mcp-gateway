@@ -112,7 +112,7 @@ struct Session {
     meta: Arc<MetaMcp>,
     calls: Arc<AtomicUsize>,
     task: JoinHandle<crate::Result<()>>,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 /// A stdio session under `setup`, its stdout `capacity` bytes deep, with
@@ -127,7 +127,7 @@ fn open(
 
 async fn open_unboxed(setup: Setup, capacity: usize) -> Session {
     let (backend_url, calls) = spawn_backend().await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let quoted = |name: &str| {
         serde_json::to_string(&dir.path().join(name).display().to_string()).expect("a JSON string")
     };

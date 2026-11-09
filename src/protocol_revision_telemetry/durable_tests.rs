@@ -7,7 +7,7 @@ use crate::protocol_revision_telemetry::window;
 
 #[test]
 fn committed_window_is_not_counted_twice_after_parent_sync_failure() {
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = crate::test_dir_keep::kept_tempdir();
     let mut sink = DurableTelemetrySink::open(directory.path()).expect("durable sink");
     let mut registry = Registry::new();
     registry.observe_request(Some("2025-11-25"), "codex", Transport::Stdio);
@@ -48,7 +48,7 @@ fn window_file_is_owner_only_in_an_open_directory_and_over_a_stale_temp() {
 fn the_stdio_window_survives_a_process_restart() {
     // Moved from tests/mik_7218_acs.rs (mcp728_u1_2): two stdio sink
     // lifetimes over one data directory add up, and the shadow is kept.
-    let data_dir = tempfile::tempdir().expect("temporary data directory");
+    let data_dir = crate::test_dir_keep::kept_tempdir();
     let mut first_sink = DurableTelemetrySink::open(data_dir.path()).expect("create the window");
     let mut first_process = Registry::new();
     for _ in 0..60 {

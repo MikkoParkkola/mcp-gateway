@@ -183,6 +183,22 @@ def check_ratchet(
     return errors
 
 
+def comparison_ref(ref: str, compare: str) -> str | None:
+    """`ref` itself (compare "base": push jobs), or where HEAD's history left it (compare
+    "merge-base": pull requests and lanes, judged on their own change only). None when either
+    cannot be resolved. Inline, not scripts/dev/base_revision.py: the merge train runs this file
+    from the landed line with __file__ in the PR's worktree, so it imports nothing beside it."""
+    commit = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                            cwd=ROOT, capture_output=True, text=True)
+    if commit.returncode != 0 or not commit.stdout.strip():
+        return None
+    if compare == "base":
+        return commit.stdout.strip()
+    fork = subprocess.run(["git", "merge-base", "HEAD", commit.stdout.strip()],
+                          cwd=ROOT, capture_output=True, text=True)
+    return fork.stdout.strip() if fork.returncode == 0 and fork.stdout.strip() else None
+
+
 def read_base_baseline(ref: str) -> dict[str, int] | None:
     """The baseline as committed at `ref`, or None when git cannot read it."""
     try:
@@ -204,6 +220,9 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--base", metavar="REF", help="refuse a baseline that grew since REF")
     mode.add_argument("--update", action="store_true", help="rewrite the baseline from the tree")
+    parser.add_argument("--compare", choices=["base", "merge-base"], default="base",
+                        help="base: the baseline at --base itself (push jobs); merge-base: at the "
+                             "branch point (pull requests and lanes)")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     sizes = measure()
 
@@ -226,7 +245,12 @@ def main(argv: list[str] | None = None) -> int:
 
     ratchet = []
     if args.base is not None:
-        base = read_base_baseline(args.base) if args.base else None
+        ref = comparison_ref(args.base, args.compare) if args.base else None
+        if ref is None:
+            print(f"FAIL cannot resolve base {args.base!r} ({args.compare}); the ratchet is not skipped."
+                  " A merge-base needs full history (fetch-depth: 0)")
+            return 1
+        base = read_base_baseline(ref)
         if base is None:
             print(f"FAIL cannot read the baseline at base {args.base!r}; the ratchet is not skipped")
             return 1

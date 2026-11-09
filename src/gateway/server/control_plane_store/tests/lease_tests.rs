@@ -47,7 +47,10 @@ fn assert_refused(outcome: Result<bool, String>, audit: &Path) {
 }
 
 fn case(auth: bool, explicit: bool) {
-    let (cfg_dir, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (cfg_dir, data) = (
+        crate::test_dir_keep::kept_tempdir(),
+        crate::test_dir_keep::kept_tempdir(),
+    );
     let store_dir = data.path().join("cp");
     let (config, path) = load(
         cfg_dir.path(),

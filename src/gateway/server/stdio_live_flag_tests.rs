@@ -191,7 +191,7 @@ fn reached_resolution(reply: &Value) -> bool {
 /// to the next call, with no restart.
 #[tokio::test]
 async fn f2_stdio_sanitise_input_follows_a_reload() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_flag(&path, true);
     let mut s = Session::start(dir.path(), path.clone(), Announce::Yes).await;
@@ -236,7 +236,7 @@ async fn held_across_a_flip(s: &mut Session, path: &Path, to: bool) -> Value {
 /// turns it off before the line dispatches; and the reverse.
 #[tokio::test]
 async fn g4_a_held_stdio_line_keeps_the_generation_it_was_read_under() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_flag(&path, true);
     let mut s = Session::start(dir.path(), path.clone(), Announce::No).await;
@@ -299,7 +299,7 @@ async fn held_across_a_policy_flip(s: &mut Session, path: &Path, deny: bool) -> 
 /// allowed goes on to resolve its server, even when a reload denies it.
 #[tokio::test]
 async fn a_held_stdio_line_keeps_the_tool_policy_it_was_read_under() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_policy(&path, true);
     let mut s = Session::start(dir.path(), path.clone(), Announce::No).await;

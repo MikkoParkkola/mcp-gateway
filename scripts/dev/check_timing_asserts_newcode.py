@@ -62,7 +62,9 @@ REASONS = ("absence", "lower-bound", "first-poll", "fixture", "precondition")
 HANG_BOUND = re.compile(r"(?:\w+::)*HANG_BOUND\b")
 TAG_LINE = re.compile(r"//\s*timing:(.*)$")
 ORACLE_LINE = re.compile(r"//\s*timing-oracle:(.*)$")
-ORACLE_FORMAT = re.compile(r"^\s*vs\s+(.*\S)\s*\(MIK-\d+\)\s*$")
+# `vs <timer> (<ticket>)`, or `vs <timer> (why: <reason>)` on new lines, which may not carry a
+# ticket id (the public-repo check refuses them). The reason is non-empty and has no `)`.
+ORACLE_FORMAT = re.compile(r"^\s*vs\s+(.*?\S)\s*\((?:MIK-\d+|why:\s*[^\s)][^)]*)\)\s*$")
 ORACLE_SUBJECT = re.compile(r"\d+(?:\.\d+)?\s*(?:s|ms|us|ns)\b|\b[A-Z][A-Z0-9_]{2,}\b")
 SLEEP_CALL = re.compile(r"(?<![\w.])(?:(?:tokio|std)::(?:time|thread)::|time::|thread::)?sleep\(")
 
@@ -107,7 +109,7 @@ def statement_end(code: str, line: int) -> int:
 
 
 def oracle_malformed(m: re.Match) -> bool:
-    """True when a `timing-oracle:` comment does not name a timer and a ticket."""
+    """True when a `timing-oracle:` comment does not name a timer and a ticket or a reason."""
     f = ORACLE_FORMAT.match(m.group(1))
     return not (f and ORACLE_SUBJECT.search(f.group(1)))
 

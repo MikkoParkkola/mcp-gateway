@@ -73,7 +73,7 @@ fn prepare_refuses_a_wrong_audience_and_an_unbindable_principal_before_custody()
         );
 
         let mut nameless = identity();
-        nameless.subject = String::new();
+        nameless = nameless.with_subject("");
         let refused = vault
             .prepare(Principal::Verified(&nameless), &backend())
             .await;

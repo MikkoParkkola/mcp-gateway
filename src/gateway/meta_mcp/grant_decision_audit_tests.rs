@@ -56,13 +56,13 @@ fn oidc(issuer: &str, subject: &str, email: &str) -> Who {
             subject,
             Some(email.to_string()),
         )),
-        identity: Some(VerifiedIdentity {
-            subject: subject.to_string(),
-            email: email.to_string(),
-            name: None,
-            groups: vec![],
-            issuer: issuer.to_string(),
-        }),
+        identity: Some(VerifiedIdentity::for_test(
+            subject.to_string(),
+            email.to_string(),
+            None,
+            vec![],
+            issuer.to_string(),
+        )),
     }
 }
 

@@ -270,13 +270,13 @@ async fn direct_route_replay_needs_a_token() {
         "_meta": { key_meta: "replay-1", (ATTESTATION_META): token }});
     // A keyed direct call needs an execution principal (MIK-8154 ANON.1).
     let who = || {
-        Some(crate::key_server::oidc::VerifiedIdentity {
-            subject: "replayer".to_string(),
-            email: "replayer@example.invalid".to_string(),
-            name: None,
-            groups: vec![],
-            issuer: "https://issuer.example.invalid".to_string(),
-        })
+        Some(crate::key_server::oidc::VerifiedIdentity::for_test(
+            "replayer".to_string(),
+            "replayer@example.invalid".to_string(),
+            None,
+            vec![],
+            "https://issuer.example.invalid".to_string(),
+        ))
     };
     let (_, json) = rpc_as(&router, "/mcp/demo", "tools/call", first, who()).await;
     assert_admitted("first call", &json);
@@ -344,13 +344,13 @@ async fn direct_route_refusal_precedes_identity_minting() {
             .unwrap();
         request
             .extensions_mut()
-            .insert(crate::key_server::oidc::VerifiedIdentity {
-                subject: "alice".to_string(),
-                email: "alice@corp".to_string(),
-                name: None,
-                groups: vec![],
-                issuer: "https://idp".to_string(),
-            });
+            .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+                "alice".to_string(),
+                "alice@corp".to_string(),
+                None,
+                vec![],
+                "https://idp".to_string(),
+            ));
         let response = router.clone().oneshot(request).await.unwrap();
         let status = response.status();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
