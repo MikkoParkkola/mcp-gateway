@@ -1,0 +1,37 @@
+head_sha	78bcf43fae088875fa5498758565a7875eb619d1
+#mutant seal_get
+mcp_gateway	gateway::router::tests::task_execution_adapter::notifications::stored_seal_frames::a_tasks_get_of_a_result_redacted_at_serve_carries_no_seal	src/gateway/router/tests/task_execution_adapter/stored_seal_frames.rs:121
+#mutant seal_notify
+mcp_gateway	gateway::router::tests::task_execution_adapter::notifications::stored_seal_frames::a_task_notification_redacted_at_serve_carries_no_seal	src/gateway/router/tests/task_execution_adapter/stored_seal_frames.rs:121
+#mutant seal_repeat
+mcp_gateway	gateway::router::tests::task_execution_adapter::notifications::stored_seal_frames::a_repeated_keyed_task_redacted_at_serve_carries_no_seal	src/gateway/router/tests/task_execution_adapter/stored_seal_frames.rs:121
+#mutant seal_idem
+mcp_gateway	gateway::router::tests::task_execution_adapter::notifications::stored_seal_frames::a_keyed_sync_replay_redacted_at_serve_carries_no_seal	src/gateway/router/tests/task_execution_adapter/stored_seal_frames.rs:121
+#mutant seal_cache
+mcp_gateway	gateway::router::tests::task_execution_adapter::notifications::stored_seal_frames::a_keyed_sync_replay_redacted_at_serve_carries_no_seal	src/gateway/router/tests/task_execution_adapter/stored_seal_frames.rs:121
+#mutant seal_admit
+mcp_gateway	gateway::router::tests::task_execution_adapter::notifications::stored_seal_frames::a_keyed_sync_replay_redacted_at_serve_carries_no_seal	src/gateway/router/tests/task_execution_adapter/stored_seal_frames.rs:121
+#mutant seal_direct
+mcp_gateway	gateway::router::tests::task_execution_adapter::notifications::stored_seal_frames::a_keyed_sync_replay_redacted_at_serve_carries_no_seal	src/gateway/router/tests/task_execution_adapter/stored_seal_frames.rs:121
+#mutant seal_nodrop
+mcp_gateway	gateway::router::tests::task_execution_adapter::notifications::stored_seal_frames::a_keyed_sync_replay_redacted_at_serve_carries_no_seal	src/gateway/router/tests/task_execution_adapter/stored_seal_frames.rs:121
+mcp_gateway	gateway::router::tests::task_execution_adapter::notifications::stored_seal_frames::a_repeated_keyed_task_redacted_at_serve_carries_no_seal	src/gateway/router/tests/task_execution_adapter/stored_seal_frames.rs:121
+mcp_gateway	gateway::router::tests::task_execution_adapter::notifications::stored_seal_frames::a_task_notification_redacted_at_serve_carries_no_seal	src/gateway/router/tests/task_execution_adapter/stored_seal_frames.rs:121
+mcp_gateway	gateway::router::tests::task_execution_adapter::notifications::stored_seal_frames::a_tasks_get_of_a_result_redacted_at_serve_carries_no_seal	src/gateway/router/tests/task_execution_adapter/stored_seal_frames.rs:121
+mcp_gateway	gateway::router::tests::task_execution_adapter::notifications::stored_seal_frames::a_stored_result_is_served_unsealed_while_a_value_is_held	src/gateway/router/tests/task_execution_adapter/stored_seal_frames.rs:219
+mcp_gateway	security::needles::configured_tests::a_redacted_stored_answer_keeps_no_seal_anywhere	src/security/needles_configured_tests.rs:387
+mcp_gateway	security::needles::configured_tests::a_seal_under_a_key_the_scrub_renames_is_dropped	src/security/needles_configured_tests.rs:406
+mcp_gateway	security::needles::configured_tests::a_seal_holding_a_held_value_is_dropped	src/security/needles_configured_tests.rs:424
+mcp_gateway	security::needles::configured_tests::a_held_value_only_in_the_text_the_strip_rewrote_is_not_put_back	src/security/needles_configured_tests.rs:455
+mcp_gateway	security::needles::configured_tests::a_redacted_answer_with_seal_text_that_will_not_parse_is_refused	src/security/needles_configured_tests.rs:478
+mcp_gateway	security::needles::configured_tests::a_stored_answer_is_unsealed_while_any_value_is_held	src/security/needles_configured_tests.rs:493
+mcp_gateway	security::needles::configured_tests::a_redacted_answer_with_prose_led_seal_text_is_refused	src/security/needles_configured_tests.rs:518
+mcp_gateway	security::needles::configured_tests::a_held_number_inside_a_seal_is_not_served	src/security/needles_configured_tests.rs:540
+#mutant seal_text
+mcp_gateway	security::needles::configured_tests::a_redacted_stored_answer_keeps_no_seal_anywhere	src/security/needles_configured_tests.rs:387
+mcp_gateway	security::needles::configured_tests::a_held_value_only_in_the_text_the_strip_rewrote_is_not_put_back	src/security/needles_configured_tests.rs:455
+mcp_gateway	security::needles::configured_tests::a_redacted_answer_with_seal_text_that_will_not_parse_is_refused	src/security/needles_configured_tests.rs:478
+mcp_gateway	security::needles::configured_tests::a_redacted_answer_with_prose_led_seal_text_is_refused	src/security/needles_configured_tests.rs:518
+#mutant seal_refuse
+mcp_gateway	security::needles::configured_tests::a_redacted_answer_with_seal_text_that_will_not_parse_is_refused	src/security/needles_configured_tests.rs:478
+mcp_gateway	security::needles::configured_tests::a_redacted_answer_with_prose_led_seal_text_is_refused	src/security/needles_configured_tests.rs:518
