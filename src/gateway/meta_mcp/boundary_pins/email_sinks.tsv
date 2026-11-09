@@ -12,3 +12,5 @@ src/key_server/oidc.rs	OidcVerifier::verify_inner	read	1	verification and domain
 src/key_server/oidc/verified.rs	VerifiedIdentity::email	read	1	the accessor itself
 src/key_server/policy.rs	matches_rule	read	4	policy matching on the email and its domain; no log field
 src/projection/engine.rs	build_actor	read	1	reads ActorSpec.email, a projection setting naming where an email sits in a record; not a verified identity's email
+src/key_server/audit.rs	SafeIdentity::of	read	1	hashes the email into email_hash for the audit record; the email itself is not written
+src/key_server/oidc.rs	IdTokenClaims::fmt	read	1	the claims Debug reports only whether an email is present, never its text
