@@ -145,6 +145,15 @@ impl NeedleSet {
 /// stay: they hold no digest of the result. Keeping seals on answers the
 /// scrub leaves alone was tried and dropped: every way of proving the answer
 /// unchanged had a hole (numbers, renamed keys, rewritten text).
+///
+/// Threat model: the leak is a digest the gateway itself computed over the
+/// unredacted result. Only the gateway writes such a seal, as a
+/// `_meta.provenance.public_signature` member of a result, or inside the
+/// chain and playbook step JSON text `serde_json` writes (which never escapes
+/// a key). A seal a backend wrote, escaped or not, or anything in an error
+/// body, carries no digest the gateway made over this result, and a backend
+/// that wants to leak its own output can do so directly; neither is in
+/// scope here.
 pub(crate) fn scrub_stored(
     sets: &[std::sync::Arc<NeedleSet>],
     response: &mut JsonRpcResponse,
