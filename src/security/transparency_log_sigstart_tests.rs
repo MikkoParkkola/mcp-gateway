@@ -496,3 +496,27 @@ fn r15b_the_predicted_seq_is_the_new_active_files() {
     assert_eq!(sidecar(&fx)["segment_seq"].as_u64(), Some(active_seq(&fx)));
     assert_eq!(sidecar(&fx)["offset"], 0);
 }
+
+/// R36: an unrotated v4 log with its identity records and `.sigstart`
+/// deleted but its `.hwm` kept is tampered: v3.5.1 never wrote `.hwm`, so
+/// the migration shape does not hold (q27).
+#[test]
+fn r36_a_kept_hwm_rules_out_the_v3_shape() {
+    let fx = Fixture::new();
+    let log = fx.open(true, 0);
+    Fixture::calls(&log, 0, 3);
+    drop(log);
+    assert!(fx.hwm().exists());
+    let text = std::fs::read_to_string(&fx.path).unwrap();
+    let kept: String = text
+        .lines()
+        .filter(|l| {
+            !l.contains("\"audit_segment_opened\"") && !l.contains("\"audit_log_identified\"")
+        })
+        .flat_map(|l| [l, "\n"])
+        .collect();
+    std::fs::write(&fx.path, kept).unwrap();
+    std::fs::remove_file(fx.sidecar()).unwrap();
+    drop(fx.open(true, 0));
+    assert_eq!(sidecar(&fx)["state"], "closed");
+}

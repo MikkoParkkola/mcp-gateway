@@ -494,8 +494,9 @@ fn r12_the_live_frame_is_placed_after_every_anchor() {
 /// record reads `invalid` in the list and the export.
 #[tokio::test]
 async fn r16_the_governance_log_is_anchored_too() {
-    let inv = Fixture::new();
-    drop(inv.open(true, 0));
+    // The invocation log's anchor sits past legacy bytes; a governance row
+    // judged against it (the wrong log's anchor) would not read `sig_missing`.
+    let inv = turned_on_midway();
     let gov = Fixture::new();
     let log = gov.open(true, 0);
     for target in ["backend:alpha", "backend:beta"] {
