@@ -801,10 +801,9 @@ async fn a_callback_after_a_switch_redeems_nothing() {
 /// A code exchange already sent when a sign-in under another issuer is
 /// confirmed: the login hands back no token, caches nothing of the old
 /// issuer, and the new sign-in's status stands. An issuer switch is
-/// confirmed only through the web UI's sign-in, so the row needs it.
+/// confirmed only through the web UI's sign-in, so the rows need it.
 #[cfg(feature = "webui")]
-#[tokio::test]
-async fn a_switch_while_a_code_exchange_is_in_flight_hands_back_nothing() {
+async fn a_switch_during_the_code_exchange_hands_back_nothing(entry: Entry, label: &str) {
     use super::sign_in::{SignIn, SignInStatus};
     use super::token_server_fixture::{Answer, TokenServer};
     let server = TokenServer::start(&[Answer::HoldThenRotate]).await;
@@ -819,24 +818,42 @@ async fn a_switch_while_a_code_exchange_is_in_flight_hands_back_nothing() {
     };
 
     let ((outcome, _), ()) = tokio::join!(
-        approve_via(&mut login, &server.base, Entry::GetToken, Browser::Opens),
+        approve_via(&mut login, &server.base, entry, Browser::Opens),
         switch
     );
 
-    assert_eq!(server.requests(), 1, "the code exchange was in flight");
+    assert_eq!(
+        server.requests(),
+        1,
+        "{label}: the code exchange was in flight"
+    );
     let refused = outcome.expect_err("no old-issuer token after the switch");
     assert!(
         matches!(refused, Error::AuthorizationRequired { .. }),
-        "{refused}"
+        "{label}: {refused}"
     );
     assert!(
         login.current_token.read().is_none(),
-        "the old issuer's answer is not cached"
+        "{label}: the old issuer's answer is not cached"
     );
     assert!(
         matches!(cell.snapshot(), SignIn::SignedIn { expires_at: Some(at) }
             if at == std::time::UNIX_EPOCH + std::time::Duration::from_secs(4_000_000_000)),
-        "the new sign-in's status stands: {:?}",
+        "{label}: the new sign-in's status stands: {:?}",
         cell.snapshot()
     );
+}
+
+/// Through the token step a request takes (`get_token`).
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_switch_while_a_code_exchange_is_in_flight_hands_back_nothing() {
+    a_switch_during_the_code_exchange_hands_back_nothing(Entry::GetToken, "get_token").await;
+}
+
+/// Through the public `authorize`, which has no token step around it.
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_switch_during_a_direct_authorize_hands_back_nothing() {
+    a_switch_during_the_code_exchange_hands_back_nothing(Entry::Authorize, "authorize").await;
 }

@@ -22,8 +22,11 @@ pub(super) enum Renewal {
     Refused,
     /// Every headless grant failed: the person must authorize again.
     Exhausted,
-    /// The credential lock was busy: nothing ran, and the loop retries next
-    /// period without trying another grant on the same lease.
+    /// Nothing was renewed and nothing new is due from the person: the
+    /// credential lock was busy (nothing ran), or a sign-in under another
+    /// issuer was confirmed before the grant or while it was in flight (its
+    /// answer is not this backend's credential). The loop retries next period
+    /// without trying another grant on the same lease.
     Deferred,
 }
 
