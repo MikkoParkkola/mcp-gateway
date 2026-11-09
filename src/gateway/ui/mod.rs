@@ -759,3 +759,7 @@ mod keys_create_refusal_tests;
 #[cfg(test)]
 #[path = "keys_create_writer_tests.rs"]
 mod keys_create_writer_tests;
+
+#[cfg(test)]
+#[path = "keys_revoke_request_tests.rs"]
+mod keys_revoke_request_tests;
