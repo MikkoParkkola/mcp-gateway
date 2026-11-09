@@ -128,7 +128,10 @@ fn success_is_a_no_store_200_with_exactly_name_revoked_revision() {
 
 #[test]
 fn a_fault_after_commit_never_answers_revoked() {
-    for phase in ["commit", "journal-confirm", "reload", "postcondition"] {
+    // After the commit only: a failed write is before it, rolls back and is
+    // the writer's ordinary not_written answer (the audited writer has no
+    // injectable write fault; FailWrite belongs to the commit primitive).
+    for phase in ["journal-confirm", "reload", "postcondition"] {
         let fx = Fixture::new(target_setup());
         let path = crate::identity_grants::journal::resolved(&fx.path());
         let old = fx.live.generation();
@@ -136,7 +139,6 @@ fn a_fault_after_commit_never_answers_revoked() {
         let reached = Arc::new(Mutex::new(None));
         let seen = reached.clone();
         let journal_path = journal::journal_path(&path);
-        let armed = (phase == "commit").then(|| fault::set(&path, fault::Fault::FailWrite));
         write_order::on(
             &path,
             if phase == "postcondition" {
@@ -160,9 +162,7 @@ fn a_fault_after_commit_never_answers_revoked() {
         let sent = revoke(&fx, "target", "target-secret");
         let steps = write_order::take(&path);
         // RED R7: prove the fault's phase was reached; a missing route cannot pass.
-        if phase == "commit" {
-            assert!(fault::fired(&path) > 0);
-        } else if phase == "reload" {
+        if phase == "reload" {
             assert!(
                 reached
                     .lock()
@@ -178,7 +178,6 @@ fn a_fault_after_commit_never_answers_revoked() {
                 &"commit"
             }));
         }
-        drop(armed);
         assert!(!sent.status.is_success(), "{phase}: {}", sent.body);
         assert_ne!(sent.json()["revoked"], true, "{phase}");
         // RED R7: journal confirmation / receipt failure follows a landed removal.
