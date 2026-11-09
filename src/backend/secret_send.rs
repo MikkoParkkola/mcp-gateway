@@ -186,7 +186,7 @@ impl Backend {
         if inject_resolved(&self.config.secrets, &values, &self.name, tool, arguments).is_err() {
             return false;
         }
-        self.insert_resolved(&values);
+        mutant!("R2", { let _ = &values; }, self.insert_resolved(&values));
         true
     }
 
