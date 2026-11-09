@@ -213,6 +213,13 @@ fn m1_profile_one_list_page() {
         ..super::ListQuery::default()
     };
     for run in 1..=2 {
+        report("m1 scan only", run, measure(|| scan(&fx, false)).1, lines);
+        report(
+            "m1 scan+observe+join",
+            run,
+            measure(|| scan(&fx, true)).1,
+            lines,
+        );
         let (response, m) = measure(|| super::list_page(&fx.logs(), &fx.access(), &query));
         drop(response);
         report("m1 list page", run, m, 200);

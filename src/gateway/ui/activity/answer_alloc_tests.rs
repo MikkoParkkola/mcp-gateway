@@ -131,14 +131,11 @@ async fn m2_ratchet_an_export_stays_within_five_percent_of_its_measured_cost() {
 /// entries' worth of the scan's own per-line cost; each call may clone one
 /// bounded projection (32 findings, 4 KiB); the pending map holds at most
 /// `MAX_PENDING` projections and the tombstones `MAX_EVICTED` ids.
-#[test]
-fn m2_join_delta_stays_within_the_designed_join_cost() {
+fn assert_join_delta_within_design(fx: &Fixture, checked: u64, calls: u64) {
     use super::answer::{MAX_EVICTED, MAX_PENDING};
-    let fx = over_caps(10_000, false);
-    let (_, lines) = shape(&fx);
-    let (checked, calls) = (14_500_u64, 10_000_u64);
-    let ((), base) = measure(|| scan(&fx, false));
-    let ((), joined) = measure(|| scan(&fx, true));
+    let (_, lines) = shape(fx);
+    let ((), base) = measure(|| scan(fx, false));
+    let ((), joined) = measure(|| scan(fx, true));
     let (extra_bytes, extra_calls) = (joined.bytes - base.bytes, joined.calls - base.calls);
     let per_line_bytes = base.bytes / lines;
     let per_line_calls = base.calls / lines;
@@ -147,10 +144,21 @@ fn m2_join_delta_stays_within_the_designed_join_cost() {
         + (calls + MAX_PENDING as u64) * projection
         + MAX_EVICTED as u64 * 64;
     let calls_bound = checked * 2 * per_line_calls + (calls + MAX_PENDING as u64) * 8;
-    let shape = format!("join added {extra_bytes} B and {extra_calls} calls over {base}");
-    assert!(extra_bytes <= bytes_bound, "{shape}; bound {bytes_bound} B");
-    assert!(
-        extra_calls <= calls_bound,
-        "{shape}; bound {calls_bound} calls"
+    let shape = format!(
+        "join added {extra_bytes} B ({}% of the {bytes_bound} B bound) and {extra_calls} calls ({}% of {calls_bound}) over {base}",
+        extra_bytes * 100 / bytes_bound,
+        extra_calls * 100 / calls_bound
     );
+    assert!(extra_bytes <= bytes_bound, "{shape}");
+    assert!(extra_calls <= calls_bound, "{shape}");
+}
+
+#[test]
+fn m2_join_delta_stays_within_the_designed_join_cost() {
+    assert_join_delta_within_design(&over_caps(10_000, false), 14_500, 10_000);
+}
+
+#[test]
+fn m1_join_delta_stays_within_the_designed_join_cost() {
+    assert_join_delta_within_design(&over_caps(200, true), 4_700, 200);
 }
