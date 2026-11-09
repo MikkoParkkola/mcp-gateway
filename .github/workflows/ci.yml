@@ -710,14 +710,22 @@ jobs:
 
   # The required name. Green only when every Windows shard and the clippy job
   # succeeded: a skipped or cancelled one is red (scripts/ci/check_needs.py).
-  # always() so a failed shard still yields a verdict; the skip guards are the
-  # shards' own, so a throwaway PR or a post-merge push skips this as before;
+  # !cancelled() so a failed shard still yields a verdict, but a cancelled run
+  # (superseded by a newer push) creates no aggregate job: always() ran these
+  # after the cancel and held the run, and the newer run behind it, for a
+  # runner. A superseded run still stuck "queued" (an older ci.yml, or a job
+  # that ignores the cancel) frees only with
+  # `gh api -X POST repos/{owner}/{repo}/actions/runs/<id>/force-cancel`;
+  # a plain `gh run cancel` leaves always() jobs alive. Cancelling a PR's newest run with no newer one behind it leaves
+  # these skipped, and branch protection reads a skipped required check as
+  # passing: merge only through the train, which reads it red. The skip guards
+  # are the shards' own, so a throwaway PR or a post-merge push skips this as before;
   # a lane PR into the release line runs it with them, and heavy-gate judges
   # it on the train.
   windows-check:
     name: Windows check
     needs: [windows-shards, windows-clippy]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -744,7 +752,7 @@ jobs:
   heavy-gate:
     name: Heavy checks (merge train)
     needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal, feature-combos-pr]
-    if: ${{ always() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -840,11 +848,12 @@ jobs:
 
   # Gated like its shards: on a pull request that is not a train it is
   # skipped, never red, and no required check needs it. On a train it runs
-  # with always(), so a failed or skipped shard fails it.
+  # with !cancelled(), so a failed or skipped shard fails it; a cancelled run
+  # creates no aggregate (see windows-check).
   macos-check:
     name: macOS check
     needs: [macos-shards]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
     runs-on: ubuntu-latest
     # Read this run's job timings for the limit watch below.
     permissions:
@@ -930,7 +939,7 @@ jobs:
   test:
     name: Tests
     needs: [test-shards]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
