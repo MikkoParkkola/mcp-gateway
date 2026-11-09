@@ -231,6 +231,29 @@ def macos_train_errors(jobs: dict) -> list[str]:
     return errors
 
 
+AGGREGATES = ("test", "windows-check", "macos-check", HEAVY_GATE)
+
+
+def aggregate_cancel_errors(jobs: dict) -> list[str]:
+    """On a train PR (where all four run) each aggregate runs after a
+    failed, skipped or green shard, but a cancelled run creates no aggregate:
+    always() created them after the cancel and left the run queued for a runner,
+    holding the newer run in the concurrency group behind it."""
+    errors = []
+    for job in AGGREGATES:
+        needs = jobs[job].get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        for result in ("success", "failure", "skipped"):
+            for cancelled in (False, True):
+                c = as_train(ctx("pull_request", "success", "false"))
+                c["needs"] = {n: {"result": result, "outputs": {}} for n in needs}
+                c["_status"] = dict(c["_status"], cancelled=cancelled)
+                if runs(jobs[job], c) == cancelled:
+                    run = "cancelled run" if cancelled else "run"
+                    errors.append(f"{job}: a {run} with {result} shards {'runs' if cancelled else 'skips'} it")
+    return errors
+
+
 def post_merge_errors(jobs: dict) -> list[str]:
     """A release-line push runs everything but POST_MERGE_SKIPPED and NOT_ON_PRS."""
     errors = []
@@ -349,20 +372,28 @@ def main() -> int:
             j[job]["if"] = str(j[job]["if"]).replace(
                 " && github.event.pull_request.head.repo.full_name == github.repository) ||", ") ||")
     def check_loses_always(j: dict) -> None:
-        j["macos-check"]["if"] = str(j["macos-check"]["if"]).replace("${{ always() && ", "${{ ")
+        j["macos-check"]["if"] = str(j["macos-check"]["if"]).replace("${{ !cancelled() && ", "${{ ")
     macos_mutants = {
         "macos-shards loses its train gate": (lambda j: ungate(j, "macos-shards"), "macos-shards: code PR runs"),
         "macos-check loses its train gate": (lambda j: ungate(j, "macos-check"), "macos-check: code PR runs"),
         "macOS waits on the scope job": (waits_on_scope, "macos-shards: scope failed on a train skips"),
         "macOS skips a docs-only change": (skips_docs_only, "macos-shards: docs-only train skips"),
         "a fork's train branch gets macOS": (fork_trains_too, "macos-shards: train branch from a fork runs"),
-        "macos-check loses always()": (check_loses_always, "macos-check: a train with a failure shard skips"),
+        "macos-check loses !cancelled()": (check_loses_always, "macos-check: a train with a failure shard skips"),
     }
     for label, (mutate, expected) in macos_mutants.items():
         mutated = copy.deepcopy(jobs)
         mutate(mutated)
         if expected not in macos_train_errors(mutated):
             errors.append(f"macOS self-test: '{label}' was not caught by: {expected}")
+    errors += aggregate_cancel_errors(jobs)
+    # The cancel rows must be able to fail: always() back on any one aggregate is caught.
+    for job in AGGREGATES:
+        mutated = copy.deepcopy(jobs)
+        mutated[job]["if"] = str(mutated[job]["if"]).replace("${{ !cancelled() && ", "${{ always() && ")
+        expected = f"{job}: a cancelled run with failure shards runs it"
+        if expected not in aggregate_cancel_errors(mutated):
+            errors.append(f"cancel self-test: always() on {job} was not caught by: {expected}")
     # The feature-combination routing must be able to fail: each mutant is caught by the case named beside it.
     fc = "feature-combos-pr"
     train_only = ("${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
