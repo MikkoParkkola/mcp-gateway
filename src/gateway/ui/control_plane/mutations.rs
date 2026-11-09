@@ -236,16 +236,13 @@ pub(super) fn store_unavailable(reason: String) -> axum::response::Response {
 /// Sync core of [`resolve_decision`] (testable without a router). Authorizes
 /// FIRST, so a non-admin still gets RBAC's 403, then refuses a grant or policy
 /// decision with 409 before any store read or audit write: the store is not
-/// what dispatch enforces (E2-min). Other kinds return 422.
+/// what dispatch enforces (E2-min). Other kinds return 422. An unavailable
+/// store answers 503 only for a refusal whose [`StoreCheck`] is `First`.
 pub(super) fn resolve_decision_core(
     store: Result<&Arc<dyn ControlPlaneStore>, String>,
     actor: &ControlPlaneActor,
     req: DecisionRequest,
 ) -> axum::response::Response {
-    if let Err(reason) = store {
-        return store_unavailable(reason);
-    }
-
     // Map kind -> action; reject unsupported kinds with a static 422 (no
     // resource lookup, so no information leak).
     let (action, kind_label, refusal) = match req.target_kind {
@@ -273,6 +270,9 @@ pub(super) fn resolve_decision_core(
                 .into_response();
         }
     };
+    if let (StoreCheck::First, Err(reason)) = (refusal.store, store) {
+        return store_unavailable(reason);
+    }
     let approve = req.decision == Decision::Approve;
     let verb = if approve { "approve" } else { "deny" };
 
@@ -318,6 +318,18 @@ pub(super) fn resolve_decision_core(
 pub(super) struct WriteRefusal {
     pub(super) reason_code: &'static str,
     pub(super) reason: &'static str,
+    pub(super) store: StoreCheck,
+}
+
+/// Whether an unavailable store answers 503 before the refusal.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum StoreCheck {
+    /// The store's 503 comes first, then RBAC, then the refusal.
+    First,
+    /// The store is never consulted: RBAC, then the refusal. ADR-029: a
+    /// policy write is refused whether or not the store is available, since
+    /// the store never enforces policy.
+    Never,
 }
 
 impl WriteRefusal {
@@ -338,12 +350,18 @@ pub(super) const GRANT_WRITES_REFUSED: WriteRefusal = WriteRefusal {
     reason_code: "grants_managed_in_identity_grants_file",
     reason: "Grants are enforced from the file named by security.identity_grants.path; \
              change them with `mcp-gateway identity grants`. This store is not enforced.",
+    store: StoreCheck::First,
 };
 
 pub(super) const POLICY_WRITES_REFUSED: WriteRefusal = WriteRefusal {
     reason_code: "policies_managed_in_gateway_config",
-    reason: "Policies are enforced from gateway config: set security.sanitize_input and \
+    // Every gateway.yaml key ADR-029's decision table places policy in, in its
+    // order.
+    reason: "Policies are enforced from gateway config: security.tool_policy, \
+             security.firewall.rules, security.firewall.credential_redaction, \
+             security.firewall.collusion, security.sanitize_input and \
              security.ssrf_protection. This store is not enforced.",
+    store: StoreCheck::Never,
 };
 
 /// Shared write path: build the audited mutation and authorize it with
@@ -360,7 +378,7 @@ pub(super) fn apply_mutation(
     rollback: ControlPlaneRollbackPlan,
     refusal: &WriteRefusal,
 ) -> axum::response::Response {
-    if let Err(reason) = store {
+    if let (StoreCheck::First, Err(reason)) = (refusal.store, store) {
         return store_unavailable(reason);
     }
 
