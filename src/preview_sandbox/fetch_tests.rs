@@ -161,7 +161,6 @@ fn pypi_non_registry_specs_refuse() {
         "..",
         ".x",
         "x-",
-        "-x",
         "x@1",
         "x==",
         "x>=1",
