@@ -790,7 +790,7 @@ async fn reading_an_unvouched_row_stages_no_receipt() {
                     meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
                 })
                 .await;
-            staged.commit(true);
+            staged.commit(true, &firewall.paired_generation_for_test());
             assert_eq!(
                 relayed_by_bob(&firewall, PROSE),
                 vouching == Vouching::Vouched,

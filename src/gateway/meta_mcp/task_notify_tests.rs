@@ -200,7 +200,7 @@ async fn a_frame_of_an_unvouched_row_carries_the_withheld_answer() {
                     stored,
                     super::sealed_hold::CarriedHolds::none(),
                 )),
-                |_| false,
+                |_| None,
                 &subscription,
             )
             .await
