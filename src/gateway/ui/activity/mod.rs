@@ -109,7 +109,20 @@ fn logs(state: &AppState) -> Option<Logs> {
 /// reload changes the configured key, not the running logger's, so a key
 /// loaded but not yet running would read every row as invalid.
 fn verification_secret(live: &crate::config_reload::LiveConfig) -> Option<Vec<u8>> {
-    let secret = &mutant!("q43", live.generation().config().security.transparency_log.shared_secret.clone(), live.running().security.transparency_log.shared_secret.clone());
+    let secret = &mutant!(
+        "q43",
+        live.generation()
+            .config()
+            .security
+            .transparency_log
+            .shared_secret
+            .clone(),
+        live.running()
+            .security
+            .transparency_log
+            .shared_secret
+            .clone()
+    );
     (!secret.is_empty()).then(|| secret.clone().into_bytes())
 }
 

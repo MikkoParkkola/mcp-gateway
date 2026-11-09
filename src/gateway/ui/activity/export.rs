@@ -99,7 +99,11 @@ pub(super) fn collect(
     // so a legacy fault a row met is in it.
     let done = |mut c: Collected, truncated| {
         c.truncated = truncated;
-        c.signing_anchor = mutant!("q22", ["ok"; 2], [Which::Invocation, Which::Governance].map(|w| check.report(w)));
+        c.signing_anchor = mutant!(
+            "q22",
+            ["ok"; 2],
+            [Which::Invocation, Which::Governance].map(|w| check.report(w))
+        );
         Ok(c)
     };
     let mut bytes = 0_usize;
