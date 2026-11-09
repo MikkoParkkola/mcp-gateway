@@ -55,6 +55,15 @@ struct Envelope {
     creation_recorded: bool,
 }
 
+impl Drop for Envelope {
+    /// A generated key's text is wiped with the envelope that held it.
+    fn drop(&mut self) {
+        if let Some(hex) = self.key_hex.as_mut() {
+            zeroize::Zeroize::zeroize(hex);
+        }
+    }
+}
+
 /// The audit-log event that marks a key's creation; it carries the key id
 /// only.
 pub(crate) const CREATED_EVENT: &str = "key_server.email_hash_key_created";
@@ -85,6 +94,32 @@ pub(crate) fn history_in(log: &Path) -> Result<bool, String> {
             log.display()
         )
     })
+}
+
+/// Append the creation record for `key_id` to `log`, unless a retained
+/// segment already holds it: a start that crashed after appending but before
+/// marking the file recorded must not append the same record twice. The
+/// check fails closed like [`history_in`].
+pub(crate) fn record_creation(
+    log: &crate::security::TransparencyLogger,
+    key_id: &str,
+) -> Result<(), String> {
+    use crate::security::transparency_log::{Malformed, log_contains_entry};
+    let path = log.path();
+    let already = log_contains_entry(&path, "email-hash creation check", Malformed::Refuse, |e| {
+        e.get("event").and_then(|v| v.as_str()) == Some(CREATED_EVENT)
+            && e.get("email_hash_key_id").and_then(|v| v.as_str()) == Some(key_id)
+    })
+    .map_err(|e| format!("cannot read the audit log {}: {e}", path.display()))?;
+    if already {
+        return Ok(());
+    }
+    log.append_event_synced(
+        creation_fields(key_id),
+        &crate::security::audit::AuditEnvelope::gateway(),
+    )
+    .map(|_| ())
+    .map_err(|e| format!("cannot record the email-hash key in the audit log: {e}"))
 }
 
 /// Whether `value`, at any depth, is a creation record or carries an
@@ -188,9 +223,7 @@ fn create(file: &Path, configured: Option<&str>) -> Result<(), String> {
     let published =
         crate::config::publish_new_file(file, &json, |from, to| std::fs::hard_link(from, to));
     json.zeroize();
-    if let Some(mut hex) = envelope.key_hex {
-        hex.zeroize();
-    }
+    // `envelope` wipes its key text when it drops.
     published.map_err(|e| format!("{}: cannot create it: {e}", file.display()))
 }
 
@@ -198,19 +231,22 @@ fn create(file: &Path, configured: Option<&str>) -> Result<(), String> {
 /// the same key between the file and a configured reference.
 fn load(file: &Path, configured: Option<&str>) -> Result<(EmailHashKey, Envelope), String> {
     let refused = |why: String| format!("{}: {why}; restore it from backup", file.display());
-    let text = crate::config::secret_ref::read_file_ref("the key-server email HMAC envelope", file)
-        .map_err(|e| refused(e.to_string()))?;
-    let mut envelope: Envelope =
-        // serde's message can quote the offending value, which may be the
-        // key itself: name only where the file stops making sense.
-        serde_json::from_str(&text).map_err(|e| {
-            refused(format!(
-                "not a valid envelope ({:?} error at line {} column {})",
-                e.classify(),
-                e.line(),
-                e.column()
-            ))
-        })?;
+    let mut text =
+        crate::config::secret_ref::read_file_ref("the key-server email HMAC envelope", file)
+            .map_err(|e| refused(e.to_string()))?;
+    let parsed = serde_json::from_str::<Envelope>(&text);
+    // The text may hold the key: wiped whether or not it parsed.
+    zeroize::Zeroize::zeroize(&mut text);
+    // serde's message can quote the offending value, which may be the key
+    // itself: name only where the file stops making sense.
+    let mut envelope = parsed.map_err(|e| {
+        refused(format!(
+            "not a valid envelope ({:?} error at line {} column {})",
+            e.classify(),
+            e.line(),
+            e.column()
+        ))
+    })?;
     if envelope.version != VERSION {
         return Err(refused(format!(
             "schema version {} is not {VERSION}",

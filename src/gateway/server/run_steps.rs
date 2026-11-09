@@ -229,25 +229,19 @@ impl Gateway {
                         .to_owned(),
                 ));
             };
-            let configured = ks_config.resolve_audit_email_hmac(self.env.startup())?;
+            let mut configured = ks_config.resolve_audit_email_hmac(self.env.startup())?;
             let log_path = audit_log.path();
             let email_key = crate::key_server::email_hmac_store::resolve(
                 data_dir,
                 configured.as_deref(),
                 || crate::key_server::email_hmac_store::history_in(&log_path),
-                |key_id| {
-                    audit_log
-                        .append_event_synced(
-                            crate::key_server::email_hmac_store::creation_fields(key_id),
-                            &crate::security::audit::AuditEnvelope::gateway(),
-                        )
-                        .map(|_| ())
-                        .map_err(|e| {
-                            format!("cannot record the email-hash key in the audit log: {e}")
-                        })
-                },
-            )
-            .map_err(crate::Error::ConfigValidation)?;
+                |key_id| crate::key_server::email_hmac_store::record_creation(audit_log, key_id),
+            );
+            // The resolved secret text is no longer needed once decoded.
+            if let Some(text) = configured.as_mut() {
+                zeroize::Zeroize::zeroize(text);
+            }
+            let email_key = email_key.map_err(crate::Error::ConfigValidation)?;
 
             let cleanup_interval = std::time::Duration::from_secs(ks_config.cleanup_interval_secs);
             let ks = Arc::new(KeyServer::new(ks_config, Arc::new(email_key)));
