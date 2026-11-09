@@ -1142,6 +1142,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the release asset checker
         run: python3 scripts/release/test_check_release_assets.py
+      - name: Test the client download set and SBOM roots
+        run: python3 scripts/release/test_check_release_assets_client.py
       - name: Test that signing fails closed
         run: python3 scripts/release/test_sign_release_assets.py
       - name: Test that an upload onto a published release is refused
@@ -1712,6 +1714,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The cfg reader copies list only shrinks against the base.
+          fetch-depth: 0
       - name: Check every source file is reachable from a crate root
         run: python3 scripts/dev/check-orphan-test-modules.py
       # The resolver has already been wrong twice -- once directory-scoped,
@@ -1721,6 +1726,25 @@ jobs:
       # These pin both, and a guard that cannot fail is the thing it guards.
       - name: Check the guard catches what it claims to
         run: python3 scripts/dev/test_check_orphan_test_modules.py
+      # One test-only cfg judgement per language: a scanner that spells its own
+      # match is refused unless listed, and the list only shrinks.
+      - name: No new private copy of the test-only cfg reader
+        run: |
+          python3 scripts/dev/test_check_cfg_reader_copies.py
+          python3 scripts/dev/check_cfg_reader_copies.py
+      - name: The cfg reader copies list only shrinks against the previous tip
+        if: github.event_name != 'pull_request'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          base="$BEFORE"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD^"
+          fi
+          python3 scripts/dev/check_cfg_reader_copies.py --base "$base"
+      - name: The cfg reader copies list only shrinks against the base
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/dev/check_cfg_reader_copies.py --base "origin/${{ github.base_ref }}"
       # The shared cfg item finder the Rust-reading gates use: tree-sitter,
       # from the gates' own hash-locked environment.
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2

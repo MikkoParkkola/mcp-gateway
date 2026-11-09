@@ -1,0 +1,30 @@
+# Shared cfg predicate cases (MIK-9387.TCFG.1). One row per predicate: expr, python, rust.
+# yes = test-only (the item compiles only under test); no = it can build outside tests.
+# Read by scripts/dev/test_check_orphan_test_modules.py (cfg_is_test) and by
+# src/test_source_text_tests.rs (production_text); it lives in src/ because the
+# published crate ships src/ and a test may read only shipped files. The two columns may differ only where
+# Python says no: Python then sees more code, the safe side.
+# expr	python	rust
+test	yes	yes
+all(test, unix)	yes	yes
+all(unix, test)	yes	yes
+all(any(test, unix), test)	yes	yes
+any(all(test, unix), all(test, windows))	yes	yes
+any(test, all(test, x))	yes	yes
+any(test, unix)	no	no
+all(unix, any(test, windows))	no	no
+not(test)	no	no
+reads_token_probe	no	no
+all(reads_token_probe, feature = "firewall")	no	no
+test_mode	no	no
+all(test_mode)	no	no
+feature = "test"	no	no
+all(feature = "a,test,b")	no	no
+any(test, feature = "x,test")	no	no
+all()	no	no
+any()	no	yes
+not(not(test))	no	yes
+all(any(), x)	no	yes
+any(any(), test)	no	yes
+not(not(not(test)))	no	no
+all(not(not(test)), x)	no	yes
