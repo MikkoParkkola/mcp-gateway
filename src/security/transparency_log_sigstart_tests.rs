@@ -239,10 +239,21 @@ fn r22_first_signing_after_a_torn_tail_is_a_first_start() {
     drop(fx.open(true, 0));
     assert_eq!(sidecar(&fx)["state"], "open");
     assert_eq!(all_events(&fx), [0, 0, 0, 0]);
-    // P is the length after the repair: this open appended nothing, and any
-    // record the repair wrote lies below it (kimi code review).
-    let len = std::fs::metadata(&fx.path).unwrap().len();
-    assert_eq!(sidecar(&fx)["offset"].as_u64(), Some(len));
+    // P is taken after the repair: it falls on a line start, every unsigned
+    // record lies below it, and every record this open wrote after it (the
+    // missing-mark record an unkeyed `.hwm` causes) is signed.
+    let p = sidecar(&fx)["offset"].as_u64().unwrap();
+    let recs = fx.records();
+    assert!(recs.iter().any(|(at, _)| *at == p), "P {p} is a line start");
+    for (at, v) in &recs {
+        let signed = v.get("sig").is_some();
+        // The repair's own record, if it wrote one, sits below P, frozen.
+        let repair = v["event"] == "audit_segment_torn_tail_dropped";
+        assert!(
+            signed == (*at >= p) || (repair && *at < p),
+            "record at {at} vs P {p}: {v}"
+        );
+    }
 }
 
 use super::sigstart::{self, Fault, LegacyFile, SigStart, State};
