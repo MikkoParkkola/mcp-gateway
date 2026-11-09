@@ -191,7 +191,7 @@ fn r43g_an_incomplete_newest_line_does_not_buy_a_second_assembly() {
 fn r43h_an_assembled_record_over_the_cap_is_unreadable() {
     let fx = Fixture::new(None);
     std::fs::write(&fx.path, b"").unwrap();
-    let body = "x".repeat(ASSEMBLY_WINDOW as usize - 9);
+    let body = "x".repeat(usize::try_from(ASSEMBLY_WINDOW).expect("the cap fits in usize") - 9);
     let line = format!("{{\"a\":\"{body}\"}}\n");
     assert_eq!(
         line.len() as u64,
