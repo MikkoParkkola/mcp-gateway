@@ -11,6 +11,7 @@ use super::answer_list_tests::{get, row_of};
 use super::joiner::{Joiner, Seen};
 use super::reader::{Line, Which};
 use crate::security::audit::{AuditEnvelope, AuditWho};
+use crate::security::transparency_log::recompute_entry_hash;
 
 #[tokio::test]
 async fn r18_joined_stays_in_step_with_the_lines() {
@@ -100,13 +101,16 @@ fn r45_read_ahead_is_charged_to_the_budget() {
 
 /// An unsigned delivery record line for `trace`, with `findings`.
 fn delivery_line(trace: &str, findings: serde_json::Value) -> Line {
+    let mut entry = json!({
+        "counter": 2, "trace_id": trace, "event": "response_delivery_attempt",
+        "response_stage": "transport_finalized", "response_effect": "annotated",
+        "response_findings": findings,
+    });
+    // The trust rule reads a record with a wrong hash as invalid.
+    entry["entry_hash"] = recompute_entry_hash(&entry).unwrap().into();
     Line {
         log: Which::Invocation,
-        entry: json!({
-            "counter": 2, "trace_id": trace, "event": "response_delivery_attempt",
-            "response_stage": "transport_finalized", "response_effect": "annotated",
-            "response_findings": findings,
-        }),
+        entry,
         segment: 0,
     }
 }

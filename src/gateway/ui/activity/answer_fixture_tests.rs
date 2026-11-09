@@ -198,7 +198,7 @@ pub(super) fn read_lines(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .unwrap()
         .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
+        .filter_map(|l| serde_json::from_str(l).ok())
         .collect()
 }
 
