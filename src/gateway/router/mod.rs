@@ -107,6 +107,8 @@ mod control_plane_grant_clock_tests;
 #[cfg(test)]
 mod cost_key_tests;
 #[cfg(test)]
+mod direct_adr012_tests;
+#[cfg(test)]
 mod direct_anonymous_continuation_tests;
 #[cfg(test)]
 mod direct_audit_tests;
@@ -128,6 +130,8 @@ mod direct_guards_fixture;
 mod direct_guards_fixture_a2a;
 #[cfg(test)]
 mod direct_guards_tests;
+#[cfg(test)]
+mod direct_idempotency_routes_tests;
 #[cfg(test)]
 mod direct_lent_arms_tests;
 #[cfg(test)]
@@ -157,6 +161,10 @@ mod dispatch_parity_tests;
 /// E5: dashboard session expiry, logout and re-entry (MIK-7570.SESSION.1).
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
+#[cfg(test)]
+mod mrtr_component_tests;
+#[cfg(test)]
+mod task_lifecycle_tests;
 
 #[cfg(all(test, feature = "metrics"))]
 mod backend_origin_count_tests;

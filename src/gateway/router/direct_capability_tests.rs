@@ -64,13 +64,13 @@ async fn call_with(
     let mut request = request
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://a.example.invalid".to_string(),
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://a.example.invalid".to_string(),
+    ));
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)

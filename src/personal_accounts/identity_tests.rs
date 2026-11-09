@@ -26,13 +26,13 @@ fn domain_err<T>(result: Result<T, IdentityBindingError>, what: &str) -> Identit
 
 /// A verified principal exactly as the request path produces it.
 fn identity() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: SUBJECT.into(),
-        email: "alice@example.com".into(),
-        name: Some("Alice Example".into()),
-        groups: vec!["engineering".into()],
-        issuer: ISSUER.into(),
-    }
+    VerifiedIdentity::for_test(
+        SUBJECT,
+        "alice@example.com",
+        Some("Alice Example".into()),
+        vec!["engineering".into()],
+        ISSUER,
+    )
 }
 
 /// The configured descriptor. `descriptor_id` is the `accounts.descriptors` map
@@ -90,41 +90,11 @@ fn display_fields_never_enter_the_key_but_issuer_and_subject_always_do() {
     let base = digest_of(&identity(), &descriptor(), "base");
 
     for (label, mutated) in [
-        (
-            "email",
-            VerifiedIdentity {
-                email: "alice.example@other.test".into(),
-                ..identity()
-            },
-        ),
-        (
-            "name",
-            VerifiedIdentity {
-                name: Some("Alice Renamed".into()),
-                ..identity()
-            },
-        ),
-        (
-            "name cleared",
-            VerifiedIdentity {
-                name: None,
-                ..identity()
-            },
-        ),
-        (
-            "groups",
-            VerifiedIdentity {
-                groups: vec!["finance".into()],
-                ..identity()
-            },
-        ),
-        (
-            "groups cleared",
-            VerifiedIdentity {
-                groups: Vec::new(),
-                ..identity()
-            },
-        ),
+        ("email", identity().with_email("alice.example@other.test")),
+        ("name", identity().with_name(Some("Alice Renamed".into()))),
+        ("name cleared", identity().with_name(None)),
+        ("groups", identity().with_groups(vec!["finance".into()])),
+        ("groups cleared", identity().with_groups(Vec::new())),
     ] {
         assert_eq!(
             digest_of(&mutated, &descriptor(), label),
@@ -136,18 +106,9 @@ fn display_fields_never_enter_the_key_but_issuer_and_subject_always_do() {
     for (label, mutated) in [
         (
             "issuer",
-            VerifiedIdentity {
-                issuer: "https://other-idp.example".into(),
-                ..identity()
-            },
+            identity().with_issuer("https://other-idp.example"),
         ),
-        (
-            "subject",
-            VerifiedIdentity {
-                subject: "bob-subject-3c07".into(),
-                ..identity()
-            },
-        ),
+        ("subject", identity().with_subject("bob-subject-3c07")),
     ] {
         assert_ne!(
             digest_of(&mutated, &descriptor(), label),
@@ -167,18 +128,12 @@ fn each_of_the_five_tuple_fields_changes_the_digest() {
     let variants = [
         (
             "principal_authority",
-            VerifiedIdentity {
-                issuer: "https://other-idp.example".into(),
-                ..identity()
-            },
+            identity().with_issuer("https://other-idp.example"),
             descriptor(),
         ),
         (
             "principal_subject",
-            VerifiedIdentity {
-                subject: "carol-subject-11ab".into(),
-                ..identity()
-            },
+            identity().with_subject("carol-subject-11ab"),
             descriptor(),
         ),
         (

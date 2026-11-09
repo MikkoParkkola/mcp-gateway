@@ -9,13 +9,13 @@ use crate::identity_propagation::PropagationStrategyKind;
 use crate::key_server::oidc::VerifiedIdentity;
 
 fn person(subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.into(),
-        email: format!("{subject}@example.com"),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp".into(),
-    }
+    VerifiedIdentity::for_test(
+        subject,
+        format!("{subject}@example.com"),
+        None,
+        Vec::new(),
+        "https://idp",
+    )
 }
 
 fn config() -> Config {

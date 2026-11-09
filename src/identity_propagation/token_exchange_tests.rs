@@ -5,13 +5,13 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use super::*;
 
 fn identity(subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@corp"),
-        name: None,
-        groups: vec!["eng".to_string()],
-        issuer: "https://idp".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        subject.to_string(),
+        format!("{subject}@corp"),
+        None,
+        vec!["eng".to_string()],
+        "https://idp".to_string(),
+    )
 }
 
 fn backend(endpoint: Option<&str>) -> BackendDescriptor {

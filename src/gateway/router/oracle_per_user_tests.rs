@@ -181,13 +181,13 @@ async fn call_as(gw: &Gateway, entry: Entry, args: Value, identified: bool) -> (
         .body(axum::body::Body::from(body.to_string()))
         .expect("request");
     if identified {
-        request.extensions_mut().insert(VerifiedIdentity {
-            subject: "alpha".to_string(),
-            email: "alpha@example.invalid".to_string(),
-            name: None,
-            groups: vec![],
-            issuer: "https://issuer.example.invalid".to_string(),
-        });
+        request.extensions_mut().insert(VerifiedIdentity::for_test(
+            "alpha".to_string(),
+            "alpha@example.invalid".to_string(),
+            None,
+            vec![],
+            "https://issuer.example.invalid".to_string(),
+        ));
     }
     let response = gw.router.clone().oneshot(request).await.expect("response");
     let status = response.status();
@@ -299,13 +299,13 @@ async fn list_as_alpha(gw: &Gateway) {
         .header("content-type", "application/json")
         .body(axum::body::Body::from(body.to_string()))
         .expect("request");
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(),
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        "alpha".to_string(),
+        "alpha@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://issuer.example.invalid".to_string(),
+    ));
     let response = gw.router.clone().oneshot(request).await.expect("response");
     assert_eq!(
         response.status(),
@@ -521,13 +521,13 @@ async fn p7_a_keyed_chain_with_a_per_user_withheld_step_answers_as_a_missing_one
             .header("content-type", "application/json")
             .body(axum::body::Body::from(body.to_string()))
             .expect("request");
-        request.extensions_mut().insert(VerifiedIdentity {
-            subject: "alpha".to_string(),
-            email: "alpha@example.invalid".to_string(),
-            name: None,
-            groups: vec![],
-            issuer: "https://issuer.example.invalid".to_string(),
-        });
+        request.extensions_mut().insert(VerifiedIdentity::for_test(
+            "alpha".to_string(),
+            "alpha@example.invalid".to_string(),
+            None,
+            vec![],
+            "https://issuer.example.invalid".to_string(),
+        ));
         let response = gw.router.clone().oneshot(request).await.expect("response");
         let status = response.status();
         let bytes = to_bytes(response.into_body(), usize::MAX)
