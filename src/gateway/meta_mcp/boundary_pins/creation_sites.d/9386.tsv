@@ -1,0 +1,1 @@
+src/key_server/email_hmac_store.rs	rewrite	helper:write_atomic	1	helper	calls the crate's write_atomic

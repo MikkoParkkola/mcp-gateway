@@ -14,7 +14,7 @@ src/commands/trust/baseline.rs	write_lab_baseline	fs-write	1	no-secret	TrustLab 
 src/commands/trust/baseline.rs	write_lab_registry_manifest	fs-write	1	no-secret	TrustLab registry manifest
 src/commands/upgrade.rs	write_stamp	helper:write_atomic	1	helper	calls the crate's write_atomic
 src/commands/upgrade_webhook_notice.rs	mark	fs-write	1	no-secret	empty marker file
-src/config/record_key.rs	publish_new_key	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/config/record_key.rs	publish_new_file	helper:create_new_private	1	helper	calls the crate's create_new_private
 src/config_persistence_atomic.rs	finish_kept	open-create	1	helper	the atomic writer's create on a volume without access lists, where there is no list to keep
 src/config_persistence_atomic.rs	finish_kept	helper:create_like	1	helper	calls the writer's create_like (the target's owner, the folder's inherited list)
 src/config_persistence_atomic.rs	create_scratch	helper:create_new_private	1	helper	calls the crate's create_new_private
