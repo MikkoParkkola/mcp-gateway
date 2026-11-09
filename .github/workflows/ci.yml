@@ -210,7 +210,9 @@ jobs:
           bash scripts/ci/changed-scope.sh --self-test
           python3 scripts/ci/test_docs_only_gating.py
       - name: Validate that heavy jobs run on a release-line PR only for a merge train
-        run: python3 scripts/ci/test_heavy_train_gating.py
+        run: |
+          python3 scripts/ci/test_heavy_train_gating.py
+          python3 scripts/ci/test_rollup_train_skip.py
       - name: Validate the feature-combination shards against the documented matrix
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
@@ -753,7 +755,9 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           ROLLUP_EXPECTS: windows-shards windows-clippy
-        run: python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
+        run: |
+          # shellcheck disable=SC2086 # ROLLUP_EXPECTS is a space-separated id list on purpose
+          python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
 
   # The heavy jobs (the Windows shards, clippy and check, release tooling
   # tests, Task SDK recovery, gws dry-run, Linux keychain, Kani, upgrade
@@ -955,7 +959,9 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           ROLLUP_EXPECTS: macos-shards
-        run: python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
+        run: |
+          # shellcheck disable=SC2086 # ROLLUP_EXPECTS is a space-separated id list on purpose
+          python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
 
   # The Linux suite as shards (MIK-8482); `test` below is the aggregate that
   # keeps the required name `Tests` (and docker-build's `needs: test`).
@@ -1025,7 +1031,9 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           ROLLUP_EXPECTS: test-shards
-        run: python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
+        run: |
+          # shellcheck disable=SC2086 # ROLLUP_EXPECTS is a space-separated id list on purpose
+          python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
 
   # The test run for red-first and mutation-proof pull requests: a same-repo
   # `throwaway/` branch into the release line. Every other job in this file
