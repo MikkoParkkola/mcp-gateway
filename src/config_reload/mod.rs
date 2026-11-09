@@ -294,6 +294,7 @@ pub(crate) use reload_context::replace::order as write_order;
 pub(crate) use reload_context::replace::{
     AuditPosture, BackendOp, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG,
     RefusalClass, Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
+    ui_diff, ui_save,
 };
 #[cfg(test)]
 use reload_context::{

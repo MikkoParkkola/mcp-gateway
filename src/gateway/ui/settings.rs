@@ -3,7 +3,7 @@
 //! Settings wire contract. Admitted requests deliberately remain unimplemented.
 
 use crate::{
-    gateway::{guard::Guard, router::AppState},
+    gateway::{router::AppState, ui::guard::Guard},
     wiped_bytes::WipedBytes,
 };
 #[cfg(test)]
@@ -19,7 +19,11 @@ use std::sync::Arc;
 
 #[cfg(test)]
 #[derive(Clone)]
-pub(super) struct SettingsStoreForTest(pub(super) super::super::secret_slots::Store);
+pub(super) enum SettingsStoreForTest {
+    Store(super::secret_slots::Store),
+    // Inject the opener outcome without probing the host keychain or waiting.
+    OpenRefused(super::secret_slots::Unopened),
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -95,3 +99,37 @@ pub(super) async fn settings_save(
     }
     not_implemented()
 }
+
+// The result and constructor boundaries stay stubbed with the routes.
+fn answer(_refusal: crate::config_reload::ui_diff::UiRefused) -> Response {
+    not_implemented()
+}
+
+fn restart_fields(_fields: &[&str], _reload: &crate::config_reload::ReloadOutcome) -> Vec<String> {
+    Vec::new()
+}
+
+fn secret_target(
+    _opened: Result<
+        (
+            super::secret_slots::Store,
+            Result<crate::secret_store::Vault, crate::secret_store::StoreError>,
+        ),
+        super::secret_slots::Unopened,
+    >,
+) -> Result<crate::config_reload::ui_save::SecretTarget, Response> {
+    Err(not_implemented())
+}
+
+#[cfg(test)]
+#[path = "settings_answer_tests.rs"]
+mod answer_tests;
+#[cfg(test)]
+#[path = "settings_route_secret_tests.rs"]
+mod route_secret_tests;
+#[cfg(test)]
+#[path = "settings_route_tests.rs"]
+mod route_tests;
+#[cfg(test)]
+#[path = "settings_test_support.rs"]
+mod test_support;
