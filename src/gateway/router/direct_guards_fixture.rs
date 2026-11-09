@@ -465,7 +465,7 @@ async fn fixture_inner(
 ) -> Fx {
     // Taken before the first await, so no other fixture on this thread can
     // take a flag set for this one (`keep_every_kgram_next`).
-    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))]
+    #[cfg(feature = "firewall")]
     let every = EVERY_KGRAM.with(|e| e.replace(false));
     let (mut state, store) = fixture_state().await;
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
@@ -601,6 +601,7 @@ pub(crate) fn reload_for_test(
 /// detection, so a relay row's verdict does not depend on the per-process hash
 /// key: with the keyed 1-in-4 sample, a short text is missed for a small,
 /// documented share of keys.
+#[cfg(feature = "firewall")]
 pub(crate) fn keep_every_kgram_next() {
     EVERY_KGRAM.with(|e| e.set(true));
 }
