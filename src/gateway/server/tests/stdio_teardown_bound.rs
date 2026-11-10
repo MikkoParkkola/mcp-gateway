@@ -126,6 +126,8 @@ mod hurry {
             let result = if method == "tools/list" {
                 json!({"tools": [{"name": "echo", "inputSchema": {"type": "object"},
                     "annotations": {"readOnlyHint": true}}]})
+            } else if method == "ping" {
+                json!({})
             } else {
                 assert_eq!(method, "tools/call");
                 self.hold.pause().await;
