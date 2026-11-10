@@ -8,6 +8,7 @@ use std::hash::Hash;
 use chrono::TimeZone;
 use serde::{Deserialize, Serialize};
 
+use super::latency::{LatencySeries, SeriesFile};
 use super::{
     Dimension, HALF, Inner, MAX_LABELS, MAX_MARKERS, MAX_PAIRS, Marker, Series, day, normalize,
 };
@@ -53,6 +54,42 @@ struct File {
     caller: DimFile<String>,
     caller_server: DimFile<(String, String)>,
     markers: Vec<Marker>,
+    /// Absent in a file written by a binary that does not keep it (older
+    /// binaries ignore it and drop it on their next save); then the count
+    /// starts again and says so.
+    #[serde(default)]
+    restores: Option<u64>,
+    /// Backend latency. Additive: a file without it restores
+    /// empty latency, and a binary without this field ignores it.
+    #[serde(default)]
+    latency: LatencyFile,
+}
+
+/// The latency of the global series, the server labels and their overflow.
+#[derive(Default, Serialize, Deserialize)]
+struct LatencyFile {
+    #[serde(default)]
+    global: SeriesFile,
+    #[serde(default)]
+    server: Vec<(String, SeriesFile)>,
+    #[serde(default)]
+    overflow: SeriesFile,
+}
+
+fn latency_file(inner: &Inner) -> LatencyFile {
+    let mut server: Vec<(String, SeriesFile)> = inner
+        .server
+        .labels
+        .iter()
+        .filter(|(_, s)| !s.latency.is_empty())
+        .map(|(k, s)| (k.clone(), s.latency.to_file()))
+        .collect();
+    server.sort_by(|a, b| a.0.cmp(&b.0));
+    LatencyFile {
+        global: inner.global.latency.to_file(),
+        server,
+        overflow: inner.server.overflow.latency.to_file(),
+    }
 }
 
 /// Only the format version, read first so a file of another format is told
@@ -62,17 +99,28 @@ struct Head {
     version: u32,
 }
 
+/// `series` without its latency, which the file keeps apart
+/// ([`latency_file`]): the counts only, so a save copies no histogram twice.
+fn counts_of(series: &Series) -> Series {
+    Series {
+        half: series.half.clone(),
+        day: series.day.clone(),
+        admitted: series.admitted,
+        latency: super::latency::LatencySeries::default(),
+    }
+}
+
 fn dim_file<K: Hash + Eq + Clone + Ord>(dim: &Dimension<K>) -> DimFile<K> {
     let mut labels: Vec<(K, Series)> = dim
         .labels
         .iter()
-        .map(|(k, s)| (k.clone(), s.clone()))
+        .map(|(k, s)| (k.clone(), counts_of(s)))
         .collect();
     // Stable bytes for the same store: sorted, not hash order.
     labels.sort_by(|a, b| a.0.cmp(&b.0));
     DimFile {
         labels,
-        overflow: dim.overflow.clone(),
+        overflow: counts_of(&dim.overflow),
     }
 }
 
@@ -83,12 +131,14 @@ pub(super) fn encode(inner: &Inner, binary_version: &str, saved_at: u64) -> Vec<
         binary_version: binary_version.to_owned(),
         saved_at,
         since: inner.since,
-        global: inner.global.clone(),
+        global: counts_of(&inner.global),
         server: dim_file(&inner.server),
         tool: dim_file(&inner.tool),
         caller: dim_file(&inner.caller),
         caller_server: dim_file(&inner.caller_server),
         markers: inner.markers.iter().cloned().collect(),
+        restores: Some(inner.restores),
+        latency: latency_file(inner),
     };
     // Plain data with string keys only: serialization cannot fail.
     serde_json::to_vec(&file).unwrap_or_default()
@@ -174,9 +224,21 @@ pub(super) fn from_bytes<Tz: TimeZone>(
     let mut inner = Inner::new(file.since, [MAX_LABELS, MAX_PAIRS, MAX_MARKERS]);
     inner.global = windowed(&file.global, now, zone);
     inner.server = server;
+    // Latency rides on the restored labels; a label the restore cut (past
+    // the cap) loses its latency, as its counts went to the overflow.
+    let today = Some(super::day_key(day::local_day(zone, now).date));
+    inner.global.latency = LatencySeries::from_file(&file.latency.global, now, today);
+    inner.server.overflow.latency = LatencySeries::from_file(&file.latency.overflow, now, today);
+    for (label, latency) in &file.latency.server {
+        if let Some(series) = inner.server.labels.get_mut(&normalize(label)) {
+            series.latency = LatencySeries::from_file(latency, now, today);
+        }
+    }
     inner.tool = tool;
     inner.caller = caller;
     inner.caller_server = caller_server;
+    inner.restores = file.restores.unwrap_or(0);
+    inner.restores_restarted = file.restores.is_none();
     let markers = file.markers.len();
     let mut subjects_cut = false;
     for marker in file.markers {
@@ -193,3 +255,7 @@ pub(super) fn from_bytes<Tz: TimeZone>(
     let cut = a || b || c || d || subjects_cut || markers > MAX_MARKERS;
     Ok((inner, file.binary_version, cut))
 }
+
+#[cfg(test)]
+#[path = "latency_persist_tests.rs"]
+mod latency_persist_tests;

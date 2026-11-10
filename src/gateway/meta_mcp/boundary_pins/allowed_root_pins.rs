@@ -167,11 +167,18 @@ fn called(calls: &Calls, file: &str, func: &str) -> BTreeSet<String> {
 }
 
 /// R38b: both entry points run the folder check; `check_request` adds none.
+/// The rescan's body is `rescan_with_provenance`; `rescan_attributed` only
+/// drops its third value, so the check runs on every rescan.
 #[test]
 fn r38b_both_entry_points_call_the_folder_check() {
     let calls = scan();
     let file = "src/security/firewall/mod.rs";
-    for entry in ["check_request_attributed", "rescan_attributed"] {
+    let delegate = called(&calls, file, "rescan_attributed");
+    assert!(
+        delegate.contains("rescan_with_provenance"),
+        "rescan_attributed does not delegate: {delegate:?}"
+    );
+    for entry in ["check_request_attributed", "rescan_with_provenance"] {
         let names = called(&calls, file, entry);
         for needed in ["root_check", "apply_roots"] {
             assert!(

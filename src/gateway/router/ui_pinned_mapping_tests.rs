@@ -45,13 +45,13 @@ fn mapping(fx: &Fixture, role: Option<ControlPlaneRole>) -> Config {
 
 /// The caller: [`DEV`], whose own call the seeded log holds.
 fn identity() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: DEV.to_string(),
-        email: format!("{DEV}@example.test"),
-        name: None,
-        groups: vec![GROUP.to_string()],
-        issuer: ISSUER.to_string(),
-    }
+    VerifiedIdentity::for_test(
+        DEV.to_string(),
+        format!("{DEV}@example.test"),
+        None,
+        vec![GROUP.to_string()],
+        ISSUER.to_string(),
+    )
 }
 
 /// `method path` with `pinned` on the request while `live` is published, as

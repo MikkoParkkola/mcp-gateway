@@ -54,9 +54,9 @@ pub(crate) struct Restored {
 }
 
 /// Move `path` aside to `<name>.unreadable-<now>`, adding `-1`, `-2`, …
-/// when that name is taken. A hard link to the new name fails if the name
+/// when that name is taken (counters.json and health.json). A hard link to the new name fails if the name
 /// exists, so nothing is ever replaced; the original is unlinked after.
-fn quarantine(path: &Path, now: u64) -> std::io::Result<PathBuf> {
+pub(crate) fn quarantine(path: &Path, now: u64) -> std::io::Result<PathBuf> {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -72,7 +72,7 @@ fn quarantine(path: &Path, now: u64) -> std::io::Result<PathBuf> {
                 // A failed unlink still leaves the link: the next save
                 // renames over `path`, which leaves the linked bytes intact.
                 if let Err(e) = std::fs::remove_file(path) {
-                    warn!(error = %e, "counters.json was copied aside but not removed");
+                    warn!(error = %e, file = %name, "copied aside but not removed");
                 }
                 return Ok(candidate);
             }
@@ -122,6 +122,7 @@ impl CounterFile {
                     warn!("counters.json held more than the caps allow; cut back to them");
                 }
                 store.mark(MarkerKind::Restart, None, now);
+                store.note_restore();
                 info!("Restored call counters");
                 Restored {
                     store,
@@ -206,7 +207,7 @@ impl CounterFile {
     }
 
     fn write(&self, store: &CounterStore, binary_version: &str, now: u64, hook: &dyn Fn(Stage)) {
-        let inner = store.snapshot();
+        let inner = store.saved_snapshot(now);
         hook(Stage::Serializing);
         let bytes = snapshot::encode(&inner, binary_version, now);
         drop(inner);

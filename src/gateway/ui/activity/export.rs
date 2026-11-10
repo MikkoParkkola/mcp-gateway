@@ -216,7 +216,7 @@ pub(super) fn ndjson(
 }
 
 /// The CSV columns, in order.
-const COLUMNS: [&str; 31] = [
+const COLUMNS: [&str; 32] = [
     "id",
     "kind",
     "counter",
@@ -248,6 +248,7 @@ const COLUMNS: [&str; 31] = [
     "decision",
     "reach",
     "findings",
+    "findings_truncated",
 ];
 
 fn cell_value<'a>(row: &'a Value, column: &str) -> Option<&'a Value> {

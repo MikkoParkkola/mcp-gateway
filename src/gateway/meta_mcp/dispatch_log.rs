@@ -83,8 +83,13 @@ tokio::task_local! {
 }
 
 /// Run `future` with `log` collecting every step it completes.
-pub(crate) async fn with_dispatch_log<F: Future>(log: Arc<DispatchLog>, future: F) -> F::Output {
-    DISPATCH_LOG.scope(log, future).await
+/// A plain function, not an `async fn`: an `async fn` would hold `future` twice
+/// (the argument beside the task-local future that owns it).
+pub(crate) fn with_dispatch_log<F: Future>(
+    log: Arc<DispatchLog>,
+    future: F,
+) -> impl Future<Output = F::Output> {
+    DISPATCH_LOG.scope(log, future)
 }
 
 /// The worker channel of the dispatch being awaited, if a task worker awaits

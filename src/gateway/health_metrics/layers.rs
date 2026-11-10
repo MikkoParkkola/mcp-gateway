@@ -18,8 +18,8 @@ pub(crate) const ADDED_LATENCY: &str = "mcp_gateway_added_latency_seconds";
 /// The counter of errors clients received, by kind.
 pub(crate) const ERRORS: &str = "mcp_gateway_errors_total";
 
-#[cfg(feature = "metrics")]
-/// Upper bounds of `ADDED_LATENCY`'s buckets, in seconds.
+/// Upper bounds of `ADDED_LATENCY`'s buckets, in seconds; the health
+/// history keeps its latency in the same buckets.
 pub(crate) const LATENCY_BUCKETS: [f64; 11] = [
     0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5,
 ];
@@ -47,6 +47,7 @@ impl ErrorKind {
 /// Count one error of `kind` that a client received.
 pub(crate) fn count_error(kind: ErrorKind) {
     telemetry_metrics::counter!(ERRORS, "kind" => kind.label()).increment(1);
+    crate::health_history::file::record_error_now(kind);
 }
 
 /// Count the answer with `status` and `marker`, if it is an error.
@@ -78,7 +79,9 @@ impl Sample {
     /// Record now; later calls and the drop record nothing.
     pub(crate) fn record(&mut self) {
         if let Some(clock) = self.0.take() {
-            telemetry_metrics::histogram!(ADDED_LATENCY).record(clock.added().as_secs_f64());
+            let secs = clock.added().as_secs_f64();
+            telemetry_metrics::histogram!(ADDED_LATENCY).record(secs);
+            crate::health_history::file::record_latency_now(secs);
         }
     }
 

@@ -33,13 +33,13 @@ async fn settle(row: &Armed, terminal: &Terminal, id: &str) {
     tokio::time::timeout(Duration::from_secs(10), terminal.0.notified())
         .await
         .expect("the worker commits a transition");
-    let owner = crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@adapter.test".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp.adapter.test".to_string(),
-    }
+    let owner = crate::key_server::oidc::VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@adapter.test".to_string(),
+        None,
+        Vec::new(),
+        "https://idp.adapter.test".to_string(),
+    )
     .stable_actor_id();
     loop {
         let stored = row.state.tasks.get(&owner, id).expect("the committed task");
