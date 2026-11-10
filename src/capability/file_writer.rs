@@ -384,7 +384,7 @@ fn refuse_literal_headers(text: &str) -> Result<(), Refused> {
                     classify(
                         value,
                         Syntax::Brace {
-                            parameters: &parameters,
+                            parameters: parameters.clone(),
                         },
                     ) == Ok(ValueClass::Kept)
                 })

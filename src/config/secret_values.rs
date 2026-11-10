@@ -6,15 +6,18 @@
 //! `discover --write`. Built in every configuration, since the CLI writers
 //! are. The capability editor uses the same rule with its own brace grammar.
 
+#[cfg(feature = "webui")]
 use std::collections::HashSet;
 
 /// The template grammar of the file receiving a value. Reference forms from
 /// another grammar must never turn literal text into an accepted template.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Syntax<'a> {
+pub(crate) enum Syntax {
     Dollar,
+    /// Only the capability editor, which is part of the web UI, writes this grammar.
+    #[cfg(feature = "webui")]
     Brace {
-        parameters: &'a HashSet<String>,
+        parameters: HashSet<String>,
     },
 }
 
@@ -39,10 +42,12 @@ pub(crate) enum ValueClass {
 /// same codes discovery adopt refuses with. Either would put text that may be
 /// a secret into gateway.yaml as text. Brace uses the capability's declared
 /// inputs and system references, returning `Stored` for every literal form.
-pub(crate) fn classify(value: &str, syntax: Syntax<'_>) -> Result<ValueClass, &'static str> {
+pub(crate) fn classify(value: &str, syntax: Syntax) -> Result<ValueClass, &'static str> {
     use crate::config::secret_ref::{has_literal_default, only_scheme_beside_templates};
-    if let Syntax::Brace { parameters } = syntax {
-        return Ok(classify_brace(value, parameters));
+    match syntax {
+        Syntax::Dollar => {}
+        #[cfg(feature = "webui")]
+        Syntax::Brace { parameters } => return Ok(classify_brace(value, &parameters)),
     }
     if value.is_empty() || crate::config::is_reference(value) {
         return Ok(ValueClass::Kept);
@@ -62,6 +67,7 @@ pub(crate) fn classify(value: &str, syntax: Syntax<'_>) -> Result<ValueClass, &'
 /// Use the resolver's scanner without resolving anything. Only names the
 /// validator recognizes may disappear; expressions remain literal in a
 /// credential header even though the validator permits them elsewhere.
+#[cfg(feature = "webui")]
 fn classify_brace(value: &str, parameters: &HashSet<String>) -> ValueClass {
     use crate::capability::validator::is_known_placeholder;
     use crate::config::secret_ref::SCHEME_PREFIXES;
@@ -92,6 +98,7 @@ fn classify_brace(value: &str, parameters: &HashSet<String>) -> ValueClass {
 /// Whether `name` names a credential: the shared rule's credential words, or
 /// an HTTP authentication header (`Authorization`, `Proxy-Authorization`,
 /// `Cookie`). Dashes count as underscores, leading dashes are dropped.
+#[cfg(feature = "webui")]
 pub(crate) fn credential_name(name: &str) -> bool {
     let name = name.trim_start_matches('-').replace('-', "_");
     let lower = name.to_ascii_lowercase();
@@ -179,6 +186,7 @@ pub(crate) fn stores_discovered_value(header: bool, key: &str, value: &str) -> b
 mod tests {
     use super::*;
 
+    #[cfg(feature = "webui")]
     #[test]
     fn brace_values_keep_only_known_placeholders_and_one_leading_scheme() {
         // Declaring TOKEN must not make the other grammar's ${TOKEN} safe.
@@ -237,7 +245,7 @@ mod tests {
                 classify(
                     value,
                     Syntax::Brace {
-                        parameters: &parameters,
+                        parameters: parameters.clone(),
                     },
                 ),
                 Ok(expected),
@@ -267,6 +275,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "webui")]
     #[test]
     fn credential_header_names_share_the_backend_name_gate() {
         for name in [
