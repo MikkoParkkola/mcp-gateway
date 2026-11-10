@@ -84,10 +84,10 @@ fn save(root: &Path, name: &str, config: &Config) -> PathBuf {
     .expect("config");
     path
 }
-fn write_inner_config(root: &Path, leaves: &[&str]) -> PathBuf {
+fn write_inner_config(root: &Path, leaves: &[&str], inner_stop: Duration) -> PathBuf {
     std::fs::write(root.join("leaf.py"), LEAF_SCRIPT).expect("leaf script");
     let mut config = base_config(root, "inner");
-    config.server.shutdown_timeout = Duration::from_secs(8);
+    config.server.shutdown_timeout = inner_stop;
     for name in leaves {
         config.backends.insert(
             (*name).into(),
@@ -233,11 +233,18 @@ fn sigterm(pid: u32) {
     );
 }
 
-async fn run(seconds: u64, leaves: &[&str]) {
+fn alive_pids(pids: &[u32]) -> Vec<u32> {
+    pids.iter()
+        .copied()
+        .filter(|pid| pids::alive(*pid))
+        .collect()
+}
+
+async fn run(seconds: u64, inner_stop: Duration, leaves: &[&str]) {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path().to_path_buf();
     let root = root.as_path();
-    let inner = write_inner_config(root, leaves);
+    let inner = write_inner_config(root, leaves, inner_stop);
     let config = write_outer_config(root, &inner, seconds);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
     let mut command = tokio::process::Command::from(gateway_bin::command(
@@ -321,7 +328,8 @@ async fn run(seconds: u64, leaves: &[&str]) {
     while leaves.iter().any(|pid| pids::alive(*pid)) {
         assert!(
             Instant::now() < deadline,
-            "inner or leaf outlived parent stop budget: {leaves:?}\n{}",
+            "inner or leaf outlived parent stop budget: {:?}\n{}",
+            alive_pids(&leaves),
             logs(root)
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -336,19 +344,26 @@ async fn run(seconds: u64, leaves: &[&str]) {
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
-    run(9, &["leaf"]).await;
+    run(9, Duration::from_secs(8), &["leaf"]).await;
 }
 /// The same ownership claim holds with a 30 s parent budget.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it_30s() {
-    run(30, &["leaf"]).await;
+    run(30, Duration::from_secs(8), &["leaf"]).await;
 }
 /// Both busy leaves stop within one 9 s parent budget plus 15 s slack.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_two_leaves_within_one_deadline() {
-    run(9, &["leaf_a", "leaf_b"]).await;
+    run(9, Duration::from_secs(8), &["leaf_a", "leaf_b"]).await;
+}
+
+/// A nested gateway whose own stop outlasts its parent's plan leaves no leaf or grandchild alive.
+/// Red if a stopping stdio gateway ignores its parent's SIGTERM and lets its leaves' waits run past its own kill.
+#[tokio::test]
+async fn a_nested_gateway_whose_own_stop_outlasts_its_parents_plan_leaves_no_leaf() {
+    run(9, Duration::from_secs(30), &["leaf_a", "leaf_b"]).await;
 }
 
 /// A SIGTERM to a stdio-mode gateway (what systemd or docker stop sends) leaves no
@@ -360,7 +375,7 @@ async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path().to_path_buf();
     let root = root.as_path();
-    let config = write_inner_config(root, &["leaf"]);
+    let config = write_inner_config(root, &["leaf"], Duration::from_secs(8));
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
     let child = tokio::process::Command::from(gateway_bin::command(
         &root.join("home"),
