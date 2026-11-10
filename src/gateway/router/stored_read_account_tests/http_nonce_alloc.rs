@@ -508,10 +508,15 @@ fn a_passing_refusal_row_prints_its_bytes_and_margin() {
     for threads in [None, Some("--test-threads=1")] {
         let mut cmd = std::process::Command::new(&exe);
         cmd.args([row.as_str(), "--exact"]).args(threads);
-        let out = cmd.output().expect("re-executing the test binary must succeed");
+        let out = cmd
+            .output()
+            .expect("re-executing the test binary must succeed");
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(out.status.success(), "{threads:?}: the row failed\n{stdout}\n{stderr}");
+        assert!(
+            out.status.success(),
+            "{threads:?}: the row failed\n{stdout}\n{stderr}"
+        );
         let record = format!("test {row} ... ok");
         assert_eq!(
             stdout.lines().filter(|l| l.trim_end() == record).count(),
