@@ -85,6 +85,15 @@ fn a_target_tag_in_another_keys_previous_slot_gives_no_receipt() {
 }
 
 #[test]
+fn a_target_tag_in_another_keys_current_slot_gives_no_receipt() {
+    let mut auth = baseline();
+    // Legal: the removed key is absent, so this digest belongs to only one
+    // live slot.
+    auth.api_keys[0].key_sha256 = Some(api_key_digest_spec(TARGET_TOKEN.as_bytes()));
+    assert_no_receipt(auth);
+}
+
+#[test]
 fn a_target_tag_equal_to_the_running_bearer_gives_no_receipt() {
     let mut auth = baseline();
     // Legal for the same reason: no current or previous API-key slot holds it.
