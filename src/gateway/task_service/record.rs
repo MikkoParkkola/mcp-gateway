@@ -205,14 +205,13 @@ pub(crate) struct UpstreamRecord {
     pub(crate) operation_digest: String,
     /// What the dispatch's secret rules injected, as a keyed fingerprint
     /// (`security::dispatched`): `"none"`, `"hmac:<hex>"` or `"missing"`.
-    /// Absent only on a row written before this field existed, which is
-    /// withheld at every read. Always written, `None` as `"missing"`.
+    /// Absent only on a pre-field row (withheld at every read); `None` is
+    /// always written as `"missing"`.
     #[serde(default, serialize_with = "fingerprint_or_missing")]
     pub(crate) secret_fingerprint: Option<String>,
 }
 
-/// A row this build writes always names its fingerprint: a legacy `None`
-/// rewritten is stored as missing, which still withholds.
+/// A legacy `None` is rewritten as `missing`, which still withholds.
 #[allow(
     clippy::ref_option,
     reason = "serde's serialize_with hands the field over by reference"
@@ -580,9 +579,8 @@ pub(crate) struct CommittedTask {
     /// is not served.
     pub(crate) bindings_recorded: bool,
     /// Whether anything vouches that the gateway can still redact what this
-    /// row's dispatch injected. An upstream row with no fingerprint (from
-    /// before it was recorded, or such a row rewritten as `missing`) is
-    /// `Unvouched`: its stored outcome is never served.
+    /// row's dispatch injected; a row with no fingerprint is `Unvouched` and
+    /// its stored outcome is never served.
     pub(crate) vouching: Vouching,
     /// The relay replay snapshot stored with the result; see
     /// `Record::replay_snapshot`.
@@ -599,15 +597,12 @@ pub(crate) struct CommittedTask {
 /// Whether a stored task's outcome may be served as stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Vouching {
-    /// Served as stored.
     Vouched,
-    /// Served withheld: nothing vouches for what its dispatch injected.
+    /// Nothing vouches for what its dispatch injected: served withheld.
     Unvouched,
 }
 
-/// Replace a stored outcome with the fixed withheld answer, leaving the
-/// task's state as it is: what every reader of an unvouched upstream row
-/// gets instead of the result or the error.
+/// Swap a stored outcome for the fixed withheld answer; state is kept.
 fn withhold_outcome(wire: &mut serde_json::Value) {
     let reason = crate::gateway::meta_mcp::upstream::SECRETS_WITHHELD;
     if let Some(result) = wire.get_mut("result") {
@@ -638,17 +633,16 @@ impl CommittedTask {
             )
     }
 
-    /// Whether every read of this row is served the withheld answer in
-    /// place of its stored outcome (see [`Self::delivered_wire`]): nothing
-    /// of the stored result or error reaches the caller, so nothing of it
-    /// may be receipted as delivered.
+    /// Whether every read serves the withheld answer in place of the stored
+    /// outcome (see [`Self::delivered_wire`]), so nothing is receipted as
+    /// delivered.
     pub(crate) fn withholds_outcome(&self) -> bool {
         self.vouching == Vouching::Unvouched
     }
 
     /// The stored task as a delivery serves it: every serve site
-    /// (`tasks/get`, a repeat, a notification) sends this, never the
-    /// task's bare `Task::wire` projection, and before any egress scan reads it.
+    /// (`tasks/get`, a repeat, a notification) sends this, never the bare
+    /// `Task::wire`, and before any egress scan reads it.
     ///
     /// Each gateway-only member the row's write record does not claim is
     /// removed from the result, `error.data` and every parked input request.
@@ -706,9 +700,7 @@ impl CommittedTask {
             gateway_writes: record.gateway_writes.clone(),
             bindings: record.bindings.clone(),
             bindings_recorded: record.version >= BINDING_VERSION,
-            // A legacy row rewritten by this build stores `missing`, so both
-            // forms are unvouched; a `missing` row this build captured was
-            // already withheld at its settlement.
+            // Legacy and `missing` rows are both unvouched.
             vouching: if record.upstream.as_ref().is_some_and(|upstream| {
                 matches!(
                     upstream.secret_fingerprint.as_deref(),
