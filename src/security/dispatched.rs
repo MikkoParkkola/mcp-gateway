@@ -111,11 +111,13 @@ tokio::task_local! {
 
 /// Run `future` with `slot` armed for this task and nothing else. Opened
 /// only beside the upstream handle's own slot (`with_upstream_submission`).
-pub(crate) async fn scope<F: std::future::Future>(
+/// A plain function, not an `async fn`, for the reason
+/// `with_upstream_submission` gives: it would hold `future` twice.
+pub(crate) fn scope<F: std::future::Future>(
     slot: std::sync::Arc<Slot>,
     future: F,
-) -> F::Output {
-    SLOT.scope(slot, future).await
+) -> impl std::future::Future<Output = F::Output> {
+    SLOT.scope(slot, future)
 }
 
 /// Record what a send of `(server, tool)` injects, if a slot armed for that

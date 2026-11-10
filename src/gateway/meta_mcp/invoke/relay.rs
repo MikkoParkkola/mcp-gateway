@@ -598,7 +598,7 @@ mod delivered;
 mod replay;
 pub(crate) use replay::{
     cancel_replay_capture, collecting_writes, note_replay_call, note_sync_capture_key,
-    note_sync_lookup_key, note_task_capture, stage_task_replay, sync_replay_key,
+    note_sync_lookup_key, persisted_task_replay, stage_task_replay, sync_replay_key,
 };
 #[path = "relay_seams.rs"]
 mod seams;

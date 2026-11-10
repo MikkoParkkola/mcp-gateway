@@ -121,11 +121,12 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
         targets_recorded: true,
         output_free: false,
         error_author: None,
-        owner_digest: String::new(),
+        owner_digest: Box::default(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
         vouching: crate::gateway::task_service::Vouching::Vouched,
+        replay_snapshot: None,
     };
 
     let mut expected = serde_json::to_value(stored.task.wire()).expect("the task serializes");
@@ -191,6 +192,7 @@ async fn a_frame_of_an_unvouched_row_carries_the_withheld_answer() {
             bindings: Vec::new(),
             bindings_recorded: true,
             vouching: crate::gateway::task_service::Vouching::Unvouched,
+            replay_snapshot: None,
         };
         let subscription = SubscriptionId::of_request(RequestId::Number(id));
         let pending = meta
@@ -252,11 +254,12 @@ fn completed(text: &str) -> crate::gateway::task_service::CommittedTask {
         targets_recorded: true,
         output_free: false,
         error_author: None,
-        owner_digest: String::new(),
+        owner_digest: Box::default(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
         vouching: crate::gateway::task_service::Vouching::Vouched,
+        replay_snapshot: None,
     }
 }
 

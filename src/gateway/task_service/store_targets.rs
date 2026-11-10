@@ -13,7 +13,7 @@ use super::{Shared, StoreError, TaskStore, owned, record_name, serialize};
 use crate::gateway::gateway_writes::WriteRecord;
 use crate::gateway::task_service::record::{
     CommittedTask, ERROR_AUTHOR_VERSION, ErrorAuthor, MAX_UPSTREAM_HANDLE_BYTES, Provenance,
-    Record, TARGET_VERSION, Target, UpstreamRecord,
+    Record, SNAPSHOT_UNTRACKABLE, SNAPSHOT_VERSION, TARGET_VERSION, Target, UpstreamRecord,
 };
 use crate::protocol::JsonRpcError;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
@@ -294,6 +294,24 @@ impl Shared {
             Err(StoreError::Capacity) => {}
             settled => return settled,
         }
+        // A snapshot never costs a result its place: a row with no room for
+        // it stores the untrackable marker in its stead, before anything the
+        // result itself holds is given up.
+        let marked = Provenance {
+            replay_snapshot: targets
+                .replay_snapshot
+                .as_ref()
+                .map(|_| Box::new(serde_json::Value::from(SNAPSHOT_UNTRACKABLE))),
+            ..targets.clone()
+        };
+        if targets.replay_snapshot.is_some() {
+            let attempt = (event.clone(), marked.clone(), false, author, writes.clone());
+            match self.settle_attempt(task, record, attempt, at) {
+                Err(StoreError::Capacity) => {}
+                settled => return settled,
+            }
+        }
+        let targets = marked;
         // MIK-7993 F1 (lead ruling c): a row with no room for its record keeps
         // its result without the members the record would have exempted, so
         // the gateway's own text is never stored unrecorded and never
@@ -422,7 +440,7 @@ fn settled(
         record.version = record.version.max(TARGET_VERSION);
     }
     if let Some(targets) = targets.targets {
-        merge_targets(&mut record, targets);
+        merge_targets(&mut record, targets.into_vec());
     }
     // The bindings a settle carries (MIK-8407). The row's version is not
     // raised for them: only creation marks a row as recording bindings, so a
@@ -435,6 +453,15 @@ fn settled(
                 binding.as_deref(),
             );
         }
+    }
+    // The replay snapshot rides only a completed result that holds backend
+    // output; any other outcome, and an output-free row, stores none.
+    record.replay_snapshot = targets
+        .replay_snapshot
+        .filter(|_| completes && !discard)
+        .map(|snapshot| *snapshot);
+    if record.replay_snapshot.is_some() {
+        record.version = record.version.max(SNAPSHOT_VERSION);
     }
     Ok(Some((task, record)))
 }

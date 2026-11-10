@@ -459,18 +459,18 @@ tokio::task_local! {
 
 /// Run `future` with `submission` armed for this task and nothing else: the
 /// handle's slot and the slot for what the send injected, together. The one
-/// place either is opened.
-pub(crate) async fn with_upstream_submission<F: std::future::Future>(
+/// place either is opened. A plain function, not an `async fn`: an `async fn`
+/// would hold `future` twice (the argument beside the task-local future that
+/// owns it).
+pub(crate) fn with_upstream_submission<F: std::future::Future>(
     submission: std::sync::Arc<UpstreamSubmission>,
     future: F,
-) -> F::Output {
+) -> impl std::future::Future<Output = F::Output> {
     let dispatched = std::sync::Arc::clone(&submission.dispatched);
-    UPSTREAM_SUBMISSION
-        .scope(
-            submission,
-            crate::security::dispatched::scope(dispatched, future),
-        )
-        .await
+    UPSTREAM_SUBMISSION.scope(
+        submission,
+        crate::security::dispatched::scope(dispatched, future),
+    )
 }
 
 /// The armed slot for THIS dispatch of `(server, tool)`, or `None`.
