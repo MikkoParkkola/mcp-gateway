@@ -115,7 +115,7 @@
       "stage": "met",
       "blocked_on": "none",
       "evidence": [
-        "tests/mik_7272_task_1_acs.rs",
+        "src/gateway/router/task_lifecycle_tests.rs",
         "tests/task_expiry_http_lifecycle.rs",
         "docs/internal/requirements/scope-grading-2026-09-12.md",
         "src/gateway/router/tests/task_execution_adapter/input_round.rs",
@@ -131,7 +131,7 @@
       "stage": "met",
       "blocked_on": "none",
       "evidence": [
-        "tests/mik_7272_task_1_acs/lifecycle.rs",
+        "src/gateway/router/task_lifecycle_tests/lifecycle.rs",
         "src/gateway/router/handlers.rs",
         "src/gateway/task_service/execution/recovery.rs"
       ],
@@ -872,7 +872,7 @@
       "blocked_on": "none",
       "evidence": [
         "src/gateway/meta_mcp/retry_input_tests.rs",
-        "tests/mik_7212_mrtr_component_acs.rs",
+        "src/gateway/router/mrtr_component_tests.rs",
         "src/protocol/mrtr.rs"
       ],
       "note": "Graded 2026-09-27 (#1333; design tier3 §4). A tools/call carrying inputResponses without the requestState this gateway issued is refused -32602 before dispatch (RetryFields::solicited_input_responses, src/protocol/mrtr.rs) and the idempotency key is released; honest retries forward as before. Every InputRequiredResult the gateway sends carries a minted requestState, and MRTR client rule 2 requires the echo. Green: CI run 36278530662 at c34c83d33. Red first: CI run 36233671506. Mutants: #1479 job 108495632538, #1480 108495641546, #1481 108495662575, #1482 108495677852."

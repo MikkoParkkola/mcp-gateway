@@ -155,13 +155,13 @@ pub(super) const PLAIN: &str = "plain";
 
 /// The verified caller the `IdP` mints for.
 pub(super) fn alice() -> crate::key_server::oidc::VerifiedIdentity {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice-subject".to_string(),
-        email: "alice@corp.example".to_string(),
-        name: None,
-        groups: vec!["eng".to_string()],
-        issuer: "https://corp-idp.example".to_string(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        "alice-subject".to_string(),
+        "alice@corp.example".to_string(),
+        None,
+        vec!["eng".to_string()],
+        "https://corp-idp.example".to_string(),
+    )
 }
 
 /// The router over [`TX`]. Its counting transport serves `alice`'s

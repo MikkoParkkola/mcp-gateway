@@ -1,0 +1,19 @@
+
+running 1 test
+test m::row_with_noise ... 
+ok
+FAILED
+
+failures:
+
+---- m::row_with_noise stdout ----
+
+thread 'm::row_with_noise' (9) panicked at src/x.rs:9:5:
+assertion failed
+
+
+failures:
+    m::row_with_noise
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+

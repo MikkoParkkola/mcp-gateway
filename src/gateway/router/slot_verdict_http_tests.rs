@@ -171,13 +171,13 @@ pub(super) async fn post_as_alpha(
         .header("content-type", "application/json")
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(), // the fixture identity's issuer
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        "alpha",
+        "alpha@example.invalid",
+        None,
+        vec![],
+        "https://issuer.example.invalid", // the fixture identity's issuer
+    ));
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -319,13 +319,13 @@ pub(super) async fn task_call_as_alpha(router: &axum::Router, name: &str) -> (St
         .header("mcp-name", name)
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(), // the fixture identity's issuer
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        "alpha",
+        "alpha@example.invalid",
+        None,
+        vec![],
+        "https://issuer.example.invalid", // the fixture identity's issuer
+    ));
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();

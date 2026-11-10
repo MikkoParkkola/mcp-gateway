@@ -416,13 +416,13 @@ async fn backend_handler_required_mint_without_route_audit_fails_closed_generica
     // Inject a verified end-user identity so the required backend actually MINTS
     // a per-user credential. Auth is disabled in this test state, so the
     // middleware does not overwrite the extension.
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@corp".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp".to_string(),
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@corp".to_string(),
+        None,
+        vec![],
+        "https://idp".to_string(),
+    ));
 
     let response = router.oneshot(request).await.unwrap();
 

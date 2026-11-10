@@ -15,13 +15,13 @@ use crate::protocol::meta::Declared;
 
 /// The admission principal the route derives for `key-a`.
 fn alice() -> String {
-    VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@adapter.test".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp.adapter.test".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@adapter.test".to_string(),
+        None,
+        Vec::new(),
+        "https://idp.adapter.test".to_string(),
+    )
     .stable_actor_id()
 }
 

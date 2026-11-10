@@ -135,13 +135,13 @@ async fn send(gw: &Gateway, message: Value, subject: &str) -> (StatusCode, Value
         .header("content-type", "application/json")
         .body(axum::body::Body::from(message.to_string()))
         .unwrap();
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: subject.to_owned(),
-        email: format!("{subject}@example.invalid"),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp.example.invalid".to_owned(),
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        subject.to_owned(),
+        format!("{subject}@example.invalid"),
+        None,
+        vec![],
+        "https://idp.example.invalid".to_owned(),
+    ));
     let response = gw.router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -312,13 +312,13 @@ async fn send_mcp(
     let mut request = builder
         .body(axum::body::Body::from(message.to_string()))
         .unwrap();
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: subject.to_owned(),
-        email: format!("{subject}@example.invalid"),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp.example.invalid".to_owned(),
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        subject.to_owned(),
+        format!("{subject}@example.invalid"),
+        None,
+        vec![],
+        "https://idp.example.invalid".to_owned(),
+    ));
     let response = gw.router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let session = response

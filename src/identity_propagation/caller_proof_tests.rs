@@ -76,13 +76,13 @@ fn the_stdio_principal_text_is_not_a_local_transport() {
 /// veto it would change how OIDC callers are served today.
 #[test]
 fn a_verified_identity_outranks_every_provenance() {
-    let identity = crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".into(),
-        email: "alice@example.com".into(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://identity.example".into(),
-    };
+    let identity = crate::key_server::oidc::VerifiedIdentity::for_test(
+        "alice",
+        "alice@example.com",
+        None,
+        Vec::new(),
+        "https://identity.example",
+    );
 
     for provenance in [
         CallerProvenance::Anonymous,
