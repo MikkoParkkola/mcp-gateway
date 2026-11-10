@@ -360,7 +360,7 @@ fn refuse_literal_headers(text: &str) -> Result<(), Refused> {
         // Syntax errors remain the normal validator's responsibility.
         return Ok(());
     };
-    let parameters = doc["schema"]["input"]["properties"]
+    let parameters: std::collections::HashSet<String> = doc["schema"]["input"]["properties"]
         .as_mapping()
         .map(|properties| {
             properties
