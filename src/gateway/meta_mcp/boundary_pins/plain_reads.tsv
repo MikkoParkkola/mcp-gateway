@@ -9,6 +9,7 @@ src/capability/parser.rs	parse_capability_file	fs::read_to_string	1	not-config	c
 src/capability/pin_file.rs	pin_file_until	fs::read_to_string	1	not-config	capability YAML under the directory lock; public definitions
 src/chains/checkpoint.rs	append	.open	1	write-only	appends a chain checkpoint; reads nothing
 src/chains/checkpoint.rs	load	fs::read_to_string	1	not-config	chain checkpoint JSON
+src/commands/api.rs	read_data	File::open	1	not-config	operator-named request body for one api call (--data @FILE), size-capped
 src/commands/config_export/mod.rs	merge_into_config	fs::read_to_string	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
 src/commands/config_export/mod.rs	rollback_client_config	fs::read	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
 src/commands/config_export/mod.rs	verify_gateway_entry	fs::read_to_string	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
@@ -65,7 +66,7 @@ src/fs_lock.rs	try_acquire	.open	2	no-content	opens a lock sidecar to hold the l
 src/fs_lock.rs	try_lease	.open	1	no-content	opens a lease sidecar to hold it; its bytes are never read
 src/fs_lock_windows.rs	open_exclusive	.open	1	no-content	Windows: opens a lock sidecar to hold the lock; its bytes are never read
 src/fs_lock_windows.rs	open_existing	.open	1	no-content	Windows: opens an existing lock sidecar to hold the lock; its bytes are never read
-src/gateway/health_metrics/process.rs	exposition_from	fs::read_to_string	1	not-config	process statistics under /proc
+src/gateway/health_metrics/memory.rs	bytes_from	fs::read_to_string	1	not-config	process statistics under /proc
 src/gateway/meta_mcp/chain_interim.rs	plan_chain_resume	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
 src/gateway/meta_mcp/confirmation.rs	redeem_confirmation	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
 src/gateway/meta_mcp/invoke/continuation.rs	redeem_retry	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
@@ -83,6 +84,7 @@ src/gateway/ui/capabilities.rs	get_capability	fs::read_to_string	1	not-config	ca
 src/gateway/ui/capabilities.rs	list_capabilities	fs::read_to_string	1	not-config	capability YAML; public
 src/gateway/ui/capabilities.rs	validate_only	fs::read_to_string	1	not-config	capability YAML; public
 src/gateway/ui/preview.rs	redeem	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/health_history/file.rs	read	fs::read	1	not-config	persisted health history
 src/identity_grants/journal.rs	append_line	.open	1	not-config	the grant-change journal, opened to append and to check its tail; judged by its own integrity rule
 src/identity_grants/journal.rs	open_journal_windows	.open	1	not-config	Windows: the grant-change journal, judged by its own integrity rule before an append
 src/identity_grants/journal.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read

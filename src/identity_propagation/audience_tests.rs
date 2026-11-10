@@ -28,13 +28,13 @@ fn verify(token: &str, key: &GatewayKeyPair, audience: &str) -> bool {
 async fn a_verifier_for_another_audience_rejects_a_minted_assertion() {
     let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
     let strategy = SignedAssertionStrategy::new(Arc::clone(&key), 300);
-    let identity = VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@corp".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp".to_string(),
-    };
+    let identity = VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@corp".to_string(),
+        None,
+        vec![],
+        "https://idp".to_string(),
+    );
     let backend = BackendDescriptor {
         id: "memory".to_string(),
         audience: AUDIENCE.to_string(),

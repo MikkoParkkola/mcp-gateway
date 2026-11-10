@@ -7,7 +7,8 @@ use std::time::Instant;
 
 use chrono::{TimeZone, Utc};
 
-use super::process::{START_TIME, exposition_from, record_start_time, resident_bytes};
+use super::memory::resident_bytes;
+use super::process::{START_TIME, exposition_from, record_start_time};
 use crate::gateway::router::ProcessStart;
 
 #[test]

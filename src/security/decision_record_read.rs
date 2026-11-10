@@ -62,9 +62,12 @@ fn object_shaped(decision: &Value) -> bool {
 }
 
 /// Whether `entry`'s decision names `rule_id`. A record with no decision, or
-/// one that does not read, names no rule.
+/// one that does not read, names no rule. The borrowed `rule_id` field is
+/// compared exactly first, so a line that cannot match costs a pointer walk
+/// and no allocation; a candidate is still fully read and compared.
 pub(crate) fn matches_rule(entry: &Value, rule_id: &str) -> bool {
-    decision_evidence(entry).is_some_and(|d| d.rule_id.as_deref() == Some(rule_id))
+    entry.pointer("/decision/rule_id").and_then(Value::as_str) == Some(rule_id)
+        && decision_evidence(entry).is_some_and(|d| d.rule_id.as_deref() == Some(rule_id))
 }
 
 /// The line for evidence `decision` does not carry: its version could not

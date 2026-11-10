@@ -7,11 +7,14 @@
 //! receipts exactly as its live delivery recorded them, never by re-deriving
 //! receipts from the stored text (design E1/F2). This store holds, per
 //! stored entry, immutable [`ReplayReceipt`] snapshots of the committed
-//! in-plan receipts, in memory only: the fingerprints in them are keyed per
-//! process and are worthless after a restart, so nothing here reaches disk.
-//! A snapshot's segments hold the raw delivered text; that text is bounded
-//! by the per-entry cap ([`REPLAY_ENTRY_BYTES`], 1 MiB) and the total
-//! budget ([`REPLAY_RECEIPT_BYTES`], 32 MiB), and is never persisted. The
+//! in-plan receipts. The fingerprints in them are keyed per process, so a
+//! task's entry is persisted in its row stamped with the process epoch and
+//! rebuilt here by a read only under the same epoch (`replay_persist`); a
+//! sync entry never reaches disk. A snapshot's segments hold the raw
+//! delivered text; that text is bounded by the per-entry cap
+//! ([`REPLAY_ENTRY_BYTES`], 1 MiB) and the total budget
+//! ([`REPLAY_RECEIPT_BYTES`], 32 MiB), and is persisted only when the task's
+//! stored result delivers every segment of it. The
 //! budget counts fingerprint and text bytes plus a per-item estimate
 //! ([`REPLAY_ITEM_OVERHEAD`]); struct layout, spare capacity, the keys and
 //! the index are not counted, so actual memory can run somewhat above it
@@ -118,9 +121,9 @@ struct Held {
     life: Life,
 }
 
-/// A stored entry's lifecycle. A delivery-time capture (the task path) is
-/// [`Life::Kept`] at once; a synchronous answer's judge-time capture is
-/// [`Life::Pending`] until a write that is not under `off` keeps it.
+/// A stored entry's lifecycle. Every capture, and every entry a task read
+/// rebuilds from its row, starts [`Life::Pending`] and is [`Life::Kept`]
+/// once a write that is not under `off` delivers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Life {
     Kept,
@@ -202,6 +205,23 @@ impl Inner {
     }
 }
 
+/// One entry's accounted bytes: its receipts, its answer digest and, per
+/// call, the names plus [`REPLAY_ITEM_OVERHEAD`].
+fn entry_bytes(receipts: &[ReplayReceipt], calls: &ReplayCalls, answer_digest: &str) -> usize {
+    let mut bytes = receipts
+        .iter()
+        .map(ReplayReceipt::bytes)
+        .fold(0_usize, usize::saturating_add)
+        .saturating_add(answer_digest.len());
+    for (_, server, tool) in calls {
+        bytes = bytes
+            .saturating_add(server.len())
+            .saturating_add(tool.len())
+            .saturating_add(REPLAY_ITEM_OVERHEAD);
+    }
+    bytes
+}
+
 /// The replay receipts of every stored plan entry of one detector, byte
 /// bounded in total and per entry (E1). See the module docs for its lock
 /// discipline.
@@ -243,6 +263,7 @@ impl ReplayReceipts {
     /// `reason=too_large`, and the key's previous entry goes with it, so a
     /// key never replays an older commit's receipts. Past the total cap
     /// the oldest entries are evicted until it fits, counted.
+    #[cfg(test)]
     pub(in super::super) fn insert(
         &self,
         key: StoredKey,
@@ -271,64 +292,79 @@ impl ReplayReceipts {
         (now, retention): (Instant, Duration),
         life: Life,
     ) -> Option<u64> {
-        let mut bytes = receipts
-            .iter()
-            .map(ReplayReceipt::bytes)
-            .fold(0_usize, usize::saturating_add)
-            .saturating_add(answer_digest.len());
-        for (_, server, tool) in &calls {
-            bytes = bytes
-                .saturating_add(server.len())
-                .saturating_add(tool.len())
-                .saturating_add(REPLAY_ITEM_OVERHEAD);
-        }
-        // What to count is decided under the lock and counted after it
-        // is dropped: no counter increment runs with the lock held.
-        let mut evicted_now = 0_u64;
-        let too_large = bytes > self.entry_cap || bytes > self.total_cap;
-        let mut stored = None;
-        {
+        let bytes = entry_bytes(&receipts, &calls, &answer_digest);
+        let (stored, evicted) = {
             let mut inner = self.inner.lock();
-            inner.sweep(now);
-            // Overwrite or refusal, the previous entry under the key goes first.
-            inner.take(&key);
-            if !too_large {
-                while inner.bytes.saturating_add(bytes) > self.total_cap {
-                    if inner.take_oldest().is_none() {
-                        break;
-                    }
-                    evicted_now = evicted_now.saturating_add(1);
-                }
-                let seq = inner.next;
-                stored = Some(seq);
-                inner.next = inner.next.saturating_add(1);
-                inner.bytes = inner.bytes.saturating_add(bytes);
-                inner.order.insert(seq, key.clone());
-                inner.by_key.insert(
-                    key,
-                    Held {
-                        entry: Arc::new(ReplayEntry {
-                            seq,
-                            receipts,
-                            calls,
-                            answer_digest,
-                            expires: now.checked_add(retention).unwrap_or(now),
-                        }),
-                        seq,
-                        bytes,
-                        life,
-                    },
-                );
-            }
+            self.insert_locked(
+                &mut inner,
+                key,
+                (receipts, calls, answer_digest),
+                (now, retention, bytes),
+                life,
+            )
+        };
+        self.count_insert(stored.is_none(), evicted);
+        stored
+    }
+
+    /// The insertion under the held lock: the expired swept, the key's
+    /// previous entry taken out, then (when it fits the caps) the entry
+    /// stored with `life`, evicting the oldest past the total cap. Its
+    /// sequence (`None`: too large) and how many were evicted, for the
+    /// caller to count once the lock is dropped.
+    fn insert_locked(
+        &self,
+        inner: &mut Inner,
+        key: StoredKey,
+        (receipts, calls, answer_digest): (Vec<ReplayReceipt>, ReplayCalls, String),
+        (now, retention, bytes): (Instant, Duration, usize),
+        life: Life,
+    ) -> (Option<u64>, u64) {
+        let mut evicted = 0_u64;
+        inner.sweep(now);
+        // Overwrite or refusal, the previous entry under the key goes first.
+        inner.take(&key);
+        if !self.admits(bytes) {
+            return (None, evicted);
         }
+        while inner.bytes.saturating_add(bytes) > self.total_cap {
+            if inner.take_oldest().is_none() {
+                break;
+            }
+            evicted = evicted.saturating_add(1);
+        }
+        let seq = inner.next;
+        inner.next = inner.next.saturating_add(1);
+        inner.bytes = inner.bytes.saturating_add(bytes);
+        inner.order.insert(seq, key.clone());
+        inner.by_key.insert(
+            key,
+            Held {
+                entry: Arc::new(ReplayEntry {
+                    seq,
+                    receipts,
+                    calls,
+                    answer_digest,
+                    expires: now.checked_add(retention).unwrap_or(now),
+                }),
+                seq,
+                bytes,
+                life,
+            },
+        );
+        (Some(seq), evicted)
+    }
+
+    /// Count what one insertion decided under the lock: a refusal for size,
+    /// and the entries it evicted.
+    fn count_insert(&self, too_large: bool, evicted: u64) {
         if too_large {
             count_replay_skipped("too_large");
         }
-        if evicted_now > 0 {
-            self.evicted.fetch_add(evicted_now, Ordering::Relaxed);
-            telemetry_metrics::counter!(REPLAY_EVICTED_METRIC).increment(evicted_now);
+        if evicted > 0 {
+            self.evicted.fetch_add(evicted, Ordering::Relaxed);
+            telemetry_metrics::counter!(REPLAY_EVICTED_METRIC).increment(evicted);
         }
-        stored
     }
 
     /// Drop `key`'s entry: a non-plan commit under the key, or its stored
@@ -340,6 +376,7 @@ impl ReplayReceipts {
     /// The entry under `key` at `now`, if one is held and live. Past its
     /// expiry the lookup removes it and misses, counted `reason=expired`;
     /// no entry at all is counted `reason=absent` (G36).
+    #[cfg(test)]
     pub(in super::super) fn lookup(
         &self,
         key: &StoredKey,
@@ -370,16 +407,6 @@ impl ReplayReceipts {
     pub(in super::super) fn evicted_for_test(&self) -> u64 {
         self.evicted.load(Ordering::Relaxed)
     }
-}
-
-/// How a capture enters the store: [`CaptureMode::Pending`] for a
-/// synchronous answer captured at judge, before anything is delivered;
-/// [`CaptureMode::AtDelivery`] for a capture made where the answer is
-/// already delivered (the task path), stored kept as it always was.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CaptureMode {
-    Pending,
-    AtDelivery,
 }
 
 /// One delivery's hold on a pending entry: its key and the insertion
@@ -463,30 +490,81 @@ impl ReplayReceipts {
     ) -> Option<Acquired> {
         // The miss reason is decided under the lock and counted after it
         // is dropped, as `lookup` does.
-        let (found, skipped) = {
-            let mut inner = self.inner.lock();
-            match inner.by_key.get(key).map(|held| now >= held.entry.expires) {
-                None => (None, Some("absent")),
-                Some(true) => {
-                    inner.take(key);
-                    (None, Some("expired"))
-                }
-                Some(false) => {
-                    let held = inner.by_key.get_mut(key)?;
-                    let seq = match &mut held.life {
-                        Life::Kept => None,
-                        Life::Pending { outstanding, .. } => {
-                            *outstanding = outstanding.saturating_add(1);
-                            Some(held.seq)
-                        }
-                    };
-                    (Some((Arc::clone(&held.entry), seq)), None)
-                }
-            }
-        };
+        let (found, skipped) = acquire_locked(&mut self.inner.lock(), key, now);
         if let Some(reason) = skipped {
             count_replay_skipped(reason);
         }
+        let (entry, seq) = found?;
+        let handle = seq.map(|seq| self.handle(key.clone(), seq));
+        Acquired::pair(entry, handle)
+    }
+
+    /// Whether an entry of these parts fits the per-entry and total caps, as
+    /// an insertion would admit it.
+    pub(in super::super) fn fits(
+        &self,
+        receipts: &[ReplayReceipt],
+        calls: &ReplayCalls,
+        answer_digest: &str,
+    ) -> bool {
+        self.admits(entry_bytes(receipts, calls, answer_digest))
+    }
+
+    /// The one admission rule by size: an entry of `bytes` fits the
+    /// per-entry cap and the total cap. Insertion and [`Self::fits`] (a
+    /// stored task read's judgement) both ask it, so they cannot disagree.
+    fn admits(&self, bytes: usize) -> bool {
+        bytes <= self.entry_cap && bytes <= self.total_cap
+    }
+
+    /// [`Self::acquire`] for a stored task read that holds the entry's
+    /// persisted parts: a live entry under `key` is acquired as it is;
+    /// otherwise the parts are inserted pending with this read as its one
+    /// outstanding delivery, settled at its write (capture-if-absent). The
+    /// check and the insertion run under one lock, so two reads that both
+    /// find nothing leave exactly one entry, held by both. `None` when the
+    /// parts are over the caps (`too_large`).
+    pub(in super::super) fn adopt(
+        self: &Arc<Self>,
+        key: &StoredKey,
+        parts: (Vec<ReplayReceipt>, ReplayCalls, String),
+        now: Instant,
+        retention: Duration,
+    ) -> Option<Acquired> {
+        let bytes = entry_bytes(&parts.0, &parts.1, &parts.2);
+        let lapsed;
+        let (found, evicted) = {
+            let mut inner = self.inner.lock();
+            let (live, missed) = acquire_locked(&mut inner, key, now);
+            // A lapsed entry is counted as a lookup counts it; an absent one
+            // is not a miss here, the parts rebuild it.
+            lapsed = missed == Some("expired");
+            if let Some(found) = live {
+                (Some(found), 0)
+            } else {
+                let (seq, evicted) = self.insert_locked(
+                    &mut inner,
+                    key.clone(),
+                    parts,
+                    (now, retention, bytes),
+                    Life::Pending {
+                        outstanding: 1,
+                        delivered_off: false,
+                    },
+                );
+                let entry = seq.and_then(|seq| {
+                    inner
+                        .by_key
+                        .get(key)
+                        .map(|held| (Arc::clone(&held.entry), Some(seq)))
+                });
+                (entry, evicted)
+            }
+        };
+        if lapsed {
+            count_replay_skipped("expired");
+        }
+        self.count_insert(found.is_none(), evicted);
         let (entry, seq) = found?;
         let handle = seq.map(|seq| self.handle(key.clone(), seq));
         Acquired::pair(entry, handle)
@@ -570,6 +648,39 @@ impl ReplayReceipts {
     #[cfg(test)]
     pub(in super::super) fn bytes_for_test(&self) -> usize {
         self.inner.lock().bytes
+    }
+}
+
+/// A live entry acquired, with its sequence when it is pending.
+type Found = (Arc<ReplayEntry>, Option<u64>);
+
+/// The live entry under `key` at `now`, under the held lock, with one more
+/// outstanding delivery when it is pending (its sequence then names the
+/// handle to hand out); else the miss reason, an expired entry taken out.
+fn acquire_locked(
+    inner: &mut Inner,
+    key: &StoredKey,
+    now: Instant,
+) -> (Option<Found>, Option<&'static str>) {
+    match inner.by_key.get(key).map(|held| now >= held.entry.expires) {
+        None => (None, Some("absent")),
+        Some(true) => {
+            inner.take(key);
+            (None, Some("expired"))
+        }
+        Some(false) => {
+            let Some(held) = inner.by_key.get_mut(key) else {
+                return (None, Some("absent"));
+            };
+            let seq = match &mut held.life {
+                Life::Kept => None,
+                Life::Pending { outstanding, .. } => {
+                    *outstanding = outstanding.saturating_add(1);
+                    Some(held.seq)
+                }
+            };
+            (Some((Arc::clone(&held.entry), seq)), None)
+        }
     }
 }
 

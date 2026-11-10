@@ -56,13 +56,13 @@ fn oidc(issuer: &str, subject: &str, email: &str) -> Who {
             subject,
             Some(email.to_string()),
         )),
-        identity: Some(VerifiedIdentity {
-            subject: subject.to_string(),
-            email: email.to_string(),
-            name: None,
-            groups: vec![],
-            issuer: issuer.to_string(),
-        }),
+        identity: Some(VerifiedIdentity::for_test(
+            subject.to_string(),
+            email.to_string(),
+            None,
+            vec![],
+            issuer.to_string(),
+        )),
     }
 }
 
@@ -431,3 +431,6 @@ async fn surfaced_call_grant_denial_writes_one_record() {
 
 #[path = "grant_decision_rule_id_tests.rs"]
 mod rule_ids;
+
+#[path = "grant_allow_attribution_tests.rs"]
+mod allow_attribution;

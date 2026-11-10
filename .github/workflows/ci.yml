@@ -26,6 +26,10 @@ on:
   # runs the same jobs as a branch push, which is none of them.
   workflow_dispatch:
     inputs:
+      rehearse_macos_lib_fallback:
+        description: macOS int builds and runs its lib half itself, as when lib-b's test binary does not arrive
+        type: boolean
+        default: false
       rehearse_manifest:
         description: Build both arches and assemble the provenance-tagged index, promoting no release tag
         type: boolean
@@ -803,22 +807,32 @@ jobs:
     # The lib shard compiles the `--lib` test binary from cold (every macOS
     # shard missed the cache on the last three trains, and a hit would save
     # only the 2-4 min dependency build): 19 to 86 min, then about 32 min of
-    # tests. At 90 a slow runner cut off a train mid-test.
-    timeout-minutes: 150
+    # tests. At 90 a slow runner cut off a train mid-test. int's fallback
+    # (its suite, 10 min grace, then building the lib-a half itself) can reach
+    # about 140 min on a slow runner.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        # Two jobs: about two macOS runners serve trains, so a third job
-        # queued behind the others, and lib-a and lib-b each compiled the
-        # same lib test binary. One lib shard builds it once.
-        # A lane PR labelled os-sensitive runs the lib shard alone: these
-        # runners serve every train (test_os_label_routing.py).
-        shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib"]' || '["lib","int"]') }}
+        # Two jobs: about two macOS runners serve trains, and a second build of
+        # the lib test binary cost 19-86 min (#4562). So lib-b builds it once,
+        # uploads it and runs its half; int runs its suite, then the lib-a half
+        # from that binary.
+        # A lane PR labelled os-sensitive runs lib-b alone, and that job runs
+        # the lib-a half too: these runners serve every train
+        # (test_os_label_routing.py).
+        shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib-b"]' || '["lib-b","int"]') }}
+    permissions:
+      contents: read
+      # int waits for lib-b's test binary by listing this run's artifacts.
+      actions: read
     env:
       # Two build jobs on the 3-core, 7 GB runner (macos-latest also lands on a 5-core, 14 GB one): the default swapped. Kept
       # on measurement (MIK-8482): the slowest shard took 25.5 min (#3944
       # run 1), against 35 min at the default in the Stage 0 probe.
       CARGO_BUILD_JOBS: 2
+      # The labelled lane: lib-b runs alone, so it runs the lib-a half itself.
+      MACOS_LIB_SOLO: ${{ contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -831,7 +845,7 @@ jobs:
       # Tests job's, for the same reason; every test that does not run on
       # macOS is listed in docs/release/macos-test-exclusions.tsv.
       - name: Every test kept off macOS is listed (MIK-8174)
-        if: matrix.shard == 'lib'
+        if: matrix.shard == 'lib-b'
         run: python3 scripts/release/check_macos_exclusions.py
       # The same build takes 19 or 86 min on these runners. Swap and memory
       # pressure every 30 s, printed below, say whether the slow ones swap.
@@ -845,11 +859,53 @@ jobs:
               sleep 30
             done
           ) &
+      # Build the lib test binary once and hand it to int before running this
+      # half, so int's lib-a half starts as soon as its own suite is done. The
+      # shard suite below reuses this build.
+      - name: Build the lib test binary once
+        if: matrix.shard == 'lib-b'
+        timeout-minutes: 120
+        run: python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
+      - name: Hand the lib test binary to int
+        if: matrix.shard == 'lib-b' && env.MACOS_LIB_SOLO != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # One name per run: a rerun of int alone finds the earlier attempt's binary.
+          name: macos-lib-tests
+          path: ${{ runner.temp }}/lib-bin/lib-tests
+          retention-days: 1
+          overwrite: true
+          if-no-files-found: error
       - name: Shard suite
         # Under the job's limit, so a slow build still leaves time for the
         # report below.
         timeout-minutes: 145
         run: python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}
+      # int: wait for lib-b's binary, then run the lib-a half from it, no
+      # compile. When it is not coming (lib-b ended without it, is absent from
+      # this attempt, or is still queued 10 min in) int builds the half itself.
+      - name: Wait for the lib test binary
+        id: wait
+        if: matrix.shard == 'int'
+        timeout-minutes: 120
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MACOS_LIB_REHEARSE_FALLBACK: ${{ github.event_name == 'workflow_dispatch' && inputs.rehearse_macos_lib_fallback }}
+        run: python3 scripts/ci/shard_tests.py wait-lib macos-lib-tests "macOS shard lib-b"
+      - name: Fetch the lib test binary
+        if: matrix.shard == 'int' && steps.wait.outputs.found == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-lib-tests
+          path: ${{ runner.temp }}/lib-bin
+      - name: Lib-a half from the prebuilt binary
+        if: (matrix.shard == 'int' && steps.wait.outputs.found == 'true') || (matrix.shard == 'lib-b' && env.MACOS_LIB_SOLO == 'true')
+        timeout-minutes: 60
+        run: python3 scripts/ci/shard_tests.py run-prebuilt macos lib-a "$RUNNER_TEMP/lib-bin/lib-tests"
+      - name: Lib-a half, built here (the binary is not coming)
+        if: matrix.shard == 'int' && steps.wait.outputs.found != 'true'
+        timeout-minutes: 120
+        run: python3 scripts/ci/shard_tests.py run macos lib-a
       - name: Runner, swap and memory pressure during the build
         if: always()
         run: |

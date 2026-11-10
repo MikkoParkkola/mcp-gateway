@@ -114,7 +114,7 @@ async fn a_chain_handle_is_refused_to_another_principal() {
     let caps = elicitation_caps();
     let no_retry = &crate::protocol::mrtr::NO_RETRY;
     let (alice, mut bob) = (identity(), identity());
-    bob.subject = "bob".to_string();
+    bob = bob.with_subject("bob");
     let cases: [(&str, Who<'_>, Who<'_>); 2] = [
         (
             "another key",

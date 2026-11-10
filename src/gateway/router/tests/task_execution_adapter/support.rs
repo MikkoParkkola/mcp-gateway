@@ -47,13 +47,13 @@ pub(super) const BACKEND: &str = "mock";
 /// (`settlement_record`, `egress_task`) are `firewall`-gated.
 #[cfg(feature = "firewall")]
 pub(super) fn admission_principal() -> String {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@adapter.test".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp.adapter.test".to_string(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@adapter.test".to_string(),
+        None,
+        Vec::new(),
+        "https://idp.adapter.test".to_string(),
+    )
     .stable_actor_id()
 }
 
@@ -342,13 +342,13 @@ pub(super) fn http_request(
     {
         request
             .extensions_mut()
-            .insert(crate::key_server::oidc::VerifiedIdentity {
-                subject: subject.to_string(),
-                email: format!("{subject}@adapter.test"),
-                name: None,
-                groups: Vec::new(),
-                issuer: "https://idp.adapter.test".to_string(),
-            });
+            .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+                subject.to_string(),
+                format!("{subject}@adapter.test"),
+                None,
+                Vec::new(),
+                "https://idp.adapter.test".to_string(),
+            ));
     }
     request
 }
