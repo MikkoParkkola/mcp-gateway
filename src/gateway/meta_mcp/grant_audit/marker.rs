@@ -119,8 +119,12 @@ impl Eq for RetryCell {}
 /// Run `work`, a withheld call's note and its retry dispatch, so the retry's
 /// trace id reaches the note: the note says the call has an invocation record
 /// only when that retry's own record landed.
-pub(in crate::gateway::meta_mcp) async fn with_retry_trace<F: Future>(work: F) -> F::Output {
-    RETRY_TRACE.scope(RetryCell::default(), work).await
+/// A plain function, not an `async fn`: an `async fn` would hold `work` twice
+/// (the argument beside the task-local future that owns it).
+pub(in crate::gateway::meta_mcp) fn with_retry_trace<F: Future>(
+    work: F,
+) -> impl Future<Output = F::Output> {
+    RETRY_TRACE.scope(RetryCell::default(), work)
 }
 
 /// Called by the retry's dispatch with the trace id it opens.
