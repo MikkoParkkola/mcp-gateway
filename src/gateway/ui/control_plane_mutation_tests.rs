@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Governance mutation and decision tests for `ui::control_plane`.
 
-use super::{GRANT_WRITES_REFUSED, apply_mutation};
+use super::{GRANT_WRITES_REFUSED, POLICY_WRITES_REFUSED, apply_mutation};
 use crate::control_plane::{
     AuditFilter, ControlPlaneAction, ControlPlaneActor, ControlPlaneDecisionTargetKind,
     ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlaneRole, ControlPlaneRollbackPlan,
@@ -225,4 +225,96 @@ fn decision_guards_rbac_missing_and_unsupported() {
         Decision::Approve,
     );
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ADR-029 (the control-plane policies route): a policy write is refused
+// whether or not the store is available, because the store never enforces
+// policy; RBAC still answers first. Grant writes keep the store's 503
+// (`mutation_without_store_returns_503`).
+fn policy_write_without_store(role: ControlPlaneRole) -> axum::response::Response {
+    apply_mutation(
+        Err("store unavailable".to_string()),
+        &actor(role),
+        ControlPlaneAction::MutatePolicy,
+        "local:ssrf_protection".to_string(),
+        "upsert policy local:ssrf_protection".to_string(),
+        "change request 1".to_string(),
+        rollback(),
+        &POLICY_WRITES_REFUSED,
+    )
+}
+
+fn decision_without_store(
+    role: ControlPlaneRole,
+    target_kind: ControlPlaneDecisionTargetKind,
+) -> axum::response::Response {
+    super::resolve_decision_core(
+        Err("store unavailable".to_string()),
+        &actor(role),
+        super::DecisionRequest {
+            target_kind,
+            target_id: "local:ssrf_protection".to_string(),
+            decision: super::Decision::Approve,
+            reason: "change request 1".to_string(),
+            rollback: rollback(),
+        },
+    )
+}
+
+/// The policy refusal, whole: every key from ADR-029's table in its order,
+/// and that the store is not enforced.
+const POLICY_REFUSAL: &str = "Policies are enforced from gateway config: security.tool_policy, \
+    security.firewall.rules, security.firewall.credential_redaction, security.firewall.collusion, \
+    security.sanitize_input and security.ssrf_protection. This store is not enforced.";
+
+async fn assert_policy_refusal(resp: axum::response::Response) {
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["reason_code"], "policies_managed_in_gateway_config");
+    assert_eq!(body["reason"], POLICY_REFUSAL);
+}
+
+#[tokio::test]
+async fn a_policy_write_with_no_store_is_still_refused_by_config() {
+    assert_policy_refusal(policy_write_without_store(ControlPlaneRole::Admin)).await;
+}
+
+#[tokio::test]
+async fn a_policy_decision_with_no_store_is_still_refused_by_config() {
+    assert_policy_refusal(decision_without_store(
+        ControlPlaneRole::Admin,
+        ControlPlaneDecisionTargetKind::Policy,
+    ))
+    .await;
+}
+
+#[test]
+fn a_non_admin_policy_write_with_no_store_gets_rbac() {
+    assert_eq!(
+        policy_write_without_store(ControlPlaneRole::Auditor).status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        decision_without_store(
+            ControlPlaneRole::Auditor,
+            ControlPlaneDecisionTargetKind::Policy
+        )
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[test]
+fn an_unsupported_decision_kind_with_no_store_answers_422() {
+    assert_eq!(
+        decision_without_store(
+            ControlPlaneRole::Admin,
+            ControlPlaneDecisionTargetKind::RuntimeHealth
+        )
+        .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
 }

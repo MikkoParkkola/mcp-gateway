@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::super::collusion::replay::{CaptureMode, ReplayHandle, StoredKey, count_replay_skipped};
+use super::super::collusion::replay::{ReplayHandle, StoredKey, count_replay_skipped};
 use super::{Delivered, DeliveryDigest, Firewall, delivery_parts};
 use crate::security::ReplayCalls;
 
@@ -50,15 +50,10 @@ impl Firewall {
     /// and nothing is removed, so a commit with no candidates at all goes
     /// through [`Self::remove_replay`] instead.
     ///
-    /// `mode` says when the capture is made. [`CaptureMode::AtDelivery`]
-    /// (the task path) captures an answer already delivered: under an
-    /// effective `off` nothing is stored, and otherwise the entry is kept.
-    /// [`CaptureMode::Pending`] (a synchronous answer, at judge) captures
-    /// before anything is delivered, whatever the action: the entry is
-    /// pending and the returned handle is settled at the delivery's write
-    /// ([`Self::settle_replay`]), which keeps it or, under `off`, lets it go
-    /// (ADR-029, pending-snapshot rule).
-    #[allow(clippy::too_many_arguments, reason = "one stored entry's parts")]
+    /// The capture is made before anything is delivered, whatever the
+    /// action: the entry is pending and the returned handle is settled at
+    /// the delivery's write ([`Self::settle_replay`]), which keeps it or,
+    /// under `off`, lets it go (ADR-029, pending-snapshot rule).
     pub(crate) fn store_replay(
         &self,
         key: StoredKey,
@@ -66,17 +61,8 @@ impl Firewall {
         calls: ReplayCalls,
         answer_digest: &str,
         retention: Duration,
-        generation: &crate::config_reload::Generation,
-        mode: CaptureMode,
     ) -> Option<ReplayHandle> {
         self.relay_detector()?;
-        // Nothing delivered under an effective `off` is held, a snapshot
-        // included; a pending capture has delivered nothing yet.
-        if mode == CaptureMode::AtDelivery
-            && generation.collusion_view().action() == super::CollusionAction::Off
-        {
-            return None;
-        }
         let mut snapshots = Vec::with_capacity(receipts.len());
         for (digest, label, server, tool) in receipts {
             match digest.replay_snapshot(*label, server, tool) {
@@ -90,18 +76,9 @@ impl Firewall {
             return None;
         }
         let (digest, now) = (answer_digest.to_owned(), self.relay.now());
-        match mode {
-            CaptureMode::AtDelivery => {
-                self.relay
-                    .replay
-                    .insert(key, snapshots, calls, digest, now, retention);
-                None
-            }
-            CaptureMode::Pending => self
-                .relay
-                .replay
-                .insert_pending(key, snapshots, calls, digest, now, retention),
-        }
+        self.relay
+            .replay
+            .insert_pending(key, snapshots, calls, digest, now, retention)
     }
 
     /// How many replay entries the store holds (tests only).
@@ -130,7 +107,9 @@ impl Firewall {
     }
 
     /// Fresh digests for the snapshots stored under `key`, with its calls;
-    /// `None` stages nothing, counted `absent` or `expired` (E2).
+    /// `None` stages nothing, counted `absent` or `expired` (E2). Rows read
+    /// it; a delivery acquires (`replay_digests_for_delivery`, `adopt_replay`).
+    #[cfg(test)]
     pub(crate) fn replay_digests(
         &self,
         key: &StoredKey,
@@ -222,7 +201,9 @@ impl Firewall {
 }
 
 /// Fresh digests for every snapshot of `entry` (F2).
-fn replayed(entry: &super::super::collusion::replay::ReplayEntry) -> Vec<ReplayedDigest> {
+pub(super) fn replayed(
+    entry: &super::super::collusion::replay::ReplayEntry,
+) -> Vec<ReplayedDigest> {
     entry
         .receipts
         .iter()

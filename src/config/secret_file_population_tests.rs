@@ -179,7 +179,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "events store records read through read_checked_bytes (EventsRecord, 0600); File::open only opens the store directory to fsync it",
     ),
     (
-        "src/gateway/health_metrics/process.rs",
+        "src/gateway/health_metrics/memory.rs",
         "/proc/self/statm, the process's own memory counters; nothing secret",
     ),
     (
@@ -189,6 +189,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/gateway/server/control_plane_store.rs",
         "writability probe",
+    ),
+    (
+        "src/health_history/file.rs",
+        "the gateway's own health.json in its data directory: numbers and fixed words, never a client's data; nothing secret",
     ),
     (
         "src/transport/stdio_cache.rs",

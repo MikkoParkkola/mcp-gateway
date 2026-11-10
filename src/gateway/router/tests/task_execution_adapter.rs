@@ -91,6 +91,9 @@ mod relay_plan_replay_guards;
 /// guards for the file-size ceiling.
 #[cfg(feature = "firewall")]
 mod relay_plan_replay_notify_guards;
+/// The persisted replay snapshot of a plan task's row.
+#[cfg(feature = "firewall")]
+mod relay_plan_replay_snapshot_guards;
 /// MIK-7887.RECEIPT.2: a redacted plan answer keeps each step's delivered text.
 #[cfg(feature = "firewall")]
 mod relay_plan_route;

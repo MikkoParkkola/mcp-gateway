@@ -587,6 +587,8 @@ async fn a_queued_task_is_not_judged_by_the_startup_rules() {
     );
 }
 
+#[path = "allow_attribution_tests.rs"]
+mod allow_attribution;
 #[path = "mtls_rule_id_record_tests.rs"]
 mod mtls_rule_ids;
 /// The rule each recording site names (keyed rule ids).

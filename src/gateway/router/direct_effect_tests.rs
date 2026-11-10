@@ -30,7 +30,7 @@ const KEY: &str = "k-std";
 /// A personal REST capability [`PROBE`], owned by mTLS subject [`OWNER`],
 /// served by `port`'s `/probe`.
 #[cfg(feature = "firewall")]
-fn personal_probe(port: u16) -> String {
+pub(super) fn personal_probe(port: u16) -> String {
     let base_url = crate::test_fixture_host::fixture_url(port);
     format!(
         "name: {PROBE}\ndescription: Personal probe\nmetadata:\n  read_only: true\n  \
@@ -41,7 +41,7 @@ fn personal_probe(port: u16) -> String {
 }
 
 /// A client certificate whose CN is [`OWNER`], parsed by the production parser.
-fn owner_cert() -> crate::mtls::CertIdentity {
+pub(super) fn owner_cert() -> crate::mtls::CertIdentity {
     let mut params = rcgen::CertificateParams::default();
     let mut dn = rcgen::DistinguishedName::new();
     dn.push(rcgen::DnType::CommonName, OWNER);

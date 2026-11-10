@@ -549,7 +549,10 @@ mod answer;
 mod receipts;
 #[path = "collusion_gate_replay.rs"]
 mod replay_gate;
+#[path = "collusion_gate_replay_persist.rs"]
+mod replay_persist;
 pub(crate) use replay_gate::{ReplaySource, ReplayedDigest};
+pub(crate) use replay_persist::Adopted;
 #[path = "collusion_gate_seams.rs"]
 mod seams;
 #[path = "collusion_staging.rs"]

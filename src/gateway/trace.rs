@@ -61,6 +61,10 @@ pub fn current() -> Option<String> {
 ///
 /// Any call to [`current`] from within `future` (or any future it spawns
 /// via `.await`) will return `Some(trace_id.clone())`.
+///
+/// An `async fn` on purpose, though it holds `future` twice: a plain function
+/// returning the task-local future would drop an unpolled `future` inside the
+/// scope, so a caller's destructor would read this trace ID instead of its own.
 pub async fn with_trace_id<F, T>(trace_id: String, future: F) -> T
 where
     F: std::future::Future<Output = T>,
@@ -71,6 +75,32 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── with_trace_id, dropped before it is polled ───────────────────────
+
+    /// A caller's future dropped before its first poll is dropped under the
+    /// caller's own trace ID, not the one it was given: a destructor that
+    /// reads [`current`] during cancellation sees the context it ran in.
+    #[test]
+    fn an_unpolled_trace_scope_drops_its_future_outside_the_scope() {
+        struct Records(std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>);
+        impl Drop for Records {
+            fn drop(&mut self) {
+                self.0.lock().expect("lock").push(current());
+            }
+        }
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let guard = Records(std::sync::Arc::clone(&seen));
+        let inner = async move {
+            let _keep = &guard;
+        };
+        drop(with_trace_id("gw-inner".to_owned(), inner));
+        assert_eq!(
+            *seen.lock().expect("lock"),
+            [None],
+            "the unpolled future was dropped inside the trace scope it was given"
+        );
+    }
 
     // ── generate ──────────────────────────────────────────────────────────
 

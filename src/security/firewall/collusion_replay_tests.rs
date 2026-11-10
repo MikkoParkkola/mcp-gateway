@@ -571,8 +571,6 @@ fn d25_a_still_staged_step_yields_no_snapshot_and_no_entry() {
         Vec::new(),
         "",
         hour(),
-        &fw.paired_generation_for_test(),
-        crate::security::firewall::CaptureMode::AtDelivery,
     );
     assert!(
         fw.replay_digests(&task_key("task-d25", 1)).is_none(),
@@ -581,7 +579,7 @@ fn d25_a_still_staged_step_yields_no_snapshot_and_no_entry() {
 }
 
 /// The 24 h retention fallback for a task with no TTL (`RETENTION_SECS`,
-/// applied at `note_task_capture`): an entry stored for that retention
+/// applied where a task read rebuilds its entry): an entry stored for that retention
 /// is live just before 24 h on the relay (receipt) clock and expired
 /// just after it.
 /// Mutants killed: a shorter fallback (the just-before lookup would
@@ -598,8 +596,6 @@ fn a_ttl_less_tasks_entry_expires_after_24h_on_the_relay_clock_not_before() {
         Vec::new(),
         "",
         Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
-        &fw.paired_generation_for_test(),
-        crate::security::firewall::CaptureMode::AtDelivery,
     );
     assert!(
         fw.replay_digests(&task_key("task-24h", 3)).is_some(),
@@ -665,13 +661,11 @@ fn g47_parallel_commits_and_replays_on_a_shared_store_each_find_their_own_entry(
     });
 }
 
-/// r16: a task capture keeps its delivery-time gate. Under an effective
-/// `off` it stores nothing and returns no handle; a synchronous capture
-/// under the same `off` is stored pending, because nothing is delivered
-/// yet.
-/// Mutant killed: m12 (the task mode behaving as the pending mode).
+/// r16: a capture is stored pending under an effective `off`, because
+/// nothing is delivered yet (the only capture mode: a
+/// task's entry is persisted in its row, never captured at commit).
 #[test]
-fn r16_a_task_capture_keeps_the_delivery_time_gate() {
+fn r16_a_capture_under_off_is_stored_pending() {
     let config = FirewallConfig {
         collusion: CollusionConfig {
             action: CollusionAction::Off,
@@ -684,22 +678,6 @@ fn r16_a_task_capture_keeps_the_delivery_time_gate() {
     };
     let fw = Firewall::from_config(config, None).keeping_every_kgram();
     let digest = DeliveryDigest::of_seam((0..8_u64).collect(), true, None);
-    let generation = fw.paired_generation_for_test();
-    let task = task_key("task-r16", 1);
-    let handle = fw.store_replay(
-        task.clone(),
-        &[(&digest, None, "alpha", "read")],
-        Vec::new(),
-        "",
-        hour(),
-        &generation,
-        crate::security::firewall::CaptureMode::AtDelivery,
-    );
-    assert!(handle.is_none(), "a task capture returns no handle");
-    assert!(
-        fw.replay_digests(&task).is_none(),
-        "under off a task capture stores nothing"
-    );
     let sync = sync_key("alice", "r16", "op");
     let handle = fw.store_replay(
         sync.clone(),
@@ -707,8 +685,6 @@ fn r16_a_task_capture_keeps_the_delivery_time_gate() {
         Vec::new(),
         "",
         hour(),
-        &generation,
-        crate::security::firewall::CaptureMode::Pending,
     );
     assert!(
         handle.is_some(),
