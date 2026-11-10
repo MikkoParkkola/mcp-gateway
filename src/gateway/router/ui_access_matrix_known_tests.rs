@@ -151,9 +151,10 @@ async fn matrix_known_receipt_cells_moved_for_findings_line() {
     );
 }
 
-/// The six `other-receipt` 200 cells that moved, each with why: the seeded
-/// call has no decision object, so the receipt's `findings` text changed from
-/// the old placeholder to the reader's by-version line.
+/// The six callers whose `other-receipt` answer is 200, each with why. The
+/// receipt's `findings` text changed from the old placeholder to the reader's
+/// by-version line; that text is no marker, so their cells did not move, and
+/// each still shows the other caller's record (`OTHER_DEV`'s seeded call).
 const MOVED_FOR_FINDINGS_LINE: [(&str, &str); 6] = [
     (
         "AdminKey",
@@ -179,7 +180,7 @@ const MOVED_FOR_FINDINGS_LINE: [(&str, &str); 6] = [
 ];
 
 #[test]
-fn the_moved_receipt_cells_carry_the_new_digest() {
+fn the_receipt_readers_see_the_other_callers_record() {
     let expected = expected();
     for (caller, reason) in MOVED_FOR_FINDINGS_LINE {
         let key = format!(
@@ -188,7 +189,7 @@ fn the_moved_receipt_cells_carry_the_new_digest() {
         );
         assert_eq!(
             expected.get(&key).map(String::as_str),
-            Some("200:b5e993923abe"),
+            Some("200:dev-2,https://issuer-matrix,kind=\"call\",matrix-standard-key,tool_1"),
             "{reason}"
         );
     }
