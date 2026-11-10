@@ -114,6 +114,125 @@ mod hurry {
 
     const ROW_BOUND: Duration = Duration::from_secs(15);
 
+    #[derive(Default)]
+    struct ReplyBackend {
+        hold: crate::test_pause::Slot,
+        produced: std::sync::atomic::AtomicUsize,
+        closed: AtomicBool,
+    }
+    #[async_trait]
+    impl Transport for ReplyBackend {
+        async fn request(&self, method: &str, _: Option<Value>) -> crate::Result<JsonRpcResponse> {
+            let result = if method == "tools/list" {
+                json!({"tools": [{"name": "echo", "inputSchema": {"type": "object"},
+                    "annotations": {"readOnlyHint": true}}]})
+            } else {
+                assert_eq!(method, "tools/call");
+                self.hold.pause().await;
+                self.produced.fetch_add(1, Ordering::SeqCst);
+                json!({"content": [{"type": "text", "text": "done"}], "isError": false})
+            };
+            Ok(JsonRpcResponse::success(RequestId::Number(1), result))
+        }
+        async fn notify(&self, _: &str, _: Option<Value>) -> crate::Result<()> {
+            Ok(())
+        }
+        fn is_connected(&self) -> bool {
+            !self.closed.load(Ordering::SeqCst)
+        }
+        async fn close(&self) -> crate::Result<()> {
+            self.closed.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn a_hurry_does_not_discard_replies_already_produced() {
+        use super::super::super::stdio_seams::answers_found_queue_full;
+        use crate::test_pause::within;
+        use tokio::io::AsyncReadExt;
+
+        let dir = crate::test_dir_keep::kept_tempdir();
+        let mut config = Config::default();
+        config.tasks.store_dir = dir.path().join("tasks").display().to_string();
+        config.capabilities.enabled = false;
+        config.cache.default_ttl = Duration::ZERO;
+        config.meta_mcp.surfaced_tools = vec![crate::config::SurfacedToolConfig {
+            server: "reply".into(),
+            tool: "echo".into(),
+        }];
+        let mut gateway = Gateway::new(config)
+            .await
+            .expect("gateway boots")
+            .with_data_dir(dir.path().to_path_buf());
+        let wire = Arc::new(ReplyBackend::default());
+        let backend = Arc::new(Backend::new(
+            "reply",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ));
+        backend.set_transport_for_test(wire.clone());
+        backend.get_tools_shared().await.expect("tools cached");
+        assert!(gateway.backends.register(backend));
+        let hurry = gateway.hurry_trigger_for_test();
+        let deadline = gateway.backends.stop_deadline();
+        let (_, drain) = gateway.stdio_drain_seams_for_test();
+        let (mut stdin, input) = tokio::io::duplex(65536);
+        let (output, mut stdout) = tokio::io::duplex(1);
+        let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
+        let call = |id| {
+            json!({"jsonrpc": "2.0", "id": id,
+            "method": "tools/call", "params": {"name": "echo", "arguments": {"n": id}}})
+            .to_string()
+                + "\n"
+        };
+        let (executing, release) = wire.hold.arm();
+        let line = call(0);
+        stdin.write_all(line.as_bytes()).await.expect("call");
+        within("backend executing", executing.notified()).await;
+        let full_before = answers_found_queue_full();
+        let n = super::super::super::STDOUT_QUEUE_DEPTH + 2;
+        for id in 1..=n {
+            let line = call(id);
+            stdin.write_all(line.as_bytes()).await.expect("call");
+            wait_for(|| wire.produced.load(Ordering::SeqCst) == id).await;
+        }
+        // One reply blocks in the writer, the queue is full, and the last
+        // produced reply waits for room. No stdout reader has run yet.
+        wait_for(|| answers_found_queue_full() > full_before).await;
+        stdin.shutdown().await.expect("EOF");
+        within("drain started", drain.notified()).await;
+        assert!(wire.is_connected(), "in-flight backend alive at hurry");
+        hurry.send(()).expect("hurry listener installed");
+        wait_for(|| deadline.get().is_some()).await;
+        release.notify_one();
+        let mut bytes = String::new();
+        within("stdout closes", stdout.read_to_string(&mut bytes))
+            .await
+            .expect("read stdout");
+        let served = within("serve ends", task).await.expect("serve task");
+        served.expect("stdio result");
+        let replies: Vec<Value> = bytes
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        let missing: Vec<_> = (0..=n)
+            .filter(|id| !replies.iter().any(|r| r["id"] == json!(id)))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "hurry discarded replies: {missing:?}; id 0 was executing, ids 1..={n} were produced"
+        );
+        for reply in replies {
+            assert_eq!(reply["jsonrpc"], "2.0");
+            if reply["id"] == 0 {
+                assert!(reply.get("result").is_some() || reply["error"]["code"].is_number());
+            } else {
+                assert_eq!(reply["result"]["content"][0]["text"], "done");
+            }
+        }
+    }
+
     async fn fixture() -> (Gateway, Arc<tempfile::TempDir>, Arc<AtomicBool>) {
         let dir = crate::test_dir_keep::kept_tempdir();
         let mut config = Config::default();
