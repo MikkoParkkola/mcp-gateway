@@ -15,6 +15,7 @@ use super::super::secret_slots::Store;
 use super::super::secret_slots::{self, Unopened};
 use super::write::{STORE_UNAVAILABLE, Slotted};
 use crate::config::Config;
+use crate::config::secret_values::Syntax;
 use crate::gateway::ui::backend_ops::{ValueClass, classify, literal_refusals};
 use crate::wiped_bytes::WipedBytes;
 #[cfg(test)]
@@ -76,7 +77,7 @@ pub(super) fn literals<'a>(
         .map(|kv| (false, kv))
         .chain(headers.map(|kv| (true, kv)))
         .filter(|(header, (key, value))| {
-            classify(value) == Ok(ValueClass::Stored)
+            classify(value, Syntax::Dollar) == Ok(ValueClass::Stored)
                 && if *header {
                     secret_slots::stores_header_value(value)
                 } else {

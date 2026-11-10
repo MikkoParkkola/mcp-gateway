@@ -91,6 +91,12 @@ pub(super) fn refused(name: &str, refusal: Refused) -> axum::response::Response 
             format!("Capability '{name}' would not load"),
             json!({ "errors": field_errors(&errors), "patch": patch }),
         ),
+        Refused::LiteralCredential { errors } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "literal_in_header",
+            "Credential headers must use {env.NAME} or {keychain.NAME}, optionally after one scheme prefix such as `Bearer `.".to_owned(),
+            json!({ "errors": field_errors(&errors) }),
+        ),
     };
     let mut body = json!({ "error": code, "message": message });
     if let (Value::Object(body), Value::Object(extra)) = (&mut body, extra) {

@@ -92,6 +92,9 @@ pub(crate) enum Refused {
         errors: Vec<FieldError>,
         patch: String,
     },
+    LiteralCredential {
+        errors: Vec<FieldError>,
+    },
 }
 
 /// One change to one capability file: `<dir>/<name>.yaml`.
@@ -346,6 +349,79 @@ fn message(message: impl std::fmt::Display) -> FieldError {
     }
 }
 
+/// Judge the sent headers before pin, schema or concurrency errors can carry
+/// their bytes in a diagnostic or diff. Read YAML without the capability
+/// schema, so unrelated invalid fields cannot hide a credential header.
+fn refuse_literal_headers(text: &str) -> Result<(), Refused> {
+    use crate::config::secret_values::{Syntax, ValueClass, classify, credential_name};
+    use crate::yaml::Value;
+
+    let Ok(doc) = crate::yaml::from_str::<Value>(text) else {
+        // Syntax errors remain the normal validator's responsibility.
+        return Ok(());
+    };
+    let parameters = doc["schema"]["input"]["properties"]
+        .as_mapping()
+        .map(|properties| {
+            properties
+                .keys()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut errors = Vec::new();
+    let mut check = |name: &str, provider: &Value| {
+        let Some(headers) = provider["config"]["headers"].as_mapping() else {
+            return;
+        };
+        for (header, value) in headers {
+            let Some(header) = header.as_str() else {
+                continue;
+            };
+            if credential_name(header)
+                && !value.as_str().is_some_and(|value| {
+                    classify(
+                        value,
+                        Syntax::Brace {
+                            parameters: &parameters,
+                        },
+                    ) == Ok(ValueClass::Kept)
+                })
+            {
+                errors.push(FieldError {
+                    field: Some(format!("providers.{name}.config.headers.{header}")),
+                    ..message(
+                        "Use {env.NAME} or {keychain.NAME}, optionally after one scheme prefix such as `Bearer `.",
+                    )
+                });
+            }
+        }
+    };
+    if let Some(providers) = doc["providers"].as_mapping() {
+        for (name, provider) in providers {
+            let Some(name) = name.as_str() else {
+                continue;
+            };
+            if name == "fallback"
+                && let Some(entries) = provider.as_sequence()
+            {
+                for (index, entry) in entries.iter().enumerate() {
+                    check(&format!("fallback[{index}]"), entry);
+                }
+            } else {
+                check(name, provider);
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        errors.sort_by(|a, b| a.field.cmp(&b.field));
+        Err(Refused::LiteralCredential { errors })
+    }
+}
+
 /// The loader's acceptance of `text` as `path` (D3), plus the account
 /// binding the backend admits with: what can be saved is what loads.
 ///
@@ -541,8 +617,10 @@ fn target_path(dir: &Path, name: &str) -> PathBuf {
 ///
 /// # Errors
 ///
-/// `PinMismatch`, `Unpin` or `PinAmbiguous`, as [`commit`] would answer.
+/// `LiteralCredential`, `PinMismatch`, `Unpin` or `PinAmbiguous`, as [`commit`]
+/// would answer.
 pub(crate) fn preview(sent: &str, current: Option<&str>) -> Result<(String, PinChange), Refused> {
+    refuse_literal_headers(sent)?;
     if current.is_some_and(pin_broken) {
         return Err(Refused::PinMismatch {
             patch: unified_diff(current.unwrap_or_default(), sent),
@@ -597,6 +675,7 @@ async fn commit_with(
         Change::Write(text) => text.as_str(),
         Change::Delete => "",
     };
+    refuse_literal_headers(sent)?;
     let dir = std::fs::canonicalize(edit.dir).map_err(|e| unwritable(e, String::new()))?;
     let _held = match lock_config(&dir.join("capabilities"), deadline).await {
         Ok(held) => held,

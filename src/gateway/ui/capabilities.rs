@@ -519,7 +519,8 @@ pub(super) async fn validate_capability_route(
 /// The one validate contract, shared by `POST .../validate` and `PUT` with
 /// `?validate` or `X-Validate-Only`: it judges the bytes a save would write
 /// (pin updated), never the raw body, so a check and the save that follows it
-/// agree. 200 when valid, 422 when not; both carry the same body.
+/// agree. Literal credentials use the save's value-free refusal; other
+/// validation results carry the preview body (200 when valid, 422 when not).
 async fn validate_only(
     state: &AppState,
     name: &str,
@@ -539,6 +540,7 @@ async fn validate_only(
             let errors = file_writer::validate(&bytes, &path, Some(&accounts)).err();
             (Some(bytes), errors.unwrap_or_default())
         }
+        Err(refusal @ Refused::LiteralCredential { .. }) => return refused(name, refusal),
         Err(refusal) => {
             let message = match refusal {
                 Refused::PinMismatch { .. } => {

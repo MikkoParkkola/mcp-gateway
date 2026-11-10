@@ -294,9 +294,12 @@ pub(crate) fn store_backend_with(
             .into_iter()
             .flat_map(|(header, map)| {
                 map.iter().filter_map(move |(key, value)| {
-                    crate::config::secret_values::classify(value)
-                        .err()
-                        .map(|code| format!("{code} ({})", field_of(header, key)))
+                    crate::config::secret_values::classify(
+                        value,
+                        crate::config::secret_values::Syntax::Dollar,
+                    )
+                    .err()
+                    .map(|code| format!("{code} ({})", field_of(header, key)))
                 })
             })
             .collect();
@@ -389,7 +392,7 @@ fn stored_literals(
     keep_as_text: &[String],
 ) -> Vec<(bool, String, String)> {
     use crate::config::secret_values::{
-        ValueClass, classify, stores_env_value, stores_header_value,
+        Syntax, ValueClass, classify, stores_env_value, stores_header_value,
     };
     let mut literals = Vec::new();
     for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
@@ -402,7 +405,7 @@ fn stored_literals(
             } else {
                 stores_env_value(key, value)
             };
-            if classify(value) == Ok(ValueClass::Stored)
+            if classify(value, Syntax::Dollar) == Ok(ValueClass::Stored)
                 && by_rule
                 && !keep_as_text.contains(&field_of(header, key))
             {
