@@ -88,6 +88,11 @@ impl Default for StopDeadline {
 }
 
 impl StopDeadline {
+    /// Whether a signal has shortened this stop's graceful waits.
+    pub(crate) fn is_hurried(&self) -> bool {
+        self.hurried.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Shorten the stop while reserving a minimum SIGTERM phase when it fits.
     pub(crate) fn hurry(&self, now: Instant) -> Instant {
         self.hurried

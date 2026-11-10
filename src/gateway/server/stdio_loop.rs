@@ -218,7 +218,7 @@ impl Gateway {
         // unbounded queue would turn a stalled reader into operator-process
         // memory growth.
         let (writer, queue) = self.stdout_queue(&meta_mcp);
-        let mut writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
+        let writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
 
         // MIK-8278: decide this session's tool-list changes and tell its
         // client, and watch the capability catalogue as HTTP does. The
@@ -655,10 +655,10 @@ impl Gateway {
         let hurry = self.stdio_hurry();
         let deadline = tokio::time::Instant::now() + STDIO_DRAIN_TIMEOUT;
         let shutdown_deadline = deadline + stdio_shutdown::STDIO_TEARDOWN_TIMEOUT;
-        let writer_abort = stdio_shutdown::AbortWriter(writer_task.abort_handle());
+        let writer_task = AbortOnDrop::new(writer_task);
         let gateway = &self;
         let before = async move {
-            let _writer_abort = writer_abort;
+            let mut writer_task = writer_task;
             // The read loop is over: the session is ending, so nothing more is
             // announced, though accepted requests still drain (MIK-8278).
             announcer.stop();
@@ -724,11 +724,11 @@ impl Gateway {
             drop(announcer);
             drop(writer);
             drop(channel);
-            match tokio::time::timeout_at(deadline, &mut writer_task).await {
+            match tokio::time::timeout_at(deadline, writer_task.join_mut()).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => warn!(%error, "stdio: the stdout writer did not finish cleanly"),
                 Err(_) => {
-                    writer_task.abort();
+                    writer_task.join_mut().abort();
                     warn!("stdio: stdout is not being read; unwritten frames are dropped");
                 }
             }

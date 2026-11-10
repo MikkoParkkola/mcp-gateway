@@ -52,15 +52,6 @@ impl Hurry {
     }
 }
 
-/// Dropping cancelled preparations must abort the writer, not detach it.
-pub(super) struct AbortWriter(pub(super) tokio::task::AbortHandle);
-
-impl Drop for AbortWriter {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 /// Run one teardown step under `deadline`. `None` when it did not finish:
 /// the step is dropped, and the expiry logged by name.
 pub(super) async fn bounded_step<F: Future>(
@@ -277,6 +268,8 @@ impl Gateway {
         tokio::select! {
             biased;
             cut = hurry.wait(), if hurried.is_none() => {
+                self.backends
+                    .hand_over_now(cut.saturating_duration_since(Instant::now()));
                 bounded_step(deadline.min(cut), "backend stop", stop).await;
             }
             () = async {
