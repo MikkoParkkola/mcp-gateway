@@ -4634,21 +4634,21 @@
 /ui/api/control-plane/policies	POST	json+store	OidcUnmapped	422
 /ui/api/control-plane/policies	POST	json+store	Session	422
 /ui/api/control-plane/policies	POST	json+store	StandardKey	422
-/ui/api/control-plane/policies	POST	valid	AdminKey	503
-/ui/api/control-plane/policies	POST	valid	AdminKeyUnmapped	503
+/ui/api/control-plane/policies	POST	valid	AdminKey	409
+/ui/api/control-plane/policies	POST	valid	AdminKeyUnmapped	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
 /ui/api/control-plane/policies	POST	valid	AuthOff	403:error="Authentication required"
-/ui/api/control-plane/policies	POST	valid	Bearer	503
+/ui/api/control-plane/policies	POST	valid	Bearer	409
 /ui/api/control-plane/policies	POST	valid	NoKey	401:error.code=-32000
 /ui/api/control-plane/policies	POST	valid	NoKeyPublicStatus	401:error.code=-32000
-/ui/api/control-plane/policies	POST	valid	OidcAdmin	503
-/ui/api/control-plane/policies	POST	valid	OidcAuditor	503
-/ui/api/control-plane/policies	POST	valid	OidcDeveloper	503
-/ui/api/control-plane/policies	POST	valid	OidcDeveloperNoIssuer	503
-/ui/api/control-plane/policies	POST	valid	OidcDeveloperNoSubject	503
-/ui/api/control-plane/policies	POST	valid	OidcReviewer	503
-/ui/api/control-plane/policies	POST	valid	OidcUnmapped	503
-/ui/api/control-plane/policies	POST	valid	Session	503
-/ui/api/control-plane/policies	POST	valid	StandardKey	503
+/ui/api/control-plane/policies	POST	valid	OidcAdmin	409
+/ui/api/control-plane/policies	POST	valid	OidcAuditor	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
+/ui/api/control-plane/policies	POST	valid	OidcDeveloper	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
+/ui/api/control-plane/policies	POST	valid	OidcDeveloperNoIssuer	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
+/ui/api/control-plane/policies	POST	valid	OidcDeveloperNoSubject	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
+/ui/api/control-plane/policies	POST	valid	OidcReviewer	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
+/ui/api/control-plane/policies	POST	valid	OidcUnmapped	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
+/ui/api/control-plane/policies	POST	valid	Session	409
+/ui/api/control-plane/policies	POST	valid	StandardKey	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
 /ui/api/control-plane/policies	POST	valid+store	AdminKey	409
 /ui/api/control-plane/policies	POST	valid+store	AdminKeyUnmapped	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
 /ui/api/control-plane/policies	POST	valid+store	AuthOff	403:error="Authentication required"
