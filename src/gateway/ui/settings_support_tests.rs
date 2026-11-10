@@ -11,6 +11,7 @@ use axum::{
     http::{Method, Request, StatusCode},
 };
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(super) const BASE: &str = "# operator's note\nenvironment: \"dev\" # where\nsecrets:\n  store: files\nauth:\n  enabled: false\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\" # first\n    owner: \"team\"\n";
@@ -18,7 +19,7 @@ pub(super) const BASE: &str = "# operator's note\nenvironment: \"dev\" # where\n
 pub(super) const BUDGET: &str = "# operator's note\nsecrets:\n  store: files\ncost_governance:\n  enabled: true\n  budgets:\n    daily: 10.0 # daily cap\nbackends: {}\n";
 
 pub(super) struct Route {
-    pub(super) dir: tempfile::TempDir,
+    pub(super) dir: Arc<tempfile::TempDir>,
     _store: crate::gateway::router::tests::FixtureDir,
     pub(super) state: Arc<AppState>,
     pub(super) ctx: Arc<ReloadContext>,
@@ -29,7 +30,7 @@ impl Route {
         Self::with_reload(text, false).await
     }
     pub(super) async fn with_reload(text: &str, refusing: bool) -> Self {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let path = dir.path().join("gateway.yaml");
         write_owner_only(&path, text).expect("config");
         let running = Config::load(Some(&path)).expect("fixture loads");
@@ -137,6 +138,7 @@ impl Route {
             ))
             .expect("log"),
         );
+        log.keep_test_dir(Arc::clone(&self.dir));
         Arc::get_mut(&mut self.state)
             .expect("unique state")
             .transparency_log = Some(log.clone());
