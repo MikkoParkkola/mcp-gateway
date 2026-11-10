@@ -12,7 +12,7 @@ Static checks on ci.yml and scripts/ci/shard_tests.py:
   lib, bins, tests, doctests; Windows: `--tests`, which is lib, bins, tests);
 - each shard matrix in ci.yml lists exactly that OS's shards;
 - the aggregates keep the required names, need their shard jobs, run under
-  always() with the shards' own skip guards, and pass the same job ids to
+  !cancelled() with the shards' own skip guards, and pass the same job ids to
   check_needs.py;
 - no shard name equals a required name, every macOS shard name starts with
   `macOS ` (merge tooling treats that prefix as macOS), and none contains
@@ -41,7 +41,7 @@ EXTRA_NEEDS = {"windows-check": ["windows-clippy"]}
 LABEL = "os-sensitive"
 LABELLED = f"contains(github.event.pull_request.labels.*.name, '{LABEL}')"
 # What a labelled lane runs, by OS; an OS absent here never narrows its matrix.
-LABELLED_LEGS = {"macos": ["lib"]}
+LABELLED_LEGS = {"macos": ["lib-b"]}
 # fromJSON(<cond> && '<labelled list>' || '<train list>'), as GitHub reads it:
 # the function name in any case, any whitespace.
 MATRIX = re.compile(
@@ -62,6 +62,11 @@ def matrix_lists(value) -> tuple[list | None, list | None]:
 PIN = re.compile(r"""matrix\.shard\s*==\s*['"]([^'"]+)['"]""")
 COVERS = {"linux": {"lib", "bins", "tests", "doc"}, "macos": {"lib", "bins", "tests", "doc"},
           "windows": {"lib", "bins", "tests"}}
+
+
+def legs_of(st, os_kind: str) -> list[str]:
+    """The shards that are matrix legs: all but those run from another shard's binary (PREBUILT)."""
+    return sorted(set(st.SHARDS[os_kind]) - set(getattr(st, "PREBUILT", {}).get(os_kind, {})))
 
 
 def runner():
@@ -149,8 +154,8 @@ def workflow_problems(jobs: dict, st) -> list[str]:
             continue
         value = shard.get("strategy", {}).get("matrix", {}).get("shard")
         legs, labelled_legs = matrix_lists(value)
-        if sorted(legs or []) != sorted(st.SHARDS[os_kind]):
-            out.append(f"{shard_key}: matrix {value} is not the runner's {sorted(st.SHARDS[os_kind])}")
+        if sorted(legs or []) != legs_of(st, os_kind):
+            out.append(f"{shard_key}: matrix {value} is not the runner's {legs_of(st, os_kind)}")
         # The os-sensitive label: macOS is train-only (a static matrix, no clause) or
         # labelled (the expression, its labelled list LABELLED_LEGS, the clause on the
         # shards and their aggregate); Windows runs every shard under the label.
@@ -172,9 +177,19 @@ def workflow_problems(jobs: dict, st) -> list[str]:
         name = shard.get("name", "")
         py = "python" if os_kind == "windows" else "python3"
         call = f"{py} scripts/ci/shard_tests.py run {os_kind} ${{{{ matrix.shard }}}}"
+        # An OS with PREBUILT shards also exports the lib binary first and runs each prebuilt
+        # shard from it after the suite.
+        prebuilt = sorted(getattr(st, "PREBUILT", {}).get(os_kind, {}))
+        # Each prebuilt shard: wait for the binary, run from it, or build it here when it is not coming.
+        want = ([f'{py} scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"'] if prebuilt else []) + [call]
+        for leg in prebuilt:
+            producer = st.PREBUILT[os_kind][leg]
+            want += [f'{py} scripts/ci/shard_tests.py wait-lib macos-lib-tests "{prefix}{producer}"',
+                     f'{py} scripts/ci/shard_tests.py run-prebuilt {os_kind} {leg} "$RUNNER_TEMP/lib-bin/lib-tests"',
+                     f"{py} scripts/ci/shard_tests.py run {os_kind} {leg}"]
         calls = [s.get("run", "").strip() for s in shard.get("steps", []) if "shard_tests.py" in s.get("run", "")]
-        if calls != [call]:
-            out.append(f"{shard_key}: runner calls {calls}, want exactly [{call!r}]")
+        if calls != want:
+            out.append(f"{shard_key}: runner calls {calls}, want exactly {want!r}")
         # A duty pinned to one shard must name a shard that exists, or it
         # silently never runs (the UPGRADING, privileged and smoke steps).
         for s in shard.get("steps", []):
@@ -193,8 +208,8 @@ def workflow_problems(jobs: dict, st) -> list[str]:
         guard = str(shard.get("if", "")).strip()
         if guard.startswith("${{") and guard.endswith("}}"):
             guard = guard[3:-2].strip()
-        if str(agg.get("if", "")).replace(" ", "") != ("${{ always() && " + guard + " }}").replace(" ", ""):
-            out.append(f"{agg_key}: if must be always() plus the shards' own guard, exactly")
+        if str(agg.get("if", "")).replace(" ", "") != ("${{ !cancelled() && " + guard + " }}").replace(" ", ""):
+            out.append(f"{agg_key}: if must be !cancelled() plus the shards' own guard, exactly")
         for extra in EXTRA_NEEDS.get(agg_key, []):
             if str(jobs.get(extra, {}).get("if", "")) != str(shard.get("if", "")):
                 out.append(f"{extra}: if must equal {shard_key}'s guard")
@@ -218,8 +233,10 @@ def self_test(jobs: dict, st) -> None:
         return bool(workflow_problems(j, st))
 
     mutations = {
-        "bare always()": lambda j: j["test"].__setitem__("if", "${{ always() }}"),
-        "no always()": lambda j: j["macos-check"].__setitem__("if", j["macos-shards"]["if"]),
+        "bare !cancelled()": lambda j: j["test"].__setitem__("if", "${{ !cancelled() }}"),
+        "always() runs it on a cancelled run": lambda j: j["test"].__setitem__(
+            "if", str(j["test"]["if"]).replace("!cancelled()", "always()")),
+        "no !cancelled()": lambda j: j["macos-check"].__setitem__("if", j["macos-shards"]["if"]),
         "dropped need": lambda j: j["windows-check"].__setitem__("needs", ["windows-shards"]),
         "renamed aggregate": lambda j: j["test"].__setitem__("name", "Tests (all)"),
         "shard named like the check": lambda j: j["macos-shards"].__setitem__("name", "macOS check"),
@@ -239,7 +256,7 @@ def self_test(jobs: dict, st) -> None:
     survived = [n for n, m in mutations.items() if not broken(m)]
     assert not survived, f"wiring mutations not caught: {survived}"
     # macOS takes exactly one of two forms: train-only (a static matrix, no label
-    # clause), or labelled (fromJSON(cond && '["lib"]' || '<train list>') with the
+    # clause), or labelled (fromJSON(cond && '["lib-b"]' || '<train list>') with the
     # label clause on both macOS jobs). Today's ci.yml may hold either.
     def bare(cond) -> str:
         cond = str(cond).strip()
@@ -252,19 +269,19 @@ def self_test(jobs: dict, st) -> None:
     train_guard = bare(jobs["macos-shards"]["if"]).replace(alt, "")
     labelled_guard = train_guard[:-1] + alt + ")"
 
-    def labelled_form(j, a='["lib"]', b=None, clause_on=("macos-shards", "macos-check")):
-        train = json.dumps(sorted(st.SHARDS["macos"]) if b is None else b)
+    def labelled_form(j, a='["lib-b"]', b=None, clause_on=("macos-shards", "macos-check")):
+        train = json.dumps(legs_of(st, "macos") if b is None else b)
         j["macos-shards"]["strategy"]["matrix"]["shard"] = (
             "${{ fromJson(" + LABELLED + " && '" + a + "' || '" + train + "') }}")
         shards = labelled_guard if "macos-shards" in clause_on else train_guard
         check = labelled_guard if "macos-check" in clause_on else train_guard
         j["macos-shards"]["if"] = "${{ " + shards + " }}"
-        j["macos-check"]["if"] = "${{ always() && " + check + " }}"
+        j["macos-check"]["if"] = "${{ !cancelled() && " + check + " }}"
 
     def train_only(j):
-        j["macos-shards"]["strategy"]["matrix"]["shard"] = sorted(st.SHARDS["macos"])
+        j["macos-shards"]["strategy"]["matrix"]["shard"] = legs_of(st, "macos")
         j["macos-shards"]["if"] = "${{ " + train_guard + " }}"
-        j["macos-check"]["if"] = "${{ always() && " + train_guard + " }}"
+        j["macos-check"]["if"] = "${{ !cancelled() && " + train_guard + " }}"
 
     for name, form in (("train-only", train_only), ("labelled", labelled_form)):
         j = copy.deepcopy(jobs)
@@ -274,9 +291,9 @@ def self_test(jobs: dict, st) -> None:
         "expression without the label clause": lambda j: labelled_form(j, clause_on=()),
         "label clause on a static matrix": lambda j: (train_only(j), j["macos-shards"].__setitem__(
             "if", "${{ " + labelled_guard + " }}"), j["macos-check"].__setitem__(
-            "if", "${{ always() && " + labelled_guard + " }}")),
+            "if", "${{ !cancelled() && " + labelled_guard + " }}")),
         "label clause on one macOS job": lambda j: labelled_form(j, clause_on=("macos-shards",)),
-        "train list missing a shard": lambda j: labelled_form(j, b=["lib"]),
+        "train list missing a shard": lambda j: labelled_form(j, b=["lib-b"]),
         "labelled list without lib": lambda j: labelled_form(j, a='["int"]'),
     }
     survived = [n for n, m in mixtures.items() if not broken(m)]

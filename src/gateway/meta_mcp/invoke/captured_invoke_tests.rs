@@ -202,13 +202,13 @@ async fn call_alpha(
     meta: &MetaMcp,
     retry: &crate::protocol::mrtr::RetryFields,
 ) -> crate::Result<Value> {
-    let identity = VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp.example.invalid".to_string(),
-    };
+    let identity = VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://idp.example.invalid".to_string(),
+    );
     let actor = identity.stable_actor_id();
     let principal = crate::gateway::auth::principal_of(&actor);
     let context = MetaMcpCallerContext {
@@ -437,13 +437,13 @@ async fn a_not_connected_refusal_offers_the_account_of_the_backend_it_was_judged
         .identity_propagation_config()
         .cloned()
         .expect("propagation is configured");
-    let identity = VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp.example.invalid".to_string(),
-    };
+    let identity = VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://idp.example.invalid".to_string(),
+    );
     let caller = CallerProof::new(Some(&identity), CallerProvenance::Anonymous);
 
     let refused = meta

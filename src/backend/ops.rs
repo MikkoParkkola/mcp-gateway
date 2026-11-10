@@ -382,34 +382,16 @@ impl Backend {
         let identity_key = identity_key.map(str::to_string);
         let (perm, policy) = Self::resend_decision(&entry, method, params.as_ref());
         let send = |params: Option<Value>, extra_headers: Vec<(String, String)>| {
-            let transport = std::sync::Arc::clone(&transport);
-            let method = method.to_string();
-            let identity_key = identity_key.clone();
-            counted_send(async move {
-                match attempts {
-                    Attempts::WithRetry => {
-                        transport
-                            .request_with_headers(
-                                &method,
-                                params,
-                                &extra_headers,
-                                identity_key.as_deref(),
-                                perm,
-                            )
-                            .await
-                    }
-                    Attempts::TaskCapabilityOnce => {
-                        transport
-                            .request_with_task_capability(
-                                &method,
-                                params,
-                                &extra_headers,
-                                identity_key.as_deref(),
-                            )
-                            .await
-                    }
-                }
-            })
+            // Counted (a send the delivery facts can take back only on a
+            // pre-dispatch error) and timed (the backend's time alone).
+            counted_send(attempt::send_timed(
+                std::sync::Arc::clone(&transport),
+                method.to_string(),
+                (params, extra_headers),
+                identity_key.clone(),
+                perm,
+                attempts,
+            ))
         };
         // A call sent at most once (as `with_retry` sends under a disabled
         // policy) moves its payload in; only a resend copies (NFR.WORKLOAD.1).
@@ -780,3 +762,5 @@ mod presend_pin_tests;
 #[cfg(test)]
 #[path = "progress_token_substitution_tests.rs"]
 mod progress_token_substitution_tests;
+
+mod attempt;

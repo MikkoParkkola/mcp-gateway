@@ -27,7 +27,7 @@ async fn start_on_an_unreadable_clock(dir: &Path) -> Started {
 #[tokio::test]
 async fn t9_an_undatable_startup_snapshot_serves_no_grants_and_records_none() {
     // GIVEN: one active grant on disk
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
         .await
         .unwrap();

@@ -17,7 +17,7 @@ use crate::security::audit::AuditFailurePolicy;
 
 #[tokio::test]
 async fn stdio_admission_refusal_writes_one_record() {
-    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let endpoint = Endpoint::start(false).await;
     let mut meta =
         MetaMcp::new(Arc::new(BackendRegistry::new())).with_identity_grants(grants(vec![]));

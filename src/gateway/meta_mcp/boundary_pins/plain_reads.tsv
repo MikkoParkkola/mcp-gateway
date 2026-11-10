@@ -9,6 +9,8 @@ src/capability/parser.rs	parse_capability_file	fs::read_to_string	1	not-config	c
 src/capability/pin_file.rs	pin_file_until	fs::read_to_string	1	not-config	capability YAML under the directory lock; public definitions
 src/chains/checkpoint.rs	append	.open	1	write-only	appends a chain checkpoint; reads nothing
 src/chains/checkpoint.rs	load	fs::read_to_string	1	not-config	chain checkpoint JSON
+src/commands/add_remove.rs	read_env_file	File::open	1	not-config	operator-named --env-file JSON of env values for one add, read bounded; never gateway.yaml
+src/commands/api.rs	read_data	File::open	1	not-config	operator-named request body for one api call (--data @FILE), size-capped
 src/commands/config_export/mod.rs	merge_into_config	fs::read_to_string	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
 src/commands/config_export/mod.rs	rollback_client_config	fs::read	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
 src/commands/config_export/mod.rs	verify_gateway_entry	fs::read_to_string	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml

@@ -93,6 +93,12 @@ fn isolated(mut command: Command, home: &Path, inherit: Inherit) -> Command {
             }
         }
     }
+    // A mutant proof switches one site on through this variable, and the
+    // site may sit in the binary: pass it through in both
+    // modes. A normal build reads no switch, so there it changes nothing.
+    if let Some(value) = std::env::var_os("MCP_GATEWAY_MUTANT") {
+        command.env("MCP_GATEWAY_MUTANT", value);
+    }
     command
         .env("HOME", home)
         .env("USERPROFILE", home)

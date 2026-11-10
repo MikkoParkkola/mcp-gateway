@@ -89,7 +89,7 @@ pub(crate) struct Fixture {
     sanitize: crate::gateway::server::stdio_single::InputSanitizing,
     pub(super) store: Arc<tempfile::TempDir>,
     pub(super) expiry: Option<crate::gateway::task_service::execution::ExpirySweep>,
-    _data: tempfile::TempDir,
+    _data: std::sync::Arc<tempfile::TempDir>,
 }
 
 pub(super) async fn fixture(policy: Option<ToolPolicyConfig>) -> Fixture {
@@ -111,7 +111,7 @@ pub(crate) async fn fixture_on_with(
     policy: Option<ToolPolicyConfig>,
     configure: impl FnOnce(&mut Config),
 ) -> Fixture {
-    let store = Arc::new(tempfile::tempdir().expect("store root"));
+    let store = crate::test_dir_keep::kept_tempdir();
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.backends.insert(
@@ -130,7 +130,7 @@ pub(crate) async fn fixture_on_with(
     if let Some(policy) = policy {
         config.security.tool_policy = policy;
     }
-    let data = tempfile::tempdir().expect("data dir");
+    let data = crate::test_dir_keep::kept_tempdir();
     let built = Gateway::new(config.clone())
         .await
         .expect("the production constructor accepts this configuration")

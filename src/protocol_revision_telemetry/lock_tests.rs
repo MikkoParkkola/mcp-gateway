@@ -12,7 +12,7 @@ use super::*;
 #[test]
 fn concurrent_sinks_count_every_request() {
     const SINKS: usize = 8;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let root = dir.path().to_path_buf();
     DurableTelemetrySink::open(&root).expect("create the window");
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(SINKS));

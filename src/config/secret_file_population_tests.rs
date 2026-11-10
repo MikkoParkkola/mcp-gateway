@@ -47,6 +47,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     ("src/cli/invoke.rs", "reads stdin, not a file"),
     (
+        "src/commands/add_remove.rs",
+        "`add --env-file FILE`: the operator-named JSON of env values, read bounded (64 KiB + 1); the values go through the store rule, never echoed; not a gateway secret file",
+    ),
+    (
         "src/commands/doctor/lease_custody.rs",
         "doctor reads /proc/swaps and /sys/block/dm-*/dm/uuid; kernel tables, no secret",
     ),
@@ -57,6 +61,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/commands/config_export/mod.rs",
         "third-party MCP client config JSON edited to add the gateway entry; no gateway secret",
+    ),
+    (
+        "src/commands/api.rs",
+        "operator-named request body for one api call (--data @FILE), read size-capped at 16 MiB and sent as given; not a config or secret file",
     ),
     (
         "src/commands/dashboard_link.rs",

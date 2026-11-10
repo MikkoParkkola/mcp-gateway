@@ -65,13 +65,13 @@ fn token(group: &str) -> crate::key_server::TemporaryToken {
     crate::key_server::TemporaryToken {
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
-        identity: crate::key_server::oidc::VerifiedIdentity {
-            subject: format!("sub-{group}"),
-            email: format!("{group}@issuer.test"),
-            name: None,
-            groups: vec![group.to_owned()],
-            issuer: ISSUER.to_owned(),
-        },
+        identity: crate::key_server::oidc::VerifiedIdentity::for_test(
+            format!("sub-{group}"),
+            format!("{group}@issuer.test"),
+            None,
+            vec![group.to_owned()],
+            ISSUER.to_owned(),
+        ),
         scopes: crate::key_server::store::TokenScopes {
             backends: SCOPE.iter().map(ToString::to_string).collect(),
             tools: vec![],

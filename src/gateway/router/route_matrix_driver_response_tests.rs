@@ -164,7 +164,7 @@ pub(crate) struct Recorded {
     pub(crate) rows: Vec<Value>,
     /// Every row in the log, in order, read once the delivery rows landed.
     pub(crate) entries: Vec<Value>,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 /// One hardened, message-signed `read` on `route` (modern, nonce `n1`), with
@@ -253,8 +253,11 @@ pub(crate) async fn firewalled_recorded_call(
 /// (otherwise the logger's own default).
 pub(crate) fn temp_log(
     policy: Option<crate::security::audit::AuditFailurePolicy>,
-) -> (tempfile::TempDir, Arc<crate::security::TransparencyLogger>) {
-    let dir = tempfile::tempdir().expect("a temporary directory");
+) -> (
+    Arc<tempfile::TempDir>,
+    Arc<crate::security::TransparencyLogger>,
+) {
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::security::transparency_log::TransparencyLogConfig {
         enabled: true,
         path: dir
@@ -300,7 +303,7 @@ pub(crate) struct ReadThenRelay {
     pub(crate) relayed: Value,
     /// The log both routes record to.
     pub(crate) log: Arc<crate::security::TransparencyLogger>,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 /// On the signed, relayed fixture whose backend answers `text`, with a

@@ -197,8 +197,10 @@ impl Drop for Adoption {
 }
 
 /// Puts each adoptable server in `servers` into `config` as a backend, with
-/// every literal `env` and header value moved to the secret store and only
-/// its reference written. Runs inside the config writer's edit, under its
+/// each `env` and header value the shared rule stores
+/// ([`crate::config::secret_values::stores_discovered_value`]) moved to the
+/// secret store and only its reference written; any other value (`DEBUG=1`)
+/// is written as given. Runs inside the config writer's edit, under its
 /// lock; the vault lock is taken inside it, in the ratified order.
 ///
 /// A server is skipped, with its reasons, when it is named like
@@ -228,6 +230,187 @@ pub fn adopt_literals(
         let vault = crate::secret_store::Vault::for_config_dir(dir).map_err(refused)?;
         Ok((vault, chosen.store))
     })
+}
+
+/// Moves each literal of the backends `names` in `config` that the shared
+/// rule stores to the secret store, in one save, and puts its reference in
+/// place: a credential-named env value and any header value, at least the
+/// redactor's short-value bound long ([`crate::config::secret_values`]),
+/// never a reference, a template, or a field (`env.KEY`, `headers.NAME`)
+/// listed in `keep_as_text`, which applies to every named backend. Runs
+/// inside the CLI writer's edit, under its lock, after the backends are in
+/// `config`; settle the [`Adoption`] with the write's result. Also returns
+/// each stored field (`backends.<name>.env.KEY`) with its reference, in
+/// order, never a value. No store is opened when nothing is stored.
+///
+/// # Errors
+///
+/// A message ready to print, after removing any entry this call created: a
+/// name `config` lacks, a `keep_as_text` field no named backend has, a store
+/// that could not be opened or refused, or a value larger than it keeps.
+pub fn store_backend_literals(
+    destination: &std::path::Path,
+    config: &mut crate::config::Config,
+    names: &[&str],
+    keep_as_text: &[String],
+) -> Result<(Adoption, Vec<(String, String)>), String> {
+    let dir = destination
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let choice = config.secrets.store;
+    store_backend_with(config, names, keep_as_text, || {
+        let refused = |e: crate::secret_store::StoreError| store_refused(choice, &e);
+        let chosen = crate::secret_store::choose_store(choice, dir).map_err(refused)?;
+        let vault = crate::secret_store::Vault::for_config_dir(dir).map_err(refused)?;
+        Ok((vault, chosen.store))
+    })
+}
+
+/// [`store_backend_literals`] over a store that `open` provides, once, and
+/// only when there is a value to store.
+pub(crate) fn store_backend_with(
+    config: &mut crate::config::Config,
+    names: &[&str],
+    keep_as_text: &[String],
+    open: impl FnOnce() -> Result<Opened, String>,
+) -> Result<(Adoption, Vec<(String, String)>), String> {
+    let mut candidates = Vec::with_capacity(names.len());
+    let mut known = std::collections::HashSet::new();
+    for (outcome, name) in names.iter().enumerate() {
+        // A name given twice would store its values twice, the second set
+        // replacing the first's references and leaving those entries unused.
+        if names[..outcome].contains(name) {
+            return Err(format!(
+                "backend '{name}' is named twice; nothing was written"
+            ));
+        }
+        let Some(backend) = config.backends.get(*name) else {
+            return Err(format!("no backend named '{name}' to store values for"));
+        };
+        // A value the shared rule refuses (a literal default, literal text
+        // beside a template) is refused here too, by field and code, before
+        // any store opens: kept, it would reach gateway.yaml as text.
+        let mut refused: Vec<String> = [(false, &backend.env), (true, &backend.headers)]
+            .into_iter()
+            .flat_map(|(header, map)| {
+                map.iter().filter_map(move |(key, value)| {
+                    crate::config::secret_values::classify(value)
+                        .err()
+                        .map(|code| format!("{code} ({})", field_of(header, key)))
+                })
+            })
+            .collect();
+        if !refused.is_empty() {
+            refused.sort();
+            return Err(format!(
+                "backend '{name}' holds values written as text that may be secrets: {}; nothing was written",
+                refused.join(", ")
+            ));
+        }
+        for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
+            known.extend(map.keys().map(|key| field_of(header, key)));
+        }
+        candidates.push(Candidate {
+            outcome,
+            name: (*name).to_owned(),
+            backend: backend.clone(),
+            literals: stored_literals(backend, keep_as_text),
+        });
+    }
+    // A field to keep that no named backend has is a typo: refused, so it
+    // never silently stores what the operator asked to keep.
+    if let Some(missing) = keep_as_text.iter().find(|f| !known.contains(*f)) {
+        return Err(format!(
+            "--keep-as-text {missing}: no such field; nothing was written"
+        ));
+    }
+    let outcomes = names
+        .iter()
+        .map(|name| Outcome::Adopted {
+            name: (*name).to_owned(),
+        })
+        .collect();
+    if candidates.iter().all(|c| c.literals.is_empty()) {
+        let adoption = Adoption {
+            outcomes,
+            secrets: None,
+        };
+        return Ok((adoption, Vec::new()));
+    }
+    let (vault, store) = open()?;
+    let over = candidates.iter().find_map(|c| {
+        c.literals
+            .iter()
+            .find(|(_, _, value)| value.len() > store.limit())
+            .map(|(header, key, _)| format!("backends.{}.{}", c.name, field_of(*header, key)))
+    });
+    if let Some(field) = over {
+        return Err(format!(
+            "{field} is larger than the secret store keeps; nothing was written"
+        ));
+    }
+    let fields: Vec<(usize, bool, String)> = candidates
+        .iter()
+        .enumerate()
+        .flat_map(|(at, c)| c.literals.iter().map(move |(h, k, _)| (at, *h, k.clone())))
+        .collect();
+    let pending = store_literals(config.secrets.store, vault, store, &mut candidates)?;
+    let stored = fields
+        .into_iter()
+        .map(|(at, header, key)| {
+            let c = &candidates[at];
+            let map = if header {
+                &c.backend.headers
+            } else {
+                &c.backend.env
+            };
+            (
+                format!("backends.{}.{}", c.name, field_of(header, &key)),
+                map.get(&key).cloned().unwrap_or_default(),
+            )
+        })
+        .collect();
+    for candidate in candidates {
+        config.backends.insert(candidate.name, candidate.backend);
+    }
+    Ok((
+        Adoption {
+            outcomes,
+            secrets: pending,
+        },
+        stored,
+    ))
+}
+
+/// The `(header?, key, value)` literals of `backend` the shared rule stores,
+/// env before headers, each sorted by key; fields in `keep_as_text` stay.
+fn stored_literals(
+    backend: &crate::config::BackendConfig,
+    keep_as_text: &[String],
+) -> Vec<(bool, String, String)> {
+    use crate::config::secret_values::{
+        ValueClass, classify, stores_env_value, stores_header_value,
+    };
+    let mut literals = Vec::new();
+    for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
+        let mut keys: Vec<&String> = map.keys().collect();
+        keys.sort();
+        for key in keys {
+            let value = &map[key];
+            let by_rule = if header {
+                stores_header_value(value)
+            } else {
+                stores_env_value(key, value)
+            };
+            if classify(value) == Ok(ValueClass::Stored)
+                && by_rule
+                && !keep_as_text.contains(&field_of(header, key))
+            {
+                literals.push((header, key.clone(), value.clone()));
+            }
+        }
+    }
+    literals
 }
 
 type Opened = (
@@ -378,7 +561,7 @@ fn classify(
         let mut literals = Vec::new();
         for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
             for (key, value) in map {
-                if !value.is_empty() && !value.contains("${") {
+                if crate::config::secret_values::stores_discovered_value(header, key, value) {
                     literals.push((header, key.clone(), value.clone()));
                 }
             }
@@ -499,3 +682,7 @@ mod tests;
 #[cfg(test)]
 #[path = "cli_support_shown_tests.rs"]
 mod shown_tests;
+
+#[cfg(test)]
+#[path = "cli_support_store_tests.rs"]
+mod store_tests;

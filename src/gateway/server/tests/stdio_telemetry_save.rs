@@ -57,7 +57,7 @@ struct Session {
     /// that its drain has begun.
     hold: std::sync::Arc<crate::test_pause::Slot>,
     drain_started: std::sync::Arc<tokio::sync::Notify>,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 impl Session {
@@ -71,7 +71,7 @@ impl Session {
         trigger: Option<&mut Option<tokio::sync::oneshot::Sender<()>>>,
         every: Duration,
     ) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("gateway.yaml");
         // A temp task store: a test must never open the operator's real one.
         let tasks = dir.path().join("tasks");

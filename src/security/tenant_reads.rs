@@ -253,9 +253,11 @@ impl ReadHistory {
     /// Count the frame against `key`'s live tenants and, unless it is over
     /// and `refuse_over` is set, reserve its tenants under a ticket; both
     /// under one shard guard, so two concurrent frames serialize. `None`
-    /// when the history is full of live principals (unattributable).
+    /// when the history is full of live principals (unattributable). Only the
+    /// outbound judge holds a [`ReadsToken`](crate::gateway::outbound::ReadsToken).
     pub(crate) fn reserve(
         self: &Arc<Self>,
+        _token: &crate::gateway::outbound::ReadsToken,
         key: &str,
         attribution: &ReadAttribution,
         window: Duration,
@@ -515,6 +517,8 @@ pub(crate) fn note_attribution(_read: Option<ReadAttribution>) {}
 #[cfg(not(feature = "firewall"))]
 pub(crate) fn note_restored(_stored: Option<&ReadAttribution>) {}
 
-#[cfg(test)]
+// The history's rows reserve, which takes the judge's token, so they build
+// with the firewall that defines it.
+#[cfg(all(test, feature = "firewall"))]
 #[path = "tenant_reads_tests.rs"]
 mod tests;

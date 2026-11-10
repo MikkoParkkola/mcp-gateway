@@ -29,62 +29,7 @@ pub(super) enum Unopened {
     TimedOut,
 }
 
-/// Words an env key may end with, beyond the firewall's own credential names,
-/// that mark its value as a credential (`GITHUB_PAT`, `SENTRY_DSN`,
-/// `GOOGLE_CREDENTIALS`, `STRIPE_SECRET`, `APIKEY`). Only the last word
-/// counts: a stored value becomes a whole-value reference, which the redactor
-/// holds at any length, so a setting such as `TOKEN_LIMIT=1` stored would scrub
-/// every `1` from tool results.
-const ENV_CREDENTIAL_ENDINGS: [&str; 6] = [
-    "pat",
-    "dsn",
-    "credential",
-    "credentials",
-    "secret",
-    "apikey",
-];
-
-/// Words that, directly before a final `key`, mark an env credential beyond
-/// the firewall's own pairs (`SESSION_KEY`, `AUTH_KEY`, `ENCRYPTION_KEY`).
-const ENV_KEY_QUALIFIERS: [&str; 5] = ["session", "cookie", "auth", "access", "encryption"];
-
-/// Whether env key `key` names a credential, judged by its last words only:
-/// the firewall's credential-name rule
-/// ([`crate::security::credential_names::family_of`], which already leaves
-/// out pagination names such as `next_page_token`), or a final word in
-/// [`ENV_CREDENTIAL_ENDINGS`], or a final `key` after an
-/// [`ENV_KEY_QUALIFIERS`] word. Words are the firewall's own split (`_`, `-`,
-/// camel case). Headers are not judged: every header value is stored. The
-/// panel and discovery adopt both store by this rule.
-pub(super) fn names_a_credential(key: &str) -> bool {
-    use crate::security::credential_names::{family_of, words};
-    if family_of(key).is_some() {
-        return true;
-    }
-    match words(key).as_slice() {
-        // Rails' `SECRET_KEY_BASE`.
-        [.., a, b, c] if a == "secret" && b == "key" && c == "base" => true,
-        [.., last] if ENV_CREDENTIAL_ENDINGS.contains(&last.as_str()) => true,
-        [.., before, last] => last == "key" && ENV_KEY_QUALIFIERS.contains(&before.as_str()),
-        _ => false,
-    }
-}
-
-/// Whether env value `value` under key `key` goes to the store: its key
-/// [`names_a_credential`] and it is at least the redactor's short-value bound
-/// long. A stored value is redacted wherever it appears, at any length, so a
-/// shorter one (`1`, `true`, `none`, as in `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`)
-/// would blank ordinary text: it is written as typed, as in 3.x.
-pub(super) fn stores_env_value(key: &str, value: &str) -> bool {
-    stores_header_value(value) && names_a_credential(key)
-}
-
-/// Whether a header value goes to the store: any header that is at least
-/// the redactor's short-value bound long. A shorter one (`Authorization: none`)
-/// is written as typed, for the reason [`stores_env_value`] gives.
-pub(super) fn stores_header_value(value: &str) -> bool {
-    value.len() >= crate::security::needles::SHORT_VALUE_BYTES
-}
+pub(super) use crate::config::secret_values::{stores_env_value, stores_header_value};
 
 /// The secret slot of backend `name`'s `key`, under `headers` or `env`. Its
 /// display form is the secret step's field for that value.

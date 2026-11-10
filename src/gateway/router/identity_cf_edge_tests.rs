@@ -31,13 +31,13 @@ fn subject_of(
 }
 
 fn identity(issuer: &str, subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_string(),
-        email: "owner@corp.example".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: issuer.to_string(),
-    }
+    VerifiedIdentity::for_test(
+        subject.to_string(),
+        "owner@corp.example".to_string(),
+        None,
+        Vec::new(),
+        issuer.to_string(),
+    )
 }
 
 #[tokio::test]

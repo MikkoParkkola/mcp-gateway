@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn governance_log_uses_fixed_rotation() {
         use crate::security::transparency_log::OnDiskFull;
-        let cfg_dir = tempfile::tempdir().unwrap();
+        let cfg_dir = crate::test_dir_keep::kept_tempdir();
         let yaml = "security:\n  transparency_log:\n    enabled: true\n    rotation:\n      max_segment_bytes: 2097152\n      retain_segments: 30\n      on_disk_full: refuse\n";
         let (config, _) = load(cfg_dir.path(), yaml);
         let gov = super::governance_log_config(&config, cfg_dir.path());
@@ -271,7 +271,10 @@ mod tests {
 
     #[test]
     fn store_opens_at_explicit_store_dir() {
-        let (cfg_dir, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (cfg_dir, data) = (
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
+        );
         let store_dir = data.path().join("cp");
         let (config, path) = load(
             cfg_dir.path(),
@@ -295,7 +298,10 @@ mod tests {
 
     #[test]
     fn explicit_unopenable_store_dir_refuses_start() {
-        let (cfg_dir, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (cfg_dir, data) = (
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
+        );
         crate::gateway::test_helpers::write_owner_only(
             data.path().join("file"),
             b"not a directory",
@@ -320,9 +326,9 @@ mod tests {
     #[test]
     fn write_probe_does_not_follow_a_planted_symlink() {
         let (cfg_dir, data, outside) = (
-            tempfile::tempdir().unwrap(),
-            tempfile::tempdir().unwrap(),
-            tempfile::tempdir().unwrap(),
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
         );
         let store_dir = data.path().join("cp");
         std::fs::create_dir_all(&store_dir).unwrap();
@@ -344,7 +350,7 @@ mod tests {
 
     #[test]
     fn relative_store_dir_refuses_start() {
-        let cfg_dir = tempfile::tempdir().unwrap();
+        let cfg_dir = crate::test_dir_keep::kept_tempdir();
         let (config, path) = load(cfg_dir.path(), &auth_on_with_store_dir("relative/cp"));
 
         let err = start(&config, &path).expect_err("a relative store_dir must refuse start");
@@ -360,7 +366,7 @@ mod tests {
 
     #[test]
     fn default_unwritable_store_degrades_without_refusing() {
-        let cfg_dir = tempfile::tempdir().unwrap();
+        let cfg_dir = crate::test_dir_keep::kept_tempdir();
         crate::gateway::test_helpers::write_owner_only(
             cfg_dir.path().join("gateway-control-plane"),
             b"file",
@@ -385,7 +391,7 @@ mod tests {
 
     #[test]
     fn store_dir_change_is_restart_required() {
-        let cfg_dir = tempfile::tempdir().unwrap();
+        let cfg_dir = crate::test_dir_keep::kept_tempdir();
         let (running, _) = load(cfg_dir.path(), &auth_on_with_store_dir("/srv/a"));
         let (wanted, _) = load(cfg_dir.path(), &auth_on_with_store_dir("/srv/b"));
         let live = crate::config_reload::LiveConfig::new(running);
@@ -399,7 +405,10 @@ mod tests {
 
     #[tokio::test]
     async fn export_reads_governance_log_from_store_dir() {
-        let (cfg_dir, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (cfg_dir, data) = (
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
+        );
         let store_dir = data.path().join("cp");
         // The invocation log path goes into the one `security` block the
         // auth-on config already carries (D1: auth on requires the log).

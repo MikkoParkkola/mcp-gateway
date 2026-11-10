@@ -115,7 +115,7 @@ pub(super) struct Serve {
     client: DuplexStream,
     replies: Lines<BufReader<DuplexStream>>,
     task: JoinHandle<()>,
-    dir: tempfile::TempDir,
+    dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 impl Serve {
@@ -191,7 +191,7 @@ async fn serve() -> Serve {
 /// [`serve`] over a config file with `extra` YAML after the base, and the
 /// capability `capability` already in the capabilities directory.
 pub(super) async fn serve_with(extra: &str, capability: Option<&str>) -> Serve {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let caps = dir.path().join("caps");
     std::fs::create_dir(&caps).expect("capabilities directory");
     if let Some(capability) = capability {

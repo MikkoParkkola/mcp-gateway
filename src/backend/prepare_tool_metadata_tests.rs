@@ -133,7 +133,7 @@ fn prepare_tool_metadata_excludes_and_annotates_in_one_pass() {
 // side-effecting (ADR-012 A1 deny default); an explicit `readOnlyHint:true`
 // or `idempotentHint:true` grants resend permission. Admission never reads
 // annotations: see `idempotency_config_tests` in `config/features/idempotency.rs`.
-// Wire-level cases live in `tests/mik_7272_sub4_adr012_acs.rs`.
+// Wire-level cases live in `src/gateway/router/direct_adr012_tests.rs`.
 
 fn annotated(name: &str, read_only: Option<bool>, idempotent: Option<bool>) -> Tool {
     let mut tool = sample_tool(name);

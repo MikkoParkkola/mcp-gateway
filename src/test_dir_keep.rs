@@ -93,6 +93,16 @@ pub(crate) fn kept_tempdir() -> Arc<tempfile::TempDir> {
     register(tempfile::tempdir().expect("a temp dir"))
 }
 
+/// [`kept_tempdir`] with a name prefix, for a helper whose dirs carry one.
+pub(crate) fn kept_tempdir_prefixed(prefix: &str) -> Arc<tempfile::TempDir> {
+    register(
+        tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir()
+            .expect("a temp dir"),
+    )
+}
+
 /// [`kept_tempdir`], created inside `parent`.
 pub(crate) fn kept_tempdir_in(parent: &Path) -> Arc<tempfile::TempDir> {
     register(tempfile::tempdir_in(parent).expect("a temp dir"))
@@ -221,12 +231,15 @@ fn is_external(path: &Path) -> bool {
     is_external_in(external, path)
 }
 
-/// One unkept open: its kind (`AUDIT_LOG`), its path, and the test it is
-/// attributed to.
+/// One unkept open: its kind (`AUDIT_LOG` or `TELEMETRY_WINDOW`), its path,
+/// and the test it is attributed to.
 pub(crate) type Unkept = (&'static str, std::path::PathBuf, String);
 
 /// The kind a transparency log reports as.
 pub(crate) const AUDIT_LOG: &str = "audit log";
+
+/// The kind a protocol-revision telemetry window reports as.
+pub(crate) const TELEMETRY_WINDOW: &str = "telemetry window";
 
 std::thread_local! {
     /// The open `expect_unkept` scope on this thread, if any.
