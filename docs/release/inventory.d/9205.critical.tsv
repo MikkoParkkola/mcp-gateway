@@ -1,0 +1,1 @@
+src/gateway/router/authorization.rs	mtls_verdict	1	critical	a,d	mtls_verdict	The mTLS half of decide_tool_target: refuses a call no matching rule allows (naming the deciding rule), and returns the first matching rule that allowed as the call's mTLS allow.
