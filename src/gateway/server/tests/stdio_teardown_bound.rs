@@ -195,7 +195,11 @@ mod hurry {
         for id in 1..=n {
             let line = call(id);
             stdin.write_all(line.as_bytes()).await.expect("call");
-            named(&format!("backend produced reply {id}"), wait_for(|| wire.produced.load(Ordering::SeqCst) == id)).await;
+            named(
+                &format!("backend produced reply {id}"),
+                wait_for(|| wire.produced.load(Ordering::SeqCst) == id),
+            )
+            .await;
         }
         // The first reply blocks in the writer (stdout holds one byte) and the
         // rest wait in its queue. No stdout reader has run yet.
@@ -203,7 +207,11 @@ mod hurry {
         within("drain started", drain.notified()).await;
         assert!(wire.is_connected(), "in-flight backend alive at hurry");
         hurry.send(()).expect("hurry listener installed");
-        named("hurry moves the registry deadline", wait_for(|| deadline.get().is_some())).await;
+        named(
+            "hurry moves the registry deadline",
+            wait_for(|| deadline.get().is_some()),
+        )
+        .await;
         release.notify_one();
         let mut bytes = String::new();
         within("stdout closes", stdout.read_to_string(&mut bytes))
