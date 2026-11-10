@@ -11,7 +11,7 @@ use std::collections::HashSet;
 
 /// The template grammar of the file receiving a value. Reference forms from
 /// another grammar must never turn literal text into an accepted template.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) enum Syntax {
     Dollar,
     /// Only the capability editor, which is part of the web UI, writes this grammar.
