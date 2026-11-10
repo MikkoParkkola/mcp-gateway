@@ -3,3 +3,6 @@ src/gateway/server/stdio_shutdown.rs	wait	1	Same integration row; runs in the st
 src/gateway/server/stdio_shutdown.rs	drop	1	Same integration row; the guard releases at the end of the child gateway stop
 src/gateway/server/stdio_shutdown.rs	stdio_hurry	1	Same integration row; builds the hurry deadline in the child gateway process
 src/gateway/server/stdio_shutdown.rs	stdio_before_backends	1	Same integration row; skips pre-backend steps in the child gateway process
+src/gateway/server/background.rs	join_mut	1	Covered by the stdio drain rows (stdio_teardown_bound); a writer join on the stop path
+src/gateway/server/stdio_shutdown.rs	parent_pid	1	Reads the parent pid; its consumer is covered by the orphan_watch unit rows
+src/gateway/server/stdio_shutdown.rs	orphan_watch	1	Covered by the three stdio_orphan_watch unit rows and the three-level chain integration row

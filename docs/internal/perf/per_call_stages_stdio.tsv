@@ -489,3 +489,6 @@ src/gateway/server/stdio_shutdown.rs	stdio_hurry	-	on-path, untimed: runs once p
 src/gateway/server/stdio_shutdown.rs	wait	-	on-path, untimed: runs once per gateway stop, not per tools/call
 src/gateway/server/test_seams.rs	hurry_trigger_for_test	-	test-only seam (the hurry trigger exists for tests)
 src/gateway/server/test_seams.rs	take_hurry_trigger	-	test-only seam (the hurry trigger exists for tests)
+src/gateway/server/background.rs	join_mut	-	on-path, untimed: runs once per gateway stop, not per tools/call
+src/gateway/server/stdio_shutdown.rs	parent_pid	-	on-path, untimed: runs at gateway start and every 50 ms of a stop, not per tools/call
+src/gateway/server/stdio_shutdown.rs	orphan_watch	-	on-path, untimed: armed once per gateway stop, not per tools/call

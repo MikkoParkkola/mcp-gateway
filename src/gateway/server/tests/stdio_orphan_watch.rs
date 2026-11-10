@@ -86,10 +86,7 @@ async fn after_eof(saved: i32, change: bool) {
         parent.pid.store(7, Ordering::SeqCst);
     }
     if saved <= 1 {
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        assert_eq!(parent.reads.load(Ordering::SeqCst), 1, "watch never armed");
-        assert!(!deadline.is_hurried());
-        assert_eq!(deadline.get(), None);
+        assert_eq!(deadline.get(), None, "a saved pid of 1 never arms a hurry");
     } else if change {
         wait_for(|| deadline.is_hurried()).await;
         let cut = deadline.get().expect("watch published hurry deadline");
@@ -106,13 +103,12 @@ async fn after_eof(saved: i32, change: bool) {
         .expect("serve task")
         .expect("stdio result");
     assert_eq!(deadline.is_hurried(), saved > 1 && change);
-    let reads = parent.reads.load(Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(
-        parent.reads.load(Ordering::SeqCst),
-        reads,
-        "watch dropped with teardown"
-    );
+    if saved <= 1 {
+        assert_eq!(parent.reads.load(Ordering::SeqCst), 1, "watch never armed");
+    }
+    // The gateway and its watch are gone: nothing still holds the reader, so
+    // no poll can run after the teardown.
+    assert_eq!(Arc::strong_count(&parent), 1, "watch dropped with teardown");
 }
 
 #[tokio::test]
