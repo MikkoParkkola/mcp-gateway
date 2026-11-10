@@ -95,8 +95,12 @@ impl UiCall {
     }
 
     /// Run `call` with this UI call in scope.
-    pub(crate) async fn scope<F: std::future::Future>(self: &Arc<Self>, call: F) -> F::Output {
-        UI_CALL.scope(Arc::clone(self), call).await
+    // A plain function, not an `async fn`: an `async fn` would hold `call` twice.
+    pub(crate) fn scope<F: std::future::Future>(
+        self: &Arc<Self>,
+        call: F,
+    ) -> impl std::future::Future<Output = F::Output> + use<F> {
+        UI_CALL.scope(Arc::clone(self), call)
     }
 
     pub(crate) fn outcome(&self) -> Outcome {
