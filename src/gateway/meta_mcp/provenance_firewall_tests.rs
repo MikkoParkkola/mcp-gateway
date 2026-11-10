@@ -7,6 +7,7 @@
 use super::*;
 use serde_json::Value;
 
+use crate::gateway::gateway_writes::WriteRecord;
 use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule, ScanType};
 
 fn canary() -> String {
@@ -162,13 +163,13 @@ async fn delivered_chain_with_scan(redacts: bool, scan_responses: bool, text: &s
         dual_signed_meta(&mut meta);
         let mut response = meta
             .handle_tools_call(
-                RequestId::Number(9428),
+                RequestId::Number(61),
                 "gateway_execute",
                 json!({"chain": [
                     {"tool": "remote_docs:search", "arguments": {}},
                     {"tool": "remote_docs:search", "arguments": {}},
                 ]}),
-                Some("session-9428"),
+                Some("seal-firewall-session"),
                 allow_all_ctx_named(Some("alice"), None),
             )
             .await;
@@ -186,7 +187,9 @@ async fn delivered_chain_with_scan(redacts: bool, scan_responses: bool, text: &s
         response.result =
             Some(meta.stamp_direct_result(result, "remote_docs", "search", Some("alice")));
         install_firewall_with_scan(&mut meta, redacts, scan_responses);
-        let targets = Vec::new();
+        // Finalization consumes the route's policy targets; it does not infer
+        // them from the composite answer. Both steps use this same target.
+        let targets = [ResponsePolicyTarget::routed("remote_docs", "search")];
         meta.finalize_routed(
             response,
             &delivery_ctx(&targets, "tools/call", "gateway_execute"),
@@ -204,7 +207,7 @@ async fn a_chain_step_the_firewall_redacts_keeps_no_seal() {
     let served = delivered_chain(true).await;
     for step in chain_steps(&parsed_answer(&served)) {
         assert_redacted(step, "the chain step seal claim");
-        assert_no_stale_seal(
+        assert_no_public_signature(
             step,
             "a step the firewall redacted kept the seal made over its unredacted bytes",
         );
@@ -234,9 +237,9 @@ steps:
         engine.register(definition);
         meta.set_playbook_engine(engine);
         let response = meta.handle_tools_call(
-            RequestId::Number(9429), "gateway_run_playbook",
+            RequestId::Number(62), "gateway_run_playbook",
             json!({"name": "two_search", "arguments": {}}),
-            Some("session-9428"), allow_all_ctx_named(Some("alice"), None),
+            Some("seal-firewall-session"), allow_all_ctx_named(Some("alice"), None),
         ).await;
         let plain = parsed_answer(response.result.as_ref().expect("a playbook answer"));
         for name in ["first", "second"] {
@@ -245,7 +248,7 @@ steps:
             assert_sealed_bound(step, "premise: the playbook step seal before the firewall");
         }
         install_firewall(&mut meta, true);
-        let targets = Vec::new();
+        let targets = [ResponsePolicyTarget::routed("remote_docs", "search")];
         let delivered = meta.finalize_routed(response,
             &delivery_ctx(&targets, "tools/call", "gateway_run_playbook"), None)
             .result.expect("the firewall delivers the playbook answer");
@@ -253,7 +256,7 @@ steps:
         for name in ["first", "second"] {
             let step = &parsed["output"][name];
             assert_redacted(step, "the playbook step seal claim");
-            assert_no_stale_seal(step, "a playbook step the firewall redacted kept the seal made over its unredacted bytes");
+            assert_no_public_signature(step, "a playbook step the firewall redacted kept the seal made over its unredacted bytes");
         }
     })).await;
 }
@@ -269,7 +272,7 @@ async fn a_stored_task_the_firewall_redacts_at_read_keeps_no_seal() {
             "remote_docs",
             "search",
             None,
-            "trace-9428",
+            "seal-firewall-trace",
             json!({"content": [{"type": "text", "text": canary()}]}),
         )
     }))
@@ -303,7 +306,7 @@ async fn a_stored_task_the_firewall_redacts_at_read_keeps_no_seal() {
     };
     let mut envelope = serde_json::to_value(stored.task.wire()).expect("the stored task wire");
     envelope["resultType"] = json!("complete");
-    let mut frame = JsonRpcResponse::success(RequestId::Number(9430), envelope);
+    let mut frame = JsonRpcResponse::success(RequestId::Number(63), envelope);
     install_firewall(&mut meta, true);
     let served = with_minted_receipts(Box::pin(async {
         meta.scan_task_read(&stored, None, &mut frame);
@@ -352,10 +355,10 @@ async fn the_top_level_seal_is_bound_after_firewall_redaction() {
         let mut meta = sealing_meta();
         let response = meta
             .handle_tools_call(
-                RequestId::Number(9431),
+                RequestId::Number(64),
                 "gateway_invoke",
                 invoke_args(),
-                Some("session-9428"),
+                Some("seal-firewall-session"),
                 allow_all_ctx_named(Some("alice"), None),
             )
             .await;
@@ -375,7 +378,7 @@ async fn the_top_level_seal_is_bound_after_firewall_redaction() {
             "premise: the top-level seal is left for delivery"
         );
         install_firewall(&mut meta, true);
-        let targets = Vec::new();
+        let targets = [ResponsePolicyTarget::routed("remote_docs", "search")];
         let served = meta
             .finalize_routed(
                 response,
@@ -422,23 +425,33 @@ fn assert_no_public_signature(value: &Value, claim: &str) {
     }
 }
 
-async fn sealed_result(meta: &MetaMcp) -> Value {
-    let result = with_minted_receipts(Box::pin(async {
-        meta.recover_task_result(
-            "remote_docs",
-            "search",
-            None,
-            "seal-firewall",
-            json!({"content": [{"type": "text", "text": canary()}]}),
-        )
+async fn sealed_result(meta: &MetaMcp) -> (Value, WriteRecord) {
+    // A real task stores the creation write record beside its result. Without
+    // that record, delivered_wire removes provenance before the firewall sees it.
+    let (result, writes) = with_minted_receipts(Box::pin(async {
+        crate::gateway::meta_mcp::invoke::relay::collecting(async {
+            let result = meta
+                .recover_task_result(
+                    "remote_docs",
+                    "search",
+                    None,
+                    "seal-firewall",
+                    json!({"content": [{"type": "text", "text": canary()}]}),
+                )
+                .expect("the result settles before the redacting policy is installed");
+            (result, crate::gateway::gateway_writes::recorded())
+        })
+        .await
     }))
-    .await
-    .expect("the result settles before the redacting policy is installed");
+    .await;
     assert_sealed_bound(&result, "premise: a real seal covers the original bytes");
-    result
+    (result, writes)
 }
 
-fn completed_task(result: &Value) -> crate::gateway::task_service::CommittedTask {
+fn completed_task(
+    result: &Value,
+    writes: WriteRecord,
+) -> crate::gateway::task_service::CommittedTask {
     let mut task = crate::protocol::tasks::Task::create("gateway_invoke").expect("a task");
     task.complete(result).expect("the sealed task completes");
     crate::gateway::task_service::CommittedTask {
@@ -452,7 +465,7 @@ fn completed_task(result: &Value) -> crate::gateway::task_service::CommittedTask
         output_free: false,
         error_author: None,
         owner_digest: String::new(),
-        gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
+        gateway_writes: writes,
         bindings: Vec::new(),
         bindings_recorded: true,
     }
@@ -463,9 +476,17 @@ fn completed_task(result: &Value) -> crate::gateway::task_service::CommittedTask
 #[tokio::test]
 async fn a_task_notification_the_firewall_redacts_keeps_no_seal() {
     let mut meta = sealing_meta();
-    let original = sealed_result(&meta).await;
-    let stored = completed_task(&original);
+    let (original, writes) = sealed_result(&meta).await;
+    let stored = completed_task(&original, writes);
     let mut delivered = stored.delivered_wire();
+    assert_eq!(
+        delivered["result"], original,
+        "premise: notification shaping preserves the sealed stored result"
+    );
+    assert_sealed_bound(
+        &delivered["result"],
+        "premise: the notification carries its creation seal into the firewall",
+    );
     install_firewall(&mut meta, true);
     assert_eq!(
         meta.scan_stored_task(&stored, None, &mut delivered),
@@ -488,9 +509,10 @@ async fn a_task_notification_the_firewall_redacts_keeps_no_seal() {
 #[tokio::test]
 async fn a_repeated_keyed_task_the_firewall_redacts_keeps_no_seal() {
     let mut meta = sealing_meta();
-    let original = sealed_result(&meta).await;
-    let stored = completed_task(&original);
+    let (original, writes) = sealed_result(&meta).await;
+    let stored = completed_task(&original, writes);
     let targets = stored.targets.clone();
+    let policy_targets = [ResponsePolicyTarget::routed("remote_docs", "search")];
     install_firewall(&mut meta, true);
     let served = with_minted_receipts(Box::pin(async {
         let caller = allow_all_ctx_named(Some("alice"), None);
@@ -519,9 +541,13 @@ async fn a_repeated_keyed_task_the_firewall_redacts_keeps_no_seal() {
             &before["result"],
             "premise: the repeat still carries the creation seal before egress",
         );
+        assert_eq!(
+            before["result"], original,
+            "premise: keyed repeat shaping preserves the sealed stored result"
+        );
         meta.finalize_routed(
             response,
-            &delivery_ctx(&[], "tools/call", "gateway_invoke"),
+            &delivery_ctx(&policy_targets, "tools/call", "gateway_invoke"),
             None,
         )
     }))
@@ -669,10 +695,10 @@ enum SealSite {
 }
 
 impl SealSite {
-    fn wrap(self, sealed: Value) -> Value {
+    fn wrap(self, sealed: Value, writes: &WriteRecord) -> Value {
         match self {
             Self::TopLevel => sealed,
-            Self::StoredTask => completed_task(&sealed).delivered_wire(),
+            Self::StoredTask => completed_task(&sealed, writes.clone()).delivered_wire(),
             Self::ChainStep => json!({"content": [{"type": "text", "text":
                 json!({"results": [{"result": sealed}]}).to_string()}]}),
             Self::PlaybookStep => json!({"content": [{"type": "text", "text":
@@ -689,7 +715,7 @@ async fn every_redaction_point_strips_every_seal_site() {
     use crate::security::needles::{NeedleSet, Scrubbed, scrub_stored};
 
     let mut meta = sealing_meta();
-    let sealed = sealed_result(&meta).await;
+    let (sealed, writes) = sealed_result(&meta).await;
     install_firewall(&mut meta, true);
     for point in [RedactionPoint::StoredScrub, RedactionPoint::EgressFirewall] {
         for site in [
@@ -699,7 +725,7 @@ async fn every_redaction_point_strips_every_seal_site() {
             SealSite::PlaybookStep,
         ] {
             let claim = format!("{point:?} at {site:?} strips every seal before redaction");
-            let mut value = site.wrap(sealed.clone());
+            let mut value = site.wrap(sealed.clone(), &writes);
             assert_eq!(
                 seals_in(&value).len(),
                 1,
