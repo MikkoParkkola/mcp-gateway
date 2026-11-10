@@ -181,6 +181,43 @@ async fn a_stop_stuck_on_a_lifecycle_lock_ends_at_its_deadline() {
     }
 }
 
+/// A hurry must reach live trees even while a restart holds the lifecycle
+/// lock: waiting for the retire sweep at the full deadline misses the kill cut.
+#[tokio::test]
+async fn a_hurried_stop_hands_a_lock_held_backends_live_tree_to_the_reaper_at_once() {
+    use crate::transport::{HURRY_WINDOW, KILL_RESERVE_FOR_TEST};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let registry = BackendRegistry::new();
+    let backend = stays(dir.path(), "stuck", registry.stop_deadline());
+    let _end = EndOnDrop(Arc::clone(&backend));
+    assert!(registry.register(Arc::clone(&backend)), "registered");
+    backend.ensure_started().await.expect("the backend starts");
+    let pid = leader_pid(dir.path());
+    assert_eq!(kernel_view(pid), Some(false), "premise: the tree is live");
+    let _held = backend.lifecycle.write().await;
+    let started = tokio::time::Instant::now();
+    let cut = started + KILL_RESERVE_FOR_TEST + HURRY_WINDOW;
+    registry.stop_deadline().hurry(started.into_std());
+    let observe_at = started + HURRY_WINDOW + Duration::from_millis(200);
+    // Keep stop_all_by polled and the lifecycle lock held. Capture the early
+    // kernel state before its eventual RetireOnDrop sweep can hide the bug.
+    let (_, at_kill_cut) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(registry.stop_all_by(cut), async {
+            tokio::time::sleep_until(observe_at).await;
+            (kernel_view(pid), started.elapsed())
+        })
+    })
+    .await
+    .expect("the hurried stop completes within the watchdog");
+    assert_ne!(
+        at_kill_cut.0,
+        Some(false),
+        "live tree still running at {:?}; a held lifecycle lock delayed handover until the {cut:?} deadline",
+        at_kill_cut.1
+    );
+}
+
 /// A graceful handover that comes after the gateway stop returned (an idle
 /// release racing the return) is killed on its first step: the stop leaves
 /// its deadline at the moment it ended.

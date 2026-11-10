@@ -118,6 +118,29 @@ fn write_outer_config(root: &Path, inner: &Path, seconds: u64) -> PathBuf {
     config.backends.insert("inner".into(), inner_backend);
     save(root, "gateway.yaml", &config)
 }
+fn write_chain_parent(root: &Path, name: &str, child: &str, child_config: &Path) -> PathBuf {
+    std::fs::write(
+        root.join(format!("{child}.py")),
+        format!(
+            "import os, sys\nwith open('{child}.pid', 'w') as f: f.write(str(os.getpid()))\nos.execv(sys.argv[1], sys.argv[1:])\n"
+        ),
+    )
+    .expect("chain launcher");
+    let mut config = base_config(root, name);
+    config.server.shutdown_timeout = Duration::from_secs(30);
+    config.backends.insert(
+        child.into(),
+        backend(
+            root,
+            format!(
+                "python3 {child}.py \"{}\" --config \"{}\" serve --stdio",
+                gateway_bin::path(),
+                child_config.display()
+            ),
+        ),
+    );
+    save(root, &format!("{name}.yaml"), &config)
+}
 fn logs(root: &Path) -> String {
     std::fs::read_to_string(root.join("gateway.log")).unwrap_or_default()
 }
@@ -201,6 +224,7 @@ impl Drop for KillGroup {
         };
         kill(self.pid);
         for name in [
+            "middle.pid",
             "inner.pid",
             "leaf-leaf.pid",
             "leaf-leaf_a.pid",
@@ -364,6 +388,121 @@ async fn a_busy_nested_gateway_stops_two_leaves_within_one_deadline() {
 #[tokio::test]
 async fn a_nested_gateway_whose_own_stop_outlasts_its_parents_plan_leaves_no_leaf() {
     run(9, Duration::from_secs(30), &["leaf_a", "leaf_b"]).await;
+}
+
+/// Each nested hurry must fit its parent's remaining kill window, rather than
+/// restarting 300 ms after SIGTERM and losing its reaper to its parent's kill.
+#[tokio::test]
+async fn a_three_level_nested_gateway_chain_leaves_no_leaf_after_a_hurry() {
+    let temp = tempfile::tempdir().expect("temp root");
+    let root = temp.path();
+    let leaves = ["leaf_a", "leaf_b"];
+    let inner = write_inner_config(root, &leaves, Duration::from_secs(30));
+    let middle = write_chain_parent(root, "middle", "inner", &inner);
+    let outer = write_chain_parent(root, "outer", "middle", &middle);
+    let log = std::fs::File::create(root.join("gateway.log")).expect("log");
+    let mut reaped = gateway_bin::Reaped::new(
+        tokio::process::Command::from(gateway_bin::command(
+            &root.join("home"),
+            gateway_bin::Inherit::Environment,
+        ))
+        .env("RUST_LOG", "mcp_gateway=info")
+        .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
+        .current_dir(root)
+        .arg("--config")
+        .arg(outer)
+        .args(["serve", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(log.try_clone().expect("log handle")))
+        .stderr(Stdio::from(log))
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()
+        .expect("outer gateway"),
+    );
+    let pid = reaped.child_mut().id().expect("outer pid");
+    let cleanup = KillGroup {
+        pid,
+        root: root.into(),
+    };
+    let mut stdin = reaped.child_mut().stdin.take().expect("stdin");
+    let mut messages = vec![
+        initialize(),
+        json!({"jsonrpc":"2.0", "method":"notifications/initialized"}),
+    ];
+    for (id, name) in leaves.iter().enumerate() {
+        let mut message = invoke(name, id + 1);
+        let inner_call = message["params"]["arguments"].take();
+        message["params"]["arguments"] =
+            json!({"server":"middle", "tool":"gateway_invoke", "arguments":inner_call});
+        messages.push(message);
+    }
+    for message in messages {
+        stdin
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .expect("stdio");
+    }
+    let ready_by = Instant::now() + READY_BOUND;
+    while leaves
+        .iter()
+        .any(|name| !root.join(format!("called-{name}")).exists())
+    {
+        assert!(
+            Instant::now() < ready_by,
+            "holds never started\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let mut tree = vec![
+        pid,
+        read_pid(root, "middle.pid"),
+        read_pid(root, "inner.pid"),
+    ];
+    for name in leaves {
+        tree.push(read_pid(root, &format!("leaf-{name}.pid")));
+        tree.push(read_pid(root, &format!("leaf-{name}.grandchild.pid")));
+    }
+    assert_eq!(
+        alive_pids(&tree),
+        tree,
+        "every chain level must be live before stop"
+    );
+    // EOF installs the hurry listener before logging this message. The busy
+    // calls keep teardown pending until the subsequent SIGTERM cuts it short.
+    drop(stdin);
+    let eof_by = Instant::now() + READY_BOUND;
+    while !logs(root).contains("stdio: EOF reached, shutting down") {
+        assert!(
+            Instant::now() < eof_by,
+            "outer never saw EOF\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let hurried_at = Instant::now();
+    sigterm(pid);
+    // Observation time, not a watchdog: the outer kills at ~300 ms; allow
+    // another 2 s for scheduling and exit, not the 6 s reap reserve.
+    tokio::time::sleep_until(hurried_at + Duration::from_millis(2300)).await;
+    assert!(
+        logs(root).contains("shutdown hurried by a signal"),
+        "outer did not hurry\n{}",
+        logs(root)
+    );
+    let alive = alive_pids(&tree);
+    assert!(
+        alive.is_empty(),
+        "chain processes survived the outer's hurry kill window: {alive:?}; all pids: {tree:?}\n{}",
+        logs(root)
+    );
+    tokio::time::timeout(Duration::from_secs(10), reaped.child_mut().wait())
+        .await
+        .expect("outer exit deadline")
+        .expect("outer exit");
+    reaped.reap().await;
+    std::mem::forget(cleanup);
 }
 
 /// A SIGTERM to a stdio-mode gateway (what systemd or docker stop sends) leaves no
