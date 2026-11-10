@@ -290,19 +290,7 @@ pub(crate) fn store_backend_with(
         // A value the shared rule refuses (a literal default, literal text
         // beside a template) is refused here too, by field and code, before
         // any store opens: kept, it would reach gateway.yaml as text.
-        let mut refused: Vec<String> = [(false, &backend.env), (true, &backend.headers)]
-            .into_iter()
-            .flat_map(|(header, map)| {
-                map.iter().filter_map(move |(key, value)| {
-                    crate::config::secret_values::classify(
-                        value,
-                        crate::config::secret_values::Syntax::Dollar,
-                    )
-                    .err()
-                    .map(|code| format!("{code} ({})", field_of(header, key)))
-                })
-            })
-            .collect();
+        let mut refused = refused_fields(backend);
         if !refused.is_empty() {
             refused.sort();
             return Err(format!(
@@ -644,6 +632,24 @@ struct Candidate {
     name: String,
     backend: crate::config::BackendConfig,
     literals: Vec<(bool, String, String)>,
+}
+
+/// Fields of `backend` whose value the shared secret rule refuses, as
+/// `code (field)` strings.
+fn refused_fields(backend: &crate::config::BackendConfig) -> Vec<String> {
+    [(false, &backend.env), (true, &backend.headers)]
+        .into_iter()
+        .flat_map(|(header, map)| {
+            map.iter().filter_map(move |(key, value)| {
+                crate::config::secret_values::classify(
+                    value,
+                    crate::config::secret_values::Syntax::Dollar,
+                )
+                .err()
+                .map(|code| format!("{code} ({})", field_of(header, key)))
+            })
+        })
+        .collect()
 }
 
 /// `env.KEY` or `headers.KEY`.

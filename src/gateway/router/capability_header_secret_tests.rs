@@ -6,6 +6,7 @@
 //! headers are not judged. Uses the parent's admin gateway fixture.
 
 use super::*;
+use std::fmt::Write as _;
 
 /// A literal token in no file before this test; no answer may echo it.
 const LITERAL: &str = "tok-0123456789abcdef-canary";
@@ -14,10 +15,10 @@ const LITERAL: &str = "tok-0123456789abcdef-canary";
 /// (YAML single-quoted, so braces and quotes are literal); `second` adds a
 /// second provider carrying the same headers.
 fn doc(headers: &[(&str, &str)], second: bool) -> String {
-    let block: String = headers
-        .iter()
-        .map(|(name, value)| format!("        {name}: '{}'\n", value.replace('\'', "''")))
-        .collect();
+    let block = headers.iter().fold(String::new(), |mut acc, (name, value)| {
+        let _ = writeln!(acc, "        {name}: '{}'", value.replace('\'', "''"));
+        acc
+    });
     let provider = |key: &str, path: &str, block: &str| {
         format!(
             "  {key}:\n    service: rest\n    config:\n      base_url: https://api.example.com\n      path: {path}\n      headers:\n{block}"
