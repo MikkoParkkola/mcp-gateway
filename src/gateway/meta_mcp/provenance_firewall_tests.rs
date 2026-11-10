@@ -148,7 +148,7 @@ fn assert_no_stale_seal(result: &Value, claim: &str) {
 
 /// Mint the steps before installing the delivery firewall, so a per-invoke
 /// scan cannot erase the canary before the step seal is made. This models a
-/// stricter policy at delivery; finalize_routed runs the real egress scan.
+/// stricter policy at delivery; `finalize_routed` runs the real egress scan.
 async fn delivered_chain(redacts: bool) -> Value {
     delivered_chain_with_scan(redacts, true, &canary()).await
 }
