@@ -383,7 +383,7 @@ fn refuse_literal_headers(text: &str) -> Result<(), Refused> {
                 && !value.as_str().is_some_and(|value| {
                     classify(
                         value,
-                        Syntax::Brace {
+                        &Syntax::Brace {
                             parameters: parameters.clone(),
                         },
                     ) == Ok(ValueClass::Kept)

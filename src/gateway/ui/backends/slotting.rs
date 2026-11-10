@@ -77,7 +77,7 @@ pub(super) fn literals<'a>(
         .map(|kv| (false, kv))
         .chain(headers.map(|kv| (true, kv)))
         .filter(|(header, (key, value))| {
-            classify(value, Syntax::Dollar) == Ok(ValueClass::Stored)
+            classify(value, &Syntax::Dollar) == Ok(ValueClass::Stored)
                 && if *header {
                     secret_slots::stores_header_value(value)
                 } else {

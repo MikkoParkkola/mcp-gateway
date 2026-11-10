@@ -42,12 +42,12 @@ pub(crate) enum ValueClass {
 /// same codes discovery adopt refuses with. Either would put text that may be
 /// a secret into gateway.yaml as text. Brace uses the capability's declared
 /// inputs and system references, returning `Stored` for every literal form.
-pub(crate) fn classify(value: &str, syntax: Syntax) -> Result<ValueClass, &'static str> {
+pub(crate) fn classify(value: &str, syntax: &Syntax) -> Result<ValueClass, &'static str> {
     use crate::config::secret_ref::{has_literal_default, only_scheme_beside_templates};
     match syntax {
         Syntax::Dollar => {}
         #[cfg(feature = "webui")]
-        Syntax::Brace { parameters } => return Ok(classify_brace(value, &parameters)),
+        Syntax::Brace { parameters } => return Ok(classify_brace(value, parameters)),
     }
     if value.is_empty() || crate::config::is_reference(value) {
         return Ok(ValueClass::Kept);
@@ -244,7 +244,7 @@ mod tests {
             assert_eq!(
                 classify(
                     value,
-                    Syntax::Brace {
+                    &Syntax::Brace {
                         parameters: parameters.clone(),
                     },
                 ),
@@ -271,7 +271,7 @@ mod tests {
             ("prefix-${TOKEN}", Err("literal_in_template")),
         ];
         for (value, expected) in cases {
-            assert_eq!(classify(value, Syntax::Dollar), expected, "{value:?}");
+            assert_eq!(classify(value, &Syntax::Dollar), expected, "{value:?}");
         }
     }
 

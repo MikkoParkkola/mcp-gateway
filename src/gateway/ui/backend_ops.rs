@@ -221,7 +221,7 @@ pub(crate) fn credential_refusals(
 /// an empty one, a whole `${VAR}` template or a whole secret reference (a
 /// literal default or literal text beside a template counts as text).
 fn literal_value(value: &str) -> bool {
-    !value.is_empty() && classify(value, Syntax::Dollar) != Ok(ValueClass::Kept)
+    !value.is_empty() && classify(value, &Syntax::Dollar) != Ok(ValueClass::Kept)
 }
 
 /// A URL holding userinfo, or a credential-named query parameter with a
@@ -301,7 +301,7 @@ pub(crate) fn literal_refusals(
     let mut refused: Vec<_> = env
         .chain(headers)
         .filter_map(|(map, key, value)| {
-            classify(value, Syntax::Dollar)
+            classify(value, &Syntax::Dollar)
                 .err()
                 .map(|code| (code, format!("{map}.{key}")))
         })

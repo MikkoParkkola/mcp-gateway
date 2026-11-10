@@ -393,7 +393,7 @@ fn stored_literals(
             } else {
                 stores_env_value(key, value)
             };
-            if classify(value, Syntax::Dollar) == Ok(ValueClass::Stored)
+            if classify(value, &Syntax::Dollar) == Ok(ValueClass::Stored)
                 && by_rule
                 && !keep_as_text.contains(&field_of(header, key))
             {
@@ -643,7 +643,7 @@ fn refused_fields(backend: &crate::config::BackendConfig) -> Vec<String> {
             map.iter().filter_map(move |(key, value)| {
                 crate::config::secret_values::classify(
                     value,
-                    crate::config::secret_values::Syntax::Dollar,
+                    &crate::config::secret_values::Syntax::Dollar,
                 )
                 .err()
                 .map(|code| format!("{code} ({})", field_of(header, key)))
