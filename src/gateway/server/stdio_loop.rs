@@ -714,12 +714,19 @@ impl Gateway {
             // every save holds the sink lock, and the final save below waits for
             // it, so no two saves overlap and no delta is counted twice (MIK-8364).
             drop(telemetry_saver);
-            Self::persist_stdio_telemetry_bounded(shutdown_deadline, &protocol_telemetry_sink)
-                .await;
-            #[cfg(feature = "cost-governance")]
-            if let Some(enforcer) = &meta_mcp.budget_enforcer {
-                let (enforcer, dir) = (Arc::clone(enforcer), data_dir.clone());
-                stdio_shutdown::final_cost_save(shutdown_deadline, cost_saver, enforcer, dir).await;
+            // A hurry keeps only what delivers replies: the final saves wait
+            // behind the parent's kill, so they are dropped (the next open
+            // settles what they would have written).
+            let hurried = || gateway.backends.stop_deadline().is_hurried();
+            if !hurried() {
+                Self::persist_stdio_telemetry_bounded(shutdown_deadline, &protocol_telemetry_sink)
+                    .await;
+                #[cfg(feature = "cost-governance")]
+                if let Some(enforcer) = &meta_mcp.budget_enforcer {
+                    let (enforcer, dir) = (Arc::clone(enforcer), data_dir.clone());
+                    stdio_shutdown::final_cost_save(shutdown_deadline, cost_saver, enforcer, dir)
+                        .await;
+                }
             }
             // Every sender gone, then the writer joined: the task drains its queue
             // and returns, which is what flushes the responses the drain produced.
@@ -743,8 +750,10 @@ impl Gateway {
             // any other exit path, which is the point of them.
             drop(idle_reaper);
             drop(health_loop);
-            let left = shutdown_deadline.saturating_duration_since(tokio::time::Instant::now());
-            override_drain.drain(&gateway.backends, left).await;
+            if !hurried() {
+                let left = shutdown_deadline.saturating_duration_since(tokio::time::Instant::now());
+                override_drain.drain(&gateway.backends, left).await;
+            }
         };
         self.stdio_teardown(shutdown_deadline, warmer, task_store, hurry, before)
             .await;

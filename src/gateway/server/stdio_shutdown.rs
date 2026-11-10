@@ -283,6 +283,10 @@ impl Gateway {
         mut hurry: Hurry,
         before: impl Future<Output = ()>,
     ) {
+        // Pinned outside the select below: a hurry stops waiting for the
+        // preparations that follow it, but replies already produced, and calls
+        // the backend kill will fail, are still written before the cut.
+        tokio::pin!(before);
         let hurried = tokio::select! {
             biased;
             cut = hurry.wait() => {
@@ -290,7 +294,7 @@ impl Gateway {
                 Some(cut)
             }
             () = async {
-                before.await;
+                before.as_mut().await;
                 self.stdio_before_backends(deadline, warm_start_tasks, task_store).await;
             } => None,
         };
@@ -316,7 +320,16 @@ impl Gateway {
                 bounded_step(deadline.min(cut), "backend stop", stop).await;
             }
             () = async {
-                bounded_step(backend_deadline, "backend stop", &mut stop).await;
+                let stopped = bounded_step(backend_deadline, "backend stop", &mut stop);
+                if hurried.is_some() {
+                    // The kill fails the calls it reaches, so their replies
+                    // join those already produced; both go out before the cut.
+                    let flushed =
+                        bounded_step(backend_deadline, "reply flush", before.as_mut());
+                    tokio::join!(stopped, flushed);
+                } else {
+                    stopped.await;
+                }
             } => {}
         }
     }
