@@ -134,6 +134,11 @@ impl MetaMcp {
         if read == StoredRead::Read && self.deferred_cooldown_refuses(stored, session, caller) {
             return Some(unrecorded(retry_later(id, None)));
         }
+        // A result this process cannot track for relay is refused
+        // under block, decided now, at the read's start (the stated limit).
+        if let Some(error) = self.untrackable_refusal(stored, session, caller.api_key_name) {
+            return Some(refused((error, (DecisionKind::Firewall, None))));
+        }
         // COLLUDE.1 §13.3: a stored result or pending prompt delivered again
         // renews the reader's receipt; the delivery owner commits it.
         self.stage_stored_receipt(caller.relay_caller(session), caller.api_key_name, stored);

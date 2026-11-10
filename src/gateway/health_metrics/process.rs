@@ -10,10 +10,8 @@ pub(crate) const SESSIONS: &str = "mcp_gateway_sessions_active";
 /// When the process started, as Unix seconds.
 pub(crate) const START_TIME: &str = "process_start_time_seconds";
 /// Resident set size; not a recorder gauge, see [`resident_memory_exposition`].
-#[cfg(any(target_os = "linux", test))]
 const RESIDENT: &str = "process_resident_memory_bytes";
 /// The help text the scrape carries for [`RESIDENT`].
-#[cfg(any(target_os = "linux", test))]
 const RESIDENT_HELP: &str =
     "Resident set size. Linux only (read from /proc/self/statm); absent on other systems.";
 
@@ -50,39 +48,16 @@ pub(crate) fn register() {
 /// would keep the last good value after a failed read; text appended per
 /// scrape shows nothing instead.
 pub(crate) fn resident_memory_exposition() -> String {
-    #[cfg(target_os = "linux")]
-    {
-        exposition_from(
-            std::path::Path::new("/proc/self/statm"),
-            rustix::param::page_size() as u64,
-        )
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        String::new()
-    }
+    super::memory::resident_memory_bytes().map_or_else(String::new, exposition_of)
 }
 
 /// [`resident_memory_exposition`] reading `statm` at `path`, pages of `page` bytes.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(test)]
 pub(super) fn exposition_from(path: &std::path::Path, page: u64) -> String {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| resident_bytes(&text, page))
-        .map_or_else(String::new, |bytes| {
-            format!(
-                "# HELP {RESIDENT} {RESIDENT_HELP}\n# TYPE {RESIDENT} gauge\n{RESIDENT} {bytes}\n"
-            )
-        })
+    super::memory::bytes_from(path, page).map_or_else(String::new, exposition_of)
 }
 
-/// The second field of a `statm` line (resident pages) times the page size.
-#[cfg(any(target_os = "linux", test))]
-pub(super) fn resident_bytes(statm: &str, page: u64) -> Option<u64> {
-    statm
-        .split_whitespace()
-        .nth(1)?
-        .parse::<u64>()
-        .ok()?
-        .checked_mul(page)
+/// The exposition text for `bytes` of resident memory.
+fn exposition_of(bytes: u64) -> String {
+    format!("# HELP {RESIDENT} {RESIDENT_HELP}\n# TYPE {RESIDENT} gauge\n{RESIDENT} {bytes}\n")
 }

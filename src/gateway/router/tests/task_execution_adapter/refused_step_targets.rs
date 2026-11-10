@@ -124,14 +124,15 @@ async fn a_refused_plan_step_stays_a_target_but_is_no_replay_call() {
         vec![(ALPHA, TOOL), (BETA, TOOL)],
         "the refused step stays a target"
     );
-    let key = crate::security::firewall::StoredKey::Task {
-        id: id.clone(),
-        revision: row.revision,
-    };
-    let (_, calls) = rig
-        .relay
-        .replay_digests(&key)
-        .expect("positive control: alpha's step stores a replay entry");
+    // The replay calls live in the row's own snapshot, written by the settle:
+    // a commit inserts no in-memory entry (task replay snapshot design, P4),
+    // and this row's withheld tool refuses a read before it could rebuild one.
+    let snapshot = row
+        .replay_snapshot
+        .as_deref()
+        .expect("positive control: alpha's step stores a replay snapshot");
+    let calls: Vec<(Option<u32>, String, String)> =
+        serde_json::from_value(snapshot["calls"].clone()).expect("the snapshot's calls decode");
     let servers: Vec<&str> = calls.iter().map(|(_, server, _)| server.as_str()).collect();
     std::assert_eq!(
         servers,
@@ -140,10 +141,11 @@ async fn a_refused_plan_step_stays_a_target_but_is_no_replay_call() {
     );
 }
 
-/// A one-target plan (two steps on alpha) whose replay entry is gone, by a
-/// restart, stages nothing on re-read: its stored result is the plan's own
-/// assembly, which can carry the gateway's text for a refused step, so it is
-/// never receipted whole as the one target's answer.
+/// A one-target plan (two steps on alpha) whose replay entry is gone (a
+/// restart over a row that holds no snapshot) stages nothing on re-read: its
+/// stored result is the plan's own assembly, which can carry the gateway's
+/// text for a refused step, so it is never receipted whole as the one
+/// target's answer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_restarted_one_target_plan_receipts_nothing_whole() {
     use super::relay_plan_replay::{ALPHA, OTHER_PROSE, PROSE, Rig, playbook_args, rig, task_call};
@@ -192,6 +194,23 @@ async fn a_restarted_one_target_plan_receipts_nothing_whole() {
         ..
     } = first;
     drop(first_state);
+    // The entry gone for good: the row holds no replay snapshot, as an older
+    // gateway wrote it (task replay snapshot design, P5); a reopen alone
+    // would rebuild the entry from the row's own snapshot.
+    let record = first_store
+        .path()
+        .join("tasks")
+        .join(format!("{task}.json"));
+    let mut row: Value =
+        serde_json::from_slice(&std::fs::read(&record).expect("the row file: fixture"))
+            .expect("the row decodes");
+    assert!(
+        row.as_object_mut()
+            .and_then(|row| row.remove("replaySnapshot"))
+            .is_some(),
+        "premise: the settled row held a snapshot"
+    );
+    std::fs::write(&record, serde_json::to_vec(&row).unwrap()).unwrap();
     let restarted = state_over_tasks(
         rig(PROSE, OTHER_PROSE, Some(&one_target)).await,
         &first_store,
