@@ -303,3 +303,7 @@ mod counter_restart_tests;
 #[cfg(all(test, feature = "webui"))]
 #[path = "gateway_status_start_tests.rs"]
 mod gateway_status_start_tests;
+
+#[cfg(all(test, feature = "webui"))]
+#[path = "health_start_tests.rs"]
+mod health_start_tests;

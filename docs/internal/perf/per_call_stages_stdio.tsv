@@ -60,6 +60,7 @@ src/gateway/server/control_plane_store.rs	store_dir_change_is_restart_required	-
 src/gateway/server/control_plane_store.rs	store_opens_at_explicit_store_dir	-	test-only (inline cfg(test) module)
 src/gateway/server/control_plane_store.rs	write_probe_does_not_follow_a_planted_symlink	-	test-only (inline cfg(test) module)
 src/gateway/server/counter_wiring.rs	shutdown_save	-	shutdown saves, off the request path
+src/gateway/server/counter_wiring.rs	save_now	-	startup and shutdown counter saves, off the request path
 src/gateway/server/counter_wiring.rs	start	-	startup counter restore and periodic saver, once per serve
 src/gateway/server/events_wiring.rs	install	-	startup events-hub and webhook wiring, once per serve
 src/gateway/server/events_wiring.rs	fence_binding	-	off-path: the events hub's fence read for a delivery and a listener run, never a tools/call
@@ -71,6 +72,10 @@ src/gateway/server/first_list_wait.rs	end	-	not per call: once per session, when
 src/gateway/server/first_list_wait.rs	mark_waited_for_test	-	test-only helper (cfg(test))
 src/gateway/server/first_list_wait.rs	prepare	-	not on the tools/call path: stdio tools/list only (the grant recheck and own-view warm it already ran, and the first-list wait)
 src/gateway/server/first_list_wait.rs	scope	stdio_invoke_tiny	wraps every spawned stdio dispatch in the session's first-list ticket
+src/gateway/server/health_wiring.rs	save_path	-	startup choice of where the health history saves, once per serve
+src/gateway/server/health_wiring.rs	shutdown_save	-	shutdown health history save, off the request path
+src/gateway/server/health_wiring.rs	spawn_sampler	-	starts the background health sampler once per serve; the sampler runs on its own task, off the request path
+src/gateway/server/health_wiring.rs	start	-	startup health history restore and first save, once per serve
 src/gateway/server/identity_grants.rs	audit_startup	-	startup identity-grant audit, before serving
 src/gateway/server/identity_grants.rs	from	-	startup identity-grant audit error conversion, before serving
 src/gateway/server/identity_grants.rs	identity_grant_sink_for	-	startup and reload grant-sink construction, not per call
