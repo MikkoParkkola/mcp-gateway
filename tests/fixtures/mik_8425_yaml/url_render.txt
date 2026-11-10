@@ -240,7 +240,6 @@ key_server:
   oidc: []
   policies: []
   admin_token: null
-  audit_email_hmac_secret_ref: null
   delegated_bearer: false
 agent_auth:
   enabled: false
@@ -575,7 +574,6 @@ key_server:
   oidc: []
   policies: []
   admin_token: null
-  audit_email_hmac_secret_ref: null
   delegated_bearer: false
 agent_auth:
   enabled: false

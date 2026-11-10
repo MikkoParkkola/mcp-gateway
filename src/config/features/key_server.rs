@@ -76,8 +76,9 @@ pub struct KeyServerConfig {
     /// reference (`env:`, `file:`, keychain) resolving to exactly 64 lowercase
     /// hex digits (`openssl rand -hex 32`). Optional: when unset, the first
     /// enabled start generates a key in `key-server-email-hmac.json` under the
-    /// gateway data directory.
-    #[serde(default)]
+    /// gateway data directory. Left out of a rendered config when unset, so
+    /// every existing config reads as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit_email_hmac_secret_ref: Option<String>,
     /// Accept a raw OIDC ID token (JWT) as a bearer directly on the gateway
     /// endpoint — "delegated auth" — instead of requiring a prior token
