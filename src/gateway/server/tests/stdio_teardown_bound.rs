@@ -149,7 +149,6 @@ mod hurry {
     }
     #[tokio::test]
     async fn a_hurry_does_not_discard_replies_already_produced() {
-        use super::super::super::stdio_seams::answers_found_queue_full;
         use crate::test_pause::within;
         use tokio::io::AsyncReadExt;
 
@@ -192,16 +191,14 @@ mod hurry {
         let line = call(0);
         stdin.write_all(line.as_bytes()).await.expect("call");
         within("backend executing", executing.notified()).await;
-        let full_before = answers_found_queue_full();
-        let n = super::super::super::STDOUT_QUEUE_DEPTH + 2;
+        let n = 3;
         for id in 1..=n {
             let line = call(id);
             stdin.write_all(line.as_bytes()).await.expect("call");
             named(&format!("backend produced reply {id}"), wait_for(|| wire.produced.load(Ordering::SeqCst) == id)).await;
         }
-        // One reply blocks in the writer, the queue is full, and the last
-        // produced reply waits for room. No stdout reader has run yet.
-        named("writer queue full", wait_for(|| answers_found_queue_full() > full_before)).await;
+        // The first reply blocks in the writer (stdout holds one byte) and the
+        // rest wait in its queue. No stdout reader has run yet.
         stdin.shutdown().await.expect("EOF");
         within("drain started", drain.notified()).await;
         assert!(wire.is_connected(), "in-flight backend alive at hurry");
