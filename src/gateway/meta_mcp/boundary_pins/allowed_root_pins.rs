@@ -79,7 +79,7 @@ const SITES: [(&str, &str, &str, Pass); 7] = [
         Pass::Instance,
     ),
     (
-        "src/gateway/router/backend_handlers.rs",
+        "src/gateway/router/backend_handlers/direct_security.rs",
         "firewall_refusal",
         "check_request_attributed",
         Pass::Instance,

@@ -186,11 +186,6 @@ const SPAWN_ALLOWED: &[(&str, &str, &str)] = &[
         "let flush = tokio::spawn(async move { write_records(&writer, &notes).await });",
         "the slot's record flush, after the call",
     ),
-    (
-        "src/gateway/meta_mcp/grant_audit.rs",
-        "let writer = tokio::spawn(async move {",
-        "the record writer for a refused call",
-    ),
 ];
 
 /// T20 (design C0b): a web UI call's cell is a task-local, which does not

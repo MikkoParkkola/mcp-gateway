@@ -126,6 +126,22 @@ fn check_clean(name: &str, src: &str) {
     );
 }
 
+/// MIK-9387.TCFG.3a: `any(test, ..)` also builds outside tests, so a client
+/// under it is production code and its missing policy is reported; under
+/// `all(test, ..)` it is test code and is not.
+#[test]
+fn a_client_under_any_test_or_x_is_still_scanned() {
+    let client = "fn f() { let _ = Client::new(); }";
+    for gate in ["any(test, unix)", "any(unix, test)", "not(test)"] {
+        check_reported(gate, &format!("#[cfg({gate})]\n{client}"));
+        check_reported(gate, &format!("#[cfg({gate})]\nmod m {{ {client} }}"));
+    }
+    for gate in ["test", "all(test, unix)", "all(unix, test)"] {
+        check_clean(gate, &format!("#[cfg({gate})]\n{client}"));
+        check_clean(gate, &format!("#[cfg({gate})]\nmod m {{ {client} }}"));
+    }
+}
+
 #[test]
 fn the_scanner_reports_each_negative_fixture() {
     check_reported("client-new", "fn f() { let _ = Client::new(); }");

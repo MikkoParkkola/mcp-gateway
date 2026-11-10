@@ -216,13 +216,13 @@ async fn fixture_on(server: &str, config: BackendConfig, shared: Option<Hint>) -
 }
 
 fn identity() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@example.invalid".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example.invalid".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@example.invalid".to_string(),
+        None,
+        Vec::new(),
+        "https://issuer.example.invalid".to_string(),
+    )
 }
 
 fn elicitation() -> Declared {

@@ -640,6 +640,18 @@ async fn t16_a_grant_withdrawn_after_the_task_ran_answers_as_the_live_call() {
         json!("denied"),
         "T16: {after_stored:#?}"
     );
+    // The live refusal has no invocation record of its own; the stored read
+    // delivers a call that already has the original request's record.
+    std::assert_eq!(
+        after_live[before]["invocation_recorded"],
+        json!(false),
+        "T16: {after_live:#?}"
+    );
+    std::assert_eq!(
+        after_stored[before + 1]["invocation_recorded"],
+        json!(true),
+        "T16: the refused delivery says its call is recorded: {after_stored:#?}"
+    );
     // MIK-8361: the live call answers as an undefined capability does, for
     // the same caller (made last, so it moves none of the counts above).
     let mut undefined = super::grant_decisions::personal_invoke(10);
@@ -653,6 +665,56 @@ async fn t16_a_grant_withdrawn_after_the_task_ran_answers_as_the_live_call() {
         error_masked(&live).replace(&personal, "<tool>"),
         error_masked(&twin).replace("no_such_capability", "<tool>"),
         "T16: the live call answers as the undefined capability"
+    );
+}
+
+/// A repeated task-augmented call whose grant was withdrawn is refused at the
+/// route stage (the grant check in `invoke/chokepoint.rs`, re-run with
+/// `Emit::Audit` to write the refusal), before sync admission and before the
+/// stored task is read: a refusal of the new request, which has no invocation
+/// record of its own, so its decision says unrecorded and Activity lists it.
+/// The original call keeps its one invocation record. A repeat counts as a
+/// delivery (marker true) only when it reaches `in_repeat_scope`, which a
+/// repeat refused at the route stage never does.
+#[tokio::test]
+async fn a_repeat_refused_at_the_route_stage_is_one_unrecorded_decision() {
+    use crate::gateway::meta_mcp::grant_audit_fixture::{decisions, grants, invocations};
+    use crate::security::audit::AuditFailurePolicy;
+    let row =
+        super::grant_decisions::armed(true, false, AuditFailurePolicy::BestEffort, |m| m).await;
+    let created = post(
+        &row.state,
+        "key-a",
+        super::grant_decision_tasks::as_task(super::grant_decisions::personal_invoke(1), "s1-t13"),
+    )
+    .await;
+    let id = task_id(&created);
+    let settled = poll_until_terminal(&row.state, "key-a", &id).await;
+    std::assert_eq!(status_of(&settled), "completed", "control: {settled}");
+    let recorded_before = invocations(&row.dir).len();
+    row.state.meta_mcp.set_identity_grants(grants(vec![]));
+    let before = decisions(&row.dir).len();
+
+    let again = post(
+        &row.state,
+        "key-a",
+        super::grant_decision_tasks::as_task(super::grant_decisions::personal_invoke(2), "s1-t13"),
+    )
+    .await;
+
+    assert!(again.get("error").is_some(), "premise: refused: {again}");
+    let held = decisions(&row.dir);
+    std::assert_eq!(held.len(), before + 1, "one decision: {held:#?}");
+    std::assert_eq!(held[before]["outcome"], json!("denied"), "{held:#?}");
+    std::assert_eq!(
+        held[before]["invocation_recorded"],
+        json!(false),
+        "a repeat refused at admission has no record of its own: {held:#?}"
+    );
+    std::assert_eq!(
+        invocations(&row.dir).len(),
+        recorded_before,
+        "the original call keeps its one invocation record"
     );
 }
 

@@ -57,6 +57,40 @@ fn scan_tt_three_valued_cfg_truth_table() {
     }
 }
 
+/// The read-token probe's cfg is set only by the must-fail check build, never
+/// a product build, so the pins skip code under it. The shared reader keeps
+/// the atom at its third value (other scanners count probe code); a feature
+/// or a similar name is not the probe.
+#[test]
+fn the_read_token_probe_cfg_is_never_a_product_build() {
+    assert!(test_only(&attrs("#[cfg(reads_token_probe)]")));
+    assert!(test_only(&attrs(
+        "#[cfg(all(reads_token_probe, feature = \"firewall\"))]"
+    )));
+    assert!(!test_only(&attrs("#[cfg(not(reads_token_probe))]")));
+    assert!(!test_only(&attrs("#[cfg(any(reads_token_probe, unix))]")));
+    assert!(!test_only(&attrs("#[cfg(reads_token_probe_twin)]")));
+    assert!(!test_only(&attrs(
+        "#[cfg(feature = \"reads_token_probe\")]"
+    )));
+    assert_eq!(cfg("reads_token_probe"), Cfg::Unknown);
+}
+
+/// MIK-9387.TCFG.1: operands that do not parse leave the predicate unknown,
+/// never an empty `any()` (false, so the item would read as test-only) or an
+/// empty `all()`.
+#[test]
+fn scan_tt_operands_that_do_not_parse_are_unknown() {
+    for predicate in [
+        "any(test +)",
+        "all(test +)",
+        "any(test,, unix)",
+        "all(unix, test +)",
+    ] {
+        assert_eq!(cfg(predicate), Cfg::Unknown, "cfg({predicate})");
+    }
+}
+
 /// SCAN-1..6: which items are test-only. Production is anything not
 /// definitely excluded outside tests. Mutants: SCAN-m1 (a predicate that
 /// mentions `test` counts as test-only: SCAN-3, SCAN-4), SCAN-m2 (SCAN-5),

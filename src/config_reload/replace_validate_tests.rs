@@ -411,7 +411,7 @@ fn a_recognisable_secret_appears_in_no_trace_file_or_record() {
         runtime.block_on(async {
             let audited = || Audit::Required {
                 sink: Box::new(FileSink(record.clone())),
-                kind: IntentKind::Save,
+                kind: IntentKind::Save { fields: Vec::new() },
                 writer: None,
             };
             let mut seen = loud_refusals(dir.path(), audited).await;

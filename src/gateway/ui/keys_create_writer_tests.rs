@@ -4,7 +4,7 @@
 //! `ReplaceError` variant (the writer's answer injected), the live-table
 //! check after a write, and the order of the intent and the commit.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::http::StatusCode;
 use serde_json::Value;
@@ -250,19 +250,44 @@ fn p10_a_live_key_of_that_name_under_another_digest_is_not_success() {
 }
 
 /// A4 order: the intent is appended (fsynced) before the writer commits, and
-/// the intent's base is the file as it was.
+/// the writer records "intent" only once the append has returned: at that
+/// step the audit log already holds the intent line.
 #[test]
 fn a4_the_intent_is_durable_before_the_writer_commits() {
+    use crate::config_reload::write_order;
     let fx = Fixture::new(Setup::default());
     let target = crate::identity_grants::journal::resolved(&fx.path());
-    crate::config_reload::write_order::take(&target);
+    write_order::take(&target);
+    let audit = fx.dir.path().join("audit.jsonl");
+    let held = Arc::new(Mutex::new(None));
+    let cell = Arc::clone(&held);
+    write_order::on(
+        &target,
+        "intent",
+        Arc::new(move || {
+            // The create's own intent: its event and its key, read from the
+            // record, so another key's intent cannot stand in for it.
+            let log = std::fs::read_to_string(&audit).unwrap_or_default();
+            let own = log
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .any(|record| {
+                    record["event"] == "config_key_create_intent" && record["subject"] == "ordered"
+                });
+            *cell.lock().expect("cell") = Some(own);
+        }),
+    );
     assert_eq!(
         fx.post(Call::new(&fx.body("ordered"))).status,
         StatusCode::CREATED
     );
+    let steps = write_order::take(&target);
+    assert_eq!(steps, ["intent", "commit"]);
+    let on_disk = *held.lock().expect("cell");
     assert_eq!(
-        crate::config_reload::write_order::take(&target),
-        ["intent", "commit"]
+        on_disk,
+        Some(true),
+        "\"intent\" came before the append of the ordered key's intent"
     );
 }
 
@@ -278,8 +303,6 @@ fn a4_the_intent_is_durable_before_the_writer_commits() {
 /// reloads.
 #[test]
 fn p9r_a_failed_rollback_is_state_uncertain_and_keeps_the_original() {
-    use std::sync::Mutex;
-
     use crate::config_persistence::journal::{self, fault};
     use crate::config_reload::{refuse_hook, write_order};
     let fx = Fixture::new(Setup::default());

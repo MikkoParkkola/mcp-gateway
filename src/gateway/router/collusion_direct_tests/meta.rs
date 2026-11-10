@@ -478,12 +478,14 @@ async fn meta_grant_decision_failure_leaves_no_receipt() {
     // key never carries on HTTP: caller A also presents a verified identity,
     // and that identity owns the capability.
     const ALICE: (&str, &str) = ("https://idp.example.invalid", "alice-sub");
-    let alice = || crate::key_server::oidc::VerifiedIdentity {
-        subject: ALICE.1.to_string(),
-        email: "alice@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: ALICE.0.to_string(),
+    let alice = || {
+        crate::key_server::oidc::VerifiedIdentity::for_test(
+            ALICE.1.to_string(),
+            "alice@example.invalid".to_string(),
+            None,
+            vec![],
+            ALICE.0.to_string(),
+        )
     };
     // The capability's endpoint answers the relayable prose.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

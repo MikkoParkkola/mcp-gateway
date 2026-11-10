@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::atomic::{FileMode, Symlink, write_atomic};
+use super::sync_dir_of;
 use crate::config::UnreadConfig;
 use crate::identity_grants::journal::resolved;
 
@@ -487,23 +488,6 @@ fn remove_if_present(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Flush `path`'s directory, so a create, rename or remove in it is durable;
-/// on Windows through the shared helper that opens the directory for it.
-fn sync_dir_of(path: &Path) -> std::io::Result<()> {
-    let dir = path
-        .parent()
-        .filter(|d| !d.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    #[cfg(windows)]
-    {
-        crate::private_fs::sync_dir(dir)
-    }
-    #[cfg(not(windows))]
-    {
-        std::fs::File::open(dir)?.sync_all()
-    }
-}
-
 /// Test-only faults, keyed by the resolved target so parallel tests never see
 /// each other's. A global rather than a thread-local: recovery runs on a
 /// blocking-pool thread, not the test's.
@@ -519,6 +503,49 @@ pub(crate) mod fault {
         FailJournalRemove,
         /// Recovery of a `staged` journal stops until released.
         Pause(Arc<Pause>),
+        /// A commit fails before its rename.
+        FailWrite,
+        /// The directory sync of the given A call fails, every time, while armed.
+        FailDirSync(crate::config_persistence::commit::SyncKey),
+        /// The read-back's file flush fails, every time, while armed.
+        FailFileSync,
+        /// A row's action on the target at a point inside an A call.
+        Hook(HookAt, Arc<dyn Fn(&Path) + Send + Sync>),
+        /// Several of the above armed together on one target.
+        All(Vec<Fault>),
+    }
+
+    /// Where a `Hook` runs inside an A call.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum HookAt {
+        /// Just before the read-back opens the target.
+        BeforeReadBack,
+        /// Just before the configured path is checked again (step 5).
+        BeforeRecheck,
+    }
+
+    /// Real directory syncs per target, so a row proves A synced.
+    static SYNCED: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+
+    /// Count one real directory sync for `target`.
+    pub(crate) fn note_synced(target: &Path) {
+        let mut synced = SYNCED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *synced
+            .get_or_insert_with(HashMap::new)
+            .entry(target.to_path_buf())
+            .or_default() += 1;
+    }
+
+    /// The real directory syncs counted for `target`.
+    pub(crate) fn synced(target: &Path) -> usize {
+        SYNCED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|m| m.get(target).copied())
+            .unwrap_or(0)
     }
 
     /// A gate recovery waits at: the test sees it entered, then releases it.
@@ -569,7 +596,7 @@ pub(crate) mod fault {
     /// fault was reached and not merely armed.
     static FIRED: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
 
-    pub(super) fn note_fired(target: &Path) {
+    pub(crate) fn note_fired(target: &Path) {
         let mut fired = FIRED
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -580,10 +607,6 @@ pub(crate) mod fault {
     }
 
     /// The times the fault set for `config` has fired since it was set.
-    #[cfg_attr(
-        not(feature = "webui"),
-        expect(dead_code, reason = "read by the web UI's create-key rows")
-    )]
     pub(crate) fn fired(config: &Path) -> usize {
         let key = crate::identity_grants::journal::resolved(config);
         let fired = FIRED
@@ -634,11 +657,28 @@ pub(crate) mod fault {
         }
     }
 
-    pub(super) fn get(target: &Path) -> Option<Fault> {
+    pub(crate) fn get(target: &Path) -> Option<Fault> {
         FAULTS
             .lock()
             .expect("faults")
             .as_ref()
             .and_then(|map| map.get(target).cloned())
+    }
+
+    /// The armed fault for `target` that `want` picks, looking inside
+    /// [`Fault::All`]; a pick counts as fired.
+    pub(crate) fn fires(target: &Path, want: impl Fn(&Fault) -> bool) -> Option<Fault> {
+        fn find(f: &Fault, want: &dyn Fn(&Fault) -> bool) -> Option<Fault> {
+            match f {
+                Fault::All(all) => all.iter().find_map(|f| find(f, want)),
+                f if want(f) => Some(f.clone()),
+                _ => None,
+            }
+        }
+        let picked = get(target).and_then(|f| find(&f, &want));
+        if picked.is_some() {
+            note_fired(target);
+        }
+        picked
     }
 }

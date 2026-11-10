@@ -169,6 +169,63 @@ class TestOnlyFiles(unittest.TestCase):
         )
         self.assertEqual(found, ["src/a.rs"])
 
+    # MIK-9387.TCFG.1: an inner cfg counts only in the leading attribute run of
+    # its own file or inline module; anywhere else (a macro's tokens, after an
+    # item) it marks nothing, so production code is never skipped through it.
+    def test_an_inner_cfg_in_a_macro_call_does_not_mark_the_file(self):
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "mod a;\n",
+                "src/a.rs": "ignore!(#![cfg(test)]);\npub fn production() {}\nmod child;\n",
+                "src/a/child.rs": "",
+            }
+        )
+        self.assertEqual(found, [])
+
+    def test_an_inner_cfg_in_a_macro_call_does_not_mark_an_inline_module(self):
+        for body in (
+            "mod outer { ignore!(#![cfg(test)]); mod child; }\n",
+            "mod outer { ignore![#![cfg(test)]]; mod child; }\n",
+            "mod outer { ignore!{ #![cfg(test)] } mod child; }\n",
+            "mod outer { fn f() {} #![cfg(test)] mod child; }\n",
+            # A `mod` inside a macro's tokens is input the macro may drop.
+            "emit! { mod outer { #![cfg(test)] mod child; } }\n",
+            "emit!( mod outer { #![cfg(test)] mod child; } );\n",
+            "macro_rules! m { () => { mod outer { #![cfg(test)] mod child; } }; }\n",
+            "emit !{ mod outer { #![cfg(test)] mod child; } }\n",
+            "宏!{ mod outer { #![cfg(test)] mod child; } }\n",
+            "macro_rules! r#m { () => { mod outer { #![cfg(test)] mod child; } }; }\n",
+            "macro_rules! 宏 { () => { mod outer { #![cfg(test)] mod child; } }; }\n",
+            "r#emit! { mod outer { #![cfg(test)] mod child; } }\n",
+            "e\u0301! { mod outer { #![cfg(test)] mod child; } }\n",
+        ):
+            with self.subTest(body=body):
+                found = self.only_test_files({"src/lib.rs": body, "src/outer/child.rs": ""})
+                self.assertEqual(found, [])
+
+    def test_an_inner_cfg_leading_its_module_still_counts(self):
+        found = self.only_test_files(
+            {"src/lib.rs": "mod t {\n    #![cfg(test)]\n    mod child;\n}\n", "src/t/child.rs": ""}
+        )
+        self.assertEqual(found, ["src/t/child.rs"])
+
+    def test_a_module_after_a_macro_call_still_leads_its_scope(self):
+        found = self.only_test_files(
+            {"src/lib.rs": "emit! { x }\nmod t {\n    #![cfg(test)]\n    mod child;\n}\n", "src/t/child.rs": ""}
+        )
+        self.assertEqual(found, ["src/t/child.rs"])
+
+    def test_a_leading_inner_cfg_after_docs_and_comments_still_counts(self):
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "mod a;\n",
+                "src/a.rs": '//! docs\n// note\n#![doc = "x"]\n#![cfg(test)]\nmod child;\n',
+                "src/a/child.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a.rs", "src/a/child.rs"])
+
+
 class CfgIsTest(unittest.TestCase):
     """A predicate is test-only when it is false whenever `test` is."""
 
@@ -197,9 +254,34 @@ class CfgIsTest(unittest.TestCase):
             "all(unix, any(test, windows))",
             "all(test, unix",
             "all()",
+            # MIK-9387.TCFG.1: a comma inside a quoted value separates no operand.
+            'all(feature = "a,test,b")',
+            'all(feature = r"a,test")',
+            'all(unix, feature = "x,test")',
         ):
             with self.subTest(expr=expr):
                 self.assertFalse(self.judge(expr))
+
+
+class SharedCases(unittest.TestCase):
+    """MIK-9387.TCFG.1: the Python column of the case table the Rust reader's
+    rows read too (src/test_source_text_tests.rs)."""
+
+    def test_every_case_matches_the_python_column(self):
+        judge = load_guard(Path(".")).cfg_is_test
+        rows = [
+            line.split("\t")
+            for line in (SCRIPT.parents[2] / "src/test_source_text_cases.tsv").read_text(encoding="utf-8").splitlines()
+            if line and not line.startswith("#")
+        ]
+        self.assertGreater(len(rows), 20)
+        for expr, python, rust in rows:
+            with self.subTest(expr=expr):
+                self.assertIn(python, ("yes", "no"))
+                self.assertIn(rust, ("yes", "no"))
+                # The columns may differ only where Python sees more code.
+                self.assertFalse(python == "yes" and rust == "no", "Python may not skip what Rust keeps")
+                self.assertEqual(judge(expr), python == "yes")
 
 
 class Blank(unittest.TestCase):

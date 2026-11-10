@@ -25,9 +25,11 @@ const PRE_SEND_SITES: &[&str] = &[
     // The dispatch's started slot was replaced before its era was read: refused
     // before the wire, to be retried (MIK-8186, `start_judged`).
     "backend/era.rs",
-    // Start loop exhausted, connect policy changed, publish refused, and
-    // `pre_send_start_error`.
+    // Start loop exhausted, connect policy changed, and `pre_send_start_error`.
     "backend/lifecycle.rs",
+    // Publish refused: the backend stopped or its destination policy moved
+    // while it started.
+    "backend/lifecycle/entry_start.rs",
     // Stale tools refresh refused in cooldown.
     "backend/metadata.rs",
     // Start refused: package cache still locked, or its rename timed out.

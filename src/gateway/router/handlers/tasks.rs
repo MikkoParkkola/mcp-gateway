@@ -363,6 +363,11 @@ async fn recover_from_upstream(
             &target.arguments,
             crate::gateway::meta_mcp::upstream::recovery_attestation(params),
         );
+        // No identity grant can refuse a recovery read: `grant_evaluation`
+        // applies only to the capability backend, and a capability task never
+        // holds an upstream handle (the capability route in
+        // `invoke/dispatch.rs` returns before the handle capture). A test row
+        // pins that premise; revisit this read if it goes red.
         state
             .meta_mcp
             .check_invocation_policy(&policy_args, caller.session_id, policy_caller)

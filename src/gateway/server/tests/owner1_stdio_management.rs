@@ -131,7 +131,7 @@ async fn legacy_unkeyed_repeat_executes_twice() {
 struct Managed {
     meta: Arc<MetaMcp>,
     mtls: Arc<MtlsPolicy>,
-    _data_dir: tempfile::TempDir,
+    _data_dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 async fn managed() -> Managed {
@@ -153,7 +153,7 @@ async fn managed() -> Managed {
             ..BackendConfig::default()
         },
     );
-    let data_dir = tempfile::tempdir().expect("tempdir");
+    let data_dir = crate::test_dir_keep::kept_tempdir();
     let built = Gateway::new(config)
         .await
         .expect("the production constructor accepts this configuration")

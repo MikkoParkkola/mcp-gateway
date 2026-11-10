@@ -22,6 +22,54 @@ pub enum EmptyIdentity {
 /// Equality is `(authority, subject)` only; see its `PartialEq` impl.
 /// Read from bytes only through [`RawGrantSubject`], so a subject that names
 /// no one is refused wherever it is deserialized, whatever holds it.
+///
+/// Built only through the checked constructor and read through its accessors:
+///
+/// ```
+/// use mcp_gateway::identity_grants::GrantSubject;
+///
+/// let subject = GrantSubject::new("https://idp.test", "alice", None).expect("names someone");
+/// assert_eq!(subject.authority(), "https://idp.test");
+/// assert_eq!(subject.subject(), "alice");
+/// assert!(GrantSubject::new("https://idp.test", " ", None).is_err());
+/// ```
+///
+/// Code outside this module cannot build one by a struct literal:
+///
+/// ```compile_fail,E0451
+/// use mcp_gateway::identity_grants::GrantSubject;
+///
+/// fn mint() -> GrantSubject {
+///     GrantSubject {
+///         authority: String::new(),
+///         subject: String::new(),
+///         label: None,
+///     }
+/// }
+/// ```
+///
+/// or by copying another with one field changed:
+///
+/// ```compile_fail,E0451
+/// use mcp_gateway::identity_grants::GrantSubject;
+///
+/// fn relabel(other: GrantSubject) -> GrantSubject {
+///     GrantSubject {
+///         subject: String::new(),
+///         ..other
+///     }
+/// }
+/// ```
+///
+/// and cannot change one after it was built:
+///
+/// ```compile_fail,E0616
+/// use mcp_gateway::identity_grants::GrantSubject;
+///
+/// fn rename(identity: &mut GrantSubject) {
+///     identity.subject = String::new();
+/// }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(try_from = "RawGrantSubject")]
 pub struct GrantSubject {

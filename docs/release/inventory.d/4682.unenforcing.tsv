@@ -1,0 +1,1 @@
+src/gateway/router/meta_refusal_audit.rs	with_trace	1	Sets the trace a route-stage refusal is recorded under; it only carries the id the step check already used, and a wrong id leaves a refusal listed twice, which a row pins

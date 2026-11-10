@@ -55,16 +55,29 @@ fn p1_a_full_body_writes_the_entry_and_answers_the_secret_once() {
     );
     assert!(key.admin);
     assert_eq!(key.rate_limit, 7);
-    assert!(key.expires_at.is_some());
+    let expiry: chrono::DateTime<chrono::Utc> = "2999-01-01T00:00:00Z".parse().expect("instant");
+    assert_eq!(key.expires_at, Some(expiry), "the stored expiry");
     let client = fx.live.generation().auth().validate_token(KNOWN);
     assert_eq!(client.map(|c| c.name), Some("alpha".to_owned()));
     let listed = fx.get();
     assert_eq!(listed["revision"], answer["revision"]);
-    let entry = listed["keys"][1].clone();
-    assert_eq!(
-        (entry["name"].clone(), entry["live"].clone()),
-        (json!("alpha"), json!(true))
-    );
+    // Every supplied field comes back as given. The call above used the key,
+    // so `last_used` is set; its instant is the one thing not pinned.
+    let expected = json!({
+        "name": "alpha",
+        "backends": ["one", "two"],
+        "allowed_tools": ["read_*"],
+        "denied_tools": ["write_file"],
+        "admin": true,
+        "expires_at": "2999-01-01T00:00:00Z",
+        "previous_expires_at": null,
+        "rate_limit": 7,
+        "live": true,
+    });
+    let mut entry = listed["keys"][1].clone();
+    let last_used = entry.as_object_mut().and_then(|e| e.remove("last_used"));
+    assert!(last_used.is_some_and(|at| at.is_string()), "{entry}");
+    assert_eq!(entry, expected);
 }
 
 /// P0: the real generator, no seam: two creates, two distinct 49-character
@@ -125,6 +138,10 @@ fn p8_a_file_with_no_key_list_gets_one() {
     let keys = fx.file_keys();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].backends, ["a", "b"]);
+    assert_eq!(
+        keys[0].allowed_tools.as_deref(),
+        Some(&["x*".to_owned()][..])
+    );
     assert_eq!(keys[0].denied_tools.as_deref(), Some(&["y".to_owned()][..]));
 }
 

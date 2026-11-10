@@ -348,13 +348,7 @@ async fn revoke_tokens_by_subject(
     };
     // An empty subject names no one: refused before anything is revoked
     // (MIK-8286).
-    let Some(actor) = VerifiedIdentity::checked(
-        issuer.clone(),
-        params.subject.clone(),
-        String::new(),
-        None,
-        Vec::new(),
-    ) else {
+    let Some(actor_id) = VerifiedIdentity::stable_actor_id_for(&issuer, &params.subject) else {
         return error_response(
             StatusCode::BAD_REQUEST,
             "invalid_request",
@@ -365,7 +359,7 @@ async fn revoke_tokens_by_subject(
     if count > 0 {
         crate::events::credentials_changed();
     }
-    let ev = AuditEvent::revoked(&format!("bulk:{}", actor.stable_actor_id()), None);
+    let ev = AuditEvent::revoked(&format!("bulk:{actor_id}"), None);
     audit::emit(&ev);
 
     (
@@ -623,13 +617,13 @@ mod tests {
         let token = TemporaryToken {
             jti: "jti".to_string(),
             token: "mcpgw_test".to_string(),
-            identity: VerifiedIdentity {
-                subject: "sub".to_string(),
-                email: "alice@example.com".to_string(),
-                name: None,
-                groups: Vec::new(),
-                issuer: "https://accounts.google.com".to_string(),
-            },
+            identity: VerifiedIdentity::for_test(
+                "sub".to_string(),
+                "alice@example.com".to_string(),
+                None,
+                Vec::new(),
+                "https://accounts.google.com".to_string(),
+            ),
             scopes: TokenScopes::default(),
             iat: now,
             exp: now + 3600,
@@ -657,13 +651,13 @@ mod tests {
         let token = TemporaryToken {
             jti: "jti".to_string(),
             token: "mcpgw_test".to_string(),
-            identity: VerifiedIdentity {
-                subject: "sub".to_string(),
-                email: "alice@example.com".to_string(),
-                name: None,
-                groups: Vec::new(),
-                issuer: "https://accounts.google.com".to_string(),
-            },
+            identity: VerifiedIdentity::for_test(
+                "sub".to_string(),
+                "alice@example.com".to_string(),
+                None,
+                Vec::new(),
+                "https://accounts.google.com".to_string(),
+            ),
             scopes: TokenScopes {
                 backends: vec!["tavily".to_string()],
                 tools: vec!["tavily-search".to_string()],

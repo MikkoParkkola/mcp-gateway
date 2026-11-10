@@ -95,8 +95,12 @@ impl UiCall {
     }
 
     /// Run `call` with this UI call in scope.
-    pub(crate) async fn scope<F: std::future::Future>(self: &Arc<Self>, call: F) -> F::Output {
-        UI_CALL.scope(Arc::clone(self), call).await
+    // A plain function, not an `async fn`: an `async fn` would hold `call` twice.
+    pub(crate) fn scope<F: std::future::Future>(
+        self: &Arc<Self>,
+        call: F,
+    ) -> impl std::future::Future<Output = F::Output> + use<F> {
+        UI_CALL.scope(Arc::clone(self), call)
     }
 
     pub(crate) fn outcome(&self) -> Outcome {
@@ -179,8 +183,8 @@ pub(crate) fn note_dispatched(_step: (&str, &str)) {
 /// broader "cannot have acted" list is not used here.
 ///
 /// Known gap: a backend retired between retry attempts raises
-/// `BackendNotFound` on the later attempt (backend/lifecycle.rs), so a call
-/// whose first attempt reached the backend can still read as not run. The
+/// `BackendNotFound` on the later attempt (`backend/lifecycle/entry_start.rs`), so
+/// a call whose first attempt reached the backend can still read as not run. The
 /// retry loops are to carry "an attempt may have reached the backend" out as
 /// a non-pre-dispatch error; this check then becomes `is_pre_dispatch()`.
 pub(crate) fn note_send_error(catalogue_miss: bool) {

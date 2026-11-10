@@ -36,6 +36,11 @@ import tomllib
 from pathlib import Path
 
 LIST = "docs/release/macos-test-exclusions.tsv"
+# The one shared test-only judgement (MIK-9387.TCFG.2).
+_READER = Path(__file__).resolve().parents[2] / "scripts/dev/check-orphan-test-modules.py"
+_spec = importlib.util.spec_from_file_location("check_orphan_test_modules", _READER)
+_orphan = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_orphan)
 WORKFLOW = ".github/workflows/ci.yml"
 SHARD_RUNNER = "scripts/ci/shard_tests.py"
 # The two CI configurations a gate is evaluated under (MIK-8237), with every
@@ -70,8 +75,7 @@ ATTR = re.compile(r"#!?\[(cfg|cfg_attr)\(")
 TOKEN = re.compile(r'\s*(?:(\w+)|("(?:[^"\\]|\\.)*")|([(),=]))')
 TEST_ATTR = re.compile(r"#\[(tokio::)?test\b")
 ITEM = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(fn|mod)\s+(\w+)")
-TEST_CFG = re.compile(r"#\[cfg\((?:all\()?test\b")
-TEST_FILE = re.compile(r"(^|/)tests?(/|\.rs$)|_tests?\.rs$|_tests/")
+TEST_FILE =re.compile(r"(^|/)tests?(/|\.rs$)|_tests?\.rs$|_tests/")
 
 
 def tokens(text: str) -> list[str] | None:
@@ -181,24 +185,18 @@ def attribute_span(line: str) -> tuple[str, str] | None:
 
 
 def gated_on_test(attribute: str) -> bool:
-    """Whether a `#[cfg(..)]` names `test` anywhere in its predicate (falling
-    back to the leading-`test` spelling when it cannot be parsed)."""
+    """Whether a `#[cfg(..)]` compiles only under test, by the shared reader:
+    `any(test, unix)` also builds outside tests, so it is not a test gate.
+    An attribute that does not close is read as a test gate when it names
+    `test` at all: here that is the side that checks more (a test module
+    must be listed when it is kept off macOS)."""
     head = ATTR.match(attribute)
     if not head or head.group(1) != "cfg":
         return False
     span = attribute_span(attribute)
-    tree = predicate(span[0]) if span else None
-    if tree is None:
+    if span is None:
         return bool(re.search(r"\btest\b", unquoted(attribute)))
-
-    def names_test(node) -> bool:
-        if node[0] in ("all", "any"):
-            return any(names_test(n) for n in node[1])
-        if node[0] == "not":
-            return False
-        return node == ("flag", "test")
-
-    return names_test(tree)
+    return _orphan.cfg_is_test(span[0])
 
 
 def predicate(text: str):

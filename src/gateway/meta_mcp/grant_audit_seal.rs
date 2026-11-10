@@ -53,6 +53,6 @@ pub(super) fn refuse_late(
         tool,
         "grant decision after the answer's record; refused"
     );
-    spawn_write(logger, vec![note]);
+    spawn_write(logger, vec![note], Vec::new());
     Err(Error::AuditUnavailable)
 }

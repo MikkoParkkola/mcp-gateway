@@ -9,6 +9,7 @@ src/capability/parser.rs	parse_capability_file	fs::read_to_string	1	not-config	c
 src/capability/pin_file.rs	pin_file_until	fs::read_to_string	1	not-config	capability YAML under the directory lock; public definitions
 src/chains/checkpoint.rs	append	.open	1	write-only	appends a chain checkpoint; reads nothing
 src/chains/checkpoint.rs	load	fs::read_to_string	1	not-config	chain checkpoint JSON
+src/commands/api.rs	read_data	File::open	1	not-config	operator-named request body for one api call (--data @FILE), size-capped
 src/commands/config_export/mod.rs	merge_into_config	fs::read_to_string	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
 src/commands/config_export/mod.rs	rollback_client_config	fs::read	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
 src/commands/config_export/mod.rs	verify_gateway_entry	fs::read_to_string	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
@@ -38,7 +39,9 @@ src/config_persistence_atomic.rs	copy_keeping_access	fs::copy	1	backup-copy	Unix
 src/config_persistence_atomic.rs	create_scratch	.open	1	write-only	creates the atomic writer's scratch file (create_new): owner-only for a private write, the process default for an inherit write; reads nothing
 src/config_persistence_atomic.rs	finish_kept	.open	1	write-only	Windows: creates the scratch (create_new) on a volume that keeps no access lists; reads nothing
 src/config_persistence_atomic_windows.rs	prepare	.open	1	no-content	Windows: opens the write target with READ_CONTROL only, to copy its access list; no bytes are read
-src/config_persistence_journal.rs	sync_dir_of	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/config_persistence.rs	sync_dir_for	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/config_persistence_commit.rs	open_target	.open	1	read-only	Windows: the commit primitive's read-back handle on gateway.yaml, opened read-write without write or delete sharing so the file flushed is the file hashed; reads to hash, writes nothing
+src/config_persistence_commit.rs	open_target	open_nonblocking	1	read-only	hashes gateway.yaml's bytes just written by the commit primitive, or the revision the replace journal records, and compares the digest; never parsed, writes nothing; only a regular file is hashed
 src/config_persistence_lock.rs	keep_private	.open	1	no-content	opens the config lock sidecar to hold the lock; its bytes are never read
 src/config_persistence_scratch.rs	create_new_private	.open	1	write-only	creates an owner-only file (create_new); reads nothing
 src/config_persistence_scratch.rs	create_private_replacing	.open	1	write-only	creates an owner-only file over an old one; reads nothing

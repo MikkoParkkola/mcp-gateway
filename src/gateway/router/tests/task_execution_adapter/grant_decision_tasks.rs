@@ -224,7 +224,9 @@ async fn surfaced_task_grant_denial_writes_one_record() {
         0,
         "the refused task reaches nothing"
     );
-    let records = decisions(&row.dir);
+    // Written after the call settles, on the slot's own task.
+    let records =
+        crate::gateway::meta_mcp::grant_audit_fixture::wait_for_decisions(&row.dir, 1).await;
     std::assert_eq!(records.len(), 1, "the one grant decision: {records:#?}");
     std::assert!(
         records.iter().all(|r| r["outcome"] == json!("denied")),

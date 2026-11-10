@@ -7,6 +7,7 @@
 
 const OPS: &str = include_str!("ops.rs");
 const ERROR: &str = include_str!("../error.rs");
+const ATTEMPT: &str = include_str!("ops/attempt.rs");
 
 /// The text of `request_attempted` up to its send closure: the pre-send region.
 fn pre_send_region() -> &'static str {
@@ -14,7 +15,7 @@ fn pre_send_region() -> &'static str {
         .find("async fn request_attempted(")
         .expect("request_attempted is in ops.rs");
     let send = OPS[start..]
-        .find("counted_send(async move")
+        .find("counted_send(")
         .expect("the send closure is a counted send");
     &OPS[start..start + send]
 }
@@ -63,16 +64,28 @@ fn every_transport_call_is_a_counted_send() {
         .find("pub async fn notify_with_headers(")
         .map_or(OPS.len(), |at| start + at);
     let body = &OPS[start..end];
-    let counted = body
-        .find("counted_send(async move")
-        .expect("a counted send");
-    for call in [".request_with_headers(", ".request_with_task_capability("] {
-        let at = body
-            .find(call)
-            .unwrap_or_else(|| panic!("{call} is in request_attempted"));
-        assert!(at > counted, "{call} is outside the counted send");
-    }
+    // The one counted send wraps the timed attempt, and the timed attempt
+    // holds the transport calls: none is made in request_attempted itself.
+    assert!(
+        body.contains("counted_send(attempt::send_timed("),
+        "the counted send wraps the timed attempt"
+    );
     assert_eq!(body.matches("counted_send(").count(), 1, "one counted send");
+    assert_eq!(
+        OPS.matches("send_timed(").count(),
+        1,
+        "the timed attempt is sent only there"
+    );
+    let timed = &ATTEMPT[ATTEMPT
+        .find("pub(super) async fn send_timed(")
+        .expect("send_timed is in ops/attempt.rs")..];
+    for call in [".request_with_headers(", ".request_with_task_capability("] {
+        assert!(
+            !body.contains(call),
+            "{call} is made outside the counted send"
+        );
+        assert!(timed.contains(call), "{call} is in the timed attempt");
+    }
 }
 
 /// R20: a counted send is taken back only on `is_pre_dispatch`, so that list

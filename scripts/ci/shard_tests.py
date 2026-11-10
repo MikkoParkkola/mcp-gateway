@@ -7,8 +7,10 @@ The Tests, Windows check and macOS check suites run as shards. Each shard is
 a plain `cargo test` over a subset of test targets. The shards of one OS are
 exact complements of the command that job ran before sharding:
 
-- the library is split by a libtest filter and the matching `--skip`, or run
-  whole in one shard (macOS);
+- the library is split by a libtest filter and the matching `--skip` (Windows
+  splits the skipped part again by module filters, so it has three lib
+  shards), or run whole in one shard (macOS). Filters match substrings of
+  the test path, so a module filter also takes its nested paths;
 - the integration targets are split by `--test` glob classes `[a-l]*` and
   `[!a-l]*`, or taken whole (`*`) where the OS runs a single integration shard.
 
@@ -18,10 +20,16 @@ quietly stops matching cannot read as green. A floor that drops because tests
 were deleted is lowered in the same diff, where review sees it.
 
   shard_tests.py run <os> <shard>    run it (exit 1 on failure or under floor)
+  shard_tests.py export-lib <dir>    build the lib test binary and copy it to <dir>
+  shard_tests.py wait-lib <artifact> <producer job name>
+                                     wait for it in this run (found=true|false)
+  shard_tests.py run-prebuilt <os> <shard> <binary>
+                                     run a PREBUILT shard from that binary
   shard_tests.py --self-test         check the counter against fixed logs
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -40,6 +48,8 @@ SKIPS = {
     "windows": ["--skip", BURST],
 }
 LIB_SPLIT = "gateway::"
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+LIB_BINARY = "lib-tests"
 GLOB_A, GLOB_B, GLOB_ALL = "[a-l]*", "[!a-l]*", "*"
 BASE = ["test", "--all-features", "--no-fail-fast"]
 
@@ -47,6 +57,12 @@ BASE = ["test", "--all-features", "--no-fail-fast"]
 #  libtest args before the OS skips, floor of selected tests)
 _LIB_A = ("suite", ["--lib"], [LIB_SPLIT])
 _LIB_B = ("suite", ["--lib"], ["--skip", LIB_SPLIT])
+# Windows splits lib-b again: its tests ran about 23 min after a 22-min build (run 42493724287),
+# the longest job on a lane pull request. These top-level modules move to lib-c (4,727 of 9,251
+# tests then); lib-b skips them, so each library test still runs in exactly one shard.
+LIB_C_MODULES = ["security::", "capability::", "events::", "backend::", "transport::", "oauth::"]
+_WIN_LIB_B = ("suite", ["--lib"], ["--skip", LIB_SPLIT, *(x for m in LIB_C_MODULES for x in ("--skip", m))])
+_WIN_LIB_C = ("suite", ["--lib"], [*LIB_C_MODULES, "--skip", LIB_SPLIT])
 SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
     # Floors: the selections measured by the MIK-8482 probe (run 39135535466).
     "linux": {
@@ -57,19 +73,28 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
     },
     "windows": {
         "lib-a": [(*_LIB_A, 5335)],
-        "lib-b": [(*_LIB_B, 6747)],
+        # The former lib-b floor (6747), divided in the measured proportion.
+        "lib-b": [(*_WIN_LIB_B, 3299)],
+        "lib-c": [(*_WIN_LIB_C, 3448)],
         "int-a": [("suite", ["--bins", "--test", GLOB_A], [], 763)],
         "int-b": [("suite", ["--test", GLOB_B], [], 1238)],
     },
-    # macOS runs the library as one shard: each shard compiles the `--lib`
-    # test binary from cold, and with about two macOS runners a third job
-    # queues behind the others. One build and both halves' tests (floors
-    # 5352 + 6942) beat two builds.
+    # macOS builds the `--lib` test binary once (about two macOS runners; a
+    # second build cost 19-86 min, which #4562 removed). The `lib-b` job builds
+    # it, uploads it and runs the heavier half (Linux 45b: 1237 s of 2170 s);
+    # the `int` job, after its own suite, runs the other half from that binary
+    # (PREBUILT). Coverage is checked exactly on the binary (union_problems:
+    # no overlap, nothing missing); the floors are a coarse check, about 2%
+    # under the halves the pilot selected (run 42527204476: 9539 + 8161).
     "macos": {
-        "lib": [("suite", ["--lib"], [], 12294)],
+        "lib-b": [(*_LIB_B, 9350)],
+        "lib-a": [(*_LIB_A, 8000)],
         "int": [("suite", ["--bins", "--test", GLOB_ALL], [], 2205), ("doc", ["--doc"], [], 55)],
     },
 }
+# Shards that are no matrix leg of their own: each runs from the lib test
+# binary another shard of its OS built and exported (`export-lib`).
+PREBUILT = {"macos": {"lib-a": "lib-b"}}
 # Built, not run: the default `cargo test` target set compiles examples, and
 # Windows' former `cargo test --no-run` did too.
 EXAMPLES = {"linux": "int-b", "macos": "int", "windows": "int-b"}
@@ -91,7 +116,7 @@ KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
      "an audit write that outlives its test's temp dir "
      "(transparency_log::bounded_tests, identity_propagation::audit_fail_closed, "
      "signing_allocation_tests::withheld_parity_stdio, hardened_signing_e2e, "
-     "mik_7272_task_1_acs)"),
+     "gateway::router::task_lifecycle_tests)"),
 ]
 # Written out, not derived from the list above: an entry added there and not
 # here, or a count raised past its ceiling, fails the self-test, so the list
@@ -337,6 +362,19 @@ def self_test() -> int:
                "running 4 tests",
                "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"]
     assert selected(rustdoc) == 55, selected(rustdoc)
+    # libtest-record-parse: a line written straight to stderr mid-test can split
+    # a `test NAME ... RESULT` record (scripts/ci/mutants/fixtures/libtest).
+    # Floors read `running N` and `test result:` lines, which libtest writes
+    # before and after the tests, so the shared fixtures must count exactly.
+    fx = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mutants", "fixtures", "libtest")
+    for name, running, passed in [("midline-stderr.txt", 1, 1), ("alloc-meter-one-thread.txt", 1, 1),
+                                  ("failed-after-noise.txt", 1, 0), ("panic-in-passing-test.txt", 1, 1),
+                                  ("zero-match.txt", 0, 0)]:
+        lines = ["     Running unittests src/lib.rs (x)",
+                 *open(os.path.join(fx, name), encoding="utf-8").read().splitlines()]
+        assert selected(lines) == running, (name, selected(lines))
+        got = [int(m.group(1)) for m in map(RESULT.search, lines) if m]
+        assert got == [passed], (name, got)
     # #3944: a byte cp1252 cannot map, mirrored to a strict cp1252 stdout as
     # on the Windows runner. The mirror must not raise, and the line counts.
     import io
@@ -492,8 +530,89 @@ def self_test() -> int:
         assert found[".tmpLink01"] == ["audit.jsonl.hwm", "elsewhere"], found
         assert unexpected(found) == [".tmpLink01", ".tmpStray1"], found
     per_binary_rows()
+    prebuilt_rows()
     print("shard_tests self-test: ok")
     return 0
+
+
+def prebuilt_rows() -> None:
+    """The lib test binary is found in cargo's JSON, exported, and a PREBUILT shard run
+    from it counts its selection against its floor and fails on a red binary."""
+    art = {"reason": "compiler-artifact", "target": {"kind": ["lib"], "name": "mcp_gateway"},
+           "profile": {"test": True}, "executable": "/t/deps/mcp_gateway-1"}
+    other = [json.dumps({**art, "target": {"kind": ["bin"]}}), json.dumps({**art, "profile": {"test": False}}),
+             json.dumps({**art, "executable": None}), "not json", "   Compiling x"]
+    assert lib_test_binary([*other, json.dumps(art)]) == "/t/deps/mcp_gateway-1"
+    assert lib_test_binary(other) is None
+    with tempfile.TemporaryDirectory() as root:
+        fake = os.path.join(root, "fake-tests")
+
+        # `--list`: the whole set is gateway::a, gateway::b and other::c; each half lists its own
+        # unless LIST says otherwise (overlap: the skip half lists gateway::a too; gap: it drops c).
+        def binary(body: str, lists: str = "ok") -> None:
+            skip_half = {"ok": "other::c", "overlap": "gateway::a other::c", "gap": ""}[lists]
+            with open(fake, "w") as f:
+                f.write("#!/bin/sh\n"
+                        'if [ "$1" = --list ]; then shift 3\n'
+                        '  case "$1 $2" in "gateway:: "*) n="gateway::a gateway::b";; "--skip gateway::") n="' + skip_half + '";;'
+                        ' *) n="gateway::a gateway::b other::c";; esac\n'
+                        '  for t in $n; do echo "$t: test"; done; exit 0; fi\n'
+                        f"{body}\n")
+            os.chmod(fake, 0o644)  # run_prebuilt restores the exec bit an artifact drops
+        floor = SHARDS["macos"]["lib-a"][0][3]
+        binary(f'echo "running {floor} tests"; echo "test result: ok. {floor} passed; 0 failed; 0 ignored"; '
+               '[ "$1" = "gateway::" ] && [ "$CARGO_MANIFEST_DIR" = "$PWD" ] || exit 9')
+        assert run_prebuilt("macos", "lib-a", fake) == 0
+        binary(f'echo "running {floor - 1} tests"')
+        assert run_prebuilt("macos", "lib-a", fake) == 1, "a selection under the floor passed"
+        binary(f'echo "running {floor} tests"; exit 101')
+        assert run_prebuilt("macos", "lib-a", fake) == 1, "a red binary passed"
+        # The coverage guard: halves that overlap, or leave a test out, fail a green run.
+        ok_run = f'echo "running {floor} tests"; echo "test result: ok. {floor} passed; 0 failed; 0 ignored"'
+        binary(ok_run, "overlap")
+        assert run_prebuilt("macos", "lib-a", fake) == 1 and union_problems(fake, "macos"), "overlap passed"
+        binary(ok_run, "gap")
+        assert run_prebuilt("macos", "lib-a", fake) == 1 and union_problems(fake, "macos"), "a gap passed"
+        binary(ok_run)
+        assert run_prebuilt("macos", "lib-a", fake) == 0 and union_problems(fake, "macos") == []
+        # export-lib copies the executable cargo names, and fails when cargo names none.
+        built = os.path.join(root, "built")
+        with open(built, "w") as f:
+            f.write("bin")
+        cargo_ok = os.path.join(root, "cargo-ok")
+        with open(cargo_ok, "w") as f:
+            f.write(f"#!/bin/sh\necho '{json.dumps({**art, 'executable': built})}'\n")
+        os.chmod(cargo_ok, 0o755)
+        dest = os.path.join(root, "out")
+        assert export_lib(dest, (cargo_ok,)) == 0
+        assert open(os.path.join(dest, LIB_BINARY)).read() == "bin"
+        cargo_none = os.path.join(root, "cargo-none")
+        with open(cargo_none, "w") as f:
+            f.write("#!/bin/sh\necho '   Compiling x'\n")
+        os.chmod(cargo_none, 0o755)
+        assert export_lib(os.path.join(root, "out2"), (cargo_none,)) == 1
+    # wait_for_lib: when int waits, and when it gives up and builds its half itself.
+    def waits(states, grace=600):
+        t = [0.0]
+        seq = iter(states)
+        return wait_for_lib(lambda: next(seq), lambda s: t.__setitem__(0, t[0] + s), lambda: t[0], grace, 20)
+    assert waits([(False, "in_progress")] * 400 + [(True, "in_progress")]), "a slow producer was abandoned"
+    assert waits([(True, None)]), "a binary from an earlier attempt was not reused"
+    assert not waits([(False, "in_progress"), (False, "completed")]), "a producer that ended without it was awaited"
+    assert not waits([(False, None)] * 40), "an absent producer (int rerun alone) was awaited past grace"
+    assert not waits([(False, "queued")] * 40), "a producer queued past grace was awaited"
+    assert waits([(False, "queued")] * 5 + [(True, "in_progress")]), "a briefly queued producer was abandoned"
+    # The rehearsal input skips the wait and asks for the fallback, touching no API.
+    with tempfile.TemporaryDirectory() as root:
+        out = os.path.join(root, "out")
+        saved = {k: os.environ.get(k) for k in ("MACOS_LIB_REHEARSE_FALLBACK", "GITHUB_OUTPUT")}
+        os.environ.update(MACOS_LIB_REHEARSE_FALLBACK="true", GITHUB_OUTPUT=out)
+        try:
+            assert wait_lib("macos-lib-tests", "macOS shard lib-b") == 0
+            assert open(out).read() == "found=false\n"
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
 
 def per_binary_rows() -> None:
@@ -562,11 +681,155 @@ def per_binary_rows() -> None:
     # An unexpected empty folder at the top of TMPDIR still fails, as before.
     assert unexpected({"stray": []}) == ["stray"]
 
+def lib_test_binary(lines: list[str]) -> str | None:
+    """The `--lib` test executable in `cargo test --no-run --message-format=json` output."""
+    for line in lines:
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        target = msg.get("target", {}) if isinstance(msg, dict) else {}
+        if (msg.get("reason") == "compiler-artifact" and msg.get("executable")
+                and msg.get("profile", {}).get("test") and "lib" in target.get("kind", [])):
+            return msg["executable"]
+    return None
+
+
+def export_lib(dest: str, program: tuple[str, ...] = ("cargo",)) -> int:
+    """Build the `--lib` test binary (the same build `cargo test --all-features --lib` reuses) and
+    copy it to `dest` as LIB_BINARY, for a PREBUILT shard on another runner."""
+    rc, lines = cargo([*BASE, "--lib", "--no-run", "--message-format=json-render-diagnostics"], program)
+    path = lib_test_binary(lines) if rc == 0 else None
+    if path is None:
+        print(f"::error::export-lib: no lib test executable (cargo exited {rc})")
+        return 1
+    os.makedirs(dest, exist_ok=True)
+    out = os.path.join(dest, LIB_BINARY)
+    shutil.copy2(path, out)
+    os.chmod(out, 0o755)
+    print(f"::notice::export-lib: {path} -> {out} ({os.path.getsize(out)} bytes)")
+    return 0
+
+
+def listed(binary: str, test_args: list[str], os_kind: str) -> set[str]:
+    """The test names `binary` selects with `test_args` and the OS skips (`--list`, nothing runs)."""
+    out = subprocess.run([binary, "--list", "--format", "terse", *test_args, *SKIPS[os_kind]],
+                         capture_output=True, text=True, env={**os.environ, "CARGO_MANIFEST_DIR": ROOT},
+                         cwd=ROOT)
+    if out.returncode != 0:
+        raise RuntimeError(f"--list exited {out.returncode}: {out.stderr.strip()[-300:]}")
+    return {line[: -len(": test")] for line in out.stdout.splitlines() if line.endswith(": test")}
+
+
+def union_problems(binary: str, os_kind: str) -> list[str]:
+    """Problems with this OS's lib halves on `binary`: a test both select, or one neither does.
+    The halves' filters come from the table, so this checks exactly what the jobs run."""
+    halves = {name: steps[0][2] for name, steps in SHARDS[os_kind].items()
+              if any("--lib" in args for _, args, _, _ in steps)}
+    try:
+        whole = listed(binary, [], os_kind)
+        sets = {name: listed(binary, args, os_kind) for name, args in halves.items()}
+    except RuntimeError as error:
+        return [f"lib union: {error}"]
+    names = sorted(sets)
+    both = set.intersection(*sets.values()) if len(sets) > 1 else set()
+    missing = whole - set().union(*sets.values())
+    print(f"::notice::{os_kind} lib union: whole {len(whole)}, "
+          + ", ".join(f"{n} {len(sets[n])}" for n in names) + f", overlap {len(both)}, missing {len(missing)}")
+    out = [f"lib union: {len(both)} test(s) in both halves, e.g. {sorted(both)[:3]}"] * bool(both)
+    out += [f"lib union: {len(missing)} test(s) in neither half, e.g. {sorted(missing)[:3]}"] * bool(missing)
+    return out
+
+
+def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
+    """Run a PREBUILT shard from an exported lib test binary, as `cargo test` would run it: from the
+    package root with CARGO_MANIFEST_DIR set. Same floor and report as `run`."""
+    ((step, _args, test_args, floor),) = SHARDS[os_kind][shard]
+    os.chmod(binary, 0o755)  # an artifact round trip drops the exec bit
+    # The coverage guard: the halves' selections on this binary partition its whole list.
+    union = union_problems(binary, os_kind)
+    env = {**os.environ, "CARGO_MANIFEST_DIR": ROOT}
+    p = subprocess.Popen([binary, *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=ROOT)
+    lines = []
+    assert p.stdout is not None
+    for raw in p.stdout:
+        sys.stdout.buffer.write(raw)
+        sys.stdout.buffer.flush()
+        lines.append(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
+    rc = p.wait()
+    # The binary prints no cargo `Running` header: arm the count as cargo's would.
+    n = selected(["     Running unittests src/lib.rs (prebuilt)", *lines])
+    print(f"::notice::{os_kind} {shard} {step} (prebuilt): selected {n} (floor {floor}), rc {rc}")
+    failed = [f"{step}: test binary exited {rc}"] * (rc != 0)
+    failed += [f"{step}: selected {n} tests, below the floor of {floor}"] * (n < floor)
+    failed += union
+    for f in failed:
+        print(f"::error::{os_kind} {shard} {f}")
+    return 1 if failed else 0
+
+
+def wait_for_lib(fetch, sleep, clock, grace: float = 600, interval: float = 20) -> bool:
+    """Whether the exported lib binary arrives. `fetch()` gives (artifact present, producer job
+    status in this attempt or None). Gives up, so the caller builds the half itself, when the
+    producer finished without it, or is absent from this attempt (a rerun of int alone) or still
+    queued `grace` seconds in (both macOS runners held by waiting jobs). An in-progress producer
+    is waited for: building again would cost more than waiting."""
+    start = clock()
+    while True:
+        present, status = fetch()
+        if present:
+            return True
+        if status == "completed":
+            return False
+        if status in (None, "queued", "waiting", "pending") and clock() - start >= grace:
+            return False
+        sleep(interval)
+
+
+def wait_lib(artifact: str, producer: str) -> int:
+    """Wait for `artifact` from job `producer` of this run; write found=true|false to GITHUB_OUTPUT."""
+    if os.environ.get("MACOS_LIB_REHEARSE_FALLBACK") == "true":
+        # A dispatch input: rehearse the path a missing binary takes, without breaking lib-b.
+        print(f"::notice::wait-lib: rehearsing the fallback; {artifact} not used")
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write("found=false\n")
+        return 0
+    repo, run_id = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"]
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
+
+    def gh(path: str, jq: str) -> str:
+        return subprocess.run(["gh", "api", path, "--jq", jq], capture_output=True, text=True,
+                              check=True).stdout.strip()
+
+    def fetch():
+        count = gh(f"repos/{repo}/actions/runs/{run_id}/artifacts?name={artifact}", ".total_count")
+        status = gh(f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100",
+                    f'[.jobs[] | select(.name == "{producer}") | .status][0] // ""')
+        return int(count or 0) > 0, status or None
+
+    import time
+    start = time.monotonic()
+    found = wait_for_lib(fetch, time.sleep, time.monotonic)
+    waited = int(time.monotonic() - start)
+    print(f"::notice::wait-lib: {artifact} {'found' if found else 'not coming; building this half here'}"
+          f" after {waited} s")
+    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+        f.write(f"found={'true' if found else 'false'}\n")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if argv[1:] == ["--self-test"]:
         return self_test()
     if len(argv) == 4 and argv[1] == "run" and argv[3] in SHARDS.get(argv[2], {}):
-        return run(argv[2], argv[3])
+        return run(argv[2], argv[3])  # a PREBUILT shard too: int's fallback build
+    if len(argv) == 3 and argv[1] == "export-lib":
+        return export_lib(argv[2])
+    if len(argv) == 4 and argv[1] == "wait-lib":
+        return wait_lib(argv[2], argv[3])
+    if len(argv) == 5 and argv[1] == "run-prebuilt" and argv[3] in PREBUILT.get(argv[2], {}):
+        return run_prebuilt(argv[2], argv[3], argv[4])
     print(__doc__, file=sys.stderr)
     return 2
 

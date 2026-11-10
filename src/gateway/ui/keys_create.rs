@@ -20,7 +20,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::config_file::{Gateway, read_gateway};
-use super::errors::{flat_error, structured_error};
+use super::errors::{flat_error, stale, structured_error};
 use super::guard::Guard;
 use crate::config::{ApiKeyConfig, AuthConfig, Config, EnvOverlay};
 use crate::config_persistence::keyedit::{
@@ -71,10 +71,6 @@ fn fixed(status: StatusCode, message: &'static str) -> Response {
     flat_error(status, message).into_response()
 }
 
-fn coded(status: StatusCode, error: &'static str) -> Response {
-    (status, Json(json!({ "error": error }))).into_response()
-}
-
 /// A write whose outcome the gateway could not observe: the key may or may
 /// not be in gateway.yaml. Its secret was never returned, so the way out is
 /// to re-read the list, never to retry blindly.
@@ -109,14 +105,6 @@ fn invalid_field(field: &'static str) -> Response {
             "field": field,
             "message": "the value is not accepted",
         })),
-    )
-        .into_response()
-}
-
-fn stale(current: &FileRevision) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(json!({"error": "stale", "current": current.as_str()})),
     )
         .into_response()
 }
@@ -182,7 +170,7 @@ fn refused_field(body: &CreateBody) -> Option<&'static str> {
 fn expired_by(expires_at: Option<DateTime<Utc>>) -> Result<(), Box<Response>> {
     let Some(at) = expires_at else { return Ok(()) };
     match crate::clock::utc_now() {
-        Ok(now) if at > now => Ok(()),
+        Ok(now) if !crate::config::api_key_expired(Some(at), now) => Ok(()),
         Ok(_) => Err(Box::new(invalid_field("expires_at"))),
         Err(_) => Err(Box::new(fixed(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -204,7 +192,7 @@ async fn preconditions(state: &AppState, body: &CreateBody) -> Result<Checked, B
     let path = state.config_path.clone();
     let read = tokio::task::spawn_blocking(move || read_gateway("keys", path.as_deref())).await;
     if matches!(read, Ok(Ok(Gateway::None))) {
-        return Err(Box::new(coded(StatusCode::CONFLICT, "no_config_file")));
+        return Err(Box::new(fixed(StatusCode::CONFLICT, "no_config_file")));
     }
     let (Ok(Ok(Gateway::File { revision, config })), Some(context)) =
         (read, state.meta_mcp.reload_context())
@@ -215,10 +203,10 @@ async fn preconditions(state: &AppState, body: &CreateBody) -> Result<Checked, B
         )));
     };
     if config.auth.api_keys.iter().any(|k| k.name == body.name) {
-        return Err(Box::new(coded(StatusCode::CONFLICT, "name_taken")));
+        return Err(Box::new(fixed(StatusCode::CONFLICT, "name_taken")));
     }
     if revision.as_str() != body.revision {
-        return Err(Box::new(stale(&revision)));
+        return Err(Box::new(stale(&revision).into_response()));
     }
     Ok(Checked {
         revision,
@@ -325,7 +313,7 @@ struct Judge {
 }
 
 impl Judge {
-    fn refuse(&self, why: Refusal) -> String {
+    fn refuse_with(&self, why: Refusal) -> String {
         *self
             .outcome
             .lock()
@@ -337,8 +325,8 @@ impl Judge {
     fn check_expiry(&self, expires_at: Option<DateTime<Utc>>) -> Result<(), String> {
         let Some(at) = expires_at else { return Ok(()) };
         match crate::clock::utc_now() {
-            Ok(now) if at > now => Ok(()),
-            _ => Err(self.refuse(Refusal::Expired)),
+            Ok(now) if !crate::config::api_key_expired(Some(at), now) => Ok(()),
+            _ => Err(self.refuse_with(Refusal::Expired)),
         }
     }
 
@@ -347,7 +335,8 @@ impl Judge {
     fn check_flip(&self, entry: &NewKeyEntry) -> Result<(), String> {
         let mut wanted = self.file_auth.clone();
         wanted.api_keys.push(entry.as_key());
-        refuse_multi_user_flip(self.live.running(), &wanted).map_err(|_| self.refuse(Refusal::Flip))
+        refuse_multi_user_flip(self.live.running(), &wanted)
+            .map_err(|_| self.refuse_with(Refusal::Flip))
     }
 }
 
@@ -362,12 +351,12 @@ fn compute(
         judge.check_expiry(entry.expires_at)?;
         judge.check_flip(&entry)?;
         let at = judge.file_auth.api_keys.len();
-        edit_in_place(text, &entry.changes(at)).map_err(|_| judge.refuse(Refusal::NotWritten))
+        edit_in_place(text, &entry.changes(at)).map_err(|_| judge.refuse_with(Refusal::NotWritten))
     }
 }
 
 fn audit_unavailable() -> Response {
-    coded(StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable")
+    fixed(StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable")
 }
 
 /// Writes `replace` under the key write's audit: its intent names the caller
@@ -476,22 +465,22 @@ fn refused_write(
     }
     match (refusal, written) {
         (Some(Refusal::Expired), _) => invalid_field("expires_at"),
-        (Some(Refusal::Flip), _) => coded(StatusCode::CONFLICT, "restart_required"),
+        (Some(Refusal::Flip), _) => fixed(StatusCode::CONFLICT, "restart_required"),
         (Some(Refusal::NotWritten), _) => not_written(state),
-        (None, Err(ReplaceError::Stale { current })) => stale(&current),
+        (None, Err(ReplaceError::Stale { current })) => stale(&current).into_response(),
         (None, Err(ReplaceError::Busy)) => fixed(
             StatusCode::SERVICE_UNAVAILABLE,
             "the config is being written; retry",
         ),
         (None, Err(ReplaceError::ReloadRefused(_))) => {
-            coded(StatusCode::CONFLICT, "reload_refused")
+            fixed(StatusCode::CONFLICT, "reload_refused")
         }
         (None, Err(ReplaceError::AuditRefused(_) | ReplaceError::NoAuditLog)) => {
             audit_unavailable()
         }
         // The writer's own read check: nothing was written, so these are the
         // preconditions' answers, never the guard's text.
-        (None, Err(ReplaceError::NoConfigFile)) => coded(StatusCode::CONFLICT, "no_config_file"),
+        (None, Err(ReplaceError::NoConfigFile)) => fixed(StatusCode::CONFLICT, "no_config_file"),
         (None, Err(ReplaceError::ConfigRefused(_))) => fixed(
             StatusCode::SERVICE_UNAVAILABLE,
             "reload is off or gateway.yaml could not be loaded",

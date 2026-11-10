@@ -1,0 +1,2 @@
+# file	function	kind	count	class	reason
+src/config_persistence_commit.rs	commit	helper:write_atomic	1	helper	calls the crate's write_atomic (the config commit primitive's write)

@@ -335,12 +335,19 @@ async fn r6_the_join_is_by_name_not_by_position() {
     let mut swapped = items();
     swapped.reverse();
     let (_dir, path) = write_config(&yaml_of(&swapped));
-    let live = table(vec![key("alpha", ALPHA, None), key("beta", BETA, None)]);
+    // alpha is expired, so a positional join (file beta with live alpha)
+    // would call beta not live and alpha live.
+    let live = table(vec![
+        key("alpha", ALPHA, Some(PAST)),
+        key("beta", BETA, None),
+    ]);
     assert!(live.validate_token(BETA).is_some(), "premise");
     let answer = get(Some(&path), live, None).await;
     assert_eq!(names(&answer), vec![json!("beta"), json!("alpha")]);
     assert_ne!(entry(&answer, "beta")["last_used"], Value::Null);
     assert_eq!(entry(&answer, "alpha")["last_used"], Value::Null);
+    assert_eq!(entry(&answer, "beta")["live"], true, "beta joins by name");
+    assert_eq!(entry(&answer, "alpha")["live"], false, "alpha is expired");
 }
 
 /// Every entry's `last_used`, by name.

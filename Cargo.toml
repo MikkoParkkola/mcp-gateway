@@ -48,6 +48,7 @@ include = [
     "docs/QUICKSTART.md",
     "ARCHITECTURE.md",
     "codebase-map.md",
+    "docs/api/stable-ui-routes.md",
     "docs/blog/security-aware-mcp-gateway.md",
     "docs/design/RFC-0081-intelligent-tool-surfacing.md",
     "docs/design/surface-4.0.md",
@@ -369,7 +370,7 @@ strip = true
 
 [lints.rust]
 unsafe_code = "deny"
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(coverage)', 'cfg(mutants)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(coverage)', 'cfg(mutants)', 'cfg(reads_token_probe)'] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

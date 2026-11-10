@@ -28,13 +28,14 @@ pub(super) const ROWS: &[Row] = &[
         [401, 403, 503, 503],
         [401, 403, 409],
     ),
-    // control_plane.rs:72, mutations.rs:79 (mutate_policy), :310, :330, :342
+    // control_plane.rs:72, mutations.rs (mutate_policy): RBAC, then 409; the
+    // store is never consulted (ADR-029), so no 503 without one.
     row_cfg(
         "/ui/api/control-plane/policies",
         Method::POST,
         "/ui/api/control-plane/policies",
         Payload::Json(POLICY),
-        [401, 403, 503, 503],
+        [401, 403, 403, 409],
         [401, 403, 409],
     ),
     // control_plane.rs:72, mutations.rs:131 (resolve_decision), :194 (store), :245 (RBAC), :258 (409)

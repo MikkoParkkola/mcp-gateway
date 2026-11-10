@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::grant_audit_fixture::{
     CAPS, Endpoint, PERSONAL, capability_backend, capability_backend_exposed, decision_subject,
-    decisions, entries, grant, grants, invocations, log_path, logger, trace_of,
+    decisions, entries, grant, grants, invocations, log_path, logger, trace_of, wait_for_decisions,
 };
 use crate::backend::BackendRegistry;
 use crate::gateway::meta_mcp::{Authentication, MetaMcp, MetaMcpCallerContext};
@@ -56,13 +56,13 @@ fn oidc(issuer: &str, subject: &str, email: &str) -> Who {
             subject,
             Some(email.to_string()),
         )),
-        identity: Some(VerifiedIdentity {
-            subject: subject.to_string(),
-            email: email.to_string(),
-            name: None,
-            groups: vec![],
-            issuer: issuer.to_string(),
-        }),
+        identity: Some(VerifiedIdentity::for_test(
+            subject.to_string(),
+            email.to_string(),
+            None,
+            vec![],
+            issuer.to_string(),
+        )),
     }
 }
 
@@ -115,12 +115,12 @@ pub(super) fn gateway(
     meta
 }
 
-fn invoke_args() -> Value {
+pub(super) fn invoke_args() -> Value {
     json!({ "server": CAPS, "tool": PERSONAL, "arguments": {} })
 }
 
 /// One `tools/call` through the dispatch tail, answered as the client sees it.
-async fn call(meta: &MetaMcp, who: &Who, tool_name: &str, arguments: Value) -> Value {
+pub(super) async fn call(meta: &MetaMcp, who: &Who, tool_name: &str, arguments: Value) -> Value {
     let response = Box::pin(meta.handle_tools_call(
         RequestId::Number(1),
         tool_name,
@@ -136,7 +136,7 @@ fn error_code(answer: &Value) -> Option<i64> {
     answer.pointer("/error/code").and_then(Value::as_i64)
 }
 
-fn only(records: Vec<Value>, what: &str) -> Value {
+pub(super) fn only(records: Vec<Value>, what: &str) -> Value {
     assert_eq!(
         records.len(),
         1,
@@ -171,7 +171,8 @@ async fn grant_denial_writes_decision_record() {
     );
 
     let invocation = only(invocations(&dir), "invocation record");
-    let record = only(decisions(&dir), "decision record");
+    // Written after the call settles, on the slot's own task.
+    let record = only(wait_for_decisions(&dir, 1).await, "decision record");
     assert_eq!(record["outcome"], json!("denied"), "{record}");
     assert_eq!(record["reason"], json!("missing_grant"), "{record}");
     assert!(record.get("timestamp").is_some(), "{record}");
@@ -211,7 +212,7 @@ async fn grant_match_writes_allow_record() {
     );
 
     let invocation = only(invocations(&dir), "invocation record");
-    let record = only(decisions(&dir), "decision record");
+    let record = only(wait_for_decisions(&dir, 1).await, "decision record");
     assert_eq!(record["outcome"], json!("ok"), "{record}");
     assert_eq!(record["grant_id"], json!("g1"), "{record}");
     assert_eq!(trace_of(&record), trace_of(&invocation), "{record}");
@@ -301,7 +302,7 @@ async fn grant_decision_record_carries_no_label() {
 
         call(&meta, &who, "gateway_invoke", invoke_args()).await;
 
-        let record = only(decisions(&dir), "decision record");
+        let record = only(wait_for_decisions(&dir, 1).await, "decision record");
         assert_eq!(
             decision_subject(&record),
             (Some(authority), Some(subject)),
@@ -362,7 +363,7 @@ async fn direct_invoke_tool_writes_one_record() {
         .await
         .expect("a granted direct call succeeds");
     assert_ne!(result["isError"], json!(true), "{result}");
-    let record = only(decisions(&dir), "decision record");
+    let record = only(wait_for_decisions(&dir, 1).await, "decision record");
     assert_eq!(record["outcome"], json!("ok"), "{record}");
 }
 
@@ -424,7 +425,7 @@ async fn surfaced_call_grant_denial_writes_one_record() {
     let answer = call(&meta, &api_key("alice"), PERSONAL, json!({})).await;
     assert_eq!(error_code(&answer), Some(-32601), "{answer}");
     assert_eq!(endpoint.arrivals(), 0, "the refused call reaches nothing");
-    let record = only(decisions(&dir), "decision record");
+    let record = only(wait_for_decisions(&dir, 1).await, "decision record");
     assert_eq!(record["outcome"], json!("denied"), "{record}");
 }
 

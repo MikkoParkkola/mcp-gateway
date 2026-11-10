@@ -34,23 +34,10 @@ const RULE_DELEGATION: &str = "delegation";
 const EXEMPT_REDIRECT_RS: &str = "src/security/ssrf/redirect.rs";
 const OAUTH_PREFIX: &str = "src/oauth/";
 
-fn contains_word(hay: &str, needle: &str) -> bool {
-    hay.split(|c: char| !c.is_alphanumeric() && c != '_')
-        .any(|w| w == needle)
-}
-
+/// Test-only by the crate's one shared reader: `any(test, unix)` also builds
+/// outside tests, so it is production (MIK-9387.TCFG.3a).
 fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
-    for attr in attrs {
-        if attr.path().is_ident("cfg")
-            && let syn::Meta::List(list) = &attr.meta
-        {
-            let text = list.tokens.to_string();
-            if contains_word(&text, "test") && !contains_word(&text, "not") {
-                return true;
-            }
-        }
-    }
-    false
+    crate::test_source_text::test_only(attrs)
 }
 
 fn path_attr_value(attrs: &[syn::Attribute]) -> Option<String> {

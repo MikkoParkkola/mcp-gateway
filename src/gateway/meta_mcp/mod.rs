@@ -728,12 +728,24 @@ mod boundary_pins;
 mod capability_cache_scan_tests;
 #[cfg(test)]
 pub(super) mod grant_audit_fixture;
+/// A chain resume step refused before it dispatches.
+#[cfg(test)]
+mod grant_chain_resume_tests;
 #[cfg(test)]
 mod grant_decision_audit_tests;
 #[cfg(test)]
 mod grant_decision_slot_tests;
+/// The decision record's `server` and `invocation_recorded`.
+#[cfg(test)]
+mod grant_marker_tests;
+/// The recovery read's premise: a capability task holds no upstream handle.
+#[cfg(test)]
+mod grant_recovery_premise_tests;
 #[cfg(test)]
 mod grant_replay_dedupe_tests;
+/// A retry-routed withheld call's decision marker.
+#[cfg(test)]
+mod grant_retry_marker_tests;
 #[cfg(test)]
 mod grant_slot_wrap_tests;
 /// MIK-8340 row 7: a failed grant record on a withheld name answers as absent.

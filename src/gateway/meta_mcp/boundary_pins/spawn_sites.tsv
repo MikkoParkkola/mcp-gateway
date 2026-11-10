@@ -37,7 +37,6 @@ src/events/worker_dispatch.rs	dispatch	spawn	1	outside-calls	events worker attem
 src/gateway/meta_mcp/discovery_fetch.rs	refresh_stale_backend_tools_in_background	spawn	1	outside-calls	background tools/list cache fill for a backend with no cached tools; nobody awaits it
 src/gateway/meta_mcp/events_hook.rs	reconcile_events_after_scan	spawn	1	outside-calls	waits for the initial capability scan then reconciles event routes
 src/gateway/meta_mcp/first_fill.rs	wait_surfaced_first_fill	spawn	1	no-refusal-inside	joins or leads a surfaced backend's shared tool fill for a stdio first tools/list; a listing is not a call, so no call's delivery runs inside, and the fill's result is dropped (the list reads the cache)
-src/gateway/meta_mcp/grant_audit.rs	note_withheld_best_effort	spawn	1	no-refusal-inside	best-effort append of withheld grant-decision records; failure only logged
 src/gateway/meta_mcp/grant_audit.rs	write_owned	spawn	1	raised-at-join	owned append of grant-decision records; a failed append returns through the join and the caller turns it into AuditUnavailable under FailClosed
 src/gateway/meta_mcp/listing_warm.rs	warm_listing_views	spawn	1	no-refusal-inside	fills a caller's listing view during a tools/list warm-up; a listing is not a call, so no call's delivery runs inside
 src/gateway/outbound/audit.rs	submit	spawn	1	no-refusal-inside	audits a tenant_read rejection to the log; the frame is withheld either way

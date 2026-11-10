@@ -26,6 +26,10 @@ on:
   # runs the same jobs as a branch push, which is none of them.
   workflow_dispatch:
     inputs:
+      rehearse_macos_lib_fallback:
+        description: macOS int builds and runs its lib half itself, as when lib-b's test binary does not arrive
+        type: boolean
+        default: false
       rehearse_manifest:
         description: Build both arches and assemble the provenance-tagged index, promoting no release tag
         type: boolean
@@ -47,12 +51,18 @@ on:
         type: boolean
         default: false
 
-# A new push to a pull request cancels that PR's superseded run. Every other
-# event (branch push, tag, dispatch) gets a group of its own run id, so it is
-# never cancelled, and never queued behind or replaced by another run.
+# A new push to a pull request cancels that PR's superseded run. A new push to
+# the release line cancels the run of the tip it replaced: a merge train lands
+# its PRs one by one, and a run per intermediate commit queued about 250 jobs
+# behind every PR's CI. The train already tested the exact landed tree; to find
+# which merge broke a red tip, bisect that train's merges. Do not re-run a
+# superseded release-line push run: it would join this group and cancel the
+# newest tip's run. Every other event (another branch, a tag, a dispatch, which
+# is how the release freeze runs the line) gets a group of its own run id, so
+# it is never cancelled, queued behind or replaced by another run.
 concurrency:
-  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || (github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line' && 'release-line-push') || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
 
 permissions:
   contents: read
@@ -531,6 +541,14 @@ jobs:
           cargo clippy --release --lib --bins --no-default-features -- -D warnings
       - name: The registry lint still bites (MIK-8387)
         run: scripts/dev/check_registry_lint.sh --self-test
+      # Only the judge can build the read token that Firewall::reads and
+      # ReadHistory::reserve take. The probe build must fail with exactly the
+      # pinned error in each forgery and nowhere else, so a widened token, a
+      # loosened signature or a leaked test constructor turns the job red.
+      - name: Only the judge can build a read token
+        run: |
+          python3 scripts/ci/check-reads-token.py --self-test
+          python3 scripts/ci/check-reads-token.py
       # The command preview's test seams must never compile into a build
       # without debug assertions. This build must fail, and on the guard's
       # own message, so deleting or breaking the guard turns the job red.
@@ -583,7 +601,7 @@ jobs:
       fail-fast: false
       matrix:
         # Selections and floors: scripts/ci/shard_tests.py.
-        shard: [lib-a, lib-b, int-a, int-b]
+        shard: [lib-a, lib-b, lib-c, int-a, int-b]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -710,14 +728,22 @@ jobs:
 
   # The required name. Green only when every Windows shard and the clippy job
   # succeeded: a skipped or cancelled one is red (scripts/ci/check_needs.py).
-  # always() so a failed shard still yields a verdict; the skip guards are the
-  # shards' own, so a throwaway PR or a post-merge push skips this as before;
+  # !cancelled() so a failed shard still yields a verdict, but a cancelled run
+  # (superseded by a newer push) creates no aggregate job: always() ran these
+  # after the cancel and held the run, and the newer run behind it, for a
+  # runner. A superseded run still stuck "queued" (an older ci.yml, or a job
+  # that ignores the cancel) frees only with
+  # `gh api -X POST repos/{owner}/{repo}/actions/runs/<id>/force-cancel`;
+  # a plain `gh run cancel` leaves always() jobs alive. Cancelling a PR's newest run with no newer one behind it leaves
+  # these skipped, and branch protection reads a skipped required check as
+  # passing: merge only through the train, which reads it red. The skip guards
+  # are the shards' own, so a throwaway PR or a post-merge push skips this as before;
   # a lane PR into the release line runs it with them, and heavy-gate judges
   # it on the train.
   windows-check:
     name: Windows check
     needs: [windows-shards, windows-clippy]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -744,7 +770,7 @@ jobs:
   heavy-gate:
     name: Heavy checks (merge train)
     needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal, feature-combos-pr]
-    if: ${{ always() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -781,22 +807,32 @@ jobs:
     # The lib shard compiles the `--lib` test binary from cold (every macOS
     # shard missed the cache on the last three trains, and a hit would save
     # only the 2-4 min dependency build): 19 to 86 min, then about 32 min of
-    # tests. At 90 a slow runner cut off a train mid-test.
-    timeout-minutes: 150
+    # tests. At 90 a slow runner cut off a train mid-test. int's fallback
+    # (its suite, 10 min grace, then building the lib-a half itself) can reach
+    # about 140 min on a slow runner.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        # Two jobs: about two macOS runners serve trains, so a third job
-        # queued behind the others, and lib-a and lib-b each compiled the
-        # same lib test binary. One lib shard builds it once.
-        # A lane PR labelled os-sensitive runs the lib shard alone: these
-        # runners serve every train (test_os_label_routing.py).
-        shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib"]' || '["lib","int"]') }}
+        # Two jobs: about two macOS runners serve trains, and a second build of
+        # the lib test binary cost 19-86 min (#4562). So lib-b builds it once,
+        # uploads it and runs its half; int runs its suite, then the lib-a half
+        # from that binary.
+        # A lane PR labelled os-sensitive runs lib-b alone, and that job runs
+        # the lib-a half too: these runners serve every train
+        # (test_os_label_routing.py).
+        shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib-b"]' || '["lib-b","int"]') }}
+    permissions:
+      contents: read
+      # int waits for lib-b's test binary by listing this run's artifacts.
+      actions: read
     env:
       # Two build jobs on the 3-core, 7 GB runner (macos-latest also lands on a 5-core, 14 GB one): the default swapped. Kept
       # on measurement (MIK-8482): the slowest shard took 25.5 min (#3944
       # run 1), against 35 min at the default in the Stage 0 probe.
       CARGO_BUILD_JOBS: 2
+      # The labelled lane: lib-b runs alone, so it runs the lib-a half itself.
+      MACOS_LIB_SOLO: ${{ contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -809,7 +845,7 @@ jobs:
       # Tests job's, for the same reason; every test that does not run on
       # macOS is listed in docs/release/macos-test-exclusions.tsv.
       - name: Every test kept off macOS is listed (MIK-8174)
-        if: matrix.shard == 'lib'
+        if: matrix.shard == 'lib-b'
         run: python3 scripts/release/check_macos_exclusions.py
       # The same build takes 19 or 86 min on these runners. Swap and memory
       # pressure every 30 s, printed below, say whether the slow ones swap.
@@ -823,11 +859,53 @@ jobs:
               sleep 30
             done
           ) &
+      # Build the lib test binary once and hand it to int before running this
+      # half, so int's lib-a half starts as soon as its own suite is done. The
+      # shard suite below reuses this build.
+      - name: Build the lib test binary once
+        if: matrix.shard == 'lib-b'
+        timeout-minutes: 120
+        run: python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
+      - name: Hand the lib test binary to int
+        if: matrix.shard == 'lib-b' && env.MACOS_LIB_SOLO != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # One name per run: a rerun of int alone finds the earlier attempt's binary.
+          name: macos-lib-tests
+          path: ${{ runner.temp }}/lib-bin/lib-tests
+          retention-days: 1
+          overwrite: true
+          if-no-files-found: error
       - name: Shard suite
         # Under the job's limit, so a slow build still leaves time for the
         # report below.
         timeout-minutes: 145
         run: python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}
+      # int: wait for lib-b's binary, then run the lib-a half from it, no
+      # compile. When it is not coming (lib-b ended without it, is absent from
+      # this attempt, or is still queued 10 min in) int builds the half itself.
+      - name: Wait for the lib test binary
+        id: wait
+        if: matrix.shard == 'int'
+        timeout-minutes: 120
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MACOS_LIB_REHEARSE_FALLBACK: ${{ github.event_name == 'workflow_dispatch' && inputs.rehearse_macos_lib_fallback }}
+        run: python3 scripts/ci/shard_tests.py wait-lib macos-lib-tests "macOS shard lib-b"
+      - name: Fetch the lib test binary
+        if: matrix.shard == 'int' && steps.wait.outputs.found == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-lib-tests
+          path: ${{ runner.temp }}/lib-bin
+      - name: Lib-a half from the prebuilt binary
+        if: (matrix.shard == 'int' && steps.wait.outputs.found == 'true') || (matrix.shard == 'lib-b' && env.MACOS_LIB_SOLO == 'true')
+        timeout-minutes: 60
+        run: python3 scripts/ci/shard_tests.py run-prebuilt macos lib-a "$RUNNER_TEMP/lib-bin/lib-tests"
+      - name: Lib-a half, built here (the binary is not coming)
+        if: matrix.shard == 'int' && steps.wait.outputs.found != 'true'
+        timeout-minutes: 120
+        run: python3 scripts/ci/shard_tests.py run macos lib-a
       - name: Runner, swap and memory pressure during the build
         if: always()
         run: |
@@ -840,11 +918,12 @@ jobs:
 
   # Gated like its shards: on a pull request that is not a train it is
   # skipped, never red, and no required check needs it. On a train it runs
-  # with always(), so a failed or skipped shard fails it.
+  # with !cancelled(), so a failed or skipped shard fails it; a cancelled run
+  # creates no aggregate (see windows-check).
   macos-check:
     name: macOS check
     needs: [macos-shards]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
     runs-on: ubuntu-latest
     # Read this run's job timings for the limit watch below.
     permissions:
@@ -930,7 +1009,7 @@ jobs:
   test:
     name: Tests
     needs: [test-shards]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1134,6 +1213,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the release asset checker
         run: python3 scripts/release/test_check_release_assets.py
+      - name: Test the client download set and SBOM roots
+        run: python3 scripts/release/test_check_release_assets_client.py
       - name: Test that signing fails closed
         run: python3 scripts/release/test_sign_release_assets.py
       - name: Test that an upload onto a published release is refused
@@ -1570,26 +1651,61 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A pull request is judged against its branch point, which needs history.
+          fetch-depth: 0
       # The exemption must not become the way to grow a file with code. Run
       # first: a failing tree check would otherwise hide which rule broke.
       - name: Check the gate refuses what it claims to
         run: python3 scripts/dev/test_check_file_size.py
-      # The base: the PR's base on a pull request, the previous tip on a push,
-      # and the parent commit when a push has no previous tip (a new branch or
-      # a tag). An unreadable base fails the gate; it is never skipped.
-      - name: Check the 800-line ceiling
+      # The base: the previous tip on a push, or the parent commit when a push
+      # has no previous tip (a new branch or a tag). An unreadable base fails
+      # the gate; it is never skipped.
+      - name: Check the 800-line ceiling against the previous tip
+        if: github.event_name != 'pull_request'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          set -euo pipefail
-          base="${BASE_SHA:-}"
-          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
-            git fetch --no-tags --depth=2 origin "$GITHUB_SHA"
-            base="$(git rev-parse HEAD^)"
-          else
-            git fetch --no-tags --depth=1 origin "$base"
+          base="$BEFORE"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD^"
+          elif ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            # A force push: the tip it replaced is on no branch, so full history lacks it.
+            git fetch --no-tags origin "$base"
           fi
           python3 scripts/dev/check-file-size.py --base "$base"
+      # A pull request: against where it left the base, so a baseline shrink
+      # that landed on the base afterwards is not read as this change.
+      - name: Check the 800-line ceiling against the branch point
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/dev/check-file-size.py --base "$BASE_SHA" --compare merge-base
+
+  doc-backticks:
+    name: Doc comments name code in backticks
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # A cheap pre-filter for clippy's doc_markdown lint: a word with `_` or
+    # `::` in a `///` comment under src/, outside backticks, fails here in a
+    # second instead of failing a clippy run after a full build. CamelCase is
+    # only printed, since clippy accepts known words this check cannot list.
+    # The rows pin what clippy flags and what it accepts.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check the check flags what clippy flags, and nothing it accepts
+        run: python3 scripts/dev/test_check_doc_backticks.py
+      - name: Check this change's doc comments
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/dev/check-doc-backticks.py --base "$BASE_SHA"
+      - name: Check every doc comment
+        if: github.event_name != 'pull_request'
+        run: python3 scripts/dev/check-doc-backticks.py
 
   event-source-scope:
     name: Event source leaves the events core alone (MIK-7720 U10)
@@ -1647,7 +1763,7 @@ jobs:
           scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "$base"
       - name: Check the tree and the allowlist against the base
         if: github.event_name == 'pull_request'
-        run: scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}" --compare merge-base
 
   request-panics:
     name: No new request-path panic site without an invariant (MIK-8691)
@@ -1686,7 +1802,7 @@ jobs:
           scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "$base"
       - name: The baseline only shrinks against the base
         if: github.event_name == 'pull_request'
-        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}" --compare merge-base
 
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)
@@ -1704,6 +1820,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The cfg reader copies list only shrinks against the base.
+          fetch-depth: 0
       - name: Check every source file is reachable from a crate root
         run: python3 scripts/dev/check-orphan-test-modules.py
       # The resolver has already been wrong twice -- once directory-scoped,
@@ -1713,6 +1832,25 @@ jobs:
       # These pin both, and a guard that cannot fail is the thing it guards.
       - name: Check the guard catches what it claims to
         run: python3 scripts/dev/test_check_orphan_test_modules.py
+      # One test-only cfg judgement per language: a scanner that spells its own
+      # match is refused unless listed, and the list only shrinks.
+      - name: No new private copy of the test-only cfg reader
+        run: |
+          python3 scripts/dev/test_check_cfg_reader_copies.py
+          python3 scripts/dev/check_cfg_reader_copies.py
+      - name: The cfg reader copies list only shrinks against the previous tip
+        if: github.event_name != 'pull_request'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          base="$BEFORE"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD^"
+          fi
+          python3 scripts/dev/check_cfg_reader_copies.py --base "$base"
+      - name: The cfg reader copies list only shrinks against the base
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/dev/check_cfg_reader_copies.py --base "origin/${{ github.base_ref }}" --compare merge-base
       # The shared cfg item finder the Rust-reading gates use: tree-sitter,
       # from the gates' own hash-locked environment.
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2

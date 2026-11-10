@@ -3,8 +3,8 @@ src/capability/backend.rs	call_tool_with_context	refused_while_vouched	1
 src/capability/execution_context.rs	record_refusal	refused_while_vouched	1
 src/capability/executor/cli.rs	execute_cli	refused_while_vouched	1
 src/capability/executor/client.rs	note_redirect_refusal	refused_while_vouched	1
-src/capability/executor/client.rs	send_with_retry	refused_while_vouched	2
-src/capability/executor/client.rs	send_with_retry	via note_redirect_refusal	2
+src/capability/executor/client.rs	send_with_retry	refused_while_vouched	1
+src/capability/executor/client.rs	send_with_retry	via note_redirect_refusal	1
 src/capability/executor/credentials.rs	refresh_provider_token	via record_refusal	3
 src/capability/executor/graphql.rs	execute	refused_while_vouched	2
 src/capability/executor/graphql.rs	execute	via record_refusal	1
@@ -85,7 +85,7 @@ src/gateway/meta_mcp/support.rs	augment_with_trace	via note_written	1
 src/gateway/meta_mcp/support.rs	note_written	via note	1
 src/gateway/meta_mcp/task_confirmation.rs	confirm_destructive_task_with	refused	1
 src/gateway/meta_mcp/task_replay.rs	deliver	refused_by	1
-src/gateway/router/backend_handlers.rs	guard_tool_call	raise	1
+src/gateway/router/backend_handlers/direct_security.rs	guard_tool_call	raise	1
 src/gateway/router/backend_handlers/direct_audit.rs	audited_call_judged	raise	1
 src/gateway/router/backend_handlers/direct_dispatch.rs	answer_failure	raise	1
 src/gateway/router/backend_handlers/direct_failure.rs	answer	echo_refusal_delivered	1

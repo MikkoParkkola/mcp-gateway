@@ -72,7 +72,7 @@ pub(super) async fn held_backend(tools: &[&str]) -> Held {
 /// A stdio gateway with `backends` (YAML entries under `backends:`), the
 /// surfaced `(server, tool)` pairs, and `extra` top-level YAML.
 pub(super) async fn start(backends: &str, surfaced: &[(&str, &str)], extra: &str) -> Serve {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let tasks = dir.path().join("tasks");
     let surfaced = surfaced
         .iter()

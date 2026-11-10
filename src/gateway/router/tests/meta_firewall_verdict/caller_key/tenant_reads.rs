@@ -233,7 +233,7 @@ async fn logged_state_switched(
     Arc<tempfile::TempDir>,
 ) {
     let (state, store) = switched_state(switch, mode, 3600, &["customer_id"]).await;
-    let log_dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let log_dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,

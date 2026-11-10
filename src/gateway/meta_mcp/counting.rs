@@ -29,13 +29,15 @@ impl MetaMcp {
         self.counters.get()
     }
 
-    /// Count one finished call on `server`/`tool` by `who`.
+    /// Count one finished call on `server`/`tool` by `who`, with its backend
+    /// send time when a send began.
     pub(crate) fn count_call(
         &self,
         server: &str,
         tool: Option<&str>,
         who: &AuditWho,
         outcome: Outcome,
+        sample: Option<(std::time::Duration, crate::counters::End)>,
     ) {
         let Some(store) = self.counters.get() else {
             return;
@@ -59,7 +61,7 @@ impl MetaMcp {
             tool,
             tally,
         };
-        store.record(&call, now, &crate::local_day::host_zone());
+        store.record_timed(&call, now, &crate::local_day::host_zone(), sample);
     }
 
     /// Whether `server` is a name this gateway was configured with. The one

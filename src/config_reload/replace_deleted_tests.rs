@@ -110,7 +110,7 @@ async fn audited(
         replace,
         Audit::Required {
             sink: Box::new(kinds.clone()),
-            kind: IntentKind::Save,
+            kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
         WAIT,
@@ -266,7 +266,7 @@ async fn a_config_deleted_while_entries_are_created_discards_them() {
         matches!(result, Err(ReplaceError::NoConfigFile)),
         "{result:?}"
     );
-    assert_eq!(kinds.list(), [IntentKind::Save]);
+    assert_eq!(kinds.list(), [IntentKind::Save { fields: Vec::new() }]);
     assert_eq!(
         creates.load(Ordering::SeqCst),
         1,
@@ -294,7 +294,13 @@ async fn a_recovered_config_deleted_while_entries_are_created_discards_them() {
         matches!(result, Err(ReplaceError::NoConfigFile)),
         "{result:?}"
     );
-    assert_eq!(kinds.list(), [IntentKind::Recovery, IntentKind::Save]);
+    assert_eq!(
+        kinds.list(),
+        [
+            IntentKind::Recovery,
+            IntentKind::Save { fields: Vec::new() }
+        ]
+    );
     assert_eq!(
         creates.load(Ordering::SeqCst),
         1,

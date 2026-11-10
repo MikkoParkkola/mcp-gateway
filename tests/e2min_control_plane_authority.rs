@@ -80,7 +80,16 @@ fn writes() -> Vec<(&'static str, Value, &'static str, &'static [&'static str])>
     );
     let policies = (
         "policies_managed_in_gateway_config",
-        &["security.sanitize_input", "security.ssrf_protection"][..],
+        // ADR-029's decision table: every gateway.yaml key the Policies
+        // screen edits, not only the two switches.
+        &[
+            "security.tool_policy",
+            "security.firewall.rules",
+            "security.firewall.credential_redaction",
+            "security.firewall.collusion",
+            "security.sanitize_input",
+            "security.ssrf_protection",
+        ][..],
     );
     vec![
         (
@@ -235,4 +244,40 @@ async fn the_snapshot_does_not_advertise_mutation() {
         body["view"]["audit_events"][0]["event_id"], "e1",
         "the store stays wired for the audit log: {body}"
     );
+}
+
+/// ADR-029: with no control-plane store, a policy write is still refused by
+/// config (409, or RBAC's 403 for a non-admin), because that store never
+/// enforces policy; a grant write still answers the store's 503 first, for
+/// an admin and a non-admin alike.
+#[tokio::test]
+async fn with_no_store_policy_writes_point_at_config_and_grant_writes_answer_503() {
+    let (app, _tasks) = state(Fixture {
+        auth: auth_with(vec![api_key(AUDITOR, 1000, None)], Some(ADMIN)),
+        ..Fixture::default()
+    })
+    .await;
+    assert!(app.control_plane_store.is_none(), "premise: no store");
+
+    for (uri, body, code, _) in writes() {
+        let policy = code == "policies_managed_in_gateway_config";
+        let (status, resp) = send(&app, ADMIN, Method::POST, uri, Some(body.clone())).await;
+        if policy {
+            assert_eq!(status, StatusCode::CONFLICT, "{uri}: {resp}");
+            assert_eq!(resp["reason_code"], code, "{uri}: {resp}");
+        } else {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{uri}: {resp}");
+            assert_eq!(
+                resp["reason_code"], "CONTROL_STORE_UNAVAILABLE",
+                "{uri}: {resp}"
+            );
+        }
+        let (status, resp) = send(&app, AUDITOR, Method::POST, uri, Some(body)).await;
+        let expected = if policy {
+            StatusCode::FORBIDDEN
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        };
+        assert_eq!(status, expected, "{uri}, non-admin: {resp}");
+    }
 }

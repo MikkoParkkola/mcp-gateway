@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use super::super::grant_audit_fixture::{Endpoint, PERSONAL, decisions, grant, invocations};
+use super::super::grant_audit_fixture::{
+    Endpoint, PERSONAL, grant, invocations, wait_for_decisions,
+};
 use super::{Who, api_key, call, gateway, invoke_args, only};
 use crate::identity_grants::IdentityGrant;
 use crate::security::audit::AuditFailurePolicy;
@@ -47,7 +49,11 @@ async fn refused_without_ids(case: &str, (who, reason): (Who, &str), row: Identi
         answer.get("error").is_some(),
         "{case}: premise, refused: {answer}"
     );
-    let grant_record = only(decisions(&dir), "grant decision record");
+    // A gateway_invoke the grant refuses is a withheld call: the gate records
+    // it through `record_withheld` (gate.rs), so its decision is written after
+    // the answer, on the slot's own task (design: "withheld notes are owned by
+    // their slot"). Exactly one record is still required.
+    let grant_record = only(wait_for_decisions(&dir, 1).await, "grant decision record");
     assert_eq!(
         grant_record["reason"],
         json!(reason),

@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from release_features import ROOT, TEST_ONLY, release_features  # noqa: E402
+from release_features import PRODUCT_MARKERS, ROOT, TEST_ONLY, release_features  # noqa: E402
 
 
 def refuses(manifest: dict) -> bool:
@@ -26,6 +26,12 @@ def refuses(manifest: dict) -> bool:
 def main() -> int:
     toy = {"features": {"default": ["a"], "a": [], "b": [], "sandbox-fixtures": []}}
     assert release_features(toy) == ["a", "b"], release_features(toy)
+    # Row A15: the client product marker is not a full-product feature.
+    client = {"features": {"a": [], "client-cli": [], "sandbox-fixtures": []}}
+    assert release_features(client) == ["a"], f"client-cli reached the product list: {release_features(client)}"
+    # A release feature, or default, that switches the client marker on would carry it in.
+    assert refuses({"features": {"a": ["client-cli"], "client-cli": [], "sandbox-fixtures": []}}), "a feature enabling client-cli was accepted"
+    assert refuses({"features": {"default": ["client-cli"], "a": [], "client-cli": [], "sandbox-fixtures": []}}), "default enabling client-cli was accepted"
     assert refuses({"features": {}}), "an empty table was accepted"
     assert refuses({"features": {"default": [], "sandbox-fixtures": []}}), "a test-only-only table was accepted"
     assert refuses({}), "a manifest without [features] was accepted"
@@ -45,7 +51,7 @@ def main() -> int:
     # The real manifest: every non-default, non-test-only feature is listed.
     real = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     listed = release_features(real)
-    expected = sorted(set(real["features"]) - {"default"} - TEST_ONLY)
+    expected = sorted(set(real["features"]) - {"default"} - TEST_ONLY - PRODUCT_MARKERS)
     assert listed == expected, (listed, expected)
     assert not TEST_ONLY.intersection(listed), listed
     print(f"release-features: OK ({len(listed)} features)")

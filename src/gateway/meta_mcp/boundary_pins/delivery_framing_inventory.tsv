@@ -129,12 +129,12 @@ src/gateway/router/accounts/offer.rs	direct_refusal	JsonRpcResponse::error	1
 src/gateway/router/accounts/offer.rs	direct_refusal	JsonRpcResponse::error_with_data	1
 src/gateway/router/accounts/offer.rs	direct_refusal	build_http_response	1
 src/gateway/router/backend_handlers.rs	backend_handler	build_http_error_response	1
-src/gateway/router/backend_handlers.rs	backend_security_error	build_http_error_response	1
-src/gateway/router/backend_handlers.rs	backend_security_error_with_status	build_http_error_response	1
+src/gateway/router/backend_handlers/direct_security.rs	backend_security_error	build_http_error_response	1
+src/gateway/router/backend_handlers/direct_security.rs	backend_security_error_with_status	build_http_error_response	1
 src/gateway/router/backend_handlers.rs	cached_error_response	JsonRpcResponse::error	1
 src/gateway/router/backend_handlers.rs	cached_error_response	JsonRpcResponse::error_with_data	1
-src/gateway/router/backend_handlers.rs	guard_tool_call	build_http_response	1
-src/gateway/router/backend_handlers.rs	unnamed_call	build_http_error_response	1
+src/gateway/router/backend_handlers/direct_security.rs	guard_tool_call	build_http_response	1
+src/gateway/router/backend_handlers/direct_security.rs	unnamed_call	build_http_error_response	1
 src/gateway/router/backend_handlers/direct_audit.rs	record	build_http_error_response	1
 src/gateway/router/backend_handlers/direct_caller.rs	backend_not_found	build_http_error_response	1
 src/gateway/router/backend_handlers/direct_caller.rs	events_lease	JsonRpcResponse::error	1

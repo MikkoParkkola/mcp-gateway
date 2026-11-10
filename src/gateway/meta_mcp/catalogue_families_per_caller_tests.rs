@@ -258,13 +258,13 @@ fn oauth_config() -> BackendConfig {
 }
 
 fn identity(subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@example.invalid"),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example.invalid".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        subject.to_string(),
+        format!("{subject}@example.invalid"),
+        None,
+        Vec::new(),
+        "https://issuer.example.invalid".to_string(),
+    )
 }
 
 /// A multi-user gateway with the per-user backend and the two controls.

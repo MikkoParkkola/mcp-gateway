@@ -313,6 +313,18 @@ class Resolution(unittest.TestCase):
         source = 'const S: &CStr = c"a \\" } fn evil() {";\nconst R: &CStr = cr#"a " } fn evil2() {"#;\nimpl G { fn ok() {} }\n'
         self.assertEqual([(d.name, d.owner) for d in c6.declarations(source)], [("ok", "G")])
 
+    def test_comments_only_mode_keeps_every_literal_and_blanks_every_comment(self) -> None:
+        source = 'a /* x /* y */ z */ b // c\nlet s = "q"; let r = cr#"w"#; let ch = \'"\'; let l: &\'a u8;\n'
+        out = c6.blank(source, c6.Wipe.COMMENTS)
+        self.assertEqual(len(out), len(source))
+        self.assertEqual(out.split()[:2], ["a", "b"])
+        for kept in ('"q"', 'cr#"w"#', "'\"'", "&'a"):
+            self.assertIn(kept, out)
+        for gone in ("x", "y", "z", "// c"):
+            self.assertNotIn(gone, out.split("\n")[0].replace("a ", "", 1).replace(" b", "", 1))
+        self.assertEqual(c6.blank(source), c6.blank(source, c6.Wipe.COMMENTS_AND_LITERALS))
+        self.assertNotIn('"q"', c6.blank(source))
+
     def test_a_brace_inside_an_impl_header_does_not_open_its_body(self) -> None:
         decls = c6.declarations("impl Foo<[u8; { 1 }]> {\n    fn m(&self) {}\n}\n")
         self.assertEqual([(d.name, d.owner) for d in decls], [("m", "Foo")])

@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import re
 import sys
 from dataclasses import dataclass, field
@@ -30,6 +31,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
+# The one shared test-only judgement (MIK-9387.TCFG.2).
+_spec = importlib.util.spec_from_file_location("check_orphan_test_modules", ROOT / "scripts/dev/check-orphan-test-modules.py")
+_orphan = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_orphan)
+CFG_RE = re.compile(r"#\[cfg\(([^\]]*)\)\]")
+
+
+def test_gated(attrs: str) -> bool:
+    """Whether an attribute run carries a `#[cfg(..)]` that compiles only under test."""
+    return any(_orphan.cfg_is_test(m.group(1)) for m in CFG_RE.finditer(attrs))
 DOC = ROOT / "docs/design/surface-4.0.md"
 # A route row cites this file by its `owned_routes!` constant, `file:NAME`.
 ROUTES_FILE = "src/gateway/routes.rs"
@@ -130,7 +141,9 @@ def prod_scan(path: Path) -> tuple[str, str]:
 def prod_scan_text(text: str) -> tuple[str, str]:
     """`prod_scan` of source text already in hand."""
     code, mask = scan(text)
-    for m in reversed(list(re.finditer(r"#\[cfg\((?:all\()?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{", mask))):
+    for m in reversed(list(re.finditer(r"((?:#\[[^\]]*\]\s*)+)(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{", mask))):
+        if not test_gated(m.group(1)):
+            continue
         end = matching_brace(mask, m.end() - 1)
         blank = re.sub(r"[^\n]", " ", code[m.start() : end + 1])
         code = code[: m.start()] + blank + code[end + 1 :]
@@ -639,12 +652,14 @@ def module_files(root: Path) -> list[Path]:
         f = stack.pop()
         if f in seen or not f.exists():
             continue
+        if f != root and _orphan.file_is_test(f):
+            continue  # its leading inner cfg makes it, and its children, test-only
         seen.append(f)
         code, mask = prod_scan(f)
         child_dir = f.parent if f.name in ("lib.rs", "main.rs", "mod.rs") else f.parent / f.stem
         for m in re.finditer(r"((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+(?:r#)?(\w+)\s*;", mask):
             attrs = code[m.start(1) : m.end(1)]
-            if re.search(r"cfg\((?:all\()?test\b", attrs):
+            if test_gated(mask[m.start(1) : m.end(1)]):
                 continue
             via = re.search(r'path\s*=\s*"([^"]+)"', attrs)
             if via:

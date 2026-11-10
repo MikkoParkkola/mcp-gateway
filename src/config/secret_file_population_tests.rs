@@ -59,6 +59,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "third-party MCP client config JSON edited to add the gateway entry; no gateway secret",
     ),
     (
+        "src/commands/api.rs",
+        "operator-named request body for one api call (--data @FILE), read size-capped at 16 MiB and sent as given; not a config or secret file",
+    ),
+    (
         "src/commands/dashboard_link.rs",
         "operator-named client cert, key and CA for one request (#1832); the mode-checked read is lib-internal, widening it was declined",
     ),
@@ -122,11 +126,15 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the atomic writer's Windows half: opens the save target with READ_CONTROL only, to read its access list; never reads its bytes",
     ),
     (
-        "src/config_persistence_journal.rs",
-        "the replace journal (paths, SHA-256 revisions and a state; no secret) and the staged \
-         original of gateway.yaml, both created owner-only and both read back through the config \
-         guard (read_config_text) before recovery acts on them; the original is also checked \
-         against the journal's digest; File::open only fsyncs its directory",
+        "src/config_persistence.rs",
+        "the shared directory sync: File::open on a directory only to fsync it; reads no file bytes",
+    ),
+    (
+        "src/config_persistence_commit.rs",
+        "the config commit primitive's read-back: opens gateway.yaml (unix: without waiting; \
+         Windows: read-write without write or delete sharing) only to check it is a regular file, \
+         flush it and hash its bytes against the revision it just wrote; never parses or returns \
+         the bytes",
     ),
     (
         "src/config_persistence_lock.rs",
@@ -219,6 +227,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) source scanner reading the crate's own sources to count unfiltered capability-provider reads; no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/identity_sources.rs",
+        "cfg(test) identity-source pin: hashes the bytes of the three identity-type source files; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/invoke_stages.rs",
         "cfg(test) source scanner reading the invoke stage files for the MIK-8488 stage pin; no secret",
     ),
@@ -254,10 +266,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/mtls/cert_manager.rs",
         "reads through read_secret_file (R1, I1, I2); writes keys 0600 (W1) and public certs",
-    ),
-    (
-        "src/mutant.rs",
-        "its own cfg(all(test, ..)) self-tests read src/lib.rs and src/mutant.rs; no secret",
     ),
     (
         "src/mutant_scan.rs",
@@ -489,6 +497,28 @@ mod tests {
 }
 ";
     assert!(!has_raw_io(source));
+}
+
+/// MIK-9387.TCFG.3a: a test module gated on `all(test, ..)` is test code too,
+/// so its raw I/O does not count (the #4706 shape); `any(test, ..)` also
+/// builds outside tests, so raw I/O under it still counts.
+#[test]
+fn raw_io_under_a_compound_test_gate_counts_only_when_it_builds_outside_tests() {
+    let gated = |gate: &str| {
+        format!(
+            "fn product() {{}}\n\n#[cfg({gate})]\nmod tests {{\n    fn fixture() -> String {{\n        std::fs::read_to_string(\"x\").unwrap()\n    }}\n}}\n"
+        )
+    };
+    for gate in [
+        "all(test, unix)",
+        "all(unix, test)",
+        "all(test, feature = \"firewall\")",
+    ] {
+        assert!(!has_raw_io(&gated(gate)), "{gate}: counted");
+    }
+    for gate in ["any(test, unix)", "not(test)", "reads_token_probe"] {
+        assert!(has_raw_io(&gated(gate)), "{gate}: not counted");
+    }
 }
 
 #[test]

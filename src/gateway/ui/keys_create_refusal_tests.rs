@@ -9,60 +9,122 @@
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use std::sync::Arc;
-
-use super::keys_create::BeforeLock;
 use super::keys_create_fixture_tests::{
-    Call, Fixture, KNOWN, ROOT, Setup, item, root_item, spec, yaml_of,
+    Call, Fixture, KNOWN, ROOT, Sent, Setup, item, root_item, spec, yaml_of,
 };
 
-/// Posts `body`, then checks the status, the error code and that nothing was
-/// written and nothing leaked.
-fn refused(fx: &Fixture, body: &Value, status: StatusCode, code: &str) -> Value {
+/// How far a refused request got. Only an audit append that itself failed may
+/// have left its intent line; every other refusal came before the writer
+/// recorded one.
+#[derive(Clone, Copy)]
+enum Reached {
+    BeforeWriter,
+    AuditAppend,
+}
+
+/// The fixed answer of `{"error": code}`.
+fn code(code: &str) -> Value {
+    json!({ "error": code })
+}
+
+/// The fixed answer naming a field the loader or the clock refused.
+fn invalid_field(field: &str) -> Value {
+    json!({"error": "invalid_field", "field": field, "message": "the value is not accepted"})
+}
+
+/// The fixed answer of a missing reload or an unloadable gateway.yaml.
+fn reload_off() -> Value {
+    code("reload is off or gateway.yaml could not be loaded")
+}
+
+/// The one assertion every refusal row ends in: the status, the whole fixed
+/// body byte for byte, gateway.yaml byte-identical, and no intent unless the
+/// refusal is the intent append's own. L1 (no secret or digest anywhere) ran
+/// inside `post`.
+fn assert_refusal(
+    fx: &Fixture,
+    before: &[u8],
+    sent: &Sent,
+    (status, expected): (StatusCode, &Value),
+    reached: Reached,
+) {
+    assert_eq!(sent.status, status, "{}", sent.body);
+    assert_eq!(sent.body, expected.to_string(), "not the fixed body");
+    assert_eq!(fx.bytes(), before, "the file changed");
+    if matches!(reached, Reached::BeforeWriter) {
+        let intents = fx.records("config_key_create_intent");
+        assert!(intents.is_empty(), "an intent was recorded: {intents:?}");
+    }
+}
+
+/// Posts `body`, then runs [`assert_refusal`] for a refusal before the writer.
+fn refused(fx: &Fixture, body: &Value, status: StatusCode, expected: &Value) -> Value {
+    refused_at(fx, body, (status, expected), Reached::BeforeWriter)
+}
+
+fn refused_at(
+    fx: &Fixture,
+    body: &Value,
+    (status, expected): (StatusCode, &Value),
+    reached: Reached,
+) -> Value {
     let before = fx.bytes();
     let sent = fx.post(Call::new(body));
-    assert_eq!(sent.status, status, "{}", sent.body);
-    assert_eq!(sent.json()["error"], code, "{}", sent.body);
-    assert_eq!(fx.bytes(), before, "the file changed");
+    assert_refusal(fx, &before, &sent, (status, expected), reached);
     sent.json()
 }
 
 const CANARY: &str = "zq-create-canary";
 
-/// P2: an unlisted key, a missing name or revision and a wrong type each get
-/// one fixed 422 that never quotes the body.
+/// The one answer every unreadable body gets.
+fn invalid_body() -> Value {
+    json!({
+        "error": "invalid_body",
+        "message": "the body must be {\"name\", \"backends\", \"revision\"} and the optional \
+                    allowed_tools, denied_tools, admin, rate_limit and expires_at, and nothing else",
+    })
+}
+
+/// P2: a key outside the list, a missing name or revision and a wrong type
+/// each get one fixed 422 that never quotes the body.
 #[test]
 fn p2_a_malformed_body_gets_fixed_text_that_does_not_echo() {
     let fx = Fixture::new(Setup::default());
     let rev = fx.revision();
     let bodies = [
         json!({"name": CANARY, "backends": ["*"], "revision": rev, CANARY: 1}),
-        json!({"backends": ["*"], "revision": rev, "x": CANARY}),
+        // Only the name is missing: no other fault to refuse first.
+        json!({"backends": [CANARY], "revision": rev}),
         json!({"name": CANARY, "backends": ["*"]}),
         json!({"name": CANARY, "backends": CANARY, "revision": rev}),
         json!({"name": CANARY, "backends": ["*"], "revision": rev, "rate_limit": CANARY}),
     ];
-    let mut texts = Vec::new();
+    let expected = invalid_body();
     for body in bodies {
+        let before = fx.bytes();
         let sent = fx.post(Call::new(&body));
-        assert_eq!(
-            sent.status,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "{}",
-            sent.body
+        let status = StatusCode::UNPROCESSABLE_ENTITY;
+        assert_refusal(
+            &fx,
+            &before,
+            &sent,
+            (status, &expected),
+            Reached::BeforeWriter,
         );
         assert!(!sent.body.contains(CANARY), "{}", sent.body);
-        texts.push(sent.body);
     }
-    assert!(texts.windows(2).all(|w| w[0] == w[1]), "not one fixed text");
 }
 
 /// P4: a name already in the file is 409 `name_taken`.
 #[test]
 fn p4_a_taken_name_is_refused() {
     let fx = Fixture::new(Setup::default());
-    refused(&fx, &fx.body("root"), StatusCode::CONFLICT, "name_taken");
-    assert!(fx.records("config_key_create_intent").is_empty());
+    refused(
+        &fx,
+        &fx.body("root"),
+        StatusCode::CONFLICT,
+        &code("name_taken"),
+    );
 }
 
 /// P3: each precondition alone.
@@ -76,34 +138,23 @@ fn p3_each_precondition_refuses_alone() {
         &absent,
         &json!({"name":"a","backends":["*"],"revision":"x"}),
         StatusCode::CONFLICT,
-        "no_config_file",
+        &code("no_config_file"),
     );
     let off = Fixture::new(Setup {
         reload: false,
         ..Setup::default()
     });
-    let sent = off.post(Call::new(&off.body("a")));
-    assert_eq!(
-        sent.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "{}",
-        sent.body
-    );
+    let unavailable = StatusCode::SERVICE_UNAVAILABLE;
+    refused(&off, &off.body("a"), unavailable, &reload_off());
     let broken = Fixture::new(Setup::default());
     let body = broken.body("a");
     std::fs::write(broken.path(), "backends: [\n").expect("break");
-    let sent = broken.post(Call::new(&body));
-    assert_eq!(
-        sent.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "{}",
-        sent.body
-    );
+    refused(&broken, &body, unavailable, &reload_off());
     let stale = Fixture::new(Setup::default());
     let mut body = stale.body("a");
     body["revision"] = json!("0000");
-    let answer = refused(&stale, &body, StatusCode::CONFLICT, "stale");
-    assert_eq!(answer["current"], stale.revision());
+    let current = json!({"error": "stale", "current": stale.revision()});
+    refused(&stale, &body, StatusCode::CONFLICT, &current);
 }
 
 /// P3 combined: the earlier refusal wins.
@@ -114,61 +165,35 @@ fn p3_combined_faults_answer_the_earlier_refusal() {
         b["revision"] = json!("0000");
         b
     };
+    let (conflict, unavailable) = (StatusCode::CONFLICT, StatusCode::SERVICE_UNAVAILABLE);
     let absent = Fixture::new(Setup {
         file: false,
         ..Setup::default()
     });
-    refused(
-        &absent,
-        &stale(&absent, "a"),
-        StatusCode::CONFLICT,
-        "no_config_file",
-    );
+    let none = code("no_config_file");
+    refused(&absent, &stale(&absent, "a"), conflict, &none);
     let off = Fixture::new(Setup {
         reload: false,
         ..Setup::default()
     });
-    let sent = off.post(Call::new(&stale(&off, "a")));
-    assert_eq!(
-        sent.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "{}",
-        sent.body
-    );
-    let sent = off.post(Call::new(&off.body("root")));
-    assert_eq!(
-        sent.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "{}",
-        sent.body
-    );
+    refused(&off, &stale(&off, "a"), unavailable, &reload_off());
+    refused(&off, &off.body("root"), unavailable, &reload_off());
     let taken = Fixture::new(Setup::default());
     refused(
         &taken,
         &stale(&taken, "root"),
-        StatusCode::CONFLICT,
-        "name_taken",
+        conflict,
+        &code("name_taken"),
     );
     let gone = Fixture::new(Setup {
         file: false,
         ..Setup::default()
     });
-    refused(
-        &gone,
-        &gone.body("root"),
-        StatusCode::CONFLICT,
-        "no_config_file",
-    );
+    refused(&gone, &gone.body("root"), conflict, &none);
     let broken = Fixture::new(Setup::default());
     let body = stale(&broken, "a");
     std::fs::write(broken.path(), "backends: [\n").expect("break");
-    let sent = broken.post(Call::new(&body));
-    assert_eq!(
-        sent.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "{}",
-        sent.body
-    );
+    refused(&broken, &body, unavailable, &reload_off());
 }
 
 /// A3: no audit log (auth on, and auth off) is 503 `audit_unavailable`.
@@ -182,7 +207,7 @@ fn a3_no_audit_log_refuses_the_write() {
         &on,
         &on.body("a"),
         StatusCode::SERVICE_UNAVAILABLE,
-        "audit_unavailable",
+        &code("audit_unavailable"),
     );
     let mut running = Setup::default().running;
     running.enabled = false;
@@ -195,7 +220,7 @@ fn a3_no_audit_log_refuses_the_write() {
         &off,
         &off.body("a"),
         StatusCode::SERVICE_UNAVAILABLE,
-        "audit_unavailable",
+        &code("audit_unavailable"),
     );
 }
 
@@ -219,9 +244,8 @@ fn f2_a_key_that_flips_the_mode_is_refused_before_the_write() {
         &fx,
         &fx.body("first"),
         StatusCode::CONFLICT,
-        "restart_required",
+        &code("restart_required"),
     );
-    assert!(fx.records("config_key_create_intent").is_empty());
 }
 
 /// P5: a pattern the loader refuses, and a bad name, are 422 naming the
@@ -240,13 +264,8 @@ fn p5_validation_refusals_name_the_field_not_the_value() {
         body.as_object_mut()
             .expect("object")
             .extend(patch.as_object().expect("object").clone());
-        let answer = refused(
-            &fx,
-            &body,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "invalid_field",
-        );
-        assert_eq!(answer["field"], field);
+        let status = StatusCode::UNPROCESSABLE_ENTITY;
+        let answer = refused(&fx, &body, status, &invalid_field(field));
         assert!(!answer.to_string().contains("zq"), "{answer}");
     }
 }
@@ -265,9 +284,13 @@ fn p5_a_duplicate_principal_is_a_reload_refusal_with_fixed_text() {
         text,
         ..Setup::default()
     });
-    refused(&fx, &fx.body("new"), StatusCode::CONFLICT, "reload_refused");
     // The candidate check runs before the intent is appended.
-    assert!(fx.records("config_key_create_intent").is_empty());
+    refused(
+        &fx,
+        &fx.body("new"),
+        StatusCode::CONFLICT,
+        &code("reload_refused"),
+    );
 }
 
 const NOW: u64 = 1_793_880_000;
@@ -287,13 +310,8 @@ fn p6_an_expiry_not_after_now_is_refused() {
     for when in [NOW, NOW - 3600] {
         let mut body = fx.body("short");
         body["expires_at"] = json!(at(when));
-        let answer = refused(
-            &fx,
-            &body,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "invalid_field",
-        );
-        assert_eq!(answer["field"], "expires_at");
+        let status = StatusCode::UNPROCESSABLE_ENTITY;
+        refused(&fx, &body, status, &invalid_field("expires_at"));
     }
     let mut body = fx.body("short");
     body["expires_at"] = json!(at(NOW + 1));
@@ -311,13 +329,8 @@ fn p6b_the_expiry_checked_is_the_expiry_written() {
     let half_past = |secs: u64| at(secs).replace('Z', ".500Z");
     let mut body = fx.body("half");
     body["expires_at"] = json!(half_past(NOW));
-    let answer = refused(
-        &fx,
-        &body,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "invalid_field",
-    );
-    assert_eq!(answer["field"], "expires_at");
+    let status = StatusCode::UNPROCESSABLE_ENTITY;
+    refused(&fx, &body, status, &invalid_field("expires_at"));
     let mut body = fx.body("later");
     body["expires_at"] = json!(half_past(NOW + 1));
     assert_eq!(fx.post(Call::new(&body)).status, StatusCode::CREATED);
@@ -327,51 +340,60 @@ fn p6b_the_expiry_checked_is_the_expiry_written() {
 
 /// P6 under the lock: an expiry still ahead when the route checks, but past
 /// when the writer holds the lock, is refused. The test holds the config lock
-/// until the route says it is about to ask for it, then moves the clock and
-/// lets go, so only a clock read made under the lock sees the later time.
+/// until the writer itself is waiting on it (the lock's own waiter count, a
+/// signal only the writer's wait raises), then moves the clock and lets go, so
+/// only a clock read made under the lock sees the later time.
 #[test]
 fn p6_the_clock_is_read_again_under_the_lock() {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use crate::config_persistence::lock::{lock_config, lock_path, waiters_for_test};
+    use std::time::{Duration, Instant};
     let _clock = crate::clock::test_clock::at_secs(NOW);
     let fx = Fixture::new(Setup::default());
     let mut body = fx.body("late");
     body["expires_at"] = json!(at(NOW + 60));
-    let reached = Arc::new(tokio::sync::Notify::new());
-    let fired = Arc::new(AtomicBool::new(false));
-    let (ping, flag) = (Arc::clone(&reached), Arc::clone(&fired));
-    let mut call = Call::new(&body);
-    call.before_lock = Some(BeforeLock(Arc::new(move || {
-        flag.store(true, Ordering::SeqCst);
-        ping.notify_one();
-    })));
+    let lock = lock_path(&crate::identity_grants::journal::resolved(&fx.path()));
     let before = fx.bytes();
-    let later = std::cell::RefCell::new(None);
-    let sent = fx.post_driven(call, |send| async {
-        let held = crate::config_persistence::lock::lock_config(
-            &fx.path(),
-            std::time::Instant::now() + std::time::Duration::from_secs(30),
-        )
-        .await
-        .expect("the test holds the lock");
+    let (later, waited) = (std::cell::RefCell::new(None), std::cell::Cell::new(false));
+    let sent = fx.post_driven(Call::new(&body), |send| async {
+        let held = lock_config(&fx.path(), Instant::now() + Duration::from_secs(30))
+            .await
+            .expect("the test holds the lock");
         let advance = async {
             // A hang guard only: it never decides pass or fail in a normal run.
-            tokio::time::timeout(std::time::Duration::from_secs(60), reached.notified())
+            let wait = async {
+                while waiters_for_test(&lock) == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(60), wait)
                 .await
-                .expect("the route never reached the lock; a hung row is not a red");
+                .expect("the writer never waited on the lock; a hung row is not a red");
+            waited.set(true);
             *later.borrow_mut() = Some(crate::clock::test_clock::at_secs(NOW + 120));
             drop(held);
         };
         tokio::join!(send, advance).0
     });
-    assert!(fired.load(Ordering::SeqCst), "the route never signalled");
-    assert_eq!(
-        sent.status,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "{}",
-        sent.body
+    assert!(waited.get(), "premise: the writer's lock wait never began");
+    let status = StatusCode::UNPROCESSABLE_ENTITY;
+    let expected = invalid_field("expires_at");
+    assert_refusal(
+        &fx,
+        &before,
+        &sent,
+        (status, &expected),
+        Reached::BeforeWriter,
     );
-    assert_eq!(sent.json()["field"], "expires_at");
-    assert_eq!(fx.bytes(), before);
+}
+
+/// The 409 of a file keyedit cannot edit in place: its path and the hand steps.
+fn not_written(fx: &Fixture) -> Value {
+    let path = fx.path().display().to_string();
+    json!({"error": "not_written", "message": format!(
+        "{path} cannot be edited in place; nothing was written. Run \
+         `mcp-gateway hash-key` on the new key, add an entry to auth.api_keys \
+         with the key_sha256 it prints, then reload."
+    )})
 }
 
 /// P7: a list or `auth` keyedit cannot edit in place is 409 `not_written`
@@ -393,17 +415,36 @@ fn p7_keyedit_refusals_are_not_written_with_hand_steps() {
             text,
             ..Setup::default()
         });
-        let answer = refused(&fx, &fx.body("hand"), StatusCode::CONFLICT, "not_written");
-        // The decoded message, not the JSON text: there a Windows path's
-        // backslashes are escaped and never match `display()`.
-        let message = answer["message"].as_str().expect("a message");
-        assert!(message.contains("mcp-gateway hash-key"), "{answer}");
-        assert!(
-            message.contains(&fx.path().display().to_string()),
-            "{answer}"
+        refused(
+            &fx,
+            &fx.body("hand"),
+            StatusCode::CONFLICT,
+            &not_written(&fx),
         );
     }
-    let _ = ROOT;
+}
+
+/// P7b: a block-style `auth` whose only flaw is a flow-style `api_keys` list
+/// is refused for that list alone.
+#[test]
+fn p7b_a_flow_style_key_list_under_a_block_auth_is_not_written() {
+    let listed = format!(
+        "[{{name: root, key_sha256: \"{}\", backends: [\"*\"], admin: true}}]",
+        spec(ROOT)
+    );
+    let text = format!(
+        "secrets:\n  store: files\nbackends: {{}}\nauth:\n  enabled: true\n  api_keys: {listed}\n"
+    );
+    let fx = Fixture::new(Setup {
+        text,
+        ..Setup::default()
+    });
+    refused(
+        &fx,
+        &fx.body("hand"),
+        StatusCode::CONFLICT,
+        &not_written(&fx),
+    );
 }
 
 /// A4: an audit append that fails, and separately one whose fsync fails, each
@@ -415,18 +456,27 @@ fn a4_a_failed_intent_append_or_fsync_refuses_the_write() {
     for fault in [WriteFault::WriteError, WriteFault::SyncError] {
         let fx = Fixture::new(Setup::default());
         let log = fx.state.transparency_log.clone().expect("an audit log");
+        let target = crate::identity_grants::journal::resolved(&fx.path());
+        crate::config_reload::write_order::take(&target);
         log.arm_write_fault(Some(fault));
-        refused(
+        // The append itself failed: its line may or may not be on disk.
+        let status = StatusCode::SERVICE_UNAVAILABLE;
+        let expected = code("audit_unavailable");
+        refused_at(
             &fx,
             &fx.body("a"),
-            StatusCode::SERVICE_UNAVAILABLE,
-            "audit_unavailable",
+            (status, &expected),
+            Reached::AuditAppend,
         );
         assert_eq!(
             log.write_faults_fired(),
             1,
             "{fault:?} never reached the intent"
         );
+        // The writer records "intent" only after the append returned: a
+        // failed append or fsync leaves no such step, and no commit follows.
+        let steps = crate::config_reload::write_order::take(&target);
+        assert!(steps.is_empty(), "{fault:?}: the writer went on: {steps:?}");
     }
 }
 

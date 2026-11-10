@@ -181,10 +181,10 @@ async fn k2_a_key_removed_or_expired_by_reload_is_refused_on_the_next_call() {
         test_router_app_state_with_auth(&auth(vec![key(KEPT, None), key(ADDED, None)])).await;
     let dir = tempfile::tempdir().expect("tempdir");
     for secret in [KEPT, ADDED] {
-        assert_ne!(
-            status(&state, "/mcp", secret).await,
-            StatusCode::UNAUTHORIZED,
-            "precondition: {secret} works before the reload"
+        let got = status(&state, "/mcp", secret).await;
+        assert!(
+            accepted(got),
+            "precondition: {secret} works before the reload: {got}"
         );
     }
 
@@ -407,9 +407,29 @@ fn spend_one(state: &Arc<super::AppState>, secret: &str) -> bool {
     auth.check_authenticated_client_rate_limit(&client)
 }
 
-/// Whether `got` is a call the key table let through.
+/// Whether `got` is a call the key table let through and the window served:
+/// only a 2xx. A 429 or any other refusal (400, 403, 404) is never an
+/// admission, so a precondition cannot pass on the wrong refusal.
 fn accepted(got: StatusCode) -> bool {
-    got != StatusCode::UNAUTHORIZED && !got.is_server_error()
+    got.is_success()
+}
+
+/// `accepted` admits only a served call. A ping is answered
+/// `JsonRpcResponse::success` (handlers.rs, the `"ping"` arm), a 2xx, so a
+/// 400, 403 or 404 is a refusal the "works" preconditions must not pass.
+#[test]
+fn accepted_admits_only_a_served_call() {
+    assert!(accepted(StatusCode::OK));
+    for refused in [
+        StatusCode::BAD_REQUEST,
+        StatusCode::UNAUTHORIZED,
+        StatusCode::FORBIDDEN,
+        StatusCode::NOT_FOUND,
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::INTERNAL_SERVER_ERROR,
+    ] {
+        assert!(!accepted(refused), "{refused} was taken as served");
+    }
 }
 
 /// K2: what K5 leaves unproven is the identity across a rotation. A key with
@@ -437,6 +457,16 @@ async fn k2_an_explicit_principal_rotation_by_reload_keeps_identity_and_window()
         let got = status(&state, "/mcp", secret).await;
         assert!(accepted(got), "{what} before the grace ends: {got}");
     }
+    let rotated = state
+        .live_config
+        .generation()
+        .auth()
+        .validate_token(ROTATED);
+    assert_eq!(
+        rotated.map(|client| client.rate_limit),
+        Some(OPS_WINDOW),
+        "the rotated client's rate limit"
+    );
     let after = ops_identity(&state, ROTATED);
     assert_eq!(after[0], before[0], "the principal moved");
     assert_eq!(after[1], before[1], "the limit key moved");

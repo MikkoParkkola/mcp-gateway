@@ -56,6 +56,16 @@ def _load_orphan():
 _ORPHAN = _load_orphan()
 
 
+def _load_base_revision():
+    spec = importlib.util.spec_from_file_location("base_revision", ROOT / "scripts/dev/base_revision.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_BASE_REVISION = _load_base_revision()
+
+
 def _normalize(line: str) -> str:
     return " ".join(line.split())
 
@@ -348,7 +358,7 @@ def shrink_failures(
     return fails
 
 
-def load_base_via_git(rev: str) -> dict[tuple[str, str], int] | None:
+def load_base_via_git(rev: str, compare=None) -> dict[tuple[str, str], int] | None:
     # An unknown revision is an error, never "no baseline": a mistyped base or
     # a shallow clone missing it must not pass silently. Only a revision that
     # exists without the file (the PR that introduces it) returns None.
@@ -360,6 +370,13 @@ def load_base_via_git(rev: str) -> dict[tuple[str, str], int] | None:
     )
     if known.returncode != 0:
         raise SystemExit(f"request-panics: base revision {rev!r} is not in this clone")
+    # Merge-base mode (pull requests, lanes): the baseline where HEAD's branch left `rev`, so a
+    # shrink that landed on the tip after the branch was cut is not read as the branch growing it.
+    if compare is _BASE_REVISION.Compare.MERGE_BASE:
+        try:
+            rev = _BASE_REVISION.comparison_commit(ROOT, rev, compare)
+        except RuntimeError as exc:
+            raise SystemExit(f"request-panics: {exc}") from None
     proc = subprocess.run(
         ["git", "show", f"{rev}:scripts/ci/request-panic-baseline.txt"],
         cwd=str(ROOT),
@@ -956,6 +973,45 @@ def run_self_test() -> int:
     rc = _main_on({"src/lib.rs": "mod gone;\n"}, "", link="src/gone.rs")
     check("main unreadable source returns 1", rc == 1, repr(rc))
 
+    # Merge-base mode: a branch cut before the tip shrank the baseline, untouched by the branch,
+    # passes against its branch point; base mode keeps the tip; a real addition still fails; no
+    # branch point refuses.
+    with tempfile.TemporaryDirectory() as td:
+        troot = Path(td)
+        rel = "scripts/ci/request-panic-baseline.txt"
+        (troot / "scripts/ci").mkdir(parents=True, exist_ok=True)
+
+        def git(*args):
+            subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=str(troot),
+                           check=True, capture_output=True)
+
+        both = "src/a.rs\tx.unwrap()\t1\nsrc/b.rs\ty.unwrap()\t1\n"
+        (troot / rel).write_text(both, encoding="utf-8")
+        git("init", "-q")
+        git("add", "-A")
+        git("commit", "-qm", "branch point")
+        git("branch", "-M", "line")
+        git("branch", "feature")
+        (troot / rel).write_text("src/a.rs\tx.unwrap()\t1\n", encoding="utf-8")
+        git("commit", "-qam", "the tip shrinks the baseline")
+        git("checkout", "-q", "feature")
+        old_root = globals()["ROOT"]
+        try:
+            globals()["ROOT"] = troot
+            check("merge-base: a branch untouched by a tip shrink passes",
+                  main(["--base", "line", "--compare", "merge-base"]) == 0)
+            check("base mode: the same branch against the tip fails", main(["--base", "line"]) == 1)
+            (troot / rel).write_text(both + "src/c.rs\tz.unwrap()\t1\n", encoding="utf-8")
+            check("merge-base: a real addition still fails",
+                  main(["--base", "line", "--compare", "merge-base"]) == 1)
+            git("checkout", "-q", "--orphan", "unrelated")
+            git("commit", "-qm", "unrelated history")
+            git("checkout", "-q", "-f", "feature")
+            check("merge-base: no branch point refuses",
+                  main(["--base", "unrelated", "--compare", "merge-base"]) == 1)
+        finally:
+            globals()["ROOT"] = old_root
+
     print(f"self-test: {passed} cases passed")
     return 0
 
@@ -964,6 +1020,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="MIK-8691 request panic guard")
     parser.add_argument("--write-baseline", action="store_true")
     parser.add_argument("--base", metavar="REV", default=None)
+    _BASE_REVISION.add_argument(parser)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
 
@@ -974,7 +1031,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             current_path = ROOT / BASELINE_REL
             current = read_baseline_counts(current_path)
-            base = load_base_via_git(args.base)
+            base = load_base_via_git(args.base, _BASE_REVISION.Compare(args.compare))
         except SystemExit as exc:
             if isinstance(exc.code, str):
                 print(exc.code)

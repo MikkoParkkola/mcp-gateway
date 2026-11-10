@@ -36,8 +36,15 @@ use crate::security::TransparencyLogger;
 use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho};
 use crate::{Error, Result};
 
+mod marker;
+mod withheld;
+pub(super) use marker::in_delivery_scope;
+pub(crate) use marker::invocation_landing;
+pub(super) use marker::{RecordedSet, RetryCell, note_retry_trace, with_retry_trace};
+pub(super) use withheld::{WITHHELD_RECORD_FAILED, note_withheld_best_effort};
 mod repeat;
 pub(crate) use repeat::DecisionDedupe;
+pub(super) use repeat::RepeatMark;
 #[cfg(test)]
 pub(super) use repeat::{REPEAT_WINDOW, RepeatLedger};
 
@@ -49,9 +56,15 @@ const DECISION_KIND: &str = "identity_grant_decision";
 /// `sealed` once the answer's delivery record has flushed it ([`seal`]).
 struct Slot {
     notes: Mutex<Vec<GrantNote>>,
+    /// Withheld-call notes: written after the slot's work returns, on their
+    /// own task, warning only. Never part of the fail-closed flush.
+    best_effort: Mutex<Vec<GrantNote>>,
     answer_id: std::sync::OnceLock<RequestId>,
     logger: Arc<TransparencyLogger>,
     sealed: std::sync::atomic::AtomicBool,
+    /// Trace ids whose invocation record landed, read by each decision's own
+    /// append (see [`RecordedSet`]).
+    recorded: RecordedSet,
 }
 
 tokio::task_local! {
@@ -74,33 +87,19 @@ pub(super) fn in_repeat_scope<T>(
     task_and_caller: String,
     check: impl FnOnce() -> T,
 ) -> T {
-    REPEAT_SCOPE.sync_scope((Arc::clone(store), task_and_caller), check)
+    // A re-check of a stored delivery (a task read, a notification frame, a
+    // repeated task-augmented call) is a delivery: the call already has the
+    // invocation record of its original request. Repeat suppression above is
+    // unchanged; this only sets the decision's marker.
+    REPEAT_SCOPE.sync_scope((Arc::clone(store), task_and_caller), || {
+        in_delivery_scope(check)
+    })
 }
 
-/// A re-check note's suppression key and decision fingerprint.
-#[derive(Clone)]
-pub(super) struct RepeatMark {
-    store: Arc<DecisionDedupe>,
-    key: String,
-    decision: String,
+/// The open slot's recorded set, for an invocation writer to add to.
+pub(super) fn open_slot_recorded() -> Option<RecordedSet> {
+    GRANT_SLOT.try_with(|slot| slot.recorded.clone()).ok()
 }
-
-impl std::fmt::Debug for RepeatMark {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RepeatMark")
-            .field("key", &self.key)
-            .field("decision", &self.decision)
-            .finish_non_exhaustive()
-    }
-}
-
-impl PartialEq for RepeatMark {
-    fn eq(&self, other: &Self) -> bool {
-        self.key == other.key && self.decision == other.decision
-    }
-}
-
-impl Eq for RepeatMark {}
 
 /// One grant decision noted inside a slot, keyed by the check's own inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +118,12 @@ pub(super) struct GrantNote {
     pub(super) subject: Option<String>,
     /// Set on a finished task's re-check: how a repeat is recognised.
     pub(super) repeat: Option<RepeatMark>,
+    /// Whether [`DELIVERY`] was set when the note was taken.
+    pub(super) delivery: bool,
+    /// The open slot's recorded set; empty for a note taken outside a slot.
+    pub(super) recorded: RecordedSet,
+    /// The retry a withheld call routed to, when taken inside one.
+    pub(super) retry: Option<RetryCell>,
 }
 
 impl GrantNote {
@@ -127,6 +132,7 @@ impl GrantNote {
     fn project(server: &str, tool: &str, event: &IdentityGrantAuditEvent) -> Self {
         let mut fields = Map::new();
         fields.insert("kind".into(), DECISION_KIND.into());
+        fields.insert("server".into(), server.into());
         fields.insert("timestamp".into(), event.timestamp.to_rfc3339().into());
         fields.insert(
             "reason".into(),
@@ -160,7 +166,26 @@ impl GrantNote {
             fields,
             subject: event.subject.as_ref().map(|s| s.subject().to_owned()),
             repeat: None,
+            delivery: marker::delivery_scoped(),
+            recorded: open_slot_recorded().unwrap_or_default(),
+            retry: marker::current_retry(),
         }
+    }
+
+    /// Whether the call this note is about has an invocation record of its
+    /// own, as the log holds it now: a delivery re-check's call has the
+    /// original request's, any other call has one once its trace id landed.
+    fn invocation_recorded(&self) -> bool {
+        self.delivery
+            || self
+                .trace_id
+                .as_deref()
+                .is_some_and(|trace| self.recorded.contains(trace))
+            || self
+                .retry
+                .as_ref()
+                .and_then(RetryCell::id)
+                .is_some_and(|trace| self.recorded.contains(trace))
     }
 
     /// Every recorded field but the timestamp, and the outcome.
@@ -218,25 +243,48 @@ struct SlotGuard {
 impl Drop for SlotGuard {
     fn drop(&mut self) {
         let pending = std::mem::take(&mut *self.slot.notes.lock().expect("grant slot lock"));
-        if !pending.is_empty() {
-            spawn_write(&self.logger, pending);
+        // invariant: nothing panics while holding the slot lock, so it is never poisoned.
+        let best_effort =
+            std::mem::take(&mut *self.slot.best_effort.lock().expect("grant slot lock"));
+        if !pending.is_empty() || !best_effort.is_empty() {
+            spawn_write(&self.logger, pending, best_effort);
         }
     }
 }
 
-/// Write `notes` on a spawned task, bounded; never on the caller's thread.
-fn spawn_write(logger: &Arc<TransparencyLogger>, notes: Vec<GrantNote>) {
+/// Write `notes`, then `best_effort` notes, on one spawned task, bounded;
+/// never on the caller's thread. A failed best-effort write only warns.
+fn spawn_write(
+    logger: &Arc<TransparencyLogger>,
+    notes: Vec<GrantNote>,
+    best_effort: Vec<GrantNote>,
+) {
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::error!(
-            count = notes.len(),
+            count = notes.len() + best_effort.len(),
             "grant decision records lost: no runtime to write them"
         );
         return;
     };
     let logger = Arc::clone(logger);
+    #[cfg(test)]
+    let in_flight = seams::write_spawned(&logger);
     handle.spawn(async move {
-        if let Err(error) = write_records(&logger, &notes).await {
+        // Off the count when the task ends, panics or is cancelled.
+        #[cfg(test)]
+        let _in_flight = in_flight;
+        if !notes.is_empty()
+            && let Err(error) = write_records(&logger, &notes).await
+        {
             tracing::error!(%error, "grant decision records could not be written");
+        }
+        if !best_effort.is_empty() {
+            #[cfg(test)]
+            seams::at_best_effort_start().await;
+            let server = best_effort.first().map(|note| note.server.clone());
+            if let Err(error) = write_records(&logger, &best_effort).await {
+                tracing::warn!(server = server.as_deref(), %error, "{WITHHELD_RECORD_FAILED}");
+            }
         }
     });
 }
@@ -273,7 +321,8 @@ async fn write_records(
         {
             continue;
         }
-        let (fields, envelope) = (note.fields.clone(), note.envelope());
+        let (mut fields, envelope) = (note.fields.clone(), note.envelope());
+        let judge = note.clone();
         // Only a re-check shares its wait with the append; any other record
         // keeps the log's own bounds unchanged.
         let cap = note
@@ -281,12 +330,16 @@ async fn write_records(
             .as_ref()
             .map(|_| deadline.saturating_sub(started.elapsed()));
         #[cfg(test)]
-        if seams::fail_this_append() {
+        if seams::fail_this_append(note) {
             first_failure.get_or_insert(std::io::Error::other("injected append failure"));
             continue;
         }
         let written = logger
             .append_bounded_within(cap, move |log| {
+                // Read here, in the append op: appends are serialized, so every
+                // earlier invocation append has finished and recorded itself.
+                let recorded = judge.invocation_recorded();
+                fields.insert("invocation_recorded".into(), recorded.into());
                 log.append_event(fields, &envelope).map(|_| ())
             })
             .await;
@@ -325,9 +378,11 @@ pub(super) async fn with_grant_slot<F: Future>(
     let guard = SlotGuard {
         slot: Arc::new(Slot {
             notes: Mutex::default(),
+            best_effort: Mutex::default(),
             answer_id: std::sync::OnceLock::new(),
             logger: Arc::clone(logger),
             sealed: std::sync::atomic::AtomicBool::new(false),
+            recorded: RecordedSet::default(),
         }),
         logger: Arc::clone(logger),
     };
@@ -338,10 +393,21 @@ pub(super) async fn with_grant_slot<F: Future>(
     let answer_id = guard.slot.answer_id.get().cloned();
     // A slot that collected no decision has nothing to write, so no flush
     // task: every `/mcp` request opens a slot, and most decide nothing.
-    if notes.is_empty() {
-        return (output, Ok(()), answer_id);
+    let written = if notes.is_empty() {
+        Ok(())
+    } else {
+        write_owned(logger, notes).await
+    };
+    // Taken only after the awaited flush: a caller cancelled during it leaves
+    // the list in the slot, and the guard's drop writes it. After the flush,
+    // so this task never takes the append permit ahead of it; behind the
+    // call's own invocation append, which ran inside the wrapped work.
+    // invariant: nothing panics while holding the slot lock, so it is never poisoned.
+    let best_effort = std::mem::take(&mut *guard.slot.best_effort.lock().expect("grant slot lock"));
+    if !best_effort.is_empty() {
+        spawn_write(logger, Vec::new(), best_effort);
     }
-    (output, write_owned(logger, notes).await, answer_id)
+    (output, written, answer_id)
 }
 
 /// Write `notes` and wait for the append. The batch is owned by its own
@@ -380,52 +446,6 @@ pub(crate) async fn flush_open_slot() -> Result<()> {
         return Ok(());
     }
     write_owned(&logger, notes).await
-}
-
-/// The one warning a failed best-effort withheld record logs (MIK-8340 A5
-/// item 9); the upgrade note tells operators to alert on it.
-pub(super) const WITHHELD_RECORD_FAILED: &str = "The audit record of a withheld surfaced call could not be written; \
-     the call is answered as a name that matches no tool";
-
-/// The `FailClosed` exception of MIK-8340 A5 item 9, for the withheld surfaced
-/// call's own grant record ONLY: run `noting`, then write the decisions it
-/// noted into the open slot at once and on their own task. Their write never
-/// becomes the request's verdict (under `FailClosed` the slot's end-of-request
-/// write would answer -32005 and reveal the name exists); a failed write logs
-/// [`WITHHELD_RECORD_FAILED`] from the writing task itself, so a caller
-/// cancelled while it waits cannot drop the warning. Every note added before
-/// `noting` stays in the slot and fails closed as before. Outside a slot
-/// `noting` runs alone. Any other use is a new exception and needs its own
-/// design decision.
-pub(super) async fn note_withheld_best_effort<T>(server: &str, noting: impl FnOnce() -> T) -> T {
-    let before = GRANT_SLOT
-        .try_with(|slot| slot.notes.lock().expect("grant slot lock").len())
-        .ok();
-    let output = noting();
-    let taken = before.and_then(|before| {
-        GRANT_SLOT
-            .try_with(|slot| {
-                let mut held = slot.notes.lock().expect("grant slot lock");
-                let at = before.min(held.len());
-                (Arc::clone(&slot.logger), held.split_off(at))
-            })
-            .ok()
-    });
-    let Some((logger, notes)) = taken.filter(|(_, notes)| !notes.is_empty()) else {
-        return output;
-    };
-    let owned_server = server.to_owned();
-    // Owned by its own task, as `write_owned` is: a cancelled caller cannot
-    // drop records that were never submitted, nor the warning of their failure.
-    let writer = tokio::spawn(async move {
-        if let Err(error) = write_records(&logger, &notes).await {
-            tracing::warn!(server = %owned_server, %error, "{WITHHELD_RECORD_FAILED}");
-        }
-    });
-    if let Err(join) = writer.await {
-        tracing::warn!(server, error = %join, "{WITHHELD_RECORD_FAILED}");
-    }
-    output
 }
 
 /// Note `event` for `(server, tool)` into the open slot. Outside every slot
@@ -472,7 +492,7 @@ pub(super) fn note_grant_decision(
         tool,
         "identity grant check outside a grant-decision slot; refused"
     );
-    spawn_write(logger, vec![note]);
+    spawn_write(logger, vec![note], Vec::new());
     Err(Error::AuditUnavailable)
 }
 

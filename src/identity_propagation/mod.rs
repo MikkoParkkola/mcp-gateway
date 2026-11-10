@@ -388,17 +388,11 @@ pub(crate) fn identity_binding_prefix(
     if !url::Url::parse(subject.authority()).is_ok_and(|url| url.has_host()) {
         return None;
     }
-    // Built through `stable_actor_id` rather than restated, so the two cannot
-    // drift: the pool binding is derived from that same method.
-    // Through `checked`: a subject that names no one has no slot to evict.
-    let subject_key = VerifiedIdentity::checked(
-        subject.authority().to_owned(),
-        subject.subject().to_owned(),
-        String::new(),
-        None,
-        Vec::new(),
-    )?
-    .stable_actor_id();
+    // The verified identity's own actor-id formula rather than a restatement,
+    // so the two cannot drift: the pool binding is derived from that formula.
+    // A subject that names no one has no slot to evict.
+    let subject_key =
+        VerifiedIdentity::stable_actor_id_for(subject.authority(), subject.subject())?;
     Some(format!("idp:{}:{subject_key}:", subject_key.len()))
 }
 

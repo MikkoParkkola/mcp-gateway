@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use super::*;
 use crate::config::{BackendConfig, TransportConfig};
+use crate::config_reload::FileRevision;
 use crate::secret_store::StoreError;
 
 const CANARY: &str = "zq-adopt-canary";

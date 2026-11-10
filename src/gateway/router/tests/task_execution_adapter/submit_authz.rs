@@ -89,16 +89,13 @@ pub(super) async fn refused_like_sync_then_granted(row: &Armed, sync: Value, tas
 
 /// The refusal half of row 1; returns the committed row count.
 pub(super) async fn refused_like_sync(row: &Armed, sync: Value, task: Value) -> usize {
-    let before = decisions(&row.dir).len();
-    let (sync_status, sync_answer) = post_full(&row.state, "key-a", sync).await;
+    let (sync_status, sync_answer, sync_records) = post_counted(row, sync).await;
     assert!(
         sync_answer.get("error").is_some(),
         "the sync call is refused: {sync_answer}"
     );
-    let sync_records = decisions(&row.dir).len() - before;
-    let (rows, before) = (committed(row), decisions(&row.dir).len());
-
-    let (status, answer) = post_full(&row.state, "key-a", task.clone()).await;
+    let rows = committed(row);
+    let (status, answer, task_records) = post_counted(row, task.clone()).await;
 
     assert!(
         answer.pointer("/result/taskId").is_none(),
@@ -108,11 +105,7 @@ pub(super) async fn refused_like_sync(row: &Armed, sync: Value, task: Value) -> 
     std::assert_eq!(code_of(&answer), code_of(&sync_answer), "{answer}");
     std::assert_eq!(message_of(&answer), message_of(&sync_answer), "{answer}");
     std::assert_eq!(committed(row), rows, "a task row was committed");
-    std::assert_eq!(
-        decisions(&row.dir).len() - before,
-        sync_records,
-        "refusal audit records"
-    );
+    std::assert_eq!(task_records, sync_records, "refusal audit records");
     std::assert_eq!(
         row.endpoint.arrivals(),
         0,
@@ -173,13 +166,13 @@ pub(super) fn settled(status: crate::protocol::tasks::TaskStatus) -> bool {
 }
 
 pub(super) fn alice() -> String {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@adapter.test".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp.adapter.test".to_string(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@adapter.test".to_string(),
+        None,
+        Vec::new(),
+        "https://idp.adapter.test".to_string(),
+    )
     .stable_actor_id()
 }
 
@@ -221,7 +214,17 @@ async fn a_grant_revoked_after_submit_is_still_refused_by_the_worker() {
         tokio::task::yield_now().await;
     };
     let error = stored.task.error().expect("the worker's refusal is stored");
-    let records = decisions(&row.dir);
+    // The worker's refusal is a withheld note: written after the task settles,
+    // on the slot's own task (design: "withheld notes are owned by their
+    // slot"), so the denied record is waited for, with a bound.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut records = decisions(&row.dir);
+    while !records.iter().any(|r| r["outcome"] == json!("denied"))
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::task::yield_now().await;
+        records = decisions(&row.dir);
+    }
     std::assert_eq!(row.endpoint.arrivals(), 0, "the backend saw a call");
     assert!(
         records.iter().any(|r| r["outcome"] == json!("denied")),
@@ -335,4 +338,22 @@ async fn non_admin_webhook_submit_is_refused_like_the_sync_call() {
         sync.1
     );
     refused_like_sync(&row, webhook_invoke(1), as_task(webhook_invoke(2), "sa-2")).await;
+}
+
+/// `body` posted as `key-a`, with the grant decision records it produced. A
+/// withheld call's own record is written after its answer, on the slot's task,
+/// and no caller waits for it: the count waits until every grant-record write
+/// started so far has landed, before the call and after it, so each record
+/// counts in its own call's window.
+pub(super) async fn post_counted(row: &Armed, body: Value) -> (StatusCode, Value, usize) {
+    grant_writes_settled(row).await;
+    let before = decisions(&row.dir).len();
+    let (status, answer) = post_full(&row.state, "key-a", body).await;
+    grant_writes_settled(row).await;
+    (status, answer, decisions(&row.dir).len() - before)
+}
+
+/// Wait until every grant-record write to the row's log has landed.
+async fn grant_writes_settled(row: &Armed) {
+    crate::gateway::meta_mcp::grant_audit::seams::grant_writes_settled_for_test(&row.log).await;
 }

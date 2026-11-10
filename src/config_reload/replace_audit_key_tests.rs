@@ -102,7 +102,7 @@ fn a_key_write_intent_names_its_actor_and_key() {
 fn every_other_kind_keeps_naming_the_gateway() {
     let gateway = serde_json::to_value(AuditWho::gateway()).expect("serializes");
     for kind in [
-        IntentKind::Save,
+        IntentKind::Save { fields: Vec::new() },
         IntentKind::Adopt,
         IntentKind::Restore,
         IntentKind::Recovery,

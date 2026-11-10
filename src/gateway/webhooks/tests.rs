@@ -661,13 +661,13 @@ fn temporary_token(backends: &[&str]) -> crate::key_server::TemporaryToken {
     crate::key_server::TemporaryToken {
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
-        identity: VerifiedIdentity {
-            subject: "sub".to_string(),
-            email: "user@issuer.test".to_string(),
-            name: None,
-            groups: vec![],
-            issuer: "https://issuer.test".to_string(),
-        },
+        identity: VerifiedIdentity::for_test(
+            "sub".to_string(),
+            "user@issuer.test".to_string(),
+            None,
+            vec![],
+            "https://issuer.test".to_string(),
+        ),
         scopes: TokenScopes {
             backends: backends.iter().map(|b| (*b).to_string()).collect(),
             tools: vec![],
