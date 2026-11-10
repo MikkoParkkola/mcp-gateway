@@ -248,7 +248,11 @@ async fn g_cf_1_one_key_two_cloudflare_users_differ_only_in_subject() {
     use crate::key_server::oidc_test_harness::{Harness, ISS_A, config_yaml};
     let harness = Harness::start(&config_yaml("[]", "")).await;
     let owner = (ISS_A, "alice");
-    let w = cf_world(&harness, grant("alice_cal", owner, GrantAgent::Any)).await;
+    let w = Box::pin(cf_world(
+        &harness,
+        grant("alice_cal", owner, GrantAgent::Any),
+    ))
+    .await;
     w.set_capability_yaml(&personal_cap("alice_cal", owner, "one"));
     w.settle().await;
     let (alice, bob) = (
@@ -320,7 +324,7 @@ async fn g_proxy_1_one_key_two_proxied_users_differ_only_in_subject() {
 async fn g_cf_2_get_an_open_get_stream_dies_when_its_signing_key_rotates() {
     use crate::key_server::oidc_test_harness::{Harness, ISS_A, config_yaml};
     let harness = Harness::start(&config_yaml("[]", "")).await;
-    let w = cf_world(&harness, LocalIdentityGrantStore::default()).await;
+    let w = Box::pin(cf_world(&harness, LocalIdentityGrantStore::default())).await;
     let assertion = harness.mint(ISS_A, "alice", &json!({}));
     let mut ear = w.sse_with("k-std", cf_asserted(&assertion)).await;
     w.store_shared("alpha", alpha("r2"));
