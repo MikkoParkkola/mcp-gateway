@@ -197,16 +197,16 @@ mod hurry {
         for id in 1..=n {
             let line = call(id);
             stdin.write_all(line.as_bytes()).await.expect("call");
-            wait_for(|| wire.produced.load(Ordering::SeqCst) == id).await;
+            named(&format!("backend produced reply {id}"), wait_for(|| wire.produced.load(Ordering::SeqCst) == id)).await;
         }
         // One reply blocks in the writer, the queue is full, and the last
         // produced reply waits for room. No stdout reader has run yet.
-        wait_for(|| answers_found_queue_full() > full_before).await;
+        named("writer queue full", wait_for(|| answers_found_queue_full() > full_before)).await;
         stdin.shutdown().await.expect("EOF");
         within("drain started", drain.notified()).await;
         assert!(wire.is_connected(), "in-flight backend alive at hurry");
         hurry.send(()).expect("hurry listener installed");
-        wait_for(|| deadline.get().is_some()).await;
+        named("hurry moves the registry deadline", wait_for(|| deadline.get().is_some())).await;
         release.notify_one();
         let mut bytes = String::new();
         within("stdout closes", stdout.read_to_string(&mut bytes))
@@ -258,6 +258,13 @@ mod hurry {
         }));
         assert!(gateway.backends.register(stuck));
         (gateway, dir, entered)
+    }
+
+    /// Name the step a stuck wait belongs to, so a red row says where it stopped.
+    async fn named<T>(step: &str, wait: impl std::future::Future<Output = T>) -> T {
+        timeout(ROW_BOUND - Duration::from_secs(1), wait)
+            .await
+            .unwrap_or_else(|_| panic!("{step}: not reached"))
     }
 
     async fn wait_for(mut ready: impl FnMut() -> bool) {
