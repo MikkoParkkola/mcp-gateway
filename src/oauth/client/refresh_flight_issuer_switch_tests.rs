@@ -674,3 +674,56 @@ async fn a_renewal_sends_the_registration_current_at_its_grant() {
         "the grant sends the registration current at its request"
     );
 }
+
+/// A client-credentials grant already sent when a sign-in under the other
+/// issuer is confirmed: the renewal is deferred, not renewed, and logs no
+/// renewal; nothing of the old issuer is cached, and the status stays the new
+/// sign-in's. Red before the grant checked its cache write: it reported the
+/// old issuer's answer as renewed.
+#[test]
+fn a_switch_while_a_client_credentials_grant_is_in_flight_renews_nothing() {
+    use crate::oauth::client::renewal::Renewal;
+    let ((renewal, cached, status, requests), logged) =
+        crate::test_log_capture::capture_at(tracing::Level::INFO, || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime");
+            runtime.block_on(async {
+                let server = TokenServer::start(&[Answer::HoldThenRotate]).await;
+                let dir = tempfile::tempdir().unwrap();
+                let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+                let mut owned = client(dir.path(), &server);
+                if let Some(meta) = owned.auth_metadata.as_mut() {
+                    meta.grant_types_supported = vec!["client_credentials".to_string()];
+                }
+                let owned = owned.with_sign_in_status(Arc::clone(&cell));
+                let switch = async {
+                    server.arrivals(1, HANG_BOUND).await;
+                    cell.record_install(OTHER_ISSUER_KEY);
+                    cell.set_held(Some(4_000_000_000), false);
+                    server.release.notify_one();
+                };
+                let (renewal, ()) = tokio::join!(owned.attempt_background_renewal(), switch);
+                let cached = owned.current_token.read().is_some();
+                (renewal, cached, cell.snapshot(), server.requests())
+            })
+        });
+
+    assert_eq!(requests, 1, "the grant was in flight");
+    assert_eq!(
+        renewal,
+        Renewal::Deferred,
+        "nothing of the old issuer is renewed"
+    );
+    assert!(!cached, "the old issuer's answer is not cached");
+    assert!(
+        !logged.contains("Token renewed via client_credentials"),
+        "no renewal is logged: {logged}"
+    );
+    assert!(
+        matches!(status, SignIn::SignedIn { expires_at: Some(at) }
+            if at == std::time::UNIX_EPOCH + std::time::Duration::from_secs(4_000_000_000)),
+        "the new sign-in's status stands: {status:?}"
+    );
+}
