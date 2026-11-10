@@ -257,7 +257,7 @@ pub(crate) fn isolate(test_path: &str) -> bool {
         stdout.contains("1 passed"),
         "isolated child for {test_path} did not run exactly one test\n--- child stdout ---\n{stdout}"
     );
-    // MIK-9396 MEMB.3: a passing child's measurements reach the log too.
+    // a passing child's measurements reach the log too.
     // A direct stderr write, because libtest captures only the print
     // macros; one write with its own newlines, so the block starts and
     // ends on a line of its own.
@@ -271,7 +271,7 @@ pub(crate) fn isolate(test_path: &str) -> bool {
 }
 
 /// A child's stdout line starting with this is a measurement the parent
-/// forwards to the log on a pass (MIK-9396 MEMB.3).
+/// forwards to the log on a pass.
 pub(crate) const TAG: &str = "alloc-meter: ";
 
 /// The tagged lines of a child's stdout, in order.
@@ -364,7 +364,7 @@ fn the_process_wide_meter_refuses_outside_a_child() {
         .block_on(measure_async_process_wide(|| async {}));
 }
 
-/// MIK-9396 MEMB.3: only lines that start with the tag are forwarded, in
+/// only lines that start with the tag are forwarded, in
 /// order; libtest's own lines and an untagged print stay in the child.
 #[test]
 fn only_tagged_child_lines_are_forwarded() {

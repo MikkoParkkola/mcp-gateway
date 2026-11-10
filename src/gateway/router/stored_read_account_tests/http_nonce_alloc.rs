@@ -496,7 +496,7 @@ fn field(line: &str, key: &str) -> i128 {
         .unwrap_or_else(|| panic!("no {key}=<integer> in {line:?}"))
 }
 
-/// MIK-9396 MEMB.3: a PASSING INTAKE.2(a) run shows its readings in the log.
+/// a PASSING INTAKE.2(a) run shows its readings in the log.
 /// The row runs here as a libtest parent with capture on, as in CI: its
 /// stderr carries one line per size with the margin under the cap, and
 /// its stdout keeps exactly one whole `test <name> ... ok` record, with
