@@ -106,3 +106,124 @@ async fn stdio_eof_returns_within_the_bound_when_a_backend_never_stops() {
         "teardown reached the close that never returns, so the bound ended it"
     );
 }
+
+#[cfg(unix)]
+mod hurry {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    const ROW_BOUND: Duration = Duration::from_secs(15);
+
+    async fn fixture() -> (Gateway, Arc<tempfile::TempDir>, Arc<AtomicBool>) {
+        let dir = crate::test_dir_keep::kept_tempdir();
+        let mut config = Config::default();
+        config.tasks.store_dir = dir.path().join("tasks").display().to_string();
+        config.server.shutdown_timeout = Duration::from_secs(30);
+        let gateway = Gateway::new(config)
+            .await
+            .expect("gateway boots")
+            .with_data_dir(dir.path().to_path_buf());
+        let mut stuck = Backend::new(
+            "stuck",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        stuck.budgets.close_stage = Duration::from_secs(3600);
+        let stuck = Arc::new(stuck);
+        let entered = Arc::new(AtomicBool::new(false));
+        stuck.set_transport_for_test(Arc::new(NeverCloses {
+            entered: Arc::clone(&entered),
+        }));
+        assert!(gateway.backends.register(stuck));
+        (gateway, dir, entered)
+    }
+
+    async fn wait_for(mut ready: impl FnMut() -> bool) {
+        timeout(ROW_BOUND, async {
+            while !ready() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("seam reached");
+    }
+
+    /// A fresh signal after EOF or the first signal cuts a held drain and the
+    /// shared registry deadline. Red if the first signal hurries, or a late one is lost.
+    #[tokio::test]
+    async fn a_signal_after_the_read_loop_hurries_the_registry() {
+        for signal_ends_read in [false, true] {
+            let (mut gateway, _dir, entered) = fixture().await;
+            let first = gateway.shutdown_trigger_for_test();
+            let hurry = gateway.hurry_trigger_for_test();
+            let deadline = gateway.backends.stop_deadline();
+            let (hold, drain) = gateway.stdio_drain_seams_for_test();
+            let (reached, _release) = hold.arm();
+            let (mut stdin, input) = tokio::io::duplex(65536);
+            let (output, _reader) = tokio::io::duplex(65536);
+            let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
+            stdin
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")
+                .await
+                .expect("send held dispatch");
+            timeout(ROW_BOUND, reached.notified())
+                .await
+                .expect("dispatch held");
+            if signal_ends_read {
+                first.send(()).expect("first signal listener");
+            } else {
+                stdin.shutdown().await.expect("EOF");
+            }
+            timeout(ROW_BOUND, drain.notified())
+                .await
+                .expect("read loop ended");
+            assert_eq!(deadline.get(), None, "the first signal must not hurry");
+            hurry.send(()).expect("late signal listener is installed");
+            wait_for(|| entered.load(Ordering::SeqCst)).await;
+            let now = std::time::Instant::now();
+            let cut = deadline
+                .get()
+                .expect("hurry published the registry deadline");
+            assert!(cut > now, "backend stop still has a graceful window");
+            assert!(
+                cut <= now
+                    + crate::transport::KILL_RESERVE_FOR_TEST
+                    + crate::transport::HURRY_WINDOW
+            );
+            timeout(ROW_BOUND, task)
+                .await
+                .expect("hurried stop ends")
+                .expect("serve task")
+                .expect("stdio result");
+        }
+    }
+
+    /// A signal remains effective after backend stopping starts.
+    /// Red if the listener disappears when pre-backend shutdown finishes.
+    #[tokio::test]
+    async fn a_signal_during_backend_stop_shortens_its_deadline() {
+        let (mut gateway, _dir, entered) = fixture().await;
+        let hurry = gateway.hurry_trigger_for_test();
+        let deadline = gateway.backends.stop_deadline();
+        let (stdin, input) = tokio::io::duplex(65536);
+        let (output, _reader) = tokio::io::duplex(65536);
+        let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
+        drop(stdin);
+        wait_for(|| entered.load(Ordering::SeqCst)).await;
+        let old = deadline.get().expect("ordinary stop started");
+        hurry.send(()).expect("late listener remains installed");
+        wait_for(|| deadline.get().is_some_and(|cut| cut < old)).await;
+        assert!(
+            deadline.get().expect("shortened")
+                <= std::time::Instant::now()
+                    + crate::transport::KILL_RESERVE_FOR_TEST
+                    + crate::transport::HURRY_WINDOW
+        );
+        timeout(ROW_BOUND, task)
+            .await
+            .expect("hurried stop ends")
+            .expect("serve task")
+            .expect("stdio result");
+    }
+}

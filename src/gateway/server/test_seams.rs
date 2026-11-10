@@ -17,6 +17,9 @@ pub(super) struct TestSeams {
     /// A mutex because `run_stdio_on` takes it through `&self` (MIK-8364).
     #[cfg(test)]
     shutdown: std::sync::Mutex<Option<oneshot::Receiver<()>>>,
+    /// A separate signal after the stdio read loop ends.
+    #[cfg(test)]
+    hurry: std::sync::Mutex<Option<oneshot::Receiver<()>>>,
     /// Receives `run`'s in-flight request gate, so a test can hold a request
     /// open across the drain (MIK-8156).
     #[cfg(test)]
@@ -106,6 +109,14 @@ impl TestSeams {
     #[cfg(test)]
     pub(super) fn take_shutdown_trigger(&self) -> Option<oneshot::Receiver<()>> {
         self.shutdown
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    #[cfg(test)]
+    pub(super) fn take_hurry_trigger(&self) -> Option<oneshot::Receiver<()>> {
+        self.hurry
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
@@ -260,6 +271,18 @@ impl super::Gateway {
         *self
             .test_seams
             .shutdown
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(receiver);
+        sender
+    }
+
+    /// A second signal, consumed only after the stdio read loop has ended.
+    #[cfg(all(test, unix))]
+    pub(super) fn hurry_trigger_for_test(&mut self) -> oneshot::Sender<()> {
+        let (sender, receiver) = oneshot::channel();
+        *self
+            .test_seams
+            .hurry
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(receiver);
         sender

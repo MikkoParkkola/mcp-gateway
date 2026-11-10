@@ -19,6 +19,48 @@ use super::{Gateway, StdioTelemetry, stdio_tasks, task_runtime, warmstart::Warme
 /// The teardown window after the stdio drain window.
 pub(super) const STDIO_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// A fresh signal listener installed synchronously when the read loop exits.
+/// Windows has no SIGTERM path here: a parent's stop is a job kill. If a
+/// parent cannot close stdin, its single SIGTERM is consumed by the read
+/// loop as the first signal; that case stays out of scope.
+pub(super) struct Hurry {
+    signal: std::pin::Pin<Box<dyn Future<Output = ()> + Send>>,
+    ready: bool,
+    deadline: Arc<crate::transport::StopDeadline>,
+}
+
+impl Hurry {
+    fn new(
+        signal: impl Future<Output = ()> + Send + 'static,
+        deadline: Arc<crate::transport::StopDeadline>,
+    ) -> Self {
+        let mut signal = Box::pin(signal);
+        // Register the OS handlers now, before any drain or other await.
+        let ready = futures::FutureExt::now_or_never(signal.as_mut()).is_some();
+        Self {
+            signal,
+            ready,
+            deadline,
+        }
+    }
+
+    async fn wait(&mut self) -> Instant {
+        if !self.ready {
+            self.signal.as_mut().await;
+        }
+        self.deadline.hurry(std::time::Instant::now()).into()
+    }
+}
+
+/// Dropping cancelled preparations must abort the writer, not detach it.
+pub(super) struct AbortWriter(pub(super) tokio::task::AbortHandle);
+
+impl Drop for AbortWriter {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Run one teardown step under `deadline`. `None` when it did not finish:
 /// the step is dropped, and the expiry logged by name.
 pub(super) async fn bounded_step<F: Future>(
@@ -86,6 +128,18 @@ pub(super) async fn final_cost_save(
 }
 
 impl Gateway {
+    pub(super) fn stdio_hurry(&self) -> Hurry {
+        let (signal_tx, _) = tokio::sync::broadcast::channel(1);
+        #[cfg(test)]
+        let signal = super::test_seams::shutdown_signal_or_trigger(
+            signal_tx,
+            self.test_seams.take_hurry_trigger(),
+        );
+        #[cfg(not(test))]
+        let signal = super::support::shutdown_signal(signal_tx);
+        Hurry::new(signal, self.backends.stop_deadline())
+    }
+
     /// Save the protocol-revision window, waiting for a save already in
     /// flight. The final save at shutdown: after the saver's ticks stop, it
     /// takes the sink lock as soon as the last tick's write ends and saves
@@ -136,8 +190,8 @@ impl Gateway {
         .await;
     }
 
-    /// Everything after the writer join, each step under `deadline`.
-    pub(super) async fn stdio_teardown(
+    /// Preparations after the writer join, each step under `deadline`.
+    async fn stdio_before_backends(
         &self,
         deadline: Instant,
         warm_start_tasks: WarmerGuard,
@@ -180,15 +234,54 @@ impl Gateway {
         {
             warn!(error = %e, "Personal account custody shutdown failed");
         }
+    }
+
+    /// A fresh signal cancels the remaining preparations, then cuts backend
+    /// waits too if it arrives after those preparations have finished.
+    pub(super) async fn stdio_teardown(
+        &self,
+        deadline: Instant,
+        warm_start_tasks: WarmerGuard,
+        task_store: Option<(
+            Arc<stdio_tasks::StdioTasks>,
+            crate::gateway::task_service::execution::ExpirySweep,
+        )>,
+        mut hurry: Hurry,
+        before: impl Future<Output = ()>,
+    ) {
+        let hurried = tokio::select! {
+            biased;
+            cut = hurry.wait() => {
+                warn!("shutdown hurried by a signal; stopping backends now");
+                Some(cut)
+            }
+            () = async {
+                before.await;
+                self.stdio_before_backends(deadline, warm_start_tasks, task_store).await;
+            } => None,
+        };
         // The backends' waits are planned to end by the teardown deadline (or
         // shutdown_timeout from now, if sooner), so their kill lands before
         // this process returns.
-        let stop_deadline = deadline.min(Instant::now() + self.config.server.shutdown_timeout);
+        let mut stop_deadline = deadline.min(Instant::now() + self.config.server.shutdown_timeout);
+        if let Some(cut) = hurried {
+            stop_deadline = stop_deadline.min(cut);
+        }
+        let backend_deadline = hurried.map_or(deadline, |cut| deadline.min(cut));
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
         let stop = self.backends.stop_all_by(stop_deadline);
-        bounded_step(deadline, "backend stop", stop).await;
+        tokio::pin!(stop);
+        tokio::select! {
+            biased;
+            cut = hurry.wait(), if hurried.is_none() => {
+                bounded_step(deadline.min(cut), "backend stop", stop).await;
+            }
+            () = async {
+                bounded_step(backend_deadline, "backend stop", &mut stop).await;
+            } => {}
+        }
     }
 }
