@@ -13,7 +13,7 @@
 
 use std::io;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::TransparencyLogger;
@@ -27,6 +27,7 @@ pub(crate) enum IntentKind {
     Adopt,
     Restore,
     Backend,
+    KeyCreate,
 }
 
 /// The role a settled record plays; it names the record's event.
@@ -48,11 +49,12 @@ pub(crate) enum Role {
 
 impl Role {
     /// Every role, so a reader can name a record's role by its event.
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::Intent(IntentKind::Save),
         Self::Intent(IntentKind::Adopt),
         Self::Intent(IntentKind::Restore),
         Self::Intent(IntentKind::Backend),
+        Self::Intent(IntentKind::KeyCreate),
         Self::RecoveryIntent,
         Self::Outcome,
         Self::Abandoned,
@@ -72,6 +74,7 @@ impl Role {
             Self::Intent(IntentKind::Adopt) => "config_adopt_intent",
             Self::Intent(IntentKind::Restore) => "config_restore_intent",
             Self::Intent(IntentKind::Backend) => "config_backend_intent",
+            Self::Intent(IntentKind::KeyCreate) => "config_key_create_intent",
             Self::RecoveryIntent => "config_recovery_intent",
             Self::Outcome => "config_write_outcome",
             Self::Abandoned => "config_write_abandoned",
@@ -82,7 +85,7 @@ impl Role {
 }
 
 /// Why a write ended as it did: a closed set, never error text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Reason {
     Committed,
@@ -95,8 +98,26 @@ pub(crate) enum Reason {
     WriterDied,
     Panicked,
     OperatorAbandoned,
+    Abandoned,
+    Moved,
+    Refused,
     RenamedNotDurable,
     LeftToRecovery,
+}
+
+impl Reason {
+    pub(crate) fn from_journal(bytes: &[u8]) -> Result<Self, InvalidReason> {
+        serde_json::from_slice(bytes).map_err(|_| InvalidReason)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InvalidReason;
+
+/// Actor metadata frozen beside caller payload bytes by journal owners.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct Attribution {
+    pub(crate) actor: crate::security::audit::AuditWho,
 }
 
 /// Which recovery attempt settled a write: its token and the counter its

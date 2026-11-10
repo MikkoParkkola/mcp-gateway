@@ -24,6 +24,14 @@ use super::{FileMode, Symlink, write_atomic};
 pub(crate) struct FileRevision(String);
 
 impl FileRevision {
+    /// Restore a journal revision after validating 64 lowercase hex characters.
+    pub(crate) fn parse_journal(text: &str) -> Result<Self, super::journal::v2::JournalError> {
+        if text.len() != 64 || !text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+            return Err(super::journal::v2::JournalError::InvalidState);
+        }
+        Ok(Self(text.to_owned()))
+    }
+
     /// The revision of `bytes`.
     #[must_use]
     pub(crate) fn of(bytes: &[u8]) -> Self {

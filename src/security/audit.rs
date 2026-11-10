@@ -189,6 +189,30 @@ pub struct AuditWho {
 }
 
 impl AuditWho {
+    /// Decode stored actor fields through the validated persisted principal.
+    pub(crate) fn from_persisted(
+        bytes: &[u8],
+    ) -> Result<Self, crate::gateway::record_principal::InvalidRecordPrincipal> {
+        use crate::gateway::record_principal::{InvalidRecordPrincipal, RecordPrincipal};
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            credential_kind: Option<CredentialKind>,
+            principal: String,
+            account: String,
+            authority: Option<String>,
+            subject: Option<String>,
+        }
+        let wire: Wire = serde_json::from_slice(bytes).map_err(|_| InvalidRecordPrincipal)?;
+        Ok(Self {
+            credential_kind: wire.credential_kind,
+            principal: RecordPrincipal::from_persisted(&wire.principal)?,
+            account: wire.account,
+            authority: wire.authority,
+            subject: wire.subject,
+        })
+    }
+
     /// A governance actor. An OIDC actor id is the length-prefixed
     /// `oidc:<len>:<issuer>:<len>:<sub>`, so `(issuer, sub)` is recovered from it.
     #[must_use]

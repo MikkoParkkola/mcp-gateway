@@ -27,6 +27,9 @@ use crate::identity_grants::journal::resolved;
 
 const VERSION: u32 = 1;
 
+#[path = "config_persistence_journal_v2.rs"]
+pub(crate) mod v2;
+
 /// How far a replacement got.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -1,0 +1,133 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Private wire DTOs: persisted claims never construct an A proof.
+
+use super::*;
+use serde_json::Value;
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Wire {
+    version: u32,
+    binding: Option<String>,
+    phase: Phase,
+    original_revision: Option<String>,
+    new_revision: Option<String>,
+    pending: Option<PendingWire>,
+    fact: Option<FactWire>,
+    writer: Option<TokenState>,
+    attempts: Vec<TokenState>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PendingWire {
+    action: ActionWire,
+    expected: String,
+    tried: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ActionWire {
+    Forward,
+    Restore,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FactWire {
+    Untouched,
+    Committed(String),
+    RolledBack(String),
+}
+
+pub(super) fn decode(bytes: &[u8]) -> Result<JournalV2, JournalError> {
+    let wire: Wire = serde_json::from_slice(bytes).map_err(|_| JournalError::Unreadable)?;
+    let mut state = JournalV2 {
+        version: wire.version,
+        binding: wire.binding.map(LogId::from_journal).transpose().map_err(|_| JournalError::InvalidState)?,
+        phase: wire.phase,
+        original_revision: wire.original_revision.as_deref().map(FileRevision::parse_journal).transpose()?,
+        new_revision: wire.new_revision.as_deref().map(FileRevision::parse_journal).transpose()?,
+        pending: None,
+        fact: wire.fact.map(|fact| Ok::<_, JournalError>(match fact {
+            FactWire::Untouched => Fact::Untouched,
+            FactWire::Committed(r) => Fact::Committed(FileRevision::parse_journal(&r)?),
+            FactWire::RolledBack(r) => Fact::RolledBack(FileRevision::parse_journal(&r)?),
+        })).transpose()?,
+        writer: wire.writer,
+        attempts: wire.attempts,
+    };
+    if let Some(pending) = wire.pending {
+        let action = match pending.action {
+            ActionWire::Forward => Action::Forward,
+            ActionWire::Restore => Action::Restore,
+        };
+        state.pending = Some(Pending {
+            action,
+            expected: FileRevision::parse_journal(&pending.expected)?,
+            pre_action: state.pre_action(action)?.clone(),
+            tried: pending.tried,
+        });
+    }
+    state.validate()?;
+    Ok(state)
+}
+
+pub(super) fn encode(state: &JournalV2) -> Result<Vec<u8>, JournalError> {
+    let wire = Wire {
+        version: state.version,
+        binding: state.binding.as_ref().map(|id| id.as_str().to_owned()),
+        phase: state.phase,
+        original_revision: state.original_revision.as_ref().map(|r| r.as_str().to_owned()),
+        new_revision: state.new_revision.as_ref().map(|r| r.as_str().to_owned()),
+        pending: state.pending.as_ref().map(|p| PendingWire {
+            action: match p.action {
+                Action::Forward => ActionWire::Forward,
+                Action::Restore => ActionWire::Restore,
+            },
+            expected: p.expected.as_str().to_owned(),
+            tried: p.tried,
+        }),
+        fact: state.fact.as_ref().map(|fact| match fact {
+            Fact::Untouched => FactWire::Untouched,
+            Fact::Committed(r) => FactWire::Committed(r.as_str().to_owned()),
+            Fact::RolledBack(r) => FactWire::RolledBack(r.as_str().to_owned()),
+        }),
+        writer: state.writer.clone(),
+        attempts: state.attempts.clone(),
+    };
+    // Value's ordered maps preserve the canonical golden wire, including actors.
+    serde_json::to_value(wire).and_then(|value| serde_json::to_vec(&value))
+        .map_err(|_| JournalError::Persist)
+}
+
+pub(super) mod role {
+    use super::*;
+    pub(crate) fn serialize<S: serde::Serializer>(role: &Role, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(role.event())
+    }
+    pub(crate) fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Role, D::Error> {
+        let event = String::deserialize(d)?;
+        Role::from_event(&event).ok_or_else(|| serde::de::Error::custom("unknown journal role"))
+    }
+}
+
+pub(super) mod attribution {
+    use super::*;
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Wire { actor: Value }
+    pub(crate) fn serialize<S: serde::Serializer>(actor: &Option<Attribution>, s: S) -> Result<S::Ok, S::Error> {
+        actor.serialize(s)
+    }
+    pub(crate) fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Attribution>, D::Error> {
+        Option::<Wire>::deserialize(d)?.map(|wire| {
+            let bytes = serde_json::to_vec(&wire.actor).map_err(serde::de::Error::custom)?;
+            crate::security::audit::AuditWho::from_persisted(&bytes)
+                .map(|actor| Attribution { actor })
+                .map_err(|_| serde::de::Error::custom("invalid journal actor"))
+        }).transpose()
+    }
+}
