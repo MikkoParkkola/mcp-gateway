@@ -1,6 +1,5 @@
 src/gateway/server/stdio_shutdown.rs	new	1	Covers the stop-signal wiring by integration rows (a_nested_gateway_whose_own_stop_outlasts_its_parents_plan_leaves_no_leaf); a line-coverage grade cannot see the child gateway process
 src/gateway/server/stdio_shutdown.rs	wait	1	Same integration row; runs in the stopping child gateway process
-src/gateway/server/stdio_shutdown.rs	drop	1	Same integration row; the guard releases at the end of the child gateway stop
 src/gateway/server/stdio_shutdown.rs	stdio_hurry	1	Same integration row; builds the hurry deadline in the child gateway process
 src/gateway/server/stdio_shutdown.rs	stdio_before_backends	1	Same integration row; skips pre-backend steps in the child gateway process
 src/gateway/server/background.rs	join_mut	1	Covered by the stdio drain rows (stdio_teardown_bound); a writer join on the stop path

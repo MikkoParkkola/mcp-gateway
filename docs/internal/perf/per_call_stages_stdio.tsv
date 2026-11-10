@@ -482,7 +482,6 @@ src/gateway/server/window_seal_http_backend.rs	answer	-	test-only (the module is
 src/gateway/server/window_seal_http_backend.rs	received	-	test-only (the module is cfg(test))
 src/gateway/server/window_seal_http_backend.rs	release	-	test-only (the module is cfg(test))
 src/gateway/server/window_seal_http_backend.rs	start	-	test-only (the module is cfg(test))
-src/gateway/server/stdio_shutdown.rs	drop	-	on-path, untimed: runs once per gateway stop, not per tools/call
 src/gateway/server/stdio_shutdown.rs	new	-	on-path, untimed: runs once per gateway stop, not per tools/call
 src/gateway/server/stdio_shutdown.rs	stdio_before_backends	-	on-path, untimed: runs once per gateway stop, not per tools/call
 src/gateway/server/stdio_shutdown.rs	stdio_hurry	-	on-path, untimed: runs once per gateway stop, not per tools/call
