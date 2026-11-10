@@ -19,13 +19,14 @@ use super::{Gateway, StdioTelemetry, stdio_tasks, task_runtime, warmstart::Warme
 /// The teardown window after the stdio drain window.
 pub(super) const STDIO_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A fresh signal listener installed synchronously when the read loop exits.
+/// A fresh signal listener and orphan watch armed when the read loop exits.
 /// Windows has no SIGTERM path here: a parent's stop is a job kill. If a
 /// parent cannot close stdin, its single SIGTERM is consumed by the read
 /// loop as the first signal; that case stays out of scope.
 pub(super) struct Hurry {
     signal: std::pin::Pin<Box<dyn Future<Output = ()> + Send>>,
     ready: bool,
+    cut: Option<Instant>,
     deadline: Arc<crate::transport::StopDeadline>,
 }
 
@@ -40,6 +41,7 @@ impl Hurry {
         Self {
             signal,
             ready,
+            cut: None,
             deadline,
         }
     }
@@ -47,9 +49,19 @@ impl Hurry {
     async fn wait(&mut self) -> Instant {
         if !self.ready {
             self.signal.as_mut().await;
+            self.ready = true;
         }
-        self.deadline.hurry(std::time::Instant::now()).into()
+        *self
+            .cut
+            .get_or_insert_with(|| self.deadline.hurry(std::time::Instant::now()).into())
     }
+}
+
+fn parent_pid() -> i32 {
+    #[cfg(unix)]
+    return rustix::process::getppid().map_or(0, |pid| pid.as_raw_nonzero().get());
+    #[cfg(not(unix))]
+    0
 }
 
 /// Run one teardown step under `deadline`. `None` when it did not finish:
@@ -118,8 +130,32 @@ pub(super) async fn final_cost_save(
     .await;
 }
 
+/// Capture at startup, but poll only after the read loop ends. The future
+/// belongs to Hurry, so teardown completion or cancellation drops the watch.
+pub(super) fn orphan_watch(
+    #[cfg(test)] injected: Option<Arc<dyn Fn() -> i32 + Send + Sync>>,
+) -> impl Future<Output = ()> + Send + 'static {
+    #[cfg(test)]
+    let read = move || injected.as_ref().map_or_else(parent_pid, |read| read());
+    #[cfg(not(test))]
+    let read = parent_pid;
+    let saved = read();
+    async move {
+        if !cfg!(unix) || saved <= 1 {
+            std::future::pending::<()>().await;
+        }
+        let mut polls = tokio::time::interval(Duration::from_millis(50));
+        loop {
+            polls.tick().await;
+            if read() != saved {
+                return;
+            }
+        }
+    }
+}
+
 impl Gateway {
-    pub(super) fn stdio_hurry(&self) -> Hurry {
+    pub(super) fn stdio_hurry(&self, orphan: impl Future<Output = ()> + Send + 'static) -> Hurry {
         let (signal_tx, _) = tokio::sync::broadcast::channel(1);
         #[cfg(test)]
         let signal = super::test_seams::shutdown_signal_or_trigger(
@@ -128,6 +164,13 @@ impl Gateway {
         );
         #[cfg(not(test))]
         let signal = super::support::shutdown_signal(signal_tx);
+        let signal = async move {
+            tokio::select! {
+                biased;
+                () = signal => {},
+                () = orphan => {},
+            }
+        };
         Hurry::new(signal, self.backends.stop_deadline())
     }
 

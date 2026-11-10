@@ -20,6 +20,9 @@ pub(super) struct TestSeams {
     /// A separate signal after the stdio read loop ends.
     #[cfg(test)]
     hurry: std::sync::Mutex<Option<oneshot::Receiver<()>>>,
+    /// Parent identity injected into this gateway's orphan watch only.
+    #[cfg(test)]
+    pub(super) parent_pid: Option<std::sync::Arc<dyn Fn() -> i32 + Send + Sync>>,
     /// Receives `run`'s in-flight request gate, so a test can hold a request
     /// open across the drain (MIK-8156).
     #[cfg(test)]

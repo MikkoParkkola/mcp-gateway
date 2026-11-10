@@ -36,6 +36,10 @@ impl Gateway {
         R: tokio::io::AsyncRead + Unpin + Send + 'static,
         W: tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
+        let orphan = stdio_shutdown::orphan_watch(
+            #[cfg(test)]
+            self.test_seams.parent_pid.clone(),
+        );
         info!(
             version = env!("CARGO_PKG_VERSION"),
             "Starting MCP Gateway (stdio mode)"
@@ -652,7 +656,7 @@ impl Gateway {
             }
         }
 
-        let hurry = self.stdio_hurry();
+        let hurry = self.stdio_hurry(orphan);
         let deadline = tokio::time::Instant::now() + STDIO_DRAIN_TIMEOUT;
         let shutdown_deadline = deadline + stdio_shutdown::STDIO_TEARDOWN_TIMEOUT;
         let writer_task = AbortOnDrop::new(writer_task);
