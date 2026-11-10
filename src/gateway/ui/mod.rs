@@ -161,12 +161,26 @@ pub fn html_router() -> Router {
 ///
 /// Returns `Cache-Control: no-cache` so browsers always fetch fresh HTML
 /// after gateway restarts (the HTML is embedded via `include_str!`).
+///
+/// Its policy lets the page load and connect to this origin only. Unlike
+/// the shell's it allows inline script and style: the page is one inline
+/// script with inline handlers, and is retired when `/ui` serves the shell.
 async fn index() -> impl IntoResponse {
     (
-        [(header::CACHE_CONTROL, "no-cache, no-store, must-revalidate")],
+        [
+            (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
+            (header::CONTENT_SECURITY_POLICY, CLASSIC_CSP),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::REFERRER_POLICY, "no-referrer"),
+        ],
         Html(INDEX_HTML),
     )
 }
+
+/// The classic page's Content-Security-Policy (see `index`).
+const CLASSIC_CSP: &str = "default-src 'none'; script-src 'self' 'unsafe-inline'; \
+    style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; \
+    connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 // ── Dashboard domain types ───────────────────────────────────────────
 
