@@ -64,6 +64,7 @@ mod counters;
 #[cfg(coverage)]
 mod coverage_canary;
 mod debug_trust_roots;
+mod health_history;
 mod random_secret;
 #[cfg(test)]
 #[path = "random_secret_tests.rs"]

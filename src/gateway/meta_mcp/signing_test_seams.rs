@@ -38,7 +38,10 @@ impl SigningInvocationContext {
     /// `server`'s `tool`, as `prepare_signing_invocation` leaves it.
     pub(crate) fn prepared_for_test(server: &str, tool: &str) -> Self {
         Self {
-            prepared_target: Some((server.to_owned(), tool.to_owned())),
+            prepared_target: Some(Box::new(super::Prepared::new(
+                server.to_owned(),
+                tool.to_owned(),
+            ))),
             ..Self::external_for_test(None)
         }
     }
