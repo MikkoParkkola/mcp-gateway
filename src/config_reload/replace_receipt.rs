@@ -17,6 +17,10 @@ use super::{Audit, FileRevision, Intent, ReplaceError, ReplaceOutcome, audit};
 use crate::config_reload::LiveConfig;
 use crate::gateway::auth::digest_tag_of;
 
+#[cfg(test)]
+#[path = "replace_receipt_tests.rs"]
+mod tests;
+
 /// Filled by target selection under the writer locks, never from a request snapshot.
 pub(crate) struct RevokeCheck {
     pub(crate) name: String,
