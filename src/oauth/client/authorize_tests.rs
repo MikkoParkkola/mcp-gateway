@@ -797,3 +797,4 @@ async fn a_callback_after_a_switch_redeems_nothing() {
     );
     assert!(forms.lock().unwrap().is_empty(), "no code was redeemed");
 }
+mod switch;
