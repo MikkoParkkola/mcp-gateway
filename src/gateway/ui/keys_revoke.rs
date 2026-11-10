@@ -95,7 +95,7 @@ pub(super) async fn revoke_key(
     .key_write(IntentKind::KeyRevoke, who, &name)
     {
         Ok(audit) => audit,
-        Err(error) => return refused(error),
+        Err(error) => return refused(&name, error),
     };
     let tags = Arc::new(OnceLock::new());
     let check = RevokeCheck {
@@ -105,6 +105,7 @@ pub(super) async fn revoke_key(
     };
     let live = state.live_config.clone();
     let env = context.live_env().clone();
+    let target_name = name.clone();
     let replace = Replace {
         expected: Expected::Revision(revision),
         replaced: Replaced::Discard,
@@ -133,7 +134,7 @@ pub(super) async fn revoke_key(
     let result = replace_audited_revoke(context, replace, audit, RELOAD_LOCK_WAIT, check)
         .await
         .map(|receipt| serde_json::json!({"name": receipt.name, "revoked": true, "revision": receipt.revision.as_str()}));
-    revoke_response(result)
+    revoke_response(&target_name, result)
 }
 
 /// Remove the selected file entry while preserving the surrounding YAML.
@@ -157,7 +158,7 @@ fn remove_key(
     edit_in_place(text, &changes).map_err(|_| "not_written".to_owned())
 }
 
-fn revoke_response(result: Result<serde_json::Value, ReplaceError>) -> Response {
+fn revoke_response(name: &str, result: Result<serde_json::Value, ReplaceError>) -> Response {
     match result {
         Ok(body) => (
             StatusCode::OK,
@@ -165,12 +166,12 @@ fn revoke_response(result: Result<serde_json::Value, ReplaceError>) -> Response 
             Json(body),
         )
             .into_response(),
-        Err(error) => refused(error),
+        Err(error) => refused(name, error),
     }
 }
 
 /// Only the receipt proves success; never infer it from disk or reauthenticate.
-fn refused(error: ReplaceError) -> Response {
+fn refused(name: &str, error: ReplaceError) -> Response {
     let (status, message) = match error {
         ReplaceError::Stale { current } => return stale(&current).into_response(),
         ReplaceError::Busy => (
@@ -193,12 +194,21 @@ fn refused(error: ReplaceError) -> Response {
         | ReplaceError::Stage(_)
         | ReplaceError::Write(_)
         | ReplaceError::Secrets(_) => (StatusCode::INTERNAL_SERVER_ERROR, "not_written"),
-        ReplaceError::ReloadRefused(_)
-        | ReplaceError::RollbackFailed { .. }
-        | ReplaceError::Unconfirmed { .. }
-        | ReplaceError::Failed(_) => (StatusCode::INTERNAL_SERVER_ERROR, "state_uncertain"),
+        ReplaceError::ReloadRefused(_) => return uncertain(name, "reload_refused"),
+        ReplaceError::RollbackFailed { .. } => return uncertain(name, "rollback_failed"),
+        ReplaceError::Unconfirmed { .. } => return uncertain(name, "unconfirmed"),
+        ReplaceError::Failed(_) => return uncertain(name, "failed"),
     };
     flat_error(status, message).into_response()
+}
+
+fn uncertain(name: &str, variant: &'static str) -> Response {
+    tracing::warn!(
+        name,
+        variant,
+        "key revoke: the config write outcome is uncertain"
+    );
+    flat_error(StatusCode::INTERNAL_SERVER_ERROR, "state_uncertain").into_response()
 }
 
 /// Resolve the exact file and live identities, both at admission and under locks.

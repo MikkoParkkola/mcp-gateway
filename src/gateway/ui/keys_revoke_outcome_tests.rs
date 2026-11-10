@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! R4/R7/R10: red A52 outcomes, through the audited DELETE router.
-use super::super::keys_create_fixture_tests::{ROOT, spec};
+use super::super::keys_create_fixture_tests::{ROOT, item, root_item, spec, yaml_of};
 use super::keys_revoke_target_tests::{tag, target_setup};
 use super::*;
 use crate::config::{EnvOverlay, FailsafeConfig, LiveEnv, ResolvedEnvFiles};
@@ -16,6 +16,42 @@ fn revoke(fx: &Fixture, name: &str, secret: &str) -> Sent {
         Call::new(&json!({"revision": revision(fx), "expected_key_tag": tag(secret)})),
         None,
     )
+}
+
+#[test]
+fn a_rotated_target_loses_current_and_previous_secret() {
+    let mut setup = target_setup();
+    setup.running.api_keys[1].previous_key_sha256 = Some(spec("previous-secret"));
+    setup.running.api_keys[1].previous_expires_at =
+        Some("2099-01-01T00:00:00Z".parse().expect("time"));
+    setup.text = yaml_of(&[
+        root_item(),
+        item(
+            "target",
+            "target-secret",
+            &format!(
+                "      previous_key_sha256: \"{}\"\n      previous_expires_at: \"2099-01-01T00:00:00Z\"\n",
+                spec("previous-secret")
+            ),
+        ),
+    ]);
+    let fx = Fixture::new(setup);
+    let before = fx.live.generation();
+    for secret in ["target-secret", "previous-secret"] {
+        assert!(before.auth().validate_token(secret).is_some());
+    }
+
+    let sent = revoke(&fx, "target", "target-secret");
+    assert_eq!(sent.status, StatusCode::OK, "{}", sent.body);
+    assert_eq!(sent.cache_control.as_deref(), Some("no-store"));
+    assert_eq!(
+        sent.json(),
+        json!({"name": "target", "revoked": true, "revision": revision(&fx)})
+    );
+    let running = fx.live.generation();
+    for secret in ["target-secret", "previous-secret"] {
+        assert!(running.auth().validate_token(secret).is_none());
+    }
 }
 
 #[test]
