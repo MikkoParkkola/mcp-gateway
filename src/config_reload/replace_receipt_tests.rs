@@ -43,7 +43,7 @@ fn confirm(auth: AuthConfig) -> Result<RevokeReceipt, String> {
         Arc::new(resolved),
     );
     let tags = [TARGET_TOKEN, TARGET_PREVIOUS]
-        .map(|token| digest_tag_of(&Sha256::digest(token.as_bytes()).into()))
+        .map(|token| digest_tag_of(&presented_digest(token)))
         .into_iter()
         .collect::<BTreeSet<_>>();
     RevokeCheck {

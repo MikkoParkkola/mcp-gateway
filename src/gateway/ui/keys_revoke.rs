@@ -12,7 +12,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use super::config_file::{Gateway, read_gateway};
 use super::errors::{flat_error, stale, structured_error};
@@ -22,7 +21,7 @@ use crate::config_reload::{
     AuditPosture, Expected, GatewayAuth, Generation, IntentKind, RELOAD_LOCK_WAIT, Replace,
     ReplaceError, Replaced, RevokeCheck, refuse_multi_user_flip, replace_audited_revoke,
 };
-use crate::gateway::auth::digest_tag_of;
+use crate::gateway::auth::{digest_tag_of, presented_digest};
 use crate::gateway::router::AppState;
 
 /// Strict request fields; revision is required even when If-Match is supplied.
@@ -235,10 +234,13 @@ fn select_config(
     let running = generation.auth().api_keys();
     let live: Vec<_> = running
         .iter()
-        .map(|key| KeyIdentity {
-            name: key.name.as_str(),
-            current: key.digest,
-            previous: key.previous.as_ref().map(|slot| slot.digest),
+        .map(|key| {
+            let (current, previous) = key.accepted_digests();
+            KeyIdentity {
+                name: key.name.as_str(),
+                current: *current,
+                previous: previous.copied(),
+            }
         })
         .collect();
     select_target(
@@ -308,7 +310,7 @@ fn select_target(
     }
     let mut tags: BTreeSet<_> = selected.iter().flat_map(|key| key.tags()).collect();
     tags.extend(expected.map(str::to_owned));
-    let bearer_tag = bearer.map(|token| digest_tag_of(&Sha256::digest(token.as_bytes()).into()));
+    let bearer_tag = bearer.map(|token| digest_tag_of(&presented_digest(token)));
     if bearer_tag.as_ref().is_some_and(|tag| tags.contains(tag))
         || file
             .iter()
