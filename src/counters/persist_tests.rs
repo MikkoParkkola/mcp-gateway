@@ -203,3 +203,64 @@ fn t32_a_file_saved_by_another_version_marks_an_upgrade() {
         "a fresh install marks nothing"
     );
 }
+
+/// H20 (the health history's missed-run count): markers age out after 30
+/// days, the restore count never does. Five restores, then 31 days off: the
+/// Restart markers are gone, the count goes on to six.
+#[test]
+fn h20_the_restore_count_outlives_aged_markers() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut now = T0;
+    let mut restored = restore(dir.path(), now, VERSION);
+    for _ in 0..5 {
+        now += 60;
+        restored.file.save(&restored.store, VERSION, now);
+        restored = restore(dir.path(), now + 1, VERSION);
+    }
+    assert_eq!(
+        restored.store.restores(),
+        crate::health_history::Restores::Counted(5)
+    );
+    restored.file.save(&restored.store, VERSION, now + 2);
+    let later = restore(dir.path(), now + 31 * 86_400, VERSION);
+    let restarts = later
+        .store
+        .markers(0)
+        .iter()
+        .filter(|m| m.kind == MarkerKind::Restart)
+        .count();
+    assert_eq!(restarts, 1, "only this start's marker survives the 30 days");
+    assert_eq!(
+        later.store.restores(),
+        crate::health_history::Restores::Counted(6)
+    );
+}
+
+/// H21 (code review r1, both seats): a counters.json an older binary rewrote
+/// without `restores` restarts the count; the store says so, so the health
+/// history treats this start as a missed run even when the restarted count
+/// happens to line up.
+#[test]
+fn h21_a_file_without_the_restore_count_reports_a_restarted_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = restore(dir.path(), T0, VERSION);
+    first.file.save(&first.store, VERSION, T0 + 60);
+    let path = dir.path().join("counters.json");
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(json.as_object_mut().unwrap().remove("restores").is_some());
+    std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+    let again = restore(dir.path(), T0 + 120, VERSION);
+
+    assert_eq!(
+        again.store.restores(),
+        crate::health_history::Restores::Restarted(1)
+    );
+    again.file.save(&again.store, VERSION, T0 + 180);
+    let later = restore(dir.path(), T0 + 240, VERSION);
+    assert_eq!(
+        later.store.restores(),
+        crate::health_history::Restores::Counted(2)
+    );
+}
