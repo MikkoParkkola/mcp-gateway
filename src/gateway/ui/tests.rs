@@ -319,6 +319,70 @@ fn the_add_form_keeps_open_only_for_a_disabled_add() {
     );
 }
 
+/// The off-origin shapes in one file's text: a `src`, `srcset`, `url(...)`,
+/// `@import`, dynamic `import(...)`, meta-refresh target or `<link href>` that
+/// names another host. Case, quotes and whitespace do not hide a shape.
+fn off_origin_loads(text: &str) -> Vec<String> {
+    let text = text
+        .to_ascii_lowercase()
+        .replace(['\'', '"'], "")
+        .replace(char::is_whitespace, "");
+    let mut found = Vec::new();
+    for shape in [
+        "src=http",
+        "src=//",
+        "srcset=http",
+        "srcset=//",
+        "url(http",
+        "url(//",
+        "@importhttp",
+        "@import//",
+        "@importurl(http",
+        "@importurl(//",
+        "import(http",
+        "import(//",
+        ";url=http",
+        ";url=//",
+    ] {
+        if text.contains(shape) {
+            found.push(shape.to_string());
+        }
+    }
+    // A <link> tag (stylesheet, preload, font) pointing off-origin.
+    for tag in text.split("<link").skip(1) {
+        let tag = tag.split('>').next().unwrap_or_default();
+        if tag.contains("href=http") || tag.contains("href=//") {
+            found.push(format!("<link{tag}>"));
+        }
+    }
+    found
+}
+
+/// Each off-origin form the guard claims to refuse is refused, and the page's
+/// own same-origin forms are not.
+#[test]
+fn the_off_origin_guard_names_every_form_it_claims_to_refuse() {
+    for bad in [
+        r#"<script src="https://cdn.other.test/x.js"></script>"#,
+        r#"<img srcset="//cdn.other.test/a.png 2x">"#,
+        r#"<meta http-equiv="refresh" content="0; url=https://other.test/">"#,
+        "const m = await import('https://cdn.other.test/m.js');",
+        "@import url(https://fonts.other.test/f.css);",
+        r#"<link rel="stylesheet" href="//cdn.other.test/s.css">"#,
+        "a { background: URL( 'http://other.test/y.png' ) }",
+    ] {
+        assert!(!off_origin_loads(bad).is_empty(), "not refused: {bad}");
+    }
+    for ok in [
+        r#"<script src="/ui/app.js"></script>"#,
+        r#"<img srcset="/a.png 2x">"#,
+        r#"<a href="https://other.test/docs">docs</a>"#,
+        "// licence: https://other.test/licence",
+    ] {
+        assert!(off_origin_loads(ok).is_empty(), "wrongly refused: {ok}");
+    }
+}
+
 /// Every page, stylesheet and script under src/gateway/ui loads from this
 /// origin only: no `src`, stylesheet `href`, `url(...)` or `@import` names
 /// another host, so opening the UI makes the browser contact nobody else.
@@ -349,31 +413,9 @@ fn no_ui_file_loads_a_script_style_or_font_from_another_host() {
     );
     let mut offenders = Vec::new();
     for path in found {
-        let text = std::fs::read_to_string(&path)
-            .expect("ui text file")
-            .to_ascii_lowercase()
-            .replace(['\'', '"'], "")
-            .replace(char::is_whitespace, "");
-        for shape in [
-            "src=http",
-            "src=//",
-            "url(http",
-            "url(//",
-            "@importhttp",
-            "@import//",
-            "@importurl(http",
-            "@importurl(//",
-        ] {
-            if text.contains(shape) {
-                offenders.push(format!("{}: {shape}", path.display()));
-            }
-        }
-        // A <link> tag (stylesheet, preload, font) pointing off-origin.
-        for tag in text.split("<link").skip(1) {
-            let tag = tag.split('>').next().unwrap_or_default();
-            if tag.contains("href=http") || tag.contains("href=//") {
-                offenders.push(format!("{}: <link{tag}>", path.display()));
-            }
+        let text = std::fs::read_to_string(&path).expect("ui text file");
+        for shape in off_origin_loads(&text) {
+            offenders.push(format!("{}: {shape}", path.display()));
         }
     }
     assert!(offenders.is_empty(), "off-origin loads: {offenders:#?}");
