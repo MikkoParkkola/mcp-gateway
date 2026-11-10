@@ -163,12 +163,18 @@ async fn a_hurried_tree_keeps_its_term_phase_after_a_reaper_tick() {
         assert!(matches!(tree.reap_step(now), Reap::Pending));
         let cut = end.deadline().hurry(now);
         assert!(cut <= now + KILL_RESERVE + HURRY_WINDOW);
-        let kill = cut - KILL_RESERVE;
+        let kill = cut
+            .checked_sub(KILL_RESERVE)
+            .expect("the hurry cut leaves the kill reserve");
+        let before_kill = |ms: u64| {
+            kill.checked_sub(Duration::from_millis(ms))
+                .expect("the hurry window exceeds the probe offset")
+        };
         // Model a tick's latency without making the row race a 300 ms clock.
         tree.reap_step(now + Duration::from_millis(10));
-        tree.reap_step(kill - Duration::from_millis(101));
+        tree.reap_step(before_kill(101));
         assert_eq!(tree.term_signals_sent, 0);
-        tree.reap_step(kill - Duration::from_millis(100));
+        tree.reap_step(before_kill(100));
         assert_eq!(tree.term_signals_sent, 1, "SIGTERM precedes the kill");
         assert_eq!(tree.group_signals_sent, 0, "the term phase is retained");
         tree.reap_step(kill);
