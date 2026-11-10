@@ -318,3 +318,63 @@ fn the_add_form_keeps_open_only_for_a_disabled_add() {
         "the info line is outside the form panel"
     );
 }
+
+/// Every page, stylesheet and script under src/gateway/ui loads from this
+/// origin only: no `src`, stylesheet `href`, `url(...)` or `@import` names
+/// another host, so opening the UI makes the browser contact nobody else.
+/// Plain links, placeholders and licence comments that name a web address
+/// load nothing and are not matched.
+#[test]
+fn no_ui_file_loads_a_script_style_or_font_from_another_host() {
+    fn files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("readable ui dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                files(&path, out);
+            } else if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e, "html" | "css" | "js" | "mjs"))
+            {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/ui");
+    let mut found = Vec::new();
+    files(&root, &mut found);
+    assert!(
+        found.iter().any(|p| p.ends_with("ui/index.html")),
+        "the walk reaches the classic page"
+    );
+    let mut offenders = Vec::new();
+    for path in found {
+        let text = std::fs::read_to_string(&path)
+            .expect("ui text file")
+            .to_ascii_lowercase()
+            .replace(['\'', '"'], "")
+            .replace(char::is_whitespace, "");
+        for shape in [
+            "src=http",
+            "src=//",
+            "url(http",
+            "url(//",
+            "@importhttp",
+            "@import//",
+            "@importurl(http",
+            "@importurl(//",
+        ] {
+            if text.contains(shape) {
+                offenders.push(format!("{}: {shape}", path.display()));
+            }
+        }
+        // A <link> tag (stylesheet, preload, font) pointing off-origin.
+        for tag in text.split("<link").skip(1) {
+            let tag = tag.split('>').next().unwrap_or_default();
+            if tag.contains("href=http") || tag.contains("href=//") {
+                offenders.push(format!("{}: <link{tag}>", path.display()));
+            }
+        }
+    }
+    assert!(offenders.is_empty(), "off-origin loads: {offenders:#?}");
+}
