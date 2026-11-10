@@ -51,11 +51,13 @@ tokio::task_local! {
 /// Run `stop` (a transport's close) under the caller's stop deadline: a
 /// graceful stop splits what is left of it into its waits and the kill, so
 /// it ends by then.
-pub(crate) async fn within_stop_deadline<F: std::future::Future>(
+/// A plain function, not an `async fn`: an `async fn` would hold `stop` twice
+/// (the argument beside the task-local future that owns it).
+pub(crate) fn within_stop_deadline<F: std::future::Future>(
     deadline: tokio::time::Instant,
     stop: F,
-) -> F::Output {
-    STOP_DEADLINE.scope(deadline, stop).await
+) -> impl std::future::Future<Output = F::Output> {
+    STOP_DEADLINE.scope(deadline, stop)
 }
 
 /// A gateway's stop deadline, shared with every tree its backends hand over,

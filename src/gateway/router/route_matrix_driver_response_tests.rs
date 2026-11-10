@@ -315,6 +315,9 @@ pub(crate) struct ReadThenRelay {
 pub(crate) async fn read_then_relay(text: &'static str, record_fails: bool) -> ReadThenRelay {
     let (dir, log) = temp_log(Some(crate::security::audit::AuditFailurePolicy::FailClosed));
     let meta_log = Arc::clone(&log);
+    // R-COMMIT asserts the relay is refused: a keyed sample would miss a short
+    // text for a documented share of hash keys (about 5e-5 for 91 chars).
+    fixture::keep_every_kgram_next();
     let fx = fixture::fixture_signed_relayed_logged(
         Answer::Text(text),
         Arc::clone(&log),

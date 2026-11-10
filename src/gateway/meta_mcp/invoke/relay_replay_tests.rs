@@ -129,10 +129,11 @@ fn stored_task(
         targets_recorded: true,
         output_free: false,
         error_author: None,
-        owner_digest: String::new(),
+        owner_digest: Box::default(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        replay_snapshot: None,
     }
 }
 
@@ -159,8 +160,6 @@ fn store_entry(
         calls,
         "",
         Duration::from_secs(3600),
-        &fw.paired_generation_for_test(),
-        crate::security::firewall::CaptureMode::AtDelivery,
     );
 }
 

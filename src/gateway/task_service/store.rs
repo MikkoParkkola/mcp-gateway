@@ -552,6 +552,8 @@ impl Shared {
     /// is durable, which is what keeps an acknowledgement behind its record.
     fn publish(&self, task: Task, record: Record, holds: HoldUpdate) -> CommittedTask {
         let committed = CommittedTask::of(task.clone(), &record);
+        #[cfg(test)]
+        publish_log::note(&committed);
         let mut state = self.state();
         let holds = match holds {
             HoldUpdate::Replace(holds) => holds,
@@ -690,4 +692,39 @@ fn is_record_name(name: &str) -> bool {
         && Path::new(name)
             .extension()
             .is_some_and(|kind| kind == "json")
+}
+
+/// Every row the store publishes, by task id: whether it was completed and
+/// whether it carried a replay snapshot, so a row can show that no
+/// completed revision became readable without one (tests only; a process-
+/// wide log, read per task id).
+#[cfg(test)]
+pub(crate) mod publish_log {
+    use std::sync::Mutex;
+
+    static LOG: Mutex<Vec<(String, bool, bool)>> = Mutex::new(Vec::new());
+
+    pub(super) fn note(committed: &super::CommittedTask) {
+        let completed = committed.task.status() == crate::protocol::tasks::TaskStatus::Completed;
+        if let Ok(mut log) = LOG.lock() {
+            log.push((
+                committed.task.id().to_owned(),
+                completed,
+                committed.replay_snapshot.is_some(),
+            ));
+        }
+    }
+
+    /// `(completed, carried a snapshot)` for each publication of task `id`.
+    #[cfg(feature = "firewall")]
+    pub(crate) fn of(id: &str) -> Vec<(bool, bool)> {
+        LOG.lock()
+            .map(|log| {
+                log.iter()
+                    .filter(|(task, ..)| task == id)
+                    .map(|(_, completed, snapshot)| (*completed, *snapshot))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
