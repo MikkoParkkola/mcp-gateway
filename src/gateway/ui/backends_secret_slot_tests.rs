@@ -699,3 +699,6 @@ async fn t4r_a_change_between_the_pre_check_and_the_write_refuses_and_stores_not
 
 #[path = "backends_secret_name_tests.rs"]
 mod names;
+
+#[path = "backends_credential_tests.rs"]
+mod credentials;

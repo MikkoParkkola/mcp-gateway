@@ -43,7 +43,9 @@ use crate::registry::server_registry;
 // ── Request / response types ────────────────────────────────────────────────
 
 mod requests;
+mod update_refusals;
 pub use requests::{AddBackendRequest, UpdateBackendRequest};
+use update_refusals::refuse_update;
 mod signin;
 pub(in crate::gateway::ui) use signin::with_time;
 mod signin_flow;
@@ -175,6 +177,17 @@ async fn add_backend(
         return flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response();
     }
 
+    // A credential in the saved command or URL is refused by field before
+    // anything is resolved (it would land in gateway.yaml as text).
+    if let Some(answer) = update_refusals::credential_answer(
+        &state,
+        RefusalKind::Add,
+        &req.name,
+        req.command.as_deref(),
+        req.url.as_deref(),
+    ) {
+        return answer;
+    }
     // Resolve the whole backend: transport, description, and for a registry
     // entry its login, env templates and default state.
     let resolved = match resolve_backend(
@@ -409,19 +422,9 @@ async fn update_backend(
         allowed_tools,
     } = req;
 
-    if let Some(Some(list)) = &allowed_tools
-        && let Err(refused) = crate::config::check_backend_allowed_tools(&name, list)
-    {
-        return flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response();
-    }
-
-    // Validate: only one of command/url may be specified
-    if command.is_some() && url.is_some() {
-        return flat_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Provide either 'command' or 'url', not both",
-        )
-        .into_response();
+    let tools = allowed_tools.as_ref().and_then(Option::as_deref);
+    if let Some(refused) = refuse_update(&state, &name, tools, command.as_deref(), url.as_deref()) {
+        return refused;
     }
 
     // Only the values this request sets are judged and stored; values already

@@ -43,6 +43,7 @@ mod read_history_access;
 mod response_funnels;
 mod scan;
 mod scan_tests;
+mod secret_writers;
 mod shipped_reads;
 mod single_predicate;
 mod single_reader;
