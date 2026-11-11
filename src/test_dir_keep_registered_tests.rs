@@ -108,6 +108,7 @@ fn registered_lookup_honours_only_the_explicit_parent_kept_list() {
 fn registered_empty_attachment_never_satisfies_the_worker_guard() {
     let found = Found {
         dirs: Vec::new(),
+        covers: false,
         parent_kept: false,
     };
     assert!(!found.holds_anything());
