@@ -84,7 +84,7 @@ pub(crate) struct Pending {
     pub(super) tried: bool,
 }
 
-/// On-disk claims are not CommitTokens; record_fact requires A's proof.
+/// On-disk claims are not `CommitToken`s; `record_fact` requires A's proof.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Fact {
     Untouched,
