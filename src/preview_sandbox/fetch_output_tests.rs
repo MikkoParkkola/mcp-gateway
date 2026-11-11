@@ -95,3 +95,80 @@ fn the_last_line_is_the_last_non_blank_one() {
     assert_eq!(last_line(b"first\nsecond\n\n  \n", CRED), "second");
     assert_eq!(last_line(b"", CRED), "");
 }
+
+/// A cut inside a secret cannot be repaired by matching the whole secret.
+#[test]
+fn a_tail_cut_inside_the_final_credential_shows_no_fragment() {
+    let kept_secret_bytes = CRED.len() / 2;
+    let text = format!(
+        "previous line\nfetch {CRED}{}",
+        "-".repeat(TAIL_BYTES - kept_secret_bytes)
+    );
+    let cut = text.len() - TAIL_BYTES;
+    assert_eq!(
+        &text[cut..cut + kept_secret_bytes],
+        &CRED[kept_secret_bytes..]
+    );
+    assert!(!text[cut..].contains('\n'));
+    let mut reader = Counting {
+        inner: text.as_bytes(),
+        read: 0,
+    };
+    let tail = read_tail(&mut reader).expect("read");
+    assert_eq!(reader.read, text.len(), "not drained to EOF");
+    let line = last_line(&tail, CRED);
+    for len in 6..=CRED.len() {
+        assert!(
+            !line.contains(&CRED[CRED.len() - len..]),
+            "credential suffix of {len} bytes left"
+        );
+    }
+    assert!(line.is_empty(), "unterminated cut fragment shown");
+}
+
+/// Host normalization can recreate a literal; paths retain their input case.
+#[test]
+fn credential_case_variants_never_leave_in_urls() {
+    let upper = CRED.to_ascii_uppercase();
+    for url in [
+        format!("https://{upper}/x"),
+        format!("https://prefix{upper}suffix.example/x"),
+        format!("https://registry.npmjs.org/{upper}"),
+    ] {
+        let out = redact_line(&format!("fetch {url} failed"), CRED);
+        assert!(
+            !out.to_ascii_lowercase().contains(CRED),
+            "credential case variant left: {out}"
+        );
+        assert!(out.starts_with("fetch ") && out.ends_with(" failed"));
+    }
+}
+
+/// Keeping any hand-cut punctuation can keep a password or token with it.
+#[test]
+fn whole_url_words_leave_no_userinfo_query_or_fragment() {
+    let line = format!(
+        "fetch user:pw@host/x x:{CRED}@host https://u:p@ss@h/x \
+         \"https://u:pw@h/x?token=!!!\". ?token=!!! #token=!!! \
+         https://h/x#token=!!! https://u:pw@h:bad/x?token=!!! failed"
+    );
+    let out = redact_line(&line, CRED);
+    assert_clean(&out);
+    for secret in ["pw", "p@ss", "p%40ss", "token", "!!!", "user:", "x:", "u:"] {
+        assert!(!out.contains(secret), "{secret} left: {out}");
+    }
+    assert!(out.starts_with("fetch ") && out.ends_with(" failed"));
+}
+
+/// Clean diagnostics remain useful, including quotes around ordinary words.
+#[test]
+fn ordinary_text_and_plain_urls_are_preserved() {
+    for line in [
+        "ordinary fetch error",
+        "fetch \"ordinary\" 'words'. failed",
+        "GET https://registry.npmjs.org/x 404",
+        "fetch https://host:bad/x failed",
+    ] {
+        assert_eq!(redact_line(line, CRED), line);
+    }
+}
