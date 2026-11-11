@@ -42,7 +42,7 @@ fn log_config(dir: &Path, rotating: bool) -> Arc<TransparencyLogConfig> {
 }
 
 /// Run `case` in a child that mints, records the JTI, and aborts.
-fn run_child(dir: &Path, case: &str) -> String {
+fn run_child(dir: &Path, case: &str) -> Vec<String> {
     let out = Command::new(std::env::current_exe().expect("test binary"))
         .args([
             "--exact",
@@ -60,13 +60,26 @@ fn run_child(dir: &Path, case: &str) -> String {
         !out.status.success(),
         "the child must abort, not exit cleanly"
     );
-    std::fs::read_to_string(dir.join(JTI_FILE)).unwrap_or_else(|_| {
+    let text = std::fs::read_to_string(dir.join(JTI_FILE)).unwrap_or_else(|_| {
         panic!(
             "the child never minted:\n{}\n{}",
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         )
-    })
+    });
+    text.lines().map(str::to_owned).collect()
+}
+
+fn sealed_segments(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.starts_with("audit.jsonl.")
+                && name.chars().last().is_some_and(|c| c.is_ascii_digit())
+        })
+        .count()
 }
 
 fn row_present(dir: &Path, jti: &str) -> bool {
@@ -82,6 +95,26 @@ fn row_present(dir: &Path, jti: &str) -> bool {
     .expect("the retained log reads")
 }
 
+/// Make the mark file refuse writes while it stays readable, as a full or
+/// failing volume does. The premise is checked: a process that can still
+/// write it (root) cannot show the fault.
+#[cfg(unix)]
+fn make_mark_unwritable(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let hwm = dir.join("audit.jsonl.hwm");
+    assert!(hwm.is_file(), "the log wrote its mark when it opened");
+    std::fs::set_permissions(&hwm, std::fs::Permissions::from_mode(0o444)).expect("read-only");
+    assert!(
+        std::fs::OpenOptions::new().write(true).open(&hwm).is_err(),
+        "the mark file must refuse writes for this row to mean anything"
+    );
+}
+
+#[cfg(not(unix))]
+fn make_mark_unwritable(_dir: &Path) {
+    panic!("the mark-fault rows are Unix-only");
+}
+
 #[tokio::test]
 #[ignore = "run by the restart rows, in a child that aborts"]
 async fn restart_child() {
@@ -90,28 +123,29 @@ async fn restart_child() {
     };
     let dir = std::path::PathBuf::from(dir);
     let log = Arc::new(
-        TransparencyLogger::open(log_config(&dir, case == "rotation"))
+        TransparencyLogger::open(log_config(&dir, case.contains("rotat")))
             .expect("opens")
             .with_failure_policy(AuditFailurePolicy::FailClosed),
     );
-    if case == "hwm_write_fails" {
-        // A directory where the mark file goes: its write fails.
-        let hwm = dir.join("audit.jsonl.hwm");
-        let _ = std::fs::remove_file(&hwm);
-        std::fs::create_dir(&hwm).expect("a directory in the mark's place");
+    if case.starts_with("hwm_write_fails") {
+        make_mark_unwritable(&dir);
     }
     let ks = KeyServer::new(
         crate::config::KeyServerConfig::default(),
         EmailHashKey::for_test(),
     )
     .with_issuance_log(Arc::clone(&log));
-    let response = mint(&ks).await;
-    assert_eq!(response.status(), axum::http::StatusCode::OK, "{case}");
-    let bearer = bearer_of(response).await;
-    let jti = ks.store.get(&bearer).await.expect("valid bearer").jti;
+    // Two mints: the second shows later appends still land after the fault.
+    let mut jtis = Vec::new();
+    for _ in 0..2 {
+        let response = mint(&ks).await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK, "{case}");
+        let bearer = bearer_of(response).await;
+        jtis.push(ks.store.get(&bearer).await.expect("valid bearer").jti);
+    }
     let written = std::fs::File::create(dir.join(JTI_FILE)).and_then(|mut f| {
         use std::io::Write as _;
-        f.write_all(jti.as_bytes())?;
+        f.write_all(jtis.join("\n").as_bytes())?;
         f.sync_all()
     });
     assert!(written.is_ok());
@@ -119,45 +153,70 @@ async fn restart_child() {
     std::process::abort();
 }
 
-/// NEW.W.1: the row survives the process dying, across a rotation, and the
+/// NEW.W.1: the rows survive the process dying, across a rotation, and the
 /// log reopens on the retained files.
-/// Mutant: skip the append (the row is then missing after the death).
+/// Mutant: skip the append (the rows are then missing after the death).
 #[test]
 fn a_confirmed_row_survives_an_abrupt_death_across_a_rotation() {
     let dir = crate::test_dir_keep::kept_tempdir();
-    let jti = run_child(dir.path(), "rotation");
+    let jtis = run_child(dir.path(), "rotation");
+    assert_eq!(jtis.len(), 2);
+    for jti in &jtis {
+        assert!(
+            row_present(dir.path(), jti),
+            "the row is on retained storage"
+        );
+    }
     assert!(
-        row_present(dir.path(), &jti),
-        "the row is on retained storage"
+        sealed_segments(dir.path()) >= 1,
+        "the rows crossed a rotation"
     );
-    let sealed = std::fs::read_dir(dir.path())
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            name.starts_with("audit.jsonl.")
-                && name.chars().last().is_some_and(|c| c.is_ascii_digit())
-        })
-        .count();
-    assert!(sealed >= 1, "the mint's row crossed a segment rotation");
     let reopened = TransparencyLogger::open(log_config(dir.path(), true));
-    assert!(
-        reopened.is_ok(),
-        "the log reopens after the death: {:?}",
-        reopened.err()
-    );
+    assert!(reopened.is_ok(), "the log reopens: {:?}", reopened.err());
 }
 
-/// NEW.W.1: a failed high-water-mark write only warns: the mint is still
-/// acknowledged and its row is retained.
+/// NEW.W.1: a mark write that fails (the file refuses writes) only warns:
+/// both mints are acknowledged and both rows are retained, and the log
+/// reopens (the designed answer: the mark may lag the log, never the reverse).
 /// Mutant: treat a mark-write failure as an append failure (the mint then
 /// answers 503 and the child's own 200 assertion fails).
 #[test]
 fn a_failed_high_water_mark_write_does_not_lose_the_confirmed_row() {
     let dir = crate::test_dir_keep::kept_tempdir();
-    let jti = run_child(dir.path(), "hwm_write_fails");
+    let jtis = run_child(dir.path(), "hwm_write_fails");
+    assert_eq!(jtis.len(), 2);
+    for jti in &jtis {
+        assert!(
+            row_present(dir.path(), jti),
+            "the row is on retained storage"
+        );
+    }
+    assert!(TransparencyLogger::open(log_config(dir.path(), false)).is_ok());
+}
+
+/// NEW.W.1: the same fault while the first mint rotates the log: the seal,
+/// the rename and the new segment complete, later appends still land, and
+/// the log reopens on the stale mark.
+/// Mutant: a mark failure inside the rotation aborts it or loses a row.
+#[test]
+fn a_failed_high_water_mark_write_during_a_rotation_loses_no_row() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let jtis = run_child(dir.path(), "hwm_write_fails_rotating");
+    assert_eq!(jtis.len(), 2);
+    for jti in &jtis {
+        assert!(
+            row_present(dir.path(), jti),
+            "the row is on retained storage"
+        );
+    }
     assert!(
-        row_present(dir.path(), &jti),
-        "the row is on retained storage"
+        sealed_segments(dir.path()) >= 1,
+        "the rows crossed a rotation"
+    );
+    let reopened = TransparencyLogger::open(log_config(dir.path(), true));
+    assert!(
+        reopened.is_ok(),
+        "the log reopens on the stale mark: {:?}",
+        reopened.err()
     );
 }
