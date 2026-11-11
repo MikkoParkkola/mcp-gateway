@@ -216,7 +216,9 @@ impl Loaded {
             ("store_reads", file.attributes.store_reads),
         ] {
             if enabled {
-                block.push_str(&format!("#@ {name}\n"));
+                block.push_str("#@ ");
+                block.push_str(name);
+                block.push('\n');
             }
         }
         for row in &file.rows {

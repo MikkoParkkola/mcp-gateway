@@ -26,7 +26,7 @@ fn registered() -> BTreeSet<(String, Verb)> {
                 .unwrap_or_else(|_| panic!("a matrix method parses: {row:?}"));
             let verb = Verb::of(&method)?;
             (*caller == "AdminKey" && *answer != "405" && method != axum::http::Method::HEAD)
-                .then(|| (path.to_string(), verb))
+                .then(|| (path.clone(), verb))
         })
         .filter(|(path, _)| cfg!(feature = "cost-governance") || path != routes::UI_COSTS)
         .chain(std::iter::once(stream))
