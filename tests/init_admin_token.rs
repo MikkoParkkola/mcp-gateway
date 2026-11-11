@@ -108,7 +108,7 @@ fn admintok_2_init_token_authenticates_as_admin_and_wrong_token_is_refused() {
     assert!(auth.validate_token(&format!("{token}-wrong")).is_none());
 }
 
-/// ADMINTOK.2 / A4: doctor uses secret_slot's reference/<set> semantics,
+/// ADMINTOK.2 / A4: doctor uses `secret_slot`'s reference/<set> semantics,
 /// names legacy custody, never leaks the value, even when evaluation fails.
 #[test]
 fn admintok_2_doctor_names_custody_without_value_even_on_resolution_failure() {
