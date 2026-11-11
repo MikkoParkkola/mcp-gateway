@@ -62,3 +62,19 @@ async fn each_raw_outcome_has_its_own_label() {
     assert_eq!(late.label(), "unconfirmed");
     log2.release_and_drain(gate).await;
 }
+
+/// A degraded fail-closed log whose probe fails refuses at admission: the
+/// helper reports that nothing was attempted, not a failed append.
+/// Mutant: skip admission.
+#[tokio::test]
+async fn an_admission_error_is_reported_as_not_attempted() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let log = open_log(&dir, AuditFailurePolicy::FailClosed);
+    log.set_append_failure_for_test(true);
+    let _ = log.append_event(row("x"), &AuditEnvelope::gateway());
+    assert!(log.is_degraded());
+    let out = log
+        .append_issuance_row(row("token.issued"), AuditEnvelope::gateway())
+        .await;
+    assert_eq!(out.label(), "not_attempted", "{out:?}");
+}
