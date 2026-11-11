@@ -108,6 +108,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   webpki-root-certs 1.0.10 (RUSTSEC-2026-0381, -0383), rustls-webpki 0.103.16
   (RUSTSEC-2026-0382), rustls 0.23.46 (RUSTSEC-2026-0285, -0346, -0348,
   -0349) and quinn-proto 0.11.18 (RUSTSEC-2026-0338 to -0342).
+- **More dependency advisories.** Lockfile-only bumps: rustix 1.1.6
+  (RUSTSEC-2026-0486), block-buffer 0.12.1 (GHSA-qwgh-2vcv-g2f7) and hyper
+  1.12.0, which drops its dependency on pin-utils (RUSTSEC-2026-0441,
+  unmaintained). ([#4822](https://github.com/MikkoParkkola/mcp-gateway/pull/4822))
 - **RUSTSEC-2024-0449 stays excepted until 2026-11-05.** It flags
   `unsafe-libyaml`, reached through `serde_yaml`, as unmaintained; there is no
   patched release. The OSV exception expires on that date, with no silent
