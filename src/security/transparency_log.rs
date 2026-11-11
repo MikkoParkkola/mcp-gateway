@@ -136,6 +136,7 @@ pub use verify::{
     FailedCheck, VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries,
     verify_log, verify_log_signed,
 };
+pub(crate) use verify::{Malformed, log_contains_entry};
 
 use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
 pub use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};

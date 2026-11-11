@@ -155,12 +155,37 @@ pub(crate) fn is_signed_entry(entry: &Value) -> bool {
 ///
 /// A segment cannot be read, or the log rotated under both reads.
 pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
+    log_contains_entry(path, "signed-entry scan", Malformed::Skip, is_signed_entry)
+}
+
+/// What a scan does with a line that is not valid JSON.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Malformed {
+    /// Ignore it: the signed-entry scan judges only the entries it can read.
+    Skip,
+    /// Fail the scan, naming the file and line: a scan whose "not found" must
+    /// never rest on a line it could not read.
+    Refuse,
+}
+
+/// Whether any retained segment of the log at `path` holds an entry `wanted`
+/// accepts, over a listing that held still (as [`log_contains_signed_entry`]).
+///
+/// # Errors
+///
+/// A segment cannot be read, or the log rotated under both reads.
+pub(crate) fn log_contains_entry(
+    path: &Path,
+    what: &str,
+    malformed: Malformed,
+    wanted: impl Fn(&Value) -> bool,
+) -> io::Result<bool> {
     let mut attempt = 0;
     loop {
         let files = log_files(path)?;
         #[cfg(test)]
         fire(&LISTED);
-        let read = holds_signed_entry(&files);
+        let read = holds_entry(&files, malformed, &wanted);
         let stable = seqs(&files) == seqs(&log_files(path)?);
         match read {
             // A signed entry read is signed, whatever moved since.
@@ -170,21 +195,38 @@ pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
             _ => {}
         }
         if attempt == 1 {
-            return Err(changed_under_reader("signed-entry scan"));
+            return Err(changed_under_reader(what));
         }
         attempt += 1;
     }
 }
 
-/// Whether any of `files` holds a signed entry.
-fn holds_signed_entry(files: &[(Option<u64>, PathBuf)]) -> io::Result<bool> {
+/// Whether any of `files` holds an entry `wanted` accepts. A blank line is
+/// never an entry; any other line that is not JSON is skipped or refused as
+/// `malformed` says.
+fn holds_entry(
+    files: &[(Option<u64>, PathBuf)],
+    malformed: Malformed,
+    wanted: &impl Fn(&Value) -> bool,
+) -> io::Result<bool> {
     for (_, file) in files {
         let content = bounded_read_to_string(file, MAX_AUDIT_READ_BYTES)?;
-        let signed = content.lines().any(|raw| {
-            serde_json::from_str::<Value>(raw.trim()).is_ok_and(|e| is_signed_entry(&e))
-        });
-        if signed {
-            return Ok(true);
+        for (n, raw) in content.lines().enumerate() {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<Value>(raw) {
+                Ok(entry) if wanted(&entry) => return Ok(true),
+                Ok(_) => {}
+                Err(_) if malformed == Malformed::Skip => {}
+                Err(e) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("{} line {}: not a JSON entry ({e})", file.display(), n + 1),
+                    ));
+                }
+            }
         }
     }
     Ok(false)

@@ -150,7 +150,10 @@ async fn t10b_a_session_request_writes_no_last_use() {
 /// T10c: a verified OIDC identity's request writes no key's last use.
 #[tokio::test]
 async fn t10c_an_oidc_request_writes_no_last_use() {
-    let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
+    let key_server = Arc::new(KeyServer::new(
+        crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
+    ));
     let token = oidc_token();
     let bearer = token.token.clone();
     key_server.store.insert(token).await;
