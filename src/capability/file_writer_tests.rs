@@ -471,3 +471,79 @@ async fn a_bom_before_a_first_line_pin_is_a_mismatch_not_a_save() {
 
 #[path = "file_writer_review_tests.rs"]
 mod review;
+
+/// A pasted credential must win over any pin refusal, since those refusals
+/// normally carry a patch of the submitted bytes.
+#[tokio::test]
+async fn literal_headers_precede_pin_errors_in_save_and_preview() {
+    let canary = "literal-header-pin-canary";
+    let sent = format!("{TEXT}      headers:\n        Authorization: 'Bearer {canary}'\n");
+    let valid_pin = pinned(TEXT);
+    let broken_pin = described(&valid_pin, "Changed behind the pin");
+    let ambiguous_pin = format!("sha256: [unreadable]\n{sent}");
+    // A text that does not parse as a capability (the ambiguous pin) is
+    // refused with the fixed parse answer before any pin or credential
+    // judgement, and carries no submitted bytes.
+    for (current, body, unparsed) in [
+        (&valid_pin, &sent, false),
+        (&broken_pin, &sent, false),
+        (&valid_pin, &ambiguous_pin, true),
+    ] {
+        let (dir, file) = dir_with(current);
+        let preview = super::preview(body, Some(current));
+        if unparsed {
+            assert!(
+                matches!(&preview, Err(Refused::Invalid { patch: None, .. })),
+                "{preview:?}"
+            );
+        } else {
+            assert!(matches!(&preview, Err(Refused::LiteralCredential { .. })));
+        }
+        assert!(!format!("{preview:?}").contains(canary));
+        let saved = commit(
+            edit(
+                dir.path(),
+                Base::Bytes(sha(current)),
+                Change::Write(body.clone()),
+                PinUpdate::InPlace,
+            ),
+            None,
+            soon(),
+        )
+        .await;
+        if unparsed {
+            assert!(
+                matches!(&saved, Err(Refused::Invalid { patch: None, .. })),
+                "{saved:?}"
+            );
+        } else {
+            assert!(matches!(&saved, Err(Refused::LiteralCredential { .. })));
+        }
+        assert!(!format!("{saved:?}").contains(canary));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), *current);
+    }
+}
+
+/// A second writer holding the directory cannot change a credential refusal
+/// into a busy answer; the credential is judged before waiting for the lock.
+#[tokio::test]
+async fn literal_headers_are_refused_before_the_directory_lock() {
+    let (dir, file) = dir_with(TEXT);
+    let _held = lock_config(&dir.path().join("capabilities"), soon())
+        .await
+        .expect("the test takes the lock");
+    let sent = format!("{TEXT}      headers:\n        Cookie: 'session=literal'\n");
+    let result = commit(
+        edit(
+            dir.path(),
+            Base::Bytes(sha(TEXT)),
+            Change::Write(sent),
+            PinUpdate::InPlace,
+        ),
+        None,
+        Instant::now(),
+    )
+    .await;
+    assert!(matches!(result, Err(Refused::LiteralCredential { .. })));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), TEXT);
+}

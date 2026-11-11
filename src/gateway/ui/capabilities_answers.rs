@@ -85,11 +85,23 @@ pub(super) fn refused(name: &str, refusal: Refused) -> axum::response::Response 
             "Another write to this capability directory is in progress; retry".to_owned(),
             json!({}),
         ),
-        Refused::Invalid { errors, patch } => (
+        Refused::Invalid { errors, patch: None } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid",
+            "Capability YAML could not be parsed safely".to_owned(),
+            json!({ "errors": field_errors(&errors) }),
+        ),
+        Refused::Invalid { errors, patch: Some(patch) } => (
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid",
             format!("Capability '{name}' would not load"),
             json!({ "errors": field_errors(&errors), "patch": patch }),
+        ),
+        Refused::LiteralCredential { errors } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "literal_in_header",
+            "Credential headers must use {env.NAME} or {keychain.NAME}, optionally after one scheme prefix such as `Bearer `.".to_owned(),
+            json!({ "errors": field_errors(&errors) }),
         ),
     };
     let mut body = json!({ "error": code, "message": message });
