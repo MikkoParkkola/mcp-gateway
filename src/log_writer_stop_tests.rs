@@ -4,6 +4,7 @@
 //! and the worker is joined, or the stop says it was not.
 
 use std::io::{self, Write};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,20 @@ use super::{FlushEnd, NoticeFormat, StopOutcome, spawn};
 
 fn soon() -> Instant {
     Instant::now() + Duration::from_secs(10)
+}
+
+/// Join `handle` within ten seconds: a regression that deadlocks fails here
+/// instead of hanging the run.
+fn bounded<T: Send + 'static>(handle: thread::JoinHandle<T>, what: &str) -> T {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(handle.join());
+    });
+    match rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(Ok(value)) => value,
+        Ok(Err(_)) => panic!("{what} panicked"),
+        Err(_) => panic!("{what} did not finish in 10 s: the stop and a sender wait on each other"),
+    }
 }
 
 fn kept(out: &Accepted) -> Vec<String> {
@@ -198,7 +213,7 @@ fn a_parked_sender_and_a_full_queue_still_end_the_stop_at_the_deadline() {
     };
     sender_gate.open();
     sink_gate.open();
-    sender.join().expect("the sender returned");
+    bounded(sender, "the sender");
     assert!(
         worker.join().is_ok(),
         "the kept worker ends once everything moves"
