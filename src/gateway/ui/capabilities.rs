@@ -540,9 +540,11 @@ async fn validate_only(
             let errors = file_writer::validate(&bytes, &path, Some(&accounts)).err();
             (Some(bytes), errors.unwrap_or_default())
         }
-        Err(refusal @ (Refused::LiteralCredential { .. } | Refused::Invalid { .. })) => {
-            return refused(name, refusal);
-        }
+        Err(refusal @ Refused::LiteralCredential { .. }) => return refused(name, refusal),
+        // A text that does not parse keeps the validate contract (`valid`,
+        // `errors`, no diff, no pin after); its error is the fixed message
+        // with the parser's line and column, never a submitted byte.
+        Err(Refused::Invalid { errors, .. }) => (None, errors),
         Err(refusal) => {
             let message = match refusal {
                 Refused::PinMismatch { .. } => {
