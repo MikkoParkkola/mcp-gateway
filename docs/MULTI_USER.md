@@ -102,6 +102,12 @@ endpoints above revoke tokens the gateway issued, and a raw provider token is
 not one of them. In delegated mode your only revocation lever is the identity
 provider, so keep provider token lifetimes short.
 
+### What the audit log records about a caller
+
+Key-server audit lines record the caller's subject and issuer, and the email only as `email_hash`, a keyed hash: the same email always gives the same value on one gateway, so one person's records still correlate, but the email itself is not written. The hash key is `key-server-email-hmac.json` in the gateway data directory; back it up (see the backup runbook). The key server requires the audit log (`security.transparency_log.enabled`).
+
+Some identity providers use the email address as the OIDC subject. The subject is the identifier tokens and revocation key on, so the gateway keeps it as it is, and such subjects reach the audit log unchanged. For each provider that sends email-shaped subjects, the gateway logs one WARN naming the provider; the warning carries only the subject's `email_hash`. Providers with opaque subjects are fully covered.
+
 ### Connecting a remote MCP client (ChatGPT and similar)
 
 A client that signs in with OAuth, such as ChatGPT, finds the sign-in server

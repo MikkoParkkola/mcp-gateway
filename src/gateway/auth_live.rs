@@ -491,12 +491,21 @@ mod tests {
     async fn delivery_is_dead_for_a_revoked_token() {
         let key_server = Arc::new(crate::key_server::KeyServer::new(
             crate::config::KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
         ));
         let (kept, revoked) = (temporary_token(&["alpha"]), temporary_token(&["alpha"]));
         let (kept_cred, revoked_cred) = (bearer(&kept.token), bearer(&revoked.token));
         let revoked_jti = revoked.jti.clone();
-        key_server.store.insert(kept).await;
-        key_server.store.insert(revoked).await;
+        crate::key_server::store::activate_for_test(
+            key_server.store.as_ref(),
+            key_server.config.token_ttl_secs,
+            kept,
+        );
+        crate::key_server::store::activate_for_test(
+            key_server.store.as_ref(),
+            key_server.config.token_ttl_secs,
+            revoked,
+        );
         assert!(key_server.store.revoke_by_jti(&revoked_jti).await);
         let state = authorizer(key_server);
 
@@ -520,10 +529,15 @@ mod tests {
     async fn delivery_is_out_of_scope_for_a_live_token_without_the_backend() {
         let key_server = Arc::new(crate::key_server::KeyServer::new(
             crate::config::KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
         ));
         let token = temporary_token(&["alpha"]);
         let credential = bearer(&token.token);
-        key_server.store.insert(token).await;
+        crate::key_server::store::activate_for_test(
+            key_server.store.as_ref(),
+            key_server.config.token_ttl_secs,
+            token,
+        );
         let state = authorizer(key_server);
 
         assert_eq!(
@@ -614,6 +628,7 @@ mod tests {
         );
         let key_server = Arc::new(crate::key_server::KeyServer::new(
             crate::config::KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
         ));
         let state = authorizer(key_server);
         assert!(

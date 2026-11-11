@@ -21,7 +21,9 @@ impl MetaMcp {
         api_key_name: Option<&str>,
         stored: &CommittedTask,
     ) {
-        if !self.relay_active() || !stored.serves_backend_output() {
+        // A withheld row's caller received the gateway's answer, not the
+        // stored outcome: there is nothing delivered to receipt.
+        if !self.relay_active() || !stored.serves_backend_output() || stored.withholds_outcome() {
             return;
         }
         let [target] = stored.targets.as_slice() else {

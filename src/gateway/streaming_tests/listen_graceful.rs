@@ -81,10 +81,15 @@ async fn closed_listen_body(revoke: bool) -> String {
 
     let key_server = Arc::new(crate::key_server::KeyServer::new(
         crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
     let token = temporary_token();
     let (credential, jti) = (bearer(&token.token), token.jti.clone());
-    key_server.store.insert(token).await;
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        token,
+    );
     let registry = SubscriptionRegistry::new(4, authorizer(Arc::clone(&key_server)));
     let listener = registry
         .subscribe_as(credential)

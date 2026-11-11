@@ -127,7 +127,8 @@ async fn test_validate_reports_the_syntax_error_line() {
     assert_eq!(body["errors"][0]["line"], 3, "{body}");
     assert!(body["errors"][0]["column"].is_u64(), "{body}");
 
-    // A structural error names a field, not a position.
+    // A structural error is the same fixed message, with the parser's
+    // position when it has one; the loader's field text is not returned.
     let (status, _, body) = call(
         &router,
         Method::POST,
@@ -138,7 +139,7 @@ async fn test_validate_reports_the_syntax_error_line() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["valid"], false, "{body}");
-    assert!(body["errors"][0].get("line").is_none(), "{body}");
+    assert!(body["errors"][0]["line"].is_u64(), "{body}");
     assert!(body["errors"][0]["message"].is_string(), "{body}");
 }
 

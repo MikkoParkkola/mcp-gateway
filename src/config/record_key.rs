@@ -94,10 +94,27 @@ fn publish_new_key(
     link: impl Fn(&Path, &Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use rand::RngExt as _;
-    let dir = key_file.parent().unwrap_or(Path::new("."));
     let bytes: [u8; 32] = rand::rng().random();
+    publish_new_file(
+        key_file,
+        format!("{}\n", hex::encode(bytes)).as_bytes(),
+        link,
+    )
+}
+
+/// Publish `content` under `target` only if nothing is there yet: a private
+/// temp file, synced, then a no-replace hard link and a directory sync. When
+/// two writers race, the first link wins and the other's `AlreadyExists` is
+/// success: both then read the winner. A reader never sees a partial file.
+pub(crate) fn publish_new_file(
+    target: &Path,
+    content: &[u8],
+    link: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    use rand::RngExt as _;
+    let dir = target.parent().unwrap_or(Path::new("."));
     let nonce: [u8; 8] = rand::rng().random();
-    let mut temp_name = key_file.file_name().unwrap_or_default().to_owned();
+    let mut temp_name = target.file_name().unwrap_or_default().to_owned();
     temp_name.push(format!(
         ".{}.{}.tmp",
         std::process::id(),
@@ -106,10 +123,10 @@ fn publish_new_key(
     let temp = dir.join(temp_name);
     let published = (|| {
         let mut file = crate::config_persistence::create_new_private(&temp)?;
-        file.write_all(format!("{}\n", hex::encode(bytes)).as_bytes())?;
+        file.write_all(content)?;
         file.sync_all()?;
         drop(file);
-        match link(&temp, key_file) {
+        match link(&temp, target) {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
             linked => linked,
         }

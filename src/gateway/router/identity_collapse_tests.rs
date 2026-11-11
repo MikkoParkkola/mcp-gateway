@@ -23,8 +23,8 @@ use crate::config::{
 };
 use crate::gateway::oauth::{GatewayKeyPair, jwks_handler};
 use crate::key_server::oidc::VerifiedIdentity;
-use crate::key_server::store::{TemporaryToken, TokenScopes};
-use crate::key_server::{InMemoryTokenStore, KeyServer, OidcVerifier, TokenStore};
+use crate::key_server::store::{TemporaryToken, TokenScopes, activate_for_test};
+use crate::key_server::{InMemoryTokenStore, KeyServer, OidcVerifier};
 
 const ISS: &str = "https://idp-c.example";
 const AUD: &str = "gateway";
@@ -129,9 +129,10 @@ async fn gateway(idp: &Idp) -> (Arc<AppState>, crate::gateway::router::tests::Fi
         max_oidc_token_age_secs: 300,
         ..KeyServerConfig::default()
     };
-    let store = Arc::new(InMemoryTokenStore::new());
-    store.insert(stored(STORED_NAMELESS, "")).await;
-    store.insert(stored(STORED_NAMED, "alice")).await;
+    let store = Arc::new(InMemoryTokenStore::for_config(&config));
+    for token in [stored(STORED_NAMELESS, ""), stored(STORED_NAMED, "alice")] {
+        activate_for_test(store.as_ref(), config.token_ttl_secs, token);
+    }
     let key_server = KeyServer {
         store,
         oidc: Arc::new(OidcVerifier::with_http_client(
@@ -142,6 +143,8 @@ async fn gateway(idp: &Idp) -> (Arc<AppState>, crate::gateway::router::tests::Fi
             config.policies.clone(),
         )),
         config,
+        email_key: crate::key_server::email_hash::EmailHashKey::for_test(),
+        revocation_signals: std::sync::atomic::AtomicU64::new(0),
     };
     let auth = AuthConfig {
         enabled: true,
@@ -242,14 +245,17 @@ async fn unverifiable_input_on_a_public_path_keeps_the_public_fall_through() {
 /// A key server holding `tokens`: (bearer, subject, email) triples, all from
 /// the one issuer, all live.
 async fn key_server_with(tokens: &[(&str, &str, &str)]) -> Arc<KeyServer> {
-    let ks = KeyServer::new(KeyServerConfig {
-        enabled: true,
-        ..KeyServerConfig::default()
-    });
+    let ks = KeyServer::new(
+        KeyServerConfig {
+            enabled: true,
+            ..KeyServerConfig::default()
+        },
+        crate::key_server::email_hash::EmailHashKey::for_test(),
+    );
     for (bearer, subject, email) in tokens {
         let mut token = stored(bearer, subject);
         token.identity = token.identity.clone().with_email(*email);
-        ks.store.insert(token).await;
+        activate_for_test(ks.store.as_ref(), ks.config.token_ttl_secs, token);
     }
     Arc::new(ks)
 }

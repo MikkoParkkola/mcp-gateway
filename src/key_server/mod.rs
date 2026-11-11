@@ -32,6 +32,16 @@
 //! configuration. When disabled, no overhead is incurred.
 
 pub mod audit;
+/// The per-identity token cap holds under concurrent mints.
+#[cfg(test)]
+mod cap_race_tests;
+/// The installation key behind `email_hash`.
+pub(crate) mod email_hash;
+/// Where the `email_hash` installation key lives.
+pub(crate) mod email_hmac_store;
+/// One WARN per provider whose subjects are email addresses.
+#[cfg(test)]
+mod email_subject_tests;
 pub mod handler;
 #[cfg(test)]
 mod identity_rules_tests;
@@ -42,6 +52,12 @@ pub(crate) mod oidc_test_harness;
 /// The output-only doc tests fail for the reason they name.
 #[cfg(test)]
 mod output_only_doc_tests;
+/// No raw email in key-server output, checked in a child process.
+#[cfg(test)]
+mod piilog_capture_tests;
+/// The hashed audit email's docs rows.
+#[cfg(test)]
+mod piilog_docs_tests;
 pub mod policy;
 pub mod store;
 
@@ -69,6 +85,14 @@ pub enum TokenAgeCap {
     ExpOnly,
 }
 pub use policy::PolicyEngine;
+
+/// Whether `subject` looks like an email address: one `@`, a non-empty local
+/// part and a dotted domain. A plain string test, no regex.
+fn is_email_shaped(subject: &str) -> bool {
+    oidc::email_domain(subject).is_some_and(|domain| {
+        domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+    })
+}
 pub use store::{InMemoryTokenStore, TemporaryToken, TokenStore};
 
 /// The key server — central coordinator for OIDC token exchange.
@@ -85,13 +109,18 @@ pub struct KeyServer {
     pub policy: Arc<PolicyEngine>,
     /// Key server configuration
     pub config: KeyServerConfig,
+    /// The installation key behind every audit record's `email_hash`.
+    pub(crate) email_key: Arc<email_hash::EmailHashKey>,
+    /// How many credential-revocation signals this key server has sent.
+    pub(crate) revocation_signals: std::sync::atomic::AtomicU64,
 }
 
 impl KeyServer {
-    /// Create a new key server from configuration.
+    /// Create a new key server from configuration and the installation key
+    /// its audit records hash emails with.
     #[must_use]
-    pub fn new(config: KeyServerConfig) -> Self {
-        let store = Arc::new(InMemoryTokenStore::new());
+    pub(crate) fn new(config: KeyServerConfig, email_key: Arc<email_hash::EmailHashKey>) -> Self {
+        let store = Arc::new(InMemoryTokenStore::for_config(&config));
         let oidc = Arc::new(OidcVerifier::new(config.oidc.clone()));
         let policy = Arc::new(PolicyEngine::new(config.policies.clone()));
 
@@ -100,7 +129,44 @@ impl KeyServer {
             oidc,
             policy,
             config,
+            email_key,
+            revocation_signals: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// A credential this key server issued may have been revoked: wake every
+    /// listener re-check (process-wide), and count it here, so a row can
+    /// read exactly this server's signals.
+    pub(crate) fn credentials_changed(&self) {
+        self.revocation_signals
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::events::credentials_changed();
+    }
+
+    /// Log one WARN per identity provider whose subjects are email
+    /// addresses. The subject is the identifier tokens and revocation key on,
+    /// so it reaches audit records as it is; the warning names the provider
+    /// and carries only the subject's `email_hash`. Returns whether this call
+    /// warned.
+    pub(crate) fn note_email_subject(&self, identity: &VerifiedIdentity) -> bool {
+        static WARNED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+            std::sync::LazyLock::new(Default::default);
+        if !is_email_shaped(identity.subject()) {
+            return false;
+        }
+        let first = WARNED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(identity.issuer().to_owned());
+        if first {
+            tracing::warn!(
+                issuer = %identity.issuer(),
+                subject_hash = %self.email_key.hash(identity.subject()),
+                "this identity provider's subjects are email addresses: the audit log keeps \
+                 them as they are, since tokens and revocation key on the subject"
+            );
+        }
+        first
     }
 
     /// Validate a bearer token from an incoming request.
@@ -158,7 +224,7 @@ impl KeyServer {
             credential_kind: crate::security::audit::CredentialKind::KeyServerToken,
         };
 
-        let ev = AuditEvent::used(&temp, None);
+        let ev = AuditEvent::used(&temp, &self.email_key, None);
         audit::emit(&ev);
 
         KeyServerLookup::Valid((client, temp))
@@ -207,10 +273,14 @@ impl KeyServer {
                 return KeyServerLookup::Nameless;
             }
             Err(e) => {
-                debug!(error = %e, "Delegated OIDC bearer verification failed");
+                debug!(
+                    reason = e.reason_code(),
+                    "Delegated OIDC bearer verification failed"
+                );
                 return KeyServerLookup::Absent;
             }
         };
+        self.note_email_subject(&identity);
 
         // Resolve scopes via the same first-match-wins policy engine. No
         // requested-scope narrowing: a delegated bearer takes the policy's
@@ -350,13 +420,18 @@ mod tests {
     /// Mutant: the read-back check removed from the lookup.
     #[tokio::test]
     async fn a_stored_token_whose_identity_names_nobody_is_refused() {
-        let ks = KeyServer::new(KeyServerConfig::default());
+        let ks = KeyServer::new(
+            KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
+        );
         for (bearer, subject, issuer) in [
             ("mcpgw_nameless_subject", "", "https://issuer.invalid"),
             ("mcpgw_nameless_issuer", "sub", ""),
         ] {
-            ks.store
-                .insert(TemporaryToken {
+            store::activate_for_test(
+                ks.store.as_ref(),
+                ks.config.token_ttl_secs,
+                TemporaryToken {
                     jti: format!("jti-{bearer}"),
                     token: bearer.to_string(),
                     identity: identity(subject, "u@corp.invalid", issuer),
@@ -364,8 +439,8 @@ mod tests {
                     iat: 0,
                     exp: u64::MAX,
                     client_ip: None,
-                })
-                .await;
+                },
+            );
             assert!(ks.store.get(bearer).await.is_some(), "the store holds it");
             assert!(
                 ks.validate_token(bearer).await.is_none(),
@@ -378,7 +453,10 @@ mod tests {
     async fn oidc_token_with_empty_backends_reaches_none() {
         // BACKENDGRANT.1: the token's scopes are copied as-is, and an empty
         // backend list means none, never "all".
-        let ks = KeyServer::new(KeyServerConfig::default());
+        let ks = KeyServer::new(
+            KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
+        );
         let token = TemporaryToken {
             jti: "jti-empty".to_string(),
             token: "mcpgw_empty_backends".to_string(),
@@ -388,7 +466,7 @@ mod tests {
             exp: u64::MAX,
             client_ip: None,
         };
-        ks.store.insert(token).await;
+        store::activate_for_test(ks.store.as_ref(), ks.config.token_ttl_secs, token);
         let (client, _) = ks
             .validate_token("mcpgw_empty_backends")
             .await
@@ -401,10 +479,15 @@ mod tests {
     /// a static bearer configured with the same text is another caller.
     #[tokio::test]
     async fn key_server_token_principal_is_outside_the_configured_space() {
-        let ks = KeyServer::new(KeyServerConfig::default());
+        let ks = KeyServer::new(
+            KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
+        );
         let text = "mcpgw_runtime_principal";
-        ks.store
-            .insert(TemporaryToken {
+        store::activate_for_test(
+            ks.store.as_ref(),
+            ks.config.token_ttl_secs,
+            TemporaryToken {
                 jti: "jti-runtime".to_string(),
                 token: text.to_string(),
                 identity: identity("sub", "u@corp.invalid", "https://issuer.invalid"),
@@ -412,8 +495,8 @@ mod tests {
                 iat: 0,
                 exp: u64::MAX,
                 client_ip: None,
-            })
-            .await;
+            },
+        );
         let (client, _) = ks.validate_token(text).await.expect("token is live");
         let p = client.principal.storage_form();
         assert_ne!(p, crate::gateway::auth::principal_of(text).storage_form());

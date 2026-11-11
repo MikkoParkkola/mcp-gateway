@@ -32,18 +32,25 @@ pub(super) async fn follow_upstream_job(
         String,
         crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
         Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+        Option<crate::security::dispatched::Dispatched>,
     ),
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
-    let (job, handle, relay, bindings) = dispatched;
+    let (job, handle, relay, bindings, injected) = dispatched;
+    // The stored form the follow checks against, the same string the
+    // capture writes: missing when the dispatch's slot held nothing.
+    let fingerprint = injected.as_ref().map_or_else(
+        || crate::security::dispatched::MISSING.to_owned(),
+        crate::security::dispatched::Dispatched::stored,
+    );
     let captured = capture_handle(
         executor,
         (principal, id, revision),
         (&job, &handle),
-        bindings.clone(),
+        (bindings.clone(), injected),
     )
     .await;
-    let followed = (&job, handle.clone(), relay, captured);
+    let followed = (&job, handle.clone(), relay, captured, Some(fingerprint));
     follow_handle(
         executor,
         state,
@@ -71,7 +78,10 @@ async fn capture_handle(
     executor: &Arc<TaskExecutor>,
     (principal, id, revision): (&str, &str, u64),
     (job, handle): (&crate::gateway::meta_mcp::upstream::DirectJob, &str),
-    bindings: Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+    (bindings, injected): (
+        Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+        Option<crate::security::dispatched::Dispatched>,
+    ),
 ) -> bool {
     executor
         .notify_observer(super::super::CommitStage::BeforeCapture, id)
@@ -81,6 +91,7 @@ async fn capture_handle(
         tool: job.tool.clone(),
         arguments: job.arguments.clone(),
         handle: handle.to_owned(),
+        dispatched: injected,
     };
     executor
         .capture_upstream(principal, id, revision, (capture, bindings))

@@ -28,6 +28,8 @@
 //! }
 //! ```
 
+use crate::cli::stdout::println;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 

@@ -12,6 +12,7 @@
 /// file the release line brought in while this sweep is open; any other new
 /// unkept file fails the scan.
 const PENDING: &[&str] = &[
+    "src/cli/main_audit_secret_tests.rs",
     "src/commands/audit_race_tests.rs",
     "src/config_reload/override_audit_tests.rs",
     "src/config_reload/replace_audit_tests.rs",
@@ -57,7 +58,6 @@ const PENDING: &[&str] = &[
     "src/gateway/record_principal_scan_tests.rs",
     "src/gateway/router/backend_handlers/direct_audit_subject_tests.rs",
     "src/gateway/router/backend_handlers/tests.rs",
-    "src/gateway/router/capability_edit_audit_tests.rs",
     "src/gateway/router/collusion_direct_tests/meta.rs",
     "src/gateway/router/collusion_direct_tests/verdict.rs",
     "src/gateway/router/direct_anonymous_continuation_tests.rs",
@@ -92,7 +92,6 @@ const PENDING: &[&str] = &[
     "src/gateway/ui/keys_tests.rs",
     "src/identity_propagation/account_strategies_tests.rs",
     "src/identity_propagation/audit_fail_closed_tests.rs",
-    "src/main_audit_secret_tests.rs",
     "src/security/audit_tests.rs",
     "src/security/tenant_read_corpus_tests.rs",
 ];

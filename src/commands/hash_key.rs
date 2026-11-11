@@ -7,6 +7,8 @@
 //! stripped, so `echo "$KEY" |` and `printf %s "$KEY" |` agree; any further
 //! whitespace is part of the key. Nothing secret is ever printed.
 
+use crate::cli::stdout::println;
+
 use std::io::{self, IsTerminal, Read};
 use std::process::ExitCode;
 

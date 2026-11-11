@@ -111,9 +111,17 @@ holding an integer outside ±(2^53−1).
   `--result` = `output.<step>`. Sealed at creation, when the step answers.
 - A mapped playbook output carries no step receipt.
 
-Step seals are applied before the egress firewall. A step result the firewall
-later redacts verifies as `ResultMismatch`, which is the honest outcome, not a
-bypass.
+Step seals are made when the step answers, before the egress firewall runs. While
+the firewall can redact an answer (response scanning on and a redacting policy
+applying), every `public_signature` in it is removed first, at every depth and
+in JSON text: chain and playbook step seals and a stored task's own seal at
+`tasks/get` and in notifications are not served, even when nothing is redacted.
+A seal made before a redaction carries the digest of the unredacted bytes, so
+serving it next to the redacted body would let a client test guesses of the
+removed value offline. The receipts stay, and the fresh top-level seal, applied
+after the scan, covers what is delivered. An answer the firewall rewrote whose
+text names `public_signature` without parsing as JSON is refused. With no
+redacting policy, step seals stay and verify.
 
 Step-receipt asymmetry: step results sit inside `content[0].text`, which the
 wire never clamps, so a step's `cacheScope` is delivered as the backend sent
@@ -122,6 +130,18 @@ it.
 A direct idempotent replay that does not re-stamp delivers its stored receipt
 unsealed: the receipt was minted in an earlier request, so this request's seal
 refuses it.
+
+Stored answers lose their seals while the gateway holds any secret value for
+the stored-answer scrub (any backend with a configured or sent secret). A
+response-cache hit, an idempotency replay, `tasks/get` and a task notification
+serve the stored answer with every `public_signature` removed, at every
+depth, chain and playbook steps in `content[0].text` included. The receipts
+stay, and a fresh delivery is sealed as before. A stored answer is scrubbed against the
+values held when it is served, and a seal made before that scrub carries the
+digest of the unscrubbed bytes, so serving it next to a redacted body would
+let a client test guesses of the removed value offline. With no secret value
+held, stored answers keep their seals. A stored answer the scrub redacted and
+whose text names `public_signature` without parsing as JSON is refused.
 
 ## Reading a saved response
 

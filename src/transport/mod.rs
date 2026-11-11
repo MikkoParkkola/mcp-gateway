@@ -32,6 +32,8 @@ pub(crate) use self::lender::{Lender, LentCredential, Loan, Refusal, SendCheck};
 #[cfg(feature = "a2a")]
 pub(crate) use self::lender::count_refusal;
 #[cfg(all(test, unix))]
+pub(crate) use self::stdio::HURRY_WINDOW;
+#[cfg(all(test, unix))]
 pub(crate) use self::stdio::KILL_RESERVE_FOR_TEST;
 #[cfg(test)]
 pub(crate) use self::stdio::assigned_package_cache_dir;

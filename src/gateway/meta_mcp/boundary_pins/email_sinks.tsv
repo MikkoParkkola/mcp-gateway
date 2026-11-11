@@ -1,0 +1,33 @@
+# file	owner	kind	value	reason
+src/config/features/key_server.rs	KeyServerConfig::validate_policy_match	read	2	operator-written email rule in the config, checked at load; not a verified identity's email
+src/control_plane/role_mapping.rs	ControlPlaneRoleMappingConfig::validate	read	3	operator-written role-mapping email rules, checked at load; not a verified identity's email
+src/control_plane/role_mapping.rs	ControlPlaneRoleRule::matches	read	4	exact email or domain match for a control-plane role; no log or export
+src/events/records.rs	StoredIdentity::from	read	1	existing subscription carrier copies the email from the verified identity; no new persistence
+src/events/records.rs	StoredIdentity::verified	read	1	existing subscription carrier rebuilds the identity for delivery authorization
+src/gateway/router/handlers/events.rs	Presented::credential	read	1	existing OIDC subscription binding at creation; never populated from lookup input
+src/gateway/router/identity.rs	grant_subject_from_verified_identity	read	1	grant label copy; the label is excluded from identity equality and hash
+src/gateway/ui/control_plane/mutations.rs	actor_from_client	read	1	UI actor display falls back to the email; display only, no key-server audit permission
+src/identity_propagation/mod.rs	SignedAssertionStrategy::mint	read	1	email copied into the signed backend assertion; propagation only, never an audit or tracing record
+src/key_server/oidc.rs	OidcVerifier::verify_inner	read	1	verification and domain authorization of the token's email claim
+src/key_server/oidc/verified.rs	VerifiedIdentity::email	read	1	the accessor itself
+src/key_server/oidc/verified.rs	VerifiedIdentity::fmt	read	1	the redacting Debug: reads the email only to show whether one is present, never its text
+src/key_server/policy.rs	matches_rule	read	4	policy matching on the email and its domain; no log field
+src/projection/engine.rs	build_actor	read	1	reads ActorSpec.email, a projection setting naming where an email sits in a record; not a verified identity's email
+src/key_server/audit.rs	SafeIdentity::of	read	1	hashes the email into email_hash for the audit record; the email itself is not written
+src/key_server/oidc.rs	IdTokenClaims::fmt	read	1	the claims Debug reports only whether an email is present, never its text
+src/config/features/key_server.rs	KeyServerConfig::validate_policy_match	body	339f563566fa7654b9fc558331b5f7493325a23d9a6033e384fe22182327def2	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/control_plane/role_mapping.rs	ControlPlaneRoleMappingConfig::validate	body	e54ad223b65bba818488060b2e5d14e21b1d22f834402bb7dd5db558ad3efa18	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/control_plane/role_mapping.rs	ControlPlaneRoleRule::matches	body	dd125258bb05e7413393feb98f23f4069b24e1d979cb9af9d9e8aac4245b542d	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/events/records.rs	StoredIdentity::from	body	db04091fcfab91ca813c6d7bec7d3e0ce78d972be2cac28cec20df0c73b76425	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/events/records.rs	StoredIdentity::verified	body	caa8e687fedc8d2884d6789e465d8710b5dbfca7ed6af0b4106311e187ca81a1	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/gateway/router/handlers/events.rs	Presented::credential	body	a9a1ba64ac7a8bc860bba2b1f74644f5af2daf7f774cef50601c401245c795b9	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/gateway/router/identity.rs	grant_subject_from_verified_identity	body	0d7f93db71cd634496e2a52bdddc21da00c0a34a59af83e5cafcd95a02692607	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/gateway/ui/control_plane/mutations.rs	actor_from_client	body	a1667951b94063e40fc2dac590f8feaabc7198bdf59846859daf4b28259ba9d2	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/identity_propagation/mod.rs	SignedAssertionStrategy::mint	body	0624ec2b1473eba5788390c6646780f07361dda258834c6eeef89734eec8ff72	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/key_server/audit.rs	SafeIdentity::of	body	3682be3a2ce6577de0b6e9047ae7fc6752b3064310aeaf18f973588919d02ae6	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/key_server/oidc.rs	IdTokenClaims::fmt	body	40c63e2ff6953abcc0d297ee47f1e9217418530036fcf9cb9dd7530907a5389f	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/key_server/oidc.rs	OidcVerifier::verify_inner	body	e37c8d6bf731a44acb7393aacd6bad953c3a573354afe8c54e301bbe5b4f6a3f	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/key_server/oidc/verified.rs	VerifiedIdentity::email	body	58bff4ccc869a59e7b8f50813360995f5ce458cdbe50c3dce7fc56e5028cf50a	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/key_server/oidc/verified.rs	VerifiedIdentity::fmt	body	900b13e6cf35d81eaefaeece2b7867c81e4bbc839638e49a216ffeced4963d02	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/key_server/policy.rs	matches_rule	body	c3e07abfa48821b9290711b167a2b7dd2bb5ea42e9482ff0a790395be71f1f1c	the reviewed body of the reader in the read row above; an edit to it is a reviewed change
+src/projection/engine.rs	build_actor	body	ea58c069e9f6eb262a41aaa2a8747815325227aeb803ca444cd56734e7b456e6	the reviewed body of the reader in the read row above; an edit to it is a reviewed change

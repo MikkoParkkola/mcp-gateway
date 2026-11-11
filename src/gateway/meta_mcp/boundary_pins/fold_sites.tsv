@@ -9,6 +9,7 @@ is_error	src/gateway/meta_mcp/invoke/side_effect_markers.rs	uncertain_side_effec
 is_error	src/gateway/meta_mcp/invoke/side_effect_markers.rs	withheld_side_effect	1	stored-notice
 is_error	src/gateway/router/backend_handlers/key_check.rs	key_refusal	1	other-route
 is_error	src/gateway/task_service/execution/settlement.rs	interrupted_result	1	stored-notice
+is_error	src/gateway/task_service/record.rs	withhold_outcome	1	stored-notice
 setter	folded	src/gateway/delivery_facts.rs	1
 setter	folded	src/gateway/meta_mcp/invoke/bridge_dispatch.rs	1
 setter	folded	src/gateway/meta_mcp/invoke/errors.rs	1

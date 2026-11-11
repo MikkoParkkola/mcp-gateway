@@ -124,7 +124,12 @@ fn the_expectation_holds_known_answers() {
     let seeded = |caller: &str| get(routes::UI_CONTROL_PLANE, "plain+store", caller);
     assert_ne!(seeded("OidcAdmin"), seeded("OidcDeveloper"));
     assert_ne!(seeded("OidcAuditor"), seeded("OidcDeveloper"));
-    for path in STORE_WRITES {
+    for file in loaded()
+        .files
+        .iter()
+        .filter(|file| file.attributes.store_writes)
+    {
+        let path = file.path.as_str();
         assert!(
             post(path, "valid+store", "OidcAuditor").starts_with("403"),
             "{path}"
@@ -136,7 +141,7 @@ fn the_expectation_holds_known_answers() {
 /// A receipt for a call with no decision object reads the by-version
 /// line in `findings`, not the old placeholder. That text is why the six
 /// `other-receipt` 200 cells (`AdminKey`, `AdminKeyUnmapped`, `Bearer`, `OidcAdmin`,
-/// `OidcAuditor`, `Session`) carry a new digest in `ui_access_matrix.tsv`.
+/// `OidcAuditor`, `Session`) carry a new digest in `ui_access_matrix.d/activity___id_.tsv`.
 #[tokio::test]
 async fn matrix_known_receipt_cells_moved_for_findings_line() {
     let fx = fixture(Gateway::On, false).await;
@@ -153,7 +158,8 @@ async fn matrix_known_receipt_cells_moved_for_findings_line() {
 
 /// The six `other-receipt` 200 cells that moved, each with why: the seeded
 /// call has no decision object, so the receipt's `findings` text changed from
-/// the old placeholder to the reader's by-version line.
+/// the old placeholder to the reader's by-version line; the receipt also
+/// reports the log's `signing_anchor`, so the digest covers both.
 const MOVED_FOR_FINDINGS_LINE: [(&str, &str); 6] = [
     (
         "AdminKey",
@@ -188,7 +194,7 @@ fn the_moved_receipt_cells_carry_the_new_digest() {
         );
         assert_eq!(
             expected.get(&key).map(String::as_str),
-            Some("200:b5e993923abe"),
+            Some("200:b57068468436"),
             "{reason}"
         );
     }

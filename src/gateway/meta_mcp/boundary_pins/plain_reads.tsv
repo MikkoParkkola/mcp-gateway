@@ -133,6 +133,10 @@ src/security/transparency_log_segments.rs	read_first_line_raw	File::open	1	not-c
 src/security/transparency_log_segments.rs	read_hwm	fs::read	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
 src/security/transparency_log_segments.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
 src/security/transparency_log_segments.rs	write_hwm	.open	1	write-only	writes the audit log high-water mark; reads nothing
+src/security/transparency_log_sigstart.rs	classify	fs::read	1	not-config	the audit log's high-water mark, for its MAC flag; no secret
+src/security/transparency_log_sigstart.rs	digest	File::open	1	not-config	the audit log's segments, to digest the bytes before signing began; no secret
+src/security/transparency_log_sigstart.rs	load	fs::read	1	not-config	the audit log's signing anchor (.sigstart); no secret
+src/security/transparency_log_sigstart.rs	scan_lines	File::open	1	not-config	the audit log's segments, scanned for the first signed record; no secret
 src/skills/installer.rs	copy_dir_recursive	fs::copy	1	not-config	copies a skill bundle into the skills directory; public
 src/skills/parser.rs	parse_skill_file	fs::read_to_string	1	not-config	skill files; public
 src/skills/parser.rs	read_auxiliary_file	fs::read_to_string	1	not-config	skill files; public

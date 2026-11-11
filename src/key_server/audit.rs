@@ -10,9 +10,8 @@
 //!
 //! | Event | When |
 //! |-------|------|
-//! | `token.issued` | A new temporary token is successfully issued |
+//! | `token.issued` | A token's issuance was attempted: logged before the token is activated, so a mint refused at activation (403, 503) leaves this line and no token |
 //! | `token.used` | A temporary token is validated for a request |
-//! | `token.expired` | A token is rejected because its `exp` has passed |
 //! | `token.revoked` | A token is explicitly revoked via `DELETE /auth/token/{jti}` |
 //! | `token.denied` | OIDC verification or policy matching failed |
 //! | `token.invalid` | The token string is structurally invalid |
@@ -21,16 +20,49 @@ use std::net::IpAddr;
 
 use serde::Serialize;
 
-use super::{oidc::VerifiedIdentity, store::TemporaryToken};
+use super::{email_hash::EmailHashKey, oidc::VerifiedIdentity, store::TemporaryToken};
+
+/// The identity an audit event records: the stable subject and issuer, and
+/// the email only as its keyed hash. Never the email, name or groups.
+#[derive(Debug, Clone, Serialize)]
+pub struct SafeIdentity {
+    /// OIDC `sub` claim.
+    pub subject: String,
+    /// The issuer URL.
+    pub issuer: String,
+    /// The keyed hash of the normalized email; absent when the token carried
+    /// no verified email.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email_hash: Option<String>,
+    /// The normalization and hash version behind `email_hash`.
+    pub email_hash_version: u32,
+    /// SHA-256 of the installation key that made `email_hash`.
+    pub email_hash_key_id: String,
+}
+
+impl SafeIdentity {
+    /// The record of `identity` under the installation `key`.
+    pub(crate) fn of(identity: &VerifiedIdentity, key: &EmailHashKey) -> Self {
+        let email = identity.email();
+        Self {
+            subject: identity.subject().to_owned(),
+            issuer: identity.issuer().to_owned(),
+            email_hash: (!email.is_empty()).then(|| key.hash(email)),
+            email_hash_version: super::email_hash::VERSION,
+            email_hash_key_id: key.key_id(),
+        }
+    }
+}
 
 /// Structured audit event emitted for every token lifecycle transition.
 #[derive(Debug, Serialize)]
 pub struct AuditEvent {
     /// Event type string (e.g., `"token.issued"`).
     pub event: &'static str,
-    /// Identity associated with the event (present for most events).
+    /// Identity associated with the event (present for most events), with
+    /// the email only as its keyed hash.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub identity: Option<VerifiedIdentity>,
+    pub identity: Option<SafeIdentity>,
     /// JTI of the affected token.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_jti: Option<String>,
@@ -54,10 +86,10 @@ pub struct AuditEvent {
 impl AuditEvent {
     /// Construct a `token.issued` event.
     #[must_use]
-    pub fn issued(token: &TemporaryToken) -> Self {
+    pub(crate) fn issued(token: &TemporaryToken, key: &EmailHashKey) -> Self {
         Self {
             event: "token.issued",
-            identity: Some(token.identity.clone()),
+            identity: Some(SafeIdentity::of(&token.identity, key)),
             token_jti: Some(token.jti.clone()),
             backends: Some(token.scopes.backends.clone()),
             tools: Some(token.scopes.tools.clone()),
@@ -69,10 +101,14 @@ impl AuditEvent {
 
     /// Construct a `token.used` event.
     #[must_use]
-    pub fn used(token: &TemporaryToken, client_ip: Option<IpAddr>) -> Self {
+    pub(crate) fn used(
+        token: &TemporaryToken,
+        key: &EmailHashKey,
+        client_ip: Option<IpAddr>,
+    ) -> Self {
         Self {
             event: "token.used",
-            identity: Some(token.identity.clone()),
+            identity: Some(SafeIdentity::of(&token.identity, key)),
             token_jti: Some(token.jti.clone()),
             backends: None,
             tools: None,
@@ -82,24 +118,9 @@ impl AuditEvent {
         }
     }
 
-    /// Construct a `token.expired` event.
-    #[must_use]
-    pub fn expired(jti: &str, identity: VerifiedIdentity) -> Self {
-        Self {
-            event: "token.expired",
-            identity: Some(identity),
-            token_jti: Some(jti.to_string()),
-            backends: None,
-            tools: None,
-            rate_limit: None,
-            client_ip: None,
-            reason: None,
-        }
-    }
-
     /// Construct a `token.revoked` event.
     #[must_use]
-    pub fn revoked(jti: &str, identity: Option<VerifiedIdentity>) -> Self {
+    pub fn revoked(jti: &str, identity: Option<SafeIdentity>) -> Self {
         Self {
             event: "token.revoked",
             identity,
@@ -215,7 +236,7 @@ mod tests {
         let token = make_token();
 
         // WHEN: build issued event
-        let event = AuditEvent::issued(&token);
+        let event = AuditEvent::issued(&token, &EmailHashKey::for_test());
 
         // THEN: event type is "token.issued" and fields are populated
         assert_eq!(event.event, "token.issued");
@@ -230,7 +251,7 @@ mod tests {
         let token = make_token();
 
         // WHEN: build used event
-        let event = AuditEvent::used(&token, None);
+        let event = AuditEvent::used(&token, &EmailHashKey::for_test(), None);
 
         // THEN: event type is "token.used", no scope fields
         assert_eq!(event.event, "token.used");
@@ -251,7 +272,13 @@ mod tests {
     #[test]
     fn revoked_event_has_jti() {
         // GIVEN/WHEN: build revoked event
-        let event = AuditEvent::revoked("some-jti", Some(make_identity()));
+        let event = AuditEvent::revoked(
+            "some-jti",
+            Some(SafeIdentity::of(
+                &make_identity(),
+                &EmailHashKey::for_test(),
+            )),
+        );
 
         // THEN: event type and JTI set
         assert_eq!(event.event, "token.revoked");
@@ -263,8 +290,8 @@ mod tests {
         // GIVEN: various event types
         let token = make_token();
         let events = vec![
-            AuditEvent::issued(&token),
-            AuditEvent::used(&token, None),
+            AuditEvent::issued(&token, &EmailHashKey::for_test()),
+            AuditEvent::used(&token, &EmailHashKey::for_test(), None),
             AuditEvent::denied("test", None),
             AuditEvent::revoked("jti", None),
             AuditEvent::invalid("bad token", None),
@@ -281,7 +308,7 @@ mod tests {
     fn emit_does_not_panic() {
         // GIVEN: any audit event
         let token = make_token();
-        let event = AuditEvent::issued(&token);
+        let event = AuditEvent::issued(&token, &EmailHashKey::for_test());
 
         // WHEN: emit (just check it doesn't panic)
         emit(&event);

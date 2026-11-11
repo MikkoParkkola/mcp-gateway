@@ -12,8 +12,8 @@
 #![deny(unsafe_code)]
 // In stdio mode stdout is the JSON-RPC stream to the client, so library code
 // never prints to it: a stray line breaks the client's framing. Diagnostics go
-// to stderr or tracing. CLI output lives in the binary (`main.rs`,
-// `commands`), and the library's two CLI-output modules write through
+// to stderr or tracing. CLI output scopes (`cli`, `commands` and
+// `validator::cli_handler`) explicitly import and write through
 // `cli::stdout`'s macros, which this lint does not cover by design. Test code
 // keeps `println!`: test-only child processes use stdout as their protocol.
 #![cfg_attr(not(test), deny(clippy::print_stdout))]
@@ -21,6 +21,9 @@
 // Macro-generated arrays (e.g. include_bytes!) may exceed the 16 KiB stack
 // threshold.  Clippy cannot show a source location for these — allow crate-wide.
 #![allow(clippy::large_stack_arrays)]
+
+// Commands behind cli::run keep crate-name paths; later cleanup can use `crate::`.
+extern crate self as mcp_gateway;
 
 // The `mutant!` macros (src/mutant_macro.rs), first so every module below
 // may hold a site on a scratch commit.
@@ -45,7 +48,8 @@ pub mod chains;
 pub mod cli;
 #[doc(hidden)]
 pub mod cli_support;
-mod clock;
+pub(crate) mod clock;
+pub(crate) mod commands;
 #[doc(hidden)]
 pub mod config;
 #[doc(hidden)]
@@ -63,9 +67,9 @@ pub mod cost_accounting;
 mod counters;
 #[cfg(coverage)]
 mod coverage_canary;
-mod debug_trust_roots;
+pub(crate) mod debug_trust_roots;
 mod health_history;
-mod random_secret;
+pub(crate) mod random_secret;
 #[cfg(test)]
 #[path = "random_secret_tests.rs"]
 mod random_secret_tests;
@@ -86,7 +90,7 @@ pub use fs_lock::lock_directory_finding;
 #[doc(hidden)]
 pub mod gateway;
 mod hashing;
-mod home_dir;
+pub(crate) mod home_dir;
 #[doc(hidden)]
 pub mod honest_task_tokens;
 #[doc(hidden)]
@@ -117,7 +121,7 @@ mod mutant_scan;
 pub mod oauth;
 mod observer;
 // Unix readers and the install's metadata reader use it; elsewhere it opens plainly.
-mod open_nonblocking;
+pub(crate) mod open_nonblocking;
 pub(crate) mod personal_accounts;
 #[doc(hidden)]
 pub mod playbook;
@@ -210,8 +214,8 @@ pub mod transform;
 pub mod transition;
 #[doc(hidden)]
 pub mod transport;
-mod transport_key;
-mod truncate;
+pub(crate) mod transport_key;
+pub(crate) mod truncate;
 #[doc(hidden)]
 pub mod trust;
 #[cfg(test)]
@@ -234,7 +238,7 @@ mod win_cred;
 mod win_cred_tests;
 mod wiped_bytes;
 /// The one YAML seam (MIK-8425); crate-private.
-mod yaml;
+pub(crate) mod yaml;
 
 #[doc(hidden)]
 pub use error::{Error, Result};
