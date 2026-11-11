@@ -83,7 +83,7 @@ async fn r14_exports_carry_the_effect_and_findings() {
         }
     }
     let records = csv_records(&export(&fx, "csv").await);
-    assert_eq!(records[0].len(), 36);
+    assert_eq!(records[0].len(), 37);
     let col = |name: &str| records[0].iter().position(|c| c == name).unwrap();
     let two = records
         .iter()

@@ -89,6 +89,12 @@ impl<'a> Check<'a> {
         }
     }
 
+    /// Whether this gateway holds a log secret, so an unsigned record is one
+    /// it could have verified and cannot vouch for.
+    pub(super) fn has_secret(&self) -> bool {
+        self.secret.is_some()
+    }
+
     fn log(&self, which: Which) -> Option<(&Path, &Anchor)> {
         let (path, anchor) = match which {
             Which::Invocation => Some(&self.inv),

@@ -103,7 +103,9 @@ impl<'a, 's> Joiner<'a, 's> {
     }
 
     /// The trust rule: `Err` is why the record cannot be believed; `Ok(true)`
-    /// is a record whose signature cannot be verified by this gateway.
+    /// is a record whose signature cannot be verified by this gateway, which
+    /// holds no log secret. With a secret, an unsigned record is never
+    /// believed, even one written before signing began.
     fn trust(&self, line: &Line) -> Result<bool, Why> {
         let judged = self.check.judge(line);
         match judged.state {
@@ -112,6 +114,7 @@ impl<'a, 's> Joiner<'a, 's> {
             }
             SignatureState::Invalid => Err(Why::Invalid),
             SignatureState::Valid => Ok(false),
+            SignatureState::Unsigned if self.check.has_secret() => Err(Why::Unsigned),
             SignatureState::Unsigned | SignatureState::SignedUnverifiable => Ok(true),
         }
     }
