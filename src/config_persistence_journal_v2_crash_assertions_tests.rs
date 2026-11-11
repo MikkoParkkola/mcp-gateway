@@ -6,13 +6,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use super::super::fixtures::decision;
 use super::super::observe::{self, Event};
 use super::super::{IntentId, JournalV2, ResultClass};
 use super::crash_fixtures::{ATTEMPT_OUTCOME, WRITER_OUTCOME};
 use super::fault::Captured;
-use super::fixtures::{ATTEMPT, RECOVERY, WRITER, acquire, payload, records_at, terminal_count};
+use super::fixtures::{
+    ATTEMPT, RECOVERY, SAVE, WRITER, acquire, payload, records_at, terminal_count,
+};
 use crate::config_persistence::commit::Action;
 use crate::config_persistence::journal;
 use crate::config_persistence::lock;
@@ -55,6 +58,12 @@ pub(super) fn expected_tokens(row: &str, captured: &Captured) -> Vec<String> {
             "{row}: real decision computation observed before cut"
         );
     }
+    if row == "crash_d7" {
+        assert!(
+            captured.write_faults.is_some_and(|fired| fired > 0),
+            "{row}: child witnessed the logger partial-write fault before kill"
+        );
+    }
     expected
 }
 
@@ -95,11 +104,7 @@ pub(super) fn inspect_crash(
     );
     let verdict = verify_audit_log(log_path, config, VerifyMode::Live, None);
     if row == "crash_d7" {
-        let raw = std::fs::read(log_path).expect(row);
-        assert!(
-            raw.ends_with(b"{\"event\":"),
-            "{row}: real partial tail before reopen"
-        );
+        torn_tail(path, log_path, row);
         assert!(!verdict.is_ok_and(|v| v.ok), "{row}: reader sees torn tail");
         return;
     }
@@ -133,6 +138,59 @@ pub(super) fn inspect_crash(
             "{row}: no writer outcome at cut"
         );
     }
+}
+
+fn torn_tail(path: &Path, log_path: &Path, row: &str) {
+    let raw = std::fs::read(log_path).expect(row);
+    assert!(
+        !raw.ends_with(b"\n"),
+        "{row}: torn tail has no final newline"
+    );
+    let start = raw.iter().rposition(|byte| *byte == b'\n').expect(row) + 1;
+    let tail = &raw[start..];
+    let previous: Value = serde_json::from_slice(
+        raw[..start - 1]
+            .rsplit(|byte| *byte == b'\n')
+            .next()
+            .expect("surviving complete record"),
+    )
+    .expect("complete record before torn tail");
+    let captured: Captured = serde_json::from_slice(
+        &std::fs::read(path.with_extension("s6a2-seam")).expect("pre-kill witness"),
+    )
+    .expect("partial-write evidence");
+    // Only the random envelope trace comes from the failed write's witness.
+    // The unflagged intent must replay `SAVE`, even though its first copy survived.
+    let mut expected = payload(SAVE);
+    expected.extend(payload(
+        br#"{"event":"config_save_intent","outcome":"ok","schema_version":2,"who":{"account":"gateway","principal":""}}"#,
+    ));
+    expected.insert("token".into(), WRITER.into());
+    expected.insert(
+        "trace_id".into(),
+        captured
+            .partial_write_trace
+            .expect("witnessed trace")
+            .into(),
+    );
+    expected.insert(
+        "counter".into(),
+        (previous["counter"].as_u64().expect(row) + 1).into(),
+    );
+    expected.insert("prev_entry_hash".into(), previous["entry_hash"].clone());
+    let core = serde_json::to_vec(&expected).expect("independent expected core");
+    let hash = format!("sha256:{}", hex::encode(Sha256::digest(&core)));
+    expected.insert("entry_hash".into(), hash.into());
+    let mut line = serde_json::to_vec(&expected).expect("independent expected line");
+    line.push(b'\n');
+    assert!(
+        !tail.is_empty() && tail.len() < line.len() - 1 && line.starts_with(tail),
+        "{row}: non-empty strict prefix of the expected serialized record"
+    );
+    assert!(
+        serde_json::from_slice::<Value>(tail).is_err(),
+        "{row}: incomplete JSON, not a complete record missing its newline"
+    );
 }
 
 fn appended_intent(state: &JournalV2, records: &[Value], row: &str) {
@@ -177,6 +235,12 @@ fn retained_decisions(state: &JournalV2, row: &str) {
 }
 
 fn deferred_restore(state: &JournalV2, records: &[Value], row: &str) {
+    // D5 seeds `WRITER` with `SAVE`, counter 3 and no attribution. The unresolved
+    // writer's `left_to_recovery` fields follow `terminal_blocks_finish`.
+    const DEFERRED: &[u8] =
+        br#"{"intent_counter":3,"kind":"settle.save","reason":"left_to_recovery"}"#;
+    // Independently hashed sorted caller JSON, including `event` and `token`.
+    const CALLER_DIGEST: &str = "f8abe00b275ed19a921bc3df65c48b0e99de7dcca53aa4b22d7276bd028348ea";
     let pending = state.pending.as_ref().expect("unresolved Restore at D5");
     assert_eq!(pending.action, Action::Restore, "{row}: pending Restore");
     assert!(
@@ -196,6 +260,21 @@ fn deferred_restore(state: &JournalV2, records: &[Value], row: &str) {
         .collect();
     assert_eq!(deferred.len(), 1, "{row}: one persisted deferred record");
     let (owner, record) = deferred[0];
+    assert_eq!(owner.intent_id.0, WRITER, "{row}: deferred writer token");
+    assert_eq!(
+        owner.intent_counter,
+        Some(3),
+        "{row}: writer intent counter"
+    );
+    assert_eq!(
+        record.payload_json, DEFERRED,
+        "{row}: independent deferred journal payload"
+    );
+    assert_eq!(record.attribution, None, "{row}: deferred attribution");
+    assert_eq!(
+        record.caller_digest, CALLER_DIGEST,
+        "{row}: independent deferred journal caller digest"
+    );
     assert!(
         record.delivered,
         "{row}: deferred acknowledgement durably flagged"
@@ -204,12 +283,13 @@ fn deferred_restore(state: &JournalV2, records: &[Value], row: &str) {
         .iter()
         .find(|r| r["token"] == owner.intent_id.0 && r["event"] == Role::Deferred.event())
         .expect("deferred record appended before flag");
-    assert_payload(
-        landed,
-        &owner.intent_id.0,
-        Role::Deferred,
-        &record.payload_json,
-        row,
+    assert_payload(landed, WRITER, Role::Deferred, DEFERRED, row);
+    let caller = caller_view(landed.as_object().expect(row));
+    let caller_bytes = serde_json::to_vec(&caller).expect(row);
+    assert_eq!(
+        hex::encode(Sha256::digest(&caller_bytes)),
+        CALLER_DIGEST,
+        "{row}: independent deferred log caller digest"
     );
 }
 

@@ -439,6 +439,7 @@ impl TransparencyLogger {
     #[cfg(test)]
     fn injected_write(&self, inner: &mut Inner, bytes: &[u8]) -> Option<io::Result<()>> {
         use super::rotation::WriteFault;
+        use std::sync::atomic::Ordering;
         let stall = self.hooks.stall.lock().unwrap().take();
         if let Some(gate) = stall {
             gate.hold(); // held under `Inner`, like a write stuck in the kernel
@@ -446,9 +447,7 @@ impl TransparencyLogger {
         let fault = *self.hooks.fault.lock().unwrap();
         if fault == Some(WriteFault::WriteError) {
             *self.hooks.fault.lock().unwrap() = None;
-            self.hooks
-                .fault_fired
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.hooks.fault_fired.fetch_add(1, Ordering::AcqRel);
             return Some(Err(io::Error::other("injected write failure")));
         }
         let full = match fault {
@@ -462,10 +461,13 @@ impl TransparencyLogger {
         if !full {
             return None;
         }
-        self.hooks
-            .fault_fired
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        self.hooks.fault_fired.fetch_add(1, Ordering::AcqRel);
+        self.note_partial_write_trace(bytes);
         let _ = inner.file.write_all(&bytes[..bytes.len() / 2]);
+        let after_partial_write = self.hooks.after_partial_write.lock().unwrap().take();
+        if let Some(callback) = after_partial_write {
+            callback();
+        }
         Some(Err(io::Error::from(io::ErrorKind::StorageFull)))
     }
 

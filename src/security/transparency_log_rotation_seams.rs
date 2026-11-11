@@ -113,6 +113,10 @@ pub(crate) struct TestHooks {
     /// Holds settle's blocking task before it starts.
     pub(crate) settle_start: std::sync::Mutex<Option<std::sync::Arc<StallGate>>>,
     pub(crate) fault_fired: std::sync::atomic::AtomicUsize,
+    /// Envelope evidence only; D7 reconstructs caller fields and the hash independently.
+    pub(crate) partial_write_trace: std::sync::Mutex<Option<String>>,
+    /// Runs once after a partial write, before `write_line` can call `cut_back`.
+    pub(crate) after_partial_write: std::sync::Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     pub(crate) clock_offset: std::sync::atomic::AtomicI64,
     /// F20: the next write blocks on this gate (a stalled filesystem).
     pub(crate) stall: std::sync::Mutex<Option<std::sync::Arc<StallGate>>>,
@@ -133,10 +137,22 @@ impl super::super::TransparencyLogger {
     pub(crate) fn arm_write_fault(&self, fault: Option<WriteFault>) {
         *self.hooks.fault.lock().unwrap() = fault;
     }
+    pub(crate) fn arm_after_partial_write(&self, callback: Option<Box<dyn Fn() + Send + Sync>>) {
+        *self.hooks.after_partial_write.lock().unwrap() = callback;
+    }
     pub(crate) fn write_faults_fired(&self) -> usize {
         self.hooks
             .fault_fired
             .load(std::sync::atomic::Ordering::Acquire)
+    }
+    pub(crate) fn note_partial_write_trace(&self, bytes: &[u8]) {
+        let record: serde_json::Value = serde_json::from_slice(bytes).expect("faulted record");
+        *self.hooks.partial_write_trace.lock().unwrap() =
+            record["trace_id"].as_str().map(str::to_owned);
+    }
+    #[cfg(unix)]
+    pub(crate) fn partial_write_trace_for_test(&self) -> Option<String> {
+        self.hooks.partial_write_trace.lock().unwrap().clone()
     }
     pub(crate) fn set_clock_offset(&self, secs: i64) {
         self.hooks

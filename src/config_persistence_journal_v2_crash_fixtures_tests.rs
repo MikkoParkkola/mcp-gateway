@@ -22,6 +22,8 @@ use super::fixtures::{payload, records_at};
 use crate::config_persistence::commit::{Action, FileRevision, SyncKey};
 use crate::config_persistence::crash_fs::{self, Mode};
 use crate::config_persistence::journal::{self, fault as a_fault};
+#[cfg(unix)]
+use crate::security::transparency_log::rotation::WriteFault;
 use crate::security::transparency_log::settle::{Reason, Role};
 #[cfg(unix)]
 use crate::security::transparency_log::{
@@ -196,6 +198,32 @@ pub(super) fn child(row: &str, at: At) -> bool {
     let watch = observe::watch(&path);
     observe::plan_tokens(&path, state_of(&owner));
     let armed = (!recover).then(|| fault::arm(&path, Fault::Kill(at)));
+    if row == "crash_d7" && !recover {
+        log.arm_write_fault(Some(WriteFault::FullForever));
+        assert_eq!(log.write_faults_fired(), 0, "{row}: arming is not firing");
+        let probe = Arc::clone(&log);
+        armed
+            .as_ref()
+            .expect("D7 kill registered")
+            .before_kill(Arc::new(move |captured| {
+                let fired = probe.write_faults_fired();
+                assert!(fired > 0, "crash_d7: partial write fired before kill");
+                captured.write_faults = Some(fired);
+                captured.partial_write_trace = Some(
+                    probe
+                        .partial_write_trace_for_test()
+                        .expect("crash_d7: partial-write envelope witnessed"),
+                );
+                eprintln!("crash_d7: pre-kill write_faults={fired}");
+            }));
+        // The drain only makes the real B call for the retained unacknowledged intent.
+        // Kill inside the logger after its half-write, before `write_line` can cut back;
+        // no D7-specific kill call belongs in the drain's post-error path.
+        let target = path.clone();
+        log.arm_after_partial_write(Some(Box::new(move || {
+            fault::hit(&target, At::AfterTornWrite).expect("D7 partial-write kill boundary");
+        })));
+    }
     let a_failure = (!recover).then(|| restore_sync_fault(&path, row));
     let result = runtime(JournalDrain::run(owner, Some(log)));
     if recover {

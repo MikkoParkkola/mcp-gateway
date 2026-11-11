@@ -19,6 +19,7 @@ pub(super) enum At {
     DecisionPersisted,
     OutcomeAppended,
     DeferredFlagged,
+    /// Fired inside the logger's partial-write callback, before `write_line` returns.
     AfterTornWrite,
     RepairPaused,
 }
@@ -34,7 +35,10 @@ pub(super) enum Fault {
 struct Entry {
     fault: Fault,
     fired: usize,
+    before_kill: Option<KillWitness>,
 }
+
+type KillWitness = Arc<dyn Fn(&mut Captured) + Send + Sync>;
 
 static FAULTS: Mutex<Option<HashMap<PathBuf, Entry>>> = Mutex::new(None);
 
@@ -45,8 +49,29 @@ pub(super) fn arm(path: &Path, fault: Fault) -> Armed {
         .lock()
         .expect("fault registry")
         .get_or_insert_with(HashMap::new)
-        .insert(path.to_path_buf(), Entry { fault, fired: 0 });
+        .insert(
+            path.to_path_buf(),
+            Entry {
+                fault,
+                fired: 0,
+                before_kill: None,
+            },
+        );
     Armed(path.to_path_buf())
+}
+
+impl Armed {
+    /// Register evidence to check at the actual kill boundary, without firing it.
+    #[cfg(unix)]
+    pub(super) fn before_kill(&self, witness: KillWitness) {
+        FAULTS
+            .lock()
+            .expect("fault registry")
+            .as_mut()
+            .and_then(|entries| entries.get_mut(&self.0))
+            .expect("armed kill boundary")
+            .before_kill = Some(witness);
+    }
 }
 
 pub(super) fn fired(path: &Path) -> usize {
@@ -58,9 +83,10 @@ pub(super) fn fired(path: &Path) -> usize {
         .map_or(0, |entry| entry.fired)
 }
 
-/// Called by real implementation boundaries; neither arming nor a stub calls it.
+/// Called at real operation boundaries; neither arming nor a stub calls it.
+/// D7's `AfterTornWrite` is fired by the logger callback, never by a drain error path.
 pub(super) fn hit(path: &Path, at: At) -> Result<(), JournalError> {
-    let fault = {
+    let (fault, before_kill) = {
         let mut entries = FAULTS.lock().expect("fault registry");
         let Some(entry) = entries.as_mut().and_then(|entries| entries.get_mut(path)) else {
             return Ok(());
@@ -73,12 +99,16 @@ pub(super) fn hit(path: &Path, at: At) -> Result<(), JournalError> {
             return Ok(());
         }
         entry.fired += 1;
-        entry.fault.clone()
+        (entry.fault.clone(), entry.before_kill.clone())
     };
     observe::note(path, event(at));
     match fault {
         Fault::Kill(_) => {
-            let captured = serde_json::to_vec(&capture(path)).expect("pre-kill inventory");
+            let mut captured = capture(path);
+            if let Some(witness) = before_kill {
+                witness(&mut captured);
+            }
+            let captured = serde_json::to_vec(&captured).expect("pre-kill inventory");
             std::fs::write(path.with_extension("s6a2-seam"), captured).expect("crash seam witness");
             std::process::abort();
         }
@@ -180,6 +210,8 @@ fn decision_boundary(path: &Path, state: &JournalV2, at: At) -> Result<(), Journ
 pub(super) struct Captured {
     pub(super) tokens: Vec<String>,
     pub(super) computations: usize,
+    pub(super) write_faults: Option<usize>,
+    pub(super) partial_write_trace: Option<String>,
 }
 
 fn capture(path: &Path) -> Captured {
@@ -189,5 +221,7 @@ fn capture(path: &Path) -> Captured {
             .iter()
             .filter(|event| **event == Event::DecisionComputed)
             .count(),
+        write_faults: None,
+        partial_write_trace: None,
     }
 }
