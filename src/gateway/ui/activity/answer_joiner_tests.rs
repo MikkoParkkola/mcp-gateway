@@ -10,6 +10,7 @@ use super::answer_fixture::{Dl, Fixture};
 use super::answer_list_tests::{get, row_of};
 use super::joiner::{Joiner, Seen};
 use super::reader::{Line, Which};
+use super::rows::Check;
 use crate::security::audit::{AuditEnvelope, AuditWho};
 use crate::security::transparency_log::recompute_entry_hash;
 
@@ -47,12 +48,14 @@ fn call_line() -> Line {
         log: Which::Invocation,
         entry: json!({"counter": 1, "trace_id": "gw-t", "request_hash": "sha256:aa"}),
         segment: 0,
+        span: None,
     }
 }
 
 #[test]
 fn r44b_the_window_is_finished_by_carried_bytes_not_by_a_reset() {
-    let mut carried = Joiner::new(None);
+    let carried_check = Check::bare(None);
+    let mut carried = Joiner::new(&carried_check);
     let far = Seen {
         above: 300 * 1024,
         head_covered: false,
@@ -61,7 +64,8 @@ fn r44b_the_window_is_finished_by_carried_bytes_not_by_a_reset() {
     carried.count(&joined);
     assert_eq!(joined, Joined::NoRecord(Searched::Finished));
     assert_eq!(carried.join_incomplete, 0);
-    let mut reset = Joiner::new(None);
+    let reset_check = Check::bare(None);
+    let mut reset = Joiner::new(&reset_check);
     let near = Seen {
         above: 10,
         head_covered: false,
@@ -112,6 +116,7 @@ fn delivery_line(trace: &str, findings: &serde_json::Value) -> Line {
         log: Which::Invocation,
         entry,
         segment: 0,
+        span: None,
     }
 }
 
@@ -119,7 +124,8 @@ fn delivery_line(trace: &str, findings: &serde_json::Value) -> Line {
 /// contract, so an unfinished window never downgrades it.
 #[test]
 fn r7c_a_found_record_stays_found_when_the_window_is_unfinished() {
-    let mut joiner = Joiner::new(None);
+    let joiner_check = Check::bare(None);
+    let mut joiner = Joiner::new(&joiner_check);
     assert!(joiner.observe(&delivery_line("gw-t", &json!([]))));
     let near = Seen {
         above: 10,
@@ -144,7 +150,8 @@ fn listed(joined: Joined) -> Vec<serde_json::Value> {
 
 #[test]
 fn findings_are_projected_through_kind_severity_and_where_only() {
-    let mut joiner = Joiner::new(None);
+    let joiner_check = Check::bare(None);
+    let mut joiner = Joiner::new(&joiner_check);
     let findings = json!([
         {"kind": "k", "severity": "low", "where": "text", "payload": "a pasted secret"},
         {"kind": {"deep": "object"}, "severity": "high", "where": "text"},
@@ -167,7 +174,8 @@ fn findings_are_projected_through_kind_severity_and_where_only() {
 
 #[test]
 fn a_finding_field_is_capped_so_the_projection_stays_bounded() {
-    let mut joiner = Joiner::new(None);
+    let joiner_check = Check::bare(None);
+    let mut joiner = Joiner::new(&joiner_check);
     let long = "k".repeat(10_000);
     let findings = json!([{"kind": long, "severity": "low", "where": "text"}]);
     joiner.observe(&delivery_line("gw-t", &findings));
@@ -182,7 +190,8 @@ fn a_finding_field_is_capped_so_the_projection_stays_bounded() {
 
 #[test]
 fn a_finding_field_keeps_the_first_128_characters_not_bytes() {
-    let mut joiner = Joiner::new(None);
+    let joiner_check = Check::bare(None);
+    let mut joiner = Joiner::new(&joiner_check);
     let text: String = "é日🦀a".chars().cycle().take(200).collect();
     let findings = json!([{"kind": text, "severity": text, "where": text}]);
     joiner.observe(&delivery_line("gw-t", &findings));

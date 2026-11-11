@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use super::answer::{Delivery, Effect, Findings, Joined, RECEIPT_SCAN, Searched, Why};
 use super::joiner::{Joiner, Seen};
 use super::reader::{Line, Which};
+use super::rows::Check;
 use super::seek::{Found, segments};
 use super::strict_scan::{Forward, Next};
 use crate::security::transparency_log::pager::open_segment;
@@ -63,10 +64,10 @@ pub(super) fn scan(
     log: &Path,
     found: &Found,
     call: &Line,
-    secret: Option<&[u8]>,
+    check: &Check<'_>,
 ) -> io::Result<Scanned> {
     let trace = call.entry.get("trace_id").and_then(Value::as_str);
-    let mut joiner = Joiner::new(secret);
+    let mut joiner = Joiner::new(check);
     let mut out = Scanned {
         joined: Joined::NoRecord(Searched::Finished),
         records: Vec::new(),
@@ -86,11 +87,14 @@ pub(super) fn scan(
             break;
         };
         let mut forward = Forward::open(file, offset, RECEIPT_SCAN - out.bytes)?;
+        let mut at = offset;
         let ended = loop {
             let bytes = match forward.next_line()? {
                 Next::Line(bytes) => bytes,
                 other => break other,
             };
+            let span = Some((at, bytes.len() as u64));
+            at += bytes.len() as u64 + 1;
             out.lines += 1;
             let Ok(entry @ Value::Object(_)) = serde_json::from_slice::<Value>(&bytes) else {
                 // A complete line that is no record is a break, never a skip.
@@ -111,6 +115,7 @@ pub(super) fn scan(
                     log: Which::Invocation,
                     entry: entry.clone(),
                     segment: seq,
+                    span,
                 };
                 joiner.observe(&line);
             }
@@ -149,7 +154,7 @@ pub(super) fn scan(
 }
 
 const UNVERIFIABLE: &str =
-    "this gateway holds no log secret, so it cannot vouch for the delivery record";
+    "this gateway cannot verify the delivery record's signature, so it cannot vouch for the record";
 
 fn found_line(d: &Delivery) -> String {
     let effect = d.effect.as_str();

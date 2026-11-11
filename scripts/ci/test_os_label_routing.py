@@ -78,6 +78,10 @@ def routing_errors(jobs: dict) -> list[str]:
                 errors.append(f"{case}: the label changes {sorted(got ^ unlabelled)}")
             continue
         want = (unlabelled - LABEL_JOBS) | (simulate(jobs, train) & LABEL_JOBS)
+        # On a train the macOS aggregate is skipped (merge-train judges its shards from the base rules); a
+        # labelled lane has no merge-train behind it, so it runs the aggregate with the train's shards.
+        if "macos-shards" in want:
+            want |= {"macos-check"}
         if got != want:
             errors.append(f"{case}: labelled runs {sorted(got - want)} it should not, "
                           f"skips {sorted(want - got)} it should run")

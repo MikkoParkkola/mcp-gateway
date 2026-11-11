@@ -53,6 +53,9 @@ pub(super) struct Line {
     pub(super) log: Which,
     pub(super) entry: Value,
     pub(super) segment: u64,
+    /// The line's start and length in its segment, newline excluded; `None`
+    /// for a record the writer just announced, which follows every anchor.
+    pub(super) span: Option<(u64, u64)>,
 }
 
 /// A line that is not a JSON entry: a hand-edited log, or one over the record
@@ -175,6 +178,7 @@ impl LogTail {
                     log: self.which,
                     entry,
                     segment: self.segment,
+                    span: Some((offset, bytes.len() as u64)),
                 },
                 above - offset,
             ),
@@ -205,7 +209,6 @@ impl LogTail {
                     continue;
                 }
                 let item = self.item_of(&bytes, offset, above);
-                self.advanced = true;
                 return Ok(Some((item, above)));
             }
             if self.done {
@@ -516,9 +519,13 @@ fn look_above(
         previous = Some(seq);
         let offset = if seq == pos.segment { pos.offset } else { 0 };
         let mut forward = Forward::open(file, offset, budget - above)?;
+        let mut at = offset;
         let ended = loop {
             match forward.next_line()? {
-                Next::Line(bytes) => fold_line(&bytes, seq, fold),
+                Next::Line(bytes) => {
+                    fold_line(&bytes, seq, at, fold);
+                    at += bytes.len() as u64 + 1;
+                }
                 other => break other,
             }
         };
@@ -546,12 +553,13 @@ fn seg_last(inv: &Path) -> io::Result<Option<u64>> {
     Ok(segments(inv)?.last().copied())
 }
 
-fn fold_line(bytes: &[u8], segment: u64, fold: &mut dyn FnMut(&Line)) {
+fn fold_line(bytes: &[u8], segment: u64, offset: u64, fold: &mut dyn FnMut(&Line)) {
     if let Ok(entry @ Value::Object(_)) = serde_json::from_slice::<Value>(bytes) {
         fold(&Line {
             log: Which::Invocation,
             entry,
             segment,
+            span: Some((offset, bytes.len() as u64)),
         });
     }
 }

@@ -17,8 +17,8 @@ use super::answer::{
     DELIVERY_WINDOW, Delivery, Effect, Findings, Joined, MAX_EVICTED, MAX_PENDING, Searched, Why,
 };
 use super::reader::{Line, Which};
-use super::rows::kind_of;
-use crate::security::transparency_log::signature::{SignatureState, signature_state};
+use super::rows::{Check, kind_of};
+use crate::security::transparency_log::signature::SignatureState;
 
 pub(super) use super::reader::Seen;
 
@@ -29,9 +29,8 @@ enum Held {
 }
 
 /// The join state of one read.
-#[derive(Default)]
-pub(super) struct Joiner {
-    secret: Option<Vec<u8>>,
+pub(super) struct Joiner<'a, 's> {
+    check: &'a Check<'s>,
     pending: HashMap<String, Held>,
     /// Insertion order of `pending`, oldest first.
     order: VecDeque<String>,
@@ -90,22 +89,30 @@ fn project(entry: &Value, unverifiable: bool) -> Delivery {
     }
 }
 
-impl Joiner {
-    pub(super) fn new(secret: Option<&[u8]>) -> Self {
+impl<'a, 's> Joiner<'a, 's> {
+    pub(super) fn new(check: &'a Check<'s>) -> Self {
         Self {
-            secret: secret.map(<[u8]>::to_vec),
-            ..Self::default()
+            check,
+            pending: HashMap::new(),
+            order: VecDeque::new(),
+            evicted: HashMap::new(),
+            overflowed: false,
+            join_incomplete: 0,
+            answer_integrity_failed: 0,
         }
     }
 
     /// The trust rule: `Err` is why the record cannot be believed; `Ok(true)`
-    /// is a record nothing can vouch for (no secret configured).
-    fn trust(&self, entry: &Value) -> Result<bool, Why> {
-        match (signature_state(entry, self.secret.as_deref()), &self.secret) {
-            (SignatureState::Invalid, _) => Err(Why::Invalid),
-            (SignatureState::Unsigned, Some(_)) => Err(Why::Unsigned),
-            (SignatureState::Valid, _) => Ok(false),
-            _ => Ok(true),
+    /// is a record whose signature cannot be verified by this gateway.
+    fn trust(&self, line: &Line) -> Result<bool, Why> {
+        let judged = self.check.judge(line);
+        match judged.state {
+            SignatureState::Invalid if judged.integrity == Some("sig_missing") => {
+                Err(Why::Unsigned)
+            }
+            SignatureState::Invalid => Err(Why::Invalid),
+            SignatureState::Valid => Ok(false),
+            SignatureState::Unsigned | SignatureState::SignedUnverifiable => Ok(true),
         }
     }
 
@@ -118,7 +125,7 @@ impl Joiner {
         let Some(trace) = str_of(&line.entry, "trace_id") else {
             return false;
         };
-        match self.trust(&line.entry) {
+        match self.trust(line) {
             Err(why) => self.hold_bad(trace, why),
             Ok(unverifiable) => {
                 let is_delivery = str_of(&line.entry, "event") == Some("response_delivery_attempt")
@@ -132,7 +139,7 @@ impl Joiner {
     }
 }
 
-impl Joiner {
+impl Joiner<'_, '_> {
     /// A record that cannot be believed poisons its trace.
     fn hold_bad(&mut self, trace: &str, why: Why) {
         if let Some(reason) = self.evicted.get_mut(trace) {

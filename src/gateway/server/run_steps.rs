@@ -210,14 +210,41 @@ impl Gateway {
     pub(super) fn start_key_server(
         &self,
         shutdown_tx: &tokio::sync::broadcast::Sender<()>,
+        data_dir: &std::path::Path,
+        audit_log: Option<&Arc<crate::security::TransparencyLogger>>,
     ) -> Result<Option<Arc<KeyServer>>> {
         let step = if self.config.key_server.enabled {
             let mut ks_config = self.config.key_server.clone();
             // Resolve admin token (expand env:VAR_NAME)
             ks_config.admin_token = ks_config.resolve_admin_token(self.env.startup())?;
 
+            // The audit log is where a lost email-hash key leaves its trace:
+            // without it a missing key file would be replaced silently.
+            let Some(audit_log) = audit_log else {
+                return Err(crate::Error::Config(
+                    "key_server.enabled needs the audit log: set \
+                     security.transparency_log.enabled: true with a writable path (the \
+                     log records the email-hash key, so a lost key file is refused, never \
+                     replaced silently)"
+                        .to_owned(),
+                ));
+            };
+            let mut configured = ks_config.resolve_audit_email_hmac(self.env.startup())?;
+            let log_path = audit_log.path();
+            let email_key = crate::key_server::email_hmac_store::resolve(
+                data_dir,
+                configured.as_deref(),
+                || crate::key_server::email_hmac_store::history_in(&log_path),
+                |key_id| crate::key_server::email_hmac_store::record_creation(audit_log, key_id),
+            );
+            // The resolved secret text is no longer needed once decoded.
+            if let Some(text) = configured.as_mut() {
+                zeroize::Zeroize::zeroize(text);
+            }
+            let email_key = email_key.map_err(crate::Error::ConfigValidation)?;
+
             let cleanup_interval = std::time::Duration::from_secs(ks_config.cleanup_interval_secs);
-            let ks = Arc::new(KeyServer::new(ks_config));
+            let ks = Arc::new(KeyServer::new(ks_config, Arc::new(email_key)));
 
             spawn_reaper(
                 Arc::clone(&ks.store),

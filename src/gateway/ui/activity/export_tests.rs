@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::{CAPS, Caps, Collected, collect, csv, csv_size, ndjson, ndjson_size};
 use crate::gateway::ui::activity::access::Access;
-use crate::gateway::ui::activity::rows::Filter;
+use crate::gateway::ui::activity::rows::{Check, Filter};
 use crate::gateway::ui::activity::{ExportQuery, Logs, export_response};
 use crate::security::audit_rotation_config::RotationConfig;
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
@@ -60,7 +60,7 @@ fn all(path: &Path, caps: Caps, size: fn(&Value) -> usize) -> Collected {
         None,
         &Filter::default(),
         &Access::All,
-        Some(SECRET.as_bytes()),
+        &Check::bare(Some(SECRET.as_bytes())),
         caps,
         size,
     )
@@ -258,7 +258,7 @@ fn e5_each_cap_cuts_where_it_says_and_names_itself() {
             ..Filter::default()
         },
         &Access::All,
-        None,
+        &Check::bare(None),
         Caps {
             scan: 1 << 20,
             ..CAPS
@@ -358,7 +358,7 @@ fn manifest_counters_are_per_source_log() {
         Some(&gov),
         &Filter::default(),
         &Access::All,
-        None,
+        &Check::bare(None),
         CAPS,
         ndjson_size,
     )
@@ -449,7 +449,7 @@ fn a_reset_between_passes_aborts_instead_of_mixing_traversals() {
         None,
         &Filter::default(),
         &Access::All,
-        None,
+        &Check::bare(None),
         CAPS,
         ndjson_size,
     );
@@ -502,6 +502,7 @@ fn the_whole_download_stays_within_the_byte_cap() {
         truncated: super::Truncated::Bytes,
         join_incomplete: 0,
         answer_integrity_failed: 0,
+        signing_anchor: ["no_secret"; 2],
     })
     .len();
     assert!(header_and_end <= super::csv_framing());

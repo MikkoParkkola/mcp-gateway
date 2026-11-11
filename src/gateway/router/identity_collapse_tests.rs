@@ -142,6 +142,7 @@ async fn gateway(idp: &Idp) -> (Arc<AppState>, crate::gateway::router::tests::Fi
             config.policies.clone(),
         )),
         config,
+        email_key: crate::key_server::email_hash::EmailHashKey::for_test(),
     };
     let auth = AuthConfig {
         enabled: true,
@@ -242,10 +243,13 @@ async fn unverifiable_input_on_a_public_path_keeps_the_public_fall_through() {
 /// A key server holding `tokens`: (bearer, subject, email) triples, all from
 /// the one issuer, all live.
 async fn key_server_with(tokens: &[(&str, &str, &str)]) -> Arc<KeyServer> {
-    let ks = KeyServer::new(KeyServerConfig {
-        enabled: true,
-        ..KeyServerConfig::default()
-    });
+    let ks = KeyServer::new(
+        KeyServerConfig {
+            enabled: true,
+            ..KeyServerConfig::default()
+        },
+        crate::key_server::email_hash::EmailHashKey::for_test(),
+    );
     for (bearer, subject, email) in tokens {
         let mut token = stored(bearer, subject);
         token.identity = token.identity.clone().with_email(*email);

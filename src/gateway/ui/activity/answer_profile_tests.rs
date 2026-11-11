@@ -13,7 +13,7 @@ use super::answer_export_tests::signer;
 use super::export::{CAPS, collect, ndjson, ndjson_size};
 use super::joiner::{Joiner, Seen};
 use super::reader::{Limits, Look, read_page_joined};
-use super::rows::{Filter, kind_of};
+use super::rows::{Check, Filter, kind_of};
 use super::{Access, answer_fixture::Fixture};
 use crate::gateway::alloc_meter::{Measured, measure};
 
@@ -31,7 +31,8 @@ fn report(name: &str, run: u32, m: Measured, rows: u64) {
 
 /// The whole log read newest first, `keep` deciding nothing is a match.
 pub(super) fn scan(fx: &Fixture, fold: bool) {
-    let joiner = RefCell::new(Joiner::new(None));
+    let check = Check::bare(None);
+    let joiner = RefCell::new(Joiner::new(&check));
     let limits = Limits {
         matches: 100,
         bytes: 512 << 20,
@@ -73,7 +74,7 @@ fn m2_profile_phases_of_a_ten_thousand_row_export() {
                 None,
                 &Filter::default(),
                 &Access::All,
-                None,
+                &Check::bare(None),
                 CAPS,
                 ndjson_size,
             )
@@ -99,7 +100,8 @@ fn m2_profile_phases_of_a_ten_thousand_row_export() {
 fn m2_profile_passes_and_row_build() {
     use super::answer::Joined;
     let fx = over_caps(10_000, false);
-    let joiner = RefCell::new(Joiner::new(None));
+    let check = Check::bare(None);
+    let joiner = RefCell::new(Joiner::new(&check));
     let mut carried = Seen {
         above: 0,
         head_covered: true,
@@ -168,13 +170,13 @@ fn m2_profile_passes_and_row_build() {
     let rows = kept.len() as u64;
     let ((), m) = measure(|| {
         for (line, answer) in &kept {
-            drop(super::rows::row(line, None, answer));
+            drop(super::rows::row(line, &check, answer));
         }
     });
     report("row() over the kept lines", 1, m, rows);
     let built: Vec<_> = kept
         .iter()
-        .filter_map(|(l, j)| super::rows::row(l, None, j))
+        .filter_map(|(l, j)| super::rows::row(l, &check, j))
         .collect();
     let ((), m) = measure(|| {
         for r in &built {

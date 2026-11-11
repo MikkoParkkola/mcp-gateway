@@ -38,6 +38,9 @@ pub(crate) struct UpstreamCapture {
     pub tool: String,
     pub arguments: Value,
     pub handle: String,
+    /// What the dispatch injected; `None` when its slot held nothing,
+    /// stored as missing.
+    pub dispatched: Option<crate::security::dispatched::Dispatched>,
 }
 
 /// Whether [`TaskExecutor::cancel_upstream_once`] awaits its send or detaches it.
@@ -148,6 +151,10 @@ impl TaskExecutor {
             tool: capture.tool,
             arguments: capture.arguments,
             operation_digest,
+            secret_fingerprint: Some(capture.dispatched.map_or_else(
+                || crate::security::dispatched::MISSING.to_owned(),
+                |dispatched| dispatched.stored(),
+            )),
         };
         // MIK-8407: the bindings the dispatch ran under, from the worker's
         // own log, go durable in the same write as the handle.
@@ -207,6 +214,8 @@ impl TaskExecutor {
             tool: job.tool.clone(),
             arguments: job.arguments.clone(),
             operation_digest,
+            // A cancel offer: a cancelled task is never delivered.
+            secret_fingerprint: Some(crate::security::dispatched::MISSING.to_owned()),
         })
     }
 
@@ -319,6 +328,9 @@ impl TaskExecutor {
         let handle = UpstreamHandle {
             backend: descriptor.backend.clone(),
             handle: descriptor.handle.clone(),
+            tool: descriptor.tool.clone(),
+            arguments: descriptor.arguments.clone(),
+            fingerprint: descriptor.secret_fingerprint.clone(),
         };
 
         // In the dispatch scope, so the gates' attribution notes travel with

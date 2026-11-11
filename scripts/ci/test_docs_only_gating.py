@@ -214,17 +214,22 @@ def macos_train_errors(jobs: dict) -> list[str]:
     if errors:
         return errors
     shards, check = jobs["macos-shards"], jobs["macos-check"]
+    # On a same-repo train into the release line the aggregate skips: merge-train judges its shards itself
+    # from the base rules (rollups_ok). Its shards still run there.
+    judged_by_merge_train = {"code train", "docs-only train", "scope failed on a train"}
     for label, (c, want) in cases.items():
         shards_ran = runs(shards, c)
         after = dict(c, needs=dict(c["needs"], **{"macos-shards": {
             "result": "success" if shards_ran else "skipped", "outputs": {}}}))
-        for job, ran in (("macos-shards", shards_ran), ("macos-check", runs(check, after))):
-            if ran != want:
-                errors.append(f"{job}: {label} {'skips' if want else 'runs'}")
-    # On a train, the aggregate runs whatever its shards did, so a failed or
-    # cancelled shard turns it red rather than leaving it skipped.
+        check_want = want and label not in judged_by_merge_train
+        for job, ran, w in (("macos-shards", shards_ran, want), ("macos-check", runs(check, after), check_want)):
+            if ran != w:
+                errors.append(f"{job}: {label} {'skips' if w else 'runs'}")
+    # Where the aggregate runs (a train into main stands in for every non-release-line train), it runs
+    # whatever its shards did, so a failed or cancelled shard turns it red rather than leaving it skipped.
     for result in ("failure", "cancelled"):
         c = as_train(ctx("pull_request", "success", "false"))
+        c["github"]["base_ref"] = "main"
         c = dict(c, needs=dict(c["needs"], **{"macos-shards": {"result": result, "outputs": {}}}))
         if not runs(check, c):
             errors.append(f"macos-check: a train with a {result} shard skips")
@@ -235,8 +240,8 @@ AGGREGATES = ("test", "windows-check", "macos-check", HEAVY_GATE)
 
 
 def aggregate_cancel_errors(jobs: dict) -> list[str]:
-    """On a train PR (where all four run) each aggregate runs after a
-    failed, skipped or green shard, but a cancelled run creates no aggregate:
+    """On an os-sensitive lane PR (where all four run; on a train merge-train judges them instead) each
+    aggregate runs after a failed, skipped or green shard, but a cancelled run creates no aggregate:
     always() created them after the cancel and left the run queued for a runner,
     holding the newer run in the concurrency group behind it."""
     errors = []
@@ -245,7 +250,8 @@ def aggregate_cancel_errors(jobs: dict) -> list[str]:
         needs = [needs] if isinstance(needs, str) else needs
         for result in ("success", "failure", "skipped"):
             for cancelled in (False, True):
-                c = as_train(ctx("pull_request", "success", "false"))
+                c = ctx("pull_request", "success", "false")
+                c["github"]["event"]["pull_request"]["labels"] = [{"name": "os-sensitive"}]
                 c["needs"] = {n: {"result": result, "outputs": {}} for n in needs}
                 c["_status"] = dict(c["_status"], cancelled=cancelled)
                 if runs(jobs[job], c) == cancelled:

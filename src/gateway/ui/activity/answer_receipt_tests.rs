@@ -9,7 +9,7 @@ use super::access::Access;
 use super::answer_fixture::{Dl, Fixture, SECRET};
 use super::reader::{Line, Which};
 use super::receipt::{parse_id, receipt};
-use super::rows::row_id;
+use super::rows::{Check, row_id};
 
 /// The receipt for the call carrying `trace`, with the fixture's secret.
 pub(super) fn rcpt(fx: &Fixture, trace: &str) -> Value {
@@ -26,11 +26,17 @@ pub(super) fn rcpt_with(fx: &Fixture, trace: &str, secret: Option<&[u8]>) -> Val
         log: Which::Invocation,
         entry: e.clone(),
         segment: 0,
+        span: None,
     };
     let id = parse_id(&row_id(&line).unwrap()).unwrap();
-    receipt(&fx.path, &id, &Access::All, secret)
-        .unwrap()
-        .unwrap()
+    receipt(
+        &fx.path,
+        &id,
+        &Access::All,
+        &Check::new(secret, &fx.path, None),
+    )
+    .unwrap()
+    .unwrap()
 }
 
 pub(super) fn line_of(receipt: &Value) -> String {
@@ -107,5 +113,7 @@ fn r33_receipt_says_this_gateway_cannot_vouch_without_a_secret() {
     fx.delivery("gw-t", &Dl::effect("delivered"));
     let r = rcpt_with(&fx, "gw-t", None);
     assert_eq!(r["answer_integrity"], "unverifiable");
-    assert!(line_of(&r).contains("this gateway holds no log secret, so it cannot vouch"));
+    assert!(line_of(&r).contains(
+        "this gateway cannot verify the delivery record's signature, so it cannot vouch"
+    ));
 }

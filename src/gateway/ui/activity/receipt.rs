@@ -13,7 +13,7 @@ use super::access::Access;
 use super::answer::{CHAIN_CHECKED, CHAIN_UNFINISHED, Joined, Searched};
 use super::reader::{Line, Which};
 use super::receipt_scan::{answer_block, scan};
-use super::rows::{Kind, findings_value, kind_of, row};
+use super::rows::{Check, Kind, findings_value, kind_of, row};
 use super::seek::{Reads, oldest_counter, seek};
 use crate::security::decision_record::{Decision, read};
 use crate::security::transparency_log::recompute_entry_hash;
@@ -163,7 +163,7 @@ pub(super) fn receipt(
     log: &Path,
     id: &RowId,
     access: &Access,
-    secret: Option<&[u8]>,
+    check: &Check<'_>,
 ) -> std::io::Result<Option<Value>> {
     let mut reads = Reads::default();
     let Some(found) = seek(log, id.counter, &mut reads)? else {
@@ -179,6 +179,7 @@ pub(super) fn receipt(
         log: id.log,
         entry: found.entry.clone(),
         segment: found.segment,
+        span: Some((found.offset, found.len)),
     };
     let Some(kind) = kind_of(&line) else {
         return Ok(None);
@@ -190,16 +191,17 @@ pub(super) fn receipt(
     // A call looks forward for its delivery record; no other kind has one,
     // a refusal included.
     let scanned = if kind == Kind::Call && id.log == Which::Invocation {
-        Some(scan(log, &found, &line, secret)?)
+        Some(scan(log, &found, &line, check)?)
     } else {
         None
     };
     let joined = scanned
         .as_ref()
         .map_or(Joined::NoRecord(Searched::NotACall), |s| s.joined.clone());
-    let Some(Value::Object(mut body)) = row(&line, secret, &joined) else {
+    let Some(Value::Object(mut body)) = row(&line, check, &joined) else {
         return Ok(None);
     };
+    body.insert("signing_anchor".into(), check.report(id.log).into());
     let e = &line.entry;
     body.insert(
         "chain".into(),

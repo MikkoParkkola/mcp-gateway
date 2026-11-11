@@ -11,6 +11,27 @@ use crate::config_reload::{ConfigWriteError, ReloadOutcome};
 
 use super::{EvaluatedReload, ReloadContext, STOPPED};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReloadRefusalKind {
+    Posture,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReloadRefusal {
+    pub(crate) kind: ReloadRefusalKind,
+    pub(crate) text: String,
+}
+
+impl From<String> for ReloadRefusal {
+    fn from(text: String) -> Self {
+        Self {
+            kind: ReloadRefusalKind::Other,
+            text,
+        }
+    }
+}
+
 impl ReloadContext {
     /// Take the reload lock, giving up after `wait`.
     ///
@@ -105,7 +126,7 @@ impl ReloadContext {
     pub(super) async fn reload_outcome_locked_at(
         &self,
         path: &std::path::Path,
-    ) -> std::result::Result<ReloadOutcome, String> {
+    ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         // Audits the overrides the registry holds however this ends: applied,
         // refused, or dropped at an await after registering backends.
         let _audit = (self.reporting.override_audit.as_deref()).map(|a| a.guard(&self.registry));
@@ -122,7 +143,7 @@ impl ReloadContext {
                 refusals.record(
                     crate::config_reload::refusals::RefusalKind::Reload,
                     None,
-                    refusal,
+                    &refusal.text,
                 );
                 self.reporting.tally.refused();
             }
@@ -147,7 +168,12 @@ impl ReloadContext {
         if self.reload_owed.load(SeqCst)
             && let Err(error) = self.reload_outcome_locked_at(target).await
         {
-            tracing::warn!(%error, path = %target.display(), "the reload owed after restoring gateway.yaml failed; it is retried on the next one");
+            let class = match crate::config_reload::reload_failure(&error.text) {
+                crate::config_reload::ReloadFailure::ShuttingDown => "shutting_down",
+                crate::config_reload::ReloadFailure::PostureRefused
+                | crate::config_reload::ReloadFailure::Internal => "internal",
+            };
+            tracing::warn!(kind = ?error.kind, class, "the reload owed after restoring gateway.yaml failed; it is retried on the next one");
         }
     }
 
@@ -161,5 +187,52 @@ impl ReloadContext {
             self.reload_owed
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ReloadRefusal, ReloadRefusalKind};
+    use crate::config_reload::reload_context::replace::{RefusalClass, post_write_class};
+
+    /// K3: oracle is Other with unchanged text; this control already passes.
+    #[test]
+    fn k3_string_is_other() {
+        let refusal = ReloadRefusal::from("neutral canary".to_owned());
+        assert_eq!(refusal.kind, ReloadRefusalKind::Other);
+        assert_eq!(refusal.text, "neutral canary");
+    }
+
+    /// K5: red oracle is Posture even when the text supplies no posture hint.
+    #[test]
+    fn k5_posture_kind_with_neutral_text() {
+        let refusal = ReloadRefusal {
+            kind: ReloadRefusalKind::Posture,
+            text: "neutral".into(),
+        };
+        assert_eq!(post_write_class(&refusal), RefusalClass::Posture);
+    }
+
+    /// K5: oracle is Internal despite posture-looking text; the stub passes.
+    #[test]
+    fn k5_other_kind_with_posture_text() {
+        let refusal = ReloadRefusal {
+            kind: ReloadRefusalKind::Other,
+            text: format!(
+                "{} refusing to serve HTTP",
+                crate::config_reload::POSTURE_REFUSED_PREFIX
+            ),
+        };
+        assert_eq!(post_write_class(&refusal), RefusalClass::Internal);
+    }
+
+    /// K5: red oracle is `ShuttingDown` for the shared shutdown literal.
+    #[test]
+    fn k5_other_kind_with_shutdown_text() {
+        let refusal = ReloadRefusal {
+            kind: ReloadRefusalKind::Other,
+            text: crate::config_reload::SHUTDOWN_ABORTED_ERROR.to_owned(),
+        };
+        assert_eq!(post_write_class(&refusal), RefusalClass::ShuttingDown);
     }
 }

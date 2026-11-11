@@ -47,6 +47,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     ("src/cli/invoke.rs", "reads stdin, not a file"),
     (
+        "src/commands/add_remove.rs",
+        "`add --env-file FILE`: the operator-named JSON of env values, read bounded (64 KiB + 1); the values go through the store rule, never echoed; not a gateway secret file",
+    ),
+    (
         "src/commands/doctor/lease_custody.rs",
         "doctor reads /proc/swaps and /sys/block/dm-*/dm/uuid; kernel tables, no secret",
     ),
@@ -191,6 +195,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "writability probe",
     ),
     (
+        "src/security/transparency_log_sigstart.rs",
+        "reads the audit log's own files: its signing anchor, `.hwm` and segments, to judge unsigned entries; no secret",
+    ),
+    (
         "src/health_history/file.rs",
         "the gateway's own health.json in its data directory: numbers and fixed words, never a client's data; nothing secret",
     ),
@@ -213,6 +221,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/gateway/meta_mcp/boundary_pins/shipped_reads.rs",
         "cfg(test) source scanner reading Cargo.toml and the crate's own sources for the MIK-8481 unshipped-read guard; no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/email_sinks.rs",
+        "cfg(test) scanner for the email-sink inventory, reading the crate's own sources; no secret",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/creation_sites.rs",

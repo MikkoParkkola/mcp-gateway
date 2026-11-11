@@ -15,9 +15,7 @@ use super::answer::{Joined, SCOPE_LABEL};
 use super::csv::{Cell, CsvWriter, Truncated};
 use super::joiner::Joiner;
 use super::reader::{Cursor, Limits, Line, Look, Seen, Which, read_page_joined};
-use super::rows::{Filter, Kind, NOT_A_CALL, kind_of, row};
-use crate::security::transparency_log::recompute_entry_hash;
-use crate::security::transparency_log::signature::{SignatureState, signature_state};
+use super::rows::{Check, Filter, Kind, NOT_A_CALL, kind_of, row};
 use crate::trust::provenance_public::{ACTIVITY_EXPORT_DOMAIN, ProvenancePublicSigner};
 
 /// The caps, whichever comes first.
@@ -49,8 +47,9 @@ const PASS: usize = 100;
 
 /// One exported row: the list row plus the entry's own chain and HMAC fields,
 /// and why its integrity failed, when it did.
-fn export_row(line: &Line, kind: Kind, secret: Option<&[u8]>, joined: &Joined) -> Option<Value> {
-    let Value::Object(mut r) = row(line, secret, joined)? else {
+fn export_row(line: &Line, kind: Kind, check: &Check<'_>, joined: &Joined) -> Option<Value> {
+    // The list row already names why integrity failed, when it did.
+    let Value::Object(mut r) = row(line, check, joined)? else {
         return None;
     };
     let e = &line.entry;
@@ -58,13 +57,6 @@ fn export_row(line: &Line, kind: Kind, secret: Option<&[u8]>, joined: &Joined) -
         if let Some(v) = e.get(key) {
             r.insert(key.into(), v.clone());
         }
-    }
-    let stored = e.get("entry_hash").and_then(Value::as_str);
-    let hash_ok = recompute_entry_hash(e).is_ok_and(|h| Some(h.as_str()) == stored);
-    if !hash_ok {
-        r.insert("integrity".into(), "hash_failed".into());
-    } else if signature_state(e, secret) == SignatureState::Invalid {
-        r.insert("integrity".into(), "sig_failed".into());
     }
     super::receipt::add_evidence(&mut r, kind, e);
     Some(Value::Object(r))
@@ -83,6 +75,9 @@ pub(super) struct Collected {
     pub(super) join_incomplete: usize,
     /// Calls whose delivery record failed the trust rule or was duplicated.
     pub(super) answer_integrity_failed: usize,
+    /// Each log's anchor state (invocation, governance), reported even when
+    /// no row fails, so a broken anchor is never a clean-looking export.
+    pub(super) signing_anchor: [&'static str; 2],
 }
 
 /// Read matching rows newest first until a cap. `size` is a row's encoded
@@ -92,11 +87,11 @@ pub(super) fn collect(
     gov: Option<&Path>,
     filter: &Filter,
     access: &Access,
-    secret: Option<&[u8]>,
+    check: &Check<'_>,
     caps: Caps,
     size: impl Fn(&Value) -> usize,
 ) -> std::io::Result<Collected> {
-    let joiner = std::cell::RefCell::new(Joiner::new(secret));
+    let joiner = std::cell::RefCell::new(Joiner::new(check));
     let answers = std::cell::RefCell::new(Vec::<Joined>::new());
     let mut keep = |line: &Line, seen: Seen| {
         let mut j = joiner.borrow_mut();
@@ -135,9 +130,13 @@ pub(super) fn collect(
         truncated: Truncated::None,
         join_incomplete: 0,
         answer_integrity_failed: 0,
+        signing_anchor: [Which::Invocation, Which::Governance].map(|w| check.report(w)),
     };
+    // The report is taken when the export ends, after every row was judged,
+    // so a legacy fault a row met is in it.
     let done = |mut c: Collected, truncated| {
         c.truncated = truncated;
+        c.signing_anchor = [Which::Invocation, Which::Governance].map(|w| check.report(w));
         Ok(c)
     };
     let mut bytes = 0_usize;
@@ -173,7 +172,7 @@ pub(super) fn collect(
             let Some(kind) = kind_of(line) else { continue };
             // A matched record that cannot be projected (no counter or hash)
             // is counted, never dropped silently.
-            let Some(r) = export_row(line, kind, secret, answer) else {
+            let Some(r) = export_row(line, kind, check, answer) else {
                 c.unreadable += 1;
                 continue;
             };
@@ -250,6 +249,16 @@ pub(super) fn ndjson(
         json!({"invocation": counters(Which::Invocation), "governance": counters(Which::Governance)}),
     );
     manifest.insert("integrity_failed".into(), integrity_failed.into());
+    let [inv, gov] = collected.signing_anchor;
+    manifest.insert(
+        "signing_anchor".into(),
+        json!({"invocation": inv, "governance": gov}),
+    );
+    let faults = [inv, gov]
+        .iter()
+        .filter(|a| !matches!(**a, "ok" | "no_secret" | "none"))
+        .count();
+    manifest.insert("anchor_faults".into(), faults.into());
     manifest.insert("unreadable".into(), collected.unreadable.into());
     manifest.insert("join_incomplete".into(), collected.join_incomplete.into());
     manifest.insert(
@@ -273,7 +282,7 @@ pub(super) fn ndjson(
 }
 
 /// The CSV columns, in order.
-const COLUMNS: [&str; 36] = [
+const COLUMNS: [&str; 37] = [
     "id",
     "kind",
     "counter",
@@ -298,6 +307,8 @@ const COLUMNS: [&str; 36] = [
     "http_status",
     "signature",
     "integrity",
+    // A legacy record nothing anchors.
+    "unanchored",
     "prev_entry_hash",
     "entry_hash",
     "sig",

@@ -81,6 +81,14 @@ module = "src/security/transparency_log_signature.rs"
 reason = "names an audit entry's signature state for display (valid, invalid, signed_unverifiable, unsigned) through the existing hash and HMAC checks; it reads, it refuses no request"
 
 [[coverage.not_a_control]]
+module = "src/security/transparency_log_sigstart.rs"
+reason = "the signing anchor of the transparency-log control: where signing began and a digest of the bytes before it, written at open and read by every Activity reader to judge an unsigned entry; it reads and records, it refuses no request; the control row names transparency_log.rs"
+
+[[coverage.not_a_control]]
+module = "src/security/transparency_log_sigstart_fixture.rs"
+reason = "compiled only under cfg(test): writes signed and v3-shaped logs and the file edits the signing-anchor rows attack them with; it never ships and refuses no request"
+
+[[coverage.not_a_control]]
 module = "src/security/transparency_log_temp.rs"
 reason = "compiled only under cfg(test): keeps a test's audit log and its sidecar files inside one temp dir; it never ships and refuses no request"
 
@@ -404,6 +412,13 @@ description = "a value a backend's secrets: rules injected is removed from every
 source = "src/security/needles.rs"
 probe = "none"
 reason = "needs a backend that echoes a value the gateway injected into its call; the caller leg cannot make a backend do that. Exercised by the echo rows over real transports (secret_echo_tests, the stdio and WebSocket scrub rows, the A2A needles rows) and their red proofs"
+
+[[control]]
+id = "deferred-task-secret-fingerprint"
+description = "a deferred upstream task is polled, settled and served only while the secrets its dispatch injected are what the backend injects now in this process: a keyed per-process fingerprint stored with the task is checked before the poll and on its answer, and a row with none is never served"
+source = "src/security/dispatched.rs"
+probe = "none"
+reason = "needs a backend that runs a call as an upstream task and echoes the injected value later; the caller leg cannot make a backend do that. Exercised by tests/task_upstream_echo_rotation.rs over real gateway processes (restart, rotation, absent fingerprint, control) and dispatched_tests"
 
 [[control]]
 id = "configured-credential-echo-redaction"

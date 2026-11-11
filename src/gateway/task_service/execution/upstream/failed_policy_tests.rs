@@ -185,6 +185,7 @@ async fn seed_capturable_task(
                         tool: TOOL.to_owned(),
                         arguments: json!({}),
                         handle: "upstream-handle-1".to_owned(),
+                        dispatched: Some(crate::security::dispatched::Dispatched::None),
                     },
                     Vec::new(),
                 ),

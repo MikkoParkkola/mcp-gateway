@@ -285,7 +285,8 @@ impl Gateway {
         self.test_seams.report_inflight(&inflight);
 
         // Create key server if enabled
-        let key_server = self.start_key_server(&shutdown_tx)?;
+        let key_server =
+            self.start_key_server(&shutdown_tx, &data_dir, transparency_log.as_ref())?;
 
         let agent_auth = self.build_agent_auth()?;
 
