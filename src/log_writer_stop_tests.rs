@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::test_sinks::{Accepted, Gate, WATCHDOG, line, parked, scripted, slow_parked};
+use super::test_sinks::{Accepted, Gate, WATCHDOG, line, notices, parked, scripted, slow_parked};
 use super::{FlushEnd, NoticeFormat, StopOutcome, spawn};
 
 fn soon() -> Instant {
@@ -172,6 +172,12 @@ fn a_send_in_flight_when_the_stop_begins_is_written_not_lost() {
         assert!(Instant::now() < until, "the stop never closed admission");
         thread::yield_now();
     }
+    // A writer that does not wait for the sender has exited well inside this
+    // grace; one that waits for it is still waiting when the grace ends.
+    let grace = Instant::now() + Duration::from_millis(300);
+    while !stopper.is_finished() && Instant::now() < grace {
+        thread::sleep(Duration::from_millis(5));
+    }
     gate.open();
     sender.join().expect("the sender returned");
     let outcome = stopper.join().expect("the stop returned");
@@ -214,14 +220,18 @@ fn a_parked_sender_and_a_full_queue_still_end_the_stop_at_the_deadline() {
     sender_gate.open();
     sink_gate.open();
     bounded(sender, "the sender");
-    assert!(
-        worker.join().is_ok(),
-        "the kept worker ends once everything moves"
-    );
-    assert_eq!(kept(&out), ["a", "b"]);
+    bounded(worker, "the kept worker");
+    let (notes, data): (Vec<String>, Vec<String>) =
+        kept(&out).into_iter().partition(|l| l.contains("dropped "));
+    assert_eq!(data, ["a", "b"]);
     assert_eq!(
         w.dropped_lines(),
         1,
         "the line that found a full queue is counted"
+    );
+    assert_eq!(
+        notices(&notes),
+        [1],
+        "and the writer reported it: {notes:?}"
     );
 }
