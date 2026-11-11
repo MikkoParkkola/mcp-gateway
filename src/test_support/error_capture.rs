@@ -9,8 +9,8 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-#[path = "interest.rs"]
-mod interest;
+// The one keeper lives in the library's log capture; this capture shares it.
+use crate::test_log_capture as interest;
 
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<Vec<u8>>>);
