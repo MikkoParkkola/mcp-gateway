@@ -8,9 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::security::TransparencyLogger;
-use crate::security::transparency_log::{
-    TransparencyLogConfig, VerifyMode, verify_audit_log,
-};
+use crate::security::transparency_log::{TransparencyLogConfig, VerifyMode, verify_audit_log};
 
 use crate::config::Config;
 

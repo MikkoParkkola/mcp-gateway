@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
-use crate::commands::config_write::CommentLoss;
 use crate::cli::{Cli, InitProfile};
+use crate::commands::config_write::CommentLoss;
 use crate::config::{BackendConfig, Config, TransportConfig};
 use crate::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 use crate::gateway::test_helpers::write_config_fixture;

@@ -250,7 +250,9 @@ fn s14_library_root_carries_the_macros_and_the_switch() {
         "src/lib.rs: the first module must be `#[macro_use] mod mutant_macro;`"
     );
     assert!(
-        file.items.iter().any(|item| matches!(item, syn::Item::Mod(m) if m.ident == "mutant")),
+        file.items
+            .iter()
+            .any(|item| matches!(item, syn::Item::Mod(m) if m.ident == "mutant")),
         "src/lib.rs declares no `mod mutant`"
     );
 }
