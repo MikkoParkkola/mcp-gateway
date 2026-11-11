@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The classic UI's buttons work for names that hold a quote, and no longer
+  build handlers from names.** A backend or capability name with a quote ended
+  the attribute of an inline handler, so its buttons stopped working. Names now
+  travel in `data-` attributes read by one delegated listener, `esc()` escapes
+  both quote characters, and every interpolation inside an attribute goes
+  through it. The unused capability editor, whose Save and Revert replaced the
+  capability page's own, is removed.
+  ([#4820](https://github.com/MikkoParkkola/mcp-gateway/pull/4820))
 - **Concurrent `npx` installs no longer break each other.** Every stdio
   backend whose command runs `npx`, `npm`, `pnpm`, `yarn` or `bunx` gets its
   own package-manager cache, keyed on its full name, in the variable each
