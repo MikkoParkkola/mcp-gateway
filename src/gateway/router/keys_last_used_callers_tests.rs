@@ -156,7 +156,11 @@ async fn t10c_an_oidc_request_writes_no_last_use() {
     ));
     let token = oidc_token();
     let bearer = token.token.clone();
-    key_server.store.insert(token).await;
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        token,
+    );
     let (state, _dir) = Box::pin(fixture(Some(key_server))).await;
     let before = seed(&state).await;
     let request = from_here(
