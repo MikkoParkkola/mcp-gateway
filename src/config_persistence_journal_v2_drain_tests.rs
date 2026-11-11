@@ -16,6 +16,7 @@ use crate::config_persistence::crash_fs::{self, Mode};
 use crate::config_persistence::journal;
 use crate::config_persistence::journal::drain::{DrainError, JournalDrain};
 use crate::config_persistence::lock;
+use crate::security::transparency_log::rotation::WriteFault;
 use crate::security::transparency_log::settle::Reason;
 
 #[test]
@@ -79,6 +80,46 @@ fn journal_first_intent() {
         "actor-only typed sink appends",
         || {
             super::delivery_cases::sink_contract(ROW);
+            Ok(())
+        },
+    );
+    assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
+}
+
+#[test]
+fn audit_sync_failure_not_acknowledged() {
+    const ROW: &str = "audit_sync_failure_not_acknowledged";
+    let mut failures = Vec::new();
+    collect_case(
+        &mut failures,
+        ROW,
+        "sync_error_keeps_flag_unset",
+        "append sync failure: no delivered flag, retry lands once",
+        || {
+            let live = Live::new();
+            let mut initial = state(&live.resolved);
+            attributed(&mut initial);
+            let mut owner = live.seed(initial, ROW);
+            live.log.arm_write_fault(Some(WriteFault::SyncError));
+            let failed = runtime(JournalDrain::deliver(&mut owner, &live.log));
+            assert!(failed.is_err(), "{ROW}: failed sync is not acknowledged");
+            reread(&mut owner);
+            let writer = state_of(&owner).writer.as_ref().expect(ROW);
+            assert!(
+                !writer.intent.delivered,
+                "{ROW}: no delivered flag without a synced append"
+            );
+            live.log.arm_write_fault(None);
+            retry(&mut owner, &live, ROW);
+            let writer = state_of(&owner).writer.as_ref().expect(ROW);
+            assert!(writer.intent.delivered, "{ROW}: retry delivers");
+            let intents = live
+                .records()
+                .iter()
+                .filter(|record| record["token"] == WRITER)
+                .count();
+            assert_eq!(intents, 1, "{ROW}: one logical intent after retry");
+            live.verify(ROW);
             Ok(())
         },
     );
