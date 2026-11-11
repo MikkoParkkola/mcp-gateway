@@ -33,9 +33,12 @@ fn bounded<T: Send + 'static>(handle: thread::JoinHandle<T>, what: &str) -> T {
 
 /// Wait for a state the writer is certain to reach; fails past the watchdog.
 fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let until = Instant::now() + WATCHDOG;
+    let start = Instant::now();
     while !ready() {
-        assert!(Instant::now() < until, "never happened: {what}");
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "never happened: {what}"
+        );
         thread::yield_now();
     }
 }
