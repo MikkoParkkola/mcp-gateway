@@ -31,12 +31,13 @@ fn row(task: Task, notes: Vec<Value>) -> CommittedTask {
         targets_recorded: true,
         output_free: false,
         error_author: None,
-        owner_digest: String::new(),
+        owner_digest: Box::default(),
         gateway_writes: serde_json::from_value::<WriteRecord>(Value::Array(notes))
             .expect("a record always decodes"),
         bindings: Vec::new(),
         // M2: only a bindings-recorded row is served at all.
         bindings_recorded: true,
+        replay_snapshot: None,
     }
 }
 

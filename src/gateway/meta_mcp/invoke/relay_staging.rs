@@ -113,8 +113,8 @@ impl StagedReceipts {
 
     /// Capture the retained synchronous answer now, pending, before
     /// admission publishes it for replay (the stdio route, whose receipts
-    /// were handed out of their collector). A task capture is left for
-    /// its commit point. Before startup publishes a generation nothing is
+    /// were handed out of their collector). A task's entry is persisted
+    /// in its row instead. Before startup publishes a generation nothing is
     /// judged, so nothing is captured.
     #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     pub(crate) fn capture_pending(
@@ -122,12 +122,12 @@ impl StagedReceipts {
         generation: Option<&crate::config_reload::Generation>,
     ) {
         #[cfg(feature = "firewall")]
-        if let (Some(fw), Some(generation)) = (self.fw.clone(), generation)
+        if let (Some(fw), Some(_)) = (self.fw.clone(), generation)
             && replay::is_sync_capture(self.capture.as_ref())
         {
             let calls = std::mem::take(&mut self.calls);
             self.held.captured =
-                replay::capture_commit(&fw, self.capture.take(), &self.receipts, calls, generation);
+                replay::capture_commit(&fw, self.capture.take(), &self.receipts, calls);
         }
         #[cfg(not(feature = "firewall"))]
         let _ = generation;
@@ -150,7 +150,7 @@ impl StagedReceipts {
                 // `record_digest` gets below. A synchronous capture not
                 // yet taken pending is taken here and settled with it.
                 if let Some(handle) =
-                    replay::capture_commit(fw, self.capture, &self.receipts, self.calls, generation)
+                    replay::capture_commit(fw, self.capture, &self.receipts, self.calls)
                 {
                     held.replayed.push(handle);
                 }
@@ -322,10 +322,12 @@ impl MetaMcp {
         if response.error.is_none()
             && !response.wire_meta.delivery_refusal
             && let Some(fw) = self.firewall.as_deref()
-            && let Some(generation) = self.current_generation()
+            // Before startup publishes a generation nothing is judged, so
+            // nothing is captured.
+            && self.current_generation().is_some()
         {
             let _ = RELAY_RECEIPTS.try_with(|receipts| {
-                replay::capture_pending_now(fw, &receipts.borrow(), &generation);
+                replay::capture_pending_now(fw, &receipts.borrow());
             });
         }
         #[cfg(not(feature = "firewall"))]
@@ -469,7 +471,7 @@ pub(crate) fn commit_with(
     if delivered {
         // Snapshot before recording, exactly what
         // `record_digest` gets below.
-        if let Some(handle) = replay::capture_commit(fw, capture, &receipts, calls, generation) {
+        if let Some(handle) = replay::capture_commit(fw, capture, &receipts, calls) {
             held.replayed.push(handle);
         }
         for r in receipts.into_iter().filter(|r| !r.pending_retain) {

@@ -27,7 +27,7 @@ impl Settling<'_> {
     pub(super) fn provenance(&self) -> crate::gateway::task_service::record::Provenance {
         let composite = crate::gateway::meta_mcp::is_composite_meta_tool(&self.call.tool);
         crate::gateway::task_service::record::Provenance {
-            targets: self.plan_targets(),
+            targets: self.plan_targets().map(Vec::into_boxed_slice),
             bindings: self.owned.dispatch_log().bindings(),
             // A plan's result is its own assembly of steps: never wholly the
             // gateway's for one refused step (the partial plan keeps today's
@@ -37,6 +37,7 @@ impl Settling<'_> {
             } else {
                 self.owned.dispatch_log().round()
             },
+            replay_snapshot: None,
         }
     }
 
@@ -52,7 +53,7 @@ impl Settling<'_> {
         // A plan's calls must be durable before it parks; a single call's one
         // target was recorded at creation.
         let plan = targets.is_some();
-        let targets = targets.unwrap_or_default();
+        let targets = targets.map(<[_]>::into_vec).unwrap_or_default();
         let owner = self.executor.service.owner(self.principal).ok()?;
         let stored = self
             .executor

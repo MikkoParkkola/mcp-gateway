@@ -52,10 +52,11 @@ fn finished(targets: Vec<Target>) -> CommittedTask {
         targets_recorded: true,
         output_free: false,
         error_author: None,
-        owner_digest: String::new(),
+        owner_digest: Box::default(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        replay_snapshot: None,
     }
 }
 
@@ -213,6 +214,7 @@ async fn a_notification_withheld_for_provenance_names_it() {
     let caller = context(&alice);
     let stored = CommittedTask {
         bindings_recorded: false,
+        replay_snapshot: None,
         ..finished(vec![alice_target()])
     };
     let (frame, record) = notify(&meta, &dir, stored, &caller).await;
