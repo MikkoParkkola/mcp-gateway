@@ -95,7 +95,16 @@ fn unkept(text: &str) -> bool {
 /// constructor evidence deliberately includes it, making the scan stricter.
 fn temp_log_only(text: &str) -> bool {
     crate::test_source_text::sanitize(text).contains("TempLog::new(")
-        && !["tempdir(", "tempdir_in(", "TempDir::new", "NamedTempFile"]
+        && ![
+            "tempdir(",
+            "tempdir_in(",
+            "TempDir::new",
+            "TempDir::with_",
+            "NamedTempFile",
+            "tempfile(",
+            "tempfile_in(",
+            "temp_dir(",
+        ]
             .iter()
             .any(|constructor| {
                 text.match_indices(*constructor).any(|(at, _)| {
