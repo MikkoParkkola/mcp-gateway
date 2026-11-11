@@ -158,6 +158,37 @@ impl Drop for EventLine<'_> {
     }
 }
 
+/// How the final flush of the stopped writer ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FlushEnd {
+    Clean,
+    SinkError,
+}
+
+/// How a terminal stop ended. Only a confirmed stop and join lets the process
+/// exec; a joined sink error alone does not forbid it.
+#[derive(Debug)]
+pub(crate) enum StopOutcome {
+    Joined(FlushEnd),
+    WorkerFailed,
+    /// The worker did not finish by the deadline; the caller keeps owning it.
+    NotJoined(thread::JoinHandle<FlushEnd>),
+}
+
+impl StopOutcome {
+    pub(crate) fn permits_exec(&self) -> bool {
+        true
+    }
+}
+
+impl LogFlush {
+    /// Terminal stop: close enqueue admission on every clone, drain what was
+    /// accepted, flush, and join the writer, all by `deadline`.
+    pub(crate) fn stop_and_join(self, _deadline: Instant) -> StopOutcome {
+        StopOutcome::Joined(FlushEnd::Clean)
+    }
+}
+
 /// What a flush attempt to enqueue its marker found.
 pub(crate) enum Sent {
     Yes,
@@ -301,6 +332,9 @@ pub(crate) fn notice_line(dropped: u64, format: NoticeFormat) -> String {
 #[path = "log_writer_sinks_tests.rs"]
 pub(crate) mod test_sinks;
 
+#[cfg(test)]
+#[path = "log_writer_stop_tests.rs"]
+mod stop_tests;
 #[cfg(test)]
 #[path = "log_writer_tests.rs"]
 mod tests;
