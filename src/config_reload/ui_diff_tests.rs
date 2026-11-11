@@ -8,7 +8,7 @@ use std::sync::Arc;
 use super::{PatchStep, PreviewRefused, Shown, UiPreview, UiRefused, path_text, ui_diff};
 use crate::config_persistence::keyedit::{GiveUp, Scalar, Segment};
 use crate::config_reload::ReloadContext;
-use crate::config_reload::reload_context::replace::FileRevision;
+use crate::config_reload::reload_context::replace::{FileRevision, RefusalClass};
 use crate::config_reload::ui_fields::{FieldId, Param, PreviewEdit, PreviewValue};
 use crate::gateway::test_helpers::write_owner_only;
 
@@ -358,15 +358,8 @@ async fn a_typed_value_is_echoed_as_typed() {
     );
 }
 
-/// A hand edit to `posture: hardened` after the gateway started on
-/// `standard`: the loader refuses it first, since a hardened posture turns
-/// message signing on (`security/posture.rs`, before `resolve_with_env`) and
-/// no shared secret is set (`security/message_signing.rs`, the 32-byte rule);
-/// the writer's check reports a load refusal as "Failed to parse config: ..."
-/// (`config_reload/replace_validate.rs`). Either refusal is `Invalid`.
-const POSTURE_REFUSED: &str = "Failed to parse config";
-
 /// D21: a provable edit whose result the reload would refuse is `Invalid`.
+/// The loader's refusal is now typed.
 #[tokio::test]
 async fn an_edit_the_loader_refuses_is_invalid() {
     let (_dir, path, ctx) = gateway("environment: \"dev\"\n");
@@ -380,13 +373,19 @@ async fn an_edit_the_loader_refuses_is_invalid() {
     )
     .await;
     assert!(
-        matches!(&got, Err(UiRefused::Invalid(why)) if why.contains(POSTURE_REFUSED)),
+        matches!(
+            &got,
+            Err(UiRefused::ReloadRefused {
+                class: RefusalClass::Invalid
+            })
+        ),
         "{got:?}"
     );
 }
 
 /// D22: an unprovable edit whose result the reload would refuse is
 /// `Invalid`, not a patch.
+/// The loader's refusal is now typed.
 #[tokio::test]
 async fn an_unprovable_edit_the_loader_refuses_is_invalid_not_a_patch() {
     let (_dir, path, ctx) = gateway("environment: \"dev\"\n");
@@ -400,7 +399,12 @@ async fn an_unprovable_edit_the_loader_refuses_is_invalid_not_a_patch() {
     )
     .await;
     assert!(
-        matches!(&got, Err(UiRefused::Invalid(why)) if why.contains(POSTURE_REFUSED)),
+        matches!(
+            &got,
+            Err(UiRefused::ReloadRefused {
+                class: RefusalClass::Invalid
+            })
+        ),
         "{got:?}"
     );
 }
@@ -737,4 +741,19 @@ async fn an_alert_on_its_dash_line_shows_that_line() {
         diff_text(&got),
         "--- a/gateway.yaml\n+++ b/gateway.yaml\n@@ -3,1 +3,1 @@\n-    - at_percent: 50\n+    - at_percent: 60\n"
     );
+}
+
+/// K8: red oracle is a `BadParam` reason that omits the submitted backend name.
+#[tokio::test]
+async fn k8_missing_backend_does_not_echo_name() {
+    const CANARY: &str = "missing-backend-canary";
+    let (_dir, _path, ctx) = gateway("backends: {}\n");
+    let error = ui_diff(&ctx, &edit(vec![set("backends.owner", on(CANARY), s("A"))]))
+        .await
+        .expect_err("absent backend");
+    let UiRefused::BadParam(field, reason) = error else {
+        panic!("expected BadParam: {error:?}");
+    };
+    assert_eq!(field, id("backends.owner"));
+    assert!(!reason.contains(CANARY), "{reason}");
 }
