@@ -520,7 +520,12 @@ jobs:
       # restores only caches saved on its base branch (or its own ref), and this job's cache was
       # saved on pull-request refs alone, so every lane run rebuilt the ~350 dependencies for each
       # of the job's eight cargo steps from cold (all of 3 runs sampled logged "No cache found").
+      # Restore on every run, save only on a push: a save on each PR ref wrote a 310 MB cache nothing
+      # else can read (33 such caches held the repository at its 10 GB limit, where eviction can push
+      # out the line's own cache).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.event_name == 'push' }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
       # The wall clock is read only in src/clock.rs (MIK-8202 AC.9). Clippy
       # ignores a disallowed path it cannot resolve, so each clippy.toml clock
