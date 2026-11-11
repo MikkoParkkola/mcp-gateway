@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! S6a1 schema rows; the expected bytes never come from the codec under test.
 
+use std::path::Path;
+
 use serde_json::{Value, json};
 
 use super::fixtures::*;
@@ -22,6 +24,57 @@ fn round_trip(bytes: &[u8], row: &str) -> JournalV2 {
 
 #[test]
 fn journal_versions() {
+    const ROW: &str = "journal_versions";
+    legacy_versions();
+    let (_dir, path, locked) = config();
+    let journal_path = journal::journal_path(&path);
+    write_atomic(
+        &journal_path,
+        JOURNAL_V2_ATTRIBUTION,
+        FileMode::Private,
+        Symlink::Replace,
+    )
+    .expect(ROW);
+    let current = reopened(&locked, ROW);
+    assert_eq!(current.version, 2, "{ROW}: v2 parsed");
+    assert_eq!(
+        bytes(&path),
+        JOURNAL_V2_ATTRIBUTION,
+        "{ROW}: v2 bytes preserved"
+    );
+    assert!(
+        journal::recover(&path).is_err(),
+        "{ROW}: legacy recovery refuses v2"
+    );
+    assert_eq!(
+        bytes(&path),
+        JOURNAL_V2_ATTRIBUTION,
+        "{ROW}: unhandled v2 retained"
+    );
+    let mut unknown: Value = serde_json::from_slice(JOURNAL_V2_ATTRIBUTION).expect(ROW);
+    unknown["version"] = json!(99);
+    let unknown = serde_json::to_vec(&unknown).expect(ROW);
+    write_atomic(&journal_path, &unknown, FileMode::Private, Symlink::Replace).expect(ROW);
+    assert!(
+        matches!(open(&locked), Err(JournalError::UnsupportedVersion)),
+        "{ROW}: unknown version refused"
+    );
+    assert_eq!(bytes(&path), unknown, "{ROW}: unknown evidence retained");
+    journal_revision_and_role_codecs();
+    journal_state_controls(&path, &journal_path, &locked);
+    durable_record_fact(ROW);
+
+    let mut failures = Vec::new();
+    journal_boundary_cases(&current, &mut failures);
+    assert!(
+        failures.is_empty(),
+        "{ROW}: {} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n"),
+    );
+}
+
+fn legacy_versions() {
     const ROW: &str = "journal_versions";
     for all_renamed in [false, true] {
         let (_dir, path, locked) = config();
@@ -69,40 +122,10 @@ fn journal_versions() {
             "{ROW}: legacy cleanup"
         );
     }
-    let (_dir, path, locked) = config();
-    let journal_path = journal::journal_path(&path);
-    write_atomic(
-        &journal_path,
-        JOURNAL_V2_ATTRIBUTION,
-        FileMode::Private,
-        Symlink::Replace,
-    )
-    .expect(ROW);
-    let current = reopened(&locked, ROW);
-    assert_eq!(current.version, 2, "{ROW}: v2 parsed");
-    assert_eq!(
-        bytes(&path),
-        JOURNAL_V2_ATTRIBUTION,
-        "{ROW}: v2 bytes preserved"
-    );
-    assert!(
-        journal::recover(&path).is_err(),
-        "{ROW}: legacy recovery refuses v2"
-    );
-    assert_eq!(
-        bytes(&path),
-        JOURNAL_V2_ATTRIBUTION,
-        "{ROW}: unhandled v2 retained"
-    );
-    let mut unknown: Value = serde_json::from_slice(JOURNAL_V2_ATTRIBUTION).expect(ROW);
-    unknown["version"] = json!(99);
-    let unknown = serde_json::to_vec(&unknown).expect(ROW);
-    write_atomic(&journal_path, &unknown, FileMode::Private, Symlink::Replace).expect(ROW);
-    assert!(
-        matches!(open(&locked), Err(JournalError::UnsupportedVersion)),
-        "{ROW}: unknown version refused"
-    );
-    assert_eq!(bytes(&path), unknown, "{ROW}: unknown evidence retained");
+}
+
+fn journal_revision_and_role_codecs() {
+    const ROW: &str = "journal_versions";
     let revision = FileRevision::of(OLD);
     assert_eq!(
         FileRevision::parse_journal(revision.as_str()),
@@ -160,6 +183,10 @@ fn journal_versions() {
         "config_key_create_intent",
         "{ROW}: sixth intent has a typed event"
     );
+}
+
+fn journal_state_controls(path: &Path, journal_path: &Path, locked: &Locked) {
+    const ROW: &str = "journal_versions";
     let accepted = round_trip(JOURNAL_V2_ACCEPTED, ROW);
     assert_eq!(
         accepted.phase,
@@ -203,20 +230,21 @@ fn journal_versions() {
             Err(JournalError::InvalidState),
             "{ROW}: {case} rejected by decode"
         );
-        write_atomic(&journal_path, fixture, FileMode::Private, Symlink::Replace).expect(ROW);
+        write_atomic(journal_path, fixture, FileMode::Private, Symlink::Replace).expect(ROW);
         assert!(
-            matches!(open(&locked), Err(JournalError::InvalidState)),
+            matches!(open(locked), Err(JournalError::InvalidState)),
             "{ROW}: {case} rejected on open"
         );
         assert_eq!(
-            bytes(&path),
+            bytes(path),
             fixture,
             "{ROW}: {case} preserves invalid evidence"
         );
     }
-    durable_transitions(ROW);
+}
 
-    let mut failures = Vec::new();
+fn journal_boundary_cases(current: &JournalV2, failures: &mut Vec<String>) {
+    const ROW: &str = "journal_versions";
     // Each boundary has its own target and panic boundary: neither masks G1.
     for (case, size) in [
         ("G3_exact_limit", 1_048_576),
@@ -227,7 +255,7 @@ fn journal_versions() {
         } else {
             "exactly 1048577 bytes, Err(Unreadable), unchanged journal bytes"
         };
-        collect_case(&mut failures, ROW, case, expected, || {
+        collect_case(failures, ROW, case, expected, || {
             let (_dir, path, locked) = config();
             let journal_path = journal::journal_path(&path);
             let mut bounded = JOURNAL_V2_ATTRIBUTION.to_vec();
@@ -239,7 +267,10 @@ fn journal_versions() {
             let opened = open(&locked);
             let retained = std::fs::read(&journal_path).is_ok_and(|after| after == bounded);
             let accepted = if size == 1_048_576 {
-                matches!(&opened, Ok(Some(OpenJournal::Current(state))) if state == &current)
+                matches!(
+                    &opened,
+                    Ok(Some(OpenJournal::Current(state))) if state.as_ref() == current
+                )
             } else {
                 matches!(&opened, Err(JournalError::Unreadable))
             };
@@ -261,7 +292,7 @@ fn journal_versions() {
         ("G1_duplicate_attempts", JOURNAL_V2_DUPLICATE_ATTEMPTS),
     ] {
         collect_case(
-            &mut failures,
+            failures,
             ROW,
             case,
             "decode=Err(InvalidState), open=Err(InvalidState), unchanged journal bytes",
@@ -286,63 +317,24 @@ fn journal_versions() {
             },
         );
     }
-    assert!(
-        failures.is_empty(),
-        "{ROW}: {} case(s) failed:\n{}",
-        failures.len(),
-        failures.join("\n"),
-    );
 }
 
-fn durable_transitions(row: &str) {
+fn durable_record_fact(row: &str) {
     use crate::config_persistence::crash_fs::{self, Mode};
 
     let (dir, path, locked) = config();
-    let initial = intended(dir.path());
-    let armed = crash_fs::arm_config(&path);
-    let mut owner = checked(create_intended(&locked, initial.clone()), row);
-    crash_fs::cut(dir.path(), Mode::DropAll);
-    drop(armed);
-    assert!(
-        journal::exists(&path),
-        "{row}: create is durable before returning"
-    );
-    assert_eq!(
-        reopened(&locked, row),
-        initial,
-        "{row}: durable intended state"
-    );
-    let before = bytes(&path);
-    assert!(
-        create_intended(&locked, initial).is_err(),
-        "{row}: create refuses an existing owner"
-    );
-    assert_eq!(bytes(&path), before, "{row}: existing owner untouched");
-    let armed = crash_fs::arm_config(&path);
-    assert_eq!(
-        owner.stage(OLD, FileRevision::of(NEW)),
-        Ok(()),
-        "{row}: stage"
-    );
-    crash_fs::cut(dir.path(), Mode::DropAll);
-    drop(armed);
-    let staged = reopened(&locked, row);
-    assert_eq!(staged.phase, Phase::Staged, "{row}: staged phase durable");
-    assert_eq!(
-        staged.new_revision,
-        Some(FileRevision::of(NEW)),
-        "{row}: new revision"
-    );
-    assert_eq!(
-        std::fs::read(journal::original_path(&path)).expect(row),
-        OLD,
-        "{row}: original bytes durable"
-    );
-    assert_eq!(
-        owner.begin_action(Action::Forward, FileRevision::of(NEW)),
-        Ok(()),
-        "{row}: forward pending"
-    );
+    let mut state = intended(dir.path());
+    state.phase = Phase::Staged;
+    state.new_revision = Some(FileRevision::of(NEW));
+    state.pending = Some(Pending {
+        action: Action::Forward,
+        expected: FileRevision::of(NEW),
+        pre_action: FileRevision::of(OLD),
+        tried: false,
+    });
+    state.fact = None;
+    // Seed pending state independently of create/stage and begin_action.
+    let mut owner = session(&locked, state);
     let proof = commit::commit(&locked, &path, Action::Forward, NEW).expect(row);
     let armed = crash_fs::arm_config(&path);
     assert_eq!(
@@ -366,49 +358,6 @@ fn durable_transitions(row: &str) {
     assert_eq!(
         recorded.pending, None,
         "{row}: record_fact durably clears pending"
-    );
-    let armed = crash_fs::arm_config(&path);
-    owner.state.phase = Phase::Accepted;
-    assert_eq!(owner.persist(), Ok(()), "{row}: persist accepted state");
-    crash_fs::cut(dir.path(), Mode::DropAll);
-    drop(armed);
-    let accepted = reopened(&locked, row);
-    assert_eq!(
-        accepted.phase,
-        Phase::Accepted,
-        "{row}: durable accepted state"
-    );
-    assert_eq!(
-        accepted.fact,
-        Some(Fact::Committed(FileRevision::of(NEW))),
-        "{row}: fact"
-    );
-    assert_eq!(
-        accepted.pending, None,
-        "{row}: pending and fact cannot coexist"
-    );
-    let writer = owner.state.writer.as_mut().expect(row);
-    writer.intent.delivered = true;
-    writer.intent_counter = Some(7);
-    let token = writer.token.clone();
-    assert_eq!(
-        owner.persist(),
-        Ok(()),
-        "{row}: persist acknowledged intent"
-    );
-    let decision = decision(ResultClass::Written, Reason::Committed);
-    let armed = crash_fs::arm_config(&path);
-    assert_eq!(
-        owner.decide(&token, decision.clone()),
-        Ok(()),
-        "{row}: first decision"
-    );
-    crash_fs::cut(dir.path(), Mode::DropAll);
-    drop(armed);
-    assert_eq!(
-        reopened(&locked, row).writer.expect(row).decision,
-        Some(decision),
-        "{row}: first decision is durable before returning"
     );
 }
 
@@ -554,6 +503,11 @@ fn reason_codec_s6a() {
         Reason::from_journal(UNKNOWN).is_err(),
         "{ROW}: unknown rejected by codec"
     );
+    reason_decision_cases();
+}
+
+fn reason_decision_cases() {
+    const ROW: &str = "reason_codec_s6a";
     for (fixture, result, reason, terminal, settled_by, delivery_stopped) in [
         (
             JOURNAL_V2_DECISION_WRITTEN,

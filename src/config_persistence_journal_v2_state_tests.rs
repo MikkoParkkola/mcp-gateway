@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! S6a1 state rows seed claims independently; no synthetic CommitToken exists.
+//! S6a1 state rows seed claims independently; no synthetic `CommitToken` exists.
+
+use std::path::Path;
 
 use serde_json::{Value, json};
 
@@ -21,9 +23,9 @@ fn terminal_blocks_finish() {
     writer.intent.delivered = true;
     writer.intent_counter = Some(7);
     let mut deferred = frozen(
-        &writer.token.0,
+        &writer.intent_id.0,
         Role::Deferred,
-        json!({"kind": "settle.save", "reason": "left_to_recovery", "intent_counter": 7}),
+        &json!({"kind": "settle.save", "reason": "left_to_recovery", "intent_counter": 7}),
     );
     deferred.delivered = true;
     writer.records.push(deferred);
@@ -43,9 +45,9 @@ fn terminal_blocks_finish() {
     let writer = owner.state.writer.as_mut().expect(ROW);
     writer.decision = Some(decision(ResultClass::NotWritten, Reason::Refused));
     let mut invalid = frozen(
-        &writer.token.0,
+        &writer.intent_id.0,
         Role::Outcome,
-        json!({
+        &json!({
             "kind": "settle.save", "result": "not_written", "reason": "refused",
             "intent_counter": 7,
         }),
@@ -60,6 +62,20 @@ fn terminal_blocks_finish() {
     );
     assert_eq!(bytes(&path), before, "{ROW}: rejected evidence retained");
 
+    terminal_requires_all_deliveries();
+
+    let mut failures = Vec::new();
+    terminal_consistency_cases(&mut failures);
+    assert!(
+        failures.is_empty(),
+        "{ROW}: {} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n"),
+    );
+}
+
+fn terminal_requires_all_deliveries() {
+    const ROW: &str = "terminal_blocks_finish";
     for missing in ["intent", "deferred"] {
         let (dir, path, locked) = config();
         let mut state = intended(dir.path());
@@ -70,15 +86,15 @@ fn terminal_blocks_finish() {
         writer.intent_counter = Some(7);
         writer.decision = Some(decision(ResultClass::NotWritten, Reason::Refused));
         let mut deferred = frozen(
-            &writer.token.0,
+            &writer.intent_id.0,
             Role::Deferred,
-            json!({"kind": "settle.save", "reason": "left_to_recovery", "intent_counter": 7}),
+            &json!({"kind": "settle.save", "reason": "left_to_recovery", "intent_counter": 7}),
         );
         deferred.delivered = missing != "deferred";
         let mut terminal = frozen(
-            &writer.token.0,
+            &writer.intent_id.0,
             Role::Outcome,
-            json!({
+            &json!({
                 "kind": "settle.save", "result": "not_written", "reason": "refused",
                 "intent_counter": 7,
             }),
@@ -131,8 +147,10 @@ fn terminal_blocks_finish() {
         );
         drop(watching);
     }
+}
 
-    let mut failures = Vec::new();
+fn terminal_consistency_cases(failures: &mut Vec<String>) {
+    const ROW: &str = "terminal_blocks_finish";
     for terminal_role in [TerminalRole::Outcome, TerminalRole::Abandoned] {
         for (case, case_id) in [
             ("result mismatch", "G2_result_mismatch"),
@@ -157,124 +175,129 @@ fn terminal_blocks_finish() {
             } else {
                 "finish=Err(Finish), unchanged journal/state/original, no cleanup events"
             };
-            collect_case(&mut failures, ROW, &case_id, expected, || {
-                let (dir, path, locked) = config();
-                let mut state = intended(dir.path());
-                state.phase = Phase::Staged;
-                state.new_revision = Some(FileRevision::of(NEW));
-                let writer = state.writer.as_mut().ok_or("missing fixture writer")?;
-                writer.intent.delivered = true;
-                writer.intent_counter = Some(7);
-                let (role, mut choice, payload) = match terminal_role {
-                    TerminalRole::Outcome => (
-                        Role::Outcome,
-                        decision(ResultClass::NotWritten, Reason::Refused),
-                        json!({
-                            "kind": "settle.save", "result": "not_written", "reason": "refused",
-                            "intent_counter": 7,
-                        }),
-                    ),
-                    TerminalRole::Abandoned => (
-                        Role::Abandoned,
-                        decision(ResultClass::Unproven, Reason::Abandoned),
-                        json!({
-                            "kind": "settle.save", "result": "unproven", "reason": "abandoned",
-                            "intent_counter": 7,
-                        }),
-                    ),
-                };
-                choice.terminal = terminal_role;
-                writer.decision = Some(choice);
-                let mut terminal = frozen(&writer.token.0, role, payload.clone());
-                terminal.delivered = true;
-                if matches!(case, "result mismatch" | "reason mismatch") {
-                    let mut changed = payload;
-                    if case == "result mismatch" {
-                        changed["result"] = match terminal_role {
-                            TerminalRole::Outcome => json!("written"),
-                            TerminalRole::Abandoned => json!("not_written"),
-                        };
-                    } else {
-                        changed["reason"] = json!("writer_died");
-                    }
-                    terminal = frozen(&writer.token.0, role, changed);
-                    terminal.delivered = true;
-                    writer.records = vec![terminal];
-                } else {
-                    let mut retry = terminal.clone();
-                    match case {
-                        "conflicting terminal payload" => {
-                            let mut changed = payload;
-                            changed["reason"] = json!("writer_died");
-                            // Equal digests alone must not hide different frozen payload bytes.
-                            retry.payload_json = serde_json::to_vec(&changed)
-                                .map_err(|error| format!("payload encoding error: {error:?}"))?;
-                        }
-                        "conflicting terminal attribution" => {
-                            retry.attribution = Some(Attribution {
-                                actor: crate::security::audit::AuditWho::from_persisted(
-                                    AUDIT_WHO_PRINCIPAL,
-                                )
-                                .map_err(|error| format!("attribution error: {error:?}"))?,
-                            });
-                        }
-                        "conflicting terminal caller digest" => {
-                            retry.caller_digest = "0".repeat(64);
-                        }
-                        _ => {}
-                    }
-                    writer.records = vec![terminal, retry];
-                }
-                journal::stage_original(&path, OLD)
-                    .map_err(|error| format!("stage original error: {error:?}"))?;
-                let mut owner = session(&locked, state.clone());
-                let before = std::fs::read(journal::journal_path(&path))
-                    .map_err(|error| format!("read journal error: {error:?}"))?;
-                let watching = observe::watch(&path);
-                let finished = owner.finish();
-                let events = observe::events(&path);
-                let journal_after = std::fs::read(journal::journal_path(&path));
-                let original_after = std::fs::read(journal::original_path(&path));
-                let state_retained = owner.state == state;
-                let journal_retained = journal_after.as_ref().is_ok_and(|after| after == &before);
-                let original_retained = original_after.as_ref().is_ok_and(|after| after == OLD);
-                let removed = matches!(&journal_after, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
-                    && matches!(&original_after, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
-                let passed = if case == "equal terminal collapse" {
-                    finished == Ok(())
-                        && removed
-                        && events
-                            == vec![
-                                Event::OriginalUnlinked,
-                                Event::JournalUnlinked,
-                                Event::DirectorySynced,
-                            ]
-                } else {
-                    finished == Err(JournalError::Finish)
-                        && journal_retained
-                        && state_retained
-                        && original_retained
-                        && events.is_empty()
-                };
-                drop(watching);
-                if passed {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "finish={finished:?}, artifacts_removed={removed}, \
-                         journal_retained={journal_retained}, state_retained={state_retained}, \
-                         original_retained={original_retained}, events={events:?}",
-                    ))
-                }
+            collect_case(failures, ROW, &case_id, expected, || {
+                terminal_consistency_case(terminal_role, case)
             });
         }
     }
-    assert!(
-        failures.is_empty(),
-        "{ROW}: {} case(s) failed:\n{}",
-        failures.len(),
-        failures.join("\n"),
-    );
+}
+
+fn terminal_consistency_case(terminal_role: TerminalRole, case: &str) -> Result<(), String> {
+    let (dir, path, locked) = config();
+    let state = terminal_consistency_state(dir.path(), terminal_role, case)?;
+    journal::stage_original(&path, OLD)
+        .map_err(|error| format!("stage original error: {error:?}"))?;
+    let mut owner = session(&locked, state.clone());
+    let before = std::fs::read(journal::journal_path(&path))
+        .map_err(|error| format!("read journal error: {error:?}"))?;
+    let watching = observe::watch(&path);
+    let finished = owner.finish();
+    let events = observe::events(&path);
+    let journal_after = std::fs::read(journal::journal_path(&path));
+    let original_after = std::fs::read(journal::original_path(&path));
+    let state_retained = owner.state == state;
+    let journal_retained = journal_after.as_ref().is_ok_and(|after| after == &before);
+    let original_retained = original_after.as_ref().is_ok_and(|after| after == OLD);
+    let removed = matches!(&journal_after, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+        && matches!(&original_after, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
+    let passed = if case == "equal terminal collapse" {
+        finished == Ok(())
+            && removed
+            && events
+                == vec![
+                    Event::OriginalUnlinked,
+                    Event::JournalUnlinked,
+                    Event::DirectorySynced,
+                ]
+    } else {
+        finished == Err(JournalError::Finish)
+            && journal_retained
+            && state_retained
+            && original_retained
+            && events.is_empty()
+    };
+    drop(watching);
+    if passed {
+        Ok(())
+    } else {
+        Err(format!(
+            "finish={finished:?}, artifacts_removed={removed}, \
+             journal_retained={journal_retained}, state_retained={state_retained}, \
+             original_retained={original_retained}, events={events:?}",
+        ))
+    }
+}
+
+fn terminal_consistency_state(
+    dir: &Path,
+    terminal_role: TerminalRole,
+    case: &str,
+) -> Result<JournalV2, String> {
+    let mut state = intended(dir);
+    state.phase = Phase::Staged;
+    state.new_revision = Some(FileRevision::of(NEW));
+    let writer = state.writer.as_mut().ok_or("missing fixture writer")?;
+    writer.intent.delivered = true;
+    writer.intent_counter = Some(7);
+    let (role, mut choice, payload) = match terminal_role {
+        TerminalRole::Outcome => (
+            Role::Outcome,
+            decision(ResultClass::NotWritten, Reason::Refused),
+            json!({
+                "kind": "settle.save", "result": "not_written", "reason": "refused",
+                "intent_counter": 7,
+            }),
+        ),
+        TerminalRole::Abandoned => (
+            Role::Abandoned,
+            decision(ResultClass::Unproven, Reason::Abandoned),
+            json!({
+                "kind": "settle.save", "result": "unproven", "reason": "abandoned",
+                "intent_counter": 7,
+            }),
+        ),
+    };
+    choice.terminal = terminal_role;
+    writer.decision = Some(choice);
+    let mut terminal = frozen(&writer.intent_id.0, role, &payload);
+    terminal.delivered = true;
+    if matches!(case, "result mismatch" | "reason mismatch") {
+        let mut changed = payload;
+        if case == "result mismatch" {
+            changed["result"] = match terminal_role {
+                TerminalRole::Outcome => json!("written"),
+                TerminalRole::Abandoned => json!("not_written"),
+            };
+        } else {
+            changed["reason"] = json!("writer_died");
+        }
+        terminal = frozen(&writer.intent_id.0, role, &changed);
+        terminal.delivered = true;
+        writer.records = vec![terminal];
+    } else {
+        let mut retry = terminal.clone();
+        match case {
+            "conflicting terminal payload" => {
+                let mut changed = payload;
+                changed["reason"] = json!("writer_died");
+                // Equal digests alone must not hide different frozen payload bytes.
+                retry.payload_json = serde_json::to_vec(&changed)
+                    .map_err(|error| format!("payload encoding error: {error:?}"))?;
+            }
+            "conflicting terminal attribution" => {
+                retry.attribution = Some(Attribution {
+                    actor: crate::security::audit::AuditWho::from_persisted(AUDIT_WHO_PRINCIPAL)
+                    .map_err(|error| format!("attribution error: {error:?}"))?,
+                });
+            }
+            "conflicting terminal caller digest" => {
+                retry.caller_digest = "0".repeat(64);
+            }
+            _ => {}
+        }
+        writer.records = vec![terminal, retry];
+    }
+    Ok(state)
 }
 
 #[test]
@@ -287,52 +310,10 @@ fn overwrite_decision() {
     writer.intent.delivered = true;
     writer.intent_counter = Some(7);
     writer.decision = Some(original.clone());
-    let token = writer.token.clone();
+    let token = writer.intent_id.clone();
     let mut owner = session(&locked, state);
     let before = bytes(&path);
-    let digest = crate::hashing::sha256_hex(&before);
-    let mut result = original.clone();
-    result.result = ResultClass::Written;
-    let mut reason = original.clone();
-    reason.reason = Reason::Moved;
-    let mut settled_by = original.clone();
-    settled_by.settled_by = Some(IntentId("another-attempt".into()));
-    let mut terminal = original.clone();
-    terminal.terminal = TerminalRole::Abandoned;
-    for (field, changed) in [
-        ("result", result),
-        ("reason", reason),
-        ("settled_by", settled_by),
-        ("terminal", terminal),
-    ] {
-        assert_eq!(
-            owner.decide(&token, changed),
-            Err(JournalError::ChangedDecision),
-            "{ROW}: a different {field} cannot overwrite"
-        );
-        let after = bytes(&path);
-        assert_eq!(after, before, "{ROW}: persisted bytes unchanged");
-        assert_eq!(
-            crate::hashing::sha256_hex(&after),
-            digest,
-            "{ROW}: persisted hash unchanged"
-        );
-        assert_eq!(
-            owner.state.writer.as_ref().expect(ROW).decision,
-            Some(original.clone()),
-            "{ROW}: in-memory decision unchanged"
-        );
-    }
-    assert_eq!(
-        owner.decide(&token, original.clone()),
-        Ok(()),
-        "{ROW}: identical decision accepted"
-    );
-    assert_eq!(
-        bytes(&path),
-        before,
-        "{ROW}: identical decision preserves bytes"
-    );
+    reject_decision_overwrites(&mut owner, &token, &original, &path, &before);
     let mut stopped = original.clone();
     stopped.delivery_stopped = true;
     let armed = crash_fs::arm_config(&path);
@@ -386,29 +367,81 @@ fn overwrite_decision() {
     );
 }
 
+fn reject_decision_overwrites(
+    owner: &mut JournalSession,
+    token: &IntentId,
+    original: &Decision,
+    path: &Path,
+    before: &[u8],
+) {
+    const ROW: &str = "overwrite_decision";
+    let digest = crate::hashing::sha256_hex(before);
+    let mut result = original.clone();
+    result.result = ResultClass::Written;
+    let mut reason = original.clone();
+    reason.reason = Reason::Moved;
+    let mut settled_by = original.clone();
+    settled_by.settled_by = Some(IntentId("another-attempt".into()));
+    let mut terminal = original.clone();
+    terminal.terminal = TerminalRole::Abandoned;
+    for (field, changed) in [
+        ("result", result),
+        ("reason", reason),
+        ("settled_by", settled_by),
+        ("terminal", terminal),
+    ] {
+        assert_eq!(
+            owner.decide(token, changed),
+            Err(JournalError::ChangedDecision),
+            "{ROW}: a different {field} cannot overwrite"
+        );
+        let after = bytes(path);
+        assert_eq!(after, before, "{ROW}: persisted bytes unchanged");
+        assert_eq!(
+            crate::hashing::sha256_hex(&after),
+            digest,
+            "{ROW}: persisted hash unchanged"
+        );
+        assert_eq!(
+            owner.state.writer.as_ref().expect(ROW).decision,
+            Some(original.clone()),
+            "{ROW}: in-memory decision unchanged"
+        );
+    }
+    assert_eq!(
+        owner.decide(token, original.clone()),
+        Ok(()),
+        "{ROW}: identical decision accepted"
+    );
+    assert_eq!(
+        bytes(path),
+        before,
+        "{ROW}: identical decision preserves bytes"
+    );
+}
+
 #[test]
 fn finish_original_before_journal() {
     const ROW: &str = "finish_original_before_journal";
     let (dir, path, locked) = config();
-    let mut state = intended(dir.path());
-    state.phase = Phase::Staged;
-    state.new_revision = Some(FileRevision::of(NEW));
-    let writer = state.writer.as_mut().expect(ROW);
+    // Test-only setup; create/stage durability assertions belong to S6c.
+    let mut owner = create_intended(&locked, intended(dir.path())).expect(ROW);
+    owner.stage(OLD, FileRevision::of(NEW)).expect(ROW);
+    let writer = owner.state.writer.as_mut().expect(ROW);
     writer.intent_counter = Some(7);
     writer.intent.delivered = true;
     writer.decision = Some(decision(ResultClass::NotWritten, Reason::Refused));
     let mut terminal = frozen(
-        &writer.token.0,
+        &writer.intent_id.0,
         Role::Outcome,
-        json!({
+        &json!({
             "kind": "settle.save", "result": "not_written", "reason": "refused",
             "intent_counter": 7,
         }),
     );
     terminal.delivered = true;
     writer.records.push(terminal);
-    journal::stage_original(&path, OLD).expect(ROW);
-    let mut owner = session(&locked, state);
+    seed(&path, &owner.state);
     let journal_path = journal::journal_path(&path);
     let original_path = journal::original_path(&path);
     let audit_path = dir.path().join("audit/log.jsonl");

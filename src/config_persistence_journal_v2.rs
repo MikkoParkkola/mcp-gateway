@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Durable v2 journal state; legacy writers remain on v1 until activation.
 
+#[cfg(test)]
 use std::io::Write as _;
 use std::path::PathBuf;
 
@@ -55,10 +56,16 @@ pub(crate) enum ParkReason {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FrozenRecord {
-    #[serde(with = "codec::role")]
+    #[serde(
+        serialize_with = "codec::role::serialize_ref",
+        deserialize_with = "codec::role::deserialize"
+    )]
     pub(super) role: Role,
     pub(super) payload_json: Vec<u8>,
-    #[serde(with = "codec::attribution")]
+    #[serde(
+        serialize_with = "codec::attribution::serialize_ref",
+        deserialize_with = "codec::attribution::deserialize"
+    )]
     pub(super) attribution: Option<Attribution>,
     pub(super) caller_digest: String,
     pub(super) delivered: bool,
@@ -68,7 +75,8 @@ pub(crate) struct FrozenRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TokenState {
-    pub(super) token: IntentId,
+    #[serde(rename = "token")]
+    pub(super) intent_id: IntentId,
     pub(super) intent: FrozenRecord,
     pub(super) intent_counter: Option<u64>,
     pub(super) decision: Option<Decision>,
@@ -116,7 +124,7 @@ pub(crate) struct JournalV2 {
 #[derive(Debug)]
 pub(crate) enum OpenJournal {
     Legacy(Journal),
-    Current(JournalV2),
+    Current(Box<JournalV2>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,13 +148,16 @@ pub(crate) fn open(locked: &Locked) -> Result<Option<OpenJournal>, JournalError>
         .map_err(|_| JournalError::Unreadable)?["version"].as_u64()
     {
         Some(1) => super::read_checked(&locked.target, &path, &super::original_path(&locked.target))
-            .map(|state| state.map(OpenJournal::Legacy)).map_err(|_| JournalError::Unreadable),
-        Some(2) => JournalV2::decode(text.as_bytes()).map(|state| Some(OpenJournal::Current(state))),
+            .map(|state| state.map(OpenJournal::Legacy))
+            .map_err(|_| JournalError::Unreadable),
+        Some(2) => JournalV2::decode(text.as_bytes())
+            .map(|state| Some(OpenJournal::Current(Box::new(state)))),
         Some(_) => Err(JournalError::UnsupportedVersion),
         None => Err(JournalError::Unreadable),
     }
 }
 
+#[cfg(test)]
 pub(crate) fn create_intended(
     locked: &Locked,
     state: JournalV2,
@@ -194,6 +205,7 @@ impl JournalSession {
             .map_err(|_| JournalError::Persist)
     }
 
+    #[cfg(test)]
     pub(crate) fn stage(
         &mut self,
         original: &[u8],
@@ -267,7 +279,7 @@ impl JournalSession {
             .writer
             .iter_mut()
             .chain(self.state.attempts.iter_mut())
-            .find(|owner| &owner.token == token)
+            .find(|owner| &owner.intent_id == token)
             .ok_or(JournalError::InvalidState)?;
         if let Some(existing) = &owner.decision {
             // Retry the sync too: a prior persist may have failed after rename.
@@ -353,7 +365,7 @@ impl JournalV2 {
         }
         let mut tokens = std::collections::HashSet::new();
         for owner in self.writer.iter().chain(&self.attempts) {
-            if !tokens.insert(owner.token.0.as_str()) {
+            if !tokens.insert(owner.intent_id.0.as_str()) {
                 return Err(JournalError::InvalidState);
             }
             if let Some(decision) = &owner.decision {

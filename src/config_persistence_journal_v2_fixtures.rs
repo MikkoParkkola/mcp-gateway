@@ -79,13 +79,13 @@ pub(super) fn intended(dir: &Path) -> JournalV2 {
     }
 }
 
-pub(super) fn frozen(token: &str, role: Role, payload: Value) -> FrozenRecord {
+pub(super) fn frozen(token: &str, role: Role, payload: &Value) -> FrozenRecord {
     let mut caller = payload.as_object().expect("fixture payload object").clone();
     caller.insert("event".into(), role.event().into());
     caller.insert("token".into(), token.into());
     FrozenRecord {
         role,
-        payload_json: serde_json::to_vec(&payload).expect("fixture payload"),
+        payload_json: serde_json::to_vec(payload).expect("fixture payload"),
         attribution: None,
         caller_digest: crate::hashing::sha256_hex(
             &serde_json::to_vec(&caller).expect("fixture caller view"),
@@ -98,8 +98,8 @@ pub(super) fn frozen(token: &str, role: Role, payload: Value) -> FrozenRecord {
 fn writer() -> TokenState {
     let token = IntentId(uuid::Uuid::new_v4().simple().to_string());
     TokenState {
-        intent: frozen(&token.0, INTENT, json!({"kind": "settle.save"})),
-        token,
+        intent: frozen(&token.0, INTENT, &json!({"kind": "settle.save"})),
+        intent_id: token,
         intent_counter: None,
         decision: None,
         records: Vec::new(),
@@ -151,7 +151,7 @@ fn record_wire(record: &FrozenRecord) -> Value {
 
 fn token_wire(token: &TokenState) -> Value {
     json!({
-        "token": token.token.0,
+        "token": token.intent_id.0,
         "intent": record_wire(&token.intent),
         "intent_counter": token.intent_counter,
         "decision": token.decision.as_ref().map(decision_wire),
@@ -226,7 +226,7 @@ pub(super) fn reopened(locked: &Locked, row: &str) -> JournalV2 {
         "{row}: reopen must retain v2: {opened:?}"
     );
     let state = match opened.expect(row).expect(row) {
-        OpenJournal::Current(state) => Some(state),
+        OpenJournal::Current(state) => Some(*state),
         OpenJournal::Legacy(_) => None,
     };
     state.expect(row)
@@ -294,8 +294,7 @@ pub(super) const AUDIT_WHO_PRINCIPAL: &[u8] = concat!(
 )
 .as_bytes();
 
-pub(super) const AUDIT_WHO_NONE: &[u8] =
-    concat!(r#"{"principal":"","account":"gateway"}"#,).as_bytes();
+pub(super) const AUDIT_WHO_NONE: &[u8] = r#"{"principal":"","account":"gateway"}"#.as_bytes();
 
 // Literal wire-contract goldens: specified independently of JournalV2 and its codec.
 pub(super) const JOURNAL_V2_ADOPT: &[u8] = concat!(

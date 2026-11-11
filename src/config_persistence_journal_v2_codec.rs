@@ -2,8 +2,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Private wire DTOs: persisted claims never construct an A proof.
 
-use super::*;
 use serde_json::Value;
+
+use super::{
+    Action, Attribution, Decision, Deserialize, Fact, FileRevision, FrozenRecord, JournalError,
+    JournalV2, LogId, Pending, Phase, Reason, ResultClass, Role, Serialize, TokenState,
+};
 
 pub(super) fn terminal_matches(record: &FrozenRecord, decision: &Decision) -> bool {
     let Ok(Value::Object(mut payload)) = serde_json::from_slice(&record.payload_json) else {
@@ -139,10 +143,22 @@ pub(super) fn encode(state: &JournalV2) -> Result<Vec<u8>, JournalError> {
 }
 
 pub(super) mod role {
-    use super::*;
-    pub(crate) fn serialize<S: serde::Serializer>(role: &Role, s: S) -> Result<S::Ok, S::Error> {
+    use std::borrow::Borrow;
+
+    use super::{Deserialize, Role};
+
+    // Serde borrows fields; adapt that callback to the value-based serializer.
+    pub(crate) fn serialize_ref<S: serde::Serializer>(
+        role: impl Borrow<Role>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        serialize(*role.borrow(), s)
+    }
+
+    pub(crate) fn serialize<S: serde::Serializer>(role: Role, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(role.event())
     }
+
     pub(crate) fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Role, D::Error> {
         let event = String::deserialize(d)?;
         Role::from_event(&event).ok_or_else(|| serde::de::Error::custom("unknown journal role"))
@@ -150,18 +166,31 @@ pub(super) mod role {
 }
 
 pub(super) mod attribution {
-    use super::*;
+    use std::borrow::Borrow;
+
+    use super::{Attribution, Deserialize, Serialize, Value};
+
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Wire {
         actor: Value,
     }
+
+    // Keep Serde's borrowed-field callback separate from the optional value.
+    pub(crate) fn serialize_ref<S: serde::Serializer>(
+        actor: impl Borrow<Option<Attribution>>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        serialize(actor.borrow().as_ref(), s)
+    }
+
     pub(crate) fn serialize<S: serde::Serializer>(
-        actor: &Option<Attribution>,
+        actor: Option<&Attribution>,
         s: S,
     ) -> Result<S::Ok, S::Error> {
         actor.serialize(s)
     }
+
     pub(crate) fn deserialize<'de, D: serde::Deserializer<'de>>(
         d: D,
     ) -> Result<Option<Attribution>, D::Error> {
