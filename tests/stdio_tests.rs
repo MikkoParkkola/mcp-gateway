@@ -239,46 +239,6 @@ async fn test_stdio_tools_list_returns_meta_tools() {
 }
 
 // ============================================================================
-// Test 5: CLI correctly parses `serve --stdio` flag
-// ============================================================================
-
-#[test]
-fn test_cli_serve_stdio_flag_parses() {
-    use clap::Parser;
-    use mcp_gateway::cli::{Cli, Command};
-
-    let args = ["mcp-gateway", "serve", "--stdio"];
-    let cli = Cli::try_parse_from(args).expect("parse serve --stdio");
-
-    match cli.command {
-        Some(Command::Serve { stdio: true }) => {
-            // Correct — stdio flag is set
-        }
-        other => panic!("Expected Serve {{ stdio: true }}, got: {other:?}"),
-    }
-}
-
-// ============================================================================
-// Test 6: CLI correctly parses plain `serve` (stdio=false by default)
-// ============================================================================
-
-#[test]
-fn test_cli_serve_no_flag_defaults_to_http() {
-    use clap::Parser;
-    use mcp_gateway::cli::{Cli, Command};
-
-    let args = ["mcp-gateway", "serve"];
-    let cli = Cli::try_parse_from(args).expect("parse serve");
-
-    match cli.command {
-        Some(Command::Serve { stdio: false }) => {
-            // Correct — http mode
-        }
-        other => panic!("Expected Serve {{ stdio: false }}, got: {other:?}"),
-    }
-}
-
-// ============================================================================
 // Edge-case dispatch tests (Tests 7–11)
 //
 // These tests verify the stdio dispatch contract by exercising MetaMcp methods

@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The transport key a backend `url` stands for (MIK-8667).
 //!
-//! Compiled into both the library and the binary (`mod transport_key;` in
-//! each), so the config loader, the strict-key check and the CLI's rewrite
-//! read one table and no item becomes public.
+//! Shared within the library, so the config loader, the strict-key check
+//! and the CLI's rewrite read one table without a public API.
 
 /// The transport key a backend `url` stands for, chosen by its scheme, or
 /// `None` for a scheme no transport reads.
