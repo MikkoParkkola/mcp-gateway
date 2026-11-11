@@ -105,6 +105,27 @@ async fn r32_a_stripped_signature_under_a_secret_never_delivers() {
     assert_eq!(page["answer_integrity_failed"], 1);
 }
 
+/// A delivery record written before signing began (the log had no secret)
+/// reads Unsigned by position, but a gateway that now holds a secret still
+/// cannot believe it: the effect stays at its fail-closed value, never delivered.
+#[tokio::test]
+async fn r32b_a_legacy_unsigned_delivery_under_a_secret_is_not_believed() {
+    let legacy = Fixture::new(None);
+    legacy.call("gw-t");
+    legacy.delivery("gw-t", &Dl::effect("delivered"));
+    let mut logs = legacy.logs();
+    logs.secret = Some(SECRET.as_bytes().to_vec());
+    let response = super::list_page(&logs, &legacy.access(), &super::ListQuery::default());
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let page: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let r = row_of(&page, "gw-t");
+    assert_eq!(r["effect"], "unknown");
+    assert_eq!(r["answer_integrity"], "unsigned");
+    assert_eq!(page["answer_integrity_failed"], 1);
+}
+
 #[tokio::test]
 async fn r33_no_secret_cannot_vouch() {
     let signed = Fixture::new(Some(SECRET));
