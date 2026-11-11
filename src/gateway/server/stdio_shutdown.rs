@@ -64,6 +64,13 @@ fn parent_pid() -> i32 {
     0
 }
 
+/// A hurry flushes the reply drain only while that drain is still running: a
+/// finished drain future is never polled again (a fused one would wait out the
+/// whole cut for nothing).
+pub(super) fn flush_pending(hurried: bool, drain_finished: bool) -> bool {
+    hurried && !drain_finished
+}
+
 /// Run one teardown step under `deadline`. `None` when it did not finish:
 /// the step is dropped, and the expiry logged by name.
 pub(super) async fn bounded_step<F: Future>(
@@ -327,7 +334,8 @@ impl Gateway {
                 // A hurry that lands after the drain finished (during the
                 // post-drain cleanup) has nothing left to flush: a finished
                 // future is never polled again.
-                if hurried.is_some() && !futures::future::FusedFuture::is_terminated(&before) {
+                let drained = futures::future::FusedFuture::is_terminated(&before);
+                if flush_pending(hurried.is_some(), drained) {
                     // The kill fails the calls it reaches, so their replies
                     // join those already produced; both go out before the cut.
                     let flushed =

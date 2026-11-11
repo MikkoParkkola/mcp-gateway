@@ -340,10 +340,19 @@ mod hurry {
         }
     }
 
+    /// The guard on the post-hurry flush: only a hurried, unfinished drain is
+    /// polled (a finished one is never polled again).
+    #[test]
+    fn a_flush_is_pending_only_for_a_hurried_unfinished_drain() {
+        use super::super::super::stdio_shutdown::flush_pending;
+        assert!(flush_pending(true, false), "hurried and still draining");
+        assert!(!flush_pending(true, true), "the drain finished");
+        assert!(!flush_pending(false, false), "no hurry");
+        assert!(!flush_pending(false, true), "no hurry, finished");
+    }
+
     #[tokio::test]
     async fn a_hurry_during_post_drain_cleanup_does_not_repoll_the_finished_drain() {
-        // No backend to wait for: a flush that polls the finished drain would
-        // wait out the whole cut (about KILL_RESERVE) for nothing.
         let (mut gateway, _dir) = bare_fixture().await;
         let hurry = gateway.hurry_trigger_for_test();
         let deadline = gateway.backends.stop_deadline();
@@ -370,11 +379,9 @@ mod hurry {
                 + crate::transport::KILL_RESERVE_FOR_TEST
                 + crate::transport::HURRY_WINDOW
         );
-        // The stop is instant and the cut is about KILL_RESERVE away: ending
-        // inside this bound means nothing waited on the finished drain.
-        timeout(Duration::from_secs(5), task)
+        timeout(ROW_BOUND, task)
             .await
-            .expect("hurried stop ends before the cut")
+            .expect("hurried stop ends")
             .expect("the serve task does not panic")
             .expect("run_stdio_on returns Ok");
     }

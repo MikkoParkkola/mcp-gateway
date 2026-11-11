@@ -5,3 +5,4 @@ src/gateway/server/stdio_shutdown.rs	stdio_before_backends	1	Same integration ro
 src/gateway/server/background.rs	join_mut	1	Covered by the stdio drain rows (stdio_teardown_bound); a writer join on the stop path
 src/gateway/server/stdio_shutdown.rs	parent_pid	1	Reads the parent pid; its consumer is covered by the orphan_watch unit rows
 src/gateway/server/stdio_shutdown.rs	orphan_watch	1	Covered by the three stdio_orphan_watch unit rows and the three-level chain integration row
+src/gateway/server/stdio_shutdown.rs	flush_pending	1	Pure decision, covered by a_flush_is_pending_only_for_a_hurried_unfinished_drain
