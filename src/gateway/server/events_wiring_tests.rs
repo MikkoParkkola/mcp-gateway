@@ -24,6 +24,7 @@ fn wire(
     Arc<BackendRegistry>,
     Arc<CounterStore>,
     Arc<tempfile::TempDir>,
+    Arc<parking_lot::RwLock<WebhookRegistry>>,
 ) {
     // The gateway's events opener keeps the registered dir its store lives in.
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -48,7 +49,7 @@ fn wire(
         &store,
     )
     .expect("wired");
-    (meta, registry, store, dir)
+    (meta, registry, store, dir, webhooks)
 }
 
 fn marks(store: &CounterStore) -> Vec<(MarkerKind, Option<String>)> {
@@ -62,8 +63,29 @@ fn marks(store: &CounterStore) -> Vec<(MarkerKind, Option<String>)> {
 /// T28, T29 and T30: a kill, a revive and a tripped breaker are three
 /// markers, whatever the events configuration; a kill of a name nobody
 /// configured is marked with no subject.
-#[tokio::test]
-async fn t30_kill_switch_and_breaker_markers_in_every_events_configuration() {
+#[test]
+fn t30_kill_switch_and_breaker_markers_in_every_events_configuration() {
+    // The started hub's tasks hold it until their runtime is dropped, so the
+    // runtime is owned here and the directories are checked after it goes.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let dirs = runtime.block_on(markers_in_every_events_configuration());
+    drop(runtime);
+    for (path, events, operational) in dirs {
+        // The hub keeps its directory for as long as it lives, and it and the
+        // webhook registry hold each other: with the loop broken, the directory
+        // goes with the runtime instead of outliving the test binary.
+        assert!(
+            !path.exists(),
+            "events {events}, operational {operational}: the store directory outlived its owners"
+        );
+    }
+}
+
+async fn markers_in_every_events_configuration() -> Vec<(std::path::PathBuf, bool, bool)> {
+    let mut dirs = Vec::new();
     let backend = |name: &str| {
         Arc::new(Backend::new(
             name,
@@ -73,7 +95,8 @@ async fn t30_kill_switch_and_breaker_markers_in_every_events_configuration() {
         ))
     };
     for (events, operational) in [(false, false), (true, false), (true, true)] {
-        let (meta, registry, store, _dir) = wire(events, operational);
+        let (meta, registry, store, dir, webhooks) = wire(events, operational);
+        let path = dir.path().to_path_buf();
         assert!(registry.register(backend("alpha")));
         let kill = meta.kill_switch();
         kill.kill("alpha");
@@ -92,5 +115,9 @@ async fn t30_kill_switch_and_breaker_markers_in_every_events_configuration() {
             ],
             "events {events}, operational {operational}"
         );
+        webhooks.write().clear_events();
+        drop((meta, registry, store, dir, webhooks));
+        dirs.push((path, events, operational));
     }
+    dirs
 }
