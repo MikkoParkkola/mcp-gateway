@@ -252,6 +252,11 @@ mod transport_double_run_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;
+/// Shared test-only reader for the UI access matrix fragments.
+#[cfg(test)]
+pub(in crate::gateway) mod ui_access_matrix_rows;
+#[cfg(test)]
+mod ui_access_matrix_rows_tests;
 /// The web UI API's access answers per path, method and caller, pinned.
 #[cfg(all(test, feature = "webui"))]
 mod ui_access_matrix_tests;

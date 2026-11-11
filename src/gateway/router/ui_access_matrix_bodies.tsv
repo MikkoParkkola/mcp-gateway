@@ -1,0 +1,6 @@
+# name, digest, meaning. A body shared by 3 or more routes at the split; names are frozen, not recomputed.
+b_078e5133	078e513332cc	shared answer body on 31 routes
+b_4e89aa84	4e89aa845ceb	shared answer body on 3 routes
+b_a8264f90	a8264f90e9e6	shared answer body on 3 routes
+b_ca730ec7	ca730ec7fc2b	shared answer body on 14 routes
+b_de6b5592	de6b55925ef7	shared answer body on 47 routes
