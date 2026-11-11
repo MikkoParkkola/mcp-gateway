@@ -213,9 +213,17 @@ impl MetaMcp {
             // rewrite, and its payload carries their digest: while the scan
             // can redact, every seal comes off first, chain and playbook steps
             // and a stored task's own seal included. The top-level seal is
-            // applied after the scan, over what it delivers.
-            let strip = (firewall.scans_responses() && policies.redacts())
-                .then(|| crate::trust::seal_strip::strip_seals(result));
+            // applied after the scan, over what it delivers. An interim
+            // answer's question and state stay whole: the firewall refuses on
+            // a finding there and never rewrites it, so a seal inside cannot
+            // be left over redacted bytes, and stripping it would change what
+            // the backend asked without the immutability check seeing it.
+            let strip = (firewall.scans_responses() && policies.redacts()).then(|| {
+                crate::trust::seal_strip::strip_seals_keeping(
+                    result,
+                    &crate::security::response_policy::INTERIM_MEMBERS,
+                )
+            });
             let before = policies.redacts().then(|| result.clone());
             let verdict = firewall.check_response_artifact(
                 policies,

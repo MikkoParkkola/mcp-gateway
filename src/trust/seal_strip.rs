@@ -59,3 +59,26 @@ pub(crate) fn strip_seals(value: &mut Value) -> Strip {
     }
     strip
 }
+
+/// [`strip_seals`] over everything but the named top-level members of an
+/// object, which are set aside and put back whole. For a member the firewall
+/// holds immutable (an interim answer's question and state): it refuses on a
+/// finding there and never rewrites it, so a seal inside it cannot be left
+/// over redacted bytes, and stripping it would silently change what the
+/// backend asked.
+pub(crate) fn strip_seals_keeping(value: &mut Value, keep: &[&str]) -> Strip {
+    let kept: Vec<(String, Value)> = value.as_object_mut().map_or_else(Vec::new, |object| {
+        keep.iter()
+            .filter_map(|member| {
+                object
+                    .remove(*member)
+                    .map(|held| ((*member).to_owned(), held))
+            })
+            .collect()
+    });
+    let strip = strip_seals(value);
+    if let Some(object) = value.as_object_mut() {
+        object.extend(kept);
+    }
+    strip
+}
