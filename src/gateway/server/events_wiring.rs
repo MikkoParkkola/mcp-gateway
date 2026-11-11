@@ -50,9 +50,7 @@ pub(super) fn install(
     let store_dir = expand_home_path(&config.events.store_dir);
     #[cfg(test)]
     assert!(
-        !crate::test_dir_keep::norm(&store_dir).starts_with(crate::test_dir_keep::norm(
-            &expand_home_path("~/.mcp-gateway")
-        )),
+        !super::task_runtime::is_real_store(&store_dir),
         "a test opened the real events store at {}; give it a temp events.store_dir",
         store_dir.display()
     );

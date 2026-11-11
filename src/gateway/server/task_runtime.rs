@@ -196,10 +196,16 @@ pub(super) async fn settle_store(
 
 /// Whether `dir` lies under the operator's real `~/.mcp-gateway`.
 #[cfg(test)]
-fn is_real_store(dir: &Path) -> bool {
-    crate::test_dir_keep::norm(dir).starts_with(crate::test_dir_keep::norm(
-        &super::expand_home_path("~/.mcp-gateway"),
-    ))
+pub(super) fn is_real_store(dir: &Path) -> bool {
+    is_under(dir, &super::expand_home_path("~/.mcp-gateway"))
+}
+
+/// Whether `dir` lies under `real`, resolving existing symlinked ancestors.
+#[cfg(test)]
+pub(super) fn is_under(dir: &Path, real: &Path) -> bool {
+    use crate::test_dir_keep::norm;
+
+    norm(dir).starts_with(norm(real))
 }
 
 #[cfg(test)]
