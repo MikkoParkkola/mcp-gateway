@@ -50,6 +50,19 @@ else
   )
 fi
 
+# init stores the admin token outside gateway.yaml and writes a reference to a
+# path on this host (the file store: the runner has no keychain). The container
+# cannot see that path, so it gets a copy that takes the token from its
+# environment, as docs/DEPLOYMENT.md tells a Docker deployment to do.
+admin_ref="$(sed -n 's/^ *bearer_token: *"\(.*\)"/\1/p' "$work/gateway.yaml" | head -1)"
+[[ "$admin_ref" == file:* ]] || { echo "admin token reference is not a file: store: ${admin_ref%%:*}" >&2; exit 1; }
+token_file="${admin_ref#file:}"
+[[ "$init_in_image" == "1" ]] && token_file="$work/${token_file#/work/}"
+admin_token="$(cat "$token_file")"
+[[ -n "$admin_token" ]] || { echo "could not read the admin token init stored" >&2; exit 1; }
+export MCP_GATEWAY_TOKEN="$admin_token"  # inherited by docker run -e, never in argv
+(umask 077; sed 's|^\( *bearer_token: *\).*|\1"env:MCP_GATEWAY_TOKEN"|' "$work/gateway.yaml" >"$work/gateway.container.yaml")
+
 # The fixture listens only on this private network; it is not published.
 docker network create "$network" >/dev/null
 docker run -d --name "$fixture" --network "$network" \
@@ -94,7 +107,8 @@ docker run -d \
   -p "127.0.0.1::39400" \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
-  -v "$work/gateway.yaml:/config.yaml:ro" \
+  -e MCP_GATEWAY_TOKEN \
+  -v "$work/gateway.container.yaml:/config.yaml:ro" \
   -v "$work/capabilities:/capabilities:ro" \
   "$image" \
   --config /config.yaml --host 0.0.0.0 --port 39400 >/dev/null
@@ -125,8 +139,6 @@ fi
 # alone races the load and fails with "Not found: 'gateway'". Wait for the
 # readiness the admin health view reports — a backend that never loads still
 # fails this smoke. The product gap making it necessary is MIK-7268.
-admin_token="$(sed -n 's/^ *bearer_token: *"\(.*\)"/\1/p' "$work/gateway.yaml" | head -1)"
-[[ -n "$admin_token" ]] || { echo "could not read admin token from gateway.yaml" >&2; exit 1; }
 capabilities_ready=""
 for _ in $(seq 1 150); do
   if curl -fsS --max-time 10 -H "Authorization: Bearer $admin_token" "$health_url" 2>/dev/null \

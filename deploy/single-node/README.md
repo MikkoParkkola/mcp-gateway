@@ -11,11 +11,23 @@ gateway process working directory. Keep `gateway.yaml` and `capabilities/`
 together when moving from local development to Docker Compose, systemd, or
 launchd.
 
+`init` stores the admin token outside `gateway.yaml` and writes a reference to it
+in `auth.bearer_token`. For a service that runs as another user (systemd,
+launchd), install the stored token file next to the deployed config, owner-only,
+and point the deployed copy's reference at it, for example
+`bearer_token: "file:/etc/mcp-gateway/secrets/NAME"`. Find `NAME` and the
+original path on the `admin-token` line of `mcp-gateway doctor`.
+
 ## Docker Compose
 
 ```bash
 # Linux: gateway.yaml here is a deployment copy, not your working config
-install -m 600 <working-config> gateway.yaml && sudo chown 1001:1001 gateway.yaml
+install -m 600 <working-config> gateway.yaml
+# init wrote a reference to a token stored on this host; the container cannot
+# read it. Use an environment variable instead (QUICKSTART: "Read the admin token for a client").
+sed -i 's|^\( *bearer_token: *\).*|\1"env:MCP_GATEWAY_TOKEN"|' gateway.yaml
+export MCP_GATEWAY_TOKEN="$(cat '/absolute/config-dir/secrets/NAME')"
+sudo chown 1001:1001 gateway.yaml
 docker compose -f deploy/single-node/docker-compose.yaml up -d
 curl -sf http://127.0.0.1:39400/readyz
 ```
