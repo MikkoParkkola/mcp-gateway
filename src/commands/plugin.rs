@@ -239,8 +239,8 @@ mod tests {
         let cfg = default_config();
         // WHEN: CLI arg is None
         let result = resolve_marketplace_url(None, &cfg.marketplace);
-        // THEN: config value is returned
-        assert_eq!(result, "https://plugins.mcpgateway.io");
+        // THEN: the config value is returned, and by default no registry is set
+        assert_eq!(result, "");
     }
 
     // ── resolved_plugin_dir ───────────────────────────────────────────────────
@@ -312,8 +312,8 @@ mod tests {
     fn marketplace_config_has_expected_defaults() {
         // GIVEN: a default MarketplaceConfig
         let cfg = MarketplaceConfig::default();
-        // THEN: URL and plugin_dir have the documented defaults
-        assert_eq!(cfg.marketplace_url, "https://plugins.mcpgateway.io");
+        // THEN: no registry is configured by default; plugin_dir has its default
+        assert_eq!(cfg.marketplace_url, "");
         assert_eq!(cfg.plugin_dir, "~/.mcp-gateway/plugins");
     }
 
@@ -322,9 +322,6 @@ mod tests {
         // GIVEN: the top-level Config default
         let cfg = Config::default();
         // THEN: marketplace sub-config has default values
-        assert_eq!(
-            cfg.marketplace.marketplace_url,
-            "https://plugins.mcpgateway.io"
-        );
+        assert_eq!(cfg.marketplace.marketplace_url, "");
     }
 }
