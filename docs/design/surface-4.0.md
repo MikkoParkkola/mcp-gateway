@@ -133,7 +133,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 |---|---|---|---|---|---|
 | `(global)` | 13 |  | `mcp-gateway --protocol-revision-window` |  |  |
 | `accounts` | 13 |  |  |  |  |
-| `add` | 11 |  |  |  | `mcp-gateway add --config`; `mcp-gateway add -c` |
+| `add` | 13 |  |  |  | `mcp-gateway add --config`; `mcp-gateway add -c` |
 | `api` | 13 |  |  |  |  |
 | `audit` | 17 |  |  |  |  |
 | `cap` | 73 |  |  |  |  |
@@ -853,7 +853,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway add --description` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add --env` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add -e` | KEEP | short alias of `--env` | - | src/cli/mod.rs:401 |
+| `mcp-gateway add --env-file` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add --force` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
+| `mcp-gateway add --keep-as-text` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add <TRAILING_COMMAND>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |

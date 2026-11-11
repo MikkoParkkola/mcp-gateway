@@ -432,8 +432,13 @@ pub enum Command {
     /// # Stdio server with trailing command (claude/codex style):
     /// mcp-gateway add my-server -- npx -y @some/mcp-server --flag
     ///
-    /// # Stdio server with env vars:
-    /// mcp-gateway add -e API_KEY=xxx my-server -- npx my-mcp-server
+    /// # Stdio server with an env var taken from this shell (values never go
+    /// # on the command line, where process lists and history show them):
+    /// export MY_TOKEN=...   # or set it in your shell profile
+    /// mcp-gateway add -e MY_TOKEN my-server -- npx my-mcp-server
+    ///
+    /// # The same with values from a JSON file (`--env-file -` reads stdin):
+    /// mcp-gateway add --env-file secrets.json my-server -- npx my-mcp-server
     ///
     /// # HTTP server:
     /// mcp-gateway add --url https://mcp.sentry.dev/mcp sentry
@@ -458,9 +463,21 @@ pub enum Command {
         #[arg(long)]
         description: Option<String>,
 
-        /// Environment variables, may be repeated (-e KEY=VALUE or --env KEY=VALUE)
-        #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
+        /// An environment variable to pass the server, by NAME; its value is
+        /// read from this shell's environment. May be repeated. Values never
+        /// go on the command line (process lists and shell history show them)
+        #[arg(short = 'e', long = "env", value_name = "NAME")]
         env_vars: Vec<String>,
+
+        /// A JSON object of environment variable names to values, from FILE
+        /// or `-` for stdin (at most 64 KiB)
+        #[arg(long = "env-file", value_name = "FILE")]
+        env_file: Option<std::path::PathBuf>,
+
+        /// Write this value into gateway.yaml as typed instead of storing it in
+        /// the secret store; may be repeated (an env KEY, or header:NAME)
+        #[arg(long = "keep-as-text", value_name = "KEY")]
+        keep_as_text: Vec<String>,
 
         /// Rewrite the whole file when the change cannot be made in place
         /// (comments and layout are lost); without it such a write is refused
