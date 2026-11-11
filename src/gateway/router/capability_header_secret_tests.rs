@@ -15,10 +15,12 @@ const LITERAL: &str = "tok-0123456789abcdef-canary";
 /// (YAML single-quoted, so braces and quotes are literal); `second` adds a
 /// second provider carrying the same headers.
 fn doc(headers: &[(&str, &str)], second: bool) -> String {
-    let block = headers.iter().fold(String::new(), |mut acc, (name, value)| {
-        let _ = writeln!(acc, "        {name}: '{}'", value.replace('\'', "''"));
-        acc
-    });
+    let block = headers
+        .iter()
+        .fold(String::new(), |mut acc, (name, value)| {
+            let _ = writeln!(acc, "        {name}: '{}'", value.replace('\'', "''"));
+            acc
+        });
     let provider = |key: &str, path: &str, block: &str| {
         format!(
             "  {key}:\n    service: rest\n    config:\n      base_url: https://api.example.com\n      path: {path}\n      headers:\n{block}"
@@ -291,7 +293,8 @@ async fn capedit_a_refused_json_credential_is_echoed_nowhere() {
 
 /// r4: prove loader acceptance before judging the save's exact refusal.
 async fn assert_review_refused(after: &str, field: &str) {
-    crate::capability::parse_capability(after).expect("the loader accepts this form before the editor's credential check");
+    crate::capability::parse_capability(after)
+        .expect("the loader accepts this form before the editor's credential check");
     let (status, body, fx, before) = save(after).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     let answer: serde_json::Value = serde_json::from_str(&body).expect("a JSON answer");
@@ -328,7 +331,7 @@ async fn capedit_r4_a_boolean_provider_name_is_refused_by_header_field() {
     assert_review_refused(&after, "providers.true.config.headers.Authorization").await;
 }
 
-/// F2: the executor merges this provider's static_params before filling headers.
+/// F2: the executor merges this provider's `static_params` before filling headers.
 #[tokio::test]
 async fn capedit_r4_a_static_parameter_credential_is_refused_by_header_field() {
     let after = doc(&[("Authorization", "Bearer {api_key}")], false).replace(
@@ -347,7 +350,7 @@ async fn capedit_r4_an_env_literal_default_span_is_refused_by_header_field() {
     assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
 }
 
-/// F3 policy row: today secret_name accepts this whole nonempty suffix too.
+/// F3 policy row: today `secret_name` accepts this whole nonempty suffix too.
 #[tokio::test]
 async fn capedit_r4_an_env_space_literal_span_is_refused_by_header_field() {
     let value = format!("Bearer {{env.API_KEY {LITERAL}}}");
