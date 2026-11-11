@@ -196,7 +196,9 @@ async fn r49_a_read_past_the_joined_bound_fails_closed() {
     let fx = Fixture::new(None);
     fx.call_on("only", "gw-old");
     fx.delivery("gw-old", &Dl::effect("delivered"));
-    for i in 0..(MAX_JOINED + MAX_PENDING + MAX_EVICTED + 100) {
+    // Calls past the bounds: each one older than the last pair that still fit.
+    let past = 100;
+    for i in 0..(MAX_JOINED + MAX_PENDING + MAX_EVICTED + past) {
         let trace = format!("gw-p{i}");
         fx.call(&trace);
         fx.delivery(&trace, &Dl::effect("delivered"));
@@ -205,7 +207,9 @@ async fn r49_a_read_past_the_joined_bound_fails_closed() {
     let page = json!({"rows": rows});
     let r = row_of(&page, "gw-old");
     assert_eq!(r["effect"], "unknown");
-    assert_eq!(manifest["join_incomplete"], 1);
+    // The join counts every scanned call, whatever the filter keeps: the
+    // oldest `past` pairs and the filtered call itself.
+    assert_eq!(manifest["join_incomplete"], past + 1);
 }
 
 /// A trace reopened as poisoned after its join keeps its reason through the
