@@ -28,6 +28,7 @@ pub mod data_flow;
 #[cfg(test)]
 pub(crate) mod decision_fixture_table;
 pub(crate) mod decision_record;
+pub(crate) mod dispatched;
 pub(crate) mod dump_guard;
 #[cfg(feature = "firewall")]
 pub mod firewall;
