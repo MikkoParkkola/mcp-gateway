@@ -24,7 +24,7 @@ fn bounded<T: Send + 'static>(handle: thread::JoinHandle<T>, what: &str) -> T {
     });
     match rx.recv_timeout(Duration::from_secs(10)) {
         Ok(Ok(value)) => value,
-        Ok(Err(_)) => panic!("{what} panicked"),
+        Ok(Err(payload)) => panic!("{what} panicked: {payload:?}"),
         Err(_) => panic!("{what} did not finish in 10 s: the stop and a sender wait on each other"),
     }
 }
