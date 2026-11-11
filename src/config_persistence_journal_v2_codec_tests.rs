@@ -18,7 +18,7 @@ use super::fixtures::{
     JOURNAL_V2_INVALID_OUTCOME_DEFERRED, JOURNAL_V2_INVALID_OUTCOME_RENAMED,
     JOURNAL_V2_INVALID_OUTCOME_UNPROVEN, JOURNAL_V2_INVALID_PENDING_FACT, JOURNAL_V2_NONE,
     JOURNAL_V2_PARKED, JOURNAL_V2_PENDING, JOURNAL_V2_RESTORE, JOURNAL_V2_ROOT, NEW, OLD, bytes,
-    checked, collect_case, config, decision, intended, r2_cases, reopened, session,
+    checked, collect_case, config, intended, r2_cases, reopened, session,
 };
 use super::{
     Action, Decision, Fact, FileRevision, JournalError, JournalV2, Locked, LogId, OpenJournal,
