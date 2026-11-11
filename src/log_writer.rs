@@ -52,6 +52,9 @@ struct Shared {
     /// Sends that have registered and not finished: the writer's final drain
     /// waits for zero, so a line past the closed check is never left behind.
     inflight: AtomicUsize,
+    /// Test hook: parks a send that has registered as in flight, before it checks.
+    #[cfg(test)]
+    after_register: std::sync::Mutex<Option<test_sinks::Gate>>,
     /// Test hook: parks a send that has passed the closed check.
     #[cfg(test)]
     after_check: std::sync::Mutex<Option<test_sinks::Gate>>,
@@ -103,6 +106,8 @@ pub(crate) fn spawn(
         closed: AtomicBool::new(false),
         inflight: AtomicUsize::new(0),
         #[cfg(test)]
+        after_register: std::sync::Mutex::new(None),
+        #[cfg(test)]
         after_check: std::sync::Mutex::new(None),
         #[cfg(test)]
         after_drain: std::sync::Mutex::new(None),
@@ -146,6 +151,13 @@ impl LossyStderr {
         // or the writer sees this send and waits for it.
         self.shared.inflight.fetch_add(1, Ordering::SeqCst);
         let _registered = InFlight(&self.shared.inflight);
+        #[cfg(test)]
+        {
+            let gate = self.shared.after_register.lock().expect("hook").clone();
+            if let Some(gate) = gate {
+                gate.pass();
+            }
+        }
         if self.shared.closed.load(Ordering::SeqCst) {
             self.shared.total.fetch_add(1, Ordering::Relaxed);
             return;
@@ -175,6 +187,12 @@ impl LossyStderr {
             q.fetch_sub(n, Ordering::AcqRel);
             self.shared.total.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Park every send that has registered as in flight, before its closed check.
+    #[cfg(test)]
+    pub(crate) fn park_after_register(&self, gate: &test_sinks::Gate) {
+        *self.shared.after_register.lock().expect("hook") = Some(gate.clone());
     }
 
     /// Park every send that has passed the closed check at `gate`.

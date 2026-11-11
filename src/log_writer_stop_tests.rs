@@ -88,6 +88,37 @@ fn an_idle_writer_is_woken_by_the_stop() {
     drop(w);
 }
 
+/// A send that starts after the close must not hold the writer up: a stream of
+/// such sends would otherwise keep the in-flight count above zero for good and
+/// the stop could never join. The late send is parked right after it would
+/// register; the writer, released afterwards, must still finish.
+#[test]
+fn a_send_that_starts_after_the_close_does_not_hold_the_writer_up() {
+    let (w, f, sink_gate, _out) = parked(64, 1 << 20);
+    line(&w, "first");
+    assert!(
+        sink_gate.wait_entered(),
+        "the writer is parked inside the sink"
+    );
+    let outcome = f.stop_and_join(Instant::now());
+    let StopOutcome::NotJoined(worker) = outcome else {
+        panic!("a parked worker is not joined: {outcome:?}");
+    };
+    let late_gate = Gate::closed();
+    w.park_after_register(&late_gate);
+    let late = {
+        let w = w.clone();
+        thread::spawn(move || line(&w, "late"))
+    };
+    // The late send either parks after registering or, when the close is
+    // checked first, returns at once: neither may keep the writer waiting.
+    sink_gate.open();
+    bounded(worker, "the kept worker");
+    late_gate.open();
+    bounded(late, "the late sender");
+    assert_eq!(w.dropped_lines(), 1, "the late line is counted");
+}
+
 #[test]
 fn a_clone_cannot_enqueue_once_the_writer_is_stopped() {
     // The writer is parked inside its sink, so it is alive and could still take
