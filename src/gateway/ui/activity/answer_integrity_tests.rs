@@ -5,6 +5,7 @@
 
 use serde_json::json;
 
+use super::answer::{MAX_EVICTED, MAX_JOINED, MAX_PENDING};
 use super::answer_fixture::{Dl, Fixture, SECRET, forge};
 use super::answer_list_tests::{get, row_of, traces};
 
@@ -194,7 +195,7 @@ async fn r49_a_read_past_the_joined_bound_fails_closed() {
     let fx = Fixture::new(None);
     fx.call_on("only", "gw-old");
     fx.delivery("gw-old", &Dl::effect("delivered"));
-    for i in 0..21_000 {
+    for i in 0..(MAX_JOINED + MAX_PENDING + MAX_EVICTED + 100) {
         let trace = format!("gw-p{i}");
         fx.call(&trace);
         fx.delivery(&trace, &Dl::effect("delivered"));
@@ -203,6 +204,53 @@ async fn r49_a_read_past_the_joined_bound_fails_closed() {
     let r = row_of(&page, "gw-old");
     assert_eq!(r["effect"], "unknown");
     assert_eq!(page["join_incomplete"], 1);
+}
+
+/// A trace reopened as poisoned after its join keeps its reason through the
+/// stale order entry it left behind, compaction and eviction.
+#[tokio::test]
+async fn r50_a_reopened_trace_keeps_its_reason_through_eviction() {
+    let fx = Fixture::new(Some(SECRET));
+    fx.call("gw-t");
+    for i in 0..(2 * MAX_PENDING) {
+        fx.delivery(&format!("gw-orphan{i}"), &Dl::effect("refused"));
+    }
+    fx.delivery("gw-t", &Dl::effect("refused"));
+    let at = fx.delivery_index("gw-t");
+    fx.call("gw-t");
+    fx.delivery("gw-t", &Dl::effect("refused"));
+    fx.edit(at, |e| {
+        forge(e, "response_effect", json!("delivered"), true);
+    });
+    let (_, page) = get(&fx, &[]).await;
+    let rows = rows_of(&page, "gw-t");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["effect"], "unknown", "the older call row");
+    assert_eq!(rows[1]["answer_integrity"], "unsigned");
+}
+
+/// At the joined set's exact bound nothing is dropped: the call that joins as
+/// the set fills still reads its record, and a duplicate behind it is caught.
+#[tokio::test]
+async fn r51_the_joined_bound_drops_no_record_and_misses_no_duplicate() {
+    let fx = Fixture::new(None);
+    fx.call_on("only", "gw-dup");
+    fx.delivery("gw-dup", &Dl::effect("delivered"));
+    fx.call_on("only", "gw-dup");
+    fx.delivery("gw-dup", &Dl::effect("delivered"));
+    fx.call_on("only", "gw-edge");
+    fx.delivery("gw-edge", &Dl::effect("delivered"));
+    for i in 0..MAX_JOINED {
+        let trace = format!("gw-p{i}");
+        fx.call(&trace);
+        fx.delivery(&trace, &Dl::effect("delivered"));
+    }
+    let (_, page) = get(&fx, &[("server", "only")]).await;
+    assert_eq!(row_of(&page, "gw-edge")["effect"], "delivered");
+    let dup = rows_of(&page, "gw-dup");
+    assert_eq!(dup.len(), 2);
+    assert_eq!(dup[1]["answer_integrity"], "duplicate");
+    assert_eq!(page["answer_integrity_failed"], 1);
 }
 
 #[tokio::test]
