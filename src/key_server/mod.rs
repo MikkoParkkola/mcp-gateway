@@ -46,6 +46,9 @@ pub mod handler;
 #[cfg(test)]
 mod identity_rules_tests;
 mod issuance;
+/// The row after an abrupt death, a rotation and a mark fault.
+#[cfg(test)]
+mod issuance_restart_tests;
 /// The mint's issuance row under the failure policy.
 #[cfg(test)]
 pub(crate) mod issuance_row_tests;
