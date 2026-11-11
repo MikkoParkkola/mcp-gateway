@@ -207,8 +207,11 @@ async fn r49_a_read_past_the_joined_bound_fails_closed() {
     let page = json!({"rows": rows});
     let r = row_of(&page, "gw-old");
     assert_eq!(r["effect"], "unknown");
-    // The join counts every scanned call, whatever the filter keeps: the
-    // oldest `past` pairs and the filtered call itself.
+    // The join counts every call the caller may read, whatever the filter
+    // keeps (`export.rs`: `count` runs after the access check and before the
+    // filter; design row R36, `answer_export3_tests.rs`: a filtered-out call
+    // with a failed join still counts, so a filter cannot hide it). Here that
+    // is the oldest `past` pairs, past the bounds, and the filtered call.
     assert_eq!(manifest["join_incomplete"], past + 1);
 }
 
