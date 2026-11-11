@@ -37,6 +37,14 @@ pub(crate) enum IssuanceWrite {
 }
 
 impl IssuanceWrite {
+    /// The error's kind, safe to log; the text may name a path.
+    pub(crate) fn error_kind(&self) -> Option<io::ErrorKind> {
+        match self {
+            Self::Confirmed => None,
+            Self::NotAttempted(e) | Self::Failed(e) | Self::Unconfirmed(e) => Some(e.kind()),
+        }
+    }
+
     /// The fixed label for logs and counters; never the error text.
     pub(crate) fn label(&self) -> &'static str {
         match self {

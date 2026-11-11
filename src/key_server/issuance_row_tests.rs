@@ -129,7 +129,7 @@ async fn failclosed_every_non_confirmed_outcome_refuses_with_503() {
         let dir = tempfile::tempdir().unwrap();
         let log = open_log(&dir, AuditFailurePolicy::FailClosed);
         let ks = server(&log);
-        let hold = cell.arm(&log).await;
+        let hold = cell.arm(&log);
         let response = mint(&ks).await;
         assert_eq!(
             response.status(),
@@ -166,7 +166,7 @@ impl Cell {
     ];
 
     /// Put the log into this cell's state; a held write is returned.
-    async fn arm(
+    fn arm(
         self,
         log: &Arc<TransparencyLogger>,
     ) -> Option<crate::security::transparency_log::rotation::StallRelease> {
@@ -244,9 +244,9 @@ impl TokenStore for RowFirst {
     }
 }
 
-/// NEW.W.3: under BestEffort every cell still mints, the row is simply
+/// NEW.W.3: under `BestEffort` every cell still mints, the row is simply
 /// missing, and the bearer is valid.
-/// Mutant: BestEffort refuses like FailClosed.
+/// Mutant: `BestEffort` refuses like `FailClosed`.
 #[tokio::test]
 async fn besteffort_every_cell_mints_without_the_row() {
     // An admission error cannot arise on a healthy BestEffort log (it never
@@ -255,7 +255,7 @@ async fn besteffort_every_cell_mints_without_the_row() {
         let dir = tempfile::tempdir().unwrap();
         let log = open_log(&dir, AuditFailurePolicy::BestEffort);
         let ks = server(&log);
-        let hold = cell.arm(&log).await;
+        let hold = cell.arm(&log);
         let response = mint(&ks).await;
         assert_eq!(response.status(), StatusCode::OK, "{cell:?}");
         let bearer = bearer_of(response).await;
@@ -376,7 +376,7 @@ fn only_the_issuance_helper_appends_from_the_key_server() {
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        if !name.ends_with(".rs") || name.ends_with("_tests.rs") {
+        if path.extension().is_none_or(|e| e != "rs") || name.ends_with("_tests.rs") {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap();

@@ -33,6 +33,7 @@ pub(super) async fn record_issuance(
         _ => IssuanceWrite::NotAttempted(std::io::Error::other("the event is not a record")),
     };
     let status = write.label();
+    let error_kind = write.error_kind();
     telemetry_metrics::counter!("mcp_key_server_issuance_rows_total", "status" => status)
         .increment(1);
     if matches!(write, IssuanceWrite::Confirmed) {
@@ -41,6 +42,7 @@ pub(super) async fn record_issuance(
     if log.failure_policy() == AuditFailurePolicy::FailClosed {
         warn!(
             status,
+            ?error_kind,
             "key server: the issuance row was not confirmed; no token issued"
         );
         let mut refusal = error_response(
@@ -56,6 +58,7 @@ pub(super) async fn record_issuance(
     }
     warn!(
         status,
+        ?error_kind,
         "key server: the issuance row was not confirmed; token issued anyway"
     );
     None

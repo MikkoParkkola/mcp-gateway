@@ -33,7 +33,7 @@ async fn a_row_that_is_not_an_issuance_is_never_attempted() {
 }
 
 /// The four raw outcomes keep their own fixed labels.
-/// Mutant: fold NotStarted or Unconfirmed into Failed.
+/// Mutant: fold `NotStarted` or `Unconfirmed` into `Failed`.
 #[tokio::test]
 async fn each_raw_outcome_has_its_own_label() {
     let dir = tempfile::tempdir().unwrap();
