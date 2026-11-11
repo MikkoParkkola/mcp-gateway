@@ -149,7 +149,11 @@ async fn a_listener_whose_token_is_revoked_is_closed_at_next_delivery() {
     ));
     let token = temporary_token(&["alpha"]);
     let (bearer, jti) = (token.token.clone(), token.jti.clone());
-    key_server.store.insert(token).await;
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        token,
+    );
     let (state, _store) = test_router_app_state_with_auth_and_key_server(
         &two_principal_auth(),
         Some(Arc::clone(&key_server)),

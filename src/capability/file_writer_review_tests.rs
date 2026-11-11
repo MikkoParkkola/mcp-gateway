@@ -294,6 +294,15 @@ fn unverifiable_pins() -> Vec<String> {
     ]
 }
 
+/// A pin the typed parse refuses answers the fixed parse refusal with no
+/// patch; every other unverifiable pin is a mismatch.
+fn refused<T>(result: &Result<T, Refused>) -> bool {
+    matches!(
+        result,
+        Err(Refused::PinMismatch { .. } | Refused::Invalid { patch: None, .. })
+    )
+}
+
 #[tokio::test]
 async fn every_unverifiable_pin_is_a_mismatch() {
     for pin in unverifiable_pins() {
@@ -313,16 +322,10 @@ async fn every_unverifiable_pin_is_a_mismatch() {
         )
         .await;
 
-        assert!(
-            matches!(result, Err(Refused::PinMismatch { .. })),
-            "{pin:?}: {result:?}"
-        );
+        assert!(refused(&result), "{pin:?}: {result:?}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), base, "{pin:?}");
         assert!(
-            matches!(
-                super::super::preview(&sent, Some(&base)),
-                Err(Refused::PinMismatch { .. })
-            ),
+            refused(&super::super::preview(&sent, Some(&base))),
             "validate refuses it too: {pin:?}"
         );
     }

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::execution_context::validate_capability_account_binding;
+use super::file_writer_headers::check;
 use super::{compute_capability_hash, unloadable_issues};
 use crate::capability::parser::parse_capability_text;
 use crate::config_persistence::lock::{NotLocked, lock_config};
@@ -90,7 +91,11 @@ pub(crate) enum Refused {
     LockBusy,
     Invalid {
         errors: Vec<FieldError>,
-        patch: String,
+        // Parse refusals never carry submitted bytes.
+        patch: Option<String>,
+    },
+    LiteralCredential {
+        errors: Vec<FieldError>,
     },
 }
 
@@ -357,14 +362,10 @@ pub(crate) fn validate(
     path: &Path,
     accounts: Option<&AccountStrategyRegistry>,
 ) -> Result<(), Vec<FieldError>> {
-    if let Err(e) = crate::yaml::from_str::<crate::yaml::Value>(text) {
-        let at = e.location();
-        return Err(vec![FieldError {
-            line: at.map(|l| l.line()),
-            column: at.map(|l| l.column()),
-            field: None,
-            message: e.to_string(),
-        }]);
+    if let Err(Refused::Invalid { errors, .. } | Refused::LiteralCredential { errors }) =
+        check(text)
+    {
+        return Err(errors);
     }
     let capability = parse_capability_text(text, path).map_err(|e| vec![message(e)])?;
     let issues = unloadable_issues(&capability, path).map_err(|e| vec![message(e)])?;
@@ -541,14 +542,18 @@ fn target_path(dir: &Path, name: &str) -> PathBuf {
 ///
 /// # Errors
 ///
-/// `PinMismatch`, `Unpin` or `PinAmbiguous`, as [`commit`] would answer.
+/// `LiteralCredential`, `PinMismatch`, `Unpin` or `PinAmbiguous`, as [`commit`]
+/// would answer.
 pub(crate) fn preview(sent: &str, current: Option<&str>) -> Result<(String, PinChange), Refused> {
+    check(sent)?;
     if current.is_some_and(pin_broken) {
         return Err(Refused::PinMismatch {
             patch: unified_diff(current.unwrap_or_default(), sent),
         });
     }
-    final_bytes(sent, current, PinUpdate::InPlace)
+    let result = final_bytes(sent, current, PinUpdate::InPlace)?;
+    check(&result.0)?;
+    Ok(result)
 }
 
 /// The list's pin column: `verified`, `mismatch` or `unpinned`.
@@ -597,6 +602,9 @@ async fn commit_with(
         Change::Write(text) => text.as_str(),
         Change::Delete => "",
     };
+    if matches!(edit.change, Change::Write(_)) {
+        check(sent)?;
+    }
     let dir = std::fs::canonicalize(edit.dir).map_err(|e| unwritable(e, String::new()))?;
     let _held = match lock_config(&dir.join("capabilities"), deadline).await {
         Ok(held) => held,
@@ -636,9 +644,10 @@ async fn commit_with(
         });
     };
     let (bytes, pin) = final_bytes(sent, current.as_deref(), edit.pin)?;
+    check(&bytes)?;
     validate(&bytes, &target, accounts).map_err(|errors| Refused::Invalid {
         errors,
-        patch: patch(),
+        patch: Some(patch()),
     })?;
     // Windows `Inherit` takes the directory's ACL and could widen a private
     // file; Private never widens (lead ruling (A); the shared writer's cause

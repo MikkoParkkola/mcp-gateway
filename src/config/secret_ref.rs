@@ -218,7 +218,7 @@ pub(crate) fn is_template_syntax(text: &str) -> bool {
 
 /// The literal text a template value may carry: one auth scheme word and a
 /// space, before the template.
-const SCHEME_PREFIXES: &[&str] = &["Bearer ", "Basic ", "Token ", "Bot "];
+pub(crate) const SCHEME_PREFIXES: &[&str] = &["Bearer ", "Basic ", "Token ", "Bot "];
 
 /// Whether the text of `value` outside its templates is nothing, or one
 /// scheme prefix in front of them.
