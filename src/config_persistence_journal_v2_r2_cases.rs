@@ -2,9 +2,28 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Round-2 cases share the existing row collectors, including panic isolation.
 
+use std::path::Path;
+
+use serde_json::{Value, json};
+
 use super::super::observe::{self, Event};
-use super::r2_fixtures::*;
-use super::*;
+use super::super::{
+    Fact, IntentId, JournalError, JournalV2, Pending, Phase, ResultClass, TerminalRole,
+};
+use super::r2_fixtures::{
+    ABANDONED_PAIRS, DEFERRED_CONFLICT, DEFERRED_CONFLICT_ATTRIBUTION,
+    DEFERRED_CONFLICT_CALLER_DIGEST, DEFERRED_EQUAL, FACT_COMMITTED_MATCH, FACT_COMMITTED_WRONG,
+    FACT_ROLLED_BACK_MATCH, FACT_ROLLED_BACK_WRONG, OUTCOME_PAIRS, PENDING_FORWARD_MATCH,
+    PENDING_FORWARD_WRONG, PENDING_RESTORE_MATCH, PENDING_RESTORE_WRONG,
+};
+use super::{
+    AUDIT_WHO_PRINCIPAL, INTENT, NEW, OLD, bytes, collect_case, config, decision, frozen, intended,
+    session, wire,
+};
+use crate::config_persistence::commit::{Action, FileRevision};
+use crate::config_persistence::journal;
+use crate::config_persistence::lock::Locked;
+use crate::security::transparency_log::settle::{Attribution, Reason, Role};
 
 pub(crate) fn journal_cases(failures: &mut Vec<String>) {
     const ROW: &str = "journal_versions";
@@ -28,58 +47,7 @@ pub(crate) fn journal_cases(failures: &mut Vec<String>) {
             );
         }
     }
-    for (id, fixture, valid) in [
-        (
-            "Q1_decode_pending_wrong_destination_Forward",
-            PENDING_FORWARD_WRONG,
-            false,
-        ),
-        (
-            "Q1_decode_pending_wrong_destination_Restore",
-            PENDING_RESTORE_WRONG,
-            false,
-        ),
-        (
-            "Q1_decode_pending_right_destination_Forward",
-            PENDING_FORWARD_MATCH,
-            true,
-        ),
-        (
-            "Q1_decode_pending_right_destination_Restore",
-            PENDING_RESTORE_MATCH,
-            true,
-        ),
-        (
-            "Q1_decode_committed_fact_wrong_revision",
-            FACT_COMMITTED_WRONG,
-            false,
-        ),
-        (
-            "Q1_decode_rolledback_fact_wrong_revision",
-            FACT_ROLLED_BACK_WRONG,
-            false,
-        ),
-        (
-            "Q1_decode_committed_fact_right_revision",
-            FACT_COMMITTED_MATCH,
-            true,
-        ),
-        (
-            "Q1_decode_rolledback_fact_right_revision",
-            FACT_ROLLED_BACK_MATCH,
-            true,
-        ),
-        (
-            "Q5_conflicting_deferred_records_decode",
-            DEFERRED_CONFLICT,
-            false,
-        ),
-        ("Q5_equal_deferred_records_decode", DEFERRED_EQUAL, true),
-    ] {
-        collect_case(failures, ROW, id, decode_expectation(valid), || {
-            decode_case(fixture, valid)
-        });
-    }
+    journal_decode_cases(failures);
     for (terminal, pairs) in [("Outcome", OUTCOME_PAIRS), ("Abandoned", ABANDONED_PAIRS)] {
         for &(result, reason, valid, fixture) in pairs {
             let id = format!("Q4_invalid_result_reason_pairs_{terminal}_{result}_{reason}");
@@ -128,6 +96,73 @@ pub(crate) fn journal_cases(failures: &mut Vec<String>) {
             } else {
                 Err(format!("validate={result:?}"))
             }
+        });
+    }
+    deferred_extra_cases(failures, false);
+}
+
+fn journal_decode_cases(failures: &mut Vec<String>) {
+    const ROW: &str = "journal_versions";
+    for (id, fixture, valid) in [
+        (
+            "Q1_decode_pending_wrong_destination_Forward",
+            PENDING_FORWARD_WRONG,
+            false,
+        ),
+        (
+            "Q1_decode_pending_wrong_destination_Restore",
+            PENDING_RESTORE_WRONG,
+            false,
+        ),
+        (
+            "Q1_decode_pending_right_destination_Forward",
+            PENDING_FORWARD_MATCH,
+            true,
+        ),
+        (
+            "Q1_decode_pending_right_destination_Restore",
+            PENDING_RESTORE_MATCH,
+            true,
+        ),
+        (
+            "Q1_decode_committed_fact_wrong_revision",
+            FACT_COMMITTED_WRONG,
+            false,
+        ),
+        (
+            "Q1_decode_rolledback_fact_wrong_revision",
+            FACT_ROLLED_BACK_WRONG,
+            false,
+        ),
+        (
+            "Q1_decode_committed_fact_right_revision",
+            FACT_COMMITTED_MATCH,
+            true,
+        ),
+        (
+            "Q1_decode_rolledback_fact_right_revision",
+            FACT_ROLLED_BACK_MATCH,
+            true,
+        ),
+        (
+            "Q5_conflicting_deferred_records_decode",
+            DEFERRED_CONFLICT,
+            false,
+        ),
+        (
+            "Q5_conflicting_deferred_attribution_decode",
+            DEFERRED_CONFLICT_ATTRIBUTION,
+            false,
+        ),
+        (
+            "Q5_conflicting_deferred_caller_digest_decode",
+            DEFERRED_CONFLICT_CALLER_DIGEST,
+            false,
+        ),
+        ("Q5_equal_deferred_records_decode", DEFERRED_EQUAL, true),
+    ] {
+        collect_case(failures, ROW, id, decode_expectation(valid), || {
+            decode_case(fixture, valid)
         });
     }
 }
@@ -326,6 +361,7 @@ pub(crate) fn terminal_cases(failures: &mut Vec<String>) {
             },
         );
     }
+    deferred_extra_cases(failures, true);
 }
 
 fn terminal_state(dir: &Path, role: TerminalRole) -> JournalV2 {
@@ -449,6 +485,58 @@ fn deferred_state(dir: &Path, equal: bool) -> JournalV2 {
     writer.records.insert(0, retry);
     writer.records.insert(0, first);
     state
+}
+
+// Keep the equal-retry setup intact; change exactly one frozen-content field.
+fn deferred_conflict_state(dir: &Path, attribution: bool) -> Result<JournalV2, String> {
+    let mut state = deferred_state(dir, true);
+    let retry = &mut state.writer.as_mut().ok_or("writer")?.records[1];
+    if attribution {
+        retry.attribution = Some(Attribution {
+            actor: crate::security::audit::AuditWho::from_persisted(AUDIT_WHO_PRINCIPAL)
+                .map_err(|error| format!("attribution error: {error:?}"))?,
+        });
+    } else {
+        retry.caller_digest = "0".repeat(64);
+    }
+    Ok(state)
+}
+
+fn deferred_extra_cases(failures: &mut Vec<String>, finish: bool) {
+    let (row, operation, expected) = if finish {
+        (
+            "terminal_blocks_finish",
+            "finish",
+            "Err(InvalidState) or Err(Finish), all evidence untouched, no cleanup",
+        )
+    } else {
+        ("journal_versions", "validate", "Err(InvalidState)")
+    };
+    for (id, attribution) in [
+        ("Q5_conflicting_deferred_attribution", true),
+        ("Q5_conflicting_deferred_caller_digest", false),
+    ] {
+        collect_case(
+            failures,
+            row,
+            &format!("{id}_{operation}"),
+            expected,
+            || {
+                let (dir, path, locked) = config();
+                let state = deferred_conflict_state(dir.path(), attribution)?;
+                if finish {
+                    check_finish(&locked, &path, state, false, true)
+                } else {
+                    let result = state.validate();
+                    if result == Err(JournalError::InvalidState) {
+                        Ok(())
+                    } else {
+                        Err(format!("validate={result:?}"))
+                    }
+                }
+            },
+        );
+    }
 }
 
 fn check_finish(

@@ -467,3 +467,63 @@ pub(super) const DEFERRED_EQUAL: &[u8] = concat!(
     r#"105,116,116,101,110,34,125],"role":"config_write_outcome"}],"token":"writer-1"}}"#,
 )
 .as_bytes();
+
+// Equal payload bytes and caller digest; only the retry attribution differs.
+pub(super) const DEFERRED_CONFLICT_ATTRIBUTION: &[u8] = concat!(
+    r#"{"attempts":[],"binding":"opaque-log:fixture","fact":"untouched","new_revision":"bbbbbbb"#,
+    r#"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","original_revision":"aaaaaaaa"#,
+    r#"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pending":null,"phase":"staged"#,
+    r#"","version":2,"writer":{"decision":{"delivery_stopped":false,"reason":"refused","result""#,
+    r#":"not_written","settled_by":null,"terminal":"outcome"},"handed_over":false,"intent":{"at"#,
+    r#"tribution":null,"caller_digest":"8db52a270d606fc2078954f3a4f4766037fdf26b170d107b2131f00"#,
+    r#"250db7f35","delivered":true,"parked":null,"payload_json":[123,34,107,105,110,100,34,58,3"#,
+    r#"4,115,101,116,116,108,101,46,115,97,118,101,34,125],"role":"config_save_intent"},"intent"#,
+    r#"_counter":7,"records":[{"attribution":null,"caller_digest":"59f23596631b0dc1ff4c4b8efd51"#,
+    r#"f98449606b979c1eca8a478c25cabd902f67","delivered":true,"parked":null,"payload_json":[123"#,
+    r#",34,105,110,116,101,110,116,95,99,111,117,110,116,101,114,34,58,55,44,34,107,105,110,100"#,
+    r#",34,58,34,115,101,116,116,108,101,46,115,97,118,101,34,44,34,114,101,97,115,111,110,34,5"#,
+    r#"8,34,108,101,102,116,95,116,111,95,114,101,99,111,118,101,114,121,34,125],"role":"config"#,
+    r#"_write_deferred"},{"attribution":{"actor":{"credential_kind":"oidc_bearer","principal":""#,
+    r#"0123ab45cd67","account":"key-admin","authority":"https://issuer.example","subject":""#,
+    r#"operator-7"}},"caller_digest":"59f23596631b0dc1ff4c4b8efd51f9844"#,
+    r#"9606b979c1eca8a478c25cabd902f67","delivered":true,"parked":null,"payload_json":[123,34,1"#,
+    r#"05,110,116,101,110,116,95,99,111,117,110,116,101,114,34,58,55,44,34,107,105,110,100,34,5"#,
+    r#"8,34,115,101,116,116,108,101,46,115,97,118,101,34,44,34,114,101,97,115,111,110,34,58,34,"#,
+    r#"108,101,102,116,95,116,111,95,114,101,99,111,118,101,114,121,34,125],"role":"config_writ"#,
+    r#"e_deferred"},{"attribution":null,"caller_digest":"66bbc117d72dca58cf172aaae9cf2995aa2e58"#,
+    r#"c7dd948f2b9f08f027072feed6","delivered":true,"parked":null,"payload_json":[123,34,105,11"#,
+    r#"0,116,101,110,116,95,99,111,117,110,116,101,114,34,58,55,44,34,107,105,110,100,34,58,34,"#,
+    r#"115,101,116,116,108,101,46,115,97,118,101,34,44,34,114,101,97,115,111,110,34,58,34,114,1"#,
+    r#"01,102,117,115,101,100,34,44,34,114,101,115,117,108,116,34,58,34,110,111,116,95,119,114,"#,
+    r#"105,116,116,101,110,34,125],"role":"config_write_outcome"}],"token":"writer-1"}}"#,
+)
+.as_bytes();
+
+// Equal payload bytes and attribution; only the retry caller digest differs.
+pub(super) const DEFERRED_CONFLICT_CALLER_DIGEST: &[u8] = concat!(
+    r#"{"attempts":[],"binding":"opaque-log:fixture","fact":"untouched","new_revision":"bbbbbbb"#,
+    r#"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","original_revision":"aaaaaaaa"#,
+    r#"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pending":null,"phase":"staged"#,
+    r#"","version":2,"writer":{"decision":{"delivery_stopped":false,"reason":"refused","result""#,
+    r#":"not_written","settled_by":null,"terminal":"outcome"},"handed_over":false,"intent":{"at"#,
+    r#"tribution":null,"caller_digest":"8db52a270d606fc2078954f3a4f4766037fdf26b170d107b2131f00"#,
+    r#"250db7f35","delivered":true,"parked":null,"payload_json":[123,34,107,105,110,100,34,58,3"#,
+    r#"4,115,101,116,116,108,101,46,115,97,118,101,34,125],"role":"config_save_intent"},"intent"#,
+    r#"_counter":7,"records":[{"attribution":null,"caller_digest":"59f23596631b0dc1ff4c4b8efd51"#,
+    r#"f98449606b979c1eca8a478c25cabd902f67","delivered":true,"parked":null,"payload_json":[123"#,
+    r#",34,105,110,116,101,110,116,95,99,111,117,110,116,101,114,34,58,55,44,34,107,105,110,100"#,
+    r#",34,58,34,115,101,116,116,108,101,46,115,97,118,101,34,44,34,114,101,97,115,111,110,34,5"#,
+    r#"8,34,108,101,102,116,95,116,111,95,114,101,99,111,118,101,114,121,34,125],"role":"config"#,
+    r#"_write_deferred"},{"attribution":null,"caller_digest":"000000000000000000000000000000000"#,
+    r#"0000000000000000000000000000000","delivered":true,"parked":null,"payload_json":[123,34,1"#,
+    r#"05,110,116,101,110,116,95,99,111,117,110,116,101,114,34,58,55,44,34,107,105,110,100,34,5"#,
+    r#"8,34,115,101,116,116,108,101,46,115,97,118,101,34,44,34,114,101,97,115,111,110,34,58,34,"#,
+    r#"108,101,102,116,95,116,111,95,114,101,99,111,118,101,114,121,34,125],"role":"config_writ"#,
+    r#"e_deferred"},{"attribution":null,"caller_digest":"66bbc117d72dca58cf172aaae9cf2995aa2e58"#,
+    r#"c7dd948f2b9f08f027072feed6","delivered":true,"parked":null,"payload_json":[123,34,105,11"#,
+    r#"0,116,101,110,116,95,99,111,117,110,116,101,114,34,58,55,44,34,107,105,110,100,34,58,34,"#,
+    r#"115,101,116,116,108,101,46,115,97,118,101,34,44,34,114,101,97,115,111,110,34,58,34,114,1"#,
+    r#"01,102,117,115,101,100,34,44,34,114,101,115,117,108,116,34,58,34,110,111,116,95,119,114,"#,
+    r#"105,116,116,101,110,34,125],"role":"config_write_outcome"}],"token":"writer-1"}}"#,
+)
+.as_bytes();
