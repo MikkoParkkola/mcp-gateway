@@ -61,6 +61,9 @@ struct Shared {
     /// Test hook: how many times the writer has come round to wait for a message.
     #[cfg(test)]
     idle_polls: AtomicUsize,
+    /// Test hook: how many times the writer found a sender in flight and waited.
+    #[cfg(test)]
+    inflight_waits: AtomicUsize,
 }
 
 /// The `MakeWriter` for the fmt layer: each event's line goes to the queue.
@@ -105,6 +108,8 @@ pub(crate) fn spawn(
         after_drain: std::sync::Mutex::new(None),
         #[cfg(test)]
         idle_polls: AtomicUsize::new(0),
+        #[cfg(test)]
+        inflight_waits: AtomicUsize::new(0),
     });
     let for_thread = Arc::clone(&shared);
     let worker = thread::Builder::new()
@@ -182,6 +187,12 @@ impl LossyStderr {
     #[cfg(test)]
     pub(crate) fn idle_polls(&self) -> usize {
         self.shared.idle_polls.load(Ordering::SeqCst)
+    }
+
+    /// How many times the writer found a sender in flight and waited for it.
+    #[cfg(test)]
+    pub(crate) fn inflight_waits(&self) -> usize {
+        self.shared.inflight_waits.load(Ordering::SeqCst)
     }
 
     /// Park the writer at `gate` after each drain pass of the terminal stop.
@@ -396,6 +407,8 @@ fn run(
         if shared.inflight.load(Ordering::SeqCst) == 0 {
             break;
         }
+        #[cfg(test)]
+        shared.inflight_waits.fetch_add(1, Ordering::SeqCst);
         thread::yield_now();
     }
     // A sender's last act is the enqueue, then its guard drops: one more drain.

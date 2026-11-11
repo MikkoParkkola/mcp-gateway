@@ -190,8 +190,9 @@ fn only_a_joined_stop_permits_exec() {
 
 /// The one race a stop has: a line already past the closed check when the stop
 /// begins. It must reach the sink, not vanish between the drain and the exit.
-/// The writer is parked after its drain pass and the sender is released while
-/// it is parked, so no clock decides which of the two comes first.
+/// The writer is parked after its drain pass, then let go while the sender is
+/// still in flight; the sender is released only once the writer is seen waiting
+/// for it, so no clock decides which of the two comes first.
 #[test]
 fn a_send_in_flight_when_the_stop_begins_is_written_not_lost() {
     let (w, f, out) = scripted(vec![]);
@@ -212,9 +213,14 @@ fn a_send_in_flight_when_the_stop_begins_is_written_not_lost() {
         drain_gate.wait_entered(),
         "the writer finished a drain pass"
     );
+    // The writer goes on while the sender is still in flight, and must wait for
+    // it: the sender is released only once the writer is seen waiting.
+    drain_gate.open();
+    wait_until("the writer waits for the in-flight sender", || {
+        w.inflight_waits() >= 1
+    });
     check_gate.open();
     bounded(sender, "the sender");
-    drain_gate.open();
     let outcome = bounded(stopper, "the stop");
     assert!(matches!(outcome, StopOutcome::Joined(_)), "{outcome:?}");
     assert_eq!(kept(&out), ["racing"], "the in-flight line was written");
