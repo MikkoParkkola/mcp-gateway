@@ -1883,6 +1883,8 @@ jobs:
         run: python3 scripts/dev/test_mcp_events_oauth_shim.py
       - name: MCP events fail-fast harness rows
         run: python3 scripts/dev/test_mcp_events_failfast.py
+      - name: The UI access matrix bless tool writes only a complete table
+        run: python3 scripts/dev/test_bless_ui_matrix.py
 
   control-drift-probes:
     name: Control-drift probes (NFR.SEC.7)
