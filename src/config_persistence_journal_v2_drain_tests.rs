@@ -14,9 +14,9 @@ use super::fixtures::{
 };
 use crate::config_persistence::crash_fs::{self, Mode};
 use crate::config_persistence::journal;
-use crate::config_persistence::journal::drain::{Delivery, DrainError, JournalDrain, SettleSink};
+use crate::config_persistence::journal::drain::{DrainError, JournalDrain};
 use crate::config_persistence::lock;
-use crate::security::transparency_log::settle::{Attribution, IntentKind, Reason, Role};
+use crate::security::transparency_log::settle::Reason;
 
 #[test]
 fn journal_first_intent() {
@@ -25,7 +25,7 @@ fn journal_first_intent() {
     let expected = "verified frozen actor; append before flag";
     collect_case(&mut failures, ROW, "actor_and_ack", expected, || {
         let live = Live::new();
-        let mut initial = state(live.dir.path());
+        let mut initial = state(&live.resolved);
         attributed(&mut initial);
         let mut owner = live.seed(initial, ROW);
         let durable = bytes(&live.path);
@@ -40,7 +40,7 @@ fn journal_first_intent() {
             "{ROW}: acknowledgement precedes durable flag"
         );
         assert!(!durable.is_empty(), "{ROW}: seeded owner predates B");
-        crash_fs::cut(live.dir.path(), Mode::DropAll);
+        crash_fs::cut(&live.resolved, Mode::DropAll);
         drop(armed);
         reread(&mut owner);
         let writer = state_of(&owner).writer.as_ref().expect(ROW);
@@ -78,43 +78,7 @@ fn journal_first_intent() {
         "sink_contract",
         "actor-only typed sink appends",
         || {
-            let live = Live::new();
-            let delivery = Delivery {
-                binding: live.log.log_id(),
-                token: IntentId(WRITER.to_owned()),
-                role: Role::Intent(IntentKind::Save),
-                payload: payload(SAVE),
-                attribution: Some(Attribution { actor: actor() }),
-            };
-            assert_eq!(delivery.token.0, WRITER, "{ROW}: delivery retains token");
-            assert_eq!(
-                delivery.attribution.as_ref().map(|a| &a.actor),
-                Some(&actor()),
-                "{ROW}: delivery retains actor"
-            );
-            let sink: &dyn SettleSink = &live.log;
-            assert_eq!(sink.log_id(), delivery.binding, "{ROW}: sink binding");
-            let result = runtime(sink.settle(&delivery));
-            assert!(
-                result.is_ok(),
-                "{ROW}: shared sink delivers attributed record"
-            );
-            let direct = runtime(live.log.settle_attributed(
-                &delivery.binding,
-                "actor-control",
-                delivery.role,
-                delivery.payload.clone(),
-                actor(),
-            ));
-            assert!(direct.is_ok(), "{ROW}: actor-only primitive appends");
-            assert!(
-                live.records()
-                    .iter()
-                    .filter(|r| r["token"] == WRITER)
-                    .all(|r| r["who"] == serde_json::to_value(actor()).expect(ROW)),
-                "{ROW}: sink preserves full actor"
-            );
-            live.verify(ROW);
+            super::delivery_cases::sink_contract(ROW);
             Ok(())
         },
     );
@@ -133,8 +97,8 @@ fn journal_persist_uncertainty() {
         expected,
         || {
             let live = Live::new();
-            let mut owner = live.seed(state(live.dir.path()), ROW);
-            let armed = fault::arm(&live.path, Fault::Fail(At::DecisionPersisted));
+            let mut owner = live.seed(state(&live.resolved), ROW);
+            let armed = fault::arm(&live.path, Fault::Fail(At::BeforeDecisionSync));
             let choice = decision(ResultClass::NotWritten, Reason::Refused);
             let got = owner
                 .journal
@@ -155,12 +119,18 @@ fn journal_persist_uncertainty() {
             drop(armed);
             reread(&mut owner);
             assert_eq!(
+                bytes(&live.path),
+                candidate,
+                "{ROW}: reopened candidate bytes retained"
+            );
+            assert_eq!(
                 state_of(&owner).writer.as_ref().expect(ROW).decision,
-                Some(choice),
+                Some(choice.clone()),
                 "{ROW}: possibly landed decision retained after reopen"
             );
-            retry(&mut owner, &live, ROW);
-            retry(&mut owner, &live, ROW);
+            for _ in 0..2 {
+                super::delivery_cases::retained_retry(&mut owner, &live, &choice, ROW);
+            }
             assert_eq!(
                 terminal_count(&live.records(), WRITER),
                 1,
@@ -182,7 +152,7 @@ fn overwrite_decision_reopen() {
         let expected = "ChangedDecision; original delivered";
         collect_case(&mut failures, ROW, &format!("{reason:?}"), expected, || {
             let live = Live::new();
-            let mut initial = state(live.dir.path());
+            let mut initial = state(&live.resolved);
             decided(&mut initial);
             let mut owner = live.seed(initial, ROW);
             reread(&mut owner);
@@ -234,7 +204,7 @@ fn invalid_record_is_parked() {
         let expected = "one Invalid, durable park, lock refused";
         collect_case(&mut failures, ROW, &case, expected, || {
             let live = Live::new();
-            let mut initial = state(live.dir.path());
+            let mut initial = state(&live.resolved);
             initial.writer.as_mut().expect(ROW).intent.payload_json = invalid.to_vec();
             let mut owner = live.seed(initial, ROW);
             let watching = observe::watch(&live.path);
@@ -302,7 +272,7 @@ fn wrong_log_is_not_rebound() {
         || {
             let live = Live::new();
             let foreign = Live::new();
-            let owner = live.seed(state(live.dir.path()), ROW);
+            let owner = live.seed(state(&live.resolved), ROW);
             let before = bytes(&live.path);
             let log_before = std::fs::read(&foreign.log_path).unwrap_or_default();
             let result = runtime(JournalDrain::run(owner, Some(Arc::clone(&foreign.log))));
@@ -336,7 +306,7 @@ fn wrong_log_is_not_rebound() {
         "NoLogger retains the owner",
         || {
             let live = Live::new();
-            let owner = live.seed(state(live.dir.path()), ROW);
+            let owner = live.seed(state(&live.resolved), ROW);
             let before = bytes(&live.path);
             let result = runtime(JournalDrain::run(owner, None));
             assert!(
@@ -365,7 +335,7 @@ fn late_journal_retry() {
         "same role keys and bytes without TTL",
         || {
             let live = Live::new();
-            let mut initial = state(live.dir.path());
+            let mut initial = state(&live.resolved);
             decided(&mut initial);
             let mut owner = live.seed(initial, ROW);
             let path = journal::journal_path(&live.path);
@@ -424,40 +394,7 @@ fn late_journal_retry() {
         "finish_only",
         "Finish failure never repeats A or B",
         || {
-            let live = Live::new();
-            let mut initial = state(live.dir.path());
-            decided(&mut initial);
-            let writer = initial.writer.as_mut().expect(ROW);
-            writer.intent.delivered = true;
-            writer.records[0].delivered = true;
-            let owner = live.seed(initial, ROW);
-            runtime(
-                live.log
-                    .settle(&live.log.log_id(), WRITER, Role::Outcome, payload(OUTCOME)),
-            )
-            .expect("seed already delivered terminal");
-            let before = std::fs::read(&live.log_path).expect(ROW);
-            let armed = journal::fault::set(&live.path, journal::fault::Fault::FailJournalRemove);
-            let result = runtime(JournalDrain::run(owner, Some(Arc::clone(&live.log))));
-            assert!(
-                matches!(&result, Err(failure) if failure.error == DrainError::Finish),
-                "{ROW}: fully flagged owner takes finish-only path"
-            );
-            assert_eq!(
-                std::fs::read(&live.log_path).expect(ROW),
-                before,
-                "{ROW}: no append on finish retry"
-            );
-            assert_eq!(
-                journal::fault::fired(&live.path),
-                1,
-                "{ROW}: cleanup fault reached exactly once"
-            );
-            assert!(
-                journal::journal_path(&live.path).exists(),
-                "{ROW}: cleanup failure retains owner"
-            );
-            drop(armed);
+            super::delivery_cases::finish_only(ROW);
             Ok(())
         },
     );

@@ -3,10 +3,8 @@
 //! Root exceptions use the same validator as live settle and verification.
 
 use super::super::fixtures::collect_case;
-use super::fixtures::{Live, ROOT, actor, payload, runtime};
-use crate::security::transparency_log::settle::{
-    IntentKind, Role, Unsettled, role_fields, root_recovery_fields,
-};
+use super::fixtures::{Live, ROOT, SAVE, actor, payload, runtime};
+use crate::security::transparency_log::settle::{IntentKind, Role, Unsettled, role_fields};
 
 #[test]
 fn root_recovery_lands() {
@@ -38,11 +36,6 @@ fn root_recovery_lands() {
         assert!(
             !root.contains_key("settles"),
             "{ROW}: no invented settles token"
-        );
-        assert_eq!(
-            root_recovery_fields(Role::RecoveryIntent, root),
-            Ok(()),
-            "{ROW}: shared root validator accepts"
         );
         assert_eq!(
             role_fields(Role::RecoveryIntent, root),
@@ -87,15 +80,14 @@ fn non_root_missing_settles_invalid() {
         collect_case(&mut failures, ROW, &case, expected, || {
             let live = Live::new();
             let before = std::fs::read(&live.log_path).expect(ROW);
+            let previous = live.records().last().expect(ROW)["counter"]
+                .as_u64()
+                .expect(ROW);
             let mut fields = payload(bytes);
             fields.insert("token".into(), "invalid-1".into());
             assert!(
-                root_recovery_fields(role, &fields).is_err(),
-                "{ROW}: shared validator refuses missing settles or foreign-role root marker"
-            );
-            assert!(
                 role_fields(role, &fields).is_err(),
-                "{ROW}: verify uses the same root restriction"
+                "{ROW}: the production validator refuses missing settles or a foreign-role root marker"
             );
             let result = runtime(live.log.settle_attributed(
                 &live.log.log_id(),
@@ -111,10 +103,40 @@ fn non_root_missing_settles_invalid() {
             assert_eq!(
                 std::fs::read(&live.log_path).expect(ROW),
                 before,
-                "{ROW}: zero append and counter change"
+                "{ROW}: zero append"
             );
+            append_after_rejection(&live, previous, ROW);
             Ok(())
         });
     }
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
+}
+
+fn append_after_rejection(live: &Live, previous: u64, row: &str) {
+    let appended = runtime(live.log.settle(
+        &live.log.log_id(),
+        "valid-after-rejection",
+        Role::Intent(IntentKind::Save),
+        payload(SAVE),
+    ))
+    .expect("valid append after rejection");
+    assert_eq!(
+        appended.counter,
+        previous + 1,
+        "{row}: rejected call did not consume counter"
+    );
+    let records = live.records();
+    assert_eq!(
+        records.last().expect(row)["counter"].as_u64(),
+        Some(previous + 1),
+        "{row}: next persisted counter"
+    );
+    for pair in records.windows(2) {
+        assert_eq!(
+            pair[1]["counter"].as_u64(),
+            pair[0]["counter"].as_u64().map(|n| n + 1),
+            "{row}: gapless chain"
+        );
+    }
+    live.verify(row);
 }

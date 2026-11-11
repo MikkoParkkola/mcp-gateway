@@ -200,13 +200,18 @@ pub(crate) struct JournalSession {
 
 impl JournalSession {
     pub(crate) fn persist(&mut self) -> Result<(), JournalError> {
+        #[cfg(test)]
+        observe::plan_tokens(&self.target, &self.state);
         let bytes = self.state.encode()?;
         let path = super::journal_path(&self.target);
         write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)
             .map_err(|_| JournalError::Persist)?;
         #[cfg(test)]
         drain::fault::before_decision_sync(&self.target, &self.state)?;
-        sync_dir_of(&path).map_err(|_| JournalError::Persist)
+        sync_dir_of(&path).map_err(|_| JournalError::Persist)?;
+        #[cfg(test)]
+        drain::fault::after_decision_sync(&self.target, &self.state)?;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -281,6 +286,8 @@ impl JournalSession {
         token: &IntentId,
         decision: Decision,
     ) -> Result<(), JournalError> {
+        #[cfg(test)]
+        observe::note(&self.target, observe::Event::DecisionProposed);
         let owner = self
             .state
             .writer
@@ -323,6 +330,14 @@ impl JournalSession {
             .map_err(|_| JournalError::Finish)?;
         #[cfg(test)]
         observe::note(&self.target, observe::Event::OriginalUnlinked);
+        #[cfg(test)]
+        if matches!(
+            super::fault::get(&self.target),
+            Some(super::fault::Fault::FailJournalRemove)
+        ) {
+            super::fault::note_fired(&self.target);
+            return Err(JournalError::Finish);
+        }
         super::remove_if_present(&super::journal_path(&self.target))
             .map_err(|_| JournalError::Finish)?;
         #[cfg(test)]

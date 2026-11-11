@@ -140,6 +140,7 @@ pub(super) fn replace_bytes(path: &Path, bytes: &[u8]) {
 
 pub(super) struct Live {
     pub(super) dir: Arc<tempfile::TempDir>,
+    pub(super) resolved: PathBuf,
     pub(super) path: PathBuf,
     pub(super) log_path: PathBuf,
     pub(super) log: Arc<TransparencyLogger>,
@@ -149,9 +150,10 @@ pub(super) struct Live {
 impl Live {
     pub(super) fn new() -> Self {
         let dir = Arc::new(tempfile::tempdir().expect("fixture directory"));
-        let path = dir.path().join("gateway.yaml");
+        let resolved = std::fs::canonicalize(dir.path()).expect("resolved fixture directory");
+        let path = resolved.join("gateway.yaml");
         replace_bytes(&path, OLD);
-        let log_path = dir.path().join("audit.jsonl");
+        let log_path = resolved.join("audit.jsonl");
         let config = Arc::new(TransparencyLogConfig {
             enabled: true,
             path: log_path.to_string_lossy().into_owned(),
@@ -162,6 +164,29 @@ impl Live {
         log.keep_test_dir(Arc::clone(&dir));
         Self {
             dir,
+            resolved,
+            path,
+            log_path,
+            log,
+            config,
+        }
+    }
+
+    pub(super) fn reopen_log(self) -> Self {
+        let Self {
+            dir,
+            resolved,
+            path,
+            log_path,
+            log,
+            config,
+        } = self;
+        drop(log);
+        let log = Arc::new(TransparencyLogger::open(Arc::clone(&config)).expect("reopen log"));
+        log.keep_test_dir(Arc::clone(&dir));
+        Self {
+            dir,
+            resolved,
             path,
             log_path,
             log,

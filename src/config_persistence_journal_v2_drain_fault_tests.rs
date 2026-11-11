@@ -15,6 +15,7 @@ use crate::config_persistence::crash_fs::{self, Mode};
 pub(super) enum At {
     AttemptPersisted,
     IntentAppended,
+    BeforeDecisionSync,
     DecisionPersisted,
     OutcomeAppended,
     DeferredFlagged,
@@ -77,12 +78,14 @@ pub(super) fn hit(path: &Path, at: At) -> Result<(), JournalError> {
     observe::note(path, event(at));
     match fault {
         Fault::Kill(_) => {
-            std::fs::write(path.with_extension("s6a2-seam"), b"1").expect("crash seam witness");
+            let captured = serde_json::to_vec(&capture(path)).expect("pre-kill inventory");
+            std::fs::write(path.with_extension("s6a2-seam"), captured).expect("crash seam witness");
             std::process::abort();
         }
         Fault::Cut(_, mode) => {
+            let captured = capture(path);
             crash_fs::cut(path.parent().expect("target directory"), mode);
-            Err(JournalError::Persist)
+            std::panic::resume_unwind(Box::new(captured))
         }
         Fault::Fail(_) => Err(JournalError::Persist),
         Fault::Pause(pause) => {
@@ -96,6 +99,7 @@ pub(super) fn event(at: At) -> Event {
     match at {
         At::AttemptPersisted => Event::AttemptPersisted,
         At::IntentAppended => Event::IntentAppended,
+        At::BeforeDecisionSync => Event::BeforeDecisionSync,
         At::DecisionPersisted => Event::DecisionPersisted,
         At::OutcomeAppended => Event::OutcomeAppended,
         At::DeferredFlagged => Event::DeferredFlagged,
@@ -154,10 +158,36 @@ impl Pause {
 
 /// Inject only after the atomic replacement and before the real directory sync.
 pub(crate) fn before_decision_sync(path: &Path, state: &JournalV2) -> Result<(), JournalError> {
+    decision_boundary(path, state, At::BeforeDecisionSync)
+}
+
+/// D3 is reached only after the replacement's directory sync succeeds.
+pub(crate) fn after_decision_sync(path: &Path, state: &JournalV2) -> Result<(), JournalError> {
+    decision_boundary(path, state, At::DecisionPersisted)
+}
+
+fn decision_boundary(path: &Path, state: &JournalV2, at: At) -> Result<(), JournalError> {
     let decided = state.writer.as_ref().is_none_or(|w| w.decision.is_some())
         && state.attempts.iter().all(|a| a.decision.is_some());
     if decided && (state.writer.is_some() || !state.attempts.is_empty()) {
-        hit(path, At::DecisionPersisted)?;
+        hit(path, at)?;
     }
     Ok(())
+}
+
+/// Pre-cut evidence travels outside the projected filesystem state.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(super) struct Captured {
+    pub(super) tokens: Vec<String>,
+    pub(super) computations: usize,
+}
+
+fn capture(path: &Path) -> Captured {
+    Captured {
+        tokens: observe::tokens(path),
+        computations: observe::events(path)
+            .iter()
+            .filter(|event| **event == Event::DecisionComputed)
+            .count(),
+    }
 }

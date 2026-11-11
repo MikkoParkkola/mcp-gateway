@@ -141,3 +141,12 @@ mod crash_fixtures;
 
 #[path = "config_persistence_journal_v2_torn_tests.rs"]
 mod torn_cases;
+
+#[path = "config_persistence_journal_v2_crash_assertions_tests.rs"]
+mod crash_assertions;
+
+#[path = "config_persistence_journal_v2_delivery_cases_tests.rs"]
+mod delivery_cases;
+
+#[path = "config_persistence_journal_v2_crash_cases_tests.rs"]
+mod crash_cases;

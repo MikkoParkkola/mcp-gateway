@@ -6,27 +6,27 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::super::fixtures::{NEW, OLD, collect_case};
-use super::super::observe::{self, Event};
+use super::super::observe;
 use super::crash_fixtures::{self, setup};
 use super::fault::{self, At, Fault, Pause};
 use super::fixtures::{
-    Live, OUTCOME, WRITER, accepted, decided, replace_bytes, reread, retry, runtime, state,
-    state_of, terminal_count,
+    ATTEMPT, Live, WRITER, accepted, replace_bytes, reread, runtime, state, state_of,
+    terminal_count,
 };
 use super::{DrainError, JournalDrain};
 use crate::config_persistence::crash_fs::{self, Mode};
 use crate::config_persistence::journal;
 use crate::config_persistence::lock::{self, NotLocked};
-use crate::security::transparency_log::settle::FailSettle;
 
-#[cfg(unix)]
 #[test]
 fn crash_d1() {
     const ROW: &str = "crash_d1";
+    #[cfg(unix)]
     if crash_fixtures::child(ROW, At::AttemptPersisted) {
         return;
     }
     let mut failures = Vec::new();
+    #[cfg(unix)]
     crash_fixtures::killed(&mut failures, ROW, At::AttemptPersisted);
     crash_fixtures::projections(&mut failures, ROW, At::AttemptPersisted);
     let expected = "persist/reuse exactly one attempt before repair";
@@ -58,7 +58,7 @@ fn crash_d1() {
         "zero attempts without repair",
         || {
             let live = Live::new();
-            let mut initial = state(live.dir.path());
+            let mut initial = state(&live.resolved);
             accepted(&mut initial);
             replace_bytes(&live.path, NEW);
             let mut owner = live.seed(initial, ROW);
@@ -78,59 +78,64 @@ fn crash_d1() {
                     .all(|r| r["event"] != "config_recovery_intent"),
                 "{ROW}: zero attempt intents for delivery-only owner"
             );
+            super::crash_assertions::accounted(&live.records(), ROW, &[WRITER.to_owned()]);
             Ok(())
         },
     );
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }
 
-#[cfg(unix)]
 #[test]
 fn crash_d2() {
     const ROW: &str = "crash_d2";
+    #[cfg(unix)]
     if crash_fixtures::child(ROW, At::IntentAppended) {
         return;
     }
     let mut failures = Vec::new();
+    #[cfg(unix)]
     crash_fixtures::killed(&mut failures, ROW, At::IntentAppended);
     crash_fixtures::projections(&mut failures, ROW, At::IntentAppended);
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }
 
-#[cfg(unix)]
 #[test]
 fn crash_d3() {
     const ROW: &str = "crash_d3";
+    #[cfg(unix)]
     if crash_fixtures::child(ROW, At::DecisionPersisted) {
         return;
     }
     let mut failures = Vec::new();
+    #[cfg(unix)]
     crash_fixtures::killed(&mut failures, ROW, At::DecisionPersisted);
     crash_fixtures::projections(&mut failures, ROW, At::DecisionPersisted);
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }
 
-#[cfg(unix)]
 #[test]
 fn crash_d4() {
     const ROW: &str = "crash_d4";
+    #[cfg(unix)]
     if crash_fixtures::child(ROW, At::OutcomeAppended) {
         return;
     }
     let mut failures = Vec::new();
+    #[cfg(unix)]
     crash_fixtures::killed(&mut failures, ROW, At::OutcomeAppended);
     crash_fixtures::projections(&mut failures, ROW, At::OutcomeAppended);
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }
 
-#[cfg(unix)]
 #[test]
 fn crash_d5() {
     const ROW: &str = "crash_d5";
+    #[cfg(unix)]
     if crash_fixtures::child(ROW, At::DeferredFlagged) {
         return;
     }
     let mut failures = Vec::new();
+    #[cfg(unix)]
     crash_fixtures::killed(&mut failures, ROW, At::DeferredFlagged);
     crash_fixtures::projections(&mut failures, ROW, At::DeferredFlagged);
     collect_case(
@@ -177,6 +182,11 @@ fn crash_d5() {
                 OLD,
                 "{ROW}: restored original"
             );
+            super::crash_assertions::accounted(
+                &live.records(),
+                ROW,
+                &[WRITER.to_owned(), ATTEMPT.to_owned()],
+            );
             live.verify(ROW);
             Ok(())
         },
@@ -190,59 +200,7 @@ fn crash_d6() {
     let mut failures = Vec::new();
     let expected = "Refused leaves frozen unflagged bytes; retry succeeds";
     collect_case(&mut failures, ROW, "before_append", expected, || {
-        let live = Live::new();
-        let mut initial = state(live.dir.path());
-        decided(&mut initial);
-        let mut owner = live.seed(initial, ROW);
-        let before = std::fs::read(&live.log_path).expect(ROW);
-        let watching = observe::watch(&live.path);
-        let overlay = crash_fs::arm_config(&live.path);
-        live.log.arm_settle_fault(FailSettle::BeforeAppend);
-        let result = runtime(JournalDrain::deliver(&mut owner, &live.log));
-        assert_eq!(
-            result,
-            Err(DrainError::Refused),
-            "{ROW}: B BeforeAppend is Refused"
-        );
-        assert_eq!(
-            observe::events(&live.path)
-                .iter()
-                .filter(|e| **e == Event::BStarted)
-                .count(),
-            1,
-            "{ROW}: exactly one real B call reached the refusal seam"
-        );
-        assert_eq!(
-            std::fs::read(&live.log_path).expect(ROW),
-            before,
-            "{ROW}: no first-call bytes"
-        );
-        assert!(
-            state_of(&owner)
-                .writer
-                .as_ref()
-                .expect(ROW)
-                .records
-                .iter()
-                .all(|r| !r.delivered),
-            "{ROW}: no flag before append"
-        );
-        crash_fs::cut(live.dir.path(), Mode::DropAll);
-        drop(overlay);
-        reread(&mut owner);
-        retry(&mut owner, &live, ROW);
-        assert_eq!(
-            state_of(&owner).writer.as_ref().expect(ROW).records[0].payload_json,
-            OUTCOME,
-            "{ROW}: retry uses exact same payload"
-        );
-        assert_eq!(
-            terminal_count(&live.records(), WRITER),
-            1,
-            "{ROW}: one logical terminal"
-        );
-        live.verify(ROW);
-        drop(watching);
+        super::crash_cases::before_append(ROW);
         Ok(())
     });
     collect_case(
@@ -251,50 +209,22 @@ fn crash_d6() {
         "after_append",
         "Unconfirmed preserves immutable retry",
         || {
-            let live = Live::new();
-            let mut initial = state(live.dir.path());
-            decided(&mut initial);
-            let mut owner = live.seed(initial, ROW);
-            let before = std::fs::read(&live.log_path).expect(ROW);
-            live.log.arm_settle_fault(FailSettle::AfterAppend);
-            let result = runtime(JournalDrain::deliver(&mut owner, &live.log));
-            assert_eq!(
-                result,
-                Err(DrainError::Unconfirmed),
-                "{ROW}: AfterAppend is not Refused"
-            );
-            assert_ne!(
-                std::fs::read(&live.log_path).expect(ROW),
-                before,
-                "{ROW}: append may already have landed"
-            );
-            assert!(
-                !state_of(&owner)
-                    .writer
-                    .as_ref()
-                    .expect(ROW)
-                    .intent
-                    .delivered,
-                "{ROW}: unconfirmed intent has no acknowledged flag"
-            );
-            reread(&mut owner);
-            retry(&mut owner, &live, ROW);
-            crash_fixtures::accounted(&live.records(), ROW);
-            live.verify(ROW);
+            super::crash_cases::after_append(ROW);
             Ok(())
         },
     );
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }
 
-#[cfg(unix)]
 #[test]
 fn crash_d7() {
     const ROW: &str = "crash_d7";
+    #[cfg(unix)]
     if crash_fixtures::child(ROW, At::AfterTornWrite) {
         return;
     }
     let mut failures = Vec::new();
+    #[cfg(unix)]
     crash_fixtures::killed(&mut failures, ROW, At::AfterTornWrite);
     super::torn_cases::cases(&mut failures, ROW);
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
@@ -349,7 +279,7 @@ fn crash_d8() {
                 1,
                 "{ROW}: pause fired exactly once"
             );
-            crash_fs::cut(live.dir.path(), Mode::DropAll);
+            crash_fs::cut(&live.resolved, Mode::DropAll);
             drop(overlay);
             assert_eq!(
                 std::fs::read(&live.path).expect(ROW),
@@ -369,6 +299,11 @@ fn crash_d8() {
                 terminal_count(&live.records(), super::fixtures::ATTEMPT),
                 1,
                 "{ROW}: attempt delivered after caller leaves"
+            );
+            super::crash_assertions::accounted(
+                &live.records(),
+                ROW,
+                &[WRITER.to_owned(), ATTEMPT.to_owned()],
             );
             live.verify(ROW);
             drop((armed, watching));

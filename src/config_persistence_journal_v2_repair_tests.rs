@@ -53,7 +53,7 @@ fn phase_fact_precedence() {
 
 fn phase_case(case: &str, row: &str) {
     let live = Live::new();
-    let mut initial = state(live.dir.path());
+    let mut initial = state(&live.resolved);
     staged(&mut initial);
     let expected = if case == "accepted" { NEW } else { OLD };
     match case {
@@ -136,7 +136,7 @@ fn phase_case(case: &str, row: &str) {
 
 fn dispatch_case(case: &str, row: &str) {
     let live = Live::new();
-    let owner = live.seed(state(live.dir.path()), row);
+    let owner = live.seed(state(&live.resolved), row);
     let path = journal::journal_path(&live.path);
     if case == "unknown" {
         replace_bytes(&path, br#"{"version":93}"#);
@@ -186,7 +186,7 @@ fn accepted_foreign_bytes() {
         expected,
         || {
             let live = Live::new();
-            let mut initial = state(live.dir.path());
+            let mut initial = state(&live.resolved);
             accepted(&mut initial);
             let owner = live.seed(initial, ROW);
             reseed(&owner);
