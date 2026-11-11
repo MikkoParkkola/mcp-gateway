@@ -60,6 +60,16 @@ class Bless(unittest.TestCase):
         self.assertIn("/ui/api/a\tGET\tplain\tNoKey\t401:error.code=-32000\n", files["a.tsv"])
         self.assertTrue(files["a.tsv"].startswith("#@ scoped\n"), "the attribute header was kept")
 
+    def test_a_fragments_own_comment_line_is_kept(self):
+        with TemporaryDirectory() as tmp:
+            fragments = Path(tmp)
+            (fragments / "a.tsv").write_text("# one route per file\n#@ scoped\n" + "".join(f"{r}\n" for r in OLD["a.tsv"][1]))
+            (fragments / "b.tsv").write_text("# one route per file\n" + "".join(f"{r}\n" for r in OLD["b.tsv"][1]))
+            moved = {"a.tsv": OLD["a.tsv"], "b.tsv": ([], ["/ui/api/b\tGET\tplain\tAdminKey\t403"])}
+            bless.bless(log(moved), 101, fragments, set())
+            self.assertTrue((fragments / "b.tsv").read_text().startswith("# one route per file\n"))
+            self.assertEqual((fragments / "a.tsv").read_text().count("# one route per file"), 1)
+
     def test_a_new_row_in_a_stored_fragment_is_added(self):
         new = {"a.tsv": OLD["a.tsv"], "b.tsv": ([], OLD["b.tsv"][1] + ["/ui/api/b\tGET\tplain\tNoKey\t401"])}
         said, _, files = self.run_bless(log(new))

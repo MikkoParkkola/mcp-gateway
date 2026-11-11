@@ -140,6 +140,16 @@ def check_removals(old: dict[str, str], new: dict[str, str], allowed: set[str]) 
         raise Refused("these routes lost cells; name each deliberate removal with --allow-removed ROUTE: " + ", ".join(lost))
 
 
+def kept_comments(target: Path, block: list[str]) -> list[str]:
+    """The plain comment lines (not `#@` attributes) the fragment already has, when the block lacks them.
+
+    The test prints each fragment's attribute lines and rows, not its descriptive
+    comment, so writing the block as is would delete that comment from every file.
+    """
+    old = target.read_text(encoding="utf-8").splitlines() if target.exists() else []
+    return [line for line in old if line.startswith("#") and not line.startswith("#@") and line not in block]
+
+
 def bless(log: str, rc: int, fragments: Path, allowed: set[str]) -> str:
     """Writes the fragments from `log`; returns what it did. Raises Refused instead of writing a wrong one."""
     if rc == 0 and "1 passed" in log:
@@ -154,7 +164,7 @@ def bless(log: str, rc: int, fragments: Path, allowed: set[str]) -> str:
     for name, block in blocks.items():
         target = fragments / name
         tmp = target.with_suffix(".tsv.tmp")
-        tmp.write_text("\n".join(block) + "\n", encoding="utf-8")
+        tmp.write_text("\n".join(kept_comments(target, block) + block) + "\n", encoding="utf-8")
         staged.append((tmp, target))
     for tmp, target in staged:
         tmp.replace(target)
