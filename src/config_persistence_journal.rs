@@ -30,6 +30,8 @@ const VERSION: u32 = 1;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2.rs"]
 pub(crate) mod v2;
+#[cfg(test)]
+pub(crate) use v2::drain;
 
 /// How far a replacement got.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

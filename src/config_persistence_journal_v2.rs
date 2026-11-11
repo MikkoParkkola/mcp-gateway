@@ -203,8 +203,10 @@ impl JournalSession {
         let bytes = self.state.encode()?;
         let path = super::journal_path(&self.target);
         write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)
-            .and_then(|()| sync_dir_of(&path))
-            .map_err(|_| JournalError::Persist)
+            .map_err(|_| JournalError::Persist)?;
+        #[cfg(test)]
+        drain::fault::before_decision_sync(&self.target, &self.state)?;
+        sync_dir_of(&path).map_err(|_| JournalError::Persist)
     }
 
     #[cfg(test)]
@@ -504,3 +506,7 @@ mod observe;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_state_tests.rs"]
 mod state_tests;
+
+#[cfg(test)]
+#[path = "config_persistence_journal_v2_drain.rs"]
+pub(crate) mod drain;

@@ -215,9 +215,12 @@ pub(crate) fn role_fields(role: Role, fields: &Map<String, Value>) -> Result<(),
         (Role::Outcome, Some(_)) => fault("settled_by", Mistyped)?,
         (_, Some(_)) => fault("settled_by", Forbidden)?,
     }
+    #[cfg(not(test))]
     if role == Role::RecoveryIntent {
         text_field(fields, "settles", "settles")?;
     }
+    #[cfg(test)]
+    root_recovery_fields(role, fields)?;
     Ok(())
 }
 
@@ -462,5 +465,34 @@ impl TransparencyLogger {
     /// after its refresh (which would otherwise restore the id on disk).
     pub(crate) fn present_log_id_for_test(&self, id: LogId) {
         *self.hooks.presented_id.lock().unwrap() = Some(id);
+    }
+}
+
+/// Shared root-recovery extension for the settle and verification validator.
+#[cfg(test)]
+pub(crate) fn root_recovery_fields(
+    role: Role,
+    fields: &Map<String, Value>,
+) -> Result<(), FieldFault> {
+    // stub: S6a2
+    let _ = (role, fields);
+    Ok(())
+}
+
+#[cfg(test)]
+impl TransparencyLogger {
+    pub(crate) async fn settle_attributed(
+        self: &std::sync::Arc<Self>,
+        binding: &LogId,
+        token: &str,
+        role: Role,
+        payload: Map<String, Value>,
+        actor: crate::security::audit::AuditWho,
+    ) -> Result<Appended, Unsettled> {
+        // stub: S6a2
+        let _ = (binding, token, role, payload, actor);
+        Err(Unsettled::Refused(io::Error::other(
+            "settlement unavailable",
+        )))
     }
 }

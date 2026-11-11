@@ -11,6 +11,18 @@ pub(super) enum Event {
     OriginalUnlinked,
     JournalUnlinked,
     DirectorySynced,
+    BStarted,
+    BInvalid,
+    IntentAppended,
+    FlagSynced,
+    RestoreVerified,
+    ForwardVerified,
+    AttemptPersisted,
+    DecisionPersisted,
+    OutcomeAppended,
+    DeferredFlagged,
+    AfterTornWrite,
+    RepairPaused,
 }
 
 static EVENTS: Mutex<Option<HashMap<PathBuf, Vec<Event>>>> = Mutex::new(None);
