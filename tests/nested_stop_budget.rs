@@ -24,6 +24,11 @@ const PROTOCOL_VERSION: &str = "2025-11-25";
 const READY_BOUND: Duration = Duration::from_secs(60);
 /// How long a gateway's stop may take before its leaves must be gone: above the 30 s parent timeout, with slack for a loaded host.
 const STOP_BOUND: Duration = Duration::from_secs(45);
+/// How long a stdio gateway sent SIGTERM with stdin still open may take to exit. Its worst case is
+/// the 30 s drain, the 10 s teardown bound and the 10 s serve-runtime shutdown bound (the blocked
+/// stdin reader keeps the runtime waiting until that bound), 50 s in all, plus slack for a loaded
+/// host. A 45 s bound sat on the typical path (30 s drain, about 5 s teardown, 10 s runtime).
+const STDIO_SIGTERM_EXIT_BOUND: Duration = Duration::from_secs(75);
 const LEAF_SCRIPT: &str = r#"import json, os, signal, subprocess, sys, time
 name = sys.argv[1]
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -573,7 +578,7 @@ async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
         "leaf and its grandchild must be live at stop\n{}",
         logs(root)
     );
-    let deadline = Instant::now() + STOP_BOUND;
+    let deadline = Instant::now() + STDIO_SIGTERM_EXIT_BOUND;
     sigterm(pid);
     tokio::time::timeout_at(deadline, reaped.child_mut().wait())
         .await
