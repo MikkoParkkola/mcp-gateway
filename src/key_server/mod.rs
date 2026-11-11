@@ -55,6 +55,9 @@ mod output_only_doc_tests;
 /// No raw email in key-server output, checked in a child process.
 #[cfg(test)]
 mod piilog_capture_tests;
+/// The mint's issuance row under the failure policy.
+#[cfg(test)]
+pub(crate) mod issuance_row_tests;
 /// The hashed audit email's docs rows.
 #[cfg(test)]
 mod piilog_docs_tests;
@@ -111,6 +114,10 @@ pub struct KeyServer {
     pub config: KeyServerConfig,
     /// The installation key behind every audit record's `email_hash`.
     pub(crate) email_key: Arc<email_hash::EmailHashKey>,
+    /// The audit log a mint writes its `token.issued` row to, under that
+    /// log's failure policy. `None` only where no audit log exists (tests):
+    /// the mint then emits tracing only.
+    pub(crate) issuance_log: Option<Arc<crate::security::TransparencyLogger>>,
     /// How many credential-revocation signals this key server has sent.
     pub(crate) revocation_signals: std::sync::atomic::AtomicU64,
 }
@@ -130,8 +137,16 @@ impl KeyServer {
             policy,
             config,
             email_key,
+            issuance_log: None,
             revocation_signals: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Write every mint's `token.issued` row to `log`.
+    #[must_use]
+    pub(crate) fn with_issuance_log(mut self, log: Arc<crate::security::TransparencyLogger>) -> Self {
+        self.issuance_log = Some(log);
+        self
     }
 
     /// A credential this key server issued may have been revoked: wake every

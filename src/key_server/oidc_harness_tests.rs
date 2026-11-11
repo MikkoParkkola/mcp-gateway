@@ -77,6 +77,7 @@ impl Harness {
             policy: Arc::new(PolicyEngine::new(config.policies.clone())),
             config,
             email_key: crate::key_server::email_hash::EmailHashKey::for_test(),
+            issuance_log: None,
             revocation_signals: std::sync::atomic::AtomicU64::new(0),
         });
         let jwks = Router::new()
