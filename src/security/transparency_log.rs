@@ -81,12 +81,12 @@ mod append;
 #[path = "transparency_log_bounded.rs"]
 mod bounded;
 // The key server's issuance row, with the raw dispatch outcome.
-#[path = "transparency_log_issuance.rs"]
-pub(crate) mod issuance;
 #[path = "transparency_log_hwm_scan.rs"]
 mod hwm_scan;
 #[path = "transparency_log_identity.rs"]
 pub(crate) mod identity;
+#[path = "transparency_log_issuance.rs"]
+pub(crate) mod issuance;
 #[cfg(test)]
 #[path = "transparency_log_kill.rs"]
 mod kill;
@@ -727,9 +727,6 @@ mod anchor_tests;
 #[path = "transparency_log_attributed_tests.rs"]
 mod attributed_tests;
 #[cfg(test)]
-#[path = "transparency_log_issuance_tests.rs"]
-mod issuance_tests;
-#[cfg(test)]
 #[path = "transparency_log_bounded_tests.rs"]
 mod bounded_tests;
 #[cfg(test)]
@@ -744,6 +741,9 @@ mod hwm_missing_tests;
 #[cfg(test)]
 #[path = "transparency_log_identity_tests.rs"]
 mod identity_tests;
+#[cfg(test)]
+#[path = "transparency_log_issuance_tests.rs"]
+mod issuance_tests;
 #[cfg(test)]
 #[path = "transparency_log_keep_dir_tests.rs"]
 mod keep_dir_tests;

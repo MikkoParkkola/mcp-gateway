@@ -11,24 +11,31 @@ use axum::http::StatusCode;
 
 use super::handler::issue;
 use crate::config::KeyServerConfig;
-use crate::security::transparency_log::RotationConfig;
 use crate::key_server::email_hash::EmailHashKey;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::key_server::store::{
     ActivateError, InMemoryTokenStore, ReservationId, ReservationRequest, ReserveError,
     TemporaryToken, TokenScopes, TokenStore,
 };
-use crate::security::{TransparencyLogConfig, TransparencyLogger};
 use crate::security::audit::AuditFailurePolicy;
+use crate::security::transparency_log::RotationConfig;
 use crate::security::transparency_log::{Malformed, log_contains_entry};
+use crate::security::{TransparencyLogConfig, TransparencyLogger};
 
 const ISS: &str = "https://issuer.invalid";
 const EMAIL: &str = "planted.person@corp.invalid";
 
-pub(crate) fn open_log(dir: &tempfile::TempDir, policy: AuditFailurePolicy) -> Arc<TransparencyLogger> {
+pub(crate) fn open_log(
+    dir: &tempfile::TempDir,
+    policy: AuditFailurePolicy,
+) -> Arc<TransparencyLogger> {
     let config = TransparencyLogConfig {
         enabled: true,
-        path: dir.path().join("audit.jsonl").to_string_lossy().into_owned(),
+        path: dir
+            .path()
+            .join("audit.jsonl")
+            .to_string_lossy()
+            .into_owned(),
         key_id: "test".into(),
         shared_secret: String::new(),
         rotation: RotationConfig::default(),
@@ -46,7 +53,13 @@ fn server(log: &Arc<TransparencyLogger>) -> crate::key_server::KeyServer {
 }
 
 async fn mint(ks: &crate::key_server::KeyServer) -> axum::response::Response {
-    let identity = VerifiedIdentity::for_test("sub", EMAIL, Some("Planted Person".to_owned()), vec!["g".into()], ISS);
+    let identity = VerifiedIdentity::for_test(
+        "sub",
+        EMAIL,
+        Some("Planted Person".to_owned()),
+        vec!["g".into()],
+        ISS,
+    );
     issue(ks, identity, TokenScopes::default(), None).await
 }
 
@@ -64,14 +77,20 @@ fn has_row(dir: &tempfile::TempDir, jti: Option<&str>) -> bool {
 }
 
 async fn bearer_of(response: axum::response::Response) -> String {
-    let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.expect("body");
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("body");
     let v: serde_json::Value = serde_json::from_slice(&body).expect("json");
     v["access_token"].as_str().expect("a bearer").to_owned()
 }
 
 /// A refused mint holds no slot and no bearer.
 async fn nothing_issued(ks: &crate::key_server::KeyServer) {
-    assert_eq!(ks.store.count_for_subject(ISS, "sub").await, 0, "no slot or token held");
+    assert_eq!(
+        ks.store.count_for_subject(ISS, "sub").await,
+        0,
+        "no slot or token held"
+    );
 }
 
 /// NEW.W.1: the confirmed row exists when the store activates, and after an
@@ -90,7 +109,10 @@ async fn failclosed_confirmed_row_precedes_the_bearer_and_survives_restart() {
     });
     let response = mint(&ks).await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(seen.load(std::sync::atomic::Ordering::SeqCst), "the row was on disk at activation");
+    assert!(
+        seen.load(std::sync::atomic::Ordering::SeqCst),
+        "the row was on disk at activation"
+    );
     let bearer = bearer_of(response).await;
     let jti = ks.store.get(&bearer).await.expect("valid bearer").jti;
     drop(ks);
@@ -109,8 +131,17 @@ async fn failclosed_every_non_confirmed_outcome_refuses_with_503() {
         let ks = server(&log);
         let hold = cell.arm(&log).await;
         let response = mint(&ks).await;
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{cell:?}");
-        assert!(response.headers().contains_key(axum::http::header::RETRY_AFTER), "{cell:?}");
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{cell:?}"
+        );
+        assert!(
+            response
+                .headers()
+                .contains_key(axum::http::header::RETRY_AFTER),
+            "{cell:?}"
+        );
         nothing_issued(&ks).await;
         if let Some(gate) = hold {
             log.release_and_drain(gate).await;
@@ -170,10 +201,19 @@ struct RowFirst {
 
 #[async_trait::async_trait]
 impl TokenStore for RowFirst {
-    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<ReservationId, ReserveError> {
+    fn reserve(
+        &self,
+        request: ReservationRequest,
+        now: u64,
+    ) -> Result<ReservationId, ReserveError> {
         self.inner.reserve(request, now)
     }
-    fn activate(&self, id: &ReservationId, token: TemporaryToken, now: u64) -> Result<(), ActivateError> {
+    fn activate(
+        &self,
+        id: &ReservationId,
+        token: TemporaryToken,
+        now: u64,
+    ) -> Result<(), ActivateError> {
         let row = log_contains_entry(&self.path, "row-first", Malformed::Refuse, |e| {
             e.get("token_jti").and_then(|v| v.as_str()) == Some(token.jti.as_str())
         })
@@ -219,7 +259,10 @@ async fn besteffort_every_cell_mints_without_the_row() {
         let response = mint(&ks).await;
         assert_eq!(response.status(), StatusCode::OK, "{cell:?}");
         let bearer = bearer_of(response).await;
-        assert!(ks.store.get(&bearer).await.is_some(), "{cell:?}: bearer valid");
+        assert!(
+            ks.store.get(&bearer).await.is_some(),
+            "{cell:?}: bearer valid"
+        );
         if let Some(gate) = hold {
             log.release_and_drain(gate).await;
         }
@@ -246,10 +289,19 @@ struct Revoking(Arc<InMemoryTokenStore>);
 
 #[async_trait::async_trait]
 impl TokenStore for Revoking {
-    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<ReservationId, ReserveError> {
+    fn reserve(
+        &self,
+        request: ReservationRequest,
+        now: u64,
+    ) -> Result<ReservationId, ReserveError> {
         self.0.reserve(request, now)
     }
-    fn activate(&self, id: &ReservationId, _token: TemporaryToken, _now: u64) -> Result<(), ActivateError> {
+    fn activate(
+        &self,
+        id: &ReservationId,
+        _token: TemporaryToken,
+        _now: u64,
+    ) -> Result<(), ActivateError> {
         self.0.abort(id);
         Err(ActivateError::Revoked)
     }
@@ -291,7 +343,13 @@ async fn the_row_holds_the_safe_envelope_and_no_email() {
         .find(|v: &serde_json::Value| v["event"] == "token.issued")
         .expect("a row");
     let id = &row["identity"];
-    for key in ["subject", "issuer", "email_hash", "email_hash_version", "email_hash_key_id"] {
+    for key in [
+        "subject",
+        "issuer",
+        "email_hash",
+        "email_hash_version",
+        "email_hash_key_id",
+    ] {
         assert!(id.get(key).is_some(), "{key}");
     }
     for word in [EMAIL, "Planted Person", "\"groups\"", "\"email\":"] {
@@ -327,7 +385,14 @@ fn only_the_issuance_helper_appends_from_the_key_server() {
             users.push(name);
         }
     }
-    assert_eq!(users, vec!["email_hmac_store.rs".to_owned()], "appenders: {users:?}");
+    assert_eq!(
+        users,
+        vec!["email_hmac_store.rs".to_owned()],
+        "appenders: {users:?}"
+    );
     let handler = std::fs::read_to_string(dir.join("handler.rs")).unwrap();
-    assert!(handler.contains("append_issuance_row("), "the mint uses the helper");
+    assert!(
+        handler.contains("append_issuance_row("),
+        "the mint uses the helper"
+    );
 }

@@ -45,6 +45,9 @@ mod email_subject_tests;
 pub mod handler;
 #[cfg(test)]
 mod identity_rules_tests;
+/// The mint's issuance row under the failure policy.
+#[cfg(test)]
+pub(crate) mod issuance_row_tests;
 pub mod oidc;
 #[cfg(test)]
 #[path = "oidc_harness_tests.rs"]
@@ -55,9 +58,6 @@ mod output_only_doc_tests;
 /// No raw email in key-server output, checked in a child process.
 #[cfg(test)]
 mod piilog_capture_tests;
-/// The mint's issuance row under the failure policy.
-#[cfg(test)]
-pub(crate) mod issuance_row_tests;
 /// The hashed audit email's docs rows.
 #[cfg(test)]
 mod piilog_docs_tests;
@@ -144,7 +144,10 @@ impl KeyServer {
 
     /// Write every mint's `token.issued` row to `log`.
     #[must_use]
-    pub(crate) fn with_issuance_log(mut self, log: Arc<crate::security::TransparencyLogger>) -> Self {
+    pub(crate) fn with_issuance_log(
+        mut self,
+        log: Arc<crate::security::TransparencyLogger>,
+    ) -> Self {
         self.issuance_log = Some(log);
         self
     }

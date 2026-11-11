@@ -20,9 +20,13 @@ fn row(event: &str) -> serde_json::Map<String, serde_json::Value> {
 async fn a_row_that_is_not_an_issuance_is_never_attempted() {
     let dir = tempfile::tempdir().unwrap();
     let log = open_log(&dir, AuditFailurePolicy::BestEffort);
-    let size = |l: &crate::security::TransparencyLogger| std::fs::metadata(l.path()).map_or(0, |m| m.len());
+    let size = |l: &crate::security::TransparencyLogger| {
+        std::fs::metadata(l.path()).map_or(0, |m| m.len())
+    };
     let before = size(&log);
-    let out = log.append_issuance_row(row("admin_action"), AuditEnvelope::gateway()).await;
+    let out = log
+        .append_issuance_row(row("admin_action"), AuditEnvelope::gateway())
+        .await;
     assert!(matches!(out, IssuanceWrite::NotAttempted(_)), "{out:?}");
     assert_eq!(out.label(), "not_attempted");
     assert_eq!(size(&log), before, "nothing was written");
@@ -34,19 +38,27 @@ async fn a_row_that_is_not_an_issuance_is_never_attempted() {
 async fn each_raw_outcome_has_its_own_label() {
     let dir = tempfile::tempdir().unwrap();
     let log = open_log(&dir, AuditFailurePolicy::BestEffort);
-    let ok = log.append_issuance_row(row("token.issued"), AuditEnvelope::gateway()).await;
+    let ok = log
+        .append_issuance_row(row("token.issued"), AuditEnvelope::gateway())
+        .await;
     assert_eq!(ok.label(), "confirmed");
     log.fail_next_append_for_test();
-    let failed = log.append_issuance_row(row("token.issued"), AuditEnvelope::gateway()).await;
+    let failed = log
+        .append_issuance_row(row("token.issued"), AuditEnvelope::gateway())
+        .await;
     assert_eq!(failed.label(), "failed");
     log.close_append_permit_for_test();
-    let never = log.append_issuance_row(row("token.issued"), AuditEnvelope::gateway()).await;
+    let never = log
+        .append_issuance_row(row("token.issued"), AuditEnvelope::gateway())
+        .await;
     assert_eq!(never.label(), "not_attempted");
 
     let dir2 = tempfile::tempdir().unwrap();
     let log2 = open_log(&dir2, AuditFailurePolicy::BestEffort);
     let gate = log2.stall_next_write_for_test(std::time::Duration::from_millis(200));
-    let late = log2.append_issuance_row(row("token.issued"), AuditEnvelope::gateway()).await;
+    let late = log2
+        .append_issuance_row(row("token.issued"), AuditEnvelope::gateway())
+        .await;
     assert_eq!(late.label(), "unconfirmed");
     log2.release_and_drain(gate).await;
 }

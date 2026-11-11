@@ -339,7 +339,10 @@ async fn record_issuance(ks: &KeyServer, event: &AuditEvent) -> Option<axum::res
         return None;
     }
     if log.failure_policy() == AuditFailurePolicy::FailClosed {
-        warn!(status, "key server: the issuance row was not confirmed; no token issued");
+        warn!(
+            status,
+            "key server: the issuance row was not confirmed; no token issued"
+        );
         let mut refusal = error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "temporarily_unavailable",
@@ -351,7 +354,10 @@ async fn record_issuance(ks: &KeyServer, event: &AuditEvent) -> Option<axum::res
         );
         return Some(refusal);
     }
-    warn!(status, "key server: the issuance row was not confirmed; token issued anyway");
+    warn!(
+        status,
+        "key server: the issuance row was not confirmed; token issued anyway"
+    );
     None
 }
 
