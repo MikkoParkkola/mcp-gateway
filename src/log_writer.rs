@@ -48,6 +48,9 @@ struct Shared {
     max_bytes: usize,
     /// Set by the terminal stop: no clone enqueues after it.
     closed: AtomicBool,
+    /// Test hook: parks a send that has passed the closed check.
+    #[cfg(test)]
+    after_check: std::sync::Mutex<Option<test_sinks::Gate>>,
 }
 
 /// The `MakeWriter` for the fmt layer: each event's line goes to the queue.
@@ -84,6 +87,8 @@ pub(crate) fn spawn(
         queued_bytes: AtomicUsize::new(0),
         max_bytes: bytes,
         closed: AtomicBool::new(false),
+        #[cfg(test)]
+        after_check: std::sync::Mutex::new(None),
     });
     let for_thread = Arc::clone(&shared);
     let worker = thread::Builder::new()
@@ -109,6 +114,13 @@ impl LossyStderr {
             self.shared.total.fetch_add(1, Ordering::Relaxed);
             return;
         }
+        #[cfg(test)]
+        {
+            let gate = self.shared.after_check.lock().expect("hook").clone();
+            if let Some(gate) = gate {
+                gate.pass();
+            }
+        }
         let n = line.len();
         let q = &self.shared.queued_bytes;
         let mut cur = q.load(Ordering::Relaxed);
@@ -127,6 +139,17 @@ impl LossyStderr {
             q.fetch_sub(n, Ordering::AcqRel);
             self.shared.total.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Park every send that has passed the closed check at `gate`.
+    #[cfg(test)]
+    pub(crate) fn park_after_check(&self, gate: &test_sinks::Gate) {
+        *self.shared.after_check.lock().expect("hook") = Some(gate.clone());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_closed(&self) -> bool {
+        self.shared.closed.load(Ordering::Acquire)
     }
 
     /// Lines dropped so far.

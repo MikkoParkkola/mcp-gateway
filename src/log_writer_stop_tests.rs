@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::test_sinks::{Accepted, line, parked, scripted, slow_parked};
+use super::test_sinks::{Accepted, Gate, WATCHDOG, line, parked, scripted, slow_parked};
 use super::{FlushEnd, NoticeFormat, StopOutcome, spawn};
 
 fn soon() -> Instant {
@@ -137,4 +137,30 @@ fn only_a_joined_stop_permits_exec() {
     assert!(!StopOutcome::WorkerFailed.permits_exec());
     let running = thread::spawn(|| FlushEnd::Clean);
     assert!(!StopOutcome::NotJoined(running).permits_exec());
+}
+
+/// The one race a stop has: a line already past the closed check when the stop
+/// begins. It must reach the sink, not vanish between the drain and the exit.
+#[test]
+fn a_send_in_flight_when_the_stop_begins_is_written_not_lost() {
+    let (w, f, out) = scripted(vec![]);
+    let gate = Gate::closed();
+    w.park_after_check(&gate);
+    let sender = {
+        let w = w.clone();
+        thread::spawn(move || line(&w, "racing"))
+    };
+    assert!(gate.wait_entered(), "the sender is past the closed check");
+    let stopper = thread::spawn(move || f.stop_and_join(Instant::now() + WATCHDOG));
+    let until = Instant::now() + WATCHDOG;
+    while !w.is_closed() {
+        assert!(Instant::now() < until, "the stop never closed admission");
+        thread::yield_now();
+    }
+    gate.open();
+    sender.join().expect("the sender returned");
+    let outcome = stopper.join().expect("the stop returned");
+    assert!(matches!(outcome, StopOutcome::Joined(_)), "{outcome:?}");
+    assert_eq!(kept(&out), ["racing"], "the in-flight line was written");
+    assert_eq!(w.dropped_lines(), 0, "and nothing was dropped");
 }
