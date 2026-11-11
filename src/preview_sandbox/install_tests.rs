@@ -394,3 +394,159 @@ fn a_script_name_with_a_path_refuses() {
         assert!(text.contains("no single entry point"), "{name}: {text}");
     }
 }
+
+/// The root has no required tarball, but must not opt into a local install.
+#[test]
+fn a_linked_root_refuses() {
+    let mut l = lock();
+    l["packages"][""]["link"] = true.into();
+    assert!(lock_refusal(&l).contains("not from the registry"));
+}
+
+#[test]
+fn a_root_resolved_outside_the_registry_refuses() {
+    for resolved in ["file:../x", "git+https://github.com/x/y.git"] {
+        let mut l = lock();
+        l["packages"][""]["resolved"] = resolved.into();
+        assert!(
+            lock_refusal(&l).contains("not from the registry"),
+            "{resolved}"
+        );
+    }
+}
+
+#[test]
+fn a_root_without_resolved_or_link_is_accepted() {
+    let l = lock();
+    assert!(l["packages"][""].get("resolved").is_none());
+    assert!(l["packages"][""].get("link").is_none());
+    check_lock(&l).expect("root needs no tarball of its own");
+}
+
+/// Keep the dependency reachable so a missing entry cannot mask a bad spec.
+#[test]
+fn local_specs_in_dependency_maps_refuse() {
+    for spec in ["", ".", "..", ".git", "./x", "a.tgz", "a.tar", "a.tar.gz"] {
+        for range in [spec.to_owned(), format!("npm:@s/p@{spec}")] {
+            let mut l = lock();
+            l["packages"][""]["dependencies"]["a"] = range.as_str().into();
+            assert!(
+                lock_refusal(&l).contains("not from the registry"),
+                "{range}"
+            );
+        }
+    }
+}
+
+#[test]
+fn registry_tags_ranges_and_aliases_are_accepted() {
+    for range in ["latest", "^1.2.3", "npm:@s/p@^1", "1.x || >=2"] {
+        let mut l = lock();
+        l["packages"][""]["dependencies"]["a"] = range.into();
+        check_lock(&l).expect(range);
+    }
+}
+
+/// A normalized alias listed first must not shadow the exact script name.
+#[test]
+fn the_exact_console_script_wins_over_a_normalized_match() {
+    let scripts = "[console_scripts]\nMY_SRV = m:alias\nmy-srv = m:main\n";
+    let env = uv_env(&[("my_srv-1.0.dist-info", scripts)], &["MY_SRV", "my-srv"]);
+    assert!(
+        entry_of(&env, "my-srv")
+            .expect("exact script")
+            .ends_with("bin/my-srv")
+    );
+}
+
+#[test]
+fn a_unique_normalized_console_script_is_accepted() {
+    let scripts = "[console_scripts]\nMY_SRV = m:main\nother = m:other\n";
+    let env = uv_env(&[("my_srv-1.0.dist-info", scripts)], &["MY_SRV", "other"]);
+    assert!(
+        entry_of(&env, "my-srv")
+            .expect("unique normalized script")
+            .ends_with("bin/MY_SRV")
+    );
+}
+
+/// Without an exact name, metadata order cannot resolve a collision.
+#[test]
+fn ambiguous_normalized_console_scripts_refuse() {
+    let scripts = "[console_scripts]\nMY_SRV = m:first\nmy.srv = m:second\n";
+    let env = uv_env(&[("my_srv-1.0.dist-info", scripts)], &["MY_SRV", "my.srv"]);
+    assert!(
+        entry_of(&env, "my-srv")
+            .expect_err("ambiguous normalized scripts")
+            .contains("no single entry point")
+    );
+}
+
+/// The hyphen before the version separates the full distribution name.
+#[test]
+fn a_distribution_name_prefix_is_not_the_package() {
+    let env = uv_env(&[("foo-bar-1.0.dist-info", ONE)], &["srv"]);
+    assert!(
+        entry_of(&env, "foo")
+            .expect_err("prefix is not a distribution match")
+            .contains("installed metadata")
+    );
+}
+
+#[test]
+fn a_hyphenated_distribution_name_is_matched_in_full() {
+    let env = uv_env(&[("foo-bar-1.0.dist-info", ONE)], &["srv"]);
+    assert!(
+        entry_of(&env, "foo-bar")
+            .expect("full distribution name")
+            .ends_with("bin/srv")
+    );
+}
+
+/// Containment applies to the package directory as well as its bin target.
+#[cfg(unix)]
+#[test]
+fn an_npm_package_directory_outside_the_root_refuses() {
+    let outside = npm_pkg("pkg", &json!("cli.js"), &["cli.js"]);
+    let root = tempfile::tempdir().expect("root");
+    std::fs::create_dir(root.path().join("node_modules")).expect("node_modules");
+    std::os::unix::fs::symlink(
+        outside.path().join("node_modules/pkg"),
+        root.path().join("node_modules/pkg"),
+    )
+    .expect("package symlink");
+    assert!(
+        bin_of(&root, "pkg")
+            .expect_err("package outside root")
+            .contains("the package's entry point is outside the package")
+    );
+}
+
+/// Valid metadata and a real bin isolate the read cap from parsing failures.
+#[test]
+fn an_oversized_npm_manifest_refuses() {
+    let root = npm_pkg("pkg", &json!("cli.js"), &["cli.js"]);
+    let mut manifest = json!({"bin": "cli.js"}).to_string();
+    manifest.push_str(&" ".repeat(2 * 1024 * 1024 - manifest.len()));
+    std::fs::write(root.path().join("node_modules/pkg/package.json"), manifest)
+        .expect("oversized manifest");
+    assert!(
+        bin_of(&root, "pkg")
+            .expect_err("oversized manifest")
+            .contains("no single entry point")
+    );
+}
+
+/// Comment padding keeps parsing valid without adding more console scripts.
+#[test]
+fn oversized_uv_entry_points_refuse() {
+    let mut scripts = ONE.to_owned();
+    scripts.push_str(&"#\n".repeat((2 * 1024 * 1024 - scripts.len()) / 2));
+    scripts.push_str(&"\n".repeat(2 * 1024 * 1024 - scripts.len()));
+    let env = uv_env(&[("srv-1.0.dist-info", &scripts)], &["srv"]);
+    assert!(
+        entry_of(&env, "srv")
+            .expect_err("oversized entry points")
+            .contains("no single entry point")
+    );
+}
