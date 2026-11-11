@@ -129,10 +129,35 @@ async fn t2_the_classic_page_is_also_at_ui_classic() {
             reply.header(header::CACHE_CONTROL),
             Some("no-cache, no-store, must-revalidate")
         );
-        assert!(
-            reply.header(header::CONTENT_SECURITY_POLICY).is_none(),
-            "the classic page keeps today's headers"
+        // The page loads and connects to nothing off this origin: every
+        // fetch directive is 'self' or 'none', so no host is ever named.
+        let csp = reply
+            .header(header::CONTENT_SECURITY_POLICY)
+            .expect("the classic page sends a policy");
+        for directive in [
+            "default-src 'none'",
+            "connect-src 'self'",
+            "font-src 'self'",
+            "img-src 'self' data:",
+            "base-uri 'none'",
+            "form-action 'self'",
+            "frame-ancestors 'none'",
+        ] {
+            assert!(csp.contains(directive), "{directive} in {csp}");
+        }
+        for directive in csp.split(';') {
+            for source in directive.split_whitespace().skip(1) {
+                assert!(
+                    source.starts_with('\'') || source == "data:",
+                    "{source} names a host in {csp}"
+                );
+            }
+        }
+        assert_eq!(
+            reply.header(header::X_CONTENT_TYPE_OPTIONS),
+            Some("nosniff")
         );
+        assert_eq!(reply.header(header::REFERRER_POLICY), Some("no-referrer"));
     }
 }
 
