@@ -392,6 +392,25 @@ async fn a_nested_gateway_whose_own_stop_outlasts_its_parents_plan_leaves_no_lea
 
 /// Each nested hurry must fit its parent's remaining kill window, rather than
 /// restarting 300 ms after SIGTERM and losing its reaper to its parent's kill.
+/// Every pid of a three-level chain, asserted live before the stop begins.
+fn live_chain(root: &Path, outer: u32, leaves: &[&str]) -> Vec<u32> {
+    let mut tree = vec![
+        outer,
+        read_pid(root, "middle.pid"),
+        read_pid(root, "inner.pid"),
+    ];
+    for name in leaves {
+        tree.push(read_pid(root, &format!("leaf-{name}.pid")));
+        tree.push(read_pid(root, &format!("leaf-{name}.grandchild.pid")));
+    }
+    assert_eq!(
+        alive_pids(&tree),
+        tree,
+        "every chain level must be live before stop"
+    );
+    tree
+}
+
 #[tokio::test]
 async fn a_three_level_nested_gateway_chain_leaves_no_leaf_after_a_hurry() {
     let temp = tempfile::tempdir().expect("temp root");
@@ -455,20 +474,7 @@ async fn a_three_level_nested_gateway_chain_leaves_no_leaf_after_a_hurry() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let mut tree = vec![
-        pid,
-        read_pid(root, "middle.pid"),
-        read_pid(root, "inner.pid"),
-    ];
-    for name in leaves {
-        tree.push(read_pid(root, &format!("leaf-{name}.pid")));
-        tree.push(read_pid(root, &format!("leaf-{name}.grandchild.pid")));
-    }
-    assert_eq!(
-        alive_pids(&tree),
-        tree,
-        "every chain level must be live before stop"
-    );
+    let tree = live_chain(root, pid, &leaves);
     // EOF installs the hurry listener before logging this message. The busy
     // calls keep teardown pending until the subsequent SIGTERM cuts it short.
     drop(stdin);

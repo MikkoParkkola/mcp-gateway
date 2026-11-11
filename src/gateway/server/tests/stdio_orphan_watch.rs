@@ -113,15 +113,15 @@ async fn after_eof(saved: i32, change: bool) {
 
 #[tokio::test]
 async fn orphan_watch_hurries_when_parent_changes_after_eof() {
-    after_eof(42, true).await;
+    Box::pin(after_eof(42, true)).await;
 }
 
 #[tokio::test]
 async fn orphan_watch_does_not_hurry_an_unchanged_parent_across_polls() {
-    after_eof(42, false).await;
+    Box::pin(after_eof(42, false)).await;
 }
 
 #[tokio::test]
 async fn orphan_watch_never_arms_for_saved_pid_one() {
-    after_eof(1, true).await;
+    Box::pin(after_eof(1, true)).await;
 }

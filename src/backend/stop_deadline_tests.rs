@@ -202,7 +202,7 @@ async fn a_hurried_stop_hands_a_lock_held_backends_live_tree_to_the_reaper_at_on
     let observe_at = started + HURRY_WINDOW + Duration::from_millis(200);
     // Keep stop_all_by polled and the lifecycle lock held. Capture the early
     // kernel state before its eventual RetireOnDrop sweep can hide the bug.
-    let (_, at_kill_cut) = tokio::time::timeout(Duration::from_secs(10), async {
+    let ((), at_kill_cut) = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::join!(registry.stop_all_by(cut), async {
             tokio::time::sleep_until(observe_at).await;
             (kernel_view(pid), started.elapsed())
