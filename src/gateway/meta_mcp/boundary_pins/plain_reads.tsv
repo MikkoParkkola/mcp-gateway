@@ -98,6 +98,7 @@ src/personal_accounts/migration_source.rs	read_legacy_source	File::open	1	not-co
 src/personal_accounts/storage.rs	open_nofollow	.open	1	not-config	personal-accounts storage; its own stricter check (O_NOFOLLOW, no group or world bits)
 src/personal_accounts/storage.rs	sync_directory	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
 src/playbook/engine/mod.rs	load_from_directory	fs::read_to_string	1	not-config	playbook YAML definitions; public
+src/preview_sandbox/install.rs	read_metadata	open_nonblocking	1	not-config	a fetched package's package.json or entry_points.txt, read as a regular file by its opened handle and capped at 1 MiB; never gateway config
 src/preview_sandbox/linux/mod.rs	read	fs::read_to_string	1	not-config	kernel settings under /proc/sys
 src/preview_sandbox/linux/mounts.rs	mountinfo	fs::read_to_string	1	not-config	/proc/self/mountinfo in the sandbox namespace
 src/private_fs.rs	open_dir	.open	1	no-content	Windows: opens a directory for its access list or a flush; no file bytes
