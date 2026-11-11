@@ -9,8 +9,9 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-// The one keeper lives in the library's log capture; this capture shares it.
-use crate::test_log_capture as interest;
+// The including module provides `interest`, the one keeper: the library's log
+// capture, or the fresh-process test's own copy of interest.rs.
+use super::interest;
 
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<Vec<u8>>>);

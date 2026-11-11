@@ -32,6 +32,8 @@ fn stuck_task(runtime: &tokio::runtime::Runtime) -> mpsc::Sender<()> {
     release
 }
 
+// The library's log capture is the one keeper `error_capture` shares.
+use crate::test_log_capture as interest;
 #[path = "../test_support/error_capture.rs"]
 mod error_capture;
 use error_capture::errors_logged;
