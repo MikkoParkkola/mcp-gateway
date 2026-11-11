@@ -116,8 +116,7 @@ mod mutant_scan;
 #[doc(hidden)]
 pub mod oauth;
 mod observer;
-// Only Unix readers use it: the guard opens through its own Windows path.
-#[cfg(unix)]
+// Unix readers and the install's metadata reader use it; elsewhere it opens plainly.
 mod open_nonblocking;
 pub(crate) mod personal_accounts;
 #[doc(hidden)]
