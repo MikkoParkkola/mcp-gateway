@@ -210,7 +210,7 @@ fn the_vault_lock_passes_the_real_uid() {
     let lock = dir.path().join("vault.lock");
     std::fs::write(&lock, "").expect("write");
     std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o644)).expect("chmod");
-    let held = super::lock_file_blocking(&lock, std::time::Instant::now());
+    let held = super::lock_file_blocking(&lock, "the secret vault", std::time::Instant::now());
     assert!(held.is_ok(), "the user's own sidecar was refused");
     let mode = std::fs::metadata(&lock).expect("stat").permissions().mode();
     assert_eq!(mode & 0o777, 0o600, "mode {mode:o}");
@@ -230,11 +230,41 @@ fn the_vault_lock_refuses_a_sidecar_owned_by_anyone_else() {
     std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o600)).expect("chmod");
     let me = rustix::process::geteuid().as_raw();
     super::EXPECTED_OWNER.with(|uid| uid.set(Some(me + 1)));
-    let refused = super::lock_file_blocking(&lock, std::time::Instant::now());
+    let refused = super::lock_file_blocking(&lock, "the secret vault", std::time::Instant::now());
     super::EXPECTED_OWNER.with(|uid| uid.set(None));
     match refused {
         Err(super::NotLocked::Failed(why)) => {
             assert!(why.contains("belongs to another user"), "{why}");
+        }
+        other => panic!("not refused: {:?}", other.is_ok()),
+    }
+}
+
+/// A refusal names what the caller locks, not a fixed subject: the key
+/// server's email-hash key file is not "the secret vault".
+#[cfg(unix)]
+#[test]
+fn a_file_lock_refusal_names_the_callers_subject() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let lock = dir.path().join(".key-server-email-hmac.lock");
+    std::fs::write(&lock, "").expect("write");
+    std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let me = rustix::process::geteuid().as_raw();
+    super::EXPECTED_OWNER.with(|uid| uid.set(Some(me + 1)));
+    let refused = super::lock_file_blocking(
+        &lock,
+        "the key-server email HMAC envelope",
+        std::time::Instant::now(),
+    );
+    super::EXPECTED_OWNER.with(|uid| uid.set(None));
+    match refused {
+        Err(super::NotLocked::Failed(why)) => {
+            assert!(
+                why.contains("cannot lock the key-server email HMAC envelope"),
+                "{why}"
+            );
+            assert!(!why.contains("secret vault"), "{why}");
         }
         other => panic!("not refused: {:?}", other.is_ok()),
     }

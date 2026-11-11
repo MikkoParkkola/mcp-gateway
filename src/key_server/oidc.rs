@@ -123,6 +123,31 @@ pub enum OidcError {
     ClientUnavailable,
 }
 
+impl OidcError {
+    /// A fixed code for the refusal, for audit reasons and logs. The error's
+    /// text can carry token-supplied strings (an issuer, a key id, a domain),
+    /// so a refusal record names the kind only.
+    #[must_use]
+    pub(crate) fn reason_code(&self) -> &'static str {
+        match self {
+            Self::JwtError(_) => "jwt_invalid",
+            Self::UnknownIssuer(_) => "unknown_issuer",
+            Self::MissingKeyId => "missing_key_id",
+            Self::UnknownKeyId(_) => "unknown_key_id",
+            Self::DomainNotAllowed(_) => "domain_not_allowed",
+            Self::NoPolicyMatch(_) => "no_policy_match",
+            Self::HttpError(_) => "jwks_fetch_failed",
+            Self::TokenTooOld { .. } => "token_too_old",
+            Self::IssuerMismatch { .. } => "issuer_mismatch",
+            Self::InsecureJwksUri(_) => "insecure_jwks_uri",
+            Self::InsecureIssuer => "insecure_issuer",
+            Self::InsecureFetch => "insecure_fetch",
+            Self::DiscoveryStatus(_) => "discovery_status",
+            Self::ClientUnavailable => "client_unavailable",
+        }
+    }
+}
+
 /// Keep a built client, or log once and keep none: a fallback client would
 /// drop the redirect and proxy policy the builder carries.
 fn built(client: reqwest::Result<reqwest::Client>) -> Option<reqwest::Client> {
@@ -152,8 +177,30 @@ pub(crate) fn email_domain(email: &str) -> Option<&str> {
     (!local.is_empty() && !domain.is_empty() && !domain.contains('@')).then_some(domain)
 }
 
-/// Raw claims extracted from an OIDC ID token.
-#[derive(Debug, Deserialize)]
+/// How a redacting `Debug` names a personal field: by presence only.
+fn shown(present: bool) -> &'static str {
+    if present { "<present>" } else { "<absent>" }
+}
+
+impl std::fmt::Debug for IdTokenClaims {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdTokenClaims")
+            .field("iss", &self.iss)
+            .field("sub", &self.sub)
+            .field("aud", &self.aud)
+            .field("exp", &self.exp)
+            .field("iat", &self.iat)
+            .field("email", &shown(self.email.is_some()))
+            .field("email_verified", &self.email_verified)
+            .field("name", &shown(self.name.is_some()))
+            .field("groups", &shown(self.groups.is_some()))
+            .finish()
+    }
+}
+
+/// Raw claims extracted from an OIDC ID token. Its `Debug` names the email,
+/// name and groups only by presence: a stray `?claims` cannot log them.
+#[derive(Deserialize)]
 struct IdTokenClaims {
     /// Issuer
     iss: String,
@@ -480,7 +527,8 @@ impl OidcVerifier {
         }
 
         // Unknown kid: refresh once and retry
-        debug!(kid = %kid, "Key not found in cached JWKS, refreshing");
+        // The kid comes from a header no signature has vouched for yet: not logged.
+        debug!("Key not found in cached JWKS, refreshing");
         let jwks = self.jwks_cache.get_or_fetch(issuer, jwks_uri, true).await?;
         find_key_in_jwks(&jwks, kid).ok_or_else(|| OidcError::UnknownKeyId(kid.to_string()))
     }
@@ -665,6 +713,10 @@ use redirect::remote_redirect_policy;
 #[cfg(test)]
 #[path = "oidc_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "oidc_claims_debug_tests.rs"]
+mod claims_debug_tests;
 
 #[cfg(test)]
 #[path = "oidc_fallback_tests.rs"]

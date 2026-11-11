@@ -168,11 +168,9 @@ async fn exchange_token(
     let client_ip: Option<IpAddr> = extract_client_ip(&headers);
 
     if body.grant_type != "urn:ietf:params:oauth:grant-type:token-exchange" {
-        warn!(grant_type = %body.grant_type, "Invalid grant_type");
-        let ev = AuditEvent::invalid(
-            format!("invalid grant_type: {}", body.grant_type),
-            client_ip,
-        );
+        // The submitted value is caller input: the record names the refusal only.
+        warn!("Invalid grant_type");
+        let ev = AuditEvent::invalid("invalid_grant_type", client_ip);
         audit::emit(&ev);
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -198,8 +196,8 @@ async fn exchange_token(
     let identity = match ks.oidc.verify(&body.subject_token, &oidc_config).await {
         Ok(id) => id,
         Err(e) => {
-            warn!(error = %e, "OIDC verification failed");
-            let ev = AuditEvent::denied(e.to_string(), client_ip);
+            warn!(reason = e.reason_code(), "OIDC verification failed");
+            let ev = AuditEvent::denied(e.reason_code(), client_ip);
             audit::emit(&ev);
             return error_response(
                 StatusCode::UNAUTHORIZED,
@@ -208,6 +206,7 @@ async fn exchange_token(
             );
         }
     };
+    ks.note_email_subject(&identity);
 
     // Parse requested scopes from scope string
     let requested = parse_scope_string(&body.scope);
@@ -215,9 +214,13 @@ async fn exchange_token(
     let scopes = match ks.policy.resolve_scopes(&identity, &requested) {
         Ok(scopes) => scopes,
         Err(ScopeRefusal::NoBackendsGranted) => {
-            warn!(email = %identity.email(), "Matched policy grants no backend");
+            warn!(issuer = %identity.issuer(), subject = %identity.subject(), "Matched policy grants no backend");
             let ev = AuditEvent::denied(
-                format!("policy grants no backend to {}", identity.email()),
+                format!(
+                    "policy grants no backend to {} at {}",
+                    identity.subject(),
+                    identity.issuer()
+                ),
                 client_ip,
             );
             audit::emit(&ev);
@@ -230,9 +233,13 @@ async fn exchange_token(
             );
         }
         Err(ScopeRefusal::Denied) => {
-            warn!(email = %identity.email(), "No policy matched");
+            warn!(issuer = %identity.issuer(), subject = %identity.subject(), "No policy matched");
             let ev = AuditEvent::denied(
-                format!("no policy matched for {}", identity.email()),
+                format!(
+                    "no policy matched for {} at {}",
+                    identity.subject(),
+                    identity.issuer()
+                ),
                 client_ip,
             );
             audit::emit(&ev);
@@ -292,7 +299,7 @@ pub(super) async fn issue(
         jti: token.jti.clone(),
     };
 
-    let ev = AuditEvent::issued(&token);
+    let ev = AuditEvent::issued(&token, &ks.email_key);
     audit::emit(&ev);
     ks.store.insert(token).await;
 
@@ -514,10 +521,13 @@ mod tests {
     fn empty_admin_token_never_authenticates() {
         // Defence in depth behind the load-time refusal: a KeyServer built in
         // code with an empty admin token must not accept an empty bearer.
-        let ks = KeyServer::new(crate::config::KeyServerConfig {
-            admin_token: Some(String::new()),
-            ..crate::config::KeyServerConfig::default()
-        });
+        let ks = KeyServer::new(
+            crate::config::KeyServerConfig {
+                admin_token: Some(String::new()),
+                ..crate::config::KeyServerConfig::default()
+            },
+            crate::key_server::email_hash::EmailHashKey::for_test(),
+        );
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer ".parse().expect("header"));
         assert!(check_admin_auth(&ks, &headers).is_err());

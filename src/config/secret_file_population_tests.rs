@@ -223,6 +223,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) source scanner reading Cargo.toml and the crate's own sources for the MIK-8481 unshipped-read guard; no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/email_sinks.rs",
+        "cfg(test) scanner for the email-sink inventory, reading the crate's own sources; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/creation_sites.rs",
         "cfg(test) scanner for the file-creation inventory, reading the crate's own sources; its fs::write calls are quoted syntax in a scanner test, never run; no secret",
     ),
