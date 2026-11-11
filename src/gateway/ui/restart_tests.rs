@@ -143,10 +143,10 @@ fn refusal(body: &Value, available: bool) {
 }
 #[tokio::test]
 async fn admin_get_is_unavailable_without_a_token_in_gateway_actions() {
+    use super::access_table::{AdminShape, Need, Page, ROWS, Tab, Verb};
     let fx = fixture().await;
     let body = send(&fx, request("GET", URI, Some(ADMIN), None), 200).await;
     refusal(&body, true);
-    use super::access_table::{AdminShape, Need, Page, ROWS, Tab, Verb};
     for method in [Verb::Get, Verb::Post] {
         let row = ROWS
             .iter()
