@@ -27,6 +27,7 @@ use crate::identity_grants::journal::resolved;
 
 const VERSION: u32 = 1;
 
+#[cfg(test)]
 #[path = "config_persistence_journal_v2.rs"]
 pub(crate) mod v2;
 

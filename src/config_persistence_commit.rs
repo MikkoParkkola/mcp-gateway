@@ -25,10 +25,12 @@ pub(crate) struct FileRevision(String);
 
 impl FileRevision {
     /// Restore a journal revision after validating 64 lowercase hex characters.
+    #[cfg(test)]
     pub(crate) fn parse_journal(text: &str) -> Result<Self, super::journal::v2::JournalError> {
         Self::checked(text).ok_or(super::journal::v2::JournalError::InvalidState)
     }
 
+    #[cfg(any(test, feature = "webui"))]
     fn checked(text: &str) -> Option<Self> {
         (text.len() == 64
             && text

@@ -13,7 +13,9 @@
 
 use std::io;
 
-use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::TransparencyLogger;
@@ -85,6 +87,7 @@ impl Role {
 }
 
 /// Why a write ended as it did: a closed set, never error text.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Reason {
@@ -105,16 +108,19 @@ pub(crate) enum Reason {
     LeftToRecovery,
 }
 
+#[cfg(test)]
 impl Reason {
     pub(crate) fn from_journal(bytes: &[u8]) -> Result<Self, InvalidReason> {
         serde_json::from_slice(bytes).map_err(|_| InvalidReason)
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InvalidReason;
 
 /// Actor metadata frozen beside caller payload bytes by journal owners.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct Attribution {
     pub(crate) actor: crate::security::audit::AuditWho,

@@ -49,6 +49,7 @@ pub(crate) enum SecretFile {
     /// the next recovery restore it ([`RECOVERY_FILE_FIX`]).
     RecoveryFile,
     /// A v2 recovery journal, with the recovery rule and a 1 MiB read limit.
+    #[cfg(test)]
     RecoveryJournalV2,
 }
 
@@ -113,6 +114,7 @@ impl SecretFile {
     const fn max_bytes(self) -> Option<u64> {
         match self {
             Self::Reference => Some(64 * 1024),
+            #[cfg(test)]
             Self::RecoveryJournalV2 => Some(1_048_576),
             _ => None,
         }
@@ -131,6 +133,9 @@ impl SecretFile {
             Self::TlsCrl => "certificate revocation list",
             Self::IdentityGrants => "identity grants file",
             Self::ControlPlaneCollection => "control-plane file",
+            #[cfg(not(test))]
+            Self::RecoveryFile => "replace journal or staged original",
+            #[cfg(test)]
             Self::RecoveryFile | Self::RecoveryJournalV2 => "replace journal or staged original",
         }
     }
@@ -140,6 +145,9 @@ impl SecretFile {
     /// whatever the refusal.
     const fn recovery_guidance(self) -> Option<&'static str> {
         match self {
+            #[cfg(not(test))]
+            Self::RecoveryFile => Some(RECOVERY_FILE_FIX),
+            #[cfg(test)]
             Self::RecoveryFile | Self::RecoveryJournalV2 => Some(RECOVERY_FILE_FIX),
             _ => None,
         }
@@ -680,6 +688,7 @@ pub(crate) fn read_recovery_text(path: &Path) -> std::result::Result<Option<Stri
 /// # Errors
 ///
 /// As [`read_recovery_text`], also refusing an oversized journal.
+#[cfg(test)]
 pub(crate) fn read_recovery_journal_v2(
     path: &Path,
 ) -> std::result::Result<Option<String>, UnreadConfig> {

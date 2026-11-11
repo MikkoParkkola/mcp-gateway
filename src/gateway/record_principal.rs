@@ -211,11 +211,13 @@ impl InternalPrincipal {
 #[serde(transparent)]
 pub(crate) struct RecordPrincipal(String);
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InvalidRecordPrincipal;
 
 impl RecordPrincipal {
     /// Restore exactly 12 ASCII hex characters or the empty none sentinel.
+    #[cfg(test)]
     pub(crate) fn from_persisted(text: &str) -> Result<Self, InvalidRecordPrincipal> {
         if !text.is_empty() && (text.len() != 12 || !text.bytes().all(|b| b.is_ascii_hexdigit())) {
             return Err(InvalidRecordPrincipal);
