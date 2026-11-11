@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use super::ui_access_matrix_test_rows::{Attributes, Loaded, load_from, rows};
 
-const OLD_ROW_COUNT: usize = 10890;
 const BODY: &str = "refused\tde6b55925ef7\tshared refusal body\n";
 const PLAIN: &str = "/ui/api/status\tGET\tplain\tAdminKey\t200\n";
 const NAMED: &str = "/ui/api/status\tGET\tplain\tNoKey\t401:@refused\n";
@@ -198,29 +197,16 @@ fn accepts_dashboard_nested_and_parameterized_route_slugs() {
 }
 
 #[test]
-fn real_directory_expands_to_the_original_row_count() {
+fn the_real_directory_loads_expanded_and_with_every_features_rows() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/router");
-    let dir = root.join("ui_access_matrix.d");
-    let bodies = root.join("ui_access_matrix_bodies.tsv");
-    assert_eq!(
-        fs::read_dir(&dir).expect("real directory exists").count(),
-        47
-    );
-    assert!(
-        !fs::read_to_string(&bodies)
-            .expect("real bodies exist")
-            .is_empty()
-    );
-    let loaded = load_from(&dir, &bodies).expect("real fragments load");
-    assert_eq!(loaded.files.len(), 47);
-    assert_eq!(
-        loaded
-            .files
-            .iter()
-            .map(|file| file.rows.len())
-            .sum::<usize>(),
-        OLD_ROW_COUNT
-    );
+    let loaded = load_from(
+        &root.join("ui_access_matrix.d"),
+        &root.join("ui_access_matrix_bodies.tsv"),
+    )
+    .expect("real fragments load");
+    // No count is pinned here: a new route adds a file and must not edit a shared number.
+    // Completeness is `every_ui_api_path_is_in_the_matrix` plus the computed matrix comparison.
+    assert!(!loaded.files.is_empty());
     assert!(
         loaded
             .files

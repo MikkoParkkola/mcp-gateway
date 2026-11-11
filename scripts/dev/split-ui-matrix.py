@@ -3,23 +3,36 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Convert a single-file UI access matrix into per-route fragments.
 
-    scripts/dev/split-ui-matrix.py [ROOT]
+    scripts/dev/split-ui-matrix.py [--bodies FILE] [ROOT]
 
 ROOT is a checkout (default: the current directory). It reads the old
 `src/gateway/router/ui_access_matrix.tsv`, writes `ui_access_matrix.d/<slug>.tsv`
-(one file per route path) and deletes the old file. Digests named in
-`ui_access_matrix_bodies.tsv` become `status:@name` cells; a digest not named
-there stays inline. Without a bodies file, one is created from the digests that
-occur on three or more routes, and the names are frozen from then on.
+(one file per route path) and deletes the old file. It refuses to run when
+`ui_access_matrix.d/` already holds files, so it never overwrites fragments.
 
-Use it on an in-flight branch that still edits the single table: merge the
-release line into the branch taking the line's `.d/` and bodies file, restore
-the branch's own old-format table with `git show <branch>:<path>`, run this,
-and commit the result.
+Digests named in `ui_access_matrix_bodies.tsv` become `status:@name` cells; a
+digest not named there stays inline. `--bodies FILE` copies FILE over the bodies
+file first (use the release line's, so every branch shares the frozen names).
+Without any bodies file, one is created from the digests that occur on three or
+more routes.
+
+Migrating an in-flight branch that still edits the single table, BEFORE merging
+the release line (merging first would let the old table overwrite release-side
+rows):
+
+    git show <line>:src/gateway/router/ui_access_matrix_bodies.tsv > /tmp/bodies.tsv
+    scripts/dev/split-ui-matrix.py --bodies /tmp/bodies.tsv
+    git add -A && git commit -m "test(ui): split the access matrix per route"
+    git merge <line>
+
+The merge then meets the line's fragments file by file: a fragment both sides
+changed shows as an add/add conflict only where its rows differ; keep both sides'
+rows.
 """
 import collections
 import os
 import re
+import shutil
 import sys
 
 ROUTER = "src/gateway/router"
@@ -64,9 +77,14 @@ def read_bodies(path):
     return names
 
 
-def split(root):
+def split(root, bodies_from=None):
     old = os.path.join(root, ROUTER, "ui_access_matrix.tsv")
     bodies = os.path.join(root, ROUTER, "ui_access_matrix_bodies.tsv")
+    out = os.path.join(root, ROUTER, "ui_access_matrix.d")
+    if os.path.isdir(out) and os.listdir(out):
+        raise SystemExit(f"{out} already holds files; refusing to overwrite them")
+    if bodies_from:
+        shutil.copyfile(bodies_from, bodies)
     rows = read_rows(old)
     if len({slug(p) for p in rows}) != len(rows):
         raise SystemExit("two routes share a slug")
@@ -83,7 +101,6 @@ def split(root):
             f.write("# name, digest, meaning. A body shared by 3 or more routes at the split; names are frozen, not recomputed.\n")
             for digest, name in sorted(names.items(), key=lambda x: x[1]):
                 f.write(f"{name}\t{digest}\tshared answer body on {len(routes_of[digest])} routes\n")
-    out = os.path.join(root, ROUTER, "ui_access_matrix.d")
     os.makedirs(out, exist_ok=True)
     for path, cells in rows.items():
         with open(os.path.join(out, slug(path) + ".tsv"), "w", encoding="utf-8") as f:
@@ -101,5 +118,11 @@ def split(root):
 
 
 if __name__ == "__main__":
-    files, named = split(sys.argv[1] if len(sys.argv) > 1 else ".")
+    args = sys.argv[1:]
+    bodies_from = None
+    if args[:1] == ["--bodies"]:
+        if len(args) < 2:
+            raise SystemExit("--bodies needs a file")
+        bodies_from, args = args[1], args[2:]
+    files, named = split(args[0] if args else ".", bodies_from)
     print(f"{files} route files, {named} named bodies")

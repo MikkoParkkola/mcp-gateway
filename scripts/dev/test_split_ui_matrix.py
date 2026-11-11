@@ -83,6 +83,27 @@ class Split(unittest.TestCase):
             self.assertIn("#@ store_reads\n", text)
             self.assertNotIn("store_writes", text)
 
+    def test_it_refuses_to_overwrite_existing_fragments(self):
+        m = load()
+        with TemporaryDirectory() as tmp:
+            router = tree(tmp, [row("/ui/api/a", "NoKey", "401")])
+            (router / "ui_access_matrix.d").mkdir()
+            (router / "ui_access_matrix.d/a.tsv").write_text("kept\n")
+            with self.assertRaises(SystemExit):
+                m.split(tmp)
+            self.assertEqual((router / "ui_access_matrix.d/a.tsv").read_text(), "kept\n")
+            self.assertTrue((router / "ui_access_matrix.tsv").exists())
+
+    def test_bodies_from_another_file_supply_the_frozen_names(self):
+        m = load()
+        with TemporaryDirectory() as tmp:
+            router = tree(tmp, [row("/ui/api/r", "NoKey", f"403:{D2}")])
+            donor = Path(tmp) / "donor.tsv"
+            donor.write_text(f"# header\nrefusal\t{D2}\tfrom the line\n")
+            m.split(tmp, str(donor))
+            self.assertIn("403:@refusal", (router / "ui_access_matrix.d/r.tsv").read_text())
+            self.assertEqual((router / "ui_access_matrix_bodies.tsv").read_text(), donor.read_text())
+
     def test_a_malformed_line_stops_the_run(self):
         m = load()
         with TemporaryDirectory() as tmp:
