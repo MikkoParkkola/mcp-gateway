@@ -451,6 +451,11 @@ fn registry_tags_ranges_and_aliases_are_accepted() {
         "",
         "npm:foo",
         "npm:@s/p",
+        // A registry tag with an underscore, and ranges npm accepts with a
+        // tab or a newline between their comparators.
+        "beta_1",
+        ">=1\t<2",
+        ">=1\n<2",
     ] {
         let mut l = lock();
         l["packages"][""]["dependencies"]["a"] = range.into();
