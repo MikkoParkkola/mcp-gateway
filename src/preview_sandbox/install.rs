@@ -8,6 +8,7 @@
     expect(dead_code, reason = "the Linux fetch step, a later part, calls these")
 )]
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -27,16 +28,15 @@ pub(crate) fn check_lock(lock: &Value) -> Result<(), Refusal> {
         .and_then(Value::as_object)
         .ok_or_else(|| refuse("the npm lock has no package list (npm 7 or later writes one)"))?;
     for (key, entry) in packages {
-        if !key.is_empty() {
-            let bundled = entry.get("inBundle").and_then(Value::as_bool) == Some(true);
-            let resolved = entry.get("resolved").and_then(Value::as_str);
-            let registry = resolved.is_some_and(|r| {
-                r.starts_with(REGISTRY) && r.rsplit_once('.').is_some_and(|(_, ext)| ext == "tgz")
-            });
-            let linked = entry.get("link").and_then(Value::as_bool) == Some(true);
-            if linked || !(registry || (bundled && resolved.is_none())) {
-                return Err(not_registry(key));
-            }
+        let bundled = entry.get("inBundle").and_then(Value::as_bool) == Some(true);
+        let resolved = entry.get("resolved").and_then(Value::as_str);
+        let registry = resolved.is_some_and(|r| {
+            r.starts_with(REGISTRY) && r.rsplit_once('.').is_some_and(|(_, ext)| ext == "tgz")
+        });
+        let linked = entry.get("link").and_then(Value::as_bool) == Some(true);
+        // The root need not have a tarball, but cannot redirect the install.
+        if linked || !(registry || ((key.is_empty() || bundled) && resolved.is_none())) {
+            return Err(not_registry(key));
         }
         for field in ["dependencies", "optionalDependencies"] {
             let Some(deps) = entry.get(field).and_then(Value::as_object) else {
@@ -78,9 +78,15 @@ fn registry_range(range: &str) -> bool {
 }
 
 fn semver(range: &str) -> bool {
-    range
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || ".+-^~<>=| *".contains(c))
+    // npm treats leading dots and archive suffixes as files, including in aliases.
+    !range.is_empty()
+        && !range.starts_with('.')
+        && ![".tgz", ".tar", ".tar.gz"]
+            .into_iter()
+            .any(|suffix| range.ends_with(suffix))
+        && range
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || ".+-^~<>=| *".contains(c))
 }
 
 fn name_part(part: &str) -> bool {
@@ -129,15 +135,35 @@ fn not_registry(what: &str) -> Refusal {
 
 const NO_ENTRY: &str = "the package has no single entry point";
 
+/// Bound untrusted metadata reads even if the file grows after opening.
+fn read_metadata(path: &Path) -> Option<Vec<u8>> {
+    const LIMIT: usize = 1024 * 1024;
+    let file = crate::open_nonblocking::open_nonblocking(path).ok()?;
+    // Check the opened object so a replaced path cannot bypass the file check.
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take((LIMIT + 1) as u64).read_to_end(&mut bytes).ok()?;
+    (bytes.len() <= LIMIT).then_some(bytes)
+}
+
 /// The bin file of npm package `name` installed under `root`: `bin` as a
 /// string, a map with one entry, or the entry named after the package's own
 /// name (scope dropped), as npx picks it. The file must resolve, symlinks
 /// followed, inside the package's directory; it runs directly, so its shebang
 /// or native format picks the interpreter.
 pub(crate) fn npm_bin(root: &Path, name: &str) -> Result<PathBuf, Refusal> {
-    let dir = root.join("node_modules").join(name);
-    let manifest: Value = std::fs::read(dir.join("package.json"))
-        .ok()
+    let root = root.canonicalize().map_err(|_| refuse(NO_ENTRY))?;
+    let dir = root
+        .join("node_modules")
+        .join(name)
+        .canonicalize()
+        .map_err(|_| refuse(NO_ENTRY))?;
+    if !dir.starts_with(&root) {
+        return Err(refuse("the package's entry point is outside the package"));
+    }
+    let manifest: Value = read_metadata(&dir.join("package.json"))
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .ok_or_else(|| refuse(NO_ENTRY))?;
     let own = name.rsplit('/').next().unwrap_or(name);
@@ -150,7 +176,6 @@ pub(crate) fn npm_bin(root: &Path, name: &str) -> Result<PathBuf, Refusal> {
         _ => None,
     }
     .ok_or_else(|| refuse(NO_ENTRY))?;
-    let dir = dir.canonicalize().map_err(|_| refuse(NO_ENTRY))?;
     let target = dir
         .join(file)
         .canonicalize()
@@ -167,12 +192,18 @@ pub(crate) fn npm_bin(root: &Path, name: &str) -> Result<PathBuf, Refusal> {
 /// every dependency's scripts.
 pub(crate) fn uv_entry_point(env: &Path, name: &str) -> Result<PathBuf, Refusal> {
     let dist_info = dist_info(&site_packages(env)?, name)?;
-    let text = std::fs::read_to_string(dist_info.join("entry_points.txt")).unwrap_or_default();
+    let text = read_metadata(&dist_info.join("entry_points.txt"))
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .ok_or_else(|| refuse(NO_ENTRY))?;
     let scripts = console_scripts(&text);
     let wanted = normalize(name);
     let script = match scripts.as_slice() {
         [only] => Some(*only),
-        many => many.iter().copied().find(|s| normalize(s) == wanted),
+        many => many.iter().copied().find(|s| *s == name).or_else(|| {
+            let mut matches = many.iter().copied().filter(|s| normalize(s) == wanted);
+            let first = matches.next()?;
+            matches.next().is_none().then_some(first)
+        }),
     }
     .ok_or_else(|| refuse(NO_ENTRY))?;
     // A name is one path component: a script named `../x` would leave bin/.
@@ -215,7 +246,7 @@ fn dist_info(site: &Path, name: &str) -> Result<PathBuf, Refusal> {
         else {
             continue;
         };
-        let dist = stem.split_once('-').map_or(stem, |(dist, _)| dist);
+        let dist = stem.rsplit_once('-').map_or(stem, |(dist, _)| dist);
         if normalize(dist) == wanted && entry.path().is_dir() {
             found.push(entry.path());
         }
