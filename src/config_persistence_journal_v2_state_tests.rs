@@ -446,7 +446,9 @@ fn finish_original_before_journal() {
     let journal_path = journal::journal_path(&path);
     let original_path = journal::original_path(&path);
     let audit_path = dir.path().join("audit/log.jsonl");
-    let audit_before = std::fs::read(&audit_path).expect(ROW);
+    // No logger is opened here (a test log in a temp dir must be kept alive); finish has no log
+    // handle, so the audit path stays absent and unchanged.
+    let audit_before = std::fs::read(&audit_path).ok();
     let before_syncs =
         fault::synced(&journal_path) + fault::synced(&original_path) + fault::synced(&path);
     let watching = observe::watch(&path);
@@ -493,7 +495,7 @@ fn finish_original_before_journal() {
         "{ROW}: no A commit or verify retry"
     );
     assert_eq!(
-        std::fs::read(audit_path).expect(ROW),
+        std::fs::read(audit_path).ok(),
         audit_before,
         "{ROW}: no B append retry"
     );
