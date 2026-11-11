@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! How the runtime ends once `run` returned (MIK-7683, MIK-8084).
+//! How the runtime ends once `dispatch` returned.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use mcp_gateway::cli::Command;
+use crate::cli::Command;
 
 use super::{RuntimeShutdown, SERVE_RUNTIME_SHUTDOWN_TIMEOUT, block_on, shut_down};
 
@@ -32,7 +32,7 @@ fn stuck_task(runtime: &tokio::runtime::Runtime) -> mpsc::Sender<()> {
     release
 }
 
-#[path = "test_support/error_capture.rs"]
+#[path = "../test_support/error_capture.rs"]
 mod error_capture;
 use error_capture::errors_logged;
 
@@ -64,14 +64,14 @@ fn every_serve_mode_bounds_the_runtime_shutdown() {
 #[test]
 fn doctor_bounds_the_runtime_shutdown_at_one_second() {
     use clap::Parser as _;
-    let doctor = mcp_gateway::cli::Cli::try_parse_from(["mcp-gateway", "doctor"])
+    let doctor = crate::cli::Cli::try_parse_from(["mcp-gateway", "doctor"])
         .expect("doctor parses")
         .command;
     assert_eq!(
         RuntimeShutdown::of(doctor.as_ref()),
         RuntimeShutdown::Bounded(Duration::from_secs(1))
     );
-    let init = mcp_gateway::cli::Cli::try_parse_from(["mcp-gateway", "init"])
+    let init = crate::cli::Cli::try_parse_from(["mcp-gateway", "init"])
         .expect("init parses")
         .command;
     assert_eq!(

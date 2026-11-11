@@ -7,6 +7,8 @@
 //! The rewrite reads and writes the file under one hold of the config lock
 //! (`edit_config_text`), so a change another writer saved first is kept.
 
+use crate::cli::stdout::println;
+
 use std::path::Path;
 use std::process::ExitCode;
 

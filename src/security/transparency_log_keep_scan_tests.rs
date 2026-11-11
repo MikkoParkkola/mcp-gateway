@@ -12,6 +12,7 @@
 /// file the release line brought in while this sweep is open; any other new
 /// unkept file fails the scan.
 const PENDING: &[&str] = &[
+    "src/cli/main_audit_secret_tests.rs",
     "src/commands/audit_race_tests.rs",
     "src/config_reload/override_audit_tests.rs",
     "src/config_reload/replace_audit_tests.rs",
@@ -91,7 +92,6 @@ const PENDING: &[&str] = &[
     "src/gateway/ui/keys_tests.rs",
     "src/identity_propagation/account_strategies_tests.rs",
     "src/identity_propagation/audit_fail_closed_tests.rs",
-    "src/main_audit_secret_tests.rs",
     "src/security/audit_tests.rs",
     "src/security/tenant_read_corpus_tests.rs",
 ];

@@ -5,6 +5,8 @@
 //! Monitors `config_path` for file-system changes and re-exports client
 //! configs whenever the file is modified, using a 500 ms debounce.
 
+use crate::cli::stdout::println;
+
 use std::path::Path;
 
 use mcp_gateway::{cli::ConnectionMode, config::Config};

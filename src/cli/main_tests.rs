@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
 use crate::commands::config_write::CommentLoss;
-use mcp_gateway::cli::{Cli, InitProfile};
-use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
-use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
-use mcp_gateway::gateway::test_helpers::write_config_fixture;
+use crate::cli::{Cli, InitProfile};
+use crate::config::{BackendConfig, Config, TransportConfig};
+use crate::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
+use crate::gateway::test_helpers::write_config_fixture;
 #[cfg(unix)]
 #[path = "main_audit_secret_tests.rs"]
 mod audit_secret;
@@ -13,8 +13,6 @@ mod audit_secret;
 mod cli_parse;
 #[path = "main_dangling_tests.rs"]
 mod dangling;
-#[path = "main_stack_tests.rs"]
-mod stack;
 
 fn make_discovered_server(name: &str) -> DiscoveredServer {
     DiscoveredServer::new(
@@ -318,10 +316,10 @@ fn gh462_discovery_persistence_preserves_existing_invalid_files() {
         "backends:\n  original:\n    command: \"unterminated\n",
         "backends:\n  bad/name:\n    command: echo original\n",
     ] {
-        mcp_gateway::gateway::test_helpers::write_owner_only(&output, original).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&output, original).unwrap();
         let error = Config::load_literal(Some(&output)).unwrap_err();
         if original.contains("bad/name") {
-            assert!(matches!(error, mcp_gateway::Error::ConfigValidation(_)));
+            assert!(matches!(error, crate::Error::ConfigValidation(_)));
         }
         #[cfg(unix)] // Unix-only: (dev, ino) file identity via MetadataExt.
         let identity = {
@@ -458,7 +456,7 @@ fn resolve_stats_url_no_url_no_config_falls_back_to_default() {
 fn resolve_stats_url_no_url_derives_port_from_config_file() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("gateway.yaml");
-    mcp_gateway::gateway::test_helpers::write_owner_only(
+    crate::gateway::test_helpers::write_owner_only(
         &config_path,
         "server:\n  host: \"127.0.0.1\"\n  port: 39477\n",
     )
@@ -477,7 +475,7 @@ fn resolve_stats_url_no_url_derives_port_from_config_file() {
 fn resolve_stats_url_no_url_translates_wildcard_bind_host() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("gateway.yaml");
-    mcp_gateway::gateway::test_helpers::write_owner_only(
+    crate::gateway::test_helpers::write_owner_only(
         &config_path,
         "server:\n  host: \"0.0.0.0\"\n  port: 39400\n",
     )
@@ -538,7 +536,7 @@ fn serve_config_path_missing_downgrades_to_none() {
 fn serve_config_path_existing_is_preserved() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.yaml");
-    mcp_gateway::gateway::test_helpers::write_owner_only(&path, "server:\n  port: 8080\n").unwrap();
+    crate::gateway::test_helpers::write_owner_only(&path, "server:\n  port: 8080\n").unwrap();
     let cli = make_cli_with_config(Some(path.clone()));
     assert_eq!(serve_config_path(&cli), Some(path));
 }

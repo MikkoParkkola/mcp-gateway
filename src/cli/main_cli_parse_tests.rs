@@ -40,8 +40,8 @@ fn cli_identity_grants_list_parses_file_and_json_format() {
     ])
     .unwrap();
     match cli.command {
-        Some(Command::Identity(mcp_gateway::cli::IdentityCommand::Grants(
-            mcp_gateway::cli::IdentityGrantsCommand::List {
+        Some(Command::Identity(crate::cli::IdentityCommand::Grants(
+            crate::cli::IdentityGrantsCommand::List {
                 file,
                 active_only,
                 format,
@@ -49,7 +49,7 @@ fn cli_identity_grants_list_parses_file_and_json_format() {
         ))) => {
             assert_eq!(file, std::path::PathBuf::from("identity-grants.yaml"));
             assert!(active_only);
-            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Json);
+            assert_eq!(format, crate::cli::output::OutputFormat::Json);
         }
         other => panic!("unexpected: {other:?}"),
     }
@@ -82,8 +82,8 @@ fn cli_identity_grants_grant_parses_required_local_admin_fields() {
     ])
     .unwrap();
     match cli.command {
-        Some(Command::Identity(mcp_gateway::cli::IdentityCommand::Grants(
-            mcp_gateway::cli::IdentityGrantsCommand::Grant {
+        Some(Command::Identity(crate::cli::IdentityCommand::Grants(
+            crate::cli::IdentityGrantsCommand::Grant {
                 file,
                 grant_id,
                 subject,
@@ -102,7 +102,7 @@ fn cli_identity_grants_grant_parses_required_local_admin_fields() {
             assert_eq!(agent.as_deref(), Some("agent-a"));
             assert_eq!(capability, "personal_calendar");
             assert_eq!(tool.as_deref(), Some("read_day"));
-            assert_eq!(scope, mcp_gateway::cli::IdentityGrantScopeArg::Read);
+            assert_eq!(scope, crate::cli::IdentityGrantScopeArg::Read);
             assert_eq!(ttl_seconds, Some(3600));
             assert_eq!(reason, "read calendar");
         }
@@ -122,13 +122,13 @@ fn cli_trust_generate_parses_capabilities_and_json_format() {
     ])
     .unwrap();
     match cli.command {
-        Some(Command::Trust(mcp_gateway::cli::TrustCommand::Generate {
+        Some(Command::Trust(crate::cli::TrustCommand::Generate {
             capabilities,
             format,
             output,
         })) => {
             assert_eq!(capabilities, std::path::PathBuf::from("fixtures/caps"));
-            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Json);
+            assert_eq!(format, crate::cli::output::OutputFormat::Json);
             assert!(output.is_none());
         }
         other => panic!("unexpected: {other:?}"),
@@ -139,7 +139,7 @@ fn cli_trust_generate_parses_capabilities_and_json_format() {
 fn cli_trust_validate_parses_file_and_strict_flag() {
     let cli = parse_args(&["trust", "validate", "--file", "trustcard.json", "--strict"]).unwrap();
     match cli.command {
-        Some(Command::Trust(mcp_gateway::cli::TrustCommand::Validate { file, strict, .. })) => {
+        Some(Command::Trust(crate::cli::TrustCommand::Validate { file, strict, .. })) => {
             assert_eq!(
                 file.as_deref(),
                 Some(std::path::Path::new("trustcard.json"))
@@ -184,8 +184,8 @@ fn cli_trust_lab_evaluate_parses_thresholds() {
     ])
     .unwrap();
     match cli.command {
-        Some(Command::Trust(mcp_gateway::cli::TrustCommand::Lab(
-            mcp_gateway::cli::TrustLabCommand::Evaluate {
+        Some(Command::Trust(crate::cli::TrustCommand::Lab(
+            crate::cli::TrustLabCommand::Evaluate {
                 name,
                 capabilities,
                 enforce,
@@ -226,7 +226,7 @@ fn cli_trust_lab_evaluate_parses_thresholds() {
             assert!(!execute_active_fixtures);
             assert_eq!(
                 runtime_provider_plan,
-                Some(mcp_gateway::cli::RuntimeProviderArg::Docker)
+                Some(crate::cli::RuntimeProviderArg::Docker)
             );
             assert_eq!(
                 runtime_image.as_deref(),
@@ -235,7 +235,7 @@ fn cli_trust_lab_evaluate_parses_thresholds() {
             assert_eq!(baseline_id, "weather-baseline");
             assert_eq!(minimum_score, 80);
             assert_eq!(certification_score, 95);
-            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Json);
+            assert_eq!(format, crate::cli::output::OutputFormat::Json);
         }
         other => panic!("unexpected: {other:?}"),
     }
@@ -254,8 +254,8 @@ fn cli_trust_lab_evaluate_parses_execute_active_fixtures() {
     ])
     .unwrap();
     match cli.command {
-        Some(Command::Trust(mcp_gateway::cli::TrustCommand::Lab(
-            mcp_gateway::cli::TrustLabCommand::Evaluate {
+        Some(Command::Trust(crate::cli::TrustCommand::Lab(
+            crate::cli::TrustLabCommand::Evaluate {
                 active_fixtures,
                 execute_active_fixtures,
                 ..
@@ -288,17 +288,17 @@ fn cli_import_preview_parses_openapi_kind_and_json_format() {
     ])
     .unwrap();
     match cli.command {
-        Some(Command::Import(mcp_gateway::cli::ProtocolImportCommand::Preview {
+        Some(Command::Import(crate::cli::ProtocolImportCommand::Preview {
             kind,
             file,
             source_name,
             format,
             context_integrity_profile,
         })) => {
-            assert_eq!(kind, mcp_gateway::cli::ProtocolImportKind::OpenApi);
+            assert_eq!(kind, crate::cli::ProtocolImportKind::OpenApi);
             assert_eq!(file, std::path::PathBuf::from("fixtures/openapi.yaml"));
             assert_eq!(source_name.as_deref(), Some("users-api"));
-            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Json);
+            assert_eq!(format, crate::cli::output::OutputFormat::Json);
             assert_eq!(context_integrity_profile, "reviewed_import");
         }
         other => panic!("unexpected: {other:?}"),
@@ -309,15 +309,15 @@ fn cli_import_preview_parses_openapi_kind_and_json_format() {
 fn cli_import_preview_accepts_oci_alias() {
     let cli = parse_args(&["import", "preview", "--kind", "oci", "package.yaml"]).unwrap();
     match cli.command {
-        Some(Command::Import(mcp_gateway::cli::ProtocolImportCommand::Preview {
+        Some(Command::Import(crate::cli::ProtocolImportCommand::Preview {
             kind,
             file,
             format,
             ..
         })) => {
-            assert_eq!(kind, mcp_gateway::cli::ProtocolImportKind::OciMcpPackage);
+            assert_eq!(kind, crate::cli::ProtocolImportKind::OciMcpPackage);
             assert_eq!(file, std::path::PathBuf::from("package.yaml"));
-            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Table);
+            assert_eq!(format, crate::cli::output::OutputFormat::Table);
         }
         other => panic!("unexpected: {other:?}"),
     }
@@ -336,7 +336,7 @@ fn cli_kubernetes_plan_parses_resources_namespace_and_json_format() {
     ])
     .unwrap();
     match cli.command {
-        Some(Command::Kubernetes(mcp_gateway::cli::KubernetesCommand::Plan {
+        Some(Command::Kubernetes(crate::cli::KubernetesCommand::Plan {
             resources,
             namespace,
             format,
@@ -348,7 +348,7 @@ fn cli_kubernetes_plan_parses_resources_namespace_and_json_format() {
                 )
             );
             assert_eq!(namespace, "gateway-prod");
-            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Json);
+            assert_eq!(format, crate::cli::output::OutputFormat::Json);
         }
         other => panic!("unexpected: {other:?}"),
     }
@@ -371,7 +371,7 @@ fn cli_kubernetes_controller_parses_cycles_interval_and_plain_format() {
     ])
     .unwrap();
     match cli.command {
-        Some(Command::Kubernetes(mcp_gateway::cli::KubernetesCommand::Controller {
+        Some(Command::Kubernetes(crate::cli::KubernetesCommand::Controller {
             resources,
             namespace,
             interval_seconds,
@@ -389,7 +389,7 @@ fn cli_kubernetes_controller_parses_cycles_interval_and_plain_format() {
             assert_eq!(interval_seconds, 5);
             assert_eq!(cycles, 2);
             assert!(!watch);
-            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Plain);
+            assert_eq!(format, crate::cli::output::OutputFormat::Plain);
         }
         other => panic!("unexpected: {other:?}"),
     }
@@ -409,7 +409,7 @@ fn cli_kubernetes_apply_plan_parses_approval_and_json_format() {
     ])
     .unwrap();
     match cli.command {
-        Some(Command::Kubernetes(mcp_gateway::cli::KubernetesCommand::ApplyPlan {
+        Some(Command::Kubernetes(crate::cli::KubernetesCommand::ApplyPlan {
             resources,
             namespace,
             approve_apply,
@@ -425,7 +425,7 @@ fn cli_kubernetes_apply_plan_parses_approval_and_json_format() {
             assert_eq!(namespace, "gateway-prod");
             assert!(approve_apply);
             assert!(!execute);
-            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Json);
+            assert_eq!(format, crate::cli::output::OutputFormat::Json);
         }
         other => panic!("unexpected: {other:?}"),
     }
@@ -443,7 +443,7 @@ fn cli_kubernetes_apply_plan_parses_execute_gate() {
     ])
     .unwrap();
     match cli.command {
-        Some(Command::Kubernetes(mcp_gateway::cli::KubernetesCommand::ApplyPlan {
+        Some(Command::Kubernetes(crate::cli::KubernetesCommand::ApplyPlan {
             execute,
             approve_apply,
             format,
@@ -451,7 +451,7 @@ fn cli_kubernetes_apply_plan_parses_execute_gate() {
         })) => {
             assert!(execute);
             assert!(!approve_apply);
-            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Plain);
+            assert_eq!(format, crate::cli::output::OutputFormat::Plain);
         }
         other => panic!("unexpected: {other:?}"),
     }

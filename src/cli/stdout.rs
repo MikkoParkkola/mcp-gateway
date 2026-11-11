@@ -14,9 +14,8 @@
 //! SIGPIPE's disposition is deliberately left alone: restoring the default
 //! would kill a serving gateway the moment a client socket closed.
 //!
-//! Scope: the binary takes these for every module with `#[macro_use]`. In the
-//! library only the two CLI-output modules the binary prints through
-//! (`cli::output`, `validator::cli_handler`) import them; server code keeps
+//! Scope: CLI output scopes (`cli::entry`, `commands`, `cli::output` and
+//! `validator::cli_handler`) import these explicitly; server code keeps
 //! std's macros.
 
 /// Write formatted output to stdout, ending the process on `BrokenPipe`.
@@ -57,7 +56,5 @@ macro_rules! println {
     }};
 }
 
-// Path imports for library modules; the binary reaches the macros through
-// `#[macro_use]` and leaves these unused.
-#[allow(unused_imports)]
+// Path imports for CLI output scopes.
 pub(crate) use {print, println};
