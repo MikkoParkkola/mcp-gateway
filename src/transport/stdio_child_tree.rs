@@ -324,14 +324,16 @@ impl ChildTree {
         // handover still cuts its waits, so its kill lands before the stop's
         // deadline with the reap's own reserve left.
         let mut grace = grace;
-        if let Some(cut) = self.stop_deadline.as_ref().and_then(|d| d.get()) {
+        if let Some(deadline) = self.stop_deadline.as_ref()
+            && let Some(cut) = deadline.get()
+        {
             let cut = cut.checked_sub(super::reaper::KILL_RESERVE).unwrap_or(now);
             if cut < grace.kill_at {
                 // What is left is split as the plan was: its last third after
-                // SIGTERM, so a cut stop still sends SIGTERM before the kill,
-                // unless that third is under the minimum phase.
+                // SIGTERM, unless that third is under the minimum phase.
+                // A hurry preserves the minimum phase while it still fits.
                 grace.kill_at = cut;
-                let term = cut.saturating_duration_since(now) / 3;
+                let term = deadline.term_phase(cut.saturating_duration_since(now));
                 grace.term_at = if term < super::reaper::MIN_PHASE {
                     // Too little left to use a SIGTERM wait: none is sent,
                     // even if the uncut plan had one due sooner.

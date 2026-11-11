@@ -276,6 +276,9 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         // Hands out the stop deadline cell, for backends built outside the
         // registry; it reads no backend.
         "stop_deadline",
+        // Hands every live stdio tree to the reaper for a hurried stop; it
+        // signals processes and hands out no backend or backend data.
+        "hand_over_now",
     ]
     .into_iter()
     .map(str::to_string)
