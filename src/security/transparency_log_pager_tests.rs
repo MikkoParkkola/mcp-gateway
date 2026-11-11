@@ -435,6 +435,10 @@ const OPENERS: &[(&str, &str)] = &[
         "src/security/transparency_log_session.rs",
         "whole-log reader: one session, relists after each pass and retries",
     ),
+    (
+        "src/security/transparency_log_sigstart.rs",
+        "anchor reader: digests pre-signing files by seq, relisted per open and per request",
+    ),
 ];
 
 fn production_files(dir: &Path, out: &mut Vec<PathBuf>) {

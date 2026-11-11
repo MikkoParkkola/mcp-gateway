@@ -4,6 +4,7 @@
 //! grant and policy changes and admin actions are gateway-wide, so a scoped
 //! reader sees neither, even a grant whose id names one of its backends.
 
+use crate::gateway::ui::activity::rows::Check;
 use serde_json::{Value, json};
 
 use super::access::Access;
@@ -130,9 +131,10 @@ fn a_scoped_receipt_answers_as_a_missing_one() {
             log: which,
             entry: entry.clone(),
             segment: 0,
+            span: None,
         };
         let id = parse_id(&row_id(&line).unwrap()).unwrap();
-        receipt(path, &id, access, None).unwrap()
+        receipt(path, &id, access, &Check::bare(None)).unwrap()
     };
     let gov_path = logs.governance.clone().unwrap();
     assert!(read(Which::Invocation, &logs.invocation, &inv[0], &scoped(None)).is_some());
