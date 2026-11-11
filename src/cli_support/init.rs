@@ -65,7 +65,7 @@ pub fn write_init_files(
         if refs.len() != 1 || refs[0].len() > crate::secret_store::MAX_REFERENCE_LEN {
             return Err("init store returned invalid references".into());
         }
-        reference = refs[0].clone();
+        reference.clone_from(&refs[0]);
         let bytes = template
             .fill(&std::collections::BTreeMap::from([(
                 slot,
@@ -103,7 +103,11 @@ pub fn write_init_files(
         .unwrap_or_else(|| "init was not written".into());
     let retained = undo.rollback();
     if !retained.is_empty() {
-        error.push_str(&format!("; recovery required: retained {retained:?}. Inspect the config; remove partial init files and orphan store entries, then rerun init"));
+        use std::fmt::Write as _;
+        let _ = write!(
+            error,
+            "; recovery required: retained {retained:?}. Inspect the config; remove partial init files and orphan store entries, then rerun init"
+        );
     }
     Err(error)
 }
