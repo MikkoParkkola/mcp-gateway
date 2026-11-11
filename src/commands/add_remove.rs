@@ -8,6 +8,8 @@
 //! All core logic is delegated to [`mcp_gateway::gateway::ui::backend_ops`],
 //! which provides `Result<T>` functions usable from both CLI and HTTP handlers.
 
+use crate::cli::stdout::println;
+
 use std::path::Path;
 use std::process::ExitCode;
 

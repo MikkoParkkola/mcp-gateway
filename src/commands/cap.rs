@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Capability (`cap`) subcommand handlers for `mcp-gateway`.
 
+use crate::cli::stdout::println;
+
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -174,7 +176,7 @@ async fn cap_pin(file: std::path::PathBuf) -> ExitCode {
 fn list_executor(
     config: Option<&std::path::Path>,
 ) -> Result<CapabilityExecutor, (std::path::PathBuf, mcp_gateway::Error)> {
-    let (_, load_path) = crate::discovered_config::resolve(config);
+    let (_, load_path) = crate::cli::entry::discovered_config::resolve(config);
     match mcp_gateway::config::Config::load_evaluated(load_path.as_deref()) {
         Ok(evaluated) => {
             let env = Arc::new(mcp_gateway::config::LiveEnv::new(

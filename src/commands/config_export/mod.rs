@@ -26,6 +26,8 @@
 //! | Zed            | `context_servers` | platform-specific (Zed's config dir)   |
 //! | Generic        | `mcpServers`      | stdout                                 |
 
+use crate::cli::stdout::println;
+
 mod watch;
 
 #[cfg(test)]

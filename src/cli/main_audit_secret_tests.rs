@@ -7,12 +7,10 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use mcp_gateway::security::TransparencyLogger;
-use mcp_gateway::security::transparency_log::{
-    TransparencyLogConfig, VerifyMode, verify_audit_log,
-};
+use crate::security::TransparencyLogger;
+use crate::security::transparency_log::{TransparencyLogConfig, VerifyMode, verify_audit_log};
 
-use mcp_gateway::config::Config;
+use crate::config::Config;
 
 const FIELD: &str = "security.transparency_log.shared_secret";
 const VAR: &str = "MCP_GW_8365_VERIFY_KEY";
@@ -88,7 +86,7 @@ fn audit_verify_uses_the_resolved_key_and_rejects_the_reference_text() {
 fn audit_verify_refuses_a_key_that_did_not_resolve() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = config(dir.path(), false, "MCP_GW_8365_OTHER=1\n");
-    mcp_gateway::config::Config::load(Some(&path)).expect("a disabled log loads");
+    crate::config::Config::load(Some(&path)).expect("a disabled log loads");
     let error = Config::audit_verify_config(Some(&path)).expect_err("verify refuses");
     assert!(error.to_string().contains(FIELD), "{error}");
 }

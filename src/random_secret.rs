@@ -4,10 +4,8 @@
 //! without padding, behind a caller's prefix (`mcpgw_` for gateway tokens and
 //! API keys, `mcp_` for the auto bearer, none for a dashboard session handle).
 //!
-//! Twin-copy invariant, as `clock.rs`: this file compiles into two crates, the
-//! library (`lib.rs`) and the binary (`main.rs`, `#[path = "random_secret.rs"]`,
-//! for `gateway init`). Any state in it would exist twice, so it holds none: no
-//! `static`, lock, atomic or once-cell, which a lexical test in
+//! Shared by the gateway and `gateway init` through the library. It holds no
+//! state: no `static`, lock, atomic or once-cell, which a lexical test in
 //! `random_secret_tests.rs` holds. A test seam that picks a known secret
 //! belongs to its caller, never here.
 
