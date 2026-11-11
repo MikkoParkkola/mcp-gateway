@@ -37,6 +37,13 @@ enum Msg {
     Line(Vec<u8>),
     Flush(SyncSender<()>),
     /// The terminal stop's wake for an idle writer.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the restart's terminal stop, a later slice, calls it"
+        )
+    )]
     Stop,
 }
 
@@ -69,6 +76,13 @@ pub(crate) struct LossyStderr {
 /// Flushes the queue when dropped, within [`LOG_FLUSH_DEADLINE`].
 pub(crate) struct LogFlush {
     tx: SyncSender<Msg>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the restart's terminal stop, a later slice, calls it"
+        )
+    )]
     shared: Arc<Shared>,
     /// Taken by the terminal stop, which then owns the join.
     worker: Option<thread::JoinHandle<FlushEnd>>,
@@ -176,11 +190,6 @@ impl LossyStderr {
         *self.shared.after_drain.lock().expect("hook") = Some(gate.clone());
     }
 
-    #[cfg(test)]
-    pub(crate) fn is_closed(&self) -> bool {
-        self.shared.closed.load(Ordering::Acquire)
-    }
-
     /// Lines dropped so far.
     #[cfg(test)]
     pub(crate) fn dropped_lines(&self) -> u64 {
@@ -236,6 +245,13 @@ pub(crate) enum FlushEnd {
 /// How a terminal stop ended. Only a confirmed stop and join lets the process
 /// exec; a joined sink error alone does not forbid it.
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the restart's terminal stop, a later slice, calls it"
+    )
+)]
 pub(crate) enum StopOutcome {
     Joined(FlushEnd),
     WorkerFailed,
@@ -244,6 +260,13 @@ pub(crate) enum StopOutcome {
 }
 
 impl StopOutcome {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the restart's terminal stop, a later slice, calls it"
+        )
+    )]
     pub(crate) fn permits_exec(&self) -> bool {
         matches!(self, Self::Joined(_))
     }
@@ -252,6 +275,13 @@ impl StopOutcome {
 impl LogFlush {
     /// Terminal stop: close enqueue admission on every clone, drain what was
     /// accepted, flush, and join the writer, all by `deadline`.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the restart's terminal stop, a later slice, calls it"
+        )
+    )]
     pub(crate) fn stop_and_join(mut self, deadline: Instant) -> StopOutcome {
         // Admission closes first, so a clone cannot keep the queue busy. An idle
         // writer wakes on the Stop message; a writer with a full queue is busy
@@ -358,7 +388,7 @@ fn run(
                     break;
                 }
             }
-            Err(_) => return FlushEnd::Clean,
+            Err(mpsc::RecvError) => return FlushEnd::Clean,
         }
     }
     // Accepted before the close: still written. Senders already past the closed
