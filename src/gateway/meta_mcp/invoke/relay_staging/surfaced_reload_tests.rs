@@ -175,19 +175,21 @@ security:
         }
     }
     async fn execute(&self, retry: &RetryFields, id: i64) -> (JsonRpcResponse, StagedReceipts) {
-        memo::with_visibility_memo(self.meta.collecting_staged(async {
-            let caller = self.caller(retry);
-            let SyncAdmission::Owned(lease) = admit(&self.meta, &caller, id).unwrap() else {
-                panic!("first call must own admission")
-            };
-            let caller = Caller {
-                execution: Some(&lease),
-                ..caller
-            };
-            let answer = dispatch(&self.meta, caller, id).await;
-            lease.complete_secured(&answer);
-            answer
-        }))
+        Box::pin(memo::with_visibility_memo(self.meta.collecting_staged(
+            async {
+                let caller = self.caller(retry);
+                let SyncAdmission::Owned(lease) = admit(&self.meta, &caller, id).unwrap() else {
+                    panic!("first call must own admission")
+                };
+                let caller = Caller {
+                    execution: Some(&lease),
+                    ..caller
+                };
+                let answer = dispatch(&self.meta, caller, id).await;
+                lease.complete_secured(&answer);
+                answer
+            },
+        )))
         .await
     }
 }
@@ -215,13 +217,13 @@ fn admit(meta: &MetaMcp, caller: &Caller<'_>, id: i64) -> crate::Result<SyncAdmi
     )
 }
 async fn dispatch(meta: &MetaMcp, caller: Caller<'_>, id: i64) -> JsonRpcResponse {
-    meta.handle_tools_call_ref(
+    Box::pin(meta.handle_tools_call_ref(
         RequestId::Number(id),
         "read",
         Cow::Owned(json!({})),
         Some("session"),
         caller,
-    )
+    ))
     .await
 }
 fn answer(response: &JsonRpcResponse, id: i64, server: &str) {
@@ -242,52 +244,54 @@ async fn replay3_deferred_surfaced_replay_survives_real_reload() {
     f.receipt(staged);
     let records = f.records();
     assert_eq!(records.len(), 1);
-    let (_, staged) = memo::with_visibility_memo(f.meta.collecting_staged(async {
-        let caller = f.caller(&retry);
-        let SyncAdmission::Replay(response, audit, target, steps, bindings, slot) =
-            admit(&f.meta, &caller, 2).unwrap()
-        else {
-            panic!("repeat must replay")
-        };
-        let target_ref = target.as_ref().unwrap();
-        assert_eq!(
-            (&*target_ref.server, &*target_ref.tool, target_ref.origin),
-            ("alpha", "read", ReplayOrigin::Named)
-        );
-        assert!(
-            f.meta
-                .stored_replay_defers(&f.meta.unscoped_for_test(), "alpha", "read")
-        );
-        let deferred = f
-            .meta
-            .defer_or_serve_replay(
-                "read",
-                &json!({}),
-                &caller,
-                target,
-                (steps, bindings, slot),
-                (response, audit),
-            )
-            .await;
-        assert!(deferred.is_none());
-        f.reload().await;
-        let replay = dispatch(&f.meta, caller, 2).await;
-        answer(&replay, 2, "alpha");
-        f.counts([1, 0]);
-        // A take outside this SAME open memo would pass vacuously.
-        assert!(
-            memo::surfaced_snapshot(|| f.meta.surfaced_state_live()).is_some(),
-            "memo must be open"
-        );
-        let key = deferred_replay_key("alpha", "read", &retry).unwrap();
-        assert!(memo::take_deferred_replay(&key).is_none());
-        f.replay_record(&records[0]);
-        assert_eq!(
-            f.meta.surfaced_state_live().map.unscoped("read"),
-            Some("beta")
-        );
-        assert_eq!(f.meta.surfaced_server_unscoped("read"), Some("alpha"));
-    }))
+    let (_, staged) = Box::pin(memo::with_visibility_memo(f.meta.collecting_staged(
+        async {
+            let caller = f.caller(&retry);
+            let SyncAdmission::Replay(response, audit, target, steps, bindings, slot) =
+                admit(&f.meta, &caller, 2).unwrap()
+            else {
+                panic!("repeat must replay")
+            };
+            let target_ref = target.as_ref().unwrap();
+            assert_eq!(
+                (&*target_ref.server, &*target_ref.tool, target_ref.origin),
+                ("alpha", "read", ReplayOrigin::Named)
+            );
+            assert!(
+                f.meta
+                    .stored_replay_defers(&f.meta.unscoped_for_test(), "alpha", "read")
+            );
+            let deferred = f
+                .meta
+                .defer_or_serve_replay(
+                    "read",
+                    &json!({}),
+                    &caller,
+                    target,
+                    (steps, bindings, slot),
+                    (response, audit),
+                )
+                .await;
+            assert!(deferred.is_none());
+            f.reload().await;
+            let replay = dispatch(&f.meta, caller, 2).await;
+            answer(&replay, 2, "alpha");
+            f.counts([1, 0]);
+            // A take outside this SAME open memo would pass vacuously.
+            assert!(
+                memo::surfaced_snapshot(|| f.meta.surfaced_state_live()).is_some(),
+                "memo must be open"
+            );
+            let key = deferred_replay_key("alpha", "read", &retry).unwrap();
+            assert!(memo::take_deferred_replay(&key).is_none());
+            f.replay_record(&records[0]);
+            assert_eq!(
+                f.meta.surfaced_state_live().map.unscoped("read"),
+                Some("beta")
+            );
+            assert_eq!(f.meta.surfaced_server_unscoped("read"), Some("alpha"));
+        },
+    )))
     .await;
     f.receipt(staged);
     let (fresh, staged) = f.execute(&keyed("fresh-beta"), 3).await;
@@ -309,58 +313,60 @@ async fn reload5_real_reload_preserves_admitted_replay_and_refuses_late_retry() 
     assert_eq!(records[0]["server"], "alpha");
     assert_eq!(records[0]["tool"], "read");
 
-    let (_, staged) = memo::with_visibility_memo(f.meta.collecting_staged(async {
-        let caller = f.caller(&retry);
-        let SyncAdmission::Replay(response, audit, target, steps, bindings, slot) =
-            admit(&f.meta, &caller, 2).unwrap()
-        else {
-            panic!("repeat admitted before reload must replay")
-        };
-        let target_ref = target.as_ref().unwrap();
-        assert_eq!(
-            (&*target_ref.server, &*target_ref.tool, target_ref.origin),
-            ("alpha", "read", ReplayOrigin::Named)
-        );
-        f.reload().await;
-        assert_eq!(
-            f.meta.surfaced_state_live().map.unscoped("read"),
-            Some("beta")
-        );
-        assert_eq!(f.meta.surfaced_server_unscoped("read"), Some("alpha"));
-        let (response, facts) = f
-            .meta
-            .defer_or_serve_replay(
-                "read",
-                &json!({}),
-                &caller,
-                target,
-                (steps, bindings, slot),
-                (response, audit),
-            )
-            .await
-            .expect("plain alpha must serve the admitted replay directly");
-        assert_eq!(facts.server.as_deref(), Some("alpha"));
-        assert_eq!(facts.tool.as_deref(), Some("read"));
-        let replay = f
-            .meta
-            .audit_replay(
-                "read",
-                &json!({}),
-                Some("session"),
-                &caller,
-                response,
-                facts,
-            )
-            .await;
-        answer(&replay, 2, "alpha");
-        f.counts([1, 0]);
-        f.replay_record(&records[0]);
-    }))
+    let (_, staged) = Box::pin(memo::with_visibility_memo(f.meta.collecting_staged(
+        async {
+            let caller = f.caller(&retry);
+            let SyncAdmission::Replay(response, audit, target, steps, bindings, slot) =
+                admit(&f.meta, &caller, 2).unwrap()
+            else {
+                panic!("repeat admitted before reload must replay")
+            };
+            let target_ref = target.as_ref().unwrap();
+            assert_eq!(
+                (&*target_ref.server, &*target_ref.tool, target_ref.origin),
+                ("alpha", "read", ReplayOrigin::Named)
+            );
+            f.reload().await;
+            assert_eq!(
+                f.meta.surfaced_state_live().map.unscoped("read"),
+                Some("beta")
+            );
+            assert_eq!(f.meta.surfaced_server_unscoped("read"), Some("alpha"));
+            let (response, facts) = f
+                .meta
+                .defer_or_serve_replay(
+                    "read",
+                    &json!({}),
+                    &caller,
+                    target,
+                    (steps, bindings, slot),
+                    (response, audit),
+                )
+                .await
+                .expect("plain alpha must serve the admitted replay directly");
+            assert_eq!(facts.server.as_deref(), Some("alpha"));
+            assert_eq!(facts.tool.as_deref(), Some("read"));
+            let replay = f
+                .meta
+                .audit_replay(
+                    "read",
+                    &json!({}),
+                    Some("session"),
+                    &caller,
+                    response,
+                    facts,
+                )
+                .await;
+            answer(&replay, 2, "alpha");
+            f.counts([1, 0]);
+            f.replay_record(&records[0]);
+        },
+    )))
     .await;
     f.receipt(staged);
 
     // A fresh request resolves beta; this staged row stops at failed admission.
-    memo::with_visibility_memo(async {
+    Box::pin(memo::with_visibility_memo(async {
         let caller = f.caller(&retry);
         assert_eq!(f.meta.surfaced_server_unscoped("read"), Some("beta"));
         let Err(error) = admit(&f.meta, &caller, 3) else {
@@ -375,6 +381,6 @@ async fn reload5_real_reload_preserves_admitted_replay_and_refuses_late_retry() 
             "Idempotency key belongs to another execution or representation"
         );
         f.counts([1, 0]);
-    })
+    }))
     .await;
 }
