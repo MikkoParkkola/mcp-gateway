@@ -12,7 +12,7 @@
 use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,8 @@ pub(crate) enum NoticeFormat {
 enum Msg {
     Line(Vec<u8>),
     Flush(SyncSender<()>),
+    /// The terminal stop's wake for an idle writer.
+    Stop,
 }
 
 struct Shared {
@@ -199,9 +201,11 @@ impl LogFlush {
     /// Terminal stop: close enqueue admission on every clone, drain what was
     /// accepted, flush, and join the writer, all by `deadline`.
     pub(crate) fn stop_and_join(mut self, deadline: Instant) -> StopOutcome {
-        // Admission closes first, so a clone cannot keep the queue busy. The
-        // worker sees the flag on its next poll: a full data queue cannot delay it.
+        // Admission closes first, so a clone cannot keep the queue busy. An idle
+        // writer wakes on the Stop message; a writer with a full queue is busy
+        // and sees the flag after its next message, so a failed try_send is fine.
         self.shared.closed.store(true, Ordering::Release);
+        let _ = self.tx.try_send(Msg::Stop);
         let Some(worker) = self.worker.take() else {
             return StopOutcome::WorkerFailed;
         };
@@ -280,9 +284,6 @@ impl Drop for LogFlush {
     }
 }
 
-/// How often an idle writer looks for the terminal stop.
-const STOP_POLL: Duration = Duration::from_millis(5);
-
 /// The writer thread: one line at a time, until every sender is gone or the
 /// terminal stop closes admission and the accepted lines are drained.
 fn run(
@@ -297,37 +298,54 @@ fn run(
     };
     let mut reported = 0_u64;
     loop {
-        let msg = match rx.recv_timeout(STOP_POLL) {
-            Ok(msg) => msg,
-            Err(RecvTimeoutError::Timeout) if !shared.closed.load(Ordering::Acquire) => continue,
-            Err(RecvTimeoutError::Timeout) => match rx.try_recv() {
-                // Accepted before the close: still written.
-                Ok(msg) => msg,
-                Err(_) => break,
-            },
-            Err(RecvTimeoutError::Disconnected) => return FlushEnd::Clean,
-        };
-        match msg {
-            Msg::Line(line) => {
-                shared.queued_bytes.fetch_sub(line.len(), Ordering::AcqRel);
-                if out.record(&line) {
-                    reported = out.notice(shared, reported, format);
-                } else {
-                    shared.total.fetch_add(1, Ordering::Relaxed);
+        match rx.recv() {
+            Ok(Msg::Stop) => break,
+            Ok(msg) => {
+                reported = serve(msg, &mut out, shared, reported, format);
+                if shared.closed.load(Ordering::Acquire) {
+                    break;
                 }
             }
-            Msg::Flush(ack) => {
-                reported = out.notice(shared, reported, format);
-                let _ = out.sink.flush();
-                let _ = ack.try_send(());
-            }
+            Err(_) => return FlushEnd::Clean,
         }
+    }
+    // Accepted before the close: still written. A send that passed the closed
+    // check just before it may land after this drain and is then lost.
+    while let Ok(msg) = rx.try_recv() {
+        reported = serve(msg, &mut out, shared, reported, format);
     }
     out.notice(shared, reported, format);
     match out.sink.flush() {
         Ok(()) => FlushEnd::Clean,
         Err(_) => FlushEnd::SinkError,
     }
+}
+
+/// Handle one queued message; return the new drop-notice watermark.
+fn serve(
+    msg: Msg,
+    out: &mut Out<'_>,
+    shared: &Shared,
+    mut reported: u64,
+    format: NoticeFormat,
+) -> u64 {
+    match msg {
+        Msg::Line(line) => {
+            shared.queued_bytes.fetch_sub(line.len(), Ordering::AcqRel);
+            if out.record(&line) {
+                reported = out.notice(shared, reported, format);
+            } else {
+                shared.total.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        Msg::Flush(ack) => {
+            reported = out.notice(shared, reported, format);
+            let _ = out.sink.flush();
+            let _ = ack.try_send(());
+        }
+        Msg::Stop => {}
+    }
+    reported
 }
 
 struct Out<'s> {
