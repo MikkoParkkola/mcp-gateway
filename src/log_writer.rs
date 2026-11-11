@@ -146,6 +146,13 @@ impl Drop for InFlight<'_> {
 impl LossyStderr {
     /// Queue `line`, or drop and count it. Never waits.
     fn send(&self, line: Vec<u8>) {
+        // A send that starts after the close never registers: a steady stream of
+        // them would keep the in-flight count above zero and the stop could
+        // never join. Only a send that raced the close gets past this check.
+        if self.shared.closed.load(Ordering::SeqCst) {
+            self.shared.total.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         // Register before the check (SeqCst, against the stop's store and the
         // writer's load): either this send sees the close and counts the line,
         // or the writer sees this send and waits for it.
