@@ -288,3 +288,70 @@ async fn capedit_a_refused_json_credential_is_echoed_nowhere() {
     );
     assert!(!patch.contains(LITERAL), "the patch echoed it");
 }
+
+/// r4: prove loader acceptance before judging the save's exact refusal.
+async fn assert_review_refused(after: &str, field: &str) {
+    crate::capability::parser::parse_capability_text(after, std::path::Path::new("kept.yaml"))
+        .expect("the loader accepts this form before the editor's credential check");
+    let (status, body, fx, before) = save(after).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let answer: serde_json::Value = serde_json::from_str(&body).expect("a JSON answer");
+    assert_eq!(answer["error"], "literal_in_header", "{body}");
+    let errors = answer["errors"].as_array().expect("field errors");
+    assert_eq!(errors.len(), 1, "{body}");
+    assert_eq!(errors[0]["field"], field, "{body}");
+    assert!(
+        !body.contains(LITERAL),
+        "the answer echoed the literal: {body}"
+    );
+    assert_eq!(std::fs::read_to_string(&fx.file).expect("the file"), before);
+}
+
+/// F1: typed field identifiers read the tagged scalar's source text.
+#[tokio::test]
+async fn capedit_r4_a_tagged_providers_key_is_refused_by_header_field() {
+    let after =
+        doc(&[("Authorization", LITERAL)], false).replace("\nproviders:", "\n!x providers:");
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+/// F1: keep a valid primary; the loader reads the second provider's key as String.
+#[tokio::test]
+async fn capedit_r4_a_numeric_provider_name_is_refused_by_header_field() {
+    let after = doc(&[("Authorization", LITERAL)], true).replace("  fallback:", "  123:");
+    assert_review_refused(&after, "providers.123.config.headers.Authorization").await;
+}
+
+/// F1: the same scalar-to-String loader rule also accepts a boolean key.
+#[tokio::test]
+async fn capedit_r4_a_boolean_provider_name_is_refused_by_header_field() {
+    let after = doc(&[("Authorization", LITERAL)], true).replace("  fallback:", "  true:");
+    assert_review_refused(&after, "providers.true.config.headers.Authorization").await;
+}
+
+/// F2: the executor merges this provider's static_params before filling headers.
+#[tokio::test]
+async fn capedit_r4_a_static_parameter_credential_is_refused_by_header_field() {
+    let after = doc(&[("Authorization", "Bearer {api_key}")], false).replace(
+        "      headers:\n",
+        &format!("      static_params:\n        api_key: '{LITERAL}'\n      headers:\n"),
+    );
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+/// F3 policy row: today the resolver looks up the entire X:-literal as a name;
+/// it does not implement a literal default. Tightening that grammar needs review.
+#[tokio::test]
+async fn capedit_r4_an_env_literal_default_span_is_refused_by_header_field() {
+    let value = format!("Bearer {{env.API_KEY:-{LITERAL}}}");
+    let after = doc(&[("Authorization", &value)], false);
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+/// F3 policy row: today secret_name accepts this whole nonempty suffix too.
+#[tokio::test]
+async fn capedit_r4_an_env_space_literal_span_is_refused_by_header_field() {
+    let value = format!("Bearer {{env.API_KEY {LITERAL}}}");
+    let after = doc(&[("Authorization", &value)], false);
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
