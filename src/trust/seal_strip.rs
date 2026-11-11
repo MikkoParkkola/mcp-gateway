@@ -66,6 +66,7 @@ pub(crate) fn strip_seals(value: &mut Value) -> Strip {
 /// finding there and never rewrites it, so a seal inside it cannot be left
 /// over redacted bytes, and stripping it would silently change what the
 /// backend asked.
+#[cfg(feature = "firewall")]
 pub(crate) fn strip_seals_keeping(value: &mut Value, keep: &[&str]) -> Strip {
     let kept: Vec<(String, Value)> = value.as_object_mut().map_or_else(Vec::new, |object| {
         keep.iter()
