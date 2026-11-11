@@ -43,9 +43,13 @@ async fn an_interim_questions_seal_survives_a_redaction_elsewhere_in_the_answer(
             .is_some(),
         "premise: the question holds a real seal"
     );
+    // The question holds a real seal but not the credential: a finding
+    // inside it would refuse the whole answer, which is a different row.
+    let mut question = sealed.clone();
+    question["content"] = serde_json::json!([{"type": "text", "text": "which file?"}]);
     let mut value = serde_json::json!({
         "content": [{"type": "text", "text": canary()}],
-        "inputRequests": sealed.clone(),
+        "inputRequests": question.clone(),
         "requestState": "state-handle",
         "_meta": sealed["_meta"].clone(),
     });
@@ -56,7 +60,7 @@ async fn an_interim_questions_seal_survives_a_redaction_elsewhere_in_the_answer(
         meta.firewall_result(&mut value, &firewall_at(&meta, &delivery)),
         crate::gateway::meta_mcp::invoke::egress::EgressOutcome::Rewritten,
     );
-    assert_eq!(value["inputRequests"], sealed, "the question stays whole");
+    assert_eq!(value["inputRequests"], question, "the question stays whole");
     assert_eq!(value["requestState"], "state-handle");
     assert!(
         value
