@@ -495,7 +495,13 @@ impl TransparencyLogger {
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             return Err(io::Error::other("injected expiry sync failure"));
         }
-        inner.file.sync_all()
+        let synced = inner.file.sync_all();
+        if synced.is_ok() {
+            self.hooks
+                .syncs_done
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        }
+        synced
     }
 
     fn mark_hwm(&self, inner: &Inner, path: &Path, sync: bool) {

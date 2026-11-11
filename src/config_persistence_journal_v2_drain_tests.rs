@@ -110,7 +110,12 @@ fn audit_sync_failure_not_acknowledged() {
                 "{ROW}: no delivered flag without a synced append"
             );
             live.log.arm_write_fault(None);
+            let synced = live.log.syncs_done();
             retry(&mut owner, &live, ROW);
+            assert!(
+                live.log.syncs_done() > synced,
+                "{ROW}: the acknowledged append really synced the file"
+            );
             let writer = state_of(&owner).writer.as_ref().expect(ROW);
             assert!(writer.intent.delivered, "{ROW}: retry delivers");
             let intents = live

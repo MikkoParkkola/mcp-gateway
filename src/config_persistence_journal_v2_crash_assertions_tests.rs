@@ -284,6 +284,11 @@ fn deferred_restore(state: &JournalV2, records: &[Value], row: &str) {
         .find(|r| r["token"] == owner.intent_id.0 && r["event"] == Role::Deferred.event())
         .expect("deferred record appended before flag");
     assert_payload(landed, WRITER, Role::Deferred, DEFERRED, row);
+    assert_eq!(
+        landed["who"],
+        serde_json::json!({"account": "gateway", "principal": ""}),
+        "{row}: deferred record carries the gateway actor"
+    );
     let caller = caller_view(landed.as_object().expect(row));
     let caller_bytes = serde_json::to_vec(&caller).expect(row);
     assert_eq!(
