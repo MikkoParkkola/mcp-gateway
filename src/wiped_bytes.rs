@@ -48,6 +48,12 @@ impl std::fmt::Debug for WipedBytes {
     }
 }
 
+/// Observe drops on the calling test thread, including partially parsed bodies.
+#[cfg(all(test, feature = "webui"))]
+pub(crate) fn wipes_for_test() -> usize {
+    WIPES.with(std::cell::Cell::get)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{WIPES, WipedBytes};

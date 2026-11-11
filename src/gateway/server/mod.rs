@@ -27,6 +27,7 @@ mod cost_restore_attribution_tests;
 mod cost_save_stamp_tests;
 mod counter_wiring;
 mod events_wiring;
+mod health_wiring;
 #[cfg(test)]
 mod key_server_start_tests;
 /// The startup notice that the read verdict runs with the firewall off.

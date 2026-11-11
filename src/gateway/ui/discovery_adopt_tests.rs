@@ -3,6 +3,8 @@
 //! The adopt route's pieces that need no running gateway: every writer
 //! outcome's answer, and the compute's splice and refusals.
 
+use crate::config_reload::RefusalClass;
+
 use axum::body::to_bytes;
 use axum::http::StatusCode;
 use serde_json::Value;
@@ -86,7 +88,10 @@ fn writer_outcomes() -> Vec<(
         failed(ReplaceError::Secrets(SaveError::Store(StoreError::Failed(
             CANARY.to_owned(),
         )))),
-        failed(ReplaceError::ReloadRefused(CANARY.to_owned())),
+        failed(ReplaceError::ReloadRefused {
+            class: RefusalClass::Internal,
+            reason: CANARY.to_owned(),
+        }),
         failed(ReplaceError::Unsupported(CANARY.to_owned())),
         failed(ReplaceError::Stage(CANARY.to_owned())),
         failed(ReplaceError::Write(CANARY.to_owned())),
@@ -259,8 +264,7 @@ fn the_compute_refuses_a_managed_name_and_a_short_reference_list() {
 
 /// Adopt's split of a find, as the route makes it.
 fn adopted(server: &crate::discovery::DiscoveredServer) -> crate::discovery::adopt::Adoption {
-    use super::super::super::secret_slots::{stores_env_value, stores_header_value};
-    crate::discovery::adopt::adoption(server, stores_env_value, stores_header_value)
+    crate::discovery::adopt::adoption(server)
 }
 
 /// A find carrying ordinary settings and credentials side by side, as a

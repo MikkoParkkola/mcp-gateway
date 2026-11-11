@@ -54,6 +54,11 @@ struct File {
     caller: DimFile<String>,
     caller_server: DimFile<(String, String)>,
     markers: Vec<Marker>,
+    /// Absent in a file written by a binary that does not keep it (older
+    /// binaries ignore it and drop it on their next save); then the count
+    /// starts again and says so.
+    #[serde(default)]
+    restores: Option<u64>,
     /// Backend latency. Additive: a file without it restores
     /// empty latency, and a binary without this field ignores it.
     #[serde(default)]
@@ -132,6 +137,7 @@ pub(super) fn encode(inner: &Inner, binary_version: &str, saved_at: u64) -> Vec<
         caller: dim_file(&inner.caller),
         caller_server: dim_file(&inner.caller_server),
         markers: inner.markers.iter().cloned().collect(),
+        restores: Some(inner.restores),
         latency: latency_file(inner),
     };
     // Plain data with string keys only: serialization cannot fail.
@@ -231,6 +237,8 @@ pub(super) fn from_bytes<Tz: TimeZone>(
     inner.tool = tool;
     inner.caller = caller;
     inner.caller_server = caller_server;
+    inner.restores = file.restores.unwrap_or(0);
+    inner.restores_restarted = file.restores.is_none();
     let markers = file.markers.len();
     let mut subjects_cut = false;
     for marker in file.markers {

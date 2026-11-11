@@ -36,7 +36,7 @@ fn server(name: &str, env: &[(&str, &str)]) -> DiscoveredServer {
     server
 }
 
-fn opened(dir: &Path) -> Opened {
+pub(super) fn opened(dir: &Path) -> Opened {
     (
         Vault::with_lock(dir, dir.join("vault.lock")),
         Arc::new(FilesStore::new(dir)),
@@ -44,7 +44,7 @@ fn opened(dir: &Path) -> Opened {
 }
 
 /// Entries in the store that no config names: every entry, here.
-fn entries(dir: &Path) -> usize {
+pub(super) fn entries(dir: &Path) -> usize {
     let store = FilesStore::new(dir);
     let stores: [&dyn SecretStore; 1] = [&store];
     unused_entries(
@@ -57,7 +57,7 @@ fn entries(dir: &Path) -> usize {
 }
 
 /// The value the gateway reads for `reference`, through its own reader.
-fn read_reference(reference: &str) -> String {
+pub(super) fn read_reference(reference: &str) -> String {
     assert!(reference.starts_with("file:"), "{reference}");
     crate::config::secret_ref::SecretRef::parse(reference)
         .resolve("test", &Config::default().env_overlay())
@@ -68,7 +68,7 @@ fn read_reference(reference: &str) -> String {
 fn d16_a_literal_goes_to_the_store_and_only_its_reference_is_written() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut config = Config::default();
-    let mut found = server("tool", &[("API_KEY", "sk-test")]);
+    let mut found = server("tool", &[("API_KEY", "sk-test-0123")]);
     found.headers = [("Authorization".to_string(), "Bearer sk-header".to_string())]
         .into_iter()
         .collect();
@@ -78,14 +78,14 @@ fn d16_a_literal_goes_to_the_store_and_only_its_reference_is_written() {
 
     let backend = &config.backends["tool"];
     let written = &backend.env["API_KEY"];
-    assert_ne!(written, "sk-test");
-    assert_eq!(read_reference(written), "sk-test");
+    assert_ne!(written, "sk-test-0123");
+    assert_eq!(read_reference(written), "sk-test-0123");
     assert_eq!(
         read_reference(&backend.headers["Authorization"]),
         "Bearer sk-header"
     );
     let yaml = crate::yaml::to_string(&config).expect("yaml");
-    assert!(!yaml.contains("sk-test"), "{yaml}");
+    assert!(!yaml.contains("sk-test-0123"), "{yaml}");
 }
 
 /// d9c: a client value that looks like a gateway reference is the client's
@@ -104,6 +104,53 @@ fn d9c_a_reference_shaped_literal_is_stored_as_its_bytes() {
     let written = &config.backends["tool"].env["API_KEY"];
     assert_ne!(written, literal);
     assert_eq!(read_reference(written), literal);
+}
+
+/// D1 (CLIADD.6): discover stores by the shared rule. `DEBUG=1` and a
+/// short or non-credential value stay as written (stored, each would be
+/// redacted wherever it appears); a credential-named literal is stored.
+#[test]
+fn d1_discover_stores_by_the_shared_rule() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut config = Config::default();
+    let found = server(
+        "tool",
+        &[
+            ("DEBUG", "1"),
+            ("LOG_LEVEL", "debug-verbose"),
+            ("API_KEY", "sk-short"),
+            ("API_TOKEN", "sk-sev7"),
+        ],
+    );
+
+    adopt_with(&mut config, &[found], || Ok(opened(dir.path())))
+        .expect("adopts")
+        .settle(&Ok(()));
+
+    let env = &config.backends["tool"].env;
+    assert_eq!(env["DEBUG"], "1");
+    assert_eq!(env["LOG_LEVEL"], "debug-verbose");
+    assert_eq!(env["API_TOKEN"], "sk-sev7", "seven bytes stay as written");
+    assert_eq!(read_reference(&env["API_KEY"]), "sk-short");
+    assert_eq!(entries(dir.path()), 1);
+}
+
+/// D1b: a reference-shaped client value is stored as its bytes under any
+/// name and at any length: written as text, the gateway would read it as a
+/// reference to a local file or variable.
+#[test]
+fn d1b_a_reference_shaped_value_is_stored_under_any_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut config = Config::default();
+    let found = server("tool", &[("LOG", "env:X"), ("CONF", "file:/etc/x")]);
+
+    adopt_with(&mut config, &[found], || Ok(opened(dir.path())))
+        .expect("adopts")
+        .settle(&Ok(()));
+
+    let env = &config.backends["tool"].env;
+    assert_eq!(read_reference(&env["LOG"]), "env:X");
+    assert_eq!(read_reference(&env["CONF"]), "file:/etc/x");
 }
 
 #[test]
@@ -146,7 +193,7 @@ fn d7_a_refused_server_is_skipped_with_its_reasons_and_no_value() {
         server(&capabilities, &[]),
         server("x/y", &[]),
         client_only,
-        server("good", &[("K", "zq-stored")]),
+        server("good", &[("API_KEY", "zq-stored")]),
     ];
 
     let adoption = adopt_with(&mut config, &servers, || Ok(opened(dir.path()))).expect("adopts");
@@ -215,8 +262,11 @@ fn a_value_the_store_cannot_keep_skips_its_server_only() {
     // One byte over the files store's limit.
     let huge = "x".repeat(64 * 1024);
     let servers = [
-        server("big", &[("A", "zq-small"), ("B", huge.as_str())]),
-        server("fine", &[("K", "zq-kept")]),
+        server(
+            "big",
+            &[("A_TOKEN", "zq-small"), ("B_TOKEN", huge.as_str())],
+        ),
+        server("fine", &[("API_KEY", "zq-kept-1")]),
     ];
 
     let adoption = adopt_with(&mut config, &servers, || Ok(opened(dir.path()))).expect("adopts");
@@ -225,7 +275,7 @@ fn a_value_the_store_cannot_keep_skips_its_server_only() {
         adoption.outcomes[0],
         Outcome::Skipped {
             name: "big".to_string(),
-            reasons: vec![("value_too_large", "env.B".to_string())],
+            reasons: vec![("value_too_large", "env.B_TOKEN".to_string())],
             skip: Skip::Refused,
         }
     );
@@ -238,7 +288,7 @@ fn a_value_the_store_cannot_keep_skips_its_server_only() {
 #[test]
 fn an_unopenable_store_writes_nothing() {
     let mut config = Config::default();
-    let found = server("tool", &[("A", "zq-small")]);
+    let found = server("tool", &[("A_TOKEN", "zq-small")]);
 
     let Err(message) = adopt_with(&mut config, &[found], || {
         Err("secrets.store (keychain) refused: locked".to_string())
@@ -257,8 +307,8 @@ fn a_repeated_name_is_skipped_and_stores_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut config = Config::default();
     let servers = [
-        server("tool", &[("K", "zq-first")]),
-        server("tool", &[("K", "zq-second")]),
+        server("tool", &[("API_KEY", "zq-first")]),
+        server("tool", &[("API_KEY", "zq-second")]),
     ];
 
     let adoption = adopt_with(&mut config, &servers, || Ok(opened(dir.path()))).expect("adopts");
@@ -274,7 +324,7 @@ fn a_repeated_name_is_skipped_and_stores_nothing() {
     adoption.settle(&Ok(()));
     assert_eq!(entries(dir.path()), 1);
     assert_eq!(
-        read_reference(&config.backends["tool"].env["K"]),
+        read_reference(&config.backends["tool"].env["API_KEY"]),
         "zq-first"
     );
 }
@@ -326,7 +376,7 @@ fn no_refusal_shows_a_url_or_an_argument() {
 fn f4_a_panic_after_the_edit_keeps_the_entries() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut config = Config::default();
-    let found = server("tool", &[("API_KEY", "sk-test")]);
+    let found = server("tool", &[("API_KEY", "sk-test-0123")]);
     let adoption = adopt_with(&mut config, &[found], || Ok(opened(dir.path()))).expect("adopts");
 
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -349,7 +399,7 @@ fn a_failed_save_removes_the_entries_and_a_saved_one_keeps_them() {
     ] {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = Config::default();
-        let found = server("tool", &[("API_KEY", "sk-test")]);
+        let found = server("tool", &[("API_KEY", "sk-test-0123")]);
 
         adopt_with(&mut config, &[found], || Ok(opened(dir.path())))
             .expect("adopts")

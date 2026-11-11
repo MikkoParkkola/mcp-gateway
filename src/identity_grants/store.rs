@@ -49,13 +49,6 @@ impl LocalIdentityGrantStore {
 
     /// The keyed id of grant `grant_id`; `None` for an unkeyed store or a
     /// grant the store does not hold.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production reader until the allow path names its grant"
-        )
-    )]
     #[must_use]
     pub(crate) fn rule_id(&self, grant_id: &str) -> Option<&crate::security::rule_id::RuleId> {
         self.ids.get(grant_id)
@@ -101,6 +94,27 @@ impl LocalIdentityGrantStore {
         grant.revoked_at = Some(revoked_at);
         self.rekey(grant_id);
         true
+    }
+
+    /// [`Self::evaluate`], with the matched grant's keyed id read under the
+    /// same borrow as the match, so a reload cannot pair one row's match
+    /// with another row's id. Only a matched grant names one.
+    #[must_use]
+    pub(crate) fn evaluate_explained(
+        &self,
+        request: &IdentityGrantRequest,
+    ) -> (
+        IdentityGrantEvaluation,
+        Option<crate::security::rule_id::RuleId>,
+    ) {
+        let evaluation = self.evaluate(request);
+        let id = match (&evaluation.reason, &evaluation.grant_id) {
+            (IdentityGrantDecisionReason::GrantMatched, Some(grant_id)) => {
+                self.rule_id(grant_id).cloned()
+            }
+            _ => None,
+        };
+        (evaluation, id)
     }
 
     /// Evaluate one request against the local grant set.

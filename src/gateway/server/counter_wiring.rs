@@ -73,6 +73,13 @@ pub(super) fn start(
 }
 
 impl Counters {
+    /// Save `counters.json` now, at startup, so this start's restore count
+    /// and Restart marker are on disk before anything is served (best
+    /// effort: a failure is logged by the save).
+    pub(super) fn save_now(&self, now: u64) {
+        self.file.save(&self.store, VERSION, now);
+    }
+
     /// The shutdown step that writes `counters.json`.
     pub(super) fn shutdown_save(&self) -> ShutdownSave {
         let (store, file) = (Arc::clone(&self.store), Arc::clone(&self.file));

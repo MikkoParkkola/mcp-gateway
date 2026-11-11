@@ -12,11 +12,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use crate::config::Config;
 use crate::gateway::Gateway;
 
-const BACKEND: &str = "fixture";
-const TOOL: &str = "rows";
+pub(super) const BACKEND: &str = "fixture";
+pub(super) const TOOL: &str = "rows";
 
 /// An HTTP MCP backend whose one tool answers a tenant-free "ok".
-async fn spawn_backend() -> String {
+pub(super) async fn spawn_backend() -> String {
     spawn_backend_answering(Answer::Now).await
 }
 
@@ -96,7 +96,7 @@ async fn answer(
 }
 
 /// One initialized stdio session against `backend_url` under `mode`.
-struct Session {
+pub(super) struct Session {
     client: tokio::io::DuplexStream,
     lines: tokio::io::Lines<BufReader<tokio::io::DuplexStream>>,
     task: tokio::task::JoinHandle<()>,
@@ -105,7 +105,7 @@ struct Session {
 
 /// Whether the session's gateway keeps a transparency log.
 #[derive(Clone, Copy)]
-enum Log {
+pub(super) enum Log {
     Off,
     On,
 }
@@ -119,6 +119,15 @@ impl Session {
     }
 
     async fn open_with(backend_url: &str, mode: &str, log: Log) -> Self {
+        let firewall = format!(
+            "  firewall:\n    tenant_guard:\n      arg_keys: [customer_id]\n      cross_tenant_reads: {mode}\n"
+        );
+        Self::open_security(backend_url, log, &firewall).await
+    }
+
+    /// A session whose `security:` block holds `firewall` (YAML indented
+    /// under it) and, with [`Log::On`], the transparency log.
+    pub(super) async fn open_security(backend_url: &str, log: Log, firewall: &str) -> Self {
         let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("gateway.yaml");
         let quoted = |name: &str| {
@@ -135,7 +144,7 @@ impl Session {
         let yaml = format!(
             "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n\
              tasks:\n  store_dir: {}\n\
-             security:\n{log}  firewall:\n    tenant_guard:\n      arg_keys: [customer_id]\n      cross_tenant_reads: {mode}\n",
+             security:\n{log}{firewall}",
             quoted("tasks")
         );
         crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
@@ -165,7 +174,7 @@ impl Session {
     }
 
     /// Send `frame` and wait for the answer to `id`.
-    async fn ask(&mut self, frame: &Value, id: i64) -> Value {
+    pub(super) async fn ask(&mut self, frame: &Value, id: i64) -> Value {
         self.client
             .write_all(format!("{frame}\n").as_bytes())
             .await
@@ -175,7 +184,7 @@ impl Session {
 
     /// The record key this gateway generated in its data directory on boot
     /// (MIK-8697): read back, never generated here.
-    fn record_key(&self) -> crate::gateway::record_principal::RecordPrincipalKey {
+    pub(super) fn record_key(&self) -> crate::gateway::record_principal::RecordPrincipalKey {
         let file = self
             .dir
             .path()
@@ -190,7 +199,7 @@ impl Session {
     }
 
     /// Every record the session's transparency log holds, in order.
-    fn records(&self) -> Vec<Value> {
+    pub(super) fn records(&self) -> Vec<Value> {
         std::fs::read_to_string(self.dir.path().join(AUDIT))
             .unwrap_or_default()
             .lines()

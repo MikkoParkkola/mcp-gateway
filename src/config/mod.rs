@@ -43,6 +43,7 @@ pub(crate) use record_key::publish_new_file;
 mod remote_provenance_posture;
 mod secret_file;
 pub(crate) mod secret_ref;
+pub(crate) mod secret_values;
 mod server_config;
 mod strict_keys;
 mod validation;
