@@ -46,7 +46,7 @@ async fn fixture() -> Fixture {
     .collect();
     let auth: AuthConfig =
         serde_json::from_value(json!({"enabled": true, "api_keys": keys})).unwrap();
-    let audit = Arc::new(tempfile::tempdir().expect("audit directory"));
+    let audit = crate::test_dir_keep::kept_tempdir();
     let file = audit.path().join("audit.jsonl");
     let path = file.display().to_string();
     let config = TransparencyLogConfig {

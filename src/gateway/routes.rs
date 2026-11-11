@@ -114,6 +114,8 @@ owned_routes! {
     UI_REFUSALS = "/ui/api/refusals",
     /// The Gateway page's facts: process, reloads, TLS, upgrade, clients.
     UI_GATEWAY = "/ui/api/gateway",
+    /// Restart availability and an audited refusal; the process keeps serving.
+    UI_GATEWAY_RESTART = "/ui/api/gateway/restart",
     /// The configured API keys, with their last use (no secret, no digest).
     UI_KEYS = "/ui/api/keys",
     /// The UI's live event feed (server-sent events).

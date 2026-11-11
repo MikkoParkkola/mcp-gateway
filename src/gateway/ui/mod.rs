@@ -54,6 +54,7 @@ mod policies_tests;
 mod preview;
 mod preview_identity;
 mod refusals;
+mod restart;
 #[cfg(test)]
 mod restart_tests;
 mod secret_slots;
@@ -136,6 +137,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(decisions::decisions_router())
         .merge(policies::policies_router())
         .merge(history::history_router())
+        .merge(restart::restart_router())
         .merge(stream::stream_router());
 
     #[cfg(feature = "cost-governance")]
