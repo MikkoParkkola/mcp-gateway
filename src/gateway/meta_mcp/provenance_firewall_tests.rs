@@ -299,10 +299,12 @@ async fn a_stored_task_the_firewall_redacts_at_read_keeps_no_seal() {
         targets_recorded: true,
         output_free: false,
         error_author: None,
-        owner_digest: String::new(),
+        owner_digest: Box::default(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        vouching: crate::gateway::task_service::Vouching::Vouched,
+        replay_snapshot: None,
     };
     let mut envelope = serde_json::to_value(stored.task.wire()).expect("the stored task wire");
     envelope["resultType"] = json!("complete");
@@ -464,10 +466,12 @@ fn completed_task(
         targets_recorded: true,
         output_free: false,
         error_author: None,
-        owner_digest: String::new(),
+        owner_digest: Box::default(),
         gateway_writes: writes,
         bindings: Vec::new(),
         bindings_recorded: true,
+        vouching: crate::gateway::task_service::Vouching::Vouched,
+        replay_snapshot: None,
     }
 }
 
