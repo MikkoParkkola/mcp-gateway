@@ -81,6 +81,7 @@ impl TaskStore {
             tool: tool.to_owned(),
             arguments: arguments.clone(),
             operation_digest,
+            secret_fingerprint: Some(crate::security::dispatched::WIDEST.to_owned()),
         });
         candidate.version = candidate.version.max(UPSTREAM_VERSION);
         let budget = self.0.limits.record_bytes;
