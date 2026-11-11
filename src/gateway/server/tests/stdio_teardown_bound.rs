@@ -351,6 +351,42 @@ mod hurry {
         assert!(!flush_pending(false, true), "no hurry, finished");
     }
 
+    /// A parent with no time left closes stdin and signals in one instant: the
+    /// signal wins the read loop's select and hides the EOF. It must still
+    /// hurry, as a signal after EOF does. Red if the EOF is not counted.
+    #[tokio::test]
+    async fn a_signal_arriving_with_stdin_closed_hurries_the_stop() {
+        let (mut gateway, _dir) = bare_fixture().await;
+        let signal = gateway.shutdown_trigger_for_test();
+        let deadline = gateway.backends.stop_deadline();
+        let (stdin, input) = tokio::io::duplex(65536);
+        let (output, _reader) = tokio::io::duplex(65536);
+        drop(stdin);
+        signal.send(()).expect("signal listener");
+        timeout(ROW_BOUND, gateway.run_stdio_on(input, output, None))
+            .await
+            .expect("stop ends")
+            .expect("run_stdio_on returns Ok");
+        assert!(deadline.is_hurried(), "signal plus EOF is a hurried stop");
+    }
+
+    /// The same signal with stdin still open (a service manager's SIGTERM)
+    /// keeps the ordinary drain: no hurry from the signal alone.
+    #[tokio::test]
+    async fn a_signal_with_stdin_open_does_not_hurry_the_stop() {
+        let (mut gateway, _dir) = bare_fixture().await;
+        let signal = gateway.shutdown_trigger_for_test();
+        let deadline = gateway.backends.stop_deadline();
+        let (_stdin, input) = tokio::io::duplex(65536);
+        let (output, _reader) = tokio::io::duplex(65536);
+        signal.send(()).expect("signal listener");
+        timeout(ROW_BOUND, gateway.run_stdio_on(input, output, None))
+            .await
+            .expect("stop ends")
+            .expect("run_stdio_on returns Ok");
+        assert!(!deadline.is_hurried(), "a lone signal is not a hurry");
+    }
+
     #[tokio::test]
     async fn a_hurry_during_post_drain_cleanup_does_not_repoll_the_finished_drain() {
         let (mut gateway, _dir) = bare_fixture().await;
