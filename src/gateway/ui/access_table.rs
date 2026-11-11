@@ -255,6 +255,7 @@ pub(super) static ROWS: &[Row] = &[
         true,
     ),
     row(routes::UI_KEYS, Post, Admin(Forbidden), &[], false),
+    row(routes::UI_KEYS_NAME, Delete, Admin(Forbidden), &[], false),
     row(
         routes::UI_DEAD_LETTERS,
         Get,

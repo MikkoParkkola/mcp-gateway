@@ -47,6 +47,14 @@ pub(super) const ROWS: &[Row] = &[
         Payload::Json("{}"),
         [401, 403, 403, 422],
     ),
+    // keys_revoke.rs: the admin's empty object lacks the required revision.
+    row(
+        "/ui/api/keys/{name}",
+        Method::DELETE,
+        "/ui/api/keys/target",
+        Payload::Json("{}"),
+        [401, 403, 403, 422],
+    ),
     // src/gateway/ui/tool_call.rs (call; admin-only, and an empty body is
     // refused before anything runs)
     row(

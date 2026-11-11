@@ -118,6 +118,8 @@ owned_routes! {
     UI_GATEWAY_RESTART = "/ui/api/gateway/restart",
     /// The configured API keys, with their last use (no secret, no digest).
     UI_KEYS = "/ui/api/keys",
+    /// Revoke the API key named by one decoded path segment.
+    UI_KEYS_NAME = "/ui/api/keys/{name}",
     /// The UI's live event feed (server-sent events).
     UI_STREAM = "/ui/api/stream",
 }

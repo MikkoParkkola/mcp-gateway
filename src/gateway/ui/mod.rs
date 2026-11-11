@@ -35,6 +35,7 @@ mod history;
 pub mod import;
 mod keys;
 mod keys_create;
+mod keys_revoke;
 mod overview;
 mod policies;
 #[cfg(feature = "firewall")]
@@ -73,7 +74,7 @@ use std::sync::Arc;
 use axum::extract::{Extension, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -122,6 +123,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
             routes::UI_KEYS,
             get(keys::keys).post(keys_create::create_key),
         )
+        .route(routes::UI_KEYS_NAME, delete(keys_revoke::revoke_key))
         .route(routes::UI_CONFIG, get(config))
         .route(routes::UI_RELOAD, post(reload))
         .route(routes::UI_DASHBOARD_LINK, post(session::dashboard_link))
@@ -780,3 +782,7 @@ mod keys_create_refusal_tests;
 #[cfg(test)]
 #[path = "keys_create_writer_tests.rs"]
 mod keys_create_writer_tests;
+
+#[cfg(test)]
+#[path = "keys_revoke_request_tests.rs"]
+mod keys_revoke_request_tests;
