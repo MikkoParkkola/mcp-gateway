@@ -28,8 +28,5 @@ fn main() -> ExitCode {
 }
 
 #[cfg(test)]
-#[path = "."]
-mod tests {
-    #[path = "main_stack_tests.rs"]
-    mod stack;
-}
+#[path = "main_stack_tests.rs"]
+mod main_stack_tests;
