@@ -20,10 +20,12 @@ use crate::security::secret_redaction::redact_untruncated;
 pub(crate) const TAIL_BYTES: usize = 64 * 1024;
 
 /// Read `reader` to EOF, keeping its last [`TAIL_BYTES`]: the tool's final
-/// line is the one a failing fetch is explained by.
+/// line is the one a failing fetch is explained by. A final line longer than
+/// the cap shows nothing: its cut fragment may start inside a credential.
 pub(crate) fn read_tail(reader: &mut impl Read) -> io::Result<Vec<u8>> {
     let mut tail = Vec::with_capacity(2 * TAIL_BYTES);
     let mut buf = [0; 8 * 1024];
+    let mut drained = false;
     loop {
         let n = match reader.read(&mut buf) {
             Ok(0) => break,
@@ -34,7 +36,13 @@ pub(crate) fn read_tail(reader: &mut impl Read) -> io::Result<Vec<u8>> {
         tail.extend_from_slice(&buf[..n]);
         if tail.len() > TAIL_BYTES {
             tail.drain(..tail.len() - TAIL_BYTES);
+            drained = true;
         }
+    }
+    if drained {
+        // Only a newline proves that the next bytes start a complete line.
+        let end = tail.iter().position(|&b| b == b'\n');
+        tail.drain(..end.map_or(tail.len(), |i| i + 1));
     }
     Ok(tail)
 }
@@ -64,34 +72,37 @@ pub(crate) fn redact_line(line: &str, credential: &str) -> String {
     .map(|f| f.trim_end_matches('=').to_owned())
     .collect();
     let text = redact_untruncated(line, &forms, &[]);
-    text.split(' ')
+    let text = text
+        .split(' ')
         .map(|word| {
-            if word.contains("://") {
-                redact_url_word(word)
+            if word.contains("://") || word.contains(['@', '?', '#']) {
+                // Punctuation belongs to the input: cutting it off can keep secrets.
+                redact_url_keep_path(word)
             } else {
                 word.to_owned()
             }
         })
         .collect::<Vec<_>>()
+        .join(" ");
+    // URL normalization can recreate a literal by lowercasing the host.
+    let text = redact_untruncated(&text, &forms, &[]);
+    let lowered_forms: Vec<String> = forms
+        .iter()
+        .filter(|form| !form.is_empty())
+        .map(|form| form.to_ascii_lowercase())
+        .collect();
+    text.split(' ')
+        .map(|word| {
+            // Case variants in paths or free text can survive URL normalization.
+            let lowered = word.to_ascii_lowercase();
+            if lowered_forms.iter().any(|form| lowered.contains(form)) {
+                "[redacted]"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
         .join(" ")
-}
-
-/// A word holding a URL, with the URL's userinfo, query and fragment removed
-/// by the parser (quotes and trailing punctuation kept around it).
-fn redact_url_word(word: &str) -> String {
-    let start = word.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(0);
-    let end = word
-        .rfind(|c: char| c.is_ascii_alphanumeric() || c == '/')
-        .map_or(word.len(), |i| i + 1);
-    if start >= end {
-        return redact_url_keep_path(word);
-    }
-    format!(
-        "{}{}{}",
-        &word[..start],
-        redact_url_keep_path(&word[start..end]),
-        &word[end..]
-    )
 }
 
 #[cfg(test)]
