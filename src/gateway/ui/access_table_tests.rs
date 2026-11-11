@@ -7,6 +7,7 @@
 use std::collections::BTreeSet;
 
 use super::{PAGES, ROWS, TABS, Verb};
+use crate::gateway::router::ui_access_matrix_rows;
 use crate::gateway::routes;
 
 /// The (path, verb) pairs the router answers, read from the pinned matrix:
@@ -14,17 +15,15 @@ use crate::gateway::routes;
 /// the live stream, which the matrix cannot probe (its body never ends).
 fn registered() -> BTreeSet<(String, Verb)> {
     let stream = (routes::UI_STREAM.to_string(), Verb::Get);
-    include_str!("../router/ui_access_matrix.tsv")
-        .lines()
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter_map(|l| {
-            let cells: Vec<&str> = l.split('\t').collect();
-            let [path, method, _shape, caller, answer] = cells.as_slice() else {
-                panic!("a matrix line has five cells: {l:?}");
-            };
+    ui_access_matrix_rows::rows()
+        .files
+        .into_iter()
+        .flat_map(|file| file.rows)
+        .filter_map(|row| {
+            let [path, method, _shape, caller, answer] = &row;
             let method = method
                 .parse::<axum::http::Method>()
-                .unwrap_or_else(|_| panic!("a matrix method parses: {l:?}"));
+                .unwrap_or_else(|_| panic!("a matrix method parses: {row:?}"));
             let verb = Verb::of(&method)?;
             (*caller == "AdminKey" && *answer != "405" && method != axum::http::Method::HEAD)
                 .then(|| (path.to_string(), verb))

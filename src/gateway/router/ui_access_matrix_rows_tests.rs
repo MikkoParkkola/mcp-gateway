@@ -180,10 +180,7 @@ fn accepts_dashboard_nested_and_parameterized_route_slugs() {
                 "backends___name_",
                 "/ui/api/backends/{name}\tGET\tplain\tAdminKey\t200\n",
             ),
-            (
-                "__dashboard",
-                "/dashboard\tGET\tplain\tAdminKey\t200\n",
-            ),
+            ("__dashboard", "/dashboard\tGET\tplain\tAdminKey\t200\n"),
             (
                 "activity__export",
                 "/ui/api/activity/export\tGET\tplain\tAdminKey\t200:tool_0\n",
@@ -193,7 +190,10 @@ fn accepts_dashboard_nested_and_parameterized_route_slugs() {
     );
     let loaded = fixture.load().expect("valid slug transformations");
     let slugs: Vec<_> = loaded.files.iter().map(|file| file.slug.as_str()).collect();
-    assert_eq!(slugs, ["__dashboard", "activity__export", "backends___name_"]);
+    assert_eq!(
+        slugs,
+        ["__dashboard", "activity__export", "backends___name_"]
+    );
     assert_eq!(loaded.files[1].rows[0][4], "200:tool_0");
 }
 
@@ -214,7 +214,11 @@ fn real_directory_expands_to_the_original_row_count() {
     let loaded = load_from(&dir, &bodies).expect("real fragments load");
     assert_eq!(loaded.files.len(), 47);
     assert_eq!(
-        loaded.files.iter().map(|file| file.rows.len()).sum::<usize>(),
+        loaded
+            .files
+            .iter()
+            .map(|file| file.rows.len())
+            .sum::<usize>(),
         OLD_ROW_COUNT
     );
     assert!(
@@ -240,4 +244,60 @@ fn rendered_block_reloads_equal_with_headers_and_body_names_intact() {
     assert!(!block.contains("de6b55925ef7"));
     let replay = Fixture::new(&[(&file.slug, &block)], BODY);
     assert_eq!(replay.load().expect("rendered block reloads"), loaded);
+}
+
+#[test]
+fn rejects_a_fragment_without_rows() {
+    let fixture = Fixture::new(&[("status", "#@ scoped\n")], "");
+    assert_eq!(
+        fixture.load().unwrap_err(),
+        "status.tsv:1: fragment has no rows"
+    );
+}
+
+#[test]
+fn rejects_an_unknown_attribute_instead_of_silently_dropping_it() {
+    let fixture = Fixture::new(&[("status", &format!("#@ scope\n{PLAIN}"))], "");
+    assert_eq!(
+        fixture.load().unwrap_err(),
+        "status.tsv:1: unknown attribute scope"
+    );
+}
+
+#[test]
+fn a_shared_body_edit_and_an_independent_route_addition_compose() {
+    let fixture = Fixture::new(&[("status", NAMED)], BODY);
+    let original = fixture.load().unwrap();
+    let changed_body = BODY.replace("de6b55925ef7", "0123456789ab");
+    assert_eq!(changed_body.lines().count(), 1);
+    fs::write(&fixture.bodies, &changed_body).unwrap();
+    let edited = fixture.load().unwrap();
+    assert_eq!(edited.files[0].rows[0][4], "401:0123456789ab");
+    // The body change requires no fragment edits, including newly added routes.
+    assert_eq!(
+        fs::read_to_string(fixture.dir.join("status.tsv")).unwrap(),
+        NAMED
+    );
+    let new_route = NAMED.replace("/ui/api/status", "/ui/api/new-route");
+    fs::write(fixture.dir.join("new-route.tsv"), &new_route).unwrap();
+    let together = fixture.load().unwrap();
+    assert_eq!(together.files.len(), 2);
+    assert!(
+        together
+            .files
+            .iter()
+            .all(|file| file.rows[0][4] == "401:0123456789ab")
+    );
+    // Apply the two independent changes in the other order, too.
+    let reverse = Fixture::new(&[("status", NAMED), ("new-route", &new_route)], BODY);
+    assert!(
+        reverse
+            .load()
+            .unwrap()
+            .files
+            .iter()
+            .all(|file| { file.rows[0][4] == original.files[0].rows[0][4] })
+    );
+    fs::write(&reverse.bodies, changed_body).unwrap();
+    assert_eq!(reverse.load().unwrap(), together);
 }
