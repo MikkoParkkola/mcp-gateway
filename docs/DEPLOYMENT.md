@@ -1381,9 +1381,12 @@ that is not in a working tree:
 ```json
 { "mcpServers": { "gateway": {
     "url": "http://127.0.0.1:39400/mcp",
-    "headers": { "Authorization": "Bearer <the token in gateway.yaml>" }
+    "headers": { "Authorization": "Bearer <the admin token value>" }
 } } }
 ```
+
+`gateway.yaml` holds only a reference to the token, never the token. Retrieve the
+value as described in [Read the admin token for a client](QUICKSTART.md#read-the-admin-token-for-a-client).
 
 ### Opening the dashboard
 

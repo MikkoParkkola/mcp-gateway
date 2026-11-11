@@ -51,14 +51,24 @@ else
 fi
 
 # init stores the admin token outside gateway.yaml and writes a reference to a
-# path on this host (the file store: the runner has no keychain). The container
-# cannot see that path, so it gets a copy that takes the token from its
-# environment, as docs/DEPLOYMENT.md tells a Docker deployment to do.
+# path on this host. The container cannot see that path, so it gets a copy that
+# takes the token from its environment, as docs/DEPLOYMENT.md tells a Docker
+# deployment to do.
 admin_ref="$(sed -n 's/^ *bearer_token: *"\(.*\)"/\1/p' "$work/gateway.yaml" | head -1)"
-[[ "$admin_ref" == file:* ]] || { echo "admin token reference is not a file: store: ${admin_ref%%:*}" >&2; exit 1; }
-token_file="${admin_ref#file:}"
-[[ "$init_in_image" == "1" ]] && token_file="$work/${token_file#/work/}"
-admin_token="$(cat "$token_file")"
+case "$admin_ref" in
+  file:*)
+    token_file="${admin_ref#file:}"
+    [[ "$init_in_image" == "1" ]] && token_file="$work/${token_file#/work/}"
+    admin_token="$(cat "$token_file")" ;;
+  keychain:*) # init chose the OS keychain: the recipes in docs/QUICKSTART.md
+    name="${admin_ref#keychain:}"
+    if [[ "$(uname -s)" == Darwin ]]; then
+      admin_token="$(security find-generic-password -a mcp-gateway -s "$name" -w)"
+    else
+      admin_token="$(secret-tool lookup service "$name")"
+    fi ;;
+  *) echo "unsupported admin token reference: ${admin_ref%%:*}" >&2; exit 1 ;;
+esac
 [[ -n "$admin_token" ]] || { echo "could not read the admin token init stored" >&2; exit 1; }
 export MCP_GATEWAY_TOKEN="$admin_token"  # inherited by docker run -e, never in argv
 (umask 077; sed 's|^\( *bearer_token: *\).*|\1"env:MCP_GATEWAY_TOKEN"|' "$work/gateway.yaml" >"$work/gateway.container.yaml")

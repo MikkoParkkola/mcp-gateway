@@ -374,6 +374,11 @@ scripts/dev/usability-smoke.sh  # repo checkout: no prompts + safe export + rout
 # Container
 # Linux bind mounts: prepare a dedicated owner-only copy for container UID 1001.
 install -m 600 gateway.yaml gateway.container.yaml
+# init wrote a reference to a token stored on this host, which the container
+# cannot read: point the copy at an environment variable and read the token out
+# with the recipe in "Read the admin token for a client" above.
+sed -i 's|^\( *bearer_token: *\).*|\1"env:MCP_GATEWAY_TOKEN"|' gateway.container.yaml
+export MCP_GATEWAY_TOKEN="$(cat '/absolute/config-dir/secrets/NAME')"  # or the recipe for your store
 sudo chown 1001:1001 gateway.container.yaml
 # The container must bind 0.0.0.0 to receive anything, and the config `init`
 # writes keeps /mcp public, so the gateway refuses that pairing unless the
@@ -382,6 +387,7 @@ sudo chown 1001:1001 gateway.container.yaml
 # on may cross the container's 0.0.0.0 in plain HTTP (host_local_publish).
 # Mirrors deploy/single-node/docker-compose.yaml.
 docker run --rm -p 127.0.0.1:39400:39400 \
+  -e MCP_GATEWAY_TOKEN \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
   -v "$PWD/gateway.container.yaml:/config.yaml:ro" \

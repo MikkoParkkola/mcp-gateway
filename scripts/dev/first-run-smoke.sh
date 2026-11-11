@@ -94,10 +94,18 @@ curl -fsS "$health_url" >/dev/null
 # (MIK-7268), so the loop above already waits for the catalogue. This check
 # still confirms the bundled sample and the fixture the smoke invokes are in it.
 admin_ref="$(sed -n 's/^ *bearer_token: *"\(.*\)"/\1/p' "$work/gateway.yaml" | head -1)"
-# init stores the token and writes a reference; this smoke runs on the file
-# store (no keychain on the runner), so the reference names the file to read.
-[[ "$admin_ref" == file:* ]] || { echo "admin token reference is not a file: store: ${admin_ref%%:*}" >&2; exit 1; }
-admin_token="$(cat "${admin_ref#file:}")"
+# init stores the token and writes a reference to it; read the value back.
+case "$admin_ref" in
+  file:*) admin_token="$(cat "${admin_ref#file:}")" ;;
+  keychain:*) # init chose the OS keychain: the recipes in docs/QUICKSTART.md
+    name="${admin_ref#keychain:}"
+    if [[ "$(uname -s)" == Darwin ]]; then
+      admin_token="$(security find-generic-password -a mcp-gateway -s "$name" -w)"
+    else
+      admin_token="$(secret-tool lookup service "$name")"
+    fi ;;
+  *) echo "unsupported admin token reference: ${admin_ref%%:*}" >&2; exit 1 ;;
+esac
 [[ -n "$admin_token" ]] || { echo "could not read the admin token init stored" >&2; exit 1; }
 capabilities_ready=""
 for _ in $(seq 1 100); do

@@ -18,6 +18,13 @@ and point the deployed copy's reference at it, for example
 `bearer_token: "file:/etc/mcp-gateway/secrets/NAME"`. Find `NAME` and the
 original path on the `admin-token` line of `mcp-gateway doctor`.
 
+If that line shows `keychain:NAME` (the default when the OS keychain is
+available), no token file exists yet. As the user who ran `init`, read the value
+with the keychain recipe in [QUICKSTART](../../docs/QUICKSTART.md#read-the-admin-token-for-a-client),
+write it to `/etc/mcp-gateway/secrets/NAME` with `umask 077`, owned by the
+service user, and then use the `file:` reference above. A service cannot read
+another user's keychain.
+
 ## Docker Compose
 
 ```bash
