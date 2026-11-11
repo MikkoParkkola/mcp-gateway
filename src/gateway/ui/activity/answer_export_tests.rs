@@ -109,3 +109,22 @@ async fn r22_an_export_joins_across_passes() {
     );
     assert_eq!(manifest["join_incomplete"], 0);
 }
+
+/// A long export of ordinary call/delivery pairs reads every call's effect:
+/// completed traces do not use up the joiner's bounds, which are for the
+/// traces that are still unresolved.
+#[tokio::test]
+async fn r45_a_long_export_of_sequential_pairs_reads_every_effect() {
+    let fx = Fixture::new(None);
+    for i in 0..5000 {
+        let trace = format!("gw-p{i}");
+        fx.call(&trace);
+        fx.delivery(&trace, &Dl::effect("delivered"));
+    }
+    let (rows, manifest) = ndjson(&export(&fx, "ndjson").await);
+    let calls: Vec<&Value> = rows.iter().filter(|r| r["kind"] == "call").collect();
+    assert_eq!(calls.len(), 5000, "every call is exported");
+    let not_delivered = calls.iter().filter(|r| r["effect"] != "delivered").count();
+    assert_eq!(not_delivered, 0, "calls that do not read delivered");
+    assert_eq!(manifest["join_incomplete"], 0);
+}
