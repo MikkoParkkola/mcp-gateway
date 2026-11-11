@@ -104,7 +104,10 @@ fn semver(range: &str) -> bool {
             .any(|suffix| lower.ends_with(suffix))
         && range
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || ".+-^~<>=| *".contains(c))
+            // Letters, digits and a tag's underscore, with the operators and
+            // the whitespace npm allows between comparators; never `/`, `:`
+            // or `@`, which mark a URL, path, git or alias spec.
+            .all(|c| c.is_ascii_alphanumeric() || "_.+-^~<>=| *\t\n\r".contains(c))
 }
 
 fn name_part(part: &str) -> bool {
