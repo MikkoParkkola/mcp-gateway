@@ -92,7 +92,11 @@ POST_MERGE_SKIPPED = {
     # (package-tests, a build of that crate, keeps running: #1812 pins it to every ref.)
     "test",
     # Per-item properties two clean PRs cannot break together; the tag reruns them.
-    "check", "kani",
+    # (`check`, the pedantic clippy job, is NOT skipped on a release-line push: a pull request can
+    # only restore a cache saved on the release line, so its push run is what keeps the Linux
+    # clippy build cache warm for every lane PR and train; without it each PR rebuilds ~350
+    # dependencies for each of the job's eight cargo steps.)
+    "kani",
     # Platform builds: scarce hosted runners; the tag workflow runs both.
     "windows-check", "macos-check",
     # The shards behind test, windows-check and macos-check (MIK-8482).
