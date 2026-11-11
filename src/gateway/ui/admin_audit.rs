@@ -33,7 +33,10 @@ pub(super) struct AuditDetail(pub(super) serde_json::Map<String, serde_json::Val
 /// handler, so a handler bug cannot make a write skip the audit.
 /// `POST .../validate` writes nothing by construction (its handler has no
 /// writer).
-const UNRECORDED_ROUTES: &[&str] = &[crate::gateway::routes::UI_CAPABILITY_VALIDATE];
+const UNRECORDED_ROUTES: &[&str] = &[
+    crate::gateway::routes::UI_CAPABILITY_VALIDATE,
+    crate::gateway::routes::UI_SETTINGS_DIFF,
+];
 
 /// Record a change of `name`'s `allowed_tools` on its `admin_action` record:
 /// the backend and the list before and after (`null`: every tool).

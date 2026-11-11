@@ -25,6 +25,9 @@ mod lock_api;
 #[path = "replace.rs"]
 pub(crate) mod replace;
 
+#[path = "replace_refusal.rs"]
+mod replace_refusal;
+
 #[path = "reload_context_evaluate.rs"]
 mod evaluate;
 
@@ -35,6 +38,8 @@ mod refusals;
 pub(super) use evaluate::IMPLICIT_STARTUP_ENV_KEYS;
 use evaluate::nothing_published;
 pub(super) use evaluate::{EvaluatedReload, changed_startup_env_keys, load_config_patch};
+use lock_api::{ReloadRefusal, ReloadRefusalKind};
+use refusals::BeforeApplyKind;
 
 // ============================================================================
 // ReloadContext — imperative reload handle for the meta-tool
@@ -410,7 +415,8 @@ impl ReloadContext {
             // Both steps render on every path: a config refusal read alone
             // hides whether the revocation landed. Appended, so every consumer
             // keying on the refusal's prefix still matches.
-            Err(mut refusal) => {
+            Err(refusal) => {
+                let mut refusal = refusal.text;
                 if let Some(Ok(line) | Err(line)) = grants {
                     write!(refusal, "; {line}").ok();
                 }
@@ -431,7 +437,7 @@ impl ReloadContext {
     async fn reload_transaction(
         &self,
         path: &std::path::Path,
-    ) -> std::result::Result<ReloadOutcome, String> {
+    ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
         let evaluated = self.load_off_worker(path.to_path_buf()).await?;
@@ -440,7 +446,7 @@ impl ReloadContext {
         if let Some(refusal) =
             posture::reload_refusal(self.live_config.running(), &evaluated.config)
         {
-            return Err(refusal);
+            return Err(refusal.into());
         }
         self.restart_only_refusal(&evaluated)?;
         // Measured against the overlay startup captured, so a requirement stays
@@ -489,7 +495,17 @@ impl ReloadContext {
             ));
         }
 
-        self.refuse_before_apply(&new_config, &patch)?;
+        if let Some(refusal) = self.before_apply_refusal(&new_config, &patch) {
+            return Err(ReloadRefusal {
+                kind: match refusal.kind {
+                    BeforeApplyKind::NetworkPosture => ReloadRefusalKind::Posture,
+                    BeforeApplyKind::AccountBinding | BeforeApplyKind::CapabilityClash => {
+                        ReloadRefusalKind::Other
+                    }
+                },
+                text: refusal.text,
+            });
+        }
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
         let prepared = self.live_config.prepare(new_config, &overlay);
@@ -512,7 +528,7 @@ impl ReloadContext {
             // Publishing here would describe backends the registry refused, and
             // report a reload that did not happen. The caller asked for an
             // outcome; the honest one is an error.
-            return Err(SHUTDOWN_ABORTED_ERROR.to_string());
+            return Err(SHUTDOWN_ABORTED_ERROR.to_string().into());
         }
         // Test seam: after the patch registered its backends, before the
         // publish, so a test can drop a reload between the two.

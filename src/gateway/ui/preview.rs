@@ -215,6 +215,11 @@ pub(super) async fn preview_backend(
     if let Err(message) = validate_backend_name(&add.name) {
         return flat_error(StatusCode::UNPROCESSABLE_ENTITY, message).into_response();
     }
+    let refused =
+        super::backend_ops::credential_refusals(add.command.as_deref(), add.url.as_deref());
+    if !refused.is_empty() {
+        return super::secret_slots::refused_values(&refused);
+    }
     let resolved = match resolve_backend(
         add.registry.as_deref().unwrap_or(&add.name),
         add.command.as_deref(),
