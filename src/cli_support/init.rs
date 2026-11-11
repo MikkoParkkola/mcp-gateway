@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 /// Returns only the reference. Existing files are refused.
 /// # Errors
 /// Reports failed publication/cleanup and recovery for any retained entry.
-pub fn write_init_files(
+pub(crate) fn write_init_files(
     destination: &Path,
     template: &str,
     samples: &[(PathBuf, &str)],

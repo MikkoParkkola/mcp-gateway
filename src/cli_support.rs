@@ -5,7 +5,7 @@
 
 #[path = "cli_support/init.rs"]
 mod init;
-pub use init::write_init_files;
+pub(crate) use init::write_init_files;
 
 /// Whether `c` is a Unicode format character (general category Cf): bidi
 /// overrides, zero-width marks and their kin, which reorder or hide the
