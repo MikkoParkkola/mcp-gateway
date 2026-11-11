@@ -14,16 +14,39 @@ use std::process::ExitCode;
 use super::config_write::CommentLoss;
 
 use mcp_gateway::{
+    cli_support::store_backend_literals,
     config::TransportConfig,
     config_persistence::load_existing_or_default,
     gateway::ui::backend_ops::{
-        add_backend, get_backend, list_backends, parse_env_vars, remove_backend, resolve_backend,
+        add_backend, get_backend, list_backends, remove_backend, resolve_backend,
     },
     gateway::ui::backends::RegistryEntryJson,
     registry::server_registry,
 };
 
 // ── add ───────────────────────────────────────────────────────────────────────
+
+/// The values `add` writes: `-e` names, an `--env-file`, and the fields to keep
+/// as typed instead of storing (`--keep-as-text`: an env key, or
+/// `header:NAME`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AddValues<'a> {
+    /// `-e` names, each read from this process's environment.
+    pub env_vars: &'a [String],
+    /// `--env-file`: a JSON object of names to values; `-` is stdin.
+    pub env_file: Option<&'a Path>,
+    /// Env keys, or `header:NAME`, to write as typed.
+    pub keep_as_text: &'a [String],
+}
+
+/// The field a `--keep-as-text` value names: `header:NAME` is a header,
+/// anything else an env key.
+fn keep_field(given: &str) -> String {
+    given.strip_prefix("header:").map_or_else(
+        || format!("env.{given}"),
+        |header| format!("headers.{header}"),
+    )
+}
 
 /// Run `mcp-gateway add`.
 ///
@@ -33,23 +56,33 @@ use mcp_gateway::{
 /// * `cmd` – explicit stdio command (overrides registry)
 /// * `url` – explicit HTTP URL (overrides registry)
 /// * `desc` – description (overrides registry)
-/// * `env_vars` – `KEY=VALUE` strings injected as environment variables
+/// * `values` – `KEY=VALUE` env strings, and the fields to keep as text
 /// * `config` – path to the gateway config file
 pub async fn run_add_command(
     name: &str,
     cmd: Option<&str>,
     url: Option<&str>,
     desc: Option<&str>,
-    env_vars: &[String],
+    values: AddValues<'_>,
     config: &Path,
     mode: CommentLoss,
 ) -> ExitCode {
     // ── Build env map ──────────────────────────────────────────────────────
-    let env = match parse_env_vars(env_vars) {
-        Ok(e) => e,
+    let env_file = match values.env_file.map(read_env_file).transpose() {
+        Ok(bytes) => bytes,
         Err(msg) => {
             eprintln!("Error: {msg}");
-            return ExitCode::FAILURE;
+            return ExitCode::from(2);
+        }
+    };
+    let env = match env_inputs(values.env_vars, env_file.as_deref(), |name| {
+        std::env::var(name).ok()
+    }) {
+        Ok(e) => e.into_iter().collect::<std::collections::HashMap<_, _>>(),
+        // A usage error, before any side effect.
+        Err(msg) => {
+            eprintln!("Error: {msg}");
+            return ExitCode::from(2);
         }
     };
 
@@ -58,6 +91,11 @@ pub async fn run_add_command(
         Ok(r) => r,
         Err(msg) => {
             eprintln!("Error: {msg}");
+            // A credential in the command or URL is a usage error, like a
+            // value given to -e (the library's CREDENTIAL_IN_ARGV phrase).
+            if msg.contains("would write a credential into gateway.yaml as text") {
+                return ExitCode::from(2);
+            }
             return ExitCode::FAILURE;
         }
     };
@@ -75,12 +113,29 @@ pub async fn run_add_command(
     let creating_config = !config.exists();
 
     // ── Insert backend and write, under one config lock hold ───────────────
+    // A literal the shared rule stores goes to the secret store inside the
+    // same hold; the entries are settled by the write's result.
+    let keep: Vec<String> = values.keep_as_text.iter().map(|k| keep_field(k)).collect();
     let mut notes = Vec::new();
+    let mut store_step = None;
     let written = super::config_write::write(config, mode, |gateway_config| {
         notes = add_backend(gateway_config, name, resolved)
             .map_err(|msg| format!("{msg} (in {})", config.display()))?;
+        store_step = Some(store_backend_literals(
+            config,
+            gateway_config,
+            &[name],
+            &keep,
+        )?);
         Ok(())
     });
+    let stored = match store_step {
+        Some((adoption, stored)) => {
+            adoption.settle(&written);
+            stored
+        }
+        None => Vec::new(),
+    };
     if let Err(e) = written {
         eprintln!("Error: {e}");
         return ExitCode::FAILURE;
@@ -95,6 +150,9 @@ pub async fn run_add_command(
         TransportConfig::A2a { .. } => "a2a",
     };
     println!("Added '{name}' ({transport_label}).");
+    for (field, reference) in &stored {
+        println!("  {field} is in the secret store; gateway.yaml holds {reference}");
+    }
     for note in &notes {
         println!("  {note}");
     }
@@ -280,458 +338,115 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `--env-file`'s entries in file order, repeats kept.
+struct EnvFile(Vec<(String, serde_json::Value)>);
+
+impl<'de> serde::Deserialize<'de> for EnvFile {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Entries;
+        impl<'de> serde::de::Visitor<'de> for Entries {
+            type Value = EnvFile;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON object of names to values")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<EnvFile, M::Error> {
+                let mut entries = Vec::new();
+                while let Some(entry) = map.next_entry::<String, serde_json::Value>()? {
+                    entries.push(entry);
+                }
+                Ok(EnvFile(entries))
+            }
+        }
+        deserializer.deserialize_map(Entries)
+    }
+}
+
+/// `--env-file`'s bytes, from the file or (`-`) stdin, read at most one
+/// byte past the bound so an oversized input is refused, not truncated.
+fn read_env_file(path: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let limit = u64::try_from(ENV_FILE_MAX_BYTES).unwrap_or(u64::MAX) + 1;
+    let mut bytes = Vec::new();
+    let read = if path == Path::new("-") {
+        std::io::stdin().take(limit).read_to_end(&mut bytes)
+    } else {
+        std::fs::File::open(path).and_then(|f| f.take(limit).read_to_end(&mut bytes))
+    };
+    read.map_err(|e| format!("--env-file {}: {e}", path.display()))?;
+    Ok(bytes)
+}
+
+/// The largest `--env-file` accepted, as `hash-key` bounds its input.
+pub(crate) const ENV_FILE_MAX_BYTES: usize = 64 * 1024;
+
+/// The env values `add` writes, from `-e NAME` (each looked up with
+/// `lookup`, the CLI's own environment in production) and `--env-file`'s
+/// bytes (a JSON object of names to string values). A name given twice, a
+/// `-e` value with `=` (a value on the command line), a name the lookup
+/// lacks, or a file that is not such an object within
+/// [`ENV_FILE_MAX_BYTES`] is refused with a message naming the problem and
+/// never a value.
+pub(crate) fn env_inputs(
+    names: &[String],
+    env_file: Option<&[u8]>,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let mut values = std::collections::BTreeMap::new();
+    let mut put = |name: String, value: String| {
+        if values.insert(name.clone(), value).is_some() {
+            return Err(format!("{name} is given twice; give each variable once"));
+        }
+        Ok(())
+    };
+    for given in names {
+        if let Some((name, _value)) = given.split_once('=') {
+            return Err(format!(
+                "-e takes an environment variable name, not a name with a value: values on \
+                 the command line are visible in process lists and shell history. Set {name} \
+                 in the environment and pass -e {name}, or use --env-file FILE (- for stdin)"
+            ));
+        }
+        let value =
+            lookup(given).ok_or_else(|| format!("{given} is not set in the environment"))?;
+        put(given.clone(), value)?;
+    }
+    if let Some(bytes) = env_file {
+        if bytes.len() > ENV_FILE_MAX_BYTES {
+            return Err(format!(
+                "--env-file is larger than {ENV_FILE_MAX_BYTES} bytes"
+            ));
+        }
+        // Every entry in order, a repeated name included (a JSON map would
+        // keep only the last).
+        let EnvFile(entries) = serde_json::from_slice(bytes).map_err(|e| {
+            if e.is_data() {
+                "--env-file must be a JSON object of names to values".to_string()
+            } else {
+                format!(
+                    "--env-file is not JSON (line {}, column {})",
+                    e.line(),
+                    e.column()
+                )
+            }
+        })?;
+        for (name, value) in entries {
+            let serde_json::Value::String(value) = value else {
+                return Err(format!("--env-file: the value of {name} is not a string"));
+            };
+            put(name, value)?;
+        }
+    }
+    Ok(values)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use mcp_gateway::config::{Config, TransportConfig};
-    use mcp_gateway::gateway::ui::backend_ops::{BackendUpdate, update_backend};
-    use tempfile::TempDir;
-
-    fn temp_config() -> (TempDir, std::path::PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gateway.yaml");
-        (dir, path)
-    }
-
-    /// Runs `cli` on its own thread while a gateway mutation holds the config
-    /// lock and adds backend `x` to `a`, the overlap MIK-8241 checks for each
-    /// CLI writer. Returns what `cli` returned and the backends left after.
-    async fn overlap_with_gateway_add<T: Send + 'static>(
-        cli: impl FnOnce(std::path::PathBuf) -> T + Send + 'static,
-    ) -> (T, Vec<String>) {
-        let (_dir, path) = temp_config();
-        mcp_gateway::gateway::test_helpers::write_owner_only(
-            &path,
-            "backends:\n  a:\n    command: a\n",
-        )
-        .expect("write");
-        let at = path.clone();
-        let mutated = mcp_gateway::config_reload::mutate_config_and_reload(&path, None, |config| {
-            let queued = mcp_gateway::gateway::test_helpers::when_waiting_for_config_lock(&at);
-            let writer = at.clone();
-            let cli = std::thread::spawn(move || cli(writer));
-            assert!(
-                queued
-                    .recv_timeout(std::time::Duration::from_secs(10))
-                    .is_ok(),
-                "the CLI writer never waited for the config lock"
-            );
-            let x = crate::yaml::from_str("command: x\n").expect("backend");
-            config.backends.insert("x".into(), x);
-            Ok::<_, String>(cli)
-        })
-        .await;
-        let Ok(mcp_gateway::config_reload::ConfigMutation::Applied(cli, _)) = mutated else {
-            panic!("mutation not applied");
-        };
-        let out = cli.join().expect("cli thread");
-        let config = Config::load_literal(Some(&path)).expect("loads");
-        let mut names: Vec<_> = config.backends.keys().cloned().collect();
-        names.sort_unstable();
-        (out, names)
-    }
-
-    /// MIK-8241 MIK-CLI-OVERLAP.1: `add` overlapping a gateway's locked
-    /// mutation keeps the mutation's backend and adds its own.
-    #[tokio::test]
-    async fn add_racing_a_gateway_mutation_keeps_both_backends() {
-        let (code, names) = overlap_with_gateway_add(|path| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("runtime")
-                .block_on(run_add_command(
-                    "y",
-                    Some("y"),
-                    None,
-                    None,
-                    &[],
-                    &path,
-                    CommentLoss::Refuse,
-                ))
-        })
-        .await;
-        assert_eq!(code, ExitCode::SUCCESS);
-        assert_eq!(names, ["a", "x", "y"]);
-    }
-
-    /// MIK-8241 MIK-CLI-OVERLAP.3: `cap discover --write-config` overlapping a
-    /// gateway's locked mutation keeps the mutation's backend and adds the
-    /// discovered one.
-    #[tokio::test]
-    async fn discover_write_racing_a_gateway_mutation_keeps_both() {
-        let (written, names) = overlap_with_gateway_add(|path| {
-            let server = mcp_gateway::discovery::DiscoveredServer::new(
-                "found".to_string(),
-                "found description".to_string(),
-                mcp_gateway::discovery::DiscoverySource::ClaudeDesktop,
-                TransportConfig::Stdio {
-                    command: "found".to_string(),
-                    cwd: None,
-                    protocol_version: None,
-                },
-                mcp_gateway::discovery::ServerMetadata::default(),
-            );
-            crate::write_discovered_to_config(&[server], Some(&path), CommentLoss::Refuse)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        })
-        .await;
-        assert_eq!(written, Ok(()));
-        assert_eq!(names, ["a", "found", "x"]);
-    }
-
-    /// MIK-8042: `remove` overlapping a gateway's locked mutation loads the
-    /// file under the same lock it writes with, so the backend the mutation
-    /// added survives the removal.
-    #[tokio::test]
-    async fn remove_racing_a_gateway_mutation_keeps_its_add() {
-        let (_dir, path) = temp_config();
-        mcp_gateway::gateway::test_helpers::write_owner_only(
-            &path,
-            "backends:\n  a:\n    command: a\n  b:\n    command: b\n",
-        )
-        .expect("write");
-        let at = path.clone();
-        let mutated = mcp_gateway::config_reload::mutate_config_and_reload(&path, None, |config| {
-            let queued = mcp_gateway::gateway::test_helpers::when_waiting_for_config_lock(&at);
-            let remove = at.clone();
-            let cli =
-                std::thread::spawn(move || run_remove_command("b", &remove, CommentLoss::Refuse));
-            assert!(
-                queued
-                    .recv_timeout(std::time::Duration::from_secs(10))
-                    .is_ok(),
-                "remove never waited for the config lock"
-            );
-            let x = crate::yaml::from_str("command: x\n").expect("backend");
-            config.backends.insert("x".into(), x);
-            Ok::<_, String>(cli)
-        })
-        .await;
-        let Ok(mcp_gateway::config_reload::ConfigMutation::Applied(cli, _)) = mutated else {
-            panic!("mutation not applied");
-        };
-        assert_eq!(cli.join().expect("cli thread"), ExitCode::SUCCESS);
-        let config = Config::load_literal(Some(&path)).expect("loads");
-        let mut names: Vec<_> = config.backends.keys().map(String::as_str).collect();
-        names.sort_unstable();
-        assert_eq!(names, ["a", "x"]);
-    }
-
-    // ── add round-trip ────────────────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn add_then_remove_round_trip() {
-        // GIVEN: a temp config file
-        let (_dir, path) = temp_config();
-
-        // WHEN: adding a backend by registry name
-        let code =
-            run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
-        assert_eq!(code, ExitCode::SUCCESS, "add should succeed");
-
-        // THEN: it appears in the config
-        let config = Config::load(Some(&path)).unwrap();
-        assert!(
-            config.backends.contains_key("tavily"),
-            "tavily must be present"
-        );
-
-        // WHEN: removing it
-        let code = run_remove_command("tavily", &path, CommentLoss::Refuse);
-        assert_eq!(code, ExitCode::SUCCESS, "remove should succeed");
-
-        // THEN: it is gone
-        let config = Config::load(Some(&path)).unwrap();
-        assert!(
-            !config.backends.contains_key("tavily"),
-            "tavily must be gone"
-        );
-    }
-
-    #[tokio::test]
-    async fn add_custom_command_backend() {
-        // GIVEN: a temp config
-        let (_dir, path) = temp_config();
-
-        // WHEN: adding with an explicit --command
-        let code = run_add_command(
-            "my-server",
-            Some("node /home/user/my-server.js"),
-            None,
-            Some("My custom server"),
-            &["API_KEY=secret123".to_string()],
-            &path,
-            CommentLoss::Refuse,
-        )
-        .await;
-        assert_eq!(code, ExitCode::SUCCESS);
-
-        // THEN: the backend has correct fields
-        let config = Config::load(Some(&path)).unwrap();
-        let backend = config.backends.get("my-server").unwrap();
-        assert_eq!(backend.description, "My custom server");
-        assert_eq!(
-            backend.env.get("API_KEY").map(String::as_str),
-            Some("secret123")
-        );
-    }
-
-    #[tokio::test]
-    async fn add_duplicate_returns_failure() {
-        // GIVEN: a config that already has "tavily"
-        let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
-
-        // WHEN: adding again
-        let code =
-            run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
-
-        // THEN: failure
-        assert_eq!(code, ExitCode::FAILURE);
-    }
-
-    #[test]
-    fn remove_nonexistent_backend_returns_failure() {
-        let (_dir, path) = temp_config();
-        let code = run_remove_command("does-not-exist", &path, CommentLoss::Refuse);
-        assert_eq!(code, ExitCode::FAILURE);
-    }
-
-    #[tokio::test]
-    async fn add_http_url_backend() {
-        // GIVEN: a temp config
-        let (_dir, path) = temp_config();
-
-        // WHEN: adding an HTTP backend
-        let code = run_add_command(
-            "context7",
-            None,
-            Some("https://mcp.context7.com/mcp"),
-            None,
-            &[],
-            &path,
-            CommentLoss::Refuse,
-        )
-        .await;
-        assert_eq!(code, ExitCode::SUCCESS);
-
-        // THEN: transport is Http
-        let config = Config::load(Some(&path)).unwrap();
-        let backend = config.backends.get("context7").unwrap();
-        match &backend.transport {
-            TransportConfig::Http { http_url, .. } => {
-                assert_eq!(http_url, "https://mcp.context7.com/mcp");
-            }
-            other => panic!("expected Http transport, got {other:?}"),
-        }
-    }
-
-    // ── get command ───────────────────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn get_existing_backend_returns_success() {
-        let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
-        let code = run_get_command("tavily", &path);
-        assert_eq!(code, ExitCode::SUCCESS);
-    }
-
-    #[test]
-    fn get_missing_backend_returns_failure() {
-        let (_dir, path) = temp_config();
-        let code = run_get_command("ghost", &path);
-        assert_eq!(code, ExitCode::FAILURE);
-    }
-
-    // ── list command ──────────────────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn list_returns_success_when_empty() {
-        let (_dir, path) = temp_config();
-        let code = run_list_command(false, &path);
-        assert_eq!(code, ExitCode::SUCCESS);
-    }
-
-    #[tokio::test]
-    async fn list_json_returns_success_with_backends() {
-        let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
-        let code = run_list_command(true, &path);
-        assert_eq!(code, ExitCode::SUCCESS);
-    }
-
-    // ── run_update_backend ────────────────────────────────────────────────────
-
-    /// `update_backend` through the CLI's comment-keeping writer. Test-only:
-    /// no CLI verb updates a backend, and the web UI's PATCH goes through the
-    /// async reload API, never this blocking writer.
-    fn run_update_backend(name: &str, update: BackendUpdate, config: &Path) -> Result<(), String> {
-        super::super::config_write::write(config, CommentLoss::Refuse, |gateway_config| {
-            update_backend(gateway_config, name, update)
-        })
-    }
-
-    #[tokio::test]
-    async fn update_existing_backend_succeeds() {
-        let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
-
-        let result = run_update_backend(
-            "tavily",
-            BackendUpdate {
-                description: Some("updated desc".to_string()),
-                ..Default::default()
-            },
-            &path,
-        );
-        assert!(result.is_ok());
-
-        let config = Config::load(Some(&path)).unwrap();
-        assert_eq!(config.backends["tavily"].description, "updated desc");
-    }
-
-    /// `MIK-CLI-COMMENTS.SILENT.1`: an update that cannot keep the comments
-    /// is refused and leaves the file as it was.
-    #[test]
-    fn update_that_would_drop_comments_is_refused() {
-        let (_dir, path) = temp_config();
-        let flow = "# keep\nbackends: {a: {command: x}}\n";
-        mcp_gateway::gateway::test_helpers::write_owner_only(&path, flow).unwrap();
-        let update = BackendUpdate {
-            description: Some("new".into()),
-            ..BackendUpdate::default()
-        };
-        let error = run_update_backend("a", update, &path).unwrap_err();
-        assert!(error.contains("line 1"), "{error}");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), flow);
-    }
-
-    #[test]
-    fn update_missing_backend_returns_error() {
-        let (_dir, path) = temp_config();
-        let result = run_update_backend("ghost", BackendUpdate::default(), &path);
-        assert!(result.is_err());
-    }
-
-    // GH462.CONFIG.5: these guarded writers must never persist an empty fallback.
-    fn assert_guarded_writers_preserve_invalid_config(original: &str) {
-        let (_dir, path) = temp_config();
-        mcp_gateway::gateway::test_helpers::write_owner_only(&path, original).unwrap();
-        let error = Config::load_literal(Some(&path)).unwrap_err();
-        if original.contains("bad/name") {
-            assert!(matches!(error, mcp_gateway::Error::ConfigValidation(_)));
-        } else {
-            assert!(matches!(error, mcp_gateway::Error::Config(_)));
-        }
-        // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
-        #[cfg(unix)]
-        let identity = {
-            use std::os::unix::fs::MetadataExt;
-            let metadata = std::fs::metadata(&path).unwrap();
-            (metadata.dev(), metadata.ino())
-        };
-
-        assert_eq!(
-            run_remove_command("original", &path, CommentLoss::Refuse),
-            ExitCode::FAILURE
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
-        // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            let metadata = std::fs::metadata(&path).unwrap();
-            assert_eq!((metadata.dev(), metadata.ino()), identity);
-        }
-
-        let result = run_update_backend(
-            "original",
-            BackendUpdate {
-                description: Some("gh462 edit must not persist".into()),
-                ..BackendUpdate::default()
-            },
-            &path,
-        );
-        assert!(result.is_err());
-        assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
-        // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            let metadata = std::fs::metadata(&path).unwrap();
-            assert_eq!((metadata.dev(), metadata.ino()), identity);
-        }
-    }
-
-    #[test]
-    fn gh462_remove_and_update_preserve_malformed_config() {
-        assert_guarded_writers_preserve_invalid_config(
-            "backends:\n  original:\n    command: \"unterminated\n",
-        );
-    }
-
-    #[test]
-    fn gh462_remove_and_update_preserve_semantic_invalid_config() {
-        assert_guarded_writers_preserve_invalid_config(
-            "backends:\n  bad/name:\n    command: echo original\n",
-        );
-    }
-
-    /// A real CLI edit after a crashed byte write: `remove` meets a pending
-    /// replace journal over an unparseable candidate and refuses, leaving the
-    /// file, the journal and the staged original as they were. The CLI holds
-    /// no audit sink, so it does not recover; a gateway reload does, and
-    /// records it when the gateway keeps an audit log. The refusal checks only
-    /// that a journal exists; the on-disk format is pinned by the startup
-    /// recovery row in `serve_load_tests`.
-    #[test]
-    fn remove_refuses_a_crashed_byte_write_and_leaves_it_pending() {
-        use sha2::Digest as _;
-        let dir = TempDir::new().unwrap();
-        let config = dir.path().join("gateway.yaml");
-        let original = "# operator's note\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
-        std::fs::write(&config, "backends: [not: yaml\n").unwrap();
-        let target = std::fs::canonicalize(&config).unwrap();
-        let staged = target.with_file_name(".gateway.yaml.replace-original");
-        // Owner-only, as the writer stages it: recovery reads both files
-        // through the config guard.
-        mcp_gateway::gateway::test_helpers::write_owner_only(&staged, original).unwrap();
-        let journal = target.with_file_name(".gateway.yaml.replace-journal");
-        let revision = hex::encode(sha2::Sha256::digest(original.as_bytes()));
-        mcp_gateway::gateway::test_helpers::write_owner_only(
-            &journal,
-            serde_json::json!({
-                "version": 1,
-                "state": "staged",
-                "target": target,
-                "original": staged,
-                "original_revision": revision,
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        let code = run_remove_command("b", &config, CommentLoss::Refuse);
-
-        assert_eq!(code, ExitCode::FAILURE, "the refusal fails the command");
-
-        assert_eq!(
-            std::fs::read_to_string(&config).unwrap(),
-            "backends: [not: yaml\n",
-            "nothing was written"
-        );
-        assert!(journal.exists(), "the journal is still pending");
-        assert_eq!(
-            std::fs::read_to_string(&staged).unwrap(),
-            original,
-            "the staged original is kept for the audited recovery"
-        );
-    }
-}
+#[path = "add_remove_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "add_remove_layout_tests.rs"]

@@ -8,6 +8,7 @@
 //! and, where one exists, the one-time step that fixes it. There is no
 //! unsandboxed fallback and no setting that turns the sandbox off.
 
+mod fetch;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]

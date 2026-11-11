@@ -9,8 +9,8 @@
 //! read), refuses while a crashed write awaits recovery, and takes no lock:
 //! the save rechecks the revision under the writer's lock.
 #![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "first caller: the settings diff route (U8 PR c)")
+    not(any(test, feature = "webui")),
+    expect(dead_code, reason = "settings routes require webui")
 )]
 
 use std::fmt::Write as _;
@@ -23,7 +23,7 @@ use crate::config_reload::ReloadContext;
 use crate::config_reload::ui_fields::{EditRefused, FieldId, PreviewEdit, PreviewValue, Seg};
 use crate::yaml::Value;
 
-use super::{FileRevision, ReplaceError};
+use super::{FileRevision, RefusalClass, ReplaceError};
 
 /// A preview of one edit.
 #[derive(Debug, Clone, PartialEq)]
@@ -164,6 +164,9 @@ pub(crate) enum UiRefused {
     Preview(PreviewRefused),
     /// The loader or the reload would refuse the result.
     Invalid(String),
+    ReloadRefused {
+        class: RefusalClass,
+    },
     Unsupported(String),
     /// Save: auth is on and no audit log is configured, or the audit log
     /// refused this save's intent; nothing was written either way.
@@ -304,7 +307,7 @@ fn resolve(edit: &PreviewEdit, doc: &Value) -> Result<Vec<(FieldPath, Change)>, 
                         .and_then(Value::as_mapping)
                         .is_some_and(|m| m.get(Value::from(name.as_str())).is_some());
                     if !known {
-                        return Err(bad(format!("gateway.yaml has no backend {name:?}")));
+                        return Err(bad(format!("no such backend for {}", id.spec().id)));
                     }
                     Segment::Key(name)
                 }
@@ -335,9 +338,7 @@ fn resolve(edit: &PreviewEdit, doc: &Value) -> Result<Vec<(FieldPath, Change)>, 
         if *at != alerts + n || !complete {
             return Err(UiRefused::BadParam(
                 *id,
-                format!(
-                    "alert {at}: gateway.yaml lists {alerts}; a new alert follows the last and sets every field"
-                ),
+                format!("index out of range for {}", id.spec().id),
             ));
         }
     }
@@ -407,13 +408,35 @@ async fn validate(
 ) -> Result<(), UiRefused> {
     ctx.validate_template(target, template, None)
         .await
-        .map_err(|e| match e {
-            ReplaceError::Refused(why) | ReplaceError::ReloadRefused(why) => {
-                UiRefused::Invalid(why)
-            }
-            ReplaceError::Failed(why) => UiRefused::Unsupported(why),
-            other => UiRefused::Unsupported(format!("{other:?}")),
-        })
+        .map_err(|error| validate_refusal(&error))
+}
+
+/// The answer to a change the config loader would refuse: fixed text, since
+/// the loader's own message can quote what the file holds.
+pub(super) const LOADER_REFUSED: &str = "the change would be refused by the config loader";
+
+pub(super) fn validate_refusal(e: &ReplaceError) -> UiRefused {
+    match e {
+        ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused { class: *class },
+        ReplaceError::Refused(_) => UiRefused::Invalid(LOADER_REFUSED.to_owned()),
+        ReplaceError::Unsupported(_) => {
+            UiRefused::Unsupported("this change is not supported here".to_owned())
+        }
+        ReplaceError::Failed(_)
+        | ReplaceError::Busy
+        | ReplaceError::Stale { .. }
+        | ReplaceError::NoAuditLog
+        | ReplaceError::AuditRefused(_)
+        | ReplaceError::Stage(_)
+        | ReplaceError::Write(_)
+        | ReplaceError::RollbackFailed { .. }
+        | ReplaceError::Unconfirmed { .. }
+        | ReplaceError::Secrets(_)
+        | ReplaceError::NoConfigFile
+        | ReplaceError::ConfigRefused(_) => {
+            UiRefused::Failed("the preview did not complete".to_owned())
+        }
+    }
 }
 
 #[path = "ui_diff_show.rs"]
@@ -422,3 +445,7 @@ mod show;
 #[cfg(test)]
 #[path = "ui_diff_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ui_diff_refusal_tests.rs"]
+mod refusal_tests;
