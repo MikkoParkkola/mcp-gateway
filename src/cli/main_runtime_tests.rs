@@ -167,9 +167,15 @@ fn a_flush_inside_the_bound_completes_and_logs_nothing() {
         });
         (left_running, logged)
     });
-    std::thread::yield_now();
+    // A shutdown that waits for the flush cannot finish before the release, so
+    // this poll never fails it; one that returns without waiting finishes
+    // within a few yields. A count, not a timer.
+    let returned_early = (0..100_000).any(|_| {
+        std::thread::yield_now();
+        shutdown.is_finished()
+    });
     assert!(
-        !shutdown.is_finished(),
+        !returned_early,
         "the shutdown returned while the flush was still running"
     );
     release.send(()).expect("the flush is still waiting");
