@@ -94,6 +94,9 @@ fn handle_on(backend: &str) -> UpstreamHandle {
     UpstreamHandle {
         backend: backend.to_string(),
         handle: "t1".to_string(),
+        tool: String::new(),
+        arguments: serde_json::Value::Null,
+        fingerprint: Some("none".to_owned()),
     }
 }
 

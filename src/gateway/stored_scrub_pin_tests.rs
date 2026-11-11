@@ -137,6 +137,7 @@ fn the_stored_task_wire_has_only_listed_callers() {
         let rel = entry.strip_prefix(root).expect("under the crate");
         let rel = rel.to_string_lossy().replace('\\', "/");
         if rel.ends_with("_tests.rs")
+            || rel.contains("_tests/")
             || rel.contains("/tests/")
             || rel == "src/gateway/task_service/record.rs"
         {

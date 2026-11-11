@@ -21,7 +21,8 @@ use serde_json::Value;
 
 use super::Backend;
 use crate::secret_injection::{
-    CredentialRule, InjectTarget, drop_owned, inject_rules, tool_matches_rule,
+    CredentialRule, InjectTarget, drop_owned, inject_resolved, resolve_rules, resolved_pairs,
+    tool_matches_rule,
 };
 use crate::secrets::SecretResolver;
 use crate::{Error, Result};
@@ -150,6 +151,69 @@ impl Backend {
         }
     }
 
+    /// Whether a deferred task dispatched with the `stored` fingerprint may
+    /// be polled or settled, renewing what its dispatch sent when it may.
+    /// One resolution of this backend's rules for `tool` is both compared
+    /// with `stored` and renewed, so a rotation between two lookups cannot
+    /// match one value and renew another. The call's own `arguments` must
+    /// still inject; then every resolved value joins the set again, a value
+    /// a later rule overwrote included. `false` (the task is withheld) on a
+    /// mismatch, an unresolvable rule or a refused injection.
+    pub(crate) fn vouch_and_renew(
+        &self,
+        tool: &str,
+        arguments: &Value,
+        stored: Option<&str>,
+    ) -> bool {
+        use crate::security::dispatched::{Dispatched, delivers};
+        if self.secret_rules_for(tool).is_empty() {
+            return delivers(stored, &Dispatched::None);
+        }
+        let Some(resolver) = self.secret_resolver.get() else {
+            return false;
+        };
+        let Ok(values) = resolve_rules(&self.config.secrets, resolver, &self.name, tool) else {
+            return false;
+        };
+        if !delivers(stored, &self.fingerprint(&values)) {
+            return false;
+        }
+        let mut arguments = arguments.clone();
+        if !arguments.is_object() {
+            arguments = Value::Object(serde_json::Map::new());
+        }
+        drop_owned(&self.config.secrets, tool, &mut arguments);
+        if inject_resolved(&self.config.secrets, &values, &self.name, tool, arguments).is_err() {
+            return false;
+        }
+        self.insert_resolved(&values);
+        true
+    }
+
+    /// The fingerprint of one resolution of this backend's rules.
+    fn fingerprint(&self, values: &[Option<String>]) -> crate::security::dispatched::Dispatched {
+        crate::security::dispatched::Dispatched::of(
+            &self.name,
+            &resolved_pairs(&self.config.secrets, values),
+        )
+    }
+
+    /// Insert every non-empty value of one resolution into this backend's
+    /// set (or renew it), and name a short one once. A send of these rules
+    /// carries only such values: an injected value is its rule's resolved
+    /// value, unchanged.
+    fn insert_resolved(&self, values: &[Option<String>]) {
+        let Some(needles) = self.needles.get() else {
+            return;
+        };
+        for (rule, value) in self.config.secrets.iter().zip(values) {
+            if let Some(value) = value.as_deref().filter(|value| !value.is_empty()) {
+                needles.insert(&self.name, value);
+                needles.warn_if_short(&self.name, &rule.name, value);
+            }
+        }
+    }
+
     /// The configured credentials this instance was seeded with; empty
     /// before it registers.
     pub(crate) fn configured_record(&self) -> crate::config::configured_secrets::ConfiguredSecrets {
@@ -210,7 +274,7 @@ impl Backend {
                 owned_headers: Vec::new(),
             })
         };
-        if method != "tools/call" || self.config.secrets.is_empty() {
+        if method != "tools/call" {
             return unchanged(params);
         }
         let Some(tool) = params
@@ -223,6 +287,10 @@ impl Backend {
         };
         let rules = self.secret_rules_for(&tool);
         let Some(first) = rules.first() else {
+            // A deferring dispatch's slot learns that no rule applies.
+            crate::security::dispatched::record(&self.name, &tool, || {
+                Some(crate::security::dispatched::Dispatched::None)
+            });
             return unchanged(params);
         };
         for rule in &rules {
@@ -235,6 +303,10 @@ impl Backend {
                 self.name, first.name
             )));
         };
+        // One resolution: what a deferring dispatch's slot fingerprints is
+        // what this send injects.
+        let values = resolve_rules(&self.config.secrets, resolver, &self.name, &tool)?;
+        crate::security::dispatched::record(&self.name, &tool, || Some(self.fingerprint(&values)));
         let mut params = params;
         let owned = if let Some(Value::Object(map)) = params.as_mut() {
             // An absent `arguments` is an empty object: a rule still applies.
@@ -254,27 +326,10 @@ impl Backend {
         let Some(owned) = owned else {
             return unchanged(params);
         };
-        let injection = inject_rules(&self.config.secrets, resolver, &self.name, &tool, owned)?;
+        let injection = inject_resolved(&self.config.secrets, &values, &self.name, &tool, owned)?;
         // Every value this send carries joins the backend's set before the
         // send leaves, so its echo is removed from whatever comes back.
-        if let Some(needles) = self.needles.get() {
-            for rule in &rules {
-                let sent = match rule.inject_as {
-                    InjectTarget::Argument => injection
-                        .arguments
-                        .get(&rule.inject_key)
-                        .and_then(Value::as_str),
-                    InjectTarget::Header => {
-                        injection.headers.get(&rule.inject_key).map(String::as_str)
-                    }
-                    InjectTarget::Query => None,
-                };
-                if let Some(value) = sent {
-                    needles.insert(&self.name, value);
-                    needles.warn_if_short(&self.name, &rule.name, value);
-                }
-            }
-        }
+        self.insert_resolved(&values);
         let owned_headers = rules
             .iter()
             .filter(|rule| matches!(rule.inject_as, InjectTarget::Header))

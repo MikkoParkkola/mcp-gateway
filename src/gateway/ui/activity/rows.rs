@@ -11,7 +11,128 @@ use serde_json::{Map, Value};
 use super::reader::{Line, Which};
 use crate::gateway::authz::BackendGrant;
 use crate::security::decision_record::{Decision, read};
-use crate::security::transparency_log::signature::signature_state;
+use std::cell::{OnceCell, RefCell};
+use std::path::{Path, PathBuf};
+
+use crate::security::transparency_log::signature::{Judged, judge};
+use crate::security::transparency_log::sigstart::{self, Anchor, Checked, LinePos};
+
+/// How one request checks rows: the running logger's secret and key, each
+/// log's signing anchor (loaded at most once per request), and the chunks of
+/// pre-signing files already hashed.
+pub(super) struct Check<'a> {
+    secret: Option<&'a [u8]>,
+    inv: (PathBuf, OnceCell<Anchor>),
+    gov: Option<(PathBuf, OnceCell<Anchor>)>,
+    checked: RefCell<Checked>,
+    /// The first legacy fault each log showed (invocation, governance): the
+    /// log-wide report names it once a row met it.
+    legacy_faults: RefCell<[Option<&'static str>; 2]>,
+}
+
+fn slot(which: Which) -> usize {
+    match which {
+        Which::Invocation => 0,
+        Which::Governance => 1,
+    }
+}
+
+impl<'a> Check<'a> {
+    /// Load the anchors of `inv` and `gov` under `secret`, now: a request
+    /// judges every row against the anchor as it stood when it began.
+    pub(super) fn new(secret: Option<&'a [u8]>, inv: &Path, gov: Option<&Path>) -> Self {
+        let load = |p: &Path| (p.to_path_buf(), OnceCell::from(sigstart::load(p, secret)));
+        Self {
+            secret,
+            inv: load(inv),
+            gov: gov.map(load),
+            checked: RefCell::default(),
+            legacy_faults: RefCell::default(),
+        }
+    }
+
+    /// One log only: the live stream reads one log per source. Its anchor is
+    /// loaded when a record first needs placing: a signed record that
+    /// verifies never consults it, so a live frame for one reads nothing.
+    pub(super) fn one(secret: Option<&'a [u8]>, which: Which, path: &Path) -> Self {
+        let lazy = (path.to_path_buf(), OnceCell::new());
+        let (inv, gov) = match which {
+            Which::Invocation => (lazy, None),
+            Which::Governance => ((PathBuf::new(), OnceCell::from(Anchor::Absent)), Some(lazy)),
+        };
+        Self {
+            secret,
+            inv,
+            gov,
+            checked: RefCell::default(),
+            legacy_faults: RefCell::default(),
+        }
+    }
+
+    /// Whether this request has loaded every anchor it holds.
+    #[cfg(test)]
+    pub(super) fn anchor_loaded(&self) -> bool {
+        self.inv.1.get().is_some() && self.gov.as_ref().is_none_or(|g| g.1.get().is_some())
+    }
+
+    /// Rows judged as if every unsigned record predated signing: for rows
+    /// tests that build entries by hand, with no log on disk.
+    #[cfg(test)]
+    pub(super) fn bare(secret: Option<&'a [u8]>) -> Self {
+        Self {
+            secret,
+            inv: (PathBuf::new(), OnceCell::from(Anchor::NoSecret)),
+            gov: None,
+            checked: RefCell::default(),
+            legacy_faults: RefCell::default(),
+        }
+    }
+
+    fn log(&self, which: Which) -> Option<(&Path, &Anchor)> {
+        let (path, anchor) = match which {
+            Which::Invocation => Some(&self.inv),
+            Which::Governance => self.gov.as_ref(),
+        }?;
+        Some((
+            path,
+            anchor.get_or_init(|| sigstart::load(path, self.secret)),
+        ))
+    }
+
+    /// The log-wide anchor state, as the exports and receipts report it;
+    /// `none` for a log this gateway does not keep (no governance log).
+    pub(super) fn report(&self, which: Which) -> &'static str {
+        let anchor = self.log(which).map_or("none", |(_, a)| a.report());
+        match (anchor, self.legacy_faults.borrow()[slot(which)]) {
+            ("ok", Some(fault)) => fault,
+            _ => anchor,
+        }
+    }
+
+    /// Judge `line` against its log's anchor.
+    pub(super) fn judge(&self, line: &Line) -> Judged {
+        judge(&line.entry, self.secret, || {
+            let Some((path, anchor)) = self.log(line.log) else {
+                return sigstart::Placed::Invalid("sigstart_missing");
+            };
+            let pos = match line.span {
+                Some((offset, len)) => LinePos::At {
+                    segment: line.segment,
+                    offset,
+                    len,
+                },
+                None => LinePos::Newest,
+            };
+            let placed = anchor.place(path, pos, &line.entry, &mut self.checked.borrow_mut());
+            if let sigstart::Placed::Invalid(why) = placed
+                && why.starts_with("legacy_")
+            {
+                self.legacy_faults.borrow_mut()[slot(line.log)].get_or_insert(why);
+            }
+            placed
+        })
+    }
+}
 
 /// The kinds Activity lists. Other records (identity-propagation mints and
 /// refusals, event lifecycle, segment housekeeping) carry free text U2 has
@@ -125,7 +246,7 @@ fn copy(row: &mut Map<String, Value>, entry: &Value, keys: &[&str]) {
 }
 
 /// The row for `line`, or `None` for a kind Activity does not list.
-pub(super) fn row(line: &Line, secret: Option<&[u8]>) -> Option<Value> {
+pub(super) fn row(line: &Line, check: &Check<'_>) -> Option<Value> {
     let kind = kind_of(line)?;
     let e = &line.entry;
     let mut row = Map::new();
@@ -136,10 +257,17 @@ pub(super) fn row(line: &Line, secret: Option<&[u8]>) -> Option<Value> {
         e,
         &["counter", "timestamp", "prev_entry_hash", "entry_hash"],
     );
+    let judged = check.judge(line);
     row.insert(
         "signature".into(),
-        serde_json::to_value(signature_state(e, secret)).unwrap_or(Value::Null),
+        serde_json::to_value(judged.state).unwrap_or(Value::Null),
     );
+    if let Some(why) = judged.integrity {
+        row.insert("integrity".into(), why.into());
+    }
+    if judged.unanchored {
+        row.insert("unanchored".into(), true.into());
+    }
     match kind {
         Kind::Call => {
             copy(

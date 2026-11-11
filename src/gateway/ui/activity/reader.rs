@@ -49,6 +49,9 @@ pub(super) struct Line {
     pub(super) log: Which,
     pub(super) entry: Value,
     pub(super) segment: u64,
+    /// The line's start and length in its segment, newline excluded; `None`
+    /// for a record the writer just announced, which follows every anchor.
+    pub(super) span: Option<(u64, u64)>,
 }
 
 /// A line that is not a JSON entry: a hand-edited log, or one over the record
@@ -174,6 +177,7 @@ impl LogTail {
                         log: self.which,
                         entry,
                         segment: self.segment,
+                        span: Some((offset, bytes.len() as u64)),
                     }),
                     _ => Item::Unreadable(Unreadable {
                         log: self.which,

@@ -133,7 +133,10 @@ async fn tools_list_changed_reaches_only_sessions_in_scope_for_the_changed_backe
 
 #[tokio::test]
 async fn a_revoked_session_is_not_told_about_tools_list_changes() {
-    let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
+    let key_server = Arc::new(KeyServer::new(
+        crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
+    ));
     let kept = temporary_token(&["alpha"]);
     let revoked = temporary_token(&["alpha"]);
     let (kept_bearer, revoked_bearer) = (kept.token.clone(), revoked.token.clone());

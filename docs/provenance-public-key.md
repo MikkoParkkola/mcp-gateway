@@ -123,6 +123,18 @@ A direct idempotent replay that does not re-stamp delivers its stored receipt
 unsealed: the receipt was minted in an earlier request, so this request's seal
 refuses it.
 
+Stored answers lose their seals while the gateway holds any secret value for
+the stored-answer scrub (any backend with a configured or sent secret). A
+response-cache hit, an idempotency replay, `tasks/get` and a task notification
+serve the stored answer with every `public_signature` removed, at every
+depth, chain and playbook steps in `content[0].text` included. The receipts
+stay, and a fresh delivery is sealed as before. A stored answer is scrubbed against the
+values held when it is served, and a seal made before that scrub carries the
+digest of the unscrubbed bytes, so serving it next to a redacted body would
+let a client test guesses of the removed value offline. With no secret value
+held, stored answers keep their seals. A stored answer the scrub redacted and
+whose text names `public_signature` without parsing as JSON is refused.
+
 ## Reading a saved response
 
 ```bash

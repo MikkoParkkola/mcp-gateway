@@ -188,6 +188,7 @@ async fn live_config_edit_after_build_does_not_lift_the_cap() {
 async fn key_server_route_body_over_cap_is_rejected() {
     let key_server = Arc::new(crate::key_server::KeyServer::new(
         crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
     let (state, _store) = super::tests::test_router_app_state_with_auth_and_key_server(
         &crate::config::AuthConfig::default(),

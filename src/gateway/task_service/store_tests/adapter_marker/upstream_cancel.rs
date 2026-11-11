@@ -13,6 +13,7 @@ fn descriptor(binding: &TaskBinding, handle: &str) -> UpstreamRecord {
         tool: "create".into(),
         arguments: json!({"sku": "x"}),
         operation_digest: binding.operation().to_owned(),
+        secret_fingerprint: Some("none".to_owned()),
     }
 }
 
@@ -583,4 +584,78 @@ async fn a_durable_handle_carries_its_bindings_across_a_reopen() {
         "the handle is not on the reopened row"
     );
     reopened.close().await.unwrap();
+}
+
+/// The lifecycle through the store: the descriptor is written, completion
+/// writes the row again, the store reopens and the owner's read serves it.
+/// A row whose descriptor predates the fingerprint is withheld after every
+/// rewrite; a row this build fingerprinted is served as stored.
+#[tokio::test]
+async fn a_completed_upstream_row_is_withheld_after_reload_only_when_legacy() {
+    let echoed = "echo of key lifecycle-secret-2f88";
+    let reason = crate::gateway::meta_mcp::upstream::SECRETS_WITHHELD;
+    for legacy in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks");
+        let store = open(&path).await;
+        let admission = services();
+        let (row, binding) = admitted_with(
+            &store,
+            &admission,
+            "lifecycle",
+            vec![Target {
+                server: "orders".into(),
+                tool: "create".into(),
+            }],
+        )
+        .await;
+        let owner = binding.principal_digest().to_owned();
+        let id = row.id().to_owned();
+        let mut upstream = descriptor(&binding, "job-life");
+        upstream.secret_fingerprint = Some(format!("hmac:{}", "a".repeat(64)));
+        store
+            .mark_upstream(&owner, &id, 1, (upstream, Vec::new()))
+            .await
+            .unwrap();
+        let store = if legacy {
+            // As a pre-release build left it: no fingerprint member at all.
+            store.close().await.unwrap();
+            let mut on_disk = record_json(&path, &id);
+            on_disk["upstream"]
+                .as_object_mut()
+                .expect("an upstream descriptor")
+                .remove("secretFingerprint");
+            reseed(&path, &id, &on_disk);
+            open(&path).await
+        } else {
+            store
+        };
+        store
+            .transition(
+                &owner,
+                &id,
+                1,
+                TaskTransition::Complete(json!({"content": [{"type": "text", "text": echoed}]})),
+                at(1),
+            )
+            .await
+            .unwrap();
+        store.close().await.unwrap();
+        let reopened = open(&path).await;
+        let served = reopened
+            .get(&owner, &id)
+            .unwrap()
+            .delivered_wire()
+            .to_string();
+        if legacy {
+            assert!(!served.contains(echoed), "{served}");
+            assert!(served.contains(reason), "{served}");
+        } else {
+            assert!(
+                served.contains(echoed),
+                "a fingerprinted row is served: {served}"
+            );
+        }
+        reopened.close().await.unwrap();
+    }
 }

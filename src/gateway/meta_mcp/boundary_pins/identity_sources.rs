@@ -448,12 +448,12 @@ pub(super) fn crate_scan() -> Scan {
 }
 
 /// An identifier's name with any raw prefix removed: `r#checked` is `checked`.
-fn name(ident: &syn::Ident) -> String {
+pub(super) fn name(ident: &syn::Ident) -> String {
     syn::ext::IdentExt::unraw(ident).to_string()
 }
 
 /// The last identifier of a type written as a path (`a::B<C>` -> `B`).
-fn last_ident(ty: &syn::Type) -> Option<String> {
+pub(super) fn last_ident(ty: &syn::Type) -> Option<String> {
     match ty {
         syn::Type::Path(p) => p.path.segments.last().map(|s| name(&s.ident)),
         syn::Type::Group(g) => last_ident(&g.elem),
@@ -471,7 +471,7 @@ fn path_text(path: &syn::Path) -> String {
 }
 
 /// The owner name an item gives the code inside it.
-fn item_name(item: &syn::Item) -> String {
+pub(super) fn item_name(item: &syn::Item) -> String {
     use syn::Item as I;
     match item {
         I::Const(i) => name(&i.ident),
@@ -596,7 +596,7 @@ fn listed(table: &Table) -> (Listed, Vec<String>) {
 
 /// What differs between a scan and the reviewed table: refused forms,
 /// malformed rows, changed values, unlisted sites and stale rows.
-pub(super) fn differences(found: &Scan, table: &Table) -> Vec<String> {
+pub(super) fn differences(found: &Scan, table: &Table, pin: &str) -> Vec<String> {
     let (want, bad) = listed(table);
     let mut wrong: Vec<String> = found.refused.clone();
     wrong.extend(bad);
@@ -622,7 +622,7 @@ pub(super) fn differences(found: &Scan, table: &Table) -> Vec<String> {
     }
     if !add.is_empty() {
         wrong.push(format!(
-            "rows to add ({}; put these in your fragment identity_sources.d/<ticket>.tsv):",
+            "rows to add ({}; put these in your fragment {pin}.d/<ticket>.tsv):",
             add.len()
         ));
         wrong.extend(add);

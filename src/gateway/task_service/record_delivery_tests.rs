@@ -37,6 +37,7 @@ fn row(task: Task, notes: Vec<Value>) -> CommittedTask {
         bindings: Vec::new(),
         // M2: only a bindings-recorded row is served at all.
         bindings_recorded: true,
+        vouching: crate::gateway::task_service::Vouching::Vouched,
         replay_snapshot: None,
     }
 }
@@ -267,4 +268,88 @@ fn a_gateway_authored_row_is_delivered_as_before() {
     authored.error_author = Some(ErrorAuthor::Gateway);
     assert_eq!(authored.delivered_wire(), plain.delivered_wire());
     assert!(authored.backend_error().is_none());
+}
+
+/// An upstream row stored before its dispatch's secrets were fingerprinted
+/// is served withheld at every reader: a completed result and a failed
+/// error alike are replaced by the fixed answer, holding none of the stored
+/// bytes, and the task's state is left as it is. A vouched row is unchanged.
+#[test]
+fn an_unvouched_upstream_row_is_served_withheld_never_its_outcome() {
+    let echoed = "echo of key legacy-secret-0b51";
+    let reason = crate::gateway::meta_mcp::upstream::SECRETS_WITHHELD;
+    let mut done = completed(
+        &json!({"content": [{"type": "text", "text": echoed}], "isError": false}),
+        Vec::new(),
+    );
+    assert!(
+        done.delivered_wire().to_string().contains(echoed),
+        "premise: a vouched row serves its result"
+    );
+    done.vouching = crate::gateway::task_service::Vouching::Unvouched;
+    let served = done.delivered_wire();
+    assert!(!served.to_string().contains(echoed), "{served}");
+    assert!(served.to_string().contains(reason), "{served}");
+    assert_eq!(
+        served["status"],
+        json!("completed"),
+        "the state is left as it is"
+    );
+
+    let mut task = Task::create("gateway_invoke").expect("the clock reads after 1970");
+    task.fail(&JsonRpcError {
+        code: -32001,
+        message: echoed.to_owned(),
+        data: Some(json!({"quoted": echoed})),
+    })
+    .expect("a live task fails");
+    let mut failed = row(task, Vec::new());
+    failed.vouching = crate::gateway::task_service::Vouching::Unvouched;
+    let served = failed.delivered_wire();
+    assert!(!served.to_string().contains(echoed), "{served}");
+    assert_eq!(served["error"]["message"], json!(reason), "{served}");
+}
+
+/// The owner's `tasks/get` and a keyed repeat serve an unvouched upstream row
+/// withheld, completed and failed alike: each reader goes through
+/// `delivered_wire`, and neither hands back the stored bytes.
+#[test]
+fn tasks_get_and_a_keyed_repeat_serve_an_unvouched_row_withheld() {
+    use crate::gateway::meta_mcp::sealed_hold::{CarriedHolds, Held};
+    let echoed = "echo of key legacy-secret-7e13";
+    let reason = crate::gateway::meta_mcp::upstream::SECRETS_WITHHELD;
+    let unvouched = |task: Task| {
+        let mut stored = row(task, Vec::new());
+        stored.vouching = crate::gateway::task_service::Vouching::Unvouched;
+        stored
+    };
+    let mut done = Task::create("gateway_invoke").expect("the clock reads after 1970");
+    done.complete(&json!({"content": [{"type": "text", "text": echoed}], "isError": false}))
+        .expect("a live task completes");
+    let mut failed = Task::create("gateway_invoke").expect("the clock reads after 1970");
+    failed
+        .fail(&JsonRpcError {
+            code: -32001,
+            message: echoed.to_owned(),
+            data: None,
+        })
+        .expect("a live task fails");
+    for task in [done, failed] {
+        let (_, got) = crate::gateway::task_route::task_envelope(
+            Held::new(unvouched(task.clone()), CarriedHolds::none()),
+            "task",
+        );
+        let repeat = crate::gateway::task_service::execution::BeginOutcome::Existing(Held::new(
+            unvouched(task),
+            CarriedHolds::none(),
+        ))
+        .into_response(crate::protocol::RequestId::Number(1));
+        for served in [
+            got.to_string(),
+            serde_json::to_string(&repeat).expect("a response"),
+        ] {
+            assert!(!served.contains(echoed), "{served}");
+            assert!(served.contains(reason), "{served}");
+        }
+    }
 }

@@ -537,6 +537,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `idempotency.read_only_tools[].tool` | KEEP | — | operator declares read-only tools the admission gate may replay (ADR-012) | - | src/config/features/idempotency.rs:22 |
 | `key_server` | KEEP | `type default` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/mod.rs:132 |
 | `key_server.admin_token` | KEEP | `None` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:65 |
+| `key_server.audit_email_hmac_secret_ref` | KEEP | `None` | secret reference for the key that hashes emails in key-server audit records; an operator who supplies their own key must back it up with the data directory (UPGRADING) | - | src/config/features/key_server.rs:81 |
 | `key_server.cleanup_interval_secs` | INTERNAL | `DEFAULT_CLEANUP_INTERVAL_SECS` | token-store hygiene; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/key_server.rs:55 |
 | `key_server.delegated_bearer` | KEEP | `false` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:73 |
 | `key_server.enabled` | KEEP | `false` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:43 |
