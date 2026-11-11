@@ -80,10 +80,10 @@ impl Certified<'_> {
     }
 }
 
-pub(crate) fn run_checkpoint<'a>(
-    adapters: &'a mut [Box<dyn FloorAdapter>],
+pub(crate) fn run_checkpoint(
+    adapters: &mut [Box<dyn FloorAdapter>],
     deadline: Instant,
-) -> Result<Certified<'a>, Cancelled> {
+) -> Result<Certified<'_>, Cancelled> {
     let outcome = checkpoint_all(adapters, deadline);
     if outcome.is_err() {
         for adapter in adapters.iter_mut() {
@@ -155,7 +155,7 @@ pub(crate) fn validate_owners(adapters: &[Box<dyn FloorAdapter>]) -> Result<(), 
 
 impl Cancelled {
     /// The audit and UI reason: owner, stage and reason, nothing else.
-    pub(crate) fn audit_detail(&self) -> Map<String, Value> {
+    pub(crate) fn audit_detail(self) -> Map<String, Value> {
         let owner = match self.owner {
             FloorOwner::TaskStore => "task_store",
             FloorOwner::Config => "config",

@@ -201,7 +201,9 @@ fn a_checkpoint_past_the_deadline_cancels() {
 fn a_deadline_already_past_cancels_before_any_pause() {
     let log = Log::default();
     let mut a = three(&log, None);
-    let c = expect_cancel(&mut a, Instant::now() - Duration::from_millis(1));
+    let past = Instant::now();
+    std::thread::sleep(Duration::from_millis(2));
+    let c = expect_cancel(&mut a, past);
     assert_eq!(c.reason, CancelReason::DeadlineExceeded);
     assert!(
         !log.borrow().iter().any(|l| l.starts_with("pause")),
@@ -214,9 +216,10 @@ fn a_deadline_already_past_cancels_before_any_pause() {
 fn a_certified_checkpoint_holds_every_pause_until_abort() {
     let log = Log::default();
     let mut a = three(&log, None);
-    let certified = run_checkpoint(&mut a, far())
-        .ok()
-        .expect("all three certify");
+    let certified = match run_checkpoint(&mut a, far()) {
+        Ok(certified) => certified,
+        Err(c) => panic!("all three certify, got {c:?}"),
+    };
     assert!(
         resumes(&log).is_empty(),
         "no resume before abort: {:?}",
