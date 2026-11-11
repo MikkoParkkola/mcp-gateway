@@ -266,7 +266,7 @@ fn admintok_1_existing_config_refusal_preserves_all_files_and_store_bytes() {
     no_token_leaks(root.path(), &out, Some(entry));
 }
 
-/// R2 / A6: a pre-existing dangling link passes absence checks, but create_new
+/// R2 / A6: a pre-existing dangling link passes absence checks, but `create_new`
 /// refuses it after the first sample and entry exist. This is not the R4 race.
 #[test]
 fn admintok_1_sample_create_failure_removes_owned_files_and_entry_preserving_competitors() {
@@ -307,7 +307,7 @@ fn admintok_1_sample_create_failure_removes_owned_files_and_entry_preserving_com
     no_token_leaks(root.path(), &out, None);
 }
 
-/// R3 / A6: probe succeeds, then FilesStore::create cannot encode its reference.
+/// R3 / A6: probe succeeds, then `FilesStore::create` cannot encode its reference.
 /// Unlike chmod, this is deterministic even as root (probe resets mode to 0700).
 #[test]
 fn admintok_1_chosen_store_create_failure_leaves_no_config_samples_or_literal_fallback() {
