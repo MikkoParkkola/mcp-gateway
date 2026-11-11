@@ -153,6 +153,76 @@ fn journal_versions() {
         assert_eq!(bytes(&path), fixture, "{ROW}: {case} preserves invalid evidence");
     }
     durable_transitions(ROW);
+
+    let mut failures = Vec::new();
+    // Each boundary has its own target and panic boundary: neither masks G1.
+    for (case, size) in [
+        ("G3_exact_limit", 1_048_576),
+        ("G3_oversized_journal", 1_048_577),
+    ] {
+        let expected = if size == 1_048_576 {
+            "exactly 1048576 bytes, original v2 state, unchanged journal bytes"
+        } else {
+            "exactly 1048577 bytes, Err(Unreadable), unchanged journal bytes"
+        };
+        collect_case(&mut failures, ROW, case, expected, || {
+            let (_dir, path, locked) = config();
+            let journal_path = journal::journal_path(&path);
+            let mut bounded = JOURNAL_V2_ATTRIBUTION.to_vec();
+            bounded.resize(size, b' ');
+            write_atomic(&journal_path, &bounded, FileMode::Private, Symlink::Replace)
+                .map_err(|error| format!("write error: {error:?}"))?;
+            let before = std::fs::read(&journal_path)
+                .map_err(|error| format!("read error: {error:?}"))?;
+            let opened = open(&locked);
+            let retained = std::fs::read(&journal_path)
+                .is_ok_and(|after| after == bounded);
+            let accepted = if size == 1_048_576 {
+                matches!(&opened, Ok(Some(OpenJournal::Current(state))) if state == &current)
+            } else {
+                matches!(&opened, Err(JournalError::Unreadable))
+            };
+            if before.len() == size && accepted && retained {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{} bytes, open={opened:?}, bytes_retained={retained}", before.len(),
+                ))
+            }
+        });
+    }
+    for (case, fixture) in [
+        ("G1_duplicate_writer_attempt", JOURNAL_V2_DUPLICATE_WRITER_ATTEMPT),
+        ("G1_duplicate_attempts", JOURNAL_V2_DUPLICATE_ATTEMPTS),
+    ] {
+        collect_case(
+            &mut failures, ROW, case,
+            "decode=Err(InvalidState), open=Err(InvalidState), unchanged journal bytes",
+            || {
+                let (_dir, path, locked) = config();
+                let journal_path = journal::journal_path(&path);
+                let decoded = JournalV2::decode(fixture);
+                write_atomic(&journal_path, fixture, FileMode::Private, Symlink::Replace)
+                    .map_err(|error| format!("write error: {error:?}"))?;
+                let opened = open(&locked);
+                let retained = std::fs::read(&journal_path)
+                    .is_ok_and(|after| after == fixture);
+                if matches!(&decoded, Err(JournalError::InvalidState))
+                    && matches!(&opened, Err(JournalError::InvalidState)) && retained
+                {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "decode={decoded:?}, open={opened:?}, bytes_retained={retained}",
+                    ))
+                }
+            },
+        );
+    }
+    assert!(
+        failures.is_empty(), "{ROW}: {} case(s) failed:\n{}",
+        failures.len(), failures.join("\n"),
+    );
 }
 
 fn durable_transitions(row: &str) {

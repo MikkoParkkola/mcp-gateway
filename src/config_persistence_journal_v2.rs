@@ -131,7 +131,8 @@ pub(crate) enum JournalError {
 
 pub(crate) fn open(locked: &Locked) -> Result<Option<OpenJournal>, JournalError> {
     let path = super::journal_path(&locked.target);
-    let Some(text) = crate::config::read_recovery_text(&path).map_err(|_| JournalError::Unreadable)? else {
+    let Some(text) = crate::config::read_recovery_journal_v2(&path)
+        .map_err(|_| JournalError::Unreadable)? else {
         return Ok(None);
     };
     match serde_json::from_str::<serde_json::Value>(&text)
@@ -305,7 +306,9 @@ impl JournalV2 {
         {
             return Err(JournalError::InvalidState);
         }
+        let mut tokens = std::collections::HashSet::new();
         for owner in self.writer.iter().chain(&self.attempts) {
+            if !tokens.insert(owner.token.0.as_str()) { return Err(JournalError::InvalidState); }
             if let Some(decision) = &owner.decision { decision.validate()?; }
         }
         Ok(())
@@ -332,11 +335,19 @@ impl TokenState {
             TerminalRole::Outcome => Role::Outcome,
             TerminalRole::Abandoned => Role::Abandoned,
         };
+        let mut terminals = self.records.iter()
+            .filter(|r| matches!(r.role, Role::Outcome | Role::Abandoned));
+        let Some(first) = terminals.next() else { return false; };
+        // Retries collapse by frozen content, never by delivery state or digest alone.
+        if first.role != terminal || !codec::terminal_matches(first, decision)
+            || !terminals.all(|r| r.role == terminal && r.payload_json == first.payload_json
+                && r.attribution == first.attribution && r.caller_digest == first.caller_digest)
+        {
+            return false;
+        }
         self.intent.delivered && self.intent_counter.is_some()
             && self.records.iter().all(|r| r.delivered)
             && (!decision.delivery_stopped || self.records.iter().any(|r| r.role == Role::DeliveryStopped))
-            && self.records.iter().filter(|r| matches!(r.role, Role::Outcome | Role::Abandoned)).count() == 1
-            && self.records.iter().any(|r| r.role == terminal)
     }
 }
 

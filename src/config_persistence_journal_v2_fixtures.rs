@@ -19,6 +19,31 @@ pub(super) const OLD: &[u8] = b"server:\n  port: 1\n";
 pub(super) const NEW: &[u8] = b"server:\n  port: 2\n";
 pub(super) const INTENT: Role = Role::Intent(IntentKind::Save);
 
+// New cases return diagnostics instead of asserting; even a production panic
+// must leave the remaining cases runnable. Existing row assertions stay intact.
+pub(super) fn collect_case(
+    failures: &mut Vec<String>,
+    row: &str,
+    case: &str,
+    expected: &str,
+    run: impl FnOnce() -> Result<(), String>,
+) {
+    let got = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+        Ok(Ok(())) => {
+            println!("{row} {case}: passed");
+            return;
+        }
+        Ok(Err(detail)) => detail,
+        Err(panic) => {
+            let detail = panic.downcast_ref::<String>().map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or("non-string panic payload");
+            format!("panic: {detail}")
+        }
+    };
+    failures.push(format!("{row} {case}: expected {expected}, got {got}"));
+}
+
 pub(super) fn config() -> (tempfile::TempDir, PathBuf, Locked) {
     let dir = tempfile::tempdir().expect("fixture directory");
     let path = dir.path().join("gateway.yaml");
@@ -491,3 +516,56 @@ pub(super) const JOURNAL_V2_INVALID_PENDING_FACT: &[u8] = concat!(
     r#"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","tried":false},"phase":"staged","version":2,"writer":null}"#,
 )
 .as_bytes();
+
+// Duplicate owners have individually valid but different decisions for the same id.
+pub(super) const JOURNAL_V2_DUPLICATE_WRITER_ATTEMPT: &[u8] = br#"{
+    "version":2,"binding":"opaque-log:fixture","phase":"intended",
+    "original_revision":null,"new_revision":null,"pending":null,"fact":"untouched",
+    "writer":{
+        "token":"writer-1","handed_over":false,"intent_counter":7,
+        "decision":{"result":"not_written","reason":"refused","settled_by":null,
+                    "terminal":"outcome","delivery_stopped":false},
+        "intent":{"role":"config_save_intent","attribution":null,
+                  "payload_json":[123,34,107,105,110,100,34,58,34,115,101,116,116,
+                                  108,101,46,115,97,118,101,34,125],
+                  "caller_digest":"8db52a270d606fc2078954f3a4f4766037fdf26b170d107b2131f00250db7f35",
+                  "delivered":true,"parked":null},"records":[]
+    },
+    "attempts":[{
+        "token":"writer-1","handed_over":false,"intent_counter":8,
+        "decision":{"result":"unproven","reason":"abandoned","settled_by":null,
+                    "terminal":"abandoned","delivery_stopped":false},
+        "intent":{"role":"config_recovery_intent","attribution":null,
+                  "payload_json":[123,34,107,105,110,100,34,58,34,115,101,116,116,
+                                  108,101,46,114,101,99,111,118,101,114,121,34,
+                                  44,34,114,111,111,116,34,58,116,114,117,101,125],
+                  "caller_digest":"ff808f85a5675af934e1b28062a14b401766191c37dc3c9cdab3439790873a48",
+                  "delivered":true,"parked":null},"records":[]
+    }]
+}"#;
+
+pub(super) const JOURNAL_V2_DUPLICATE_ATTEMPTS: &[u8] = br#"{
+    "version":2,"binding":"opaque-log:fixture","phase":"intended",
+    "original_revision":null,"new_revision":null,"pending":null,"fact":"untouched",
+    "writer":null,"attempts":[{
+        "token":"writer-1","handed_over":false,"intent_counter":7,
+        "decision":{"result":"not_written","reason":"refused","settled_by":null,
+                    "terminal":"outcome","delivery_stopped":false},
+        "intent":{"role":"config_recovery_intent","attribution":null,
+                  "payload_json":[123,34,107,105,110,100,34,58,34,115,101,116,116,
+                                  108,101,46,114,101,99,111,118,101,114,121,34,
+                                  44,34,114,111,111,116,34,58,116,114,117,101,125],
+                  "caller_digest":"ff808f85a5675af934e1b28062a14b401766191c37dc3c9cdab3439790873a48",
+                  "delivered":true,"parked":null},"records":[]
+    },{
+        "token":"writer-1","handed_over":false,"intent_counter":8,
+        "decision":{"result":"unproven","reason":"abandoned","settled_by":null,
+                    "terminal":"abandoned","delivery_stopped":false},
+        "intent":{"role":"config_recovery_intent","attribution":null,
+                  "payload_json":[123,34,107,105,110,100,34,58,34,115,101,116,116,
+                                  108,101,46,114,101,99,111,118,101,114,121,34,
+                                  44,34,114,111,111,116,34,58,116,114,117,101,125],
+                  "caller_digest":"ff808f85a5675af934e1b28062a14b401766191c37dc3c9cdab3439790873a48",
+                  "delivered":true,"parked":null},"records":[]
+    }]
+}"#;

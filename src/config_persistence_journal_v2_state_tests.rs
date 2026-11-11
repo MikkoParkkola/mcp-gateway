@@ -107,6 +107,131 @@ fn terminal_blocks_finish() {
         );
         drop(watching);
     }
+
+    let mut failures = Vec::new();
+    for terminal_role in [TerminalRole::Outcome, TerminalRole::Abandoned] {
+        for (case, case_id) in [
+            ("result mismatch", "G2_result_mismatch"),
+            ("reason mismatch", "G2_reason_mismatch"),
+            ("equal terminal collapse", "K1_equal_terminal_collapse"),
+            ("conflicting terminal payload", "K1_conflicting_terminal_payload"),
+            ("conflicting terminal attribution", "K1_conflicting_terminal_attribution"),
+            ("conflicting terminal caller digest", "K1_conflicting_terminal_caller_digest"),
+        ] {
+            let case_id = format!("{terminal_role:?}_{case_id}");
+            let expected = if case == "equal terminal collapse" {
+                "finish=Ok(()), both artifacts removed, ordered and synced cleanup"
+            } else {
+                "finish=Err(Finish), unchanged journal/state/original, no cleanup events"
+            };
+            collect_case(&mut failures, ROW, &case_id, expected, || {
+                let (dir, path, locked) = config();
+                let mut state = intended(dir.path());
+                state.phase = Phase::Staged;
+                state.new_revision = Some(FileRevision::of(NEW));
+                let writer = state.writer.as_mut().ok_or("missing fixture writer")?;
+                writer.intent.delivered = true;
+                writer.intent_counter = Some(7);
+                let (role, mut choice, payload) = match terminal_role {
+                    TerminalRole::Outcome => (
+                        Role::Outcome,
+                        decision(ResultClass::NotWritten, Reason::Refused),
+                        json!({
+                            "kind": "settle.save", "result": "not_written", "reason": "refused",
+                            "intent_counter": 7,
+                        }),
+                    ),
+                    TerminalRole::Abandoned => (
+                        Role::Abandoned,
+                        decision(ResultClass::Unproven, Reason::Abandoned),
+                        json!({
+                            "kind": "settle.save", "result": "unproven", "reason": "abandoned",
+                            "intent_counter": 7,
+                        }),
+                    ),
+                };
+                choice.terminal = terminal_role;
+                writer.decision = Some(choice);
+                let mut terminal = frozen(&writer.token.0, role, payload.clone());
+                terminal.delivered = true;
+                if matches!(case, "result mismatch" | "reason mismatch") {
+                    let mut changed = payload;
+                    if case == "result mismatch" {
+                        changed["result"] = match terminal_role {
+                            TerminalRole::Outcome => json!("written"),
+                            TerminalRole::Abandoned => json!("not_written"),
+                        };
+                    } else {
+                        changed["reason"] = json!("writer_died");
+                    }
+                    terminal = frozen(&writer.token.0, role, changed);
+                    terminal.delivered = true;
+                    writer.records = vec![terminal];
+                } else {
+                    let mut retry = terminal.clone();
+                    match case {
+                        "conflicting terminal payload" => {
+                            let mut changed = payload;
+                            changed["reason"] = json!("writer_died");
+                            // Equal digests alone must not hide different frozen payload bytes.
+                            retry.payload_json = serde_json::to_vec(&changed)
+                                .map_err(|error| format!("payload encoding error: {error:?}"))?;
+                        }
+                        "conflicting terminal attribution" => {
+                            retry.attribution = Some(Attribution {
+                                actor: crate::security::audit::AuditWho::from_persisted(
+                                    AUDIT_WHO_PRINCIPAL,
+                                )
+                                .map_err(|error| format!("attribution error: {error:?}"))?,
+                            });
+                        }
+                        "conflicting terminal caller digest" => {
+                            retry.caller_digest = "0".repeat(64);
+                        }
+                        _ => {}
+                    }
+                    writer.records = vec![terminal, retry];
+                }
+                journal::stage_original(&path, OLD)
+                    .map_err(|error| format!("stage original error: {error:?}"))?;
+                let mut owner = session(&locked, state.clone());
+                let before = std::fs::read(journal::journal_path(&path))
+                    .map_err(|error| format!("read journal error: {error:?}"))?;
+                let watching = observe::watch(&path);
+                let finished = owner.finish();
+                let events = observe::events(&path);
+                let journal_after = std::fs::read(journal::journal_path(&path));
+                let original_after = std::fs::read(journal::original_path(&path));
+                let state_retained = owner.state == state;
+                let journal_retained = journal_after.as_ref().is_ok_and(|after| after == &before);
+                let original_retained = original_after.as_ref().is_ok_and(|after| after == OLD);
+                let removed = matches!(&journal_after, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+                    && matches!(&original_after, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
+                let passed = if case == "equal terminal collapse" {
+                    finished == Ok(()) && removed && events == vec![
+                        Event::OriginalUnlinked, Event::JournalUnlinked, Event::DirectorySynced,
+                    ]
+                } else {
+                    finished == Err(JournalError::Finish) && journal_retained
+                        && state_retained && original_retained && events.is_empty()
+                };
+                drop(watching);
+                if passed {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "finish={finished:?}, artifacts_removed={removed}, \
+                         journal_retained={journal_retained}, state_retained={state_retained}, \
+                         original_retained={original_retained}, events={events:?}",
+                    ))
+                }
+            });
+        }
+    }
+    assert!(
+        failures.is_empty(), "{ROW}: {} case(s) failed:\n{}",
+        failures.len(), failures.join("\n"),
+    );
 }
 
 #[test]

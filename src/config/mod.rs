@@ -81,7 +81,7 @@ pub(crate) use secret_ref::{is_keychain_name, is_reference, is_template_syntax};
 pub(crate) use secret_file::Protects;
 pub(crate) use secret_file::{
     CheckedFile, UnreadConfig, read_checked_bytes, read_checked_file, read_config_text,
-    read_recovery_text,
+    read_recovery_journal_v2, read_recovery_text,
 };
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.

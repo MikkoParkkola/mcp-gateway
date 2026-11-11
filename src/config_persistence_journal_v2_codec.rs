@@ -5,6 +5,14 @@
 use super::*;
 use serde_json::Value;
 
+pub(super) fn terminal_matches(record: &FrozenRecord, decision: &Decision) -> bool {
+    let Ok(Value::Object(mut payload)) = serde_json::from_slice(&record.payload_json) else { return false; };
+    payload.remove("result").and_then(|value| serde_json::from_value::<ResultClass>(value).ok())
+        == Some(decision.result)
+        && payload.remove("reason").and_then(|value| serde_json::from_value::<Reason>(value).ok())
+            == Some(decision.reason)
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Wire {
