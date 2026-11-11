@@ -432,7 +432,24 @@ impl TransparencyLogger {
     #[cfg(not(test))]
     #[allow(clippy::unused_self)]
     fn injected_sync(&self, inner: &mut Inner) -> io::Result<()> {
-        inner.file.sync_all()
+        self.durable(&inner.file)
+    }
+
+    /// The one place an acknowledged append reaches the disk; the test build
+    /// counts each successful call so a path that skips it fails a row.
+    #[cfg(not(test))]
+    fn durable(&self, file: &std::fs::File) -> io::Result<()> {
+        let _ = self;
+        file.sync_all()
+    }
+
+    #[cfg(test)]
+    fn durable(&self, file: &std::fs::File) -> io::Result<()> {
+        file.sync_all().inspect(|()| {
+            self.hooks
+                .syncs_done
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        })
     }
 
     /// The seam: a fault writes a partial prefix and returns ENOSPC.
@@ -495,13 +512,7 @@ impl TransparencyLogger {
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             return Err(io::Error::other("injected expiry sync failure"));
         }
-        let synced = inner.file.sync_all();
-        if synced.is_ok() {
-            self.hooks
-                .syncs_done
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        }
-        synced
+        self.durable(&inner.file)
     }
 
     fn mark_hwm(&self, inner: &Inner, path: &Path, sync: bool) {
