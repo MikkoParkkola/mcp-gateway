@@ -12,12 +12,19 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 #[derive(Debug, Default)]
 pub(crate) struct TestDirKeep {
     dir: OnceLock<Arc<tempfile::TempDir>>,
+    /// Separate from explicit keeps; the worker guard will read this in phase 2.
+    registered: OnceLock<Found>,
     /// Set by the gateway's own openers: a test that builds a gateway never
     /// holds the store, so it has nothing to keep it with.
     opened_by_gateway: AtomicBool,
 }
 
 impl TestDirKeep {
+    /// Attach the ownership found before a gateway opens its store.
+    pub(crate) fn attach_registered(&self, _found: Found) {
+        panic!("not built")
+    }
+
     /// The gateway opened this store, not a test.
     pub(crate) fn opened_by_gateway(&self) {
         self.opened_by_gateway.store(true, Ordering::Relaxed);
@@ -51,6 +58,29 @@ impl TestDirKeep {
             );
         }
     }
+}
+
+/// Directory ownership held across a gateway store open.
+#[derive(Debug)]
+pub(crate) struct Found {
+    dirs: Vec<Arc<tempfile::TempDir>>,
+    parent_kept: bool,
+}
+
+impl Found {
+    pub(crate) fn holds_anything(&self) -> bool {
+        panic!("not built")
+    }
+}
+
+/// Look up registered dirs and the parent's current kept-dir declaration.
+pub(crate) fn registered_for(_path: &Path) -> Found {
+    panic!("not built")
+}
+
+/// Lookup with an explicit parsed parent list, without changing process env.
+pub(crate) fn registered_for_in(_path: &Path, _external: &[std::path::PathBuf]) -> Found {
+    panic!("not built")
 }
 
 // The registry of kept temp dirs. A transparency log opened
@@ -331,6 +361,10 @@ pub(crate) fn run_before_first_fs_call() {
 
 #[path = "test_dir_keep_registry_tests.rs"]
 mod registry_tests;
+
+#[cfg(test)]
+#[path = "test_dir_keep_registered_tests.rs"]
+mod registered_tests;
 
 #[cfg(test)]
 mod tests {
