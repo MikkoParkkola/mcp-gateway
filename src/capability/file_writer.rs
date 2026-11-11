@@ -360,16 +360,10 @@ fn refuse_literal_headers(text: &str) -> Result<(), Refused> {
         // Syntax errors remain the normal validator's responsibility.
         return Ok(());
     };
-    let parameters: std::collections::HashSet<String> = doc["schema"]["input"]["properties"]
-        .as_mapping()
-        .map(|properties| {
-            properties
-                .keys()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
+    let parameters = crate::validator::schema_helpers::input_property_names(&serde_json::json!({
+        "properties": crate::yaml::to_json(doc["schema"]["input"]["properties"].untag_ref())
+    }));
+    let syntax = Syntax::Brace { parameters };
     let mut errors = Vec::new();
     let mut check = |name: &str, provider: &Value| {
         let Some(headers) = provider["config"]["headers"].as_mapping() else {
@@ -381,12 +375,24 @@ fn refuse_literal_headers(text: &str) -> Result<(), Refused> {
             };
             if credential_name(header)
                 && !value.as_str().is_some_and(|value| {
-                    classify(
-                        value,
-                        &Syntax::Brace {
-                            parameters: parameters.clone(),
-                        },
-                    ) == Ok(ValueClass::Kept)
+                    let mut static_literal = false;
+                    let _ = crate::secrets::fill_placeholders(value, |key| {
+                        // Secrets take precedence over the executor's exact-key
+                        // parameter lookup; substituted values are not rescanned.
+                        if !key.starts_with("env.")
+                            && !key.starts_with("keychain.")
+                            && let Some(value) = provider["config"]["static_params"].get(key)
+                        {
+                            let value = match value.untag_ref() {
+                                Value::String(s) => s.clone(),
+                                Value::Null => String::new(),
+                                value => crate::yaml::to_json(value).to_string(),
+                            };
+                            static_literal |= classify(&value, &syntax) != Ok(ValueClass::Kept);
+                        }
+                        Ok(None)
+                    });
+                    classify(value, &syntax) == Ok(ValueClass::Kept) && !static_literal
                 })
             {
                 errors.push(FieldError {
@@ -398,20 +404,71 @@ fn refuse_literal_headers(text: &str) -> Result<(), Refused> {
             }
         }
     };
-    if let Some(providers) = doc["providers"].as_mapping() {
-        for (name, provider) in providers {
-            let Some(name) = name.as_str() else {
-                continue;
-            };
-            if name == "fallback"
-                && let Some(entries) = provider.as_sequence()
-            {
-                for (index, entry) in entries.iter().enumerate() {
-                    check(&format!("fallback[{index}]"), entry);
-                }
-            } else {
-                check(name, provider);
+    // String deserialization keeps the loader's scalar source text (even
+    // `TRUE` or `0x7b`), which a Value tree has already normalized.
+    #[derive(serde::Deserialize)]
+    struct NamedProviders {
+        #[serde(deserialize_with = "provider_entries")]
+        providers: Vec<(String, Value)>,
+    }
+    fn provider_entries<'de, D: serde::Deserializer<'de>>(
+        de: D,
+    ) -> Result<Vec<(String, Value)>, D::Error> {
+        struct Entries;
+        impl<'de> serde::de::Visitor<'de> for Entries {
+            type Value = Vec<(String, Value)>;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a provider mapping")
             }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<Self::Value, M::Error> {
+                let mut entries = Vec::new();
+                while let Some(entry) = map.next_entry()? {
+                    entries.push(entry);
+                }
+                Ok(entries)
+            }
+        }
+        de.deserialize_map(Entries)
+    }
+    let named = crate::yaml::from_str::<NamedProviders>(text).ok();
+    let providers: Vec<_> = if let Some(named) = &named {
+        named
+            .providers
+            .iter()
+            .map(|(k, v)| (k.clone(), v))
+            .collect()
+    } else {
+        // A malformed unrelated key must not hide a header from inspection.
+        doc.as_mapping()
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| key.untag_ref().as_str() == Some("providers"))
+            .filter_map(|(_, value)| value.as_mapping())
+            .flatten()
+            .map(|(name, provider)| {
+                let name = match name.untag_ref() {
+                    Value::String(s) => s.clone(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Number(n) => n.to_string(),
+                    Value::Null => "null".to_string(),
+                    _ => "[non-scalar]".to_string(),
+                };
+                (name, provider)
+            })
+            .collect()
+    };
+    for (name, provider) in providers {
+        if name == "fallback"
+            && let Some(entries) = provider.as_sequence()
+        {
+            for (index, entry) in entries.iter().enumerate() {
+                check(&format!("fallback[{index}]"), entry);
+            }
+        } else {
+            check(&name, provider);
         }
     }
     if errors.is_empty() {

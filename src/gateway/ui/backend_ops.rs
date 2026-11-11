@@ -289,26 +289,7 @@ fn command_carries_credential(command: &str) -> bool {
     })
 }
 
-pub(crate) use crate::config::secret_values::{ValueClass, classify};
-
-/// Each refused `env`/`headers` value of `backend` as `(code, field)`, sorted
-/// by field; the value itself is never part of it.
-pub(crate) fn literal_refusals(
-    backend: &crate::config::BackendConfig,
-) -> Vec<(&'static str, String)> {
-    let env = backend.env.iter().map(|(k, v)| ("env", k, v));
-    let headers = backend.headers.iter().map(|(k, v)| ("headers", k, v));
-    let mut refused: Vec<_> = env
-        .chain(headers)
-        .filter_map(|(map, key, value)| {
-            classify(value, &Syntax::Dollar)
-                .err()
-                .map(|code| (code, format!("{map}.{key}")))
-        })
-        .collect();
-    refused.sort_by(|a, b| a.1.cmp(&b.1));
-    refused
-}
+pub(crate) use crate::config::secret_values::{ValueClass, classify, literal_refusals};
 
 /// The add's refusal for a refused value: names each field and code, never
 /// a value, and carries [`LITERAL_IN_VALUE`].

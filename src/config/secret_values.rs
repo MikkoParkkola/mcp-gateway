@@ -80,7 +80,24 @@ fn classify_brace(value: &str, parameters: &HashSet<String>) -> ValueClass {
     }
     let mut found = false;
     let outside = crate::secrets::fill_placeholders(value, |name| {
-        let known = !name.contains('?') && is_known_placeholder(name, parameters);
+        // A reference is a real name, never a name followed by text: env names
+        // and a final bare empty default; keychain services and OAuth names
+        // are letters, digits, `_`, `-` and `.`. Anything else is literal text.
+        let word = |s: &str, extra: &[u8]| {
+            !s.is_empty()
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || extra.contains(&b))
+        };
+        let reference = if let Some(env) = name.strip_prefix("env.") {
+            word(env.strip_suffix(":-").unwrap_or(env), b"")
+        } else if let Some(service) = name.strip_prefix("keychain.") {
+            word(service, b"-.")
+        } else if let Some(oauth) = name.strip_prefix("oauth.") {
+            word(oauth, b"-.")
+        } else {
+            is_known_placeholder(name, parameters)
+        };
+        let known = !name.contains('?') && reference;
         found |= known;
         Ok(known.then(String::new))
     });
@@ -104,6 +121,25 @@ pub(crate) fn credential_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     ["authorization", "proxy_authorization", "cookie"].contains(&lower.as_str())
         || names_a_credential(&name)
+}
+
+/// Each refused `env`/`headers` value of `backend` as `(code, field)`, sorted
+/// by field; the value itself is never part of it.
+pub(crate) fn literal_refusals(
+    backend: &crate::config::BackendConfig,
+) -> Vec<(&'static str, String)> {
+    let env = backend.env.iter().map(|(k, v)| ("env", k, v));
+    let headers = backend.headers.iter().map(|(k, v)| ("headers", k, v));
+    let mut refused: Vec<_> = env
+        .chain(headers)
+        .filter_map(|(map, key, value)| {
+            classify(value, &Syntax::Dollar)
+                .err()
+                .map(|code| (code, format!("{map}.{key}")))
+        })
+        .collect();
+    refused.sort_by(|a, b| a.1.cmp(&b.1));
+    refused
 }
 
 /// Words an env key may end with, beyond the firewall's own credential names,
