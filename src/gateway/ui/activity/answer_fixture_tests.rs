@@ -104,6 +104,26 @@ impl Fixture {
         }
     }
 
+    /// The same log reopened by a gateway that now holds `secret`: what is
+    /// already in it stays as written (unsigned), what is appended is signed.
+    pub(super) fn reopened_with(&self, secret: &'static str) -> Self {
+        let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: self.path.to_string_lossy().into_owned(),
+            key_id: "test".into(),
+            shared_secret: secret.into(),
+            rotation: RotationConfig::default(),
+        }))
+        .unwrap();
+        logger.keep_test_dir(Arc::clone(&self._dir));
+        Self {
+            _dir: Arc::clone(&self._dir),
+            path: self.path.clone(),
+            logger,
+            secret: Some(secret),
+        }
+    }
+
     #[expect(
         clippy::unused_self,
         reason = "a fixture reads as `fx.access()`; every row here reads as an admin"
