@@ -25,7 +25,9 @@ fn bounded<T: Send + 'static>(handle: thread::JoinHandle<T>, what: &str) -> T {
     match rx.recv_timeout(Duration::from_secs(10)) {
         Ok(Ok(value)) => value,
         Ok(Err(payload)) => panic!("{what} panicked: {payload:?}"),
-        Err(_) => panic!("{what} did not finish in 10 s: the stop and a sender wait on each other"),
+        Err(waited) => panic!(
+            "{what} did not finish in 10 s ({waited}): a stop and a sender wait on each other"
+        ),
     }
 }
 
@@ -55,14 +57,21 @@ fn a_stop_drains_every_accepted_line_in_order_and_joins() {
 
 #[test]
 fn a_clone_cannot_enqueue_once_the_writer_is_stopped() {
-    let (w, f, out) = scripted(vec![]);
+    // The writer is parked inside its sink, so it is alive and could still take
+    // a line: only the closed flag can refuse the late one.
+    let (w, f, gate, out) = parked(64, 1 << 20);
     let clone = w.clone();
-    line(&w, "before");
-    let outcome = f.stop_and_join(soon());
-    assert!(matches!(outcome, StopOutcome::Joined(_)), "{outcome:?}");
-    let before = clone.dropped_lines();
+    line(&w, "first");
+    assert!(gate.wait_entered(), "the writer is parked inside the sink");
+    let outcome = f.stop_and_join(Instant::now());
+    let StopOutcome::NotJoined(worker) = outcome else {
+        panic!("a parked worker is not joined: {outcome:?}");
+    };
     line(&clone, "after");
-    assert_eq!(clone.dropped_lines(), before + 1, "a late line is counted");
+    assert_eq!(clone.dropped_lines(), 1, "a late line is counted");
+    assert_eq!(clone.queued_bytes(), 0, "and never queued");
+    gate.open();
+    bounded(worker, "the kept worker");
     assert!(!out.text().contains("after"), "{}", out.text());
 }
 
@@ -84,10 +93,7 @@ fn a_blocked_sink_and_a_full_queue_end_the_stop_at_the_deadline_with_the_worker_
         panic!("a parked worker is not joined: {outcome:?}");
     };
     gate.open();
-    assert!(
-        worker.join().is_ok(),
-        "the kept worker ends once the sink moves"
-    );
+    bounded(worker, "the kept worker");
 }
 
 struct PanicSink;
