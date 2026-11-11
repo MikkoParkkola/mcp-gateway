@@ -111,7 +111,11 @@ fn a_send_that_starts_after_the_close_does_not_hold_the_writer_up() {
         thread::spawn(move || line(&w, "late"))
     };
     // The late send either parks after registering or, when the close is
-    // checked first, returns at once: neither may keep the writer waiting.
+    // checked first, returns at once: neither may keep the writer waiting. Wait
+    // until it has done one or the other before the writer is let go.
+    wait_until("the late send parked or returned", || {
+        late_gate.has_entered() || late.is_finished()
+    });
     sink_gate.open();
     bounded(worker, "the kept worker");
     late_gate.open();
