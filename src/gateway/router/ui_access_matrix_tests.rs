@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 use super::tests::test_router_app_state_with_auth_and_key_server;
-use super::ui_access_matrix_rows::{self, Attributes, Loaded};
+use super::ui_access_matrix_test_rows::{self, Attributes, Loaded};
 use super::{AppState, create_router};
 use crate::config::{ApiKeyConfig, AuthConfig};
 use crate::control_plane::ControlPlaneRole;
@@ -286,7 +286,7 @@ fn session(state: &AppState) -> String {
 /// One immutable expectation shared by the probe and its dependent tests.
 fn loaded() -> &'static Loaded {
     static LOADED: OnceLock<Loaded> = OnceLock::new();
-    LOADED.get_or_init(ui_access_matrix_rows::rows)
+    LOADED.get_or_init(ui_access_matrix_test_rows::rows)
 }
 
 /// Every fragment path, except costs when that feature is disabled.
@@ -735,5 +735,5 @@ mod backend_scope;
 mod pinned_mapping;
 
 /// Reloadable mismatch blocks and shared-body divergence diagnostics.
-#[path = "ui_access_matrix_output.rs"]
+#[path = "ui_access_matrix_test_output.rs"]
 mod output;

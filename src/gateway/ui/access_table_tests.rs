@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use super::{PAGES, ROWS, TABS, Verb};
-use crate::gateway::router::ui_access_matrix_rows;
+use crate::gateway::router::ui_access_matrix_test_rows;
 use crate::gateway::routes;
 
 /// The (path, verb) pairs the router answers, read from the pinned matrix:
@@ -15,7 +15,7 @@ use crate::gateway::routes;
 /// the live stream, which the matrix cannot probe (its body never ends).
 fn registered() -> BTreeSet<(String, Verb)> {
     let stream = (routes::UI_STREAM.to_string(), Verb::Get);
-    ui_access_matrix_rows::rows()
+    ui_access_matrix_test_rows::rows()
         .files
         .into_iter()
         .flat_map(|file| file.rows)

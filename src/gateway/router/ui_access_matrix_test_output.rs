@@ -5,7 +5,7 @@
 use std::fmt::Write as _;
 
 use super::{Matrix, routes};
-use crate::gateway::router::ui_access_matrix_rows::Loaded;
+use crate::gateway::router::ui_access_matrix_test_rows::Loaded;
 
 pub(super) fn check_coverage(loaded: &Loaded, computed: &Matrix) -> Result<(), String> {
     for file in &loaded.files {
@@ -71,7 +71,7 @@ pub(super) fn render(loaded: &Loaded, computed: &Matrix) -> (String, Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::router::ui_access_matrix_rows::{
+    use crate::gateway::router::ui_access_matrix_test_rows::{
         Attributes, Fragment, NamedBody, load_from,
     };
 

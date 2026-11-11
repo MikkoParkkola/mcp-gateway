@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::ui_access_matrix_rows::{Attributes, Loaded, load_from, rows};
+use super::ui_access_matrix_test_rows::{Attributes, Loaded, load_from, rows};
 
 const OLD_ROW_COUNT: usize = 10890;
 const BODY: &str = "refused\tde6b55925ef7\tshared refusal body\n";
