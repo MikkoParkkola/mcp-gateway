@@ -26,6 +26,7 @@ pub(super) enum Event {
     DecisionProposed,
     OutcomeAppended,
     DeferredFlagged,
+    #[cfg(unix)]
     AfterTornWrite,
     RepairPaused,
 }
