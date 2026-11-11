@@ -214,9 +214,11 @@ fn a_parked_sender_and_a_full_queue_still_end_the_stop_at_the_deadline() {
     let StopOutcome::NotJoined(worker) = outcome else {
         panic!("a parked worker is not joined: {outcome:?}");
     };
+    // The sender finishes against the still-full queue before the sink moves,
+    // so the writer cannot make room for it first.
     sender_gate.open();
-    sink_gate.open();
     bounded(sender, "the sender");
+    sink_gate.open();
     bounded(worker, "the kept worker");
     let (notes, data): (Vec<String>, Vec<String>) =
         kept(&out).into_iter().partition(|l| l.contains("dropped "));
