@@ -74,7 +74,7 @@ fn a_blocked_sink_and_a_full_queue_end_the_stop_at_the_deadline_with_the_worker_
     line(&w, "b");
     line(&w, "c");
     let started = Instant::now();
-    let outcome = f.stop_and_join(Instant::now() + Duration::from_millis(300));
+    let outcome = f.stop_and_join(Instant::now());
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "the stop is bounded"
@@ -156,31 +156,32 @@ fn only_a_joined_stop_permits_exec() {
 
 /// The one race a stop has: a line already past the closed check when the stop
 /// begins. It must reach the sink, not vanish between the drain and the exit.
+/// The writer is parked after its drain pass and the sender is released while
+/// it is parked, so no clock decides which of the two comes first.
 #[test]
 fn a_send_in_flight_when_the_stop_begins_is_written_not_lost() {
     let (w, f, out) = scripted(vec![]);
-    let gate = Gate::closed();
-    w.park_after_check(&gate);
+    let check_gate = Gate::closed();
+    let drain_gate = Gate::closed();
+    w.park_after_check(&check_gate);
+    w.park_after_drain(&drain_gate);
     let sender = {
         let w = w.clone();
         thread::spawn(move || line(&w, "racing"))
     };
-    assert!(gate.wait_entered(), "the sender is past the closed check");
+    assert!(
+        check_gate.wait_entered(),
+        "the sender is past the closed check"
+    );
     let stopper = thread::spawn(move || f.stop_and_join(Instant::now() + WATCHDOG));
-    let until = Instant::now() + WATCHDOG;
-    while !w.is_closed() {
-        assert!(Instant::now() < until, "the stop never closed admission");
-        thread::yield_now();
-    }
-    // A writer that does not wait for the sender has exited well inside this
-    // grace; one that waits for it is still waiting when the grace ends.
-    let grace = Instant::now() + Duration::from_millis(300);
-    while !stopper.is_finished() && Instant::now() < grace {
-        thread::sleep(Duration::from_millis(5));
-    }
-    gate.open();
-    sender.join().expect("the sender returned");
-    let outcome = stopper.join().expect("the stop returned");
+    assert!(
+        drain_gate.wait_entered(),
+        "the writer finished a drain pass"
+    );
+    check_gate.open();
+    bounded(sender, "the sender");
+    drain_gate.open();
+    let outcome = bounded(stopper, "the stop");
     assert!(matches!(outcome, StopOutcome::Joined(_)), "{outcome:?}");
     assert_eq!(kept(&out), ["racing"], "the in-flight line was written");
     assert_eq!(w.dropped_lines(), 0, "and nothing was dropped");
@@ -209,7 +210,7 @@ fn a_parked_sender_and_a_full_queue_still_end_the_stop_at_the_deadline() {
         "the sender is past the closed check"
     );
     let started = Instant::now();
-    let outcome = f.stop_and_join(Instant::now() + Duration::from_millis(300));
+    let outcome = f.stop_and_join(Instant::now());
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "the stop is bounded"

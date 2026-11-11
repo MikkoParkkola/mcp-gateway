@@ -54,6 +54,9 @@ struct Shared {
     /// Test hook: parks a send that has passed the closed check.
     #[cfg(test)]
     after_check: std::sync::Mutex<Option<test_sinks::Gate>>,
+    /// Test hook: parks the writer after a drain pass of the terminal stop.
+    #[cfg(test)]
+    after_drain: std::sync::Mutex<Option<test_sinks::Gate>>,
 }
 
 /// The `MakeWriter` for the fmt layer: each event's line goes to the queue.
@@ -93,6 +96,8 @@ pub(crate) fn spawn(
         inflight: AtomicUsize::new(0),
         #[cfg(test)]
         after_check: std::sync::Mutex::new(None),
+        #[cfg(test)]
+        after_drain: std::sync::Mutex::new(None),
     });
     let for_thread = Arc::clone(&shared);
     let worker = thread::Builder::new()
@@ -163,6 +168,12 @@ impl LossyStderr {
     #[cfg(test)]
     pub(crate) fn park_after_check(&self, gate: &test_sinks::Gate) {
         *self.shared.after_check.lock().expect("hook") = Some(gate.clone());
+    }
+
+    /// Park the writer at `gate` after each drain pass of the terminal stop.
+    #[cfg(test)]
+    pub(crate) fn park_after_drain(&self, gate: &test_sinks::Gate) {
+        *self.shared.after_drain.lock().expect("hook") = Some(gate.clone());
     }
 
     #[cfg(test)]
@@ -356,6 +367,13 @@ fn run(
     loop {
         while let Ok(msg) = rx.try_recv() {
             reported = serve(msg, &mut out, shared, reported, format);
+        }
+        #[cfg(test)]
+        {
+            let gate = shared.after_drain.lock().expect("hook").clone();
+            if let Some(gate) = gate {
+                gate.pass();
+            }
         }
         if shared.inflight.load(Ordering::SeqCst) == 0 {
             break;
