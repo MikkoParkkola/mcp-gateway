@@ -38,6 +38,19 @@ pub(crate) fn check_lock(lock: &Value) -> Result<(), Refusal> {
         if linked || !(registry || ((key.is_empty() || bundled) && resolved.is_none())) {
             return Err(not_registry(key));
         }
+        // A peer is installed by npm 7 or later like any dependency, so its
+        // spec must be a registry range too. Reachability is not checked: an
+        // optional peer may be absent from the lock.
+        for (peer, range) in entry
+            .get("peerDependencies")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            if !range.as_str().is_some_and(registry_range) {
+                return Err(not_registry(&format!("{peer} of {}", shown(key))));
+            }
+        }
         for field in ["dependencies", "optionalDependencies"] {
             let Some(deps) = entry.get(field).and_then(Value::as_object) else {
                 continue;
@@ -70,20 +83,24 @@ fn registry_range(range: &str) -> bool {
                 },
                 None => alias,
             };
-            let (name, version) = unscoped.split_once('@').unwrap_or((unscoped, ""));
-            name_part(name) && semver(version)
+            // An alias without a version takes npm's default registry range.
+            let (name, version) = unscoped
+                .split_once('@')
+                .map_or((unscoped, None), |(name, version)| (name, Some(version)));
+            name_part(name) && version.is_none_or(semver)
         }
         None => semver(range),
     }
 }
 
 fn semver(range: &str) -> bool {
-    // npm treats leading dots and archive suffixes as files, including in aliases.
-    !range.is_empty()
-        && !range.starts_with('.')
+    // npm treats leading dots and archive suffixes (in any letter case) as
+    // files, including in aliases; the empty range is its default `*`.
+    let lower = range.to_ascii_lowercase();
+    !range.starts_with('.')
         && ![".tgz", ".tar", ".tar.gz"]
             .into_iter()
-            .any(|suffix| range.ends_with(suffix))
+            .any(|suffix| lower.ends_with(suffix))
         && range
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || ".+-^~<>=| *".contains(c))
