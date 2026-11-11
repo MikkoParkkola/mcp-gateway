@@ -1,0 +1,2 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/ui/backends.rs	update_backend	refuse_update	1	no-record	admin UI backend update: an invalid tool list, both command and URL, or a credential in either is refused before any write, no call delivery

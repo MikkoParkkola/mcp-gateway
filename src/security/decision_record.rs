@@ -176,13 +176,70 @@ impl From<Refusal> for RefusedBy {
     }
 }
 
+/// How strongly a check's allow names the call's decider: lower wins, and
+/// two notes of the same rank keep the earlier one. Declared in rank order,
+/// so the derived `Ord` is the rank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum AllowRank {
+    /// A firewall rule that let through a finding whose default is to block.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    FirewallSoftenedBlock,
+    /// A matched identity grant.
+    Grant,
+    /// A matched mTLS rule that allowed.
+    Mtls,
+    /// A tool-policy allow-list entry.
+    ToolPolicy,
+    /// Any other firewall rule that let a finding through.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    FirewallAllow,
+    /// A call answered without deciding it again.
+    NotRedecided,
+}
+
+impl AllowRank {
+    /// The decision kind a record names for an allow of this rank.
+    pub(crate) const fn kind(self) -> DecisionKind {
+        match self {
+            Self::FirewallSoftenedBlock | Self::FirewallAllow => DecisionKind::Firewall,
+            Self::Grant => DecisionKind::Grant,
+            Self::Mtls => DecisionKind::Mtls,
+            Self::ToolPolicy => DecisionKind::ToolPolicy,
+            Self::NotRedecided => DecisionKind::NotRedecided,
+        }
+    }
+}
+
+/// One check's explicit allow: its rank, the configured rule that allowed
+/// and, for a grant, the matched grant's id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Allow {
+    pub rank: AllowRank,
+    pub rule_id: Option<crate::security::rule_id::RuleId>,
+    pub grant_id: Option<String>,
+}
+
+impl Allow {
+    /// An allow of `rank` by `rule_id`, naming no grant.
+    pub(crate) const fn by(
+        rank: AllowRank,
+        rule_id: Option<crate::security::rule_id::RuleId>,
+    ) -> Self {
+        Self {
+            rank,
+            rule_id,
+            grant_id: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Noted(Option<Box<NotedChecks>>);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct NotedChecks {
     refusal: Option<Refusal>,
-    allow: Option<(DecisionKind, Option<crate::security::rule_id::RuleId>)>,
+    allow: Option<Allow>,
     effect: Option<(Effect, EffectSource)>,
 }
 
@@ -190,7 +247,7 @@ impl Noted {
     /// A call answered without deciding it again (a replay, a cache hit).
     pub(crate) fn not_redecided() -> Self {
         let mut noted = Self::default();
-        noted.allowed(DecisionKind::NotRedecided, None);
+        noted.allowed(Allow::by(AllowRank::NotRedecided, None));
         noted
     }
 
@@ -227,13 +284,13 @@ impl Noted {
         self.checks().refusal.get_or_insert((kind, rule_id));
     }
 
-    /// An explicit allow; only the earliest in check order counts.
-    pub(crate) fn allowed(
-        &mut self,
-        kind: DecisionKind,
-        rule_id: Option<crate::security::rule_id::RuleId>,
-    ) {
-        self.checks().allow.get_or_insert((kind, rule_id));
+    /// An explicit allow: the lowest rank is kept, and of two equal ranks the
+    /// earlier note (a later note replaces only on a strictly lower rank).
+    pub(crate) fn allowed(&mut self, allow: Allow) {
+        let held = &mut self.checks().allow;
+        if held.as_ref().is_none_or(|kept| allow.rank < kept.rank) {
+            *held = Some(allow);
+        }
     }
 
     /// What the tool declares the call could change, as this call read it.
@@ -263,13 +320,15 @@ impl Noted {
         refused: Refused,
         live: Option<&crate::config_reload::LiveConfig>,
     ) -> Decision {
-        let (kind, rule_id) = match (self.refusal(), refused) {
-            (Some(refusal), _) => refusal.clone(),
+        let ((kind, rule_id), grant_id) = match (self.refusal(), refused) {
+            (Some(refusal), _) => (refusal.clone(), None),
             (None, Refused::No) => self
                 .0
                 .as_ref()
                 .and_then(|checks| checks.allow.clone())
-                .unwrap_or((DecisionKind::DefaultAllow, None)),
+                .map_or(((DecisionKind::DefaultAllow, None), None), |allow| {
+                    ((allow.rank.kind(), allow.rule_id), allow.grant_id)
+                }),
             // Kani's assert macros drop the message, so `outcome` reads as
             // unused in its build only.
             #[cfg_attr(
@@ -283,7 +342,7 @@ impl Noted {
                     self.has_refusal(),
                     "a refused call ({outcome:?}) noted no check (MIK-8914.API2A.7)"
                 );
-                (DecisionKind::Unrecorded, None)
+                ((DecisionKind::Unrecorded, None), None)
             }
         };
         let applied = live.and_then(crate::config_reload::LiveConfig::applied_now);
@@ -301,7 +360,7 @@ impl Noted {
                 .unwrap_or_default(),
             kind,
             rule_id: rule_id.map(|id| id.as_str().to_owned()),
-            grant_id: None,
+            grant_id,
             request_findings: None,
             request_findings_truncated: false,
             declared_effect: self.0.as_deref().and_then(|c| c.effect.map(|(e, _)| e)),
@@ -321,6 +380,10 @@ pub(crate) mod read;
 #[cfg(test)]
 #[path = "decision_record_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "decision_record_allow_tests.rs"]
+mod allow_tests;
 
 #[cfg(test)]
 #[path = "decision_record_read_tests.rs"]

@@ -133,7 +133,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 |---|---|---|---|---|---|
 | `(global)` | 13 |  | `mcp-gateway --protocol-revision-window` |  |  |
 | `accounts` | 13 |  |  |  |  |
-| `add` | 11 |  |  |  | `mcp-gateway add --config`; `mcp-gateway add -c` |
+| `add` | 13 |  |  |  | `mcp-gateway add --config`; `mcp-gateway add -c` |
 | `api` | 13 |  |  |  |  |
 | `audit` | 17 |  |  |  |  |
 | `cap` | 73 |  |  |  |  |
@@ -188,7 +188,7 @@ counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
 | `/metrics` | 1 |  |  |  |  |
 | `/readyz` | 1 |  |  |  |  |
 | `/sse` |  |  |  | `/sse` |  |
-| `/ui` | 3 |  |  | `/ui/api/activity`; `/ui/api/activity/export`; `/ui/api/activity/{id}`; `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/backends/{name}/signin`; `/ui/api/backends/{name}/signin/confirm`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/capabilities/{name}/validate`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/decisions`; `/ui/api/decisions/count`; `/ui/api/discovery`; `/ui/api/discovery/adopt`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/events/leases`; `/ui/api/gateway`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/keys`; `/ui/api/markers`; `/ui/api/metrics/series`; `/ui/api/overview`; `/ui/api/policies`; `/ui/api/previews`; `/ui/api/refusals`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/stream`; `/ui/api/tools`; `/ui/api/tools/call`; `/ui/assets/{file}` |  |
+| `/ui` | 3 |  |  | `/ui/api/activity`; `/ui/api/activity/export`; `/ui/api/activity/{id}`; `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/backends/{name}/signin`; `/ui/api/backends/{name}/signin/confirm`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/capabilities/{name}/validate`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/decisions`; `/ui/api/decisions/count`; `/ui/api/discovery`; `/ui/api/discovery/adopt`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/events/leases`; `/ui/api/gateway`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/keys`; `/ui/api/markers`; `/ui/api/metrics/series`; `/ui/api/overview`; `/ui/api/policies`; `/ui/api/previews`; `/ui/api/refusals`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/settings`; `/ui/api/settings/diff`; `/ui/api/status`; `/ui/api/stream`; `/ui/api/tools`; `/ui/api/tools/call`; `/ui/assets/{file}` |  |
 | `config-driven` | 3 |  |  |  |  |
 
 Response-code changes from backend secret references (ADR-028). Only the new condition changes; every other answer of these routes is unchanged:
@@ -853,7 +853,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway add --description` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add --env` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add -e` | KEEP | short alias of `--env` | - | src/cli/mod.rs:401 |
+| `mcp-gateway add --env-file` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add --force` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
+| `mcp-gateway add --keep-as-text` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add <TRAILING_COMMAND>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
@@ -1493,6 +1495,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/ui/api/registry/search` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_REGISTRY_SEARCH |
 | `/ui/api/refusals` | INTERNAL | private JSON API of the bundled web UI | admin-only read of what the gateway refused to apply and how to fix it; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_REFUSALS |
 | `/ui/api/reload` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_RELOAD |
+| `/ui/api/settings` | INTERNAL | private JSON API of the bundled web UI | admin only; writes gateway.yaml through the audited writer and reloads; a secret goes to the secret store | src/gateway/routes.rs:UI_SETTINGS |
+| `/ui/api/settings/diff` | INTERNAL | private JSON API of the bundled web UI | admin only; reads gateway.yaml and returns the masked change, writes nothing | src/gateway/routes.rs:UI_SETTINGS_DIFF |
 | `/ui/api/status` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface. Its `access` member reports, per caller, which UI pages and tabs it may open, decided from `src/gateway/ui/access_table.rs`, the table every `/ui/api` route admits its caller through; an auth-on caller with no credential gets none | src/gateway/routes.rs:UI_STATUS |
 | `/ui/api/stream` | INTERNAL | private JSON API of the bundled web UI | live server-sent events for the bundled UI: `hello`, then `status` for every caller (counts only below admin) and `reload` for admins; never extends a session; capped at 32 streams and 4 per credential; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_STREAM |
 | `/ui/api/tools` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_TOOLS |

@@ -695,14 +695,19 @@ impl super::MetaMcp {
         caller: &super::MetaMcpCallerContext<'_>,
         (server, tool): (&str, &str),
     ) -> Result<()> {
-        if caller
+        if let Some(context) = caller
             .signing
-            .is_some_and(|context| context.prepared_for(server, tool))
+            .filter(|context| context.prepared_for(server, tool))
         {
             // Signing ran the policy before the route stage could record this
             // request's verdict (stdio): refuse a withheld name here.
             super::visible::memo::refuse_withheld(server, tool)?;
             stamp_prepared(server, tool);
+            // D3: the allow signing's check noted, taken once, so no later
+            // call or request inherits it.
+            if let Some(allow) = context.take_prepared_allow() {
+                super::invoke::audit::note_allowed_by(allow);
+            }
             Ok(())
         } else {
             self.check_invocation_policy(args, session_id, caller)

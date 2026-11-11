@@ -67,19 +67,14 @@ src/config_reload/generation.rs	prepare	refuse_multi_user_flip	1	no-record	confi
 src/config_reload/grant_reload.rs	read_grant_file	report_grants_refusal	1	no-record	identity grants file reload
 src/config_reload/refusals.rs	classify	is_posture_refusal	1	not-delivered	predicate (a reload refusal's classification)
 src/config_reload/refusals.rs	startup_refusals	startup_refusal	1	no-record	config reload
-src/config_reload/reload_context.rs	reload_transaction	refuse_before_apply	1	feeds	the reload refusals gateway_reload_config answers, as the rows inside it say
 src/config_reload/reload_context.rs	reload_transaction	reload_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	reload_transaction	restart_only_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	not-delivered	restart advice inside a reload answer
 src/config_reload/reload_context_evaluate.rs	load_config_patch	refuse_while_running	1	feeds	a reload refusal gateway_reload_config answers (a refused firewall rule while the firewall runs); not a posture refusal
-src/config_reload/reload_context_refusals.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
-src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
-src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
 src/config_reload/reload_context_write.rs	mutate_locked	refuse_when_audited	1	no-record	config write: the older mutate path on an audited gateway, refused before any lock
 src/config_reload/reload_context_write.rs	mutate_locked	refuse_while_running	1	no-record	a config write refused before writing while the firewall runs
 src/config_reload/reload_context_write.rs	write_and_reload_outcome_within	refuse_when_audited	1	no-record	config write: the older whole-file write on an audited gateway, refused before any lock
 src/config_reload/reload_context_write.rs	write_and_reload_outcome_within	refuse_while_running	1	no-record	a config write refused before writing while the firewall runs
-src/config_reload/replace_validate.rs	refuse_candidate	refuse_before_apply	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_candidate	reload_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_candidate	restart_only_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_shared_credentials	refuse_shared_digests	1	no-record	config write: a new bearer that is an API key's credential, before any secret entry
