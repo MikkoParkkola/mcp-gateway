@@ -1,10 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Revoke's postcondition, inspected only inside the shared writer's locks.
-#![cfg_attr(
-    not(feature = "webui"),
-    expect(dead_code, reason = "revoke requires webui")
-)]
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};
@@ -30,7 +26,9 @@ pub(crate) struct RevokeCheck {
 /// Evidence of durable completion and absence in the published generation.
 #[derive(Debug)]
 pub(crate) struct RevokeReceipt {
+    #[cfg(any(feature = "webui", test))]
     pub(crate) name: String,
+    #[cfg(any(feature = "webui", test))]
     pub(crate) revision: FileRevision,
 }
 
@@ -54,8 +52,13 @@ impl RevokeCheck {
         if present || bearer_present {
             return Err("revoke postcondition failed after durable completion".into());
         }
+        // Only the web UI route and the tests read the receipt's contents.
+        #[cfg(not(any(feature = "webui", test)))]
+        drop(revision);
         Ok(RevokeReceipt {
+            #[cfg(any(feature = "webui", test))]
             name: self.name,
+            #[cfg(any(feature = "webui", test))]
             revision,
         })
     }
