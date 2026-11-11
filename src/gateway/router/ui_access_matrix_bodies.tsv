@@ -1,3 +1,1 @@
 # name, digest, meaning. A body shared by 3 or more routes at the split; names are frozen, not recomputed.
-b_ca730ec7	ca730ec7fc2b	a refusal body served to the auth-off anonymous caller and to non-admin callers on some routes; 24 rows carry it under 401
-b_de6b5592	de6b55925ef7	the 401 refusal for a caller that sent no credential (NoKey, NoKeyPublicStatus)
