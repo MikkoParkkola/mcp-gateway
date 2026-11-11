@@ -540,7 +540,9 @@ async fn validate_only(
             let errors = file_writer::validate(&bytes, &path, Some(&accounts)).err();
             (Some(bytes), errors.unwrap_or_default())
         }
-        Err(refusal @ Refused::LiteralCredential { .. }) => return refused(name, refusal),
+        Err(refusal @ (Refused::LiteralCredential { .. } | Refused::Invalid { .. })) => {
+            return refused(name, refusal);
+        }
         Err(refusal) => {
             let message = match refusal {
                 Refused::PinMismatch { .. } => {

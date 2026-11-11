@@ -80,24 +80,27 @@ fn classify_brace(value: &str, parameters: &HashSet<String>) -> ValueClass {
     }
     let mut found = false;
     let outside = crate::secrets::fill_placeholders(value, |name| {
-        // A reference is a real name, never a name followed by text: env names
-        // and a final bare empty default; keychain services and OAuth names
-        // are letters, digits, `_`, `-` and `.`. Anything else is literal text.
-        let word = |s: &str, extra: &[u8]| {
+        // Env names have a narrow grammar; service identifiers may include
+        // slashes and other punctuation, but never pasted text or defaults.
+        let env_name =
+            |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+        let service_name = |s: &str| {
             !s.is_empty()
-                && s.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || extra.contains(&b))
+                && !s.contains(":-")
+                && !s
+                    .chars()
+                    .any(|c| c.is_whitespace() || matches!(c, '{' | '}' | '\'' | '"'))
         };
         let reference = if let Some(env) = name.strip_prefix("env.") {
-            word(env.strip_suffix(":-").unwrap_or(env), b"")
+            env_name(env.strip_suffix(":-").unwrap_or(env))
         } else if let Some(service) = name.strip_prefix("keychain.") {
-            word(service, b"-.")
+            service_name(service)
         } else if let Some(oauth) = name.strip_prefix("oauth.") {
-            word(oauth, b"-.")
+            service_name(oauth)
         } else {
-            is_known_placeholder(name, parameters)
+            !name.contains('?') && is_known_placeholder(name, parameters)
         };
-        let known = !name.contains('?') && reference;
+        let known = reference;
         found |= known;
         Ok(known.then(String::new))
     });
@@ -235,7 +238,22 @@ mod tests {
             ("Token {env.API_KEY}", ValueClass::Kept),
             ("Bot {env.API_KEY}", ValueClass::Kept),
             ("{keychain.svc}", ValueClass::Kept),
+            ("{keychain.team/service}", ValueClass::Kept),
+            ("{keychain.team?service}", ValueClass::Kept),
             ("{oauth.provider}", ValueClass::Kept),
+            ("{oauth.team/service}", ValueClass::Kept),
+            ("{keychain.}", ValueClass::Stored),
+            ("{oauth.}", ValueClass::Stored),
+            ("{keychain.team service}", ValueClass::Stored),
+            ("{oauth.team\tservice}", ValueClass::Stored),
+            ("{keychain.team\"service}", ValueClass::Stored),
+            ("{oauth.team'service}", ValueClass::Stored),
+            ("{keychain.team:-}", ValueClass::Stored),
+            ("{oauth.team:-literal}", ValueClass::Stored),
+            ("{env.KEY:-}", ValueClass::Kept),
+            ("{env.KEY:-:-}", ValueClass::Stored),
+            ("{env.KEY:-literal}", ValueClass::Stored),
+            ("{env.team/service}", ValueClass::Stored),
             ("{access_token}", ValueClass::Kept),
             ("{refresh_token}", ValueClass::Kept),
             ("{api_key}", ValueClass::Kept),

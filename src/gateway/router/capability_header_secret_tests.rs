@@ -396,6 +396,37 @@ async fn assert_r5_parse_refused(after: &str, other: &str) {
             }),
             "no patch, diff, excerpt, or loader fields: {body}"
         );
+        let mut header = plain(
+            "PUT",
+            "/ui/api/capabilities/kept",
+            "application/x-yaml",
+            text,
+        );
+        header
+            .headers_mut()
+            .insert("x-validate-only", "1".parse().expect("a header value"));
+        for request in [
+            plain(
+                "POST",
+                "/ui/api/capabilities/kept/validate",
+                "application/x-yaml",
+                text,
+            ),
+            plain(
+                "PUT",
+                "/ui/api/capabilities/kept?validate=1",
+                "application/x-yaml",
+                text,
+            ),
+            header,
+        ] {
+            let (status, body) = fx.send(request).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).expect("JSON"),
+                answer
+            );
+        }
         messages.push((top.to_owned(), detail.to_owned()));
         assert_eq!(std::fs::read_to_string(&fx.file).expect("the file"), before);
     }

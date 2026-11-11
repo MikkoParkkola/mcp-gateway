@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::execution_context::validate_capability_account_binding;
+use super::file_writer_headers::check;
 use super::{compute_capability_hash, unloadable_issues};
 use crate::capability::parser::parse_capability_text;
 use crate::config_persistence::lock::{NotLocked, lock_config};
@@ -90,7 +91,8 @@ pub(crate) enum Refused {
     LockBusy,
     Invalid {
         errors: Vec<FieldError>,
-        patch: String,
+        // Parse refusals never carry submitted bytes.
+        patch: Option<String>,
     },
     LiteralCredential {
         errors: Vec<FieldError>,
@@ -349,136 +351,6 @@ fn message(message: impl std::fmt::Display) -> FieldError {
     }
 }
 
-/// The provider entries of `text` by the loader's own scalar-name semantics:
-/// string deserialization keeps the source text of a name (even `TRUE` or
-/// `0x7b`), which a `Value` tree has already normalized. When the document
-/// does not deserialize that way, fall back to the tree so a malformed
-/// unrelated key cannot hide a header from inspection.
-fn provider_entries_of(text: &str, doc: &crate::yaml::Value) -> Vec<(String, crate::yaml::Value)> {
-    use crate::yaml::Value;
-
-    struct Entries;
-    impl<'de> serde::de::Visitor<'de> for Entries {
-        type Value = Vec<(String, Value)>;
-        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("a provider mapping")
-        }
-        fn visit_map<M: serde::de::MapAccess<'de>>(
-            self,
-            mut map: M,
-        ) -> Result<Self::Value, M::Error> {
-            let mut entries = Vec::new();
-            while let Some(entry) = map.next_entry()? {
-                entries.push(entry);
-            }
-            Ok(entries)
-        }
-    }
-    fn entries<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Vec<(String, Value)>, D::Error> {
-        de.deserialize_map(Entries)
-    }
-    #[derive(serde::Deserialize)]
-    struct NamedProviders {
-        #[serde(deserialize_with = "entries")]
-        providers: Vec<(String, Value)>,
-    }
-    if let Ok(named) = crate::yaml::from_str::<NamedProviders>(text) {
-        return named.providers;
-    }
-    doc.as_mapping()
-        .into_iter()
-        .flatten()
-        .filter(|(key, _)| key.untag_ref().as_str() == Some("providers"))
-        .filter_map(|(_, value)| value.as_mapping())
-        .flatten()
-        .map(|(name, provider)| {
-            let name = match name.untag_ref() {
-                Value::String(s) => s.clone(),
-                Value::Bool(b) => b.to_string(),
-                Value::Number(n) => n.to_string(),
-                Value::Null => "null".to_string(),
-                _ => "[non-scalar]".to_string(),
-            };
-            (name, provider.clone())
-        })
-        .collect()
-}
-
-/// Judge the sent headers before pin, schema or concurrency errors can carry
-/// their bytes in a diagnostic or diff. Read YAML without the capability
-/// schema, so unrelated invalid fields cannot hide a credential header.
-fn refuse_literal_headers(text: &str) -> Result<(), Refused> {
-    use crate::config::secret_values::{Syntax, ValueClass, classify, credential_name};
-    use crate::yaml::Value;
-
-    let Ok(doc) = crate::yaml::from_str::<Value>(text) else {
-        // Syntax errors remain the normal validator's responsibility.
-        return Ok(());
-    };
-    let parameters = crate::validator::schema_helpers::input_property_names(&serde_json::json!({
-        "properties": crate::yaml::to_json(doc["schema"]["input"]["properties"].untag_ref())
-    }));
-    let syntax = Syntax::Brace { parameters };
-    let mut errors = Vec::new();
-    let mut check = |name: &str, provider: &Value| {
-        let Some(headers) = provider["config"]["headers"].as_mapping() else {
-            return;
-        };
-        for (header, value) in headers {
-            let Some(header) = header.as_str() else {
-                continue;
-            };
-            if credential_name(header)
-                && !value.as_str().is_some_and(|value| {
-                    let mut static_literal = false;
-                    let _ = crate::secrets::fill_placeholders(value, |key| {
-                        // Secrets take precedence over the executor's exact-key
-                        // parameter lookup; substituted values are not rescanned.
-                        if !key.starts_with("env.")
-                            && !key.starts_with("keychain.")
-                            && let Some(value) = provider["config"]["static_params"].get(key)
-                        {
-                            let value = match value.untag_ref() {
-                                Value::String(s) => s.clone(),
-                                Value::Null => String::new(),
-                                value => crate::yaml::to_json(value).to_string(),
-                            };
-                            static_literal |= classify(&value, &syntax) != Ok(ValueClass::Kept);
-                        }
-                        Ok(None)
-                    });
-                    classify(value, &syntax) == Ok(ValueClass::Kept) && !static_literal
-                })
-            {
-                errors.push(FieldError {
-                    field: Some(format!("providers.{name}.config.headers.{header}")),
-                    ..message(
-                        "Use {env.NAME} or {keychain.NAME}, optionally after one scheme prefix such as `Bearer `.",
-                    )
-                });
-            }
-        }
-    };
-    let providers = provider_entries_of(text, &doc);
-    for (name, provider) in &providers {
-        if name == "fallback"
-            && let Some(entries) = provider.as_sequence()
-        {
-            for (index, entry) in entries.iter().enumerate() {
-                check(&format!("fallback[{index}]"), entry);
-            }
-        } else {
-            check(name, provider);
-        }
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        errors.sort_by(|a, b| a.field.cmp(&b.field));
-        Err(Refused::LiteralCredential { errors })
-    }
-}
-
 /// The loader's acceptance of `text` as `path` (D3), plus the account
 /// binding the backend admits with: what can be saved is what loads.
 ///
@@ -490,14 +362,10 @@ pub(crate) fn validate(
     path: &Path,
     accounts: Option<&AccountStrategyRegistry>,
 ) -> Result<(), Vec<FieldError>> {
-    if let Err(e) = crate::yaml::from_str::<crate::yaml::Value>(text) {
-        let at = e.location();
-        return Err(vec![FieldError {
-            line: at.map(|l| l.line()),
-            column: at.map(|l| l.column()),
-            field: None,
-            message: e.to_string(),
-        }]);
+    if let Err(Refused::Invalid { errors, .. } | Refused::LiteralCredential { errors }) =
+        check(text)
+    {
+        return Err(errors);
     }
     let capability = parse_capability_text(text, path).map_err(|e| vec![message(e)])?;
     let issues = unloadable_issues(&capability, path).map_err(|e| vec![message(e)])?;
@@ -677,13 +545,15 @@ fn target_path(dir: &Path, name: &str) -> PathBuf {
 /// `LiteralCredential`, `PinMismatch`, `Unpin` or `PinAmbiguous`, as [`commit`]
 /// would answer.
 pub(crate) fn preview(sent: &str, current: Option<&str>) -> Result<(String, PinChange), Refused> {
-    refuse_literal_headers(sent)?;
+    check(sent)?;
     if current.is_some_and(pin_broken) {
         return Err(Refused::PinMismatch {
             patch: unified_diff(current.unwrap_or_default(), sent),
         });
     }
-    final_bytes(sent, current, PinUpdate::InPlace)
+    let result = final_bytes(sent, current, PinUpdate::InPlace)?;
+    check(&result.0)?;
+    Ok(result)
 }
 
 /// The list's pin column: `verified`, `mismatch` or `unpinned`.
@@ -732,7 +602,9 @@ async fn commit_with(
         Change::Write(text) => text.as_str(),
         Change::Delete => "",
     };
-    refuse_literal_headers(sent)?;
+    if matches!(edit.change, Change::Write(_)) {
+        check(sent)?;
+    }
     let dir = std::fs::canonicalize(edit.dir).map_err(|e| unwritable(e, String::new()))?;
     let _held = match lock_config(&dir.join("capabilities"), deadline).await {
         Ok(held) => held,
@@ -772,9 +644,10 @@ async fn commit_with(
         });
     };
     let (bytes, pin) = final_bytes(sent, current.as_deref(), edit.pin)?;
+    check(&bytes)?;
     validate(&bytes, &target, accounts).map_err(|errors| Refused::Invalid {
         errors,
-        patch: patch(),
+        patch: Some(patch()),
     })?;
     // Windows `Inherit` takes the directory's ACL and could widen a private
     // file; Private never widens (lead ruling (A); the shared writer's cause

@@ -85,7 +85,13 @@ pub(super) fn refused(name: &str, refusal: Refused) -> axum::response::Response 
             "Another write to this capability directory is in progress; retry".to_owned(),
             json!({}),
         ),
-        Refused::Invalid { errors, patch } => (
+        Refused::Invalid { errors, patch: None } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid",
+            "Capability YAML could not be parsed safely".to_owned(),
+            json!({ "errors": field_errors(&errors) }),
+        ),
+        Refused::Invalid { errors, patch: Some(patch) } => (
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid",
             format!("Capability '{name}' would not load"),
