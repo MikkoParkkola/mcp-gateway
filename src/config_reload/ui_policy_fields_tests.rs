@@ -10,7 +10,9 @@ use super::{SaveEdit, SaveValue, ui_save};
 use crate::config_persistence::keyedit::Scalar;
 use crate::config_reload::ReloadContext;
 use crate::config_reload::reload_context::replace::ui_diff::{Shown, UiRefused, ui_diff};
-use crate::config_reload::reload_context::replace::{AuditPosture, FileRevision, GatewayAuth};
+use crate::config_reload::reload_context::replace::{
+    AuditPosture, FileRevision, GatewayAuth, RefusalClass,
+};
 use crate::config_reload::replace_test_support::{WAIT, context, read};
 use crate::config_reload::ui_fields::{FieldId, Param, PreviewEdit, PreviewValue};
 use crate::gateway::test_helpers::write_owner_only;
@@ -230,7 +232,15 @@ async fn relay_action_needs_the_firewall_and_is_live_only_with_the_running_detec
         .await
         .expect_err("needs security.firewall.enabled");
     // The loader's validation refusal, not some other failure.
-    assert!(matches!(refused, UiRefused::Invalid(_)), "{refused:?}");
+    assert!(
+        matches!(
+            refused,
+            UiRefused::ReloadRefused {
+                class: RefusalClass::Invalid
+            }
+        ),
+        "{refused:?}"
+    );
     assert_eq!(read(&path), off);
 
     // Firewall on, detector unchanged: live.
