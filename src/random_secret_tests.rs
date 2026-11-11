@@ -30,7 +30,7 @@ fn the_credential_is_not_guessable() {
     assert_eq!(random_secret("").len(), 43, "an empty prefix adds nothing");
 }
 
-/// The twin-copy invariant, as clock.rs holds its own: no state in code.
+/// The shared generator, like the clock, holds no mutable shared state.
 #[test]
 fn random_secret_rs_holds_no_shared_mutable_state() {
     let is_ident = |c: char| c.is_alphanumeric() || c == '_';
@@ -99,12 +99,12 @@ fn production_sources() -> Vec<(String, String)> {
         .collect()
 }
 
-/// The production callers of `random_secret`, both crates:
-/// `gateway init`'s admin token (binary), the auto bearer, the key server's
+/// The production callers of `random_secret` in the library:
+/// `gateway init`'s admin token, the auto bearer, the key server's
 /// bearer, the dashboard's session values, the OAuth client's PKCE verifier. The create route is listed; rotate joins in C2; any other caller fails here until it is reviewed and named.
 /// Every production file that names `random_secret` as a whole word, with
 /// how often: the shared generator's callers (2 each, since
-/// `crate::random_secret::random_secret(` names it twice), the two crates'
+/// `crate::random_secret::random_secret(` names it twice), the library's
 /// `mod random_secret;`, and the personal-account journey's own
 /// `random_secret()` (its definition, its import and its three calls), which
 /// is not the shared generator. Any other naming, by path, `use`, alias,
@@ -116,7 +116,6 @@ const CALLERS: &[(&str, usize)] = &[
     ("src/gateway/ui/keys_create.rs", 2),
     ("src/key_server/store.rs", 2),
     ("src/lib.rs", 1),
-    ("src/main.rs", 1),
     ("src/oauth/client/mod.rs", 2),
     ("src/personal_accounts/journey/mod.rs", 1),
     ("src/personal_accounts/journey/ops.rs", 4),

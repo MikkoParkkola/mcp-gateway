@@ -92,7 +92,7 @@ async fn discover_write_racing_a_gateway_mutation_keeps_both() {
             },
             mcp_gateway::discovery::ServerMetadata::default(),
         );
-        crate::write_discovered_to_config(&[server], Some(&path), CommentLoss::Refuse)
+        crate::cli::entry::write_discovered_to_config(&[server], Some(&path), CommentLoss::Refuse)
             .map(|_| ())
             .map_err(|e| e.to_string())
     })
