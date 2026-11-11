@@ -456,3 +456,43 @@ fn cli_kubernetes_apply_plan_parses_execute_gate() {
         other => panic!("unexpected: {other:?}"),
     }
 }
+
+// ============================================================================
+// Test 5: CLI correctly parses `serve --stdio` flag
+// ============================================================================
+
+#[test]
+fn test_cli_serve_stdio_flag_parses() {
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
+
+    let args = ["mcp-gateway", "serve", "--stdio"];
+    let cli = Cli::try_parse_from(args).expect("parse serve --stdio");
+
+    match cli.command {
+        Some(Command::Serve { stdio: true }) => {
+            // Correct — stdio flag is set
+        }
+        other => panic!("Expected Serve {{ stdio: true }}, got: {other:?}"),
+    }
+}
+
+// ============================================================================
+// Test 6: CLI correctly parses plain `serve` (stdio=false by default)
+// ============================================================================
+
+#[test]
+fn test_cli_serve_no_flag_defaults_to_http() {
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
+
+    let args = ["mcp-gateway", "serve"];
+    let cli = Cli::try_parse_from(args).expect("parse serve");
+
+    match cli.command {
+        Some(Command::Serve { stdio: false }) => {
+            // Correct — http mode
+        }
+        other => panic!("Expected Serve {{ stdio: false }}, got: {other:?}"),
+    }
+}

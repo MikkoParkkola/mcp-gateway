@@ -169,7 +169,7 @@ pub struct Cli {
 
     /// Subcommand to run (defaults to server mode when omitted)
     #[command(subcommand)]
-    pub command: Option<Command>,
+    pub(crate) command: Option<Command>,
 }
 
 /// Offline administration of the personal-account custody store.
@@ -242,7 +242,7 @@ fn parse_off_switch(value: &str) -> bool {
 
 /// Top-level subcommands
 #[derive(Subcommand, Debug)]
-pub enum Command {
+pub(crate) enum Command {
     /// Start the gateway server (default when no subcommand is given)
     #[command(about = "Start the gateway server")]
     Serve {
