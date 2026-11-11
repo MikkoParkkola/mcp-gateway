@@ -320,10 +320,18 @@ async fn r19_edits_to_legacy_bytes_are_caught() {
     forged["tool"] = "tool_9".into();
     // Chain-consistent where it sits, as a careful attacker would make it.
     forged["counter"] = replaced["counter"].clone();
+    // The timestamp's printed length varies with the clock (3, 6 or 9 fractional
+    // digits; Windows ticks in 100 ns), so a careful attacker copies it too.
+    forged["timestamp"] = replaced["timestamp"].clone();
     forged["prev_entry_hash"] = replaced["prev_entry_hash"].clone();
     strip_sig(&mut forged);
     let mut forged = forged.to_string();
-    assert!(forged.len() <= lines[legacy].len(), "the forged line fits");
+    assert!(
+        forged.len() <= lines[legacy].len(),
+        "the forged line fits: {} vs {} bytes",
+        forged.len(),
+        lines[legacy].len()
+    );
     while forged.len() < lines[legacy].len() {
         forged.push(' ');
     }

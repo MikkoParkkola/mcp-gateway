@@ -4,17 +4,33 @@
 //! a backend, shared by every writer that puts a backend into gateway.yaml:
 //! the web UI panel and discovery adopt, and the CLI `add`, `setup` and
 //! `discover --write`. Built in every configuration, since the CLI writers
-//! are.
+//! are. The capability editor uses the same rule with its own brace grammar.
 
-/// How one `env` or `headers` value of a backend is written to gateway.yaml.
+#[cfg(feature = "webui")]
+use std::collections::HashSet;
+
+/// The template grammar of the file receiving a value. Reference forms from
+/// another grammar must never turn literal text into an accepted template.
+#[derive(Debug, Clone)]
+pub(crate) enum Syntax {
+    Dollar,
+    /// Only the capability editor, which is part of the web UI, writes this grammar.
+    #[cfg(feature = "webui")]
+    Brace {
+        parameters: HashSet<String>,
+    },
+}
+
+/// Whether a value may remain in a definition under the selected grammar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ValueClass {
-    /// Written as given: empty, a whole-value secret reference (`env:`,
-    /// `file:`, `keychain:`), or a template the load expands.
+    /// Written as given: empty, a supported template, or (Dollar only) a
+    /// whole-value secret reference (`env:`, `file:`, `keychain:`).
     Kept,
     /// A literal: when [`stores_env_value`] or [`stores_header_value`] says
     /// so it goes to the secret store and gateway.yaml holds the store's
-    /// reference; otherwise it is written as typed.
+    /// reference; otherwise it is written as typed. The capability editor
+    /// refuses this class under a credential-named header instead of storing it.
     Stored,
 }
 
@@ -24,9 +40,15 @@ pub(crate) enum ValueClass {
 /// `literal_in_template` for literal text beside a template other than one
 /// scheme word (`Bearer ${TOKEN}` is a template; `sk-${SUFFIX}` is not), the
 /// same codes discovery adopt refuses with. Either would put text that may be
-/// a secret into gateway.yaml as text.
-pub(crate) fn classify(value: &str) -> Result<ValueClass, &'static str> {
+/// a secret into gateway.yaml as text. Brace uses the capability's declared
+/// inputs and system references, returning `Stored` for every literal form.
+pub(crate) fn classify(value: &str, syntax: &Syntax) -> Result<ValueClass, &'static str> {
     use crate::config::secret_ref::{has_literal_default, only_scheme_beside_templates};
+    match syntax {
+        Syntax::Dollar => {}
+        #[cfg(feature = "webui")]
+        Syntax::Brace { parameters } => return Ok(classify_brace(value, parameters)),
+    }
     if value.is_empty() || crate::config::is_reference(value) {
         return Ok(ValueClass::Kept);
     }
@@ -40,6 +62,87 @@ pub(crate) fn classify(value: &str) -> Result<ValueClass, &'static str> {
     } else {
         Ok(ValueClass::Kept)
     }
+}
+
+/// Use the resolver's scanner without resolving anything. Only names the
+/// validator recognizes may disappear; expressions remain literal in a
+/// credential header even though the validator permits them elsewhere.
+#[cfg(feature = "webui")]
+fn classify_brace(value: &str, parameters: &HashSet<String>) -> ValueClass {
+    use crate::capability::validator::is_known_placeholder;
+    use crate::config::secret_ref::SCHEME_PREFIXES;
+
+    if value.is_empty() {
+        return ValueClass::Kept;
+    }
+    if value.contains("{{") {
+        return ValueClass::Stored;
+    }
+    let mut found = false;
+    let outside = crate::secrets::fill_placeholders(value, |name| {
+        // Env names have a narrow grammar; service identifiers may include
+        // slashes and other punctuation, but never pasted text or defaults.
+        let env_name =
+            |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+        let service_name = |s: &str| {
+            !s.is_empty()
+                && !s.contains(":-")
+                && !s
+                    .chars()
+                    .any(|c| c.is_whitespace() || matches!(c, '{' | '}' | '\'' | '"'))
+        };
+        let reference = if let Some(env) = name.strip_prefix("env.") {
+            env_name(env.strip_suffix(":-").unwrap_or(env))
+        } else if let Some(service) = name.strip_prefix("keychain.") {
+            service_name(service)
+        } else if let Some(oauth) = name.strip_prefix("oauth.") {
+            service_name(oauth)
+        } else {
+            !name.contains('?') && is_known_placeholder(name, parameters)
+        };
+        let known = reference;
+        found |= known;
+        Ok(known.then(String::new))
+    });
+    if let Ok(outside) = outside
+        && found
+        && (outside.is_empty()
+            || (SCHEME_PREFIXES.contains(&outside.as_str()) && value.starts_with(&outside)))
+    {
+        ValueClass::Kept
+    } else {
+        ValueClass::Stored
+    }
+}
+
+/// Whether `name` names a credential: the shared rule's credential words, or
+/// an HTTP authentication header (`Authorization`, `Proxy-Authorization`,
+/// `Cookie`). Dashes count as underscores, leading dashes are dropped.
+#[cfg(feature = "webui")]
+pub(crate) fn credential_name(name: &str) -> bool {
+    let name = name.trim_start_matches('-').replace('-', "_");
+    let lower = name.to_ascii_lowercase();
+    ["authorization", "proxy_authorization", "cookie"].contains(&lower.as_str())
+        || names_a_credential(&name)
+}
+
+/// Each refused `env`/`headers` value of `backend` as `(code, field)`, sorted
+/// by field; the value itself is never part of it.
+pub(crate) fn literal_refusals(
+    backend: &crate::config::BackendConfig,
+) -> Vec<(&'static str, String)> {
+    let env = backend.env.iter().map(|(k, v)| ("env", k, v));
+    let headers = backend.headers.iter().map(|(k, v)| ("headers", k, v));
+    let mut refused: Vec<_> = env
+        .chain(headers)
+        .filter_map(|(map, key, value)| {
+            classify(value, &Syntax::Dollar)
+                .err()
+                .map(|code| (code, format!("{map}.{key}")))
+        })
+        .collect();
+    refused.sort_by(|a, b| a.1.cmp(&b.1));
+    refused
 }
 
 /// Words an env key may end with, beyond the firewall's own credential names,
@@ -116,4 +219,133 @@ pub(crate) fn stores_discovered_value(header: bool, key: &str, value: &str) -> b
         stores_env_value(key, value)
     };
     by_rule || crate::config::is_reference(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "webui")]
+    #[test]
+    fn brace_values_keep_only_known_placeholders_and_one_leading_scheme() {
+        // Declaring TOKEN must not make the other grammar's ${TOKEN} safe.
+        let parameters = HashSet::from(["token".into(), "TOKEN".into(), "input".into()]);
+        let cases = [
+            ("", ValueClass::Kept),
+            ("{env.API_KEY}", ValueClass::Kept),
+            ("Bearer {env.API_KEY}", ValueClass::Kept),
+            ("Basic {env.API_KEY}", ValueClass::Kept),
+            ("Token {env.API_KEY}", ValueClass::Kept),
+            ("Bot {env.API_KEY}", ValueClass::Kept),
+            ("{keychain.svc}", ValueClass::Kept),
+            ("{keychain.team/service}", ValueClass::Kept),
+            ("{keychain.team?service}", ValueClass::Kept),
+            ("{oauth.provider}", ValueClass::Kept),
+            ("{oauth.team/service}", ValueClass::Kept),
+            ("{keychain.}", ValueClass::Stored),
+            ("{oauth.}", ValueClass::Stored),
+            ("{keychain.team service}", ValueClass::Stored),
+            ("{oauth.team\tservice}", ValueClass::Stored),
+            ("{keychain.team\"service}", ValueClass::Stored),
+            ("{oauth.team'service}", ValueClass::Stored),
+            ("{keychain.team:-}", ValueClass::Stored),
+            ("{oauth.team:-literal}", ValueClass::Stored),
+            ("{env.KEY:-}", ValueClass::Kept),
+            ("{env.KEY:-:-}", ValueClass::Stored),
+            ("{env.KEY:-literal}", ValueClass::Stored),
+            ("{env.team/service}", ValueClass::Stored),
+            ("{access_token}", ValueClass::Kept),
+            ("{refresh_token}", ValueClass::Kept),
+            ("{api_key}", ValueClass::Kept),
+            ("{bearer_token}", ValueClass::Kept),
+            ("{auth_token}", ValueClass::Kept),
+            ("{timestamp}", ValueClass::Kept),
+            ("{service_auth_header}", ValueClass::Kept),
+            ("{token}", ValueClass::Kept),
+            ("{token[0]}", ValueClass::Kept),
+            ("{token.value}", ValueClass::Kept),
+            ("{token[0].value}", ValueClass::Kept),
+            ("Bearer {env.KEY}{token}", ValueClass::Kept),
+            ("literal", ValueClass::Stored),
+            ("Bearer literal", ValueClass::Stored),
+            ("{env.KEY}-suffix", ValueClass::Stored),
+            ("prefix-{token}", ValueClass::Stored),
+            ("{token}Bearer ", ValueClass::Stored),
+            ("Bearer {token}Basic {env.KEY}", ValueClass::Stored),
+            (" Bearer {token}", ValueClass::Stored),
+            ("Bearer {token} ", ValueClass::Stored),
+            ("Bearer ", ValueClass::Stored),
+            ("{unknown}", ValueClass::Stored),
+            ("{unknown.value}", ValueClass::Stored),
+            ("{unknown[0]}", ValueClass::Stored),
+            ("{}", ValueClass::Stored),
+            (r#"{"api_key":"literal"}"#, ValueClass::Stored),
+            (r#"{"api_key":"{env.KEY}"}"#, ValueClass::Stored),
+            ("{{token}}", ValueClass::Stored),
+            ("{{input.mode ? 'a' : 'b'}}", ValueClass::Stored),
+            ("{input.mode ? 'a' : 'b'}", ValueClass::Stored),
+            ("{env.KEY ? 'a' : 'b'}", ValueClass::Stored),
+            ("{env.KEY", ValueClass::Stored),
+            ("{env.KEY}}", ValueClass::Stored),
+            ("${TOKEN}", ValueClass::Stored),
+            ("Bearer ${TOKEN}", ValueClass::Stored),
+            ("${env.KEY}", ValueClass::Stored),
+            ("env:TOKEN", ValueClass::Stored),
+            ("file:/secret", ValueClass::Stored),
+            ("keychain:svc", ValueClass::Stored),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(
+                classify(
+                    value,
+                    &Syntax::Brace {
+                        parameters: parameters.clone(),
+                    },
+                ),
+                Ok(expected),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dollar_values_retain_the_backend_grammar_and_refusal_codes() {
+        let cases = [
+            ("", Ok(ValueClass::Kept)),
+            ("${TOKEN}", Ok(ValueClass::Kept)),
+            ("Bearer ${TOKEN}", Ok(ValueClass::Kept)),
+            ("${TOKEN:-}", Ok(ValueClass::Kept)),
+            ("env:TOKEN", Ok(ValueClass::Kept)),
+            ("file:/secret", Ok(ValueClass::Kept)),
+            ("keychain:svc", Ok(ValueClass::Kept)),
+            ("literal", Ok(ValueClass::Stored)),
+            ("Bearer {env.TOKEN}", Ok(ValueClass::Stored)),
+            ("${TOKEN:-literal}", Err("literal_default")),
+            ("${TOKEN}-suffix", Err("literal_in_template")),
+            ("prefix-${TOKEN}", Err("literal_in_template")),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(classify(value, &Syntax::Dollar), expected, "{value:?}");
+        }
+    }
+
+    #[cfg(feature = "webui")]
+    #[test]
+    fn credential_header_names_share_the_backend_name_gate() {
+        for name in [
+            "Authorization",
+            "authorization",
+            "AUTHORIZATION",
+            "Proxy-Authorization",
+            "Cookie",
+            "x-api-key",
+            "X-Auth-Token",
+            "X-Credentials",
+        ] {
+            assert!(credential_name(name), "{name}");
+        }
+        for name in ["Accept", "User-Agent", "Content-Type", "X-Mode", "X-Custom"] {
+            assert!(!credential_name(name), "{name}");
+        }
+    }
 }
