@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::answer_fixture::{Dl, Fixture};
 use super::answer_list_tests::{get, row_of};
-use super::{ExportQuery, ListQuery, export_response};
+use super::{ExportQuery, export_response};
 use crate::trust::provenance_public::ProvenancePublicSigner;
 
 pub(super) fn signer() -> ProvenancePublicSigner {
@@ -15,8 +15,13 @@ pub(super) fn signer() -> ProvenancePublicSigner {
 }
 
 pub(super) async fn export(fx: &Fixture, format: &str) -> String {
+    export_for(fx, format, &[]).await
+}
+
+/// An export of the rows the query pairs select.
+pub(super) async fn export_for(fx: &Fixture, format: &str, pairs: &[(&str, &str)]) -> String {
     let query = ExportQuery {
-        list: ListQuery::default(),
+        list: super::answer_list_tests::q(pairs),
         format: Some(format.into()),
     };
     let response = export_response(&fx.logs(), &fx.access(), &query, Some(&signer()));

@@ -6,6 +6,7 @@
 use serde_json::json;
 
 use super::answer::{MAX_EVICTED, MAX_JOINED, MAX_PENDING};
+use super::answer_export_tests::{export_for, ndjson};
 use super::answer_fixture::{Dl, Fixture, SECRET, forge};
 use super::answer_list_tests::{get, row_of, traces};
 
@@ -200,10 +201,11 @@ async fn r49_a_read_past_the_joined_bound_fails_closed() {
         fx.call(&trace);
         fx.delivery(&trace, &Dl::effect("delivered"));
     }
-    let (_, page) = get(&fx, &[("server", "only")]).await;
+    let (rows, manifest) = ndjson(&export_for(&fx, "ndjson", &[("server", "only")]).await);
+    let page = json!({"rows": rows});
     let r = row_of(&page, "gw-old");
     assert_eq!(r["effect"], "unknown");
-    assert_eq!(page["join_incomplete"], 1);
+    assert_eq!(manifest["join_incomplete"], 1);
 }
 
 /// A trace reopened as poisoned after its join keeps its reason through the
@@ -245,12 +247,13 @@ async fn r51_the_joined_bound_drops_no_record_and_misses_no_duplicate() {
         fx.call(&trace);
         fx.delivery(&trace, &Dl::effect("delivered"));
     }
-    let (_, page) = get(&fx, &[("server", "only")]).await;
+    let (rows, manifest) = ndjson(&export_for(&fx, "ndjson", &[("server", "only")]).await);
+    let page = json!({"rows": rows});
     assert_eq!(row_of(&page, "gw-edge")["effect"], "delivered");
     let dup = rows_of(&page, "gw-dup");
     assert_eq!(dup.len(), 2);
     assert_eq!(dup[1]["answer_integrity"], "duplicate");
-    assert_eq!(page["answer_integrity_failed"], 1);
+    assert_eq!(manifest["answer_integrity_failed"], 1);
 }
 
 #[tokio::test]
