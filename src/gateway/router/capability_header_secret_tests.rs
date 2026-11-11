@@ -357,3 +357,212 @@ async fn capedit_r4_an_env_space_literal_span_is_refused_by_header_field() {
     let after = doc(&[("Authorization", &value)], false);
     assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
 }
+
+async fn assert_r5_saved(after: &str) {
+    let (status, body, fx, _) = save(after).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let answer: serde_json::Value = serde_json::from_str(&body).expect("a JSON answer");
+    assert_eq!(answer["status"], "saved", "{body}");
+    assert!(!body.contains(LITERAL), "{body}");
+    assert_eq!(std::fs::read_to_string(&fx.file).expect("the file"), after);
+}
+
+async fn assert_r5_parse_refused(after: &str, other: &str) {
+    let mut messages = Vec::new();
+    for text in [after, other] {
+        let (status, body, fx, before) = save(text).await;
+        assert!(
+            [StatusCode::UNPROCESSABLE_ENTITY, StatusCode::BAD_REQUEST].contains(&status),
+            "{body}"
+        );
+        assert!(!body.contains(LITERAL), "{body}");
+        let answer: serde_json::Value = serde_json::from_str(&body).expect("a JSON answer");
+        let error = &answer["errors"][0];
+        let parse_error = crate::yaml::from_str::<crate::yaml::Value>(text)
+            .err()
+            .unwrap_or_else(|| {
+                crate::yaml::from_str::<crate::capability::CapabilityDefinition>(text)
+                    .expect_err("typed parse fails")
+            });
+        let at = parse_error.location().expect("a parser position");
+        let top = answer["message"].as_str().expect("a fixed message");
+        let detail = error["message"].as_str().expect("a fixed message");
+        assert!(!top.is_empty() && !detail.is_empty(), "{body}");
+        assert_eq!(
+            answer,
+            serde_json::json!({
+                "error": answer["error"], "message": top,
+                "errors": [{"message": detail, "line": at.line(), "column": at.column()}]
+            }),
+            "no patch, diff, excerpt, or loader fields: {body}"
+        );
+        messages.push((top.to_owned(), detail.to_owned()));
+        assert_eq!(std::fs::read_to_string(&fx.file).expect("the file"), before);
+    }
+    assert_eq!(messages[0], messages[1], "parse messages must be fixed");
+}
+
+/// R1 guard: `Value::as_str` removes the first header key's tag today.
+#[tokio::test]
+async fn capedit_r5_a_tagged_duplicate_authorization_is_refused_by_header_field() {
+    let after = doc(&[("!x Authorization", &format!("Bearer {LITERAL}"))], false)
+        + "        Authorization: '{env.KEY}'\n";
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+#[tokio::test]
+async fn capedit_r5_an_escaped_duplicate_authorization_is_refused_without_bytes() {
+    let after = doc(
+        &[(r#""Authoriz\u0061tion""#, &format!("Bearer {LITERAL}"))],
+        false,
+    ) + "        Authorization: '{env.KEY}'\n";
+    crate::capability::parse_capability(&after)
+        .expect("the typed loader accepts duplicate headers");
+    let other = after.replace(r#""Authoriz\u0061tion""#, "'Authorization'");
+    assert_r5_parse_refused(&after, &other).await;
+}
+
+/// R2 guard: the current provider-entry visitor keeps both entries for inspection.
+#[tokio::test]
+async fn capedit_r5_a_tagged_duplicate_provider_is_refused_by_header_field() {
+    let after = doc(&[("Authorization", &format!("Bearer {LITERAL}"))], false)
+        .replace("  primary:", "  !x primary:");
+    let safe = doc(&[("Authorization", "{env.KEY}")], false);
+    let after = after + safe.split_once("providers:\n").expect("providers").1;
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+/// R3 guard: the existing exact-key static lookup also covers `api_key`.
+#[tokio::test]
+async fn capedit_r5_a_static_runtime_api_key_is_refused_by_header_field() {
+    let after = doc(&[("Authorization", "Bearer {api_key}")], false).replace(
+        "      headers:\n",
+        &format!("      static_params: {{api_key: '{LITERAL}'}}\n      headers:\n"),
+    );
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+/// R3 guard: the existing exact-key static lookup also covers `oauth.x`.
+#[tokio::test]
+async fn capedit_r5_a_static_oauth_name_is_refused_by_header_field() {
+    let after = doc(&[("Authorization", "Bearer {oauth.x}")], false).replace(
+        "      headers:\n",
+        &format!("      static_params: {{oauth.x: '{LITERAL}'}}\n      headers:\n"),
+    );
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+/// R3 guard: the existing exact-key static lookup also covers `service_auth_header`.
+#[tokio::test]
+async fn capedit_r5_a_static_auth_header_name_is_refused_by_header_field() {
+    let after = doc(&[("Authorization", "Bearer {service_auth_header}")], false).replace(
+        "      headers:\n",
+        &format!("      static_params: {{service_auth_header: '{LITERAL}'}}\n      headers:\n"),
+    );
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+#[tokio::test]
+async fn capedit_r5_an_input_enum_is_refused_by_header_field() {
+    let after = doc(&[("Authorization", "Bearer {token}")], false).replace(
+        "        type: string\n",
+        &format!("        type: string\n        enum: ['{LITERAL}']\n"),
+    );
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+#[tokio::test]
+async fn capedit_r5_an_input_const_is_refused_by_header_field() {
+    let after = doc(&[("Authorization", "Bearer {token}")], false).replace(
+        "        type: string\n",
+        &format!("        type: string\n        const: '{LITERAL}'\n"),
+    );
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+#[tokio::test]
+async fn capedit_r5_an_input_examples_is_refused_by_header_field() {
+    let after = doc(&[("Authorization", "Bearer {token}")], false).replace(
+        "        type: string\n",
+        &format!("        type: string\n        examples: ['{LITERAL}']\n"),
+    );
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+#[tokio::test]
+async fn capedit_r5_a_root_anyof_input_const_is_refused_by_header_field() {
+    let after = doc(&[("Authorization", "Bearer {token}")], false).replace(
+        "    type: object\n",
+        &format!(
+            "    type: object\n    anyOf: [{{properties: {{token: {{const: '{LITERAL}'}}}}}}]\n"
+        ),
+    );
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+/// R5 guard: keep the r4 env-name restriction, including this exact space spelling.
+#[tokio::test]
+async fn capedit_r5_an_env_name_with_whitespace_is_refused_by_header_field() {
+    let after = doc(&[("Authorization", "{env.API_KEY SECRET}")], false);
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+/// R5 guard: the current keychain word check already excludes whitespace.
+#[tokio::test]
+async fn capedit_r5_a_keychain_name_with_whitespace_is_refused_by_header_field() {
+    let after = doc(
+        &[("Authorization", &format!("{{keychain.svc {LITERAL}}}"))],
+        false,
+    );
+    assert_review_refused(&after, "providers.primary.config.headers.Authorization").await;
+}
+
+#[tokio::test]
+async fn capedit_r5_a_dynamic_provider_timeout_parse_error_has_only_fixed_diagnostics() {
+    let after = doc(&[("Authorization", "{env.KEY}")], false)
+        .replace("  primary:", &format!("  {LITERAL}:"))
+        .replace("    service: rest", "    timeout: []\n    service: rest");
+    let error = crate::capability::parse_capability(&after).expect_err("invalid timeout");
+    assert!(
+        error.to_string().contains(&format!("providers.{LITERAL}")),
+        "{error}"
+    );
+    let other = after
+        .replace(LITERAL, "another-provider")
+        .replace("timeout: []", "timeout: {}");
+    assert_r5_parse_refused(&after, &other).await;
+}
+
+/// A1: currently refused by the narrower keychain charset; green after the fix.
+#[tokio::test]
+async fn capedit_r5_a_keychain_service_with_a_slash_is_saved() {
+    assert_r5_saved(&doc(&[("Authorization", "{keychain.team/service}")], false)).await;
+}
+
+/// A2 guard: a plain OAuth name is already saved.
+#[tokio::test]
+async fn capedit_r5_a_oauth_reference_is_saved() {
+    assert_r5_saved(&doc(&[("Authorization", "{oauth.gmail}")], false)).await;
+}
+
+/// A3 guard: a scheme followed by an env reference is already saved.
+#[tokio::test]
+async fn capedit_r5_a_env_reference_after_bearer_is_saved() {
+    assert_r5_saved(&doc(&[("Authorization", "Bearer {env.TOKEN}")], false)).await;
+}
+
+/// A3 guard: the final empty default is already saved.
+#[tokio::test]
+async fn capedit_r5_a_env_reference_with_an_empty_default_is_saved() {
+    assert_r5_saved(&doc(&[("Authorization", "{env.TOKEN:-}")], false)).await;
+}
+
+/// A4 guard: type and description alone leave the input value-free.
+#[tokio::test]
+async fn capedit_r5_a_plain_declared_input_with_description_is_saved() {
+    let after = doc(&[("Authorization", "{token}")], false).replace(
+        "        type: string\n",
+        "        type: string\n        description: Supplied by the caller\n",
+    );
+    assert_r5_saved(&after).await;
+}
