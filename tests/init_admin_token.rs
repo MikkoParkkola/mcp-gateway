@@ -153,3 +153,217 @@ fn admintok_2_doctor_names_custody_without_value_even_on_resolution_failure() {
         }
     }
 }
+
+fn failure_root() -> tempfile::TempDir {
+    let root = tempfile::tempdir().expect("isolated failure");
+    std::fs::create_dir(root.path().join("home")).expect("home");
+    root
+}
+
+fn failed_init(root: &Path, path: &Path, examples: bool) -> std::process::Output {
+    let out = command(root)
+        .args(["--log-level", "off", "init", "--output"])
+        .arg(path)
+        .arg(if examples {
+            "--with-examples=true"
+        } else {
+            "--with-examples=false"
+        })
+        .output()
+        .expect("real init failure");
+    assert!(!out.status.success(), "init must refuse this attempt");
+    out
+}
+
+// Include locks, index, staging, home/state, and non-YAML files; never follow links.
+fn output_files(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut files = std::collections::BTreeMap::new();
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).expect("output directory") {
+            let entry = entry.expect("output entry");
+            let path = entry.path();
+            let kind = entry.file_type().expect("output type");
+            if kind.is_dir() {
+                dirs.push(path);
+            } else {
+                let bytes = if kind.is_symlink() {
+                    std::fs::read_link(&path)
+                        .expect("link target")
+                        .as_os_str()
+                        .as_bytes()
+                        .to_vec()
+                } else {
+                    assert!(kind.is_file(), "unexpected special output");
+                    std::fs::read(&path).expect("output bytes")
+                };
+                files.insert(path, bytes);
+            }
+        }
+    }
+    files
+}
+
+fn no_token_leaks(root: &Path, out: &std::process::Output, store_entry: Option<&Path>) {
+    // The generated value is unavailable after rollback; its fixed prefix lets
+    // us reject any generated token, including one from a failed second attempt.
+    let has_token = |bytes: &[u8]| bytes.windows(6).any(|part| part == b"mcpgw_");
+    assert!(!has_token(&out.stdout), "token in stdout");
+    assert!(!has_token(&out.stderr), "token in stderr");
+    for (path, bytes) in output_files(root) {
+        if Some(path.as_path()) != store_entry {
+            assert!(!has_token(&bytes), "token outside its store entry");
+        }
+    }
+}
+
+fn one_attempt_removed(dir: &Path) {
+    let index = std::fs::read_to_string(dir.join("secrets-index.jsonl")).expect("attempt index");
+    let rows: Vec<serde_json::Value> = index
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("index row"))
+        .collect();
+    assert_eq!(rows.len(), 2, "one indexed attempt and its removal");
+    assert_eq!(rows[0]["store"], "files");
+    assert!(rows[0]["created_at"].is_number());
+    assert_eq!(rows[0]["name"], rows[1]["name"]);
+    assert!(rows[1]["removed_at"].is_number());
+    assert!(
+        std::fs::read_dir(dir.join("secrets"))
+            .expect("store")
+            .next()
+            .is_none()
+    );
+}
+
+/// R1 / lead ruling: rerun preserves the config, samples, index and sole entry.
+#[test]
+fn admintok_1_existing_config_refusal_preserves_all_files_and_store_bytes() {
+    let (root, path, written, _) = initialized();
+    let entry = Path::new(written.strip_prefix("file:").expect("stored reference"));
+    assert_eq!(
+        std::fs::read_dir(root.path().join("secrets"))
+            .expect("store")
+            .count(),
+        1
+    );
+    let before = output_files(root.path());
+    let out = failed_init(root.path(), &path, true);
+    let expected = format!(
+        "Error: {} already exists. Remove it first or choose a different path with --output.\n",
+        path.display()
+    );
+    assert!(
+        out.stderr == expected.as_bytes(),
+        "whole existing-config refusal message"
+    );
+    // Do not print the snapshot on failure: it contains the stored credential.
+    assert!(
+        before == output_files(root.path()),
+        "rerun changed existing files or added an entry"
+    );
+    no_token_leaks(root.path(), &out, Some(entry));
+}
+
+/// R2 / A6: a pre-existing dangling link passes absence checks, but create_new
+/// refuses it after the first sample and entry exist. This is not the R4 race.
+#[test]
+fn admintok_1_sample_create_failure_removes_owned_files_and_entry_preserving_competitors() {
+    let root = failure_root();
+    let samples = root.path().join("capabilities/knowledge");
+    std::fs::create_dir_all(&samples).expect("samples directory");
+    let blocked = samples.join("public_holidays.yaml");
+    let target = root.path().join("missing-competitor-target");
+    std::os::unix::fs::symlink(&target, &blocked).expect("competing dangling link");
+    let collision = std::fs::File::create_new(&blocked).expect_err("sample must refuse link");
+    let competitor = samples.join("keep.txt");
+    std::fs::write(&competitor, b"competing bytes").expect("competitor");
+    let path = root.path().join("gateway.yaml");
+    let out = failed_init(root.path(), &path, true);
+    let error = format!("Error: {}: {collision}", blocked.display());
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .any(|line| line == error)
+    );
+    assert!(!path.try_exists().expect("config absence"));
+    assert_eq!(
+        std::fs::symlink_metadata(samples.join("weather_current.yaml"))
+            .expect_err("owned sample removed")
+            .kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert_eq!(
+        std::fs::read_link(&blocked).expect("competitor remains"),
+        target
+    );
+    assert!(!target.try_exists().expect("no link traversal"));
+    assert_eq!(
+        std::fs::read(competitor).expect("competitor bytes"),
+        b"competing bytes"
+    );
+    one_attempt_removed(root.path());
+    no_token_leaks(root.path(), &out, None);
+}
+
+/// R3 / A6: probe succeeds, then FilesStore::create cannot encode its reference.
+/// Unlike chmod, this is deterministic even as root (probe resets mode to 0700).
+#[test]
+fn admintok_1_chosen_store_create_failure_leaves_no_config_samples_or_literal_fallback() {
+    use std::os::unix::ffi::OsStringExt as _;
+    let root = failure_root();
+    let dir = root
+        .path()
+        .join(std::ffi::OsString::from_vec(b"config-\xff".to_vec()));
+    std::fs::create_dir(&dir).expect("non-UTF-8 config directory");
+    let path = dir.join("gateway.yaml");
+    let out = failed_init(root.path(), &path, true);
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .any(|line| line == STORE_FAILURE)
+    );
+    assert!(!path.try_exists().expect("config absence"));
+    assert!(!dir.join("capabilities").try_exists().expect("no samples"));
+    one_attempt_removed(&dir);
+    no_token_leaks(root.path(), &out, None);
+}
+
+const STORE_FAILURE: &str = "Error: init store failed; inspect unused entries with doctor \
+                            and remove any orphan before retrying";
+
+/// R5 / A2: a handled store-probe failure prints the helper's entire message.
+#[test]
+fn admintok_1_handled_failure_reports_whole_helper_message_without_write_wrapper_or_token() {
+    let root = failure_root();
+    let store = root.path().join("secrets");
+    std::fs::write(&store, b"competing store-path file").expect("blocked store directory");
+    let path = root.path().join("gateway.yaml");
+    let out = failed_init(root.path(), &path, false);
+    assert!(
+        out.stderr == format!("{STORE_FAILURE}\n").as_bytes(),
+        "whole helper message"
+    );
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("Failed to write"));
+    assert!(!path.try_exists().expect("config absence"));
+    assert!(
+        !root
+            .path()
+            .join("capabilities")
+            .try_exists()
+            .expect("no samples")
+    );
+    assert!(
+        !root
+            .path()
+            .join("secrets-index.jsonl")
+            .try_exists()
+            .expect("no entry indexed")
+    );
+    assert_eq!(
+        std::fs::read(store).expect("store-path competitor"),
+        b"competing store-path file"
+    );
+    no_token_leaks(root.path(), &out, None);
+}
