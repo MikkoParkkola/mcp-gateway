@@ -11,7 +11,7 @@ use super::super::{
     Fact, IntentId, JournalError, JournalV2, Pending, Phase, ResultClass, TerminalRole,
 };
 use super::r2_fixtures::{
-    ABANDONED_PAIRS, DEFERRED_CONFLICT, DEFERRED_CONFLICT_ATTRIBUTION,
+    ABANDONED_PAIRS, DECISION_SETTLED_BY_CASES, DEFERRED_CONFLICT, DEFERRED_CONFLICT_ATTRIBUTION,
     DEFERRED_CONFLICT_CALLER_DIGEST, DEFERRED_EQUAL, FACT_COMMITTED_MATCH, FACT_COMMITTED_WRONG,
     FACT_ROLLED_BACK_MATCH, FACT_ROLLED_BACK_WRONG, OUTCOME_PAIRS, PENDING_FORWARD_MATCH,
     PENDING_FORWARD_WRONG, PENDING_RESTORE_MATCH, PENDING_RESTORE_WRONG,
@@ -55,6 +55,11 @@ pub(crate) fn journal_cases(failures: &mut Vec<String>) {
                 decode_case(fixture, valid)
             });
         }
+    }
+    for &(id, valid, fixture) in DECISION_SETTLED_BY_CASES {
+        collect_case(failures, ROW, id, decode_expectation(valid), || {
+            decode_case(fixture, valid)
+        });
     }
     for size in [1_048_576, 1_048_577] {
         for operation in ["encode", "persist"] {
@@ -315,9 +320,14 @@ pub(crate) fn terminal_cases(failures: &mut Vec<String>) {
             "Q2_terminal_counter_mismatch_settled_by",
             "Q2_terminal_matching_control",
         ] {
-            // Abandoned has a top-level counter in these acknowledged-token
-            // payloads; nested settled_by counters belong to Outcome only.
-            if role == TerminalRole::Abandoned && case == "Q2_terminal_counter_mismatch_settled_by"
+            // Abandoned decision-only linkage is refused on decode in Q6.
+            // Nested settled_by counters belong to Outcome only.
+            if role == TerminalRole::Abandoned
+                && matches!(
+                    case,
+                    "Q2_terminal_settled_by_presence_decision_only"
+                        | "Q2_terminal_counter_mismatch_settled_by"
+                )
             {
                 continue;
             }
@@ -426,8 +436,10 @@ fn linkage_state(dir: &Path, role: TerminalRole, case: &str) -> Result<JournalV2
     let mut payload: Value =
         serde_json::from_slice(&writer.records[0].payload_json).map_err(|e| e.to_string())?;
     let linked = role == TerminalRole::Outcome || case != "Q2_terminal_matching_control";
-    if linked {
+    if role == TerminalRole::Outcome {
         choice.settled_by = Some(IntentId("recovery-1".into()));
+    }
+    if linked {
         payload["settled_by"] = json!({"token": "recovery-1", "intent_counter": 17});
     }
     match case {

@@ -6,8 +6,24 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::fixtures::*;
-use super::*;
+use super::fixtures::{
+    AUDIT_WHO_NONE, AUDIT_WHO_PRINCIPAL, JOURNAL_V2_ACCEPTED, JOURNAL_V2_ADOPT,
+    JOURNAL_V2_ATTRIBUTION, JOURNAL_V2_BACKEND, JOURNAL_V2_DECISION_ABANDONED_NOT_WRITTEN,
+    JOURNAL_V2_DECISION_NOT_WRITTEN, JOURNAL_V2_DECISION_UNPROVEN, JOURNAL_V2_DECISION_WRITTEN,
+    JOURNAL_V2_DUPLICATE_ATTEMPTS, JOURNAL_V2_DUPLICATE_WRITER_ATTEMPT, JOURNAL_V2_HANDED_OVER,
+    JOURNAL_V2_INVALID_ABANDONED_REFUSED, JOURNAL_V2_INVALID_ABANDONED_UNPROVEN_REFUSED,
+    JOURNAL_V2_INVALID_ABANDONED_WRITTEN, JOURNAL_V2_INVALID_ACCEPTED_NO_FACT,
+    JOURNAL_V2_INVALID_ACCEPTED_NO_REVISION, JOURNAL_V2_INVALID_ACCEPTED_UNTOUCHED,
+    JOURNAL_V2_INVALID_ACCEPTED_WRONG_REVISION, JOURNAL_V2_INVALID_OUTCOME_ABANDONED,
+    JOURNAL_V2_INVALID_OUTCOME_DEFERRED, JOURNAL_V2_INVALID_OUTCOME_RENAMED,
+    JOURNAL_V2_INVALID_OUTCOME_UNPROVEN, JOURNAL_V2_INVALID_PENDING_FACT, JOURNAL_V2_NONE,
+    JOURNAL_V2_PARKED, JOURNAL_V2_PENDING, JOURNAL_V2_RESTORE, JOURNAL_V2_ROOT, NEW, OLD, bytes,
+    checked, collect_case, config, decision, intended, r2_cases, reopened, session,
+};
+use super::{
+    Action, Decision, Fact, FileRevision, JournalError, JournalV2, Locked, LogId, OpenJournal,
+    ParkReason, Pending, Phase, Reason, ResultClass, Role, TerminalRole, open,
+};
 use crate::config_persistence::commit;
 use crate::config_persistence::journal::{self, Recovered};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
@@ -535,7 +551,7 @@ fn reason_decision_cases() {
             ResultClass::Unproven,
             Reason::Abandoned,
             TerminalRole::Abandoned,
-            Some(IntentId("recovery-1".into())),
+            None,
             false,
         ),
         (

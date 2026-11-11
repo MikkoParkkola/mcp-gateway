@@ -7,7 +7,11 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::*;
+use super::{
+    Action, Decision, Fact, FileRevision, FrozenRecord, IntentId, JournalSession, JournalV2,
+    Locked, LogId, OpenJournal, ParkReason, Phase, Reason, ResultClass, Role, TerminalRole,
+    TokenState, open,
+};
 use crate::config_persistence::journal;
 use crate::config_persistence::lock;
 use crate::config_persistence::{FileMode, Symlink, sync_dir_of, write_atomic};
@@ -349,7 +353,7 @@ pub(super) const JOURNAL_V2_DECISION_UNPROVEN: &[u8] = concat!(
     r#"{"attempts":[],"binding":"opaque-log:fixture","fact":null,"new_revision":"bbbbbbbbbbbbbbbbbbbbbb"#,
     r#"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","original_revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"#,
     r#"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pending":null,"phase":"staged","version":2,"writer":{"decisi"#,
-    r#"on":{"delivery_stopped":false,"reason":"abandoned","result":"unproven","settled_by":"recovery-1""#,
+    r#"on":{"delivery_stopped":false,"reason":"abandoned","result":"unproven","settled_by":null"#,
     r#","terminal":"abandoned"},"handed_over":false,"intent":{"attribution":null,"caller_digest":"8db52"#,
     r#"a270d606fc2078954f3a4f4766037fdf26b170d107b2131f00250db7f35","delivered":true,"parked":null,"pay"#,
     r#"load_json":[123,34,107,105,110,100,34,58,34,115,101,116,116,108,101,46,115,97,118,101,34,125],"r"#,

@@ -76,6 +76,9 @@ pub(super) const FACT_ROLLED_BACK_MATCH: &[u8] = concat!(
 
 macro_rules! decision_journal {
     ($result:literal, $reason:literal, $terminal:literal) => {
+        decision_journal!($result, $reason, $terminal, "null")
+    };
+    ($result:literal, $reason:literal, $terminal:literal, $settled_by:literal) => {
         concat!(
             r#"{"attempts":[],"binding":"opaque-log:fixture","fact":"untouched","new_revision":"#,
             r#""bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","original_rev"#,
@@ -85,7 +88,9 @@ macro_rules! decision_journal {
             $reason,
             r#"","result":""#,
             $result,
-            r#"","settled_by":null,"terminal":""#,
+            r#"","settled_by":"#,
+            $settled_by,
+            r#","terminal":""#,
             $terminal,
             r#""},"handed_over":false,"intent":{"attribution":null,"caller_digest":"8db52a270d6"#,
             r#"06fc2078954f3a4f4766037fdf26b170d107b2131f00250db7f35","delivered":true,"parked""#,
@@ -96,6 +101,35 @@ macro_rules! decision_journal {
         .as_bytes()
     };
 }
+
+// II.3: settled_by belongs to an outcome alone. Each pair differs only in that field.
+pub(super) const DECISION_SETTLED_BY_CASES: &[(&str, bool, &[u8])] = &[
+    (
+        "Q6_abandoned_decision_with_settled_by_not_written",
+        false,
+        decision_journal!("not_written", "abandoned", "abandoned", r#""recovery-1""#),
+    ),
+    (
+        "Q6_abandoned_decision_with_settled_by_unproven",
+        false,
+        decision_journal!("unproven", "abandoned", "abandoned", r#""recovery-1""#),
+    ),
+    (
+        "Q6_abandoned_decision_without_settled_by_not_written",
+        true,
+        decision_journal!("not_written", "abandoned", "abandoned"),
+    ),
+    (
+        "Q6_abandoned_decision_without_settled_by_unproven",
+        true,
+        decision_journal!("unproven", "abandoned", "abandoned"),
+    ),
+    (
+        "Q6_outcome_decision_with_settled_by_written",
+        true,
+        decision_journal!("written", "committed", "outcome", r#""recovery-1""#),
+    ),
+];
 
 // Design §3.1, §3.2(10), §3.3 and §3.6: rolled_back is valid for both
 // writer/not_written and recovery/written. Deferred reasons are never outcomes.
