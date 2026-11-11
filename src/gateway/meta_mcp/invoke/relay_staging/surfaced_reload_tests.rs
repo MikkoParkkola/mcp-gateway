@@ -65,7 +65,7 @@ impl Fixture {
         let registry = Arc::new(BackendRegistry::new());
         let calls = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
         let mut config: Config = crate::yaml::from_str(
-            r#"
+            r"
 backends:
   alpha: {http_url: 'https://alpha.example/mcp'}
   beta: {http_url: 'https://beta.example/mcp'}
@@ -75,7 +75,7 @@ security:
   firewall:
     rules: [{match: '*', action: allow}]
     collusion: {action: block, sources: ['alpha:*']}
-"#,
+",
         )
         .unwrap();
         if per_user {
@@ -244,7 +244,7 @@ async fn replay3_deferred_surfaced_replay_survives_real_reload() {
     f.receipt(staged);
     let records = f.records();
     assert_eq!(records.len(), 1);
-    let (_, staged) = Box::pin(memo::with_visibility_memo(f.meta.collecting_staged(
+    let ((), staged) = Box::pin(memo::with_visibility_memo(f.meta.collecting_staged(
         async {
             let caller = f.caller(&retry);
             let SyncAdmission::Replay(response, audit, target, steps, bindings, slot) =
@@ -313,7 +313,7 @@ async fn reload5_real_reload_preserves_admitted_replay_and_refuses_late_retry() 
     assert_eq!(records[0]["server"], "alpha");
     assert_eq!(records[0]["tool"], "read");
 
-    let (_, staged) = Box::pin(memo::with_visibility_memo(f.meta.collecting_staged(
+    let ((), staged) = Box::pin(memo::with_visibility_memo(f.meta.collecting_staged(
         async {
             let caller = f.caller(&retry);
             let SyncAdmission::Replay(response, audit, target, steps, bindings, slot) =
