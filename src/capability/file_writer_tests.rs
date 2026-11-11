@@ -481,14 +481,24 @@ async fn literal_headers_precede_pin_errors_in_save_and_preview() {
     let valid_pin = pinned(TEXT);
     let broken_pin = described(&valid_pin, "Changed behind the pin");
     let ambiguous_pin = format!("sha256: [unreadable]\n{sent}");
-    for (current, body) in [
-        (&valid_pin, &sent),
-        (&broken_pin, &sent),
-        (&valid_pin, &ambiguous_pin),
+    // A text that does not parse as a capability (the ambiguous pin) is
+    // refused with the fixed parse answer before any pin or credential
+    // judgement, and carries no submitted bytes.
+    for (current, body, unparsed) in [
+        (&valid_pin, &sent, false),
+        (&broken_pin, &sent, false),
+        (&valid_pin, &ambiguous_pin, true),
     ] {
         let (dir, file) = dir_with(current);
         let preview = super::preview(body, Some(current));
-        assert!(matches!(&preview, Err(Refused::LiteralCredential { .. })));
+        if unparsed {
+            assert!(
+                matches!(&preview, Err(Refused::Invalid { patch: None, .. })),
+                "{preview:?}"
+            );
+        } else {
+            assert!(matches!(&preview, Err(Refused::LiteralCredential { .. })));
+        }
         assert!(!format!("{preview:?}").contains(canary));
         let saved = commit(
             edit(
@@ -501,7 +511,14 @@ async fn literal_headers_precede_pin_errors_in_save_and_preview() {
             soon(),
         )
         .await;
-        assert!(matches!(&saved, Err(Refused::LiteralCredential { .. })));
+        if unparsed {
+            assert!(
+                matches!(&saved, Err(Refused::Invalid { patch: None, .. })),
+                "{saved:?}"
+            );
+        } else {
+            assert!(matches!(&saved, Err(Refused::LiteralCredential { .. })));
+        }
         assert!(!format!("{saved:?}").contains(canary));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), *current);
     }
