@@ -47,7 +47,10 @@ struct Fixture {
     state: Arc<AppState>,
     log: Arc<TransparencyLogger>,
     file: std::path::PathBuf,
-    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
+    _dirs: (
+        Arc<tempfile::TempDir>,
+        crate::gateway::router::tests::FixtureDir,
+    ),
 }
 
 fn admin_auth() -> AuthConfig {
@@ -74,7 +77,7 @@ fn admin_auth() -> AuthConfig {
 /// (`text`) and an audit log under `policy`.
 async fn fixture(text: &str, policy: AuditFailurePolicy) -> Fixture {
     let (mut state, store) = test_router_app_state_with_auth(&admin_auth()).await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let caps = dir.path().join("capabilities");
     std::fs::create_dir(&caps).expect("capability dir");
     let file = caps.join("kept.yaml");
@@ -330,3 +333,6 @@ async fn caped11_a_refused_delete_record_withholds_the_answer() {
         "the handler ran and the delete committed before its record was refused"
     );
 }
+
+#[path = "capability_header_secret_tests.rs"]
+mod header_secrets;
