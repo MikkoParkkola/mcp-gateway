@@ -137,6 +137,7 @@ impl super::super::TransparencyLogger {
     pub(crate) fn arm_write_fault(&self, fault: Option<WriteFault>) {
         *self.hooks.fault.lock().unwrap() = fault;
     }
+    #[cfg(unix)]
     pub(crate) fn arm_after_partial_write(&self, callback: Option<Box<dyn Fn() + Send + Sync>>) {
         *self.hooks.after_partial_write.lock().unwrap() = callback;
     }

@@ -8,7 +8,8 @@ use super::super::fixtures::{NEW, OLD, bytes, collect_case};
 use super::super::observe::{self, Event};
 use super::super::{Fact, JournalError, OpenJournal, Pending, Phase};
 use super::fixtures::{
-    FOREIGN, Live, accepted, replace_bytes, reseed, runtime, staged, state, state_of,
+    FOREIGN, Live, accepted, acquire, reopen, replace_bytes, reseed, runtime, staged, state,
+    state_of,
 };
 use super::{DrainError, JournalDrain};
 use crate::config_persistence::commit::{Action, FileRevision};
@@ -83,7 +84,7 @@ fn phase_case(case: &str, row: &str) {
     let before = journal::fault::synced(&live.path);
     let report = JournalDrain::repair(&mut owner, false);
     assert!(report.is_ok(), "{row}: repair returns proven phase result");
-    let report = report.ok().expect(row);
+    let report = report.expect(row);
     assert_eq!(
         std::fs::read(&live.path).expect(row),
         expected,
@@ -136,12 +137,17 @@ fn phase_case(case: &str, row: &str) {
 
 fn dispatch_case(case: &str, row: &str) {
     let live = Live::new();
-    let owner = live.seed(state(&live.resolved), row);
+    let owner = if case == "v1" {
+        let locked = acquire(&live.path);
+        journal::stage_original(&live.path, OLD).expect(row);
+        journal::begin(&live.path, FileRevision::of(OLD).as_str().into()).expect(row);
+        reopen(locked)
+    } else {
+        live.seed(state(&live.resolved), row)
+    };
     let path = journal::journal_path(&live.path);
     if case == "unknown" {
         replace_bytes(&path, br#"{"version":93}"#);
-    } else if case == "v1" {
-        journal::stage_original(&live.path, super::super::fixtures::OLD).expect(row);
     }
     let before = std::fs::read(&path).expect(row);
     if case == "unresolved" {

@@ -20,12 +20,14 @@ pub(super) enum At {
     OutcomeAppended,
     DeferredFlagged,
     /// Fired inside the logger's partial-write callback, before `write_line` returns.
+    #[cfg(unix)]
     AfterTornWrite,
     RepairPaused,
 }
 
 #[derive(Clone)]
 pub(super) enum Fault {
+    #[cfg(unix)]
     Kill(At),
     Cut(At, Mode),
     Fail(At),
@@ -35,9 +37,11 @@ pub(super) enum Fault {
 struct Entry {
     fault: Fault,
     fired: usize,
+    #[cfg(unix)]
     before_kill: Option<KillWitness>,
 }
 
+#[cfg(unix)]
 type KillWitness = Arc<dyn Fn(&mut Captured) + Send + Sync>;
 
 static FAULTS: Mutex<Option<HashMap<PathBuf, Entry>>> = Mutex::new(None);
@@ -54,6 +58,7 @@ pub(super) fn arm(path: &Path, fault: Fault) -> Armed {
             Entry {
                 fault,
                 fired: 0,
+                #[cfg(unix)]
                 before_kill: None,
             },
         );
@@ -86,23 +91,33 @@ pub(super) fn fired(path: &Path) -> usize {
 /// Called at real operation boundaries; neither arming nor a stub calls it.
 /// D7's `AfterTornWrite` is fired by the logger callback, never by a drain error path.
 pub(super) fn hit(path: &Path, at: At) -> Result<(), JournalError> {
-    let (fault, before_kill) = {
+    #[cfg(unix)]
+    let before_kill;
+    let fault = {
         let mut entries = FAULTS.lock().expect("fault registry");
         let Some(entry) = entries.as_mut().and_then(|entries| entries.get_mut(path)) else {
             return Ok(());
         };
         let matches = match &entry.fault {
+            #[cfg(unix)]
             Fault::Kill(want) | Fault::Cut(want, _) | Fault::Fail(want) => *want == at,
+            #[cfg(not(unix))]
+            Fault::Cut(want, _) | Fault::Fail(want) => *want == at,
             Fault::Pause(_) => at == At::RepairPaused,
         };
         if !matches || entry.fired != 0 {
             return Ok(());
         }
         entry.fired += 1;
-        (entry.fault.clone(), entry.before_kill.clone())
+        #[cfg(unix)]
+        {
+            before_kill = entry.before_kill.clone();
+        }
+        entry.fault.clone()
     };
     observe::note(path, event(at));
     match fault {
+        #[cfg(unix)]
         Fault::Kill(_) => {
             let mut captured = capture(path);
             if let Some(witness) = before_kill {
@@ -133,6 +148,7 @@ pub(super) fn event(at: At) -> Event {
         At::DecisionPersisted => Event::DecisionPersisted,
         At::OutcomeAppended => Event::OutcomeAppended,
         At::DeferredFlagged => Event::DeferredFlagged,
+        #[cfg(unix)]
         At::AfterTornWrite => Event::AfterTornWrite,
         At::RepairPaused => Event::RepairPaused,
     }

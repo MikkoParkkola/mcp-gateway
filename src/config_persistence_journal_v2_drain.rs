@@ -34,7 +34,7 @@ pub(crate) struct RepairReport {
 }
 
 pub(crate) struct DrainFailure {
-    session: DrainSession,
+    session: Box<DrainSession>,
     error: DrainError,
 }
 
@@ -160,7 +160,10 @@ impl JournalDrain {
                 let result = Self::run_owned(&mut session, log).await;
                 match result {
                     Ok(()) => Ok(session),
-                    Err(error) => Err(DrainFailure { session, error }),
+                    Err(error) => Err(DrainFailure {
+                        session: Box::new(session),
+                        error,
+                    }),
                 }
             })
         });
@@ -621,9 +624,8 @@ async fn send_record(
     if record.delivered {
         return Ok(());
     }
-    let payload = match serde_json::from_slice(&record.payload_json) {
-        Ok(payload) => payload,
-        Err(_) => return park_record(journal, token, index, ParkReason::ArtifactCorrupt),
+    let Ok(payload) = serde_json::from_slice(&record.payload_json) else {
+        return park_record(journal, token, index, ParkReason::ArtifactCorrupt);
     };
     let delivery = Delivery {
         binding: binding.clone(),
@@ -649,12 +651,11 @@ async fn send_record(
     #[cfg(test)]
     appended_boundary(&journal.target, delivery.role)?;
     let owner = owner_mut(journal, token)?;
-    match index {
-        Some(index) => owner.records[index].delivered = true,
-        None => {
-            owner.intent_counter.get_or_insert(receipt.counter);
-            owner.intent.delivered = true;
-        }
+    if let Some(index) = index {
+        owner.records[index].delivered = true;
+    } else {
+        owner.intent_counter.get_or_insert(receipt.counter);
+        owner.intent.delivered = true;
     }
     journal.persist().map_err(|_| DrainError::Journal)?;
     #[cfg(test)]

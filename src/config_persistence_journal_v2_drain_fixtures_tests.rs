@@ -150,10 +150,15 @@ pub(super) struct Live {
 impl Live {
     pub(super) fn new() -> Self {
         let dir = Arc::new(tempfile::tempdir().expect("fixture directory"));
-        let resolved = std::fs::canonicalize(dir.path()).expect("resolved fixture directory");
+        let root = std::fs::canonicalize(dir.path()).expect("resolved fixture directory");
+        // The overlay projects only config files; the logger owns its audit durability.
+        let resolved = root.join("config");
+        let audit = root.join("audit");
+        std::fs::create_dir(&resolved).expect("fixture config directory");
+        std::fs::create_dir(&audit).expect("fixture audit directory");
         let path = resolved.join("gateway.yaml");
         replace_bytes(&path, OLD);
-        let log_path = resolved.join("audit.jsonl");
+        let log_path = audit.join("audit.jsonl");
         let config = Arc::new(TransparencyLogConfig {
             enabled: true,
             path: log_path.to_string_lossy().into_owned(),

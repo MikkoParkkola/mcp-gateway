@@ -187,7 +187,12 @@ pub(super) fn child(row: &str, at: At) -> bool {
     let owner = reopen(acquire(&path));
     let config = Arc::new(TransparencyLogConfig {
         enabled: true,
-        path: directory.join("audit.jsonl").to_string_lossy().into_owned(),
+        path: directory
+            .parent()
+            .expect("fixture root")
+            .join("audit/audit.jsonl")
+            .to_string_lossy()
+            .into_owned(),
         key_id: "s6a2-fixture".into(),
         ..Default::default()
     });
