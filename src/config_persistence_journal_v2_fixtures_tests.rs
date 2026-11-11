@@ -3,7 +3,6 @@
 //! Independent byte fixtures; no fixture calls a behavior stub.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -13,7 +12,6 @@ use crate::config_persistence::journal;
 use crate::config_persistence::lock;
 use crate::config_persistence::{FileMode, Symlink, sync_dir_of, write_atomic};
 use crate::security::transparency_log::settle::IntentKind;
-use crate::security::transparency_log::{TransparencyLogConfig, TransparencyLogger};
 
 pub(super) const OLD: &[u8] = b"server:\n  port: 1\n";
 pub(super) const NEW: &[u8] = b"server:\n  port: 2\n";
@@ -57,18 +55,13 @@ pub(super) fn config() -> (tempfile::TempDir, PathBuf, Locked) {
     (dir, path, held)
 }
 
-pub(super) fn intended(dir: &Path) -> JournalV2 {
-    let audit_dir = dir.join("audit");
-    std::fs::create_dir_all(&audit_dir).expect("fixture audit directory");
-    let log = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
-        enabled: true,
-        path: audit_dir.join("log.jsonl").to_string_lossy().into_owned(),
-        ..TransparencyLogConfig::default()
-    }))
-    .expect("fixture log identity");
+pub(super) fn intended(_dir: &Path) -> JournalV2 {
+    // A fixed binding: the rows need an id, not a live log (an opened log in a temp dir would
+    // have to be kept alive for the whole test).
+    let binding = LogId::from_journal("opaque-log:fixture".to_owned()).expect("fixture log id");
     JournalV2 {
         version: 2,
-        binding: Some(log.log_id()),
+        binding: Some(binding),
         phase: Phase::Intended,
         original_revision: Some(FileRevision::of(OLD)),
         new_revision: None,
