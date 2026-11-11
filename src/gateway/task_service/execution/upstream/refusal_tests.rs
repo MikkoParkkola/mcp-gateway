@@ -148,6 +148,7 @@ fn capture(
         tool: TOOL.to_owned(),
         arguments: json!({}),
         handle: handle.to_owned(),
+        dispatched: Some(crate::security::dispatched::Dispatched::None),
     };
     (capture, Vec::new())
 }
@@ -329,6 +330,9 @@ async fn a_handle_is_live_only_for_a_readable_working_row_that_matches() {
     let handle = |backend: &str, handle: &str| UpstreamHandle {
         backend: backend.to_owned(),
         handle: handle.to_owned(),
+        tool: String::new(),
+        arguments: serde_json::Value::Null,
+        fingerprint: Some("none".to_owned()),
     };
     let live = |f: &Fixture, id: &str, h: &UpstreamHandle| {
         f.executor.handle_still_live(&f.owner_digest, id, h)

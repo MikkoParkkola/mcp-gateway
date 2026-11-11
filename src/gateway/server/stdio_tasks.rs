@@ -347,7 +347,10 @@ impl StdioTasks {
                     })
                     .await
             }
-            "tasks/cancel" => route.cancel(id, params).await,
+            // Boxed, as tasks/get is: the cancel path carries the upstream
+            // record and handle across its awaits, and inline it would size
+            // every stdio dispatch, refusals included.
+            "tasks/cancel" => Box::pin(route.cancel(id, params)).await,
             // Fail closed: a method this body does not name is never handled
             // as one of the three it does.
             other => crate::protocol::JsonRpcResponse::error(

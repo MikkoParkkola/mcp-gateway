@@ -71,15 +71,15 @@ mod collusion_live_tests;
 /// The one replay key: relay replay builds it at capture and lookup, and the
 /// store indexes by it (MIK-8662; the crate-wide path is decision
 /// `mik-8662-vis`).
-pub(crate) use collusion::replay::{CaptureMode, ReplayHandle, StoredKey};
+pub(crate) use collusion::replay::{ReplayHandle, StoredKey};
 #[cfg(test)]
 pub(crate) use collusion_digest::{note_walk_for_test, walks_built};
 #[cfg(test)]
 pub(crate) use collusion_gate::relay_witness_hook;
-pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
 pub(crate) use collusion_gate::{
-    DeliveryDigest, PlanStaging, RelayCaller, ReplaySource, ReplayedDigest,
+    Adopted, DeliveryDigest, PlanStaging, RelayCaller, ReplaySource, ReplayedDigest,
 };
+pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
 mod config;
 pub use config::{FirewallAction, FirewallConfig, FirewallRule, RuleException, ScanType};
 pub mod input_scanner;
@@ -403,14 +403,39 @@ impl Firewall {
         subject: ScanSubject,
         backend: Option<&crate::backend::Backend>,
     ) -> (FirewallVerdict, Option<crate::security::rule_id::RuleId>) {
+        let (verdict, rule, _) =
+            self.rescan_with_provenance(policy, target, args, subject, backend);
+        (verdict, rule)
+    }
+
+    /// [`Self::rescan_attributed`], plus the firewall rule that let a finding
+    /// through, for the allow record only (D9): ranked apart from
+    /// enforcement, from the content findings and the decided root findings.
+    pub(crate) fn rescan_with_provenance(
+        &self,
+        policy: &FirewallPolicy,
+        target: RuleTarget<'_>,
+        args: &Value,
+        subject: ScanSubject,
+        backend: Option<&crate::backend::Backend>,
+    ) -> (
+        FirewallVerdict,
+        Option<crate::security::rule_id::RuleId>,
+        Option<crate::security::decision_record::Allow>,
+    ) {
         if !self.config.enabled {
-            return (FirewallVerdict::allow(), None);
+            return (FirewallVerdict::allow(), None, None);
         }
         let roots = match subject {
             ScanSubject::Arguments => allowed_root::root_check(self, policy, target, args, backend),
             ScanSubject::Answers => allowed_root::RootOutcome::default(),
         };
         let mut findings = self.content_findings(target.tool, args);
+        // Only the arguments' scan names an allow (D10); an answers scan would
+        // compute it for nothing.
+        let provenance = matches!(subject, ScanSubject::Arguments)
+            .then(|| Self::allow_provenance(policy, target, &findings, &roots.findings))
+            .flatten();
         let (content_action, content_rule) = Self::resolve_attributed(policy, target, &findings);
         let ((action, rule), root_findings) =
             allowed_root::apply_roots(roots, (content_action, content_rule.cloned()));
@@ -422,7 +447,7 @@ impl Firewall {
             findings,
             anomaly_score: None,
         };
-        (verdict, rule)
+        (verdict, rule, provenance)
     }
 
     /// One audit row for a chokepoint decision that is not a plain allow
@@ -829,3 +854,6 @@ mod severity_tests;
 #[cfg(test)]
 #[path = "firewall_tests.rs"]
 mod tests;
+
+#[path = "allow_provenance.rs"]
+mod allow_provenance;

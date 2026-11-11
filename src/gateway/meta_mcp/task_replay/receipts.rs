@@ -21,7 +21,9 @@ impl MetaMcp {
         api_key_name: Option<&str>,
         stored: &CommittedTask,
     ) {
-        if !self.relay_active() || !stored.serves_backend_output() {
+        // A withheld row's caller received the gateway's answer, not the
+        // stored outcome: there is nothing delivered to receipt.
+        if !self.relay_active() || !stored.serves_backend_output() || stored.withholds_outcome() {
             return;
         }
         let [target] = stored.targets.as_slice() else {
@@ -83,6 +85,46 @@ impl MetaMcp {
 }
 
 impl MetaMcp {
+    /// The `-32002` refusal of a read of `stored` whose persisted
+    /// replay snapshot this process cannot track (another epoch, the
+    /// untrackable marker), under the collusion action published now, at
+    /// the read's start. Under `observe` the fact is counted and audited
+    /// and the read goes on; under `off`, or with nothing to track, `None`.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
+    pub(crate) fn untrackable_refusal(
+        &self,
+        stored: &CommittedTask,
+        session: Option<&str>,
+        caller: Option<&str>,
+    ) -> Option<crate::Error> {
+        #[cfg(feature = "firewall")]
+        {
+            if !self.relay_active() || !stored.serves_backend_output() {
+                return None;
+            }
+            let fw = self.firewall.as_deref()?;
+            let generation = self.current_generation()?;
+            let verdict = fw.untrackable_read(
+                generation.collusion_view(),
+                stored.replay_snapshot.as_deref(),
+                ("gateway", "tasks/get"),
+                (session.unwrap_or(""), caller.unwrap_or("anonymous")),
+            )?;
+            (!verdict.allowed).then(|| crate::Error::Forbidden {
+                code: -32002,
+                status: 403,
+                message: "the stored task result cannot be tracked for relay detection by this \
+                          gateway process; it is refused under block"
+                    .to_owned(),
+            })
+        }
+        #[cfg(not(feature = "firewall"))]
+        {
+            let _ = (stored, session, caller);
+            None
+        }
+    }
+
     /// MIK-7887.RECEIPT.1: a followed task's failure at settlement. A peer's
     /// own error replaces the working stub with its receipt, classified like a
     /// pending prompt as a read classifies it; any other error is the

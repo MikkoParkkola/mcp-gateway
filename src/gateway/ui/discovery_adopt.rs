@@ -140,7 +140,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
             fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE)
         }
         Err(ReplaceError::Secrets(_)) => failed("secrets"),
-        Err(ReplaceError::ReloadRefused(_)) => failed("reload_refused"),
+        Err(ReplaceError::ReloadRefused { .. }) => failed("reload_refused"),
         Err(ReplaceError::Unsupported(_)) => failed("unsupported"),
         Err(ReplaceError::Stage(_)) => failed("stage"),
         Err(ReplaceError::Write(_)) => failed("write"),

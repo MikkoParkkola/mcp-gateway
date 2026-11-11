@@ -348,6 +348,9 @@ fn handle() -> UpstreamHandle {
     UpstreamHandle {
         backend: BACKEND.to_owned(),
         handle: "job-1".to_owned(),
+        tool: String::new(),
+        arguments: serde_json::Value::Null,
+        fingerprint: Some("none".to_owned()),
     }
 }
 

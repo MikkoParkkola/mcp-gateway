@@ -365,6 +365,8 @@ async fn run_dispatched(
     // on it would report a job that has not run as finished.
     if let Some(handle) = submission.as_ref().and_then(|slot| slot.handle()) {
         let job = job.expect("a handle is captured only for an armed job");
+        // Read after the dispatch: what its send injected, or nothing.
+        let injected = submission.as_ref().and_then(|slot| slot.dispatched());
         follow_upstream_job(
             &executor,
             &state,
@@ -377,6 +379,7 @@ async fn run_dispatched(
                 handle,
                 caller.relay_caller(session_id.as_deref()),
                 intent.owned.dispatch_log().bindings(),
+                injected,
             ),
             &mut cancel_rx,
         )
@@ -403,11 +406,12 @@ async fn follow_handle(
     executor: &Arc<TaskExecutor>,
     state: &crate::gateway::task_service::host::LiveHost,
     (principal, id, revision): (&str, &str, u64),
-    (job, handle, relay, captured): (
+    (job, handle, relay, captured, fingerprint): (
         &crate::gateway::meta_mcp::upstream::DirectJob,
         String,
         crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
         bool,
+        Option<String>,
     ),
     bindings: &[crate::gateway::meta_mcp::admission::StepBinding],
     cancel_rx: &mut watch::Receiver<bool>,
@@ -427,9 +431,13 @@ async fn follow_handle(
         return;
     };
     let owner_digest = owner.as_digest();
+    // In memory, whatever the capture's outcome: the dispatch's own value.
     let upstream = UpstreamHandle {
         backend: job.server.clone(),
         handle,
+        tool: job.tool.clone(),
+        arguments: job.arguments.clone(),
+        fingerprint,
     };
     let followed = tokio::select! {
         biased;

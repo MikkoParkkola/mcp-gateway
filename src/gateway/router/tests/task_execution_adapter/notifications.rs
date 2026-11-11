@@ -61,6 +61,11 @@ mod helpers;
 #[path = "stored_read_frames.rs"]
 mod stored_read_frames;
 
+// A stored result redacted at serve carries no provenance seal.
+// A child for the same reason as `helpers`.
+#[path = "stored_seal_frames.rs"]
+mod stored_seal_frames;
+
 // A5c: `subscriptions/listen` scoped per caller. A child for the same reason
 // as `helpers`, and so it reads the same stream reader.
 #[path = "listen_scope.rs"]

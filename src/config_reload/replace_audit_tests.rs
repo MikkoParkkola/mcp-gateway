@@ -561,7 +561,7 @@ async fn a_save_the_loader_refuses_records_no_intent() {
     .await;
 
     assert!(
-        matches!(result, Err(ReplaceError::ReloadRefused(_))),
+        matches!(result, Err(ReplaceError::ReloadRefused { .. })),
         "{result:?}"
     );
     assert_eq!(read(&path), START);

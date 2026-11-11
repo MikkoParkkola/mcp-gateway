@@ -267,7 +267,12 @@ fn spawn_write(
         return;
     };
     let logger = Arc::clone(logger);
+    #[cfg(test)]
+    let in_flight = seams::write_spawned(&logger);
     handle.spawn(async move {
+        // Off the count when the task ends, panics or is cancelled.
+        #[cfg(test)]
+        let _in_flight = in_flight;
         if !notes.is_empty()
             && let Err(error) = write_records(&logger, &notes).await
         {
@@ -690,14 +695,19 @@ impl super::MetaMcp {
         caller: &super::MetaMcpCallerContext<'_>,
         (server, tool): (&str, &str),
     ) -> Result<()> {
-        if caller
+        if let Some(context) = caller
             .signing
-            .is_some_and(|context| context.prepared_for(server, tool))
+            .filter(|context| context.prepared_for(server, tool))
         {
             // Signing ran the policy before the route stage could record this
             // request's verdict (stdio): refuse a withheld name here.
             super::visible::memo::refuse_withheld(server, tool)?;
             stamp_prepared(server, tool);
+            // D3: the allow signing's check noted, taken once, so no later
+            // call or request inherits it.
+            if let Some(allow) = context.take_prepared_allow() {
+                super::invoke::audit::note_allowed_by(allow);
+            }
             Ok(())
         } else {
             self.check_invocation_policy(args, session_id, caller)

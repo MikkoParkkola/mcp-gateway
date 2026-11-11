@@ -70,6 +70,36 @@ pub(crate) fn note_declared_effect(
     note_decision(|noted| noted.note_effect(effect, source));
 }
 
+/// Note the check that allowed this call, rank-merged with any allow noted
+/// before it: into the open dispatch notes, else the open signing sink, else
+/// nowhere. Never the route scope or the request memo: a route-stage or
+/// admission allow is dropped, and the dispatch repeats that check inside its
+/// own notes (a signed call's comes from the sink, D3).
+pub(crate) fn note_allowed_by(allow: crate::security::decision_record::Allow) {
+    if super::NOTES.try_with(|_| ()).is_ok() {
+        super::note(|notes| notes.decision.allowed(allow));
+        return;
+    }
+    let _ = SIGNING_SINK.try_with(|sink| {
+        let mut held = sink.borrow_mut();
+        if held.as_ref().is_none_or(|kept| allow.rank < kept.rank) {
+            *held = Some(allow);
+        }
+    });
+}
+
+/// Run `check` with a signing sink open, returning its result and the
+/// lowest-rank allow noted inside it, for signing to keep on the prepared
+/// target.
+pub(crate) fn collect_allow<R>(
+    check: impl FnOnce() -> R,
+) -> (R, Option<crate::security::decision_record::Allow>) {
+    SIGNING_SINK.sync_scope(RefCell::new(None), || {
+        let result = check();
+        (result, SIGNING_SINK.with(|sink| sink.borrow_mut().take()))
+    })
+}
+
 fn note_decision(f: impl FnOnce(&mut crate::security::decision_record::Noted)) {
     if super::NOTES.try_with(|_| ()).is_ok() {
         super::note(|notes| f(&mut notes.decision));
@@ -81,6 +111,9 @@ fn note_decision(f: impl FnOnce(&mut crate::security::decision_record::Noted)) {
 tokio::task_local! {
     /// The router pre-check's decision for this request, before any dispatch.
     static ROUTE: RefCell<crate::security::decision_record::Noted>;
+    /// Signing's policy check, run before the dispatch notes open: the allow
+    /// it noted, kept for the prepared target (D3).
+    static SIGNING_SINK: RefCell<Option<crate::security::decision_record::Allow>>;
 }
 
 /// The check noted as refusing so far, and its rule: the dispatch's, read

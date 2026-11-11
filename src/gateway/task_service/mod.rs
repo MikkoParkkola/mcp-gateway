@@ -17,6 +17,9 @@ mod store;
 #[cfg(test)]
 mod store_tests;
 
+#[cfg(test)]
+mod delivery_pin_tests;
+
 mod service;
 
 #[cfg(test)]
@@ -47,10 +50,15 @@ pub(crate) use execution::{
     CancelDelivery, InputOutcome, OwnedAdmissionRequest, OwnedCallerContext, TaskCall,
     UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
+#[cfg(test)]
+pub(crate) use record::Vouching;
 pub(crate) use record::{CommittedTask, ErrorAuthor, SurfacedKind, SurfacedTarget, Target};
 // The router's settle rows name it; production stays inside the service.
 #[cfg(test)]
 pub(crate) use record::Provenance;
+/// The marker text the firewall's own constant is pinned against.
+#[cfg(all(test, feature = "firewall"))]
+pub(crate) use record::SNAPSHOT_UNTRACKABLE;
 /// Re-exported at crate-public visibility for the same reason as
 /// [`TaskExecutor`]: [`open_runtime`] is `pub` and returns this error, so its
 /// name has to be reachable from outside the crate.
@@ -70,6 +78,8 @@ pub(crate) use service::CreateOutcome;
 pub(crate) use store::TaskStore;
 #[cfg(test)]
 pub(crate) use store::input::RedemptionRead;
+#[cfg(all(test, feature = "firewall"))]
+pub(crate) use store::publish_log;
 
 /// Open the durable store, import restored bindings, build the executor, and
 /// settle whatever a previous process left mid-flight.

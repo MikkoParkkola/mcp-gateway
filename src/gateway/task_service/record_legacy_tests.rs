@@ -24,6 +24,7 @@ fn upstream(operation_digest: &str) -> UpstreamRecord {
         tool: "slow_job".to_owned(),
         arguments: json!({}),
         operation_digest: operation_digest.to_owned(),
+        secret_fingerprint: None,
     }
 }
 
@@ -50,6 +51,7 @@ fn row(task: &Task, version: u32, upstream: Option<UpstreamRecord>) -> Record {
         model: task.snapshot(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
+        replay_snapshot: None,
     }
 }
 
@@ -139,10 +141,12 @@ fn a_row_serves_backend_output_by_status() {
         targets_recorded: true,
         output_free,
         error_author: None,
-        owner_digest: String::new(),
+        owner_digest: Box::default(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        vouching: crate::gateway::task_service::Vouching::Vouched,
+        replay_snapshot: None,
     };
     let working = Task::create("t").expect("the test clock reads after 1970");
     let mut completed = working.clone();
@@ -225,7 +229,7 @@ fn a_gateway_authored_result_is_not_backend_output() {
 fn a_committed_snapshot_carries_its_owner_digest() {
     let task = Task::create("probe").expect("the test clock reads after 1970");
     let record = row(&task, 3, None);
-    assert_eq!(CommittedTask::of(task, &record).owner_digest, "principal");
+    assert_eq!(&*CommittedTask::of(task, &record).owner_digest, "principal");
 }
 
 /// MIK-7887.RECEIPT.1: the error's author is private record state. It survives
@@ -250,4 +254,59 @@ fn the_error_author_is_private_record_state() {
         set["model"].get("errorAuthor").is_none(),
         "the snapshot carries no author: {set}"
     );
+}
+
+/// A row's fingerprint survives a store rewrite as written: absent loads as
+/// the legacy `None`, this build writes it back as `"missing"`, and a
+/// written fingerprint keeps its string. A legacy upstream row stays
+/// unvouched however often it is rewritten, so its stored outcome is never
+/// served after a write-back.
+#[test]
+fn a_legacy_upstream_row_stays_unvouched_after_a_rewrite() {
+    use super::Vouching;
+    use crate::security::dispatched::MISSING;
+    let reload = |record: &Record| -> Record {
+        serde_json::from_value(serde_json::to_value(record).expect("a row serializes"))
+            .expect("a written row loads")
+    };
+    let task = || Task::create("slow_job").expect("the test clock reads after 1970");
+
+    let mut absent = serde_json::to_value(row(&task(), TARGET_VERSION, Some(upstream(DIGEST))))
+        .expect("a row serializes");
+    absent["upstream"]
+        .as_object_mut()
+        .expect("an upstream object")
+        .remove("secretFingerprint");
+    let legacy: Record = serde_json::from_value(absent).expect("a legacy row loads");
+    let fingerprint = |record: &Record| {
+        record
+            .upstream
+            .as_ref()
+            .expect("an upstream row")
+            .secret_fingerprint
+            .clone()
+    };
+    assert_eq!(
+        fingerprint(&legacy),
+        None,
+        "absent loads as the legacy state"
+    );
+    assert_eq!(
+        CommittedTask::of(task(), &legacy).vouching,
+        Vouching::Unvouched
+    );
+
+    let rewritten = reload(&legacy);
+    assert_eq!(fingerprint(&rewritten).as_deref(), Some(MISSING));
+    assert_eq!(
+        CommittedTask::of(task(), &rewritten).vouching,
+        Vouching::Unvouched,
+        "a rewritten legacy row is still unvouched"
+    );
+
+    let mut written = upstream(DIGEST);
+    written.secret_fingerprint = Some("hmac:0a1b".to_owned());
+    let kept = reload(&row(&task(), TARGET_VERSION, Some(written)));
+    assert_eq!(fingerprint(&kept).as_deref(), Some("hmac:0a1b"));
+    assert_eq!(CommittedTask::of(task(), &kept).vouching, Vouching::Vouched);
 }
