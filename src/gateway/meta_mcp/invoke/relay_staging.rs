@@ -6,6 +6,10 @@
 
 use std::cell::RefCell;
 
+#[cfg(all(test, feature = "firewall"))]
+#[path = "relay_staging/surfaced_reload_tests.rs"]
+mod surfaced_reload_tests;
+
 #[cfg(feature = "firewall")]
 use serde_json::Value;
 

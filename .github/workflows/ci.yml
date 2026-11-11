@@ -880,6 +880,20 @@ jobs:
       # Build the lib test binary once and hand it to int before running this
       # half, so int's lib-a half starts as soon as its own suite is done. The
       # shard suite below reuses this build.
+      # PILOT (abandon rule below): the slow builds ran on the 3-core 7 GB
+      # runner and swapped 3.6 of 4 GB at two jobs (40.9 and 56.9 min); the
+      # same build took 9 min on the 5-core 14 GB runner with no swap. On a
+      # small runner, build with one job. Abandon and revert when the median
+      # lib build on small runners stays above 35 min over 3 trains.
+      - name: One build job on a small runner
+        if: matrix.shard == 'lib-b'
+        run: |
+          mem=$(sysctl -n hw.memsize)
+          echo "runner memory $((mem / 1073741824)) GB"
+          if [ "$mem" -lt 10737418240 ]; then
+            echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+            echo "small runner: CARGO_BUILD_JOBS=1"
+          fi
       - name: Build the lib test binary once
         if: matrix.shard == 'lib-b'
         timeout-minutes: 120
