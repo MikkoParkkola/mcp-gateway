@@ -148,3 +148,5 @@ src/trust/export_verify.rs	read_bounded	File::open	1	not-config	an Activity expo
 src/trust/provenance_public_cli.rs	run_verify	fs::read_to_string	3	not-config	provenance verify inputs: the public-key trust set, receipt and result
 src/validator/cli_handler.rs	run_validate_command	fs::read_to_string	1	not-config	capability YAML being validated; public
 src/win_acl.rs	create_file_private	.open	1	write-only	Windows: creates an owner-only file; reads nothing
+src/cli_support/init.rs	same_sample	File::open	1	no-content	Windows sample identity check before rolling back this init attempt
+src/commands/doctor.rs	run_doctor_command	fs::read_to_string	1	read-only	admin-token custody via secret_slot even when config evaluation fails

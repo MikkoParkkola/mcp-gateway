@@ -346,7 +346,7 @@ fn w1_init_is_stored_and_bound_to_its_executable_custody_row() {
         if f.sig.ident == case && f.attrs.iter().any(|a| a.path().is_ident("test"))))
     );
     let key = (
-        "src/commands/mod.rs".to_owned(),
+        "src/cli_support/init.rs".to_owned(),
         "write_init_files".to_owned(),
         "persist:edit_config_text".to_owned(),
     );
@@ -360,7 +360,9 @@ fn w1_init_is_stored_and_bound_to_its_executable_custody_row() {
         .rows()
         .iter()
         .find(|(_, line)| {
-            line.starts_with("src/commands/mod.rs\twrite_init_files\tpersist:edit_config_text\t")
+            line.starts_with(
+                "src/cli_support/init.rs\twrite_init_files\tpersist:edit_config_text\t",
+            )
         })
         .expect("one reviewed init row");
     assert!(line.contains(&format!("tests/init_admin_token.rs::{case}")));

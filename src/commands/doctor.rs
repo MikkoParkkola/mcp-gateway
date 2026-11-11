@@ -200,6 +200,20 @@ pub async fn run_doctor_command(
     let (config_result, config) = check_config(config_path, fix);
     results.push(config_result);
 
+    if let Some(written) = resolve_config_path(config_path)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| crate::yaml::from_str::<crate::yaml::Value>(&text).ok())
+    {
+        let shown = mcp_gateway::config::secret_slot(
+            written["auth"]["bearer_token"].as_str().unwrap_or(""),
+        );
+        let detail = if shown == "<set>" {
+            "legacy literal in config"
+        } else {
+            &shown
+        };
+        results.push(CheckResult::pass("admin-token", detail).with_category("secrets"));
+    }
     let Some(config) = config else {
         print_results(&results, format);
         return ExitCode::FAILURE;

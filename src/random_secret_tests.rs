@@ -110,13 +110,12 @@ fn production_sources() -> Vec<(String, String)> {
 /// is not the shared generator. Any other naming, by path, `use`, alias,
 /// grouped or glob import, adds a word and fails until reviewed.
 const CALLERS: &[(&str, usize)] = &[
-    ("src/commands/mod.rs", 2),
+    ("src/cli_support/init.rs", 2),
     ("src/config/features/auth.rs", 2),
     ("src/gateway/auth_dashboard.rs", 2),
     ("src/gateway/ui/keys_create.rs", 2),
     ("src/key_server/store.rs", 2),
     ("src/lib.rs", 1),
-    ("src/main.rs", 1),
     ("src/oauth/client/mod.rs", 2),
     ("src/personal_accounts/journey/mod.rs", 1),
     ("src/personal_accounts/journey/ops.rs", 4),
