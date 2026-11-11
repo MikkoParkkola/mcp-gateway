@@ -8,7 +8,9 @@
 //!
 //! 1. CLI `--marketplace-url` / `--plugin-dir` flag
 //! 2. Config file `marketplace.marketplace_url` / `marketplace.plugin_dir`
-//! 3. Built-in defaults (`https://plugins.mcpgateway.io`, `~/.mcp-gateway/plugins`)
+//! 3. Built-in default for the plugin directory (`~/.mcp-gateway/plugins`).
+//!    There is no default marketplace URL: a command that needs one refuses
+//!    until the operator names a registry.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -29,7 +31,13 @@ pub async fn run_plugin_search(
     marketplace_url: Option<&str>,
     config: &Config,
 ) -> ExitCode {
-    let url = resolve_marketplace_url(marketplace_url, &config.marketplace);
+    let url = match resolve_marketplace_url(marketplace_url, &config.marketplace) {
+        Ok(url) => url,
+        Err(refusal) => {
+            eprintln!("Error: {refusal}");
+            return ExitCode::FAILURE;
+        }
+    };
     let cache_dir = resolved_plugin_dir(None, &config.marketplace);
     let client = match MarketplaceClient::new(url, &cache_dir) {
         Ok(c) => c,
@@ -70,7 +78,13 @@ pub async fn run_plugin_install(
     plugin_dir: Option<&Path>,
     config: &Config,
 ) -> ExitCode {
-    let url = resolve_marketplace_url(marketplace_url, &config.marketplace);
+    let url = match resolve_marketplace_url(marketplace_url, &config.marketplace) {
+        Ok(url) => url,
+        Err(refusal) => {
+            eprintln!("Error: {refusal}");
+            return ExitCode::FAILURE;
+        }
+    };
     let dir = plugin_dir.map_or_else(
         || resolved_plugin_dir(None, &config.marketplace),
         Path::to_path_buf,
@@ -163,9 +177,21 @@ pub fn run_plugin_list(plugin_dir: Option<&Path>, config: &Config) -> ExitCode {
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-/// Choose the effective marketplace URL: CLI flag > config > default.
-fn resolve_marketplace_url<'a>(cli: Option<&'a str>, cfg: &'a MarketplaceConfig) -> &'a str {
-    cli.unwrap_or(cfg.marketplace_url.as_str())
+/// Choose the effective marketplace URL: CLI flag > config. There is no
+/// default registry, so neither being set is a refusal that names both.
+fn resolve_marketplace_url<'a>(
+    cli: Option<&'a str>,
+    cfg: &'a MarketplaceConfig,
+) -> Result<&'a str, String> {
+    let url = cli.unwrap_or(cfg.marketplace_url.as_str()).trim();
+    if url.is_empty() {
+        return Err(
+            "no plugin registry is configured: set `marketplace.marketplace_url` \
+                    in the config or pass `--marketplace-url`"
+                .to_owned(),
+        );
+    }
+    Ok(url)
 }
 
 /// Resolve and expand the plugin directory path.
@@ -230,7 +256,34 @@ mod tests {
         // WHEN: a CLI override is provided
         let result = resolve_marketplace_url(Some("https://custom.example.com"), &cfg.marketplace);
         // THEN: the CLI value wins
-        assert_eq!(result, "https://custom.example.com");
+        assert_eq!(result, Ok("https://custom.example.com"));
+    }
+
+    #[test]
+    fn resolve_marketplace_url_uses_the_configured_registry() {
+        let mut cfg = default_config();
+        cfg.marketplace.marketplace_url = " https://registry.test.invalid ".to_owned();
+        assert_eq!(
+            resolve_marketplace_url(None, &cfg.marketplace),
+            Ok("https://registry.test.invalid")
+        );
+    }
+
+    #[test]
+    fn resolve_marketplace_url_refuses_when_no_registry_is_named() {
+        // GIVEN: the default config, an empty override and a blank config value
+        let mut blank = default_config();
+        blank.marketplace.marketplace_url = "  ".to_owned();
+        for result in [
+            resolve_marketplace_url(None, &default_config().marketplace),
+            resolve_marketplace_url(Some(""), &default_config().marketplace),
+            resolve_marketplace_url(None, &blank.marketplace),
+        ] {
+            // THEN: each refuses and names both ways to set one
+            let refusal = result.expect_err("no registry named");
+            assert!(refusal.contains("marketplace.marketplace_url"), "{refusal}");
+            assert!(refusal.contains("--marketplace-url"), "{refusal}");
+        }
     }
 
     #[test]
@@ -240,7 +293,7 @@ mod tests {
         // WHEN: CLI arg is None
         let result = resolve_marketplace_url(None, &cfg.marketplace);
         // THEN: the config value is returned, and by default no registry is set
-        assert_eq!(result, "");
+        assert!(result.is_err(), "{result:?}");
     }
 
     // ── resolved_plugin_dir ───────────────────────────────────────────────────

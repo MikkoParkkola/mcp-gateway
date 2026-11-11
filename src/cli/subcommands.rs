@@ -614,8 +614,9 @@ pub enum RuntimeProviderArg {
 
 /// Plugin marketplace subcommands
 ///
-/// Manages gateway plugins sourced from the remote marketplace at
-/// `https://plugins.mcpgateway.io` (configurable via `marketplace.marketplace_url`).
+/// Manages gateway plugins sourced from a remote marketplace. No marketplace
+/// is configured by default: name one with `marketplace.marketplace_url` or the
+/// `--marketplace-url` flag.
 ///
 /// # Examples
 ///
