@@ -426,7 +426,9 @@ fn a_root_without_resolved_or_link_is_accepted() {
 /// Keep the dependency reachable so a missing entry cannot mask a bad spec.
 #[test]
 fn local_specs_in_dependency_maps_refuse() {
-    for spec in ["", ".", "..", ".git", "./x", "a.tgz", "a.tar", "a.tar.gz"] {
+    for spec in [
+        ".", "..", ".git", "./x", "a.tgz", "a.tar", "a.tar.gz", "A.TGZ", "a.Tar.Gz",
+    ] {
         for range in [spec.to_owned(), format!("npm:@s/p@{spec}")] {
             let mut l = lock();
             l["packages"][""]["dependencies"]["a"] = range.as_str().into();
@@ -440,7 +442,16 @@ fn local_specs_in_dependency_maps_refuse() {
 
 #[test]
 fn registry_tags_ranges_and_aliases_are_accepted() {
-    for range in ["latest", "^1.2.3", "npm:@s/p@^1", "1.x || >=2"] {
+    for range in [
+        "latest",
+        "^1.2.3",
+        "npm:@s/p@^1",
+        "1.x || >=2",
+        // npm's default range, and an alias that omits its version.
+        "",
+        "npm:foo",
+        "npm:@s/p",
+    ] {
         let mut l = lock();
         l["packages"][""]["dependencies"]["a"] = range.into();
         check_lock(&l).expect(range);
@@ -549,4 +560,35 @@ fn oversized_uv_entry_points_refuse() {
             .expect_err("oversized entry points")
             .contains("no single entry point")
     );
+}
+
+/// An alias that names a version still must name a usable one.
+#[test]
+fn an_alias_with_an_empty_explicit_version_refuses() {
+    let mut l = lock();
+    l["packages"][""]["dependencies"]["a"] = "npm:@s/p@".into();
+    assert!(lock_refusal(&l).contains("not from the registry"));
+}
+
+/// A peer is installed like a dependency: a non-registry peer spec refuses,
+/// a registry range (or an optional peer with no entry) is accepted.
+#[test]
+fn a_peer_declaration_must_be_a_registry_range() {
+    for spec in [
+        "git+https://example.invalid/p.git",
+        "file:../p",
+        ".",
+        "a.tgz",
+    ] {
+        let mut l = lock();
+        l["packages"][""]["peerDependencies"] = serde_json::json!({ "peer": spec });
+        assert!(lock_refusal(&l).contains("not from the registry"), "{spec}");
+    }
+    for range in ["", ">=16 <19 || ^1", "latest"] {
+        let mut l = lock();
+        l["packages"][""]["peerDependencies"] = serde_json::json!({ "absent": range });
+        l["packages"][""]["peerDependenciesMeta"] =
+            serde_json::json!({ "absent": { "optional": true } });
+        check_lock(&l).expect(range);
+    }
 }
