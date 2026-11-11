@@ -71,7 +71,6 @@ case "$admin_ref" in
 esac
 [[ -n "$admin_token" ]] || { echo "could not read the admin token init stored" >&2; exit 1; }
 export MCP_GATEWAY_TOKEN="$admin_token"  # inherited by docker run -e, never in argv
-(umask 077; sed 's|^\( *bearer_token: *\).*|\1"env:MCP_GATEWAY_TOKEN"|' "$work/gateway.yaml" >"$work/gateway.container.yaml")
 
 # The fixture listens only on this private network; it is not published.
 docker network create "$network" >/dev/null
@@ -96,6 +95,8 @@ fi
 fixture_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$fixture")"
 [[ -n "$fixture_ip" ]] || { echo "smoke fixture container has no address" >&2; exit 1; }
 "$repo_root/scripts/dev/smoke-fixture-capability.sh" "$work" "http://$fixture_ip:8080"
+# The container copy is made last, so it carries the proxy key the fixture script just added.
+(umask 077; sed 's|^\( *bearer_token: *\).*|\1"env:MCP_GATEWAY_TOKEN"|' "$work/gateway.yaml" >"$work/gateway.container.yaml")
 
 # Mirrors deploy/single-node/docker-compose.yaml, including the reason. A
 # container must bind 0.0.0.0 to receive anything, and the init config keeps
