@@ -97,9 +97,13 @@ fn legacy_versions() {
             }),
             "{ROW}: unchanged legacy wire contract"
         );
-        assert!(
-            matches!(open(&locked), Ok(Some(OpenJournal::Legacy(_)))),
-            "{ROW}: v1 dispatches to legacy"
+        let Ok(Some(OpenJournal::Legacy(opened))) = open(&locked) else {
+            panic!("{ROW}: v1 dispatches to legacy");
+        };
+        assert_eq!(
+            (opened.version, opened.original_revision.as_str()),
+            (1, FileRevision::of(OLD).as_str()),
+            "{ROW}: v1 dispatches to the legacy journal as written"
         );
         assert_eq!(bytes(&path), before, "{ROW}: open preserves legacy bytes");
         let expected = if all_renamed {
