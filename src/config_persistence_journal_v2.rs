@@ -428,9 +428,12 @@ impl Decision {
                 ),
                 ResultClass::Unproven => false,
             },
+            // `settled_by` belongs to an outcome alone: an abandoned terminal cannot carry it, so
+            // a decision that names one could never be matched by its terminal and never finish.
             TerminalRole::Abandoned => {
                 matches!(self.result, ResultClass::NotWritten | ResultClass::Unproven)
                     && self.reason == Reason::Abandoned
+                    && self.settled_by.is_none()
             }
         };
         if valid {
