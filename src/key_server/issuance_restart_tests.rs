@@ -115,7 +115,7 @@ async fn restart_child() {
 
 /// NEW.W.1: the row survives the process dying, across a rotation, and the
 /// log reopens on the retained files.
-/// Mutant: a mint that answers 200 before the row is appended.
+/// Mutant: skip the append (the row is then missing after the death).
 #[test]
 fn a_confirmed_row_survives_an_abrupt_death_across_a_rotation() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -144,7 +144,8 @@ fn a_confirmed_row_survives_an_abrupt_death_across_a_rotation() {
 
 /// NEW.W.1: a failed high-water-mark write only warns: the mint is still
 /// acknowledged and its row is retained.
-/// Mutant: a mark failure aborts the mint, or the row is written after it.
+/// Mutant: treat a mark-write failure as an append failure (the mint then
+/// answers 503 and the child's own 200 assertion fails).
 #[test]
 fn a_failed_high_water_mark_write_does_not_lose_the_confirmed_row() {
     let dir = crate::test_dir_keep::kept_tempdir();
