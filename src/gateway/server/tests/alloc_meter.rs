@@ -257,7 +257,30 @@ pub(crate) fn isolate(test_path: &str) -> bool {
         stdout.contains("1 passed"),
         "isolated child for {test_path} did not run exactly one test\n--- child stdout ---\n{stdout}"
     );
+    // a passing child's measurements reach the log too.
+    // A direct stderr write, because libtest captures only the print
+    // macros; one write with its own newlines, so the block starts and
+    // ends on a line of its own.
+    let lines = forwarded(&stdout);
+    if !lines.is_empty() {
+        use std::io::Write as _;
+        let block = format!("\n{}\n", lines.join("\n"));
+        let _ = std::io::stderr().write_all(block.as_bytes());
+    }
     true
+}
+
+/// A child's stdout line starting with this is a measurement the parent
+/// forwards to the log on a pass.
+pub(crate) const TAG: &str = "alloc-meter: ";
+
+/// The tagged lines of a child's stdout, in order.
+fn forwarded(stdout: &str) -> Vec<&str> {
+    stdout
+        .lines()
+        .map(|l| l.trim_end_matches('\r'))
+        .filter(|l| l.starts_with(TAG))
+        .collect()
 }
 
 /// Clears the process-wide flag on every exit, an unwind included.
@@ -339,4 +362,22 @@ fn the_process_wide_meter_refuses_outside_a_child() {
         .build()
         .expect("runtime")
         .block_on(measure_async_process_wide(|| async {}));
+}
+
+/// only lines that start with the tag are forwarded, in
+/// order; libtest's own lines and an untagged print stay in the child.
+#[test]
+fn only_tagged_child_lines_are_forwarded() {
+    let stdout = "running 1 test\n\
+                  test a::b ... \n\
+                  alloc-meter: one size=1\n\
+                  noise alloc-meter: not at the start\n\
+                  alloc-meter: two size=3\r\n\
+                  ok\n\
+                  test result: ok. 1 passed; 0 failed\n";
+    assert_eq!(
+        forwarded(stdout),
+        ["alloc-meter: one size=1", "alloc-meter: two size=3"]
+    );
+    assert!(forwarded("running 0 tests\n").is_empty());
 }
