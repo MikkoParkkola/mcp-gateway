@@ -122,6 +122,89 @@ async fn r32b_a_legacy_unsigned_delivery_under_a_secret_is_not_believed() {
     assert_eq!(page["answer_integrity_failed"], 1);
 }
 
+/// The rows of one trace, newest first.
+fn rows_of<'a>(page: &'a serde_json::Value, trace: &str) -> Vec<&'a serde_json::Value> {
+    page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["trace_id"] == trace)
+        .collect()
+}
+
+/// Retiring a joined record keeps a duplicate caught: a second delivery
+/// record for a trace that was already joined still poisons the older call row.
+#[tokio::test]
+async fn r46_a_duplicate_after_the_join_still_poisons_the_trace() {
+    let fx = Fixture::new(None);
+    fx.call("gw-t");
+    fx.delivery("gw-t", &Dl::effect("delivered"));
+    fx.call("gw-t");
+    fx.delivery("gw-t", &Dl::effect("delivered"));
+    let (_, page) = get(&fx, &[]).await;
+    let rows = rows_of(&page, "gw-t");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["effect"], "unknown", "the older call row");
+    assert_eq!(rows[1]["answer_integrity"], "duplicate");
+    assert_eq!(page["answer_integrity_failed"], 1);
+}
+
+/// The same for a record that fails the trust rule and is met after the join.
+#[tokio::test]
+async fn r47_a_bad_record_after_the_join_still_poisons_the_trace() {
+    let fx = Fixture::new(Some(SECRET));
+    fx.call("gw-t");
+    fx.delivery("gw-t", &Dl::effect("refused"));
+    let at = fx.delivery_index("gw-t");
+    fx.call("gw-t");
+    fx.delivery("gw-t", &Dl::effect("refused"));
+    fx.edit(at, |e| {
+        forge(e, "response_effect", json!("delivered"), true);
+    });
+    let (_, page) = get(&fx, &[]).await;
+    let rows = rows_of(&page, "gw-t");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["effect"], "unknown", "the older call row");
+    assert_eq!(rows[1]["answer_integrity"], "unsigned");
+}
+
+/// Two call rows on one trace that are not adjacent both find the record
+/// after the first is joined.
+#[tokio::test]
+async fn r48_two_call_rows_apart_both_find_the_record() {
+    let fx = Fixture::new(None);
+    fx.call("gw-t");
+    for i in 0..40 {
+        fx.call(&format!("gw-n{i}"));
+    }
+    fx.call("gw-t");
+    fx.delivery("gw-t", &Dl::effect("annotated"));
+    let (_, page) = get(&fx, &[("limit", "200")]).await;
+    let rows = rows_of(&page, "gw-t");
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|r| r["effect"] == "annotated"));
+}
+
+/// Past the joined set's bound a read falls back to the pending map's bounds:
+/// an older call that matches the filter reads the fail-closed effect and is
+/// counted, never delivered. (Joins run before the filter, so a read can see
+/// more traces than it exports.)
+#[tokio::test]
+async fn r49_a_read_past_the_joined_bound_fails_closed() {
+    let fx = Fixture::new(None);
+    fx.call_on("only", "gw-old");
+    fx.delivery("gw-old", &Dl::effect("delivered"));
+    for i in 0..21_000 {
+        let trace = format!("gw-p{i}");
+        fx.call(&trace);
+        fx.delivery(&trace, &Dl::effect("delivered"));
+    }
+    let (_, page) = get(&fx, &[("server", "only")]).await;
+    let r = row_of(&page, "gw-old");
+    assert_eq!(r["effect"], "unknown");
+    assert_eq!(page["join_incomplete"], 1);
+}
+
 #[tokio::test]
 async fn r33_no_secret_cannot_vouch() {
     let signed = Fixture::new(Some(SECRET));
