@@ -4,17 +4,18 @@
 //! shape × caller kind, through `create_router`, so the real `auth_middleware`,
 //! the admin-audit layer and every handler's own check run.
 //!
-//! The expected cells live in `ui_access_matrix.tsv` beside this file. Each
+//! The expected cells live in `ui_access_matrix.d/*.tsv`, with shared bodies
+//! named in `ui_access_matrix_bodies.tsv` beside this file. Each
 //! cell is the status code, plus a digest of the body where the body is what
 //! must not change: every 401/403 refusal, and every answer of a route that
 //! returns a caller-scoped view (Activity, the control plane), so a widened
 //! scope fails as surely as a loosened guard. On a mismatch the test prints
-//! the whole computed table between markers.
+//! the computed per-file blocks between markers, retaining header attributes.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
@@ -25,6 +26,7 @@ use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 use super::tests::test_router_app_state_with_auth_and_key_server;
+use super::ui_access_matrix_test_rows::{self, Attributes, Loaded};
 use super::{AppState, create_router};
 use crate::config::{ApiKeyConfig, AuthConfig};
 use crate::control_plane::ControlPlaneRole;
@@ -281,97 +283,40 @@ fn session(state: &AppState) -> String {
         .issue_session_at(Now::read(), &limits)
 }
 
-/// Every path the UI API router mounts, plus the dashboard page.
+/// One immutable expectation shared by the probe and its dependent tests.
+fn loaded() -> &'static Loaded {
+    static LOADED: OnceLock<Loaded> = OnceLock::new();
+    LOADED.get_or_init(ui_access_matrix_test_rows::rows)
+}
+
+/// Every fragment path, except costs when that feature is disabled.
 fn paths() -> Vec<&'static str> {
-    let mut paths = vec![
-        routes::DASHBOARD,
-        routes::UI_STATUS,
-        routes::UI_OVERVIEW,
-        routes::UI_TOOLS,
-        routes::UI_TOOLS_CALL,
-        routes::UI_REFUSALS,
-        routes::UI_DECISIONS,
-        routes::UI_DECISIONS_COUNT,
-        routes::UI_POLICIES,
-        routes::UI_GATEWAY,
-        routes::UI_KEYS,
-        routes::UI_KEYS_NAME,
-        routes::UI_CONFIG,
-        routes::UI_SETTINGS_DIFF,
-        routes::UI_SETTINGS,
-        routes::UI_RELOAD,
-        routes::UI_DASHBOARD_LINK,
-        routes::UI_PREVIEWS,
-        routes::UI_CAPABILITIES,
-        routes::UI_CAPABILITY,
-        routes::UI_CAPABILITY_VALIDATE,
-        routes::UI_CONTROL_PLANE,
-        routes::UI_CONTROL_PLANE_GRANTS,
-        routes::UI_CONTROL_PLANE_POLICIES,
-        routes::UI_CONTROL_PLANE_DECISIONS,
-        routes::UI_CONTROL_PLANE_EXPORT_STATUS,
-        routes::UI_ACTIVITY,
-        routes::UI_ACTIVITY_EXPORT,
-        routes::UI_ACTIVITY_RECEIPT,
-        routes::UI_BACKENDS,
-        routes::UI_BACKEND,
-        routes::UI_BACKEND_REVIVE,
-        routes::UI_BACKEND_SIGNIN,
-        routes::UI_BACKEND_SIGNIN_CONFIRM,
-        routes::UI_REGISTRY,
-        routes::UI_DISCOVERY,
-        routes::UI_DISCOVERY_ADOPT,
-        routes::UI_REGISTRY_SEARCH,
-        routes::UI_DEAD_LETTERS,
-        routes::UI_DEAD_LETTERS_REPLAY,
-        routes::UI_DEAD_LETTER_REPLAY,
-        routes::UI_EVENTS_HELD,
-        routes::UI_EVENTS_LEASES,
-        routes::UI_IMPORT_PREVIEW,
-        routes::UI_IMPORT,
-        routes::UI_METRICS_SERIES,
-        routes::UI_MARKERS,
-    ];
-    if cfg!(feature = "cost-governance") {
-        paths.push(routes::UI_COSTS);
-    }
-    paths
+    loaded()
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .filter(|path| cfg!(feature = "cost-governance") || *path != routes::UI_COSTS)
+        .collect()
+}
+
+fn attributes(path: &str) -> &'static Attributes {
+    &loaded()
+        .files
+        .iter()
+        .find(|file| file.path == path)
+        .unwrap_or_else(|| panic!("no matrix fragment for {path}"))
+        .attributes
 }
 
 /// Routes the matrix cannot probe: a server-sent event stream's body never
 /// ends. The stream's own refusals and caps are pinned in `ui_stream_tests`.
 const STREAMED: &[&str] = &[routes::UI_STREAM];
 
-/// Routes whose successful answer is scoped to the caller: their body is
-/// pinned too, so a widened scope moves a cell.
-const SCOPED: &[&str] = &[
-    routes::UI_STATUS,
-    routes::UI_ACTIVITY,
-    routes::UI_ACTIVITY_EXPORT,
-    routes::UI_ACTIVITY_RECEIPT,
-    routes::UI_CONTROL_PLANE,
-    routes::UI_CONTROL_PLANE_EXPORT_STATUS,
-];
-
-/// Control-plane writes, probed with and without a store: the store check
-/// answers before the role check today.
-const STORE_WRITES: &[&str] = &[
-    routes::UI_CONTROL_PLANE_GRANTS,
-    routes::UI_CONTROL_PLANE_POLICIES,
-    routes::UI_CONTROL_PLANE_DECISIONS,
-];
-
-/// Control-plane reads of the store, probed with and without one. The
-/// snapshot reads only the store's audit log (its grant and policy rows are
-/// never shown), so the store holds audit events by two different actors and
-/// a widened view moves a cell. Export status reads no store.
-const STORE_READS: &[&str] = &[routes::UI_CONTROL_PLANE];
-
 /// The audit events [`seed_store`] writes, one per actor.
 const SEEDED_EVENTS: [(&str, &str); 2] =
     [("matrix-event-dev", DEV), ("matrix-event-other", OTHER_DEV)];
 
-/// Audit events for [`STORE_READS`]: one by [`DEV`], one by [`OTHER_DEV`].
+/// Audit events for `store_reads` routes: one by [`DEV`], one by [`OTHER_DEV`].
 fn seed_store(state: &AppState) {
     use crate::control_plane::{
         ControlPlaneAction, ControlPlaneAuditEvent, ControlPlaneRollbackPlan,
@@ -592,7 +537,7 @@ fn cell(path: &str, status: StatusCode, body: &[u8]) -> String {
         seen.dedup();
         return format!("{code}:{}", seen.join(","));
     }
-    if status.is_success() && SCOPED.contains(&path) && !body.is_empty() {
+    if status.is_success() && attributes(path).scoped && !body.is_empty() {
         let canonical = if let Ok(mut v) = serde_json::from_slice::<Value>(body) {
             strip(&mut v);
             if path == routes::UI_STATUS
@@ -634,7 +579,7 @@ type Matrix = BTreeMap<String, String>;
 async fn compute() -> Matrix {
     let mut matrix = Matrix::new();
     for path in paths() {
-        let stores: &[bool] = if STORE_WRITES.contains(&path) || STORE_READS.contains(&path) {
+        let stores: &[bool] = if attributes(path).store_writes || attributes(path).store_reads {
             &[false, true]
         } else {
             &[false]
@@ -642,7 +587,7 @@ async fn compute() -> Matrix {
         for &store in stores {
             for gateway in [Gateway::On, Gateway::OnPublicStatus, Gateway::Off] {
                 let fx = fixture(gateway, store).await;
-                if store && STORE_READS.contains(&path) {
+                if store && attributes(path).store_reads {
                     seed_store(&fx.state);
                 }
                 let router = create_router(Arc::clone(&fx.state));
@@ -665,7 +610,7 @@ async fn compute() -> Matrix {
                                 );
                             }
                             let value = cell(path, status, &body);
-                            if SCOPED.contains(&path) && status.is_success() {
+                            if attributes(path).scoped && status.is_success() {
                                 let (again, body2) =
                                     send(&router, request(caller, req, &fx, Some(&cookie))).await;
                                 assert_eq!(
@@ -696,19 +641,14 @@ async fn compute() -> Matrix {
 
 /// The checked-in expectation, without the cost rows when that feature is off.
 fn expected() -> Matrix {
-    include_str!("ui_access_matrix.tsv")
-        .lines()
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| {
-            l.rsplit_once('\t')
-                .unwrap_or_else(|| panic!("a matrix line has a key and an answer: {l:?}"))
-        })
-        .filter(|(key, _)| {
-            cfg!(feature = "cost-governance")
-                || !key.starts_with(&format!("{}\t", routes::UI_COSTS))
-        })
-        .fold(Matrix::new(), |mut matrix, (key, value)| {
-            let earlier = matrix.insert(key.to_string(), value.to_string());
+    loaded()
+        .files
+        .iter()
+        .filter(|file| cfg!(feature = "cost-governance") || file.path != routes::UI_COSTS)
+        .flat_map(|file| &file.rows)
+        .fold(Matrix::new(), |mut matrix, row| {
+            let key = row[..4].join("\t");
+            let earlier = matrix.insert(key.clone(), row[4].clone());
             assert!(earlier.is_none(), "a matrix cell is listed twice: {key}");
             matrix
         })
@@ -718,6 +658,7 @@ fn expected() -> Matrix {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ui_api_access_matrix_is_preserved() {
     let computed = compute().await;
+    output::check_coverage(loaded(), &computed).expect("every stored fragment has computed rows");
     let expected = expected();
     if computed == expected {
         return;
@@ -733,12 +674,10 @@ async fn ui_api_access_matrix_is_preserved() {
                 .map(|k| format!("{k}: expected, not computed")),
         )
         .collect();
-    let table = computed.iter().fold(String::new(), |mut table, (k, v)| {
-        let _ = writeln!(table, "{k}\t{v}");
-        table
-    });
+    let (table, divergent) = output::render(loaded(), &computed);
     panic!(
-        "{} cells moved; first 40:\n{}\n---- BEGIN MATRIX ----\n{table}---- END MATRIX ----",
+        "{} cells moved; first 40:\n{}\nNamed-body divergences (same status):\n{}\n\
+         ---- BEGIN MATRIX ----\n{table}---- END MATRIX ----",
         moved.len(),
         moved
             .iter()
@@ -746,6 +685,7 @@ async fn ui_api_access_matrix_is_preserved() {
             .cloned()
             .collect::<Vec<_>>()
             .join("\n"),
+        divergent.join("\n"),
     );
 }
 
@@ -792,3 +732,7 @@ mod backend_scope;
 /// Each UI role check against the mapping pinned on the request, through the same fixture.
 #[path = "ui_pinned_mapping_tests.rs"]
 mod pinned_mapping;
+
+/// Reloadable mismatch blocks and shared-body divergence diagnostics.
+#[path = "ui_access_matrix_test_output.rs"]
+mod output;
