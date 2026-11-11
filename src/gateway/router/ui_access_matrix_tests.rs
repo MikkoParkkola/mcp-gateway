@@ -28,11 +28,15 @@ use super::tests::test_router_app_state_with_auth_and_key_server;
 use super::{AppState, create_router};
 use crate::config::{ApiKeyConfig, AuthConfig};
 use crate::control_plane::ControlPlaneRole;
-use crate::control_plane::role_mapping::{ControlPlaneRoleMappingConfig, ControlPlaneRoleRule};
+use crate::control_plane::role_mapping::ControlPlaneRoleMappingConfig;
 use crate::gateway::auth::{Now, SESSION_COOKIE, SessionLimits};
 use crate::gateway::routes;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::security::transparency_log::recompute_entry_hash;
+
+#[path = "ui_access_matrix_helpers.rs"]
+mod helpers;
+use helpers::{api_key, rule};
 
 const BEARER: &str = "matrix-static-bearer";
 const ADMIN_KEY: &str = "matrix-admin-key";
@@ -140,32 +144,6 @@ impl Caller {
             vec![group.to_string()],
             issuer.to_string(),
         ))
-    }
-}
-
-fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
-    ApiKeyConfig {
-        key: None,
-        key_sha256: Some(crate::config::api_key_digest_spec(key.as_bytes())),
-        expires_at: None,
-        name: key.to_string(),
-        rate_limit: 0,
-        backends: vec!["*".to_string()],
-        allowed_tools: None,
-        denied_tools: None,
-        admin,
-        kind: crate::config::ApiKeyKind::Shared,
-        ..Default::default()
-    }
-}
-
-fn rule(group: &str, role: ControlPlaneRole) -> ControlPlaneRoleRule {
-    ControlPlaneRoleRule {
-        issuer: ISSUER.to_string(),
-        group: Some(group.to_string()),
-        email: None,
-        domain: None,
-        role,
     }
 }
 
@@ -319,6 +297,8 @@ fn paths() -> Vec<&'static str> {
         routes::UI_KEYS,
         routes::UI_KEYS_NAME,
         routes::UI_CONFIG,
+        routes::UI_SETTINGS_DIFF,
+        routes::UI_SETTINGS,
         routes::UI_RELOAD,
         routes::UI_DASHBOARD_LINK,
         routes::UI_PREVIEWS,
@@ -494,6 +474,10 @@ fn request(
 fn valid_body(path: &str) -> Option<Value> {
     let rollback = json!({"summary": "none", "step": "none"});
     Some(match path {
+        p if p == routes::UI_SETTINGS_DIFF => json!({"fields": []}),
+        p if p == routes::UI_SETTINGS => json!({
+            "base_revision": "0".repeat(64), "fields": [],
+        }),
         p if p == routes::UI_BACKENDS || p == routes::UI_PREVIEWS => json!({"name": ""}),
         p if p == routes::UI_CONTROL_PLANE_GRANTS => json!({
             "grant": {"grant_id": "g-matrix", "subject_id": "s", "server_id": "srv",
