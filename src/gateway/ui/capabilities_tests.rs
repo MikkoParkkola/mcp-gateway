@@ -106,8 +106,8 @@ fn validate_yaml_body_refuses_text_that_does_not_parse() {
     assert!(
         result
             .as_deref()
-            .is_some_and(|e| e.contains("Failed to parse capability YAML")),
-        "expected the parse error, got: {result:?}"
+            .is_some_and(|e| e.contains("could not be parsed safely")),
+        "expected the fixed parse refusal, got: {result:?}"
     );
 }
 
@@ -192,5 +192,6 @@ fn validate_yaml_body_refuses_deep_unread_field() {
         "]".repeat(10_000)
     );
     let err = validate_yaml_body(&deep).expect("10k-deep YAML must be refused");
-    assert!(err.contains("nesting deeper than 128"), "got: {err}");
+    // The loader's own wording is not returned: it can carry key names.
+    assert!(err.contains("could not be parsed safely"), "got: {err}");
 }

@@ -17,7 +17,7 @@ fn alpha_with(read: &str) -> Vec<crate::protocol::Tool> {
 /// Principals A and B, each warm on their own slot of `beta`.
 async fn duo() -> (World, String, String) {
     let w = World::start().await;
-    let (a, b) = (w.principal("A").await, w.principal("B").await);
+    let (a, b) = (w.principal("A"), w.principal("B"));
     w.slot_serves("beta", "A", vec![tool("a_tool", "a")]);
     w.slot_serves("beta", "B", vec![tool("b_tool", "b")]);
     for (bearer, who) in [(&a, "a_tool"), (&b, "b_tool")] {
@@ -100,7 +100,11 @@ async fn r4_a_queued_hint_made_stale_by_a_listing_is_not_written() {
     let w = World::start().await;
     let token = scoped_token("R", &["read", "write", "scan", "fetch"]);
     let bearer = token.token.clone();
-    w.key_server.store.insert(token).await;
+    crate::key_server::store::activate_for_test(
+        w.key_server.store.as_ref(),
+        w.key_server.config.token_ttl_secs,
+        token,
+    );
     let mut ear = w.sse(&bearer).await;
     let session = ear.session_id().to_string();
     let (reached, release) = w.state.multiplexer.before_write_check.arm();
@@ -147,7 +151,11 @@ async fn mixed_surfaces(code_first: bool) {
     let w = World::start().await;
     let token = scoped_token("R", &["read", "write", "scan", "fetch"]);
     let bearer = token.token.clone();
-    w.key_server.store.insert(token).await;
+    crate::key_server::store::activate_for_test(
+        w.key_server.store.as_ref(),
+        w.key_server.config.token_ttl_secs,
+        token,
+    );
     let code_url = "/mcp?codemode=search_and_execute";
     let (mut code, mut plain);
     if code_first {
@@ -188,7 +196,7 @@ async fn r12_a_plain_stream_attached_first_leaves_the_code_mode_one_quiet() {
 async fn judging_stays_on_caches(listen: bool) {
     use std::sync::atomic::Ordering::SeqCst;
     let (w, _a, _b) = duo().await;
-    let (cold, control) = (w.principal("C").await, w.principal("D").await);
+    let (cold, control) = (w.principal("C"), w.principal("D"));
     w.slot_serves("beta", "D", vec![tool("d_tool", "d")]);
     let before = (w.probe.mints.load(SeqCst), w.probe.fetches.load(SeqCst));
     let _ = w.discovered(&control, "beta").await;
