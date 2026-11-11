@@ -50,8 +50,9 @@ backup covers these.
 
 The chart mounts two writable volumes:
 
-- `state` at `/var/lib/mcp-gateway`. It is an `emptyDir`, so the task store and everything
-  else under HOME survive a container restart but not the pod.
+- `state` at `/var/lib/mcp-gateway`. It is an `emptyDir` unless `persistence.enabled` puts it on
+  a PersistentVolumeClaim, so by default the task store and everything else under HOME survive
+  a container restart but not the pod.
 - `audit` at `/var/lib/mcp-gateway/audit`. It is an `emptyDir` unless `audit.existingClaim`
   names a PersistentVolumeClaim. In `mesh` auth mode the chart renders no audit volume.
 

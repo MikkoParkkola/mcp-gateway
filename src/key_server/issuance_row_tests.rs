@@ -128,9 +128,24 @@ async fn failclosed_every_non_confirmed_outcome_refuses_with_503() {
     for cell in Cell::ALL {
         let dir = crate::test_dir_keep::kept_tempdir();
         let log = open_log(&dir, AuditFailurePolicy::FailClosed);
-        let ks = server(&log);
+        let mut ks = server(&log);
+        let store = Arc::new(InMemoryTokenStore::new(1, 3600));
+        ks.store = store.clone();
         let hold = cell.arm(&log);
         let response = mint(&ks).await;
+        // The cap is one: a slot left pending by the refusal would refuse this.
+        let probe = store.reserve(
+            ReservationRequest {
+                issuer: ISS.to_owned(),
+                subject: "sub".to_owned(),
+                jti: "probe".to_owned(),
+            },
+            1_800_000_000,
+        );
+        assert!(
+            probe.is_ok(),
+            "{cell:?}: the refused mint released its slot"
+        );
         assert_eq!(
             response.status(),
             StatusCode::SERVICE_UNAVAILABLE,
@@ -262,6 +277,9 @@ async fn besteffort_every_cell_mints_without_the_row() {
             ks.store.get(&bearer).await.is_some(),
             "{cell:?}: bearer valid"
         );
+        if !matches!(cell, Cell::Unconfirmed) {
+            assert!(!has_row(&dir, None), "{cell:?}: no row was written");
+        }
         if let Some(gate) = hold {
             log.release_and_drain(gate).await;
         }
@@ -334,8 +352,11 @@ async fn the_row_holds_the_safe_envelope_and_no_email() {
     let dir = crate::test_dir_keep::kept_tempdir();
     let log = open_log(&dir, AuditFailurePolicy::FailClosed);
     let ks = server(&log);
-    assert_eq!(mint(&ks).await.status(), StatusCode::OK);
+    let response = mint(&ks).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bearer = bearer_of(response).await;
     let text = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+    assert!(!text.contains(&bearer), "the bearer must not be on disk");
     let row: serde_json::Value = text
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())

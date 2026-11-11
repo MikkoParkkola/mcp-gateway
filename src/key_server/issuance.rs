@@ -59,7 +59,7 @@ pub(super) async fn record_issuance(
     warn!(
         status,
         ?error_kind,
-        "key server: the issuance row was not confirmed; token issued anyway"
+        "key server: the issuance row was not confirmed; the mint goes on (best effort)"
     );
     None
 }
