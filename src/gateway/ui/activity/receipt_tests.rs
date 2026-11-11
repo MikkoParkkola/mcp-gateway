@@ -10,8 +10,9 @@ use serde_json::{Value, json};
 use super::{NOT_RECORDED, RowId, parse_id, receipt};
 use crate::gateway::ui::activity::access::Access;
 use crate::gateway::ui::activity::reader::{Line, Which};
-use crate::gateway::ui::activity::rows::{FINDINGS_NOT_RECORDED, row_id};
+use crate::gateway::ui::activity::rows::row_id;
 use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
+use crate::security::decision_record::read::NOT_RECORDED_BY_VERSION;
 use crate::security::transparency_log::recompute_entry_hash;
 use crate::security::transparency_log::segments::{list_segments, sealed_path};
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
@@ -219,7 +220,7 @@ fn c5a_c6_a_call_receipt_says_what_is_not_recorded() {
     .unwrap();
     assert_eq!(body["reach"], NOT_RECORDED);
     assert_eq!(body["decision"], NOT_RECORDED);
-    assert_eq!(body["findings"], FINDINGS_NOT_RECORDED);
+    assert_eq!(body["findings"], NOT_RECORDED_BY_VERSION);
     assert!(
         !body.to_string().contains("no longer kept"),
         "no history exists to have expired"

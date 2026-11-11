@@ -721,8 +721,9 @@ enforced grant, or show SSRF protection as off while it was on, and it called it
 Those three routes now return **409** with `reason_code`
 `grants_managed_in_identity_grants_file` or `policies_managed_in_gateway_config` (a decision of
 any other kind gets 422). A caller without admin still gets 403. Where the control-plane store
-is unavailable, as in a default Helm install (item 22), they answer **503**
-`CONTROL_STORE_UNAVAILABLE` instead of 409. Nothing is written to the control-plane store or its audit log; the
+is unavailable, as in a default Helm install (item 22), a grant write answers **503**
+`CONTROL_STORE_UNAVAILABLE` instead of 409; a policy write still answers 409, because that store
+never enforces policy. The policy refusal names every gateway config key that holds policy. Nothing is written to the control-plane store or its audit log; the
 admin-action record of item 51 is separate. The page shows
 "Read Only", lists `no_mutation_endpoint` in `current_limits`, reports `GovernanceMutation` as
 unavailable, and adds `authority`, which names where each kind is enforced.
@@ -4817,6 +4818,8 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `/ui/api/policies` | hidden | admin only; the Policies screen's read model: the tool policy (switches, the built-in denies and each entry, with each deny's coverage by the allow entries) and the finding rules (each as written, its editability, whether the firewall-on load refuses it, the earlier rules that shadow it per scan type, and where a scoped rule applies differently), the six scan types the screen offers (each with its side and preconditions, and whether it is produced), the guards (each with its running state, its rule-proof cases and its rule-decidable findings, and the cross-tenant read verdict), the credentials pair (the redaction switch and the pinned `warn` rule with the earlier rules that shadow it fully or partly), the relay settings (with what the action does and the gate's inferred classes) and the four tool limits with where each is edited; every setting carries the file's value and the enforced value, which differ until a restart for a restart-only field; `finding_rules`, `scan_types`, `guards`, `credentials` and `relay` are `null` in a build without the firewall and `finding_rules` is `[]` when it has no rule; read-only; admin only means gateway admin credentials (an admin API key, an admin bearer or a dashboard session), not an OIDC control-plane Admin role |  |
 | `/ui/api/previews` | hidden | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted |  |
 | `/ui/api/refusals` | hidden | admin-only read of what the gateway refused to apply and how to fix it; documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/settings` | hidden | admin only; writes gateway.yaml through the audited writer and reloads; a secret goes to the secret store |  |
+| `/ui/api/settings/diff` | hidden | admin only; reads gateway.yaml and returns the masked change, writes nothing |  |
 | `/ui/api/status` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface. Its `access` member reports, per caller, which UI pages and tabs it may open, decided from `src/gateway/ui/access_table.rs`, the table every `/ui/api` route admits its caller through; an auth-on caller with no credential gets none |  |
 | `/ui/api/stream` | hidden | live server-sent events for the bundled UI: `hello`, then `status` for every caller (counts only below admin) and `reload` for admins; never extends a session; capped at 32 streams and 4 per credential; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/tools/call` | hidden | admin-only: runs one tool through the MCP `gateway_invoke` dispatch; 4xx did not run, 200 ran, 5xx may have run |  |

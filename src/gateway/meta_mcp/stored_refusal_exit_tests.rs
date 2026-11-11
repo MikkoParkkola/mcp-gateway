@@ -32,10 +32,11 @@ fn finished_task() -> CommittedTask {
         targets_recorded: true,
         output_free: false,
         error_author: None,
-        owner_digest: String::new(),
+        owner_digest: Box::default(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        replay_snapshot: None,
     }
 }
 
@@ -84,6 +85,7 @@ async fn a_legacy_row_without_bindings_is_refused_for_provenance() {
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let stored = CommittedTask {
         bindings_recorded: false,
+        replay_snapshot: None,
         ..finished_task()
     };
     assert_eq!(
@@ -212,6 +214,7 @@ async fn a_refused_stored_repeat_carries_its_pair() {
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let stored = CommittedTask {
         bindings_recorded: false,
+        replay_snapshot: None,
         ..finished_task()
     };
     let alice = api_key("alice");

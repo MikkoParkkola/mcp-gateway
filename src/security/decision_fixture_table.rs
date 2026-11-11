@@ -21,6 +21,15 @@ pub(crate) enum RuleId {
     Absent(&'static str),
 }
 
+impl RuleId {
+    /// A row expecting an id computed at run time (a keyed id differs per
+    /// key, so it cannot be a literal). Leaks one short string per row: test
+    /// processes end.
+    pub(crate) fn named(id: &str) -> Self {
+        Self::Id(Box::leak(id.to_owned().into_boxed_str()))
+    }
+}
+
 /// One expected request finding: scan type, severity, location.
 pub(crate) type Finding = (&'static str, &'static str, &'static str);
 

@@ -282,31 +282,6 @@ pub(crate) fn note_sync_lookup(identity: String, round: String, operation: Strin
     let _ = (identity, round, operation);
 }
 
-/// Note that this delivery settles task `id` at `revision`: its committed
-/// in-plan receipts are captured under that key at commit, live for the
-/// task's own TTL (`ttl_ms`). A task with no TTL falls back to 24 h
-/// ([`RETENTION_SECS`], the retained sync answer's retention): the bound
-/// is stated here, at the one place both settlement paths compute it.
-///
-/// [`RETENTION_SECS`]: crate::idempotency::admission::RETENTION_SECS
-pub(crate) fn note_task_capture(id: String, revision: u64, ttl_ms: Option<u64>) {
-    #[cfg(feature = "firewall")]
-    {
-        let retention = ttl_ms.map_or(
-            Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
-            Duration::from_millis,
-        );
-        let capture = Capture {
-            key: CaptureKey::Task { id, revision },
-            retention,
-            answer_digest: None,
-        };
-        let _ = super::REPLAY_CAPTURE.try_with(|slot| *slot.borrow_mut() = Some(capture));
-    }
-    #[cfg(not(feature = "firewall"))]
-    let _ = (id, revision, ttl_ms);
-}
-
 /// This delivery's answer was not retained: nothing is captured for it,
 /// and a capture already taken pending goes (E1).
 pub(crate) fn cancel_replay_capture() {
@@ -330,13 +305,9 @@ pub(super) fn is_sync_capture(capture: Option<&Capture>) -> bool {
 /// Capture this delivery's retained synchronous answer now, pending,
 /// before admission publishes it for replay, so a retry that finds the
 /// stored answer finds its snapshot too. `receipts` are its final
-/// receipts. A task capture is left for its own commit point.
+/// receipts. A task's entry is persisted in its row instead.
 #[cfg(feature = "firewall")]
-pub(super) fn capture_pending_now(
-    fw: &crate::security::firewall::Firewall,
-    receipts: &[Receipt],
-    generation: &crate::config_reload::Generation,
-) {
+pub(super) fn capture_pending_now(fw: &crate::security::firewall::Firewall, receipts: &[Receipt]) {
     let is_sync = super::REPLAY_CAPTURE
         .try_with(|slot| is_sync_capture(slot.borrow().as_ref()))
         .unwrap_or(false);
@@ -344,7 +315,7 @@ pub(super) fn capture_pending_now(
         return;
     }
     let (capture, calls) = take_capture();
-    let handle = capture_commit(fw, capture, receipts, calls, generation);
+    let handle = capture_commit(fw, capture, receipts, calls);
     let _ = HELD.try_with(|held| held.borrow_mut().captured = handle);
 }
 
@@ -381,26 +352,13 @@ pub(super) fn capture_commit(
     capture: Option<Capture>,
     receipts: &[Receipt],
     calls: ReplayCallList,
-    generation: &crate::config_reload::Generation,
 ) -> Option<crate::security::firewall::ReplayHandle> {
     let Capture {
         key,
         retention,
         answer_digest,
     } = capture?;
-    // A retained synchronous answer is captured pending, before it is
-    // delivered; a task's result where it is stored, as it always was.
-    let mode = match key {
-        CaptureKey::Sync { .. } => crate::security::firewall::CaptureMode::Pending,
-        CaptureKey::Task { .. } => crate::security::firewall::CaptureMode::AtDelivery,
-    };
-    let sources: Vec<crate::security::firewall::ReplaySource<'_>> = receipts
-        .iter()
-        .filter(|r| {
-            !r.pending_retain && r.kind != Kind::Replayed && (r.in_plan || r.kind == Kind::Seam)
-        })
-        .map(|r| (&r.digest, r.step, r.server.as_str(), r.tool.as_str()))
-        .collect();
+    let sources = replay_sources(receipts);
     // No candidates removes, never stores: `store_replay` returns early
     // with relay detection off, which would keep the prior entry (F1).
     if sources.is_empty() {
@@ -408,15 +366,54 @@ pub(super) fn capture_commit(
         None
     } else {
         let answer_digest = answer_digest.as_deref().unwrap_or("");
-        fw.store_replay(
-            key,
-            &sources,
-            calls,
-            answer_digest,
-            retention,
-            generation,
-            mode,
-        )
+        fw.store_replay(key, &sources, calls, answer_digest, retention)
+    }
+}
+
+/// The committed receipts a capture snapshots: in-plan and seam receipts
+/// as `record_digest` gets them, never one still pending its retain or
+/// one itself replayed. The one filter a capture and a persisted task
+/// snapshot share, so the two hold the same receipts.
+#[cfg(feature = "firewall")]
+fn replay_sources(receipts: &[Receipt]) -> Vec<crate::security::firewall::ReplaySource<'_>> {
+    receipts
+        .iter()
+        .filter(|r| {
+            !r.pending_retain && r.kind != Kind::Replayed && (r.in_plan || r.kind == Kind::Seam)
+        })
+        .map(|r| (&r.digest, r.step, r.server.as_str(), r.tool.as_str()))
+        .collect()
+}
+
+/// The persisted replay snapshot of the task result `stored` this settle
+/// writes: built from what this delivery staged so far, read in
+/// place (the commit after the settle still records it), for the settle's
+/// own compare-and-set to store. `None` with relay detection off or
+/// nothing to replay.
+pub(crate) fn persisted_task_replay(meta: &MetaMcp, stored: &Value) -> Option<Value> {
+    #[cfg(feature = "firewall")]
+    {
+        let fw = meta.firewall.as_deref().filter(|fw| fw.relay_active())?;
+        let answer = CAPTURE_ANSWER
+            .try_with(|slot| slot.borrow().clone())
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let calls = super::REPLAY_CALLS
+            .try_with(|calls| calls.borrow().clone())
+            .unwrap_or_default();
+        RELAY_RECEIPTS
+            .try_with(|receipts| {
+                let receipts = receipts.borrow();
+                fw.persisted_replay(&replay_sources(&receipts), &calls, &answer, stored)
+            })
+            .ok()
+            .flatten()
+    }
+    #[cfg(not(feature = "firewall"))]
+    {
+        let _ = (meta, stored);
+        None
     }
 }
 
@@ -463,9 +460,19 @@ pub(crate) fn stage_task_replay(meta: &MetaMcp, who: RelayKey<'_>, stored: &Comm
             id: stored.task.id().to_owned(),
             revision: stored.revision,
         };
-        let Some((digests, calls)) = fw.replay_digests(&key) else {
+        // The entry in memory, else rebuilt from the row's own
+        // snapshot, pending and held by this delivery until its write; the
+        // task's TTL bounds it from this read (24 h without one).
+        let retention = stored.task.ttl_ms().map_or(
+            Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
+            Duration::from_millis,
+        );
+        let crate::security::firewall::Adopted::Held(digests, calls, handle) =
+            fw.adopt_replay(&key, stored.replay_snapshot.as_deref(), retention)
+        else {
             return false;
         };
+        hold_replay_handle(handle);
         let targets: Vec<(&str, &str)> =
             crate::gateway::task_service::Target::pairs(&stored.targets);
         stage_entries(fw, who, digests, &calls, Some(&targets));

@@ -133,7 +133,8 @@ Generated from the tables at the end; each row there carries the reason and migr
 |---|---|---|---|---|---|
 | `(global)` | 13 |  | `mcp-gateway --protocol-revision-window` |  |  |
 | `accounts` | 13 |  |  |  |  |
-| `add` | 11 |  |  |  | `mcp-gateway add --config`; `mcp-gateway add -c` |
+| `add` | 13 |  |  |  | `mcp-gateway add --config`; `mcp-gateway add -c` |
+| `api` | 13 |  |  |  |  |
 | `audit` | 17 |  |  |  |  |
 | `cap` | 73 |  |  |  |  |
 | `dashboard-link` | 8 |  |  |  |  |
@@ -187,7 +188,7 @@ counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
 | `/metrics` | 1 |  |  |  |  |
 | `/readyz` | 1 |  |  |  |  |
 | `/sse` |  |  |  | `/sse` |  |
-| `/ui` | 3 |  |  | `/ui/api/activity`; `/ui/api/activity/export`; `/ui/api/activity/{id}`; `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/backends/{name}/signin`; `/ui/api/backends/{name}/signin/confirm`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/capabilities/{name}/validate`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/decisions`; `/ui/api/decisions/count`; `/ui/api/discovery`; `/ui/api/discovery/adopt`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/events/leases`; `/ui/api/gateway`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/keys`; `/ui/api/markers`; `/ui/api/metrics/series`; `/ui/api/overview`; `/ui/api/policies`; `/ui/api/previews`; `/ui/api/refusals`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/stream`; `/ui/api/tools`; `/ui/api/tools/call`; `/ui/assets/{file}` |  |
+| `/ui` | 3 |  |  | `/ui/api/activity`; `/ui/api/activity/export`; `/ui/api/activity/{id}`; `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/backends/{name}/signin`; `/ui/api/backends/{name}/signin/confirm`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/capabilities/{name}/validate`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/decisions`; `/ui/api/decisions/count`; `/ui/api/discovery`; `/ui/api/discovery/adopt`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/events/leases`; `/ui/api/gateway`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/keys`; `/ui/api/markers`; `/ui/api/metrics/series`; `/ui/api/overview`; `/ui/api/policies`; `/ui/api/previews`; `/ui/api/refusals`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/settings`; `/ui/api/settings/diff`; `/ui/api/status`; `/ui/api/stream`; `/ui/api/tools`; `/ui/api/tools/call`; `/ui/assets/{file}` |  |
 | `config-driven` | 3 |  |  |  |  |
 
 Response-code changes from backend secret references (ADR-028). Only the new condition changes; every other answer of these routes is unchanged:
@@ -852,10 +853,25 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway add --description` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add --env` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add -e` | KEEP | short alias of `--env` | - | src/cli/mod.rs:401 |
+| `mcp-gateway add --env-file` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add --force` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
+| `mcp-gateway add --keep-as-text` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add <TRAILING_COMMAND>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
+| `mcp-gateway api` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:364 |
+| `mcp-gateway api --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:364 |
+| `mcp-gateway api -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:364 |
+| `mcp-gateway api --ca-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CA_CERT) | - | src/cli/dashboard_link.rs:32 |
+| `mcp-gateway api --client-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_CERT) | - | src/cli/dashboard_link.rs:24 |
+| `mcp-gateway api --client-key` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_KEY) | - | src/cli/dashboard_link.rs:27 |
+| `mcp-gateway api --data` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:52 |
+| `mcp-gateway api --if-match` | KEEP | send the resource ETag as If-Match for conditional mutations | - | src/cli/api.rs:55 |
+| `mcp-gateway api --json` | KEEP | structured errors on stderr; successful responses retain native JSON or raw bytes | - | src/cli/api.rs:59 |
+| `mcp-gateway api --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:55 |
+| `mcp-gateway api -u` | KEEP | short alias of `--url` | - | src/cli/api.rs:55 |
+| `mcp-gateway api <METHOD>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:45 |
+| `mcp-gateway api <PATH>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:49 |
 | `mcp-gateway audit` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:587 |
 | `mcp-gateway audit --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:587 |
 | `mcp-gateway audit -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:587 |
@@ -1405,7 +1421,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_TEST_HOME_DIR` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/home_dir.rs:23 |
 | `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/gateway/task_service/execution/pause_hook.rs:16 |
 | `MCP_GATEWAY_TEST_TRUST_CA` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries. Adds test CA roots beside the platform's so macOS test children trust a temporary CA (MIK-8188). Forcing debug assertions on in a release build brings it back; whoever controls build flags and the process env already controls trust (Linux honours `SSL_CERT_FILE`) | test-only | src/debug_trust_roots.rs:22 |
-| `MCP_GATEWAY_TOKEN` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/commands/dashboard_link.rs:13 |
+| `MCP_GATEWAY_TOKEN` | KEEP | credentials for `api`, `dashboard-link` and `events dead-letters` against a remote gateway | - | src/commands/api.rs:286 |
 | `MCP_GATEWAY_TRANSPARENCY_SECRET` | KEEP | example name the user picks for `env:` in `security.transparency_log.shared_secret`; not read by the binary | - | examples/gateway-full.yaml:74 |
 
 ## Surface: routes
@@ -1479,6 +1495,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/ui/api/registry/search` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_REGISTRY_SEARCH |
 | `/ui/api/refusals` | INTERNAL | private JSON API of the bundled web UI | admin-only read of what the gateway refused to apply and how to fix it; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_REFUSALS |
 | `/ui/api/reload` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_RELOAD |
+| `/ui/api/settings` | INTERNAL | private JSON API of the bundled web UI | admin only; writes gateway.yaml through the audited writer and reloads; a secret goes to the secret store | src/gateway/routes.rs:UI_SETTINGS |
+| `/ui/api/settings/diff` | INTERNAL | private JSON API of the bundled web UI | admin only; reads gateway.yaml and returns the masked change, writes nothing | src/gateway/routes.rs:UI_SETTINGS_DIFF |
 | `/ui/api/status` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface. Its `access` member reports, per caller, which UI pages and tabs it may open, decided from `src/gateway/ui/access_table.rs`, the table every `/ui/api` route admits its caller through; an auth-on caller with no credential gets none | src/gateway/routes.rs:UI_STATUS |
 | `/ui/api/stream` | INTERNAL | private JSON API of the bundled web UI | live server-sent events for the bundled UI: `hello`, then `status` for every caller (counts only below admin) and `reload` for admins; never extends a session; capped at 32 streams and 4 per credential; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_STREAM |
 | `/ui/api/tools` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_TOOLS |

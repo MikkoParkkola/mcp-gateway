@@ -24,6 +24,16 @@ use super::{FileMode, Symlink, write_atomic};
 pub(crate) struct FileRevision(String);
 
 impl FileRevision {
+    /// Parse the lowercase SHA-256 text returned by a settings preview.
+    #[cfg(feature = "webui")]
+    pub(crate) fn from_text(text: &str) -> Option<Self> {
+        (text.len() == 64
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+        .then(|| Self(text.to_owned()))
+    }
+
     /// The revision of `bytes`.
     #[must_use]
     pub(crate) fn of(bytes: &[u8]) -> Self {
@@ -214,7 +224,7 @@ fn read_back(target: &Path, expected: &FileRevision) -> Result<(), NotDurable> {
     }
     // A directory sync makes the name durable, not the data: flush the file
     // too, so a match read from the page cache proves bytes on disk.
-    flush(&file, target).map_err(NotDurable::Sync)?;
+    flush(&mut file, target).map_err(NotDurable::Sync)?;
     let found = FileRevision::of_reader(&mut file).map_err(NotDurable::Sync)?;
     if &found == expected {
         return Ok(());
@@ -245,14 +255,17 @@ fn open_target(target: &Path) -> io::Result<std::fs::File> {
 }
 
 /// Flush the same file whose bytes are then hashed.
-fn flush(file: &std::fs::File, target: &Path) -> io::Result<()> {
+fn flush(file: &mut std::fs::File, target: &Path) -> io::Result<()> {
     #[cfg(test)]
     if fault::fires(target, |f| matches!(f, Fault::FailFileSync)).is_some() {
         return Err(io::Error::other("injected file-sync failure"));
     }
     #[cfg(not(test))]
     let _ = target;
-    file.sync_all()
+    file.sync_all()?;
+    #[cfg(test)]
+    super::crash_fs::note_flushed(target, file)?;
+    Ok(())
 }
 
 /// Run a row's hook armed for `target` at `at`.
@@ -269,6 +282,10 @@ fn hook(target: &Path, at: HookAt) {
 /// held nothing can change or replace the file; once dropped, both work.
 #[cfg(all(test, windows))]
 mod windows_share_tests {
+    /// A26 (register 1168): red oracle: each blocked operation reports its
+    /// exact code, not just any unrelated I/O failure: the write
+    /// `ERROR_SHARING_VIOLATION` (32), the rename onto the held file
+    /// `ERROR_ACCESS_DENIED` (5).
     #[test]
     fn the_read_back_handle_blocks_writes_and_replacement_while_held() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -277,17 +294,13 @@ mod windows_share_tests {
         std::fs::write(&target, b"a").expect("seed");
         std::fs::write(&other, b"b").expect("seed");
         let held = super::open_target(&target).expect("open");
-        assert!(
-            std::fs::OpenOptions::new()
-                .write(true)
-                .open(&target)
-                .is_err(),
-            "write while held"
-        );
-        assert!(
-            std::fs::rename(&other, &target).is_err(),
-            "replace while held"
-        );
+        let write_error = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&target)
+            .expect_err("write while held");
+        assert_eq!(write_error.raw_os_error(), Some(32), "write while held");
+        let rename_error = std::fs::rename(&other, &target).expect_err("replace while held");
+        assert_eq!(rename_error.raw_os_error(), Some(5), "replace while held");
         drop(held);
         std::fs::OpenOptions::new()
             .write(true)

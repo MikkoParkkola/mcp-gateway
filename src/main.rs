@@ -154,6 +154,16 @@ async fn run(cli: Cli) -> ExitCode {
             eprintln!("events: this build has no web UI (cargo feature `webui`)");
             ExitCode::FAILURE
         }
+        #[cfg(feature = "webui")]
+        Some(Command::Api(args)) => {
+            let load = || Config::load(config_path.as_deref()).map_err(|e| e.to_string());
+            commands::run_api_command(args, load, port_override, host_override.as_deref()).await
+        }
+        #[cfg(not(feature = "webui"))]
+        Some(Command::Api(_)) => {
+            eprintln!("api: this build has no web UI (cargo feature `webui`)");
+            ExitCode::FAILURE
+        }
         Some(Command::Validate {
             paths,
             format,
@@ -234,6 +244,8 @@ async fn run(cli: Cli) -> ExitCode {
             url,
             description,
             env_vars,
+            env_file,
+            keep_as_text,
             force,
             trailing_command,
         }) => {
@@ -251,7 +263,11 @@ async fn run(cli: Cli) -> ExitCode {
                     effective_command.as_deref(),
                     url.as_deref(),
                     description.as_deref(),
-                    &env_vars,
+                    commands::AddValues {
+                        env_vars: &env_vars,
+                        env_file: env_file.as_deref(),
+                        keep_as_text: &keep_as_text,
+                    },
                     &config,
                     commands::config_write::comment_loss(force),
                 )
@@ -265,6 +281,8 @@ async fn run(cli: Cli) -> ExitCode {
                     url,
                     description,
                     env_vars,
+                    env_file,
+                    keep_as_text,
                     config,
                     force,
                 );
