@@ -47,6 +47,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     ("src/cli/invoke.rs", "reads stdin, not a file"),
     (
+        "src/cli_support/init.rs",
+        "init creates its own config and sample files with create_new and removes them on rollback; the admin token goes through the secret store, never a raw file here; it reads no existing secret file",
+    ),
+    (
         "src/commands/add_remove.rs",
         "`add --env-file FILE`: the operator-named JSON of env values, read bounded (64 KiB + 1); the values go through the store rule, never echoed; not a gateway secret file",
     ),
@@ -57,6 +61,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/commands/doctor/lease_custody.rs",
         "doctor reads /proc/swaps and /sys/block/dm-*/dm/uuid; kernel tables, no secret",
+    ),
+    (
+        "src/commands/doctor.rs",
+        "doctor reads the operator-named config text once to name where auth.bearer_token lives (a reference, or `legacy literal in config`); the value is never printed, and the config itself is loaded through the guarded loader first",
     ),
     (
         "src/commands/config_export/mod.rs",
@@ -225,6 +233,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/gateway/meta_mcp/boundary_pins/email_sinks.rs",
         "cfg(test) scanner for the email-sink inventory, reading the crate's own sources; no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/secret_writers.rs",
+        "cfg(test) pin reading the repo's own init admin-token test source to check its rows exist; no secret",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/creation_sites.rs",
