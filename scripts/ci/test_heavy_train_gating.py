@@ -11,7 +11,10 @@ fails a train (a `train/` branch in this repository) unless every heavy job
 succeeded there: a train's required checks are its pull requests' own checks plus
 this gate, and a pull request whose CI predates a job, or skipped it, would leave
 a red one unrequired on the train. On a lane the gate passes without judging; the
-lane's own checks fail it.
+lane's own checks fail it. On a same-repo train into the release line the gate itself is now skipped:
+merge-train judges its needs from the base copy of this workflow (its ROLLUP_EXPECTS and
+DOCS_ONLY_SKIPPABLE values). Its script still judges a train correctly, so reverting the skip
+(the rollback) needs no other change.
 """
 from __future__ import annotations
 
@@ -94,6 +97,10 @@ def wanted(job: str, label: str) -> bool:
     """Whether `job` runs in the context `label` names."""
     if label == "same-repo throwaway PR":
         return False
+    # A roll-up among the heavy jobs (Windows check) skips on a same-repo train into the release line:
+    # merge-train judges its needs there.
+    if job == "windows-check" and label in ("code train", "docs-only train", "scope failed on a train"):
+        return False
     if job in RELEASE_PRS:
         # Pull requests into the release line only; feature-combos.yml covers its pushes.
         into_line = label in LANE_CONTEXTS or label in ("code train", "docs-only train", "scope failed on a train")
@@ -133,23 +140,25 @@ def gate_errors(jobs: dict) -> list[str]:
     if gate.get("permissions") != {"contents": "read"}:
         errors.append(f"{GATE}: permissions must be contents: read alone")
     run = " ".join(str(s.get("run", "")) for s in gate.get("steps", []))
-    for job in sorted(HEAVY):
-        if job not in run:
-            errors.append(f"{GATE}: its verdict does not name {job}")
+    env = next((st.get("env") or {} for st in gate.get("steps", []) if st.get("name") == STEP), {})
+    # The ids are data merge-train reads from the base ci.yml: the verdict passes them by env, verbatim.
+    expects = str(env.get("ROLLUP_EXPECTS", "")).split()
+    if set(expects) != HEAVY | {"scope"} or "$ROLLUP_EXPECTS" not in run:
+        errors.append(f"{GATE}: its verdict must pass ROLLUP_EXPECTS naming exactly every heavy job plus scope")
     if "check_needs.py" not in run:
         errors.append(f"{GATE}: its verdict does not use check_needs.py")
-    allowed = re.search(r"--allow-skipped (\S+?)\)", run)
-    if not allowed or set(allowed.group(1).split(",")) != DOCS_SKIPPED:
-        errors.append(f"{GATE}: --allow-skipped must name exactly {sorted(DOCS_SKIPPED)}")
+    allowed = str(env.get("DOCS_ONLY_SKIPPABLE", ""))
+    if set(allowed.split(",")) != DOCS_SKIPPED or '--allow-skipped "$DOCS_ONLY_SKIPPABLE"' not in run:
+        errors.append(f"{GATE}: --allow-skipped must pass DOCS_ONLY_SKIPPABLE naming exactly {sorted(DOCS_SKIPPED)}")
     if "${{" in run:
         errors.append(f"{GATE}: a step interpolates an expression into its script; pass it through env")
     # It runs, whatever its needs did, on every pull request into the release
-    # line but a throwaway one, and on nothing else.
+    # line but a throwaway one and a same-repo train (merge-train judges that), and on nothing else.
     want = {
         "code PR": True, "docs-only PR": True, "scope failed on a PR": True,
         "train branch from a fork": True, "a branch merely containing train/": True,
-        "same-repo throwaway PR": False, "code train": True, "docs-only train": True,
-        "scope failed on a train": True, "PR into main": False, "train into main": False,
+        "same-repo throwaway PR": False, "code train": False, "docs-only train": False,
+        "scope failed on a train": False, "PR into main": False, "train into main": False,
         "push to main": False, "release-line push": False, "release tag": False,
         "workflow dispatch": False,
     }
@@ -166,7 +175,9 @@ def run_gate_step(gate: dict, c: dict, results: dict[str, str], root: Path = ROO
     `root` is the tree its scripts are read from (a self-test passes a copy
     holding a mutated check_needs.py)."""
     step = next(st for st in gate.get("steps", []) if st.get("name") == STEP)
-    env = {k: "true" if evaluate(str(v), c) else "false" for k, v in (step.get("env") or {}).items() if k != "NEEDS"}
+    # An expression renders to true/false; a plain value (DOCS_ONLY_SKIPPABLE, ROLLUP_EXPECTS) passes as written.
+    env = {k: ("true" if evaluate(str(v), c) else "false") if "${{" in str(v) else str(v)
+           for k, v in (step.get("env") or {}).items() if k != "NEEDS"}
     # Only the jobs the gate declares in `needs` reach toJSON(needs) on a runner, so a job the gate
     # forgot cannot be judged here either (a fixed list once let a gate without kani pass its rows).
     declared = gate.get("needs") or []
@@ -180,7 +191,8 @@ def run_gate_step(gate: dict, c: dict, results: dict[str, str], root: Path = ROO
 
 
 def gate_step_errors(jobs: dict, root: Path = ROOT) -> list[str]:
-    """The gate's own script passes every lane and judges every train."""
+    """The gate's own script passes every lane and judges every train. A same-repo train skips the
+    gate today, so this pins the script the rollback (reverting that skip) would run again."""
     gate = jobs.get(GATE)
     if gate is None:
         return [f"ci.yml has no {GATE} job"]
@@ -257,8 +269,14 @@ def main() -> int:
         def mutate(j: dict) -> None:
             for st in j[GATE]["steps"]:
                 if st.get("name") == STEP:
-                    st["run"] = re.sub(r",?" + re.escape(job), "", st["run"], count=1)
+                    st["env"]["DOCS_ONLY_SKIPPABLE"] = ",".join(
+                        x for x in str(st["env"]["DOCS_ONLY_SKIPPABLE"]).split(",") if x != job)
         return mutate
+    def train_runs_gate_again(j: dict) -> None:
+        skip = (" && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
+                " && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'train/'))")
+        assert skip in str(j[GATE]["if"]), "the gate's merge-train skip clause"
+        j[GATE]["if"] = str(j[GATE]["if"]).replace(skip, "")
     def train_inverted(j: dict) -> None:
         for st in j[GATE]["steps"]:
             if st.get("name") == STEP:
@@ -278,6 +296,7 @@ def main() -> int:
             gate_forgets("linux-keychain"), f"{GATE}: needs {sorted((HEAVY | {'scope'}) - {'linux-keychain'})}, not every heavy job plus scope"),
         "the gate stops waiting for feature combinations": (
             gate_forgets(fc), f"{GATE}: needs {sorted((HEAVY | {'scope'}) - {fc})}, not every heavy job plus scope"),
+        "a same-repo train runs the gate again": (train_runs_gate_again, f"{GATE}: code train with success needs runs"),
         "a docs-only train may not skip feature combinations": (
             docs_allowance_drops(fc), f"{GATE} step: docs-only train, docs-only skips fails (exit 1)"),
     }

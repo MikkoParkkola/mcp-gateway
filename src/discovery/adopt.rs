@@ -192,21 +192,14 @@ impl Literal {
     }
 }
 
-/// `server` as an adopted backend. A template and an empty value stay as
-/// written. Every other value the web UI's shared rule stores
-/// (`stores_header_value` for a header, `stores_env_value` for an env value:
-/// long enough to redact safely, and for env a credential name), and every
-/// value that reads as a secret reference whatever its length, is a literal
-/// and leaves the backend, env before headers, each sorted by key, so the
+/// `server` as an adopted backend. Each value
+/// [`crate::config::secret_values::stores_discovered_value`] stores is a
+/// literal and leaves the backend, env before headers, each sorted by key, so the
 /// order is the same on every run. Any other value (an ordinary setting such
 /// as `DEBUG=1`, a short header) stays as written. Call it only for a find
 /// [`refusals`] accepts.
 #[cfg(feature = "webui")]
-pub(crate) fn adoption(
-    server: &DiscoveredServer,
-    stores_env_value: fn(&str, &str) -> bool,
-    stores_header_value: fn(&str) -> bool,
-) -> Adoption {
+pub(crate) fn adoption(server: &DiscoveredServer) -> Adoption {
     let mut backend = server.to_backend_config();
     backend.enabled = false;
     let mut literals = Vec::new();
@@ -214,16 +207,7 @@ pub(crate) fn adoption(
         let mut keys: Vec<String> = map
             .iter()
             .filter(|(key, value)| {
-                // A reference-shaped literal (`file:/x`) under any name is
-                // stored as its bytes too: written as text, the gateway would
-                // read it as a reference instead.
-                !value.is_empty()
-                    && !value.contains("${")
-                    && (if header {
-                        stores_header_value(value)
-                    } else {
-                        stores_env_value(key, value)
-                    } || is_reference(value))
+                crate::config::secret_values::stores_discovered_value(header, key, value)
             })
             .map(|(key, _)| key.clone())
             .collect();

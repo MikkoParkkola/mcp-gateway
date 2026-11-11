@@ -140,7 +140,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
             fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE)
         }
         Err(ReplaceError::Secrets(_)) => failed("secrets"),
-        Err(ReplaceError::ReloadRefused(_)) => failed("reload_refused"),
+        Err(ReplaceError::ReloadRefused { .. }) => failed("reload_refused"),
         Err(ReplaceError::Unsupported(_)) => failed("unsupported"),
         Err(ReplaceError::Stage(_)) => failed("stage"),
         Err(ReplaceError::Write(_)) => failed("write"),
@@ -360,11 +360,7 @@ pub(super) async fn adopt_discovery(
         reasons.sort_by(|a, b| a.1.cmp(&b.1));
         return not_adoptable(&reasons);
     }
-    let adoption = adoption(
-        &server,
-        secret_slots::stores_env_value,
-        secret_slots::stores_header_value,
-    );
+    let adoption = adoption(&server);
     let dir = path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
