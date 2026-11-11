@@ -11,8 +11,8 @@
 
 use std::io::{self, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -44,6 +44,8 @@ struct Shared {
     total: AtomicU64,
     queued_bytes: AtomicUsize,
     max_bytes: usize,
+    /// Set by the terminal stop: no clone enqueues after it.
+    closed: AtomicBool,
 }
 
 /// The `MakeWriter` for the fmt layer: each event's line goes to the queue.
@@ -56,6 +58,9 @@ pub(crate) struct LossyStderr {
 /// Flushes the queue when dropped, within [`LOG_FLUSH_DEADLINE`].
 pub(crate) struct LogFlush {
     tx: SyncSender<Msg>,
+    shared: Arc<Shared>,
+    /// Taken by the terminal stop, which then owns the join.
+    worker: Option<thread::JoinHandle<FlushEnd>>,
 }
 
 /// One event's line, sent once when the fmt layer is done with it.
@@ -76,23 +81,32 @@ pub(crate) fn spawn(
         total: AtomicU64::new(0),
         queued_bytes: AtomicUsize::new(0),
         max_bytes: bytes,
+        closed: AtomicBool::new(false),
     });
     let for_thread = Arc::clone(&shared);
-    thread::Builder::new()
+    let worker = thread::Builder::new()
         .name("log-writer".into())
         .spawn(move || run(&rx, sink, &for_thread, format))?;
     Ok((
         LossyStderr {
             tx: tx.clone(),
-            shared,
+            shared: Arc::clone(&shared),
         },
-        LogFlush { tx },
+        LogFlush {
+            tx,
+            shared,
+            worker: Some(worker),
+        },
     ))
 }
 
 impl LossyStderr {
     /// Queue `line`, or drop and count it. Never waits.
     fn send(&self, line: Vec<u8>) {
+        if self.shared.closed.load(Ordering::Acquire) {
+            self.shared.total.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         let n = line.len();
         let q = &self.shared.queued_bytes;
         let mut cur = q.load(Ordering::Relaxed);
@@ -177,15 +191,30 @@ pub(crate) enum StopOutcome {
 
 impl StopOutcome {
     pub(crate) fn permits_exec(&self) -> bool {
-        true
+        matches!(self, Self::Joined(_))
     }
 }
 
 impl LogFlush {
     /// Terminal stop: close enqueue admission on every clone, drain what was
     /// accepted, flush, and join the writer, all by `deadline`.
-    pub(crate) fn stop_and_join(self, _deadline: Instant) -> StopOutcome {
-        StopOutcome::Joined(FlushEnd::Clean)
+    pub(crate) fn stop_and_join(mut self, deadline: Instant) -> StopOutcome {
+        // Admission closes first, so a clone cannot keep the queue busy. The
+        // worker sees the flag on its next poll: a full data queue cannot delay it.
+        self.shared.closed.store(true, Ordering::Release);
+        let Some(worker) = self.worker.take() else {
+            return StopOutcome::WorkerFailed;
+        };
+        while !worker.is_finished() {
+            if Instant::now() >= deadline {
+                return StopOutcome::NotJoined(worker);
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        match worker.join() {
+            Ok(end) => StopOutcome::Joined(end),
+            Err(_) => StopOutcome::WorkerFailed,
+        }
     }
 }
 
@@ -221,6 +250,10 @@ pub(crate) fn flush_until(
 
 impl Drop for LogFlush {
     fn drop(&mut self) {
+        if self.worker.is_none() {
+            // A terminal stop already ran; it was bounded by its own deadline.
+            return;
+        }
         let (ack_tx, ack_rx) = mpsc::sync_channel(1);
         let mut marker = Some(Msg::Flush(ack_tx));
         flush_until(
@@ -247,14 +280,33 @@ impl Drop for LogFlush {
     }
 }
 
-/// The writer thread: one line at a time, until every sender is gone.
-fn run(rx: &Receiver<Msg>, mut sink: Box<dyn Write + Send>, shared: &Shared, format: NoticeFormat) {
+/// How often an idle writer looks for the terminal stop.
+const STOP_POLL: Duration = Duration::from_millis(5);
+
+/// The writer thread: one line at a time, until every sender is gone or the
+/// terminal stop closes admission and the accepted lines are drained.
+fn run(
+    rx: &Receiver<Msg>,
+    mut sink: Box<dyn Write + Send>,
+    shared: &Shared,
+    format: NoticeFormat,
+) -> FlushEnd {
     let mut out = Out {
         sink: &mut *sink,
         broken: false,
     };
     let mut reported = 0_u64;
-    while let Ok(msg) = rx.recv() {
+    loop {
+        let msg = match rx.recv_timeout(STOP_POLL) {
+            Ok(msg) => msg,
+            Err(RecvTimeoutError::Timeout) if !shared.closed.load(Ordering::Acquire) => continue,
+            Err(RecvTimeoutError::Timeout) => match rx.try_recv() {
+                // Accepted before the close: still written.
+                Ok(msg) => msg,
+                Err(_) => break,
+            },
+            Err(RecvTimeoutError::Disconnected) => return FlushEnd::Clean,
+        };
         match msg {
             Msg::Line(line) => {
                 shared.queued_bytes.fetch_sub(line.len(), Ordering::AcqRel);
@@ -270,6 +322,11 @@ fn run(rx: &Receiver<Msg>, mut sink: Box<dyn Write + Send>, shared: &Shared, for
                 let _ = ack.try_send(());
             }
         }
+    }
+    out.notice(shared, reported, format);
+    match out.sink.flush() {
+        Ok(()) => FlushEnd::Clean,
+        Err(_) => FlushEnd::SinkError,
     }
 }
 
