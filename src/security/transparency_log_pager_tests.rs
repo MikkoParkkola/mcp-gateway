@@ -307,6 +307,14 @@ const READERS: &[(&str, &str)] = &[
     ),
     ("src/gateway/ui/activity/reader.rs", "Activity's pages"),
     (
+        "src/gateway/ui/activity/receipt_scan.rs",
+        "Activity's receipt: a bounded forward scan from a call",
+    ),
+    (
+        "src/gateway/ui/activity/strict_scan.rs",
+        "Activity's look-above and receipt scan: lines read within a byte limit",
+    ),
+    (
         "src/gateway/ui/activity/forward_place.rs",
         "the live stream's forward read: where a read starts and resumes",
     ),

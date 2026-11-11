@@ -141,6 +141,9 @@ mod task_shutdown_tail;
 // #2480: a stdio idempotent replay writes its invocation record.
 mod stdio_replay_audit;
 
+// API2.10 R0: one transport_finalized record per stdio frame.
+mod stdio_one_record_tests;
+
 // MIK-7324.COV.3: the stdio chain-nonce refusal in `prepare_signing`.
 mod stdio_chain_nonce_refusal;
 

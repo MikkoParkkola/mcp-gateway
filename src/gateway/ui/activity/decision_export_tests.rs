@@ -169,18 +169,13 @@ fn truncated_cell(extra: &Value) -> String {
     }
     let logs = logs_of(&dir, vec![call("srv", "t", Some(d))]);
     let c = gather_all(&logs);
-    let text = csv(&c);
-    let mut lines = text.lines();
-    let columns: Vec<&str> = lines.next().unwrap().split(',').collect();
-    let at = columns
+    let records = super::answer_export_tests::csv_records(&csv(&c));
+    let at = records[0]
         .iter()
-        .position(|c| *c == "findings_truncated")
+        .position(|c| c == "findings_truncated")
         .unwrap();
-    assert_eq!(columns[at - 1], "findings");
-    // The row carries one JSON array in `findings`, quoted, so read the last cell.
-    let row = lines.next().unwrap();
-    assert_eq!(at, columns.len() - 1);
-    row.rsplit(',').next().unwrap().to_string()
+    assert_eq!(records[0][at - 1], "findings");
+    records[1][at].clone()
 }
 
 fn gather_all(logs: &Logs) -> super::export::Collected {
