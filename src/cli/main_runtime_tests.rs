@@ -142,25 +142,38 @@ fn block_on_returns_behind_a_stuck_blocking_task() {
 
 /// `MIK-8084.SHUTDOWN.2`: blocking work already running that finishes inside
 /// the bound (a flush) completes before the shutdown returns, which then
-/// reports and logs nothing.
+/// reports and logs nothing. The flush waits on a channel, not a timer: the
+/// shutdown runs on its own thread and must NOT have returned while the flush
+/// is held; only after the test releases it does the shutdown finish.
 #[test]
 fn a_flush_inside_the_bound_completes_and_logs_nothing() {
     let runtime = runtime();
     let flushed = Arc::new(AtomicBool::new(false));
     let done = Arc::clone(&flushed);
     let (started, running) = mpsc::channel();
+    let (release, held) = mpsc::channel::<()>();
     runtime.spawn_blocking(move || {
         started.send(()).expect("the test waits for the start");
-        std::thread::sleep(Duration::from_millis(100));
+        held.recv().expect("the test releases the flush");
         done.store(true, Ordering::SeqCst);
     });
     running
         .recv_timeout(Duration::from_secs(5))
         .expect("the flush starts");
-    let mut left_running = true;
-    let logged = errors_logged(|| {
-        left_running = shut_down(runtime, RuntimeShutdown::Bounded(Duration::from_secs(5)));
+    let shutdown = std::thread::spawn(move || {
+        let mut left_running = true;
+        let logged = errors_logged(|| {
+            left_running = shut_down(runtime, RuntimeShutdown::Bounded(Duration::from_secs(5)));
+        });
+        (left_running, logged)
     });
+    std::thread::yield_now();
+    assert!(
+        !shutdown.is_finished(),
+        "the shutdown returned while the flush was still running"
+    );
+    release.send(()).expect("the flush is still waiting");
+    let (left_running, logged) = shutdown.join().expect("the shutdown thread ends");
     assert!(flushed.load(Ordering::SeqCst), "the flush was cut");
     assert!(!left_running, "a finished flush reported as left running");
     assert!(logged.is_empty(), "a clean shutdown logged: {logged:?}");
