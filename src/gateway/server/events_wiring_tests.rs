@@ -23,9 +23,10 @@ fn wire(
     Arc<MetaMcp>,
     Arc<BackendRegistry>,
     Arc<CounterStore>,
-    tempfile::TempDir,
+    Arc<tempfile::TempDir>,
 ) {
-    let dir = tempfile::tempdir().expect("dir");
+    // The gateway's events opener keeps the registered dir its store lives in.
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut config = Config::default();
     config.events.enabled = events;
     config.events.sources.operational = operational;
