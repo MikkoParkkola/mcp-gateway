@@ -493,10 +493,10 @@ mod codec;
 #[path = "config_persistence_journal_v2_codec_tests.rs"]
 mod codec_tests;
 #[cfg(test)]
-#[path = "config_persistence_journal_v2_fixtures.rs"]
+#[path = "config_persistence_journal_v2_fixtures_tests.rs"]
 mod fixtures;
 #[cfg(test)]
-#[path = "config_persistence_journal_v2_observe.rs"]
+#[path = "config_persistence_journal_v2_observe_tests.rs"]
 mod observe;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_state_tests.rs"]
