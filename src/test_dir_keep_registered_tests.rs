@@ -133,3 +133,22 @@ fn registered_lookup_holds_a_weak_across_a_simulated_open() {
     assert!(weak.upgrade().is_none());
     assert!(!root.exists(), "the registry itself owns no directory");
 }
+
+/// A registered directory that merely holds a symlink to an unregistered one owns the link, not the
+/// store behind it: the store's own directory could be deleted while the store is alive.
+#[cfg(unix)]
+#[test]
+fn registered_lookup_through_a_symlink_into_an_unregistered_directory_keeps_nothing() {
+    let registered = kept_tempdir();
+    let outside = tempfile::tempdir().expect("an unregistered directory");
+    std::os::unix::fs::symlink(outside.path(), registered.path().join("link")).expect("a symlink");
+    let found = registered_for(&registered.path().join("link").join("store"));
+    assert!(
+        found.dirs.iter().any(|kept| Arc::ptr_eq(kept, &registered)),
+        "the directory holding the link is still held"
+    );
+    assert!(
+        !found.holds_anything(),
+        "but it does not stand in for the store's own directory"
+    );
+}

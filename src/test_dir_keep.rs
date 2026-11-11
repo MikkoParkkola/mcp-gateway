@@ -55,12 +55,15 @@ impl TestDirKeep {
 #[derive(Debug)]
 pub(crate) struct Found {
     dirs: Vec<Arc<tempfile::TempDir>>,
+    /// Some held dir contains the store's NORMALISED path: ownership of a directory that merely
+    /// holds a symlink to the store does not stand in for ownership of the store's own directory.
+    covers: bool,
     parent_kept: bool,
 }
 
 impl Found {
     pub(crate) fn holds_anything(&self) -> bool {
-        !self.dirs.is_empty() || self.parent_kept
+        self.covers || self.parent_kept
     }
 }
 
@@ -75,8 +78,14 @@ pub(crate) fn registered_for(path: &Path) -> Found {
 /// Lookup with an explicit parsed parent list, without changing process env.
 pub(crate) fn registered_for_in(path: &Path, external: &[std::path::PathBuf]) -> Found {
     let dirs = kept_dirs_for(path);
-    let parent_kept = dirs.is_empty() && is_external_in(external, path);
-    Found { dirs, parent_kept }
+    let normal = norm(path);
+    let covers = dirs.iter().any(|dir| contains(&norm(dir.path()), &normal));
+    let parent_kept = !covers && is_external_in(external, path);
+    Found {
+        dirs,
+        covers,
+        parent_kept,
+    }
 }
 
 // The registry of kept temp dirs. A transparency log opened
