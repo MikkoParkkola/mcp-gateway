@@ -98,7 +98,7 @@ async fn nothing_issued(ks: &crate::key_server::KeyServer) {
 /// Mutant: append after activation, or skip the append.
 #[tokio::test]
 async fn failclosed_confirmed_row_precedes_the_bearer_and_survives_restart() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = open_log(&dir, AuditFailurePolicy::FailClosed);
     let mut ks = server(&log);
     let seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -126,7 +126,7 @@ async fn failclosed_confirmed_row_precedes_the_bearer_and_survives_restart() {
 #[tokio::test]
 async fn failclosed_every_non_confirmed_outcome_refuses_with_503() {
     for cell in Cell::ALL {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let log = open_log(&dir, AuditFailurePolicy::FailClosed);
         let ks = server(&log);
         let hold = cell.arm(&log);
@@ -252,7 +252,7 @@ async fn besteffort_every_cell_mints_without_the_row() {
     // An admission error cannot arise on a healthy BestEffort log (it never
     // degrades), so that cell is covered by the helper rows instead.
     for cell in [Cell::AppendFails, Cell::NotStarted, Cell::Unconfirmed] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let log = open_log(&dir, AuditFailurePolicy::BestEffort);
         let ks = server(&log);
         let hold = cell.arm(&log);
@@ -274,7 +274,7 @@ async fn besteffort_every_cell_mints_without_the_row() {
 /// Mutant: activate on any landed row.
 #[tokio::test]
 async fn a_revoked_commit_issues_nothing_even_with_a_row() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = open_log(&dir, AuditFailurePolicy::FailClosed);
     let mut ks = server(&log);
     ks.store = Arc::new(Revoking(Arc::new(InMemoryTokenStore::new(5, 3600))));
@@ -332,7 +332,7 @@ impl TokenStore for Revoking {
 /// Mutant: serialize the verified identity, or add name/groups.
 #[tokio::test]
 async fn the_row_holds_the_safe_envelope_and_no_email() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = open_log(&dir, AuditFailurePolicy::FailClosed);
     let ks = server(&log);
     assert_eq!(mint(&ks).await.status(), StatusCode::OK);
@@ -390,9 +390,9 @@ fn only_the_issuance_helper_appends_from_the_key_server() {
         vec!["email_hmac_store.rs".to_owned()],
         "appenders: {users:?}"
     );
-    let handler = std::fs::read_to_string(dir.join("handler.rs")).unwrap();
+    let record = std::fs::read_to_string(dir.join("issuance.rs")).unwrap();
     assert!(
-        handler.contains("append_issuance_row("),
+        record.contains("append_issuance_row("),
         "the mint uses the helper"
     );
 }

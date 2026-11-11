@@ -18,7 +18,7 @@ fn row(event: &str) -> serde_json::Map<String, serde_json::Value> {
 /// Mutant: drop the event check.
 #[tokio::test]
 async fn a_row_that_is_not_an_issuance_is_never_attempted() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = open_log(&dir, AuditFailurePolicy::BestEffort);
     let size = |l: &crate::security::TransparencyLogger| {
         std::fs::metadata(l.path()).map_or(0, |m| m.len())
@@ -36,7 +36,7 @@ async fn a_row_that_is_not_an_issuance_is_never_attempted() {
 /// Mutant: fold `NotStarted` or `Unconfirmed` into `Failed`.
 #[tokio::test]
 async fn each_raw_outcome_has_its_own_label() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = open_log(&dir, AuditFailurePolicy::BestEffort);
     let ok = log
         .append_issuance_row(row("token.issued"), AuditEnvelope::gateway())
@@ -53,7 +53,7 @@ async fn each_raw_outcome_has_its_own_label() {
         .await;
     assert_eq!(never.label(), "not_attempted");
 
-    let dir2 = tempfile::tempdir().unwrap();
+    let dir2 = crate::test_dir_keep::kept_tempdir();
     let log2 = open_log(&dir2, AuditFailurePolicy::BestEffort);
     let gate = log2.stall_next_write_for_test(std::time::Duration::from_millis(200));
     let late = log2
