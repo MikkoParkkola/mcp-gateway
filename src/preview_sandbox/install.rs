@@ -83,11 +83,12 @@ fn registry_range(range: &str) -> bool {
                 },
                 None => alias,
             };
-            // An alias without a version takes npm's default registry range.
+            // An alias without a version takes npm's default registry range; a
+            // dangling `@` with nothing after it is refused.
             let (name, version) = unscoped
                 .split_once('@')
                 .map_or((unscoped, None), |(name, version)| (name, Some(version)));
-            name_part(name) && version.is_none_or(semver)
+            name_part(name) && version.is_none_or(|version| !version.is_empty() && semver(version))
         }
         None => semver(range),
     }
