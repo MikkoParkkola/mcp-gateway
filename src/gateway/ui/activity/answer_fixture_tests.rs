@@ -58,7 +58,7 @@ impl Dl {
 }
 
 pub(super) struct Fixture {
-    pub(super) _dir: Arc<tempfile::TempDir>,
+    pub(super) dir: Arc<tempfile::TempDir>,
     pub(super) path: PathBuf,
     pub(super) logger: TransparencyLogger,
     pub(super) secret: Option<&'static str>,
@@ -89,7 +89,7 @@ impl Fixture {
         .unwrap();
         logger.keep_test_dir(Arc::clone(&dir));
         Self {
-            _dir: dir,
+            dir,
             path,
             logger,
             secret,
@@ -115,9 +115,9 @@ impl Fixture {
             rotation: RotationConfig::default(),
         }))
         .unwrap();
-        logger.keep_test_dir(Arc::clone(&self._dir));
+        logger.keep_test_dir(Arc::clone(&self.dir));
         Self {
-            _dir: Arc::clone(&self._dir),
+            dir: Arc::clone(&self.dir),
             path: self.path.clone(),
             logger,
             secret: Some(secret),
