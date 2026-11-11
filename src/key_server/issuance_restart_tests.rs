@@ -205,6 +205,7 @@ fn a_confirmed_row_survives_an_abrupt_death_across_a_rotation() {
 /// reopens (the designed answer: the mark may lag the log, never the reverse).
 /// Mutant: treat a mark-write failure as an append failure (the mint then
 /// answers 503 and the child's own 200 assertion fails).
+#[cfg(unix)]
 #[test]
 fn a_failed_high_water_mark_write_does_not_lose_the_confirmed_row() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -223,6 +224,7 @@ fn a_failed_high_water_mark_write_does_not_lose_the_confirmed_row() {
 /// the rename and the new segment complete, later appends still land, and
 /// the log reopens on the stale mark.
 /// Mutant: a mark failure inside the rotation aborts it or loses a row.
+#[cfg(unix)]
 #[test]
 fn a_failed_high_water_mark_write_during_a_rotation_loses_no_row() {
     let dir = crate::test_dir_keep::kept_tempdir();

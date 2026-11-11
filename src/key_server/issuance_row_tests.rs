@@ -426,3 +426,48 @@ fn only_the_issuance_helper_appends_from_the_key_server() {
         "the mint uses the helper"
     );
 }
+
+/// A mint dropped while its issuance write is held activates nothing and
+/// gives its slot back; the write, released later, only leaves a row.
+/// Mutant: activate or keep the slot on drop.
+#[tokio::test]
+async fn a_mint_dropped_during_its_issuance_write_leaves_no_slot_or_token() {
+    use std::future::Future;
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let log = open_log(&dir, AuditFailurePolicy::FailClosed);
+    let mut ks = server(&log);
+    let store = Arc::new(InMemoryTokenStore::new(1, 3600));
+    ks.store = store.clone();
+    let gate = log.stall_next_write_for_test(Duration::from_secs(30));
+    let mut mint_future = Box::pin(mint(&ks));
+    let waker = futures::task::noop_waker();
+    let mut cx = std::task::Context::from_waker(&waker);
+    let started = std::time::Instant::now();
+    while !gate.is_entered() {
+        assert!(
+            mint_future.as_mut().poll(&mut cx).is_pending(),
+            "the mint waits on the held write"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the write was never held"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(mint_future);
+    let probe = store.reserve(
+        ReservationRequest {
+            issuer: ISS.to_owned(),
+            subject: "sub".to_owned(),
+            jti: "probe".to_owned(),
+        },
+        1_800_000_000,
+    );
+    assert!(probe.is_ok(), "the dropped mint released its slot");
+    log.release_and_drain(gate).await;
+    assert_eq!(
+        store.count_for_subject(ISS, "sub").await,
+        0,
+        "no token was activated"
+    );
+}
