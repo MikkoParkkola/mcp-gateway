@@ -562,7 +562,7 @@ class Wiring(unittest.TestCase):
             "upgrading_fragments.py assemble --dry-run",
             "UPGRADING_DOC=",
             "--test upgrading_summary_rows",
-            "--bin mcp-gateway upgrade_notice_tests",
+            "--lib upgrade_notice_tests",
             "running [1-9]",
         ):
             self.assertIn(needle, step)
