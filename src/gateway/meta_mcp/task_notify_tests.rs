@@ -125,6 +125,7 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        vouching: crate::gateway::task_service::Vouching::Vouched,
         replay_snapshot: None,
     };
 
@@ -148,6 +149,68 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
         "the frame is not the stored task as it is now"
     );
     assert_eq!(pending.frame["params"]["status"], json!("completed"));
+}
+
+/// A notification of an unvouched upstream row (stored before its
+/// dispatch's secrets were fingerprinted) carries the withheld answer, never
+/// the stored result or error, completed and failed alike.
+#[tokio::test]
+async fn a_frame_of_an_unvouched_row_carries_the_withheld_answer() {
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+    let (meta, _log) = gateway(&dir, AuditFailurePolicy::FailClosed);
+    let echoed = "echo of key legacy-secret-6d02";
+    let reason = crate::gateway::meta_mcp::upstream::SECRETS_WITHHELD;
+    let mut completed = crate::protocol::tasks::Task::create("gateway_invoke")
+        .expect("the test clock reads after 1970");
+    completed
+        .complete(&json!({ "content": [{ "type": "text", "text": echoed }] }))
+        .expect("a live task takes its outcome");
+    let mut failed = crate::protocol::tasks::Task::create("gateway_invoke")
+        .expect("the test clock reads after 1970");
+    failed
+        .fail(&crate::protocol::JsonRpcError {
+            code: -32001,
+            message: echoed.to_owned(),
+            data: None,
+        })
+        .expect("a live task fails");
+    for (id, task) in [(8, completed), (9, failed)] {
+        let notice = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/tasks",
+            "params": { "taskId": task.id(), "status": "working" },
+        });
+        let stored = crate::gateway::task_service::CommittedTask {
+            task,
+            revision: 2,
+            targets: Vec::new(),
+            targets_recorded: true,
+            output_free: false,
+            error_author: None,
+            owner_digest: Box::default(),
+            gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
+            bindings: Vec::new(),
+            bindings_recorded: true,
+            vouching: crate::gateway::task_service::Vouching::Unvouched,
+            replay_snapshot: None,
+        };
+        let subscription = SubscriptionId::of_request(RequestId::Number(id));
+        let pending = meta
+            .task_notification_frame(
+                &notice,
+                Some(super::sealed_hold::Held::new(
+                    stored,
+                    super::sealed_hold::CarriedHolds::none(),
+                )),
+                |_| None,
+                &subscription,
+            )
+            .await
+            .expect("a frame is built");
+        let frame = pending.frame.to_string();
+        assert!(!frame.contains(echoed), "{frame}");
+        assert!(frame.contains(reason), "{frame}");
+    }
 }
 
 /// A gateway whose registry holds backend `alpha`, so it keeps a value set.
@@ -195,6 +258,7 @@ fn completed(text: &str) -> crate::gateway::task_service::CommittedTask {
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        vouching: crate::gateway::task_service::Vouching::Vouched,
         replay_snapshot: None,
     }
 }

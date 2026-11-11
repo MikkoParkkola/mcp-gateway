@@ -9,7 +9,7 @@ use super::access::Access;
 use super::csv::Truncated;
 use super::decision_fixtures::{assert_no_sentinel, call, decision, write_chained};
 use super::export::{CAPS, Caps, collect, csv, ndjson_size};
-use super::rows::Filter;
+use super::rows::{Check, Filter};
 use super::{ExportQuery, ListQuery, Logs, export_response};
 use crate::security::decision_record::read as evidence;
 use crate::trust::provenance_public::ProvenancePublicSigner;
@@ -131,7 +131,7 @@ fn gather(logs: &Logs, rule: &str) -> super::export::Collected {
         None,
         &filter,
         &Access::All,
-        None,
+        &Check::bare(None),
         caps,
         ndjson_size,
     )
@@ -189,7 +189,7 @@ fn gather_all(logs: &Logs) -> super::export::Collected {
         None,
         &Filter::default(),
         &Access::All,
-        None,
+        &Check::bare(None),
         CAPS,
         ndjson_size,
     )

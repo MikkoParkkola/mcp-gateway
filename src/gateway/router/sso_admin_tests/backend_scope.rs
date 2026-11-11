@@ -48,6 +48,7 @@ async fn scoped_gateway(rules: &[&str]) -> Gateway {
             config.policies.clone(),
         )),
         config,
+        email_key: crate::key_server::email_hash::EmailHashKey::for_test(),
     };
     let auth = AuthConfig {
         enabled: true,

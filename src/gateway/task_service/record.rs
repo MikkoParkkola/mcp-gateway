@@ -203,6 +203,28 @@ pub(crate) struct UpstreamRecord {
     /// Checked on load: a descriptor that does not belong to the record it was
     /// read from is refused rather than authorized.
     pub(crate) operation_digest: String,
+    /// What the dispatch's secret rules injected, as a keyed fingerprint
+    /// (`security::dispatched`): `"none"`, `"hmac:<hex>"` or `"missing"`.
+    /// Absent only on a pre-field row (withheld at every read); `None` is
+    /// always written as `"missing"`.
+    #[serde(default, serialize_with = "fingerprint_or_missing")]
+    pub(crate) secret_fingerprint: Option<String>,
+}
+
+/// A legacy `None` is rewritten as `missing`, which still withholds.
+#[allow(
+    clippy::ref_option,
+    reason = "serde's serialize_with hands the field over by reference"
+)]
+fn fingerprint_or_missing<S: serde::Serializer>(
+    value: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(
+        value
+            .as_deref()
+            .unwrap_or(crate::security::dispatched::MISSING),
+    )
 }
 
 /// A claimed upstream `tasks/cancel` the peer has not yet confirmed
@@ -556,6 +578,10 @@ pub(crate) struct CommittedTask {
     /// older row the provenance cannot be established, so its backend output
     /// is not served.
     pub(crate) bindings_recorded: bool,
+    /// Whether anything vouches that the gateway can still redact what this
+    /// row's dispatch injected; a row with no fingerprint is `Unvouched` and
+    /// its stored outcome is never served.
+    pub(crate) vouching: Vouching,
     /// The relay replay snapshot stored with the result; see
     /// `Record::replay_snapshot`.
     #[cfg_attr(
@@ -566,6 +592,31 @@ pub(crate) struct CommittedTask {
         )
     )]
     pub(crate) replay_snapshot: Option<Box<Value>>,
+}
+
+/// Whether a stored task's outcome may be served as stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Vouching {
+    Vouched,
+    /// Nothing vouches for what its dispatch injected: served withheld.
+    Unvouched,
+}
+
+/// Swap a stored outcome for the fixed withheld answer; state is kept.
+fn withhold_outcome(wire: &mut serde_json::Value) {
+    let reason = crate::gateway::meta_mcp::upstream::SECRETS_WITHHELD;
+    if let Some(result) = wire.get_mut("result") {
+        *result = serde_json::json!({
+            "content": [{"type": "text", "text": reason}],
+            "isError": true,
+        });
+    }
+    if let Some(error) = wire.get_mut("error") {
+        *error = serde_json::json!({
+            "code": crate::error::rpc_codes::INTERNAL_ERROR,
+            "message": reason,
+        });
+    }
 }
 
 impl CommittedTask {
@@ -582,9 +633,16 @@ impl CommittedTask {
             )
     }
 
+    /// Whether every read serves the withheld answer in place of the stored
+    /// outcome (see [`Self::delivered_wire`]), so nothing is receipted as
+    /// delivered.
+    pub(crate) fn withholds_outcome(&self) -> bool {
+        self.vouching == Vouching::Unvouched
+    }
+
     /// The stored task as a delivery serves it: every serve site
-    /// (`tasks/get`, a repeat, a notification) sends this, never
-    /// `task.wire()` alone, and before any egress scan reads it.
+    /// (`tasks/get`, a repeat, a notification) sends this, never the bare
+    /// `Task::wire`, and before any egress scan reads it.
     ///
     /// Each gateway-only member the row's write record does not claim is
     /// removed from the result, `error.data` and every parked input request.
@@ -618,6 +676,9 @@ impl CommittedTask {
                 strip_unnoted(request, |_| false);
             }
         }
+        if self.withholds_outcome() {
+            withhold_outcome(&mut wire);
+        }
         wire
     }
 
@@ -639,6 +700,17 @@ impl CommittedTask {
             gateway_writes: record.gateway_writes.clone(),
             bindings: record.bindings.clone(),
             bindings_recorded: record.version >= BINDING_VERSION,
+            // Legacy and `missing` rows are both unvouched.
+            vouching: if record.upstream.as_ref().is_some_and(|upstream| {
+                matches!(
+                    upstream.secret_fingerprint.as_deref(),
+                    None | Some(crate::security::dispatched::MISSING)
+                )
+            }) {
+                Vouching::Unvouched
+            } else {
+                Vouching::Vouched
+            },
             replay_snapshot: record.replay_snapshot.clone().map(Box::new),
         }
     }
