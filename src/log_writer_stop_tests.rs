@@ -164,3 +164,49 @@ fn a_send_in_flight_when_the_stop_begins_is_written_not_lost() {
     assert_eq!(kept(&out), ["racing"], "the in-flight line was written");
     assert_eq!(w.dropped_lines(), 0, "and nothing was dropped");
 }
+
+/// A sender parked inside the stop's in-flight window while the queue is full
+/// and the sink is parked: the stop still ends at its deadline with the worker
+/// kept, and once everything moves, every line is written or counted.
+#[test]
+fn a_parked_sender_and_a_full_queue_still_end_the_stop_at_the_deadline() {
+    let (w, f, sink_gate, out) = parked(1, 1 << 20);
+    line(&w, "a");
+    assert!(
+        sink_gate.wait_entered(),
+        "the worker is parked inside the sink"
+    );
+    line(&w, "b");
+    let sender_gate = Gate::closed();
+    w.park_after_check(&sender_gate);
+    let sender = {
+        let w = w.clone();
+        thread::spawn(move || line(&w, "c"))
+    };
+    assert!(
+        sender_gate.wait_entered(),
+        "the sender is past the closed check"
+    );
+    let started = Instant::now();
+    let outcome = f.stop_and_join(Instant::now() + Duration::from_millis(300));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the stop is bounded"
+    );
+    let StopOutcome::NotJoined(worker) = outcome else {
+        panic!("a parked worker is not joined: {outcome:?}");
+    };
+    sender_gate.open();
+    sink_gate.open();
+    sender.join().expect("the sender returned");
+    assert!(
+        worker.join().is_ok(),
+        "the kept worker ends once everything moves"
+    );
+    assert_eq!(kept(&out), ["a", "b"]);
+    assert_eq!(
+        w.dropped_lines(),
+        1,
+        "the line that found a full queue is counted"
+    );
+}
