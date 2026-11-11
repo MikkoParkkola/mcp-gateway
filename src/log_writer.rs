@@ -58,6 +58,9 @@ struct Shared {
     /// Test hook: parks the writer after a drain pass of the terminal stop.
     #[cfg(test)]
     after_drain: std::sync::Mutex<Option<test_sinks::Gate>>,
+    /// Test hook: how many times the writer has come round to wait for a message.
+    #[cfg(test)]
+    idle_polls: AtomicUsize,
 }
 
 /// The `MakeWriter` for the fmt layer: each event's line goes to the queue.
@@ -100,6 +103,8 @@ pub(crate) fn spawn(
         after_check: std::sync::Mutex::new(None),
         #[cfg(test)]
         after_drain: std::sync::Mutex::new(None),
+        #[cfg(test)]
+        idle_polls: AtomicUsize::new(0),
     });
     let for_thread = Arc::clone(&shared);
     let worker = thread::Builder::new()
@@ -171,6 +176,12 @@ impl LossyStderr {
     #[cfg(test)]
     pub(crate) fn park_after_check(&self, gate: &test_sinks::Gate) {
         *self.shared.after_check.lock().expect("hook") = Some(gate.clone());
+    }
+
+    /// How many times the writer has come round to wait for a message.
+    #[cfg(test)]
+    pub(crate) fn idle_polls(&self) -> usize {
+        self.shared.idle_polls.load(Ordering::SeqCst)
     }
 
     /// Park the writer at `gate` after each drain pass of the terminal stop.
@@ -354,6 +365,8 @@ fn run(
     };
     let mut reported = 0_u64;
     loop {
+        #[cfg(test)]
+        shared.idle_polls.fetch_add(1, Ordering::SeqCst);
         match rx.recv() {
             #[cfg(test)]
             Ok(Msg::Stop) => break,

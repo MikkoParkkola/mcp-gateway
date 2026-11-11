@@ -31,6 +31,15 @@ fn bounded<T: Send + 'static>(handle: thread::JoinHandle<T>, what: &str) -> T {
     }
 }
 
+/// Wait for a state the writer is certain to reach; fails past the watchdog.
+fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
+    let until = Instant::now() + WATCHDOG;
+    while !ready() {
+        assert!(Instant::now() < until, "never happened: {what}");
+        thread::yield_now();
+    }
+}
+
 fn kept(out: &Accepted) -> Vec<String> {
     out.lines().into_iter().filter(|l| !l.is_empty()).collect()
 }
@@ -56,15 +65,18 @@ fn a_stop_drains_every_accepted_line_in_order_and_joins() {
 }
 
 /// A writer idle on an empty queue is woken by the stop itself: nothing else is
-/// left to send it a message, so only the `Stop` wake can end it.
+/// left to send it a message, so only the `Stop` wake can end it. The row stops
+/// only once the writer has written its line and come round to wait again.
 #[test]
 fn an_idle_writer_is_woken_by_the_stop() {
-    let (w, f, out) = scripted(vec![]);
+    let (w, f, _out) = scripted(vec![]);
+    wait_until("the writer waits for its first message", || {
+        w.idle_polls() >= 1
+    });
     line(&w, "x");
-    assert!(
-        out.wait_for(|t| t.contains("x\n")),
-        "the line reached the sink"
-    );
+    wait_until("the writer wrote the line and waits again", || {
+        w.idle_polls() >= 2
+    });
     let outcome = f.stop_and_join(soon());
     assert!(
         matches!(outcome, StopOutcome::Joined(FlushEnd::Clean)),
