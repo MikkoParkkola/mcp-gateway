@@ -334,7 +334,7 @@ pub(crate) fn terminal_cases(failures: &mut Vec<String>) {
                 || {
                     let (dir, path, locked) = config();
                     let state = linkage_state(dir.path(), role, case)?;
-                    check_finish(&locked, &path, state, success, false)
+                    check_finish(&locked, &path, &state, success, false)
                 },
             );
         }
@@ -357,7 +357,7 @@ pub(crate) fn terminal_cases(failures: &mut Vec<String>) {
             || {
                 let (dir, path, locked) = config();
                 let state = deferred_state(dir.path(), equal);
-                check_finish(&locked, &path, state, equal, !equal)
+                check_finish(&locked, &path, &state, equal, !equal)
             },
         );
     }
@@ -525,7 +525,7 @@ fn deferred_extra_cases(failures: &mut Vec<String>, finish: bool) {
                 let (dir, path, locked) = config();
                 let state = deferred_conflict_state(dir.path(), attribution)?;
                 if finish {
-                    check_finish(&locked, &path, state, false, true)
+                    check_finish(&locked, &path, &state, false, true)
                 } else {
                     let result = state.validate();
                     if result == Err(JournalError::InvalidState) {
@@ -542,7 +542,7 @@ fn deferred_extra_cases(failures: &mut Vec<String>, finish: bool) {
 fn check_finish(
     locked: &Locked,
     path: &Path,
-    state: JournalV2,
+    state: &JournalV2,
     success: bool,
     invalid_state_allowed: bool,
 ) -> Result<(), String> {
@@ -556,7 +556,7 @@ fn check_finish(
     let original_after = std::fs::read(journal::original_path(path));
     let journal_retained = journal_after.as_ref().is_ok_and(|b| b == &before);
     let original_retained = original_after.as_ref().is_ok_and(|b| b == OLD);
-    let state_retained = owner.state == state;
+    let state_retained = owner.state == *state;
     let removed = matches!(&journal_after, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
         && matches!(&original_after, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
     let passed = if success {
