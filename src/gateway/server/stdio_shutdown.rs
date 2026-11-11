@@ -162,7 +162,11 @@ pub(super) fn orphan_watch(
 }
 
 impl Gateway {
-    pub(super) fn stdio_hurry(&self, orphan: impl Future<Output = ()> + Send + 'static) -> Hurry {
+    pub(super) fn stdio_hurry(
+        &self,
+        orphan: impl Future<Output = ()> + Send + 'static,
+        eof_with_signal: bool,
+    ) -> Hurry {
         let (signal_tx, _) = tokio::sync::broadcast::channel(1);
         #[cfg(test)]
         let signal = super::test_seams::shutdown_signal_or_trigger(
@@ -174,6 +178,7 @@ impl Gateway {
         let signal = async move {
             tokio::select! {
                 biased;
+                () = std::future::ready(()), if eof_with_signal => {},
                 () = signal => {},
                 () = orphan => {},
             }

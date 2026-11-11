@@ -285,10 +285,12 @@ impl Gateway {
 
         // Why the loop can end before EOF: see `run_stdout_writer`.
         let mut stdout_died = false;
+        let mut ended_by_signal = false;
 
         loop {
             if signalled_early {
                 info!("stdio: shutdown signal received during startup; shutting down");
+                ended_by_signal = true;
                 break;
             }
             // A closed queue means the stdout writer has exited, so every
@@ -311,6 +313,7 @@ impl Gateway {
                 }
                 () = &mut stop_signal => {
                     info!("stdio: shutdown signal received; finishing accepted requests");
+                    ended_by_signal = true;
                     break;
                 }
                 // Reaped as each ends, so an aborted dispatch is joined at once
@@ -656,7 +659,18 @@ impl Gateway {
             }
         }
 
-        let hurry = self.stdio_hurry(orphan);
+        // A signal that wins the select hides an EOF that arrived with it: a
+        // parent with no time left closes stdin and signals in one instant. A
+        // signal after EOF hurries the stop, so count that EOF.
+        let eof_with_signal = ended_by_signal
+            && matches!(
+                futures::FutureExt::now_or_never(reader.next_line()),
+                Some(Ok(None))
+            );
+        if eof_with_signal {
+            info!("stdio: shutdown signal arrived with stdin already closed; hurrying the stop");
+        }
+        let hurry = self.stdio_hurry(orphan, eof_with_signal);
         let deadline = tokio::time::Instant::now() + STDIO_DRAIN_TIMEOUT;
         let shutdown_deadline = deadline + stdio_shutdown::STDIO_TEARDOWN_TIMEOUT;
         let writer_task = AbortOnDrop::new(writer_task);
