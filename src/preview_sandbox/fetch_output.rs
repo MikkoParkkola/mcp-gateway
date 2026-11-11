@@ -84,8 +84,9 @@ pub(crate) fn redact_line(line: &str, credential: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ");
-    // URL normalization can recreate a literal by lowercasing the host.
-    let text = redact_untruncated(&text, &forms, &[]);
+    // URL normalization can recreate a literal by lowercasing the host, so
+    // every form is also matched case-insensitively, per word (a credential
+    // holds no space).
     let lowered_forms: Vec<String> = forms
         .iter()
         .filter(|form| !form.is_empty())
