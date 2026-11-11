@@ -19,6 +19,58 @@ use super::{Gateway, StdioTelemetry, stdio_tasks, task_runtime, warmstart::Warme
 /// The teardown window after the stdio drain window.
 pub(super) const STDIO_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// A fresh signal listener and orphan watch armed when the read loop exits.
+/// Windows has no SIGTERM path here: a parent's stop is a job kill. If a
+/// parent cannot close stdin, its single SIGTERM is consumed by the read
+/// loop as the first signal; that case stays out of scope.
+pub(super) struct Hurry {
+    signal: std::pin::Pin<Box<dyn Future<Output = ()> + Send>>,
+    ready: bool,
+    cut: Option<Instant>,
+    deadline: Arc<crate::transport::StopDeadline>,
+}
+
+impl Hurry {
+    fn new(
+        signal: impl Future<Output = ()> + Send + 'static,
+        deadline: Arc<crate::transport::StopDeadline>,
+    ) -> Self {
+        let mut signal = Box::pin(signal);
+        // Register the OS handlers now, before any drain or other await.
+        let ready = futures::FutureExt::now_or_never(signal.as_mut()).is_some();
+        Self {
+            signal,
+            ready,
+            cut: None,
+            deadline,
+        }
+    }
+
+    async fn wait(&mut self) -> Instant {
+        if !self.ready {
+            self.signal.as_mut().await;
+            self.ready = true;
+        }
+        *self
+            .cut
+            .get_or_insert_with(|| self.deadline.hurry(std::time::Instant::now()).into())
+    }
+}
+
+fn parent_pid() -> i32 {
+    #[cfg(unix)]
+    return rustix::process::getppid().map_or(0, |pid| pid.as_raw_nonzero().get());
+    #[cfg(not(unix))]
+    0
+}
+
+/// A hurry flushes the reply drain only while that drain is still running: a
+/// finished drain future is never polled again (a fused one would wait out the
+/// whole cut for nothing).
+pub(super) fn flush_pending(hurried: bool, drain_finished: bool) -> bool {
+    hurried && !drain_finished
+}
+
 /// Run one teardown step under `deadline`. `None` when it did not finish:
 /// the step is dropped, and the expiry logged by name.
 pub(super) async fn bounded_step<F: Future>(
@@ -85,7 +137,55 @@ pub(super) async fn final_cost_save(
     .await;
 }
 
+/// Capture at startup, but poll only after the read loop ends. The future
+/// belongs to Hurry, so teardown completion or cancellation drops the watch.
+pub(super) fn orphan_watch(
+    #[cfg(test)] injected: Option<Arc<dyn Fn() -> i32 + Send + Sync>>,
+) -> impl Future<Output = ()> + Send + 'static {
+    #[cfg(test)]
+    let read = move || injected.as_ref().map_or_else(parent_pid, |read| read());
+    #[cfg(not(test))]
+    let read = parent_pid;
+    let saved = read();
+    async move {
+        if !cfg!(unix) || saved <= 1 {
+            std::future::pending::<()>().await;
+        }
+        let mut polls = tokio::time::interval(Duration::from_millis(50));
+        loop {
+            polls.tick().await;
+            if read() != saved {
+                return;
+            }
+        }
+    }
+}
+
 impl Gateway {
+    pub(super) fn stdio_hurry(
+        &self,
+        orphan: impl Future<Output = ()> + Send + 'static,
+        eof_with_signal: bool,
+    ) -> Hurry {
+        let (signal_tx, _) = tokio::sync::broadcast::channel(1);
+        #[cfg(test)]
+        let signal = super::test_seams::shutdown_signal_or_trigger(
+            signal_tx,
+            self.test_seams.take_hurry_trigger(),
+        );
+        #[cfg(not(test))]
+        let signal = super::support::shutdown_signal(signal_tx);
+        let signal = async move {
+            tokio::select! {
+                biased;
+                () = std::future::ready(()), if eof_with_signal => {},
+                () = signal => {},
+                () = orphan => {},
+            }
+        };
+        Hurry::new(signal, self.backends.stop_deadline())
+    }
+
     /// Save the protocol-revision window, waiting for a save already in
     /// flight. The final save at shutdown: after the saver's ticks stop, it
     /// takes the sink lock as soon as the last tick's write ends and saves
@@ -136,8 +236,8 @@ impl Gateway {
         .await;
     }
 
-    /// Everything after the writer join, each step under `deadline`.
-    pub(super) async fn stdio_teardown(
+    /// Preparations after the writer join, each step under `deadline`.
+    async fn stdio_before_backends(
         &self,
         deadline: Instant,
         warm_start_tasks: WarmerGuard,
@@ -146,6 +246,8 @@ impl Gateway {
             crate::gateway::task_service::execution::ExpirySweep,
         )>,
     ) {
+        #[cfg(test)]
+        self.test_seams.stdio_before_backends_hold.pause().await;
         // Awaited, not left to the drop guard: an abort is asynchronous, so a
         // retry task mid-`ensure_started` would otherwise still be starting a
         // backend while `stop_all` drains it, delaying shutdown and logging
@@ -180,15 +282,74 @@ impl Gateway {
         {
             warn!(error = %e, "Personal account custody shutdown failed");
         }
+    }
+
+    /// A fresh signal cancels the remaining preparations, then cuts backend
+    /// waits too if it arrives after those preparations have finished.
+    pub(super) async fn stdio_teardown(
+        &self,
+        deadline: Instant,
+        warm_start_tasks: WarmerGuard,
+        task_store: Option<(
+            Arc<stdio_tasks::StdioTasks>,
+            crate::gateway::task_service::execution::ExpirySweep,
+        )>,
+        mut hurry: Hurry,
+        before: impl Future<Output = ()>,
+    ) {
+        // Pinned outside the select below: a hurry stops waiting for the
+        // preparations that follow it, but replies already produced, and calls
+        // the backend kill will fail, are still written before the cut.
+        let before = futures::FutureExt::fuse(before);
+        tokio::pin!(before);
+        let hurried = tokio::select! {
+            biased;
+            cut = hurry.wait() => {
+                warn!("shutdown hurried by a signal; stopping backends now");
+                Some(cut)
+            }
+            () = async {
+                before.as_mut().await;
+                self.stdio_before_backends(deadline, warm_start_tasks, task_store).await;
+            } => None,
+        };
         // The backends' waits are planned to end by the teardown deadline (or
         // shutdown_timeout from now, if sooner), so their kill lands before
         // this process returns.
-        let stop_deadline = deadline.min(Instant::now() + self.config.server.shutdown_timeout);
+        let mut stop_deadline = deadline.min(Instant::now() + self.config.server.shutdown_timeout);
+        if let Some(cut) = hurried {
+            stop_deadline = stop_deadline.min(cut);
+        }
+        let backend_deadline = hurried.map_or(deadline, |cut| deadline.min(cut));
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
         let stop = self.backends.stop_all_by(stop_deadline);
-        bounded_step(deadline, "backend stop", stop).await;
+        tokio::pin!(stop);
+        tokio::select! {
+            biased;
+            cut = hurry.wait(), if hurried.is_none() => {
+                self.backends
+                    .hand_over_now(cut.saturating_duration_since(Instant::now()));
+                bounded_step(deadline.min(cut), "backend stop", stop).await;
+            }
+            () = async {
+                let stopped = bounded_step(backend_deadline, "backend stop", &mut stop);
+                // A hurry that lands after the drain finished (during the
+                // post-drain cleanup) has nothing left to flush: a finished
+                // future is never polled again.
+                let drained = futures::future::FusedFuture::is_terminated(&before);
+                if flush_pending(hurried.is_some(), drained) {
+                    // The kill fails the calls it reaches, so their replies
+                    // join those already produced; both go out before the cut.
+                    let flushed =
+                        bounded_step(backend_deadline, "reply flush", before.as_mut());
+                    tokio::join!(stopped, flushed);
+                } else {
+                    stopped.await;
+                }
+            } => {}
+        }
     }
 }
