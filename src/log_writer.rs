@@ -48,6 +48,9 @@ struct Shared {
     max_bytes: usize,
     /// Set by the terminal stop: no clone enqueues after it.
     closed: AtomicBool,
+    /// Sends that have registered and not finished: the writer's final drain
+    /// waits for zero, so a line past the closed check is never left behind.
+    inflight: AtomicUsize,
     /// Test hook: parks a send that has passed the closed check.
     #[cfg(test)]
     after_check: std::sync::Mutex<Option<test_sinks::Gate>>,
@@ -87,6 +90,7 @@ pub(crate) fn spawn(
         queued_bytes: AtomicUsize::new(0),
         max_bytes: bytes,
         closed: AtomicBool::new(false),
+        inflight: AtomicUsize::new(0),
         #[cfg(test)]
         after_check: std::sync::Mutex::new(None),
     });
@@ -107,10 +111,24 @@ pub(crate) fn spawn(
     ))
 }
 
+/// Marks a send as in flight until it returns, on every path.
+struct InFlight<'a>(&'a AtomicUsize);
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl LossyStderr {
     /// Queue `line`, or drop and count it. Never waits.
     fn send(&self, line: Vec<u8>) {
-        if self.shared.closed.load(Ordering::Acquire) {
+        // Register before the check (SeqCst, against the stop's store and the
+        // writer's load): either this send sees the close and counts the line,
+        // or the writer sees this send and waits for it.
+        self.shared.inflight.fetch_add(1, Ordering::SeqCst);
+        let _registered = InFlight(&self.shared.inflight);
+        if self.shared.closed.load(Ordering::SeqCst) {
             self.shared.total.fetch_add(1, Ordering::Relaxed);
             return;
         }
@@ -227,7 +245,7 @@ impl LogFlush {
         // Admission closes first, so a clone cannot keep the queue busy. An idle
         // writer wakes on the Stop message; a writer with a full queue is busy
         // and sees the flag after its next message, so a failed try_send is fine.
-        self.shared.closed.store(true, Ordering::Release);
+        self.shared.closed.store(true, Ordering::SeqCst);
         let _ = self.tx.try_send(Msg::Stop);
         let Some(worker) = self.worker.take() else {
             return StopOutcome::WorkerFailed;
@@ -332,8 +350,19 @@ fn run(
             Err(_) => return FlushEnd::Clean,
         }
     }
-    // Accepted before the close: still written. A send that passed the closed
-    // check just before it may land after this drain and is then lost.
+    // Accepted before the close: still written. Senders already past the closed
+    // check finish first, and the drain keeps going while it waits for them; a
+    // late sender sees the flag and counts its line instead.
+    loop {
+        while let Ok(msg) = rx.try_recv() {
+            reported = serve(msg, &mut out, shared, reported, format);
+        }
+        if shared.inflight.load(Ordering::SeqCst) == 0 {
+            break;
+        }
+        thread::yield_now();
+    }
+    // A sender's last act is the enqueue, then its guard drops: one more drain.
     while let Ok(msg) = rx.try_recv() {
         reported = serve(msg, &mut out, shared, reported, format);
     }
