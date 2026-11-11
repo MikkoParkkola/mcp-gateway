@@ -30,3 +30,42 @@ async fn strip_before_redaction_catches_a_seal_the_redaction_would_hide() {
     assert!(!wire.contains(payload), "hidden seal: {wire}");
     assert!(wire.contains("[REDACTED:credential]"), "no rewrite: {wire}");
 }
+
+// A question the firewall holds immutable keeps its seal; the answer's
+// other members still lose theirs and are redacted.
+#[tokio::test]
+async fn an_interim_questions_seal_survives_a_redaction_elsewhere_in_the_answer() {
+    let mut meta = sealing_meta();
+    let (sealed, _writes) = sealed_result(&meta).await;
+    assert!(
+        sealed
+            .pointer("/_meta/provenance/public_signature")
+            .is_some(),
+        "premise: the question holds a real seal"
+    );
+    let mut value = serde_json::json!({
+        "content": [{"type": "text", "text": canary()}],
+        "inputRequests": sealed.clone(),
+        "requestState": "state-handle",
+        "_meta": sealed["_meta"].clone(),
+    });
+    install_firewall(&mut meta, true);
+    let targets = [ResponsePolicyTarget::routed("remote_docs", "search")];
+    let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
+    assert_eq!(
+        meta.firewall_result(&mut value, &firewall_at(&meta, &delivery)),
+        crate::gateway::meta_mcp::invoke::egress::EgressOutcome::Rewritten,
+    );
+    assert_eq!(value["inputRequests"], sealed, "the question stays whole");
+    assert_eq!(value["requestState"], "state-handle");
+    assert!(
+        value
+            .pointer("/_meta/provenance/public_signature")
+            .is_none(),
+        "a seal outside the question still comes off: {value}"
+    );
+    assert!(
+        !value.to_string().contains(&canary()),
+        "the credential is redacted: {value}"
+    );
+}
