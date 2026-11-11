@@ -1,0 +1,3 @@
+src/gateway/task_service/record.rs	fingerprint_or_missing	1	critical	a	fingerprint_or_missing	Decides what a deferred task's stored fingerprint is written as: a legacy None is written as missing, so a rewritten old row still withholds
+src/gateway/task_service/record.rs	withhold_outcome	1	critical	a	withhold_outcome	Decides what every reader of an unvouched upstream row is served: the stored result or error replaced by the fixed withheld answer, the task's state unchanged
+src/gateway/task_service/record.rs	withholds_outcome	1	critical	a	withholds_outcome	Decides whether a stored row is served withheld and so receipts nothing: delivered_wire withholds its outcome and a stored read renews no relay receipt for it

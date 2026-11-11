@@ -680,7 +680,9 @@ pub(crate) fn read_recovery_text(path: &Path) -> std::result::Result<Option<Stri
 /// # Errors
 ///
 /// As [`read_recovery_text`], also refusing an oversized journal.
-pub(crate) fn read_recovery_journal_v2(path: &Path) -> std::result::Result<Option<String>, UnreadConfig> {
+pub(crate) fn read_recovery_journal_v2(
+    path: &Path,
+) -> std::result::Result<Option<String>, UnreadConfig> {
     read_text_of(path, SecretFile::RecoveryJournalV2)
 }
 

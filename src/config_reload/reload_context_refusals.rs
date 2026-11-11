@@ -9,14 +9,27 @@ use crate::config_reload::{ConfigPatch, POSTURE_REFUSED_PREFIX};
 
 use super::{EvaluatedReload, ReloadContext};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BeforeApplyKind {
+    NetworkPosture,
+    AccountBinding,
+    CapabilityClash,
+}
+
+#[derive(Debug)]
+pub(super) struct BeforeApply {
+    pub(super) kind: BeforeApplyKind,
+    pub(super) text: String,
+}
+
 impl ReloadContext {
     /// The refusals a reload answers before `apply_patch` stops or starts any
     /// backend: each says nothing was started, stopped or published.
-    pub(super) fn refuse_before_apply(
+    pub(super) fn before_apply_refusal(
         &self,
         new_config: &Config,
         patch: &ConfigPatch,
-    ) -> std::result::Result<(), String> {
+    ) -> Option<BeforeApply> {
         // Before `apply_patch`, which stops and starts backends: a refusal that
         // ran after it could not say nothing was applied. And before the
         // publish, which is what the origin gate would re-read.
@@ -70,11 +83,14 @@ impl ReloadContext {
             // check asks `network_bind_refusal` and nothing else, while a
             // restart reads the whole file. Claiming more than the two facts
             // below is how a security message starts the next report.
-            return Err(format!(
-                "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped, \
-                 and no configuration was published. {restart}",
-                refusal.reason
-            ));
+            return Some(BeforeApply {
+                kind: BeforeApplyKind::NetworkPosture,
+                text: format!(
+                    "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped, \
+                     and no configuration was published. {restart}",
+                    refusal.reason
+                ),
+            });
         }
 
         // A changed account binding cannot reuse the credentials minted under
@@ -88,13 +104,21 @@ impl ReloadContext {
             self.live_config.running(),
             new_config,
         ) {
-            return Err(format!(
-                "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
-                 configuration was published."
-            ));
+            return Some(BeforeApply {
+                kind: BeforeApplyKind::AccountBinding,
+                text: format!(
+                    "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
+                     configuration was published."
+                ),
+            });
         }
 
         self.refuse_capability_name_clash(patch)
+            .err()
+            .map(|text| BeforeApply {
+                kind: BeforeApplyKind::CapabilityClash,
+                text,
+            })
     }
 
     /// A refusal when `evaluated` changes a security field only a restart
@@ -147,5 +171,61 @@ impl ReloadContext {
              or rename the backend. No backend was started or stopped, and no configuration \
              was published."
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_reload::compute_diff;
+    use crate::config_reload::replace_test_support::setup;
+
+    /// K1: red oracle is `NetworkPosture` rather than the stub `CapabilityClash`.
+    #[test]
+    fn k1_network_posture_kind() {
+        let (_dir, _path, ctx) = setup();
+        let old = ctx.live_config.get();
+        let mut new = (*old).clone();
+        new.server.public_url = Some("https://gw.example.com".to_owned());
+        let refusal = ctx
+            .before_apply_refusal(&new, &compute_diff(&old, &new))
+            .unwrap();
+        assert_eq!(refusal.kind, BeforeApplyKind::NetworkPosture);
+    }
+
+    /// K1: red oracle is `AccountBinding` rather than the stub `CapabilityClash`.
+    #[test]
+    fn k1_account_binding_kind() {
+        let (_dir, _path, ctx) = setup();
+        let old = ctx.live_config.get();
+        let mut new = (*old).clone();
+        new.backends.get_mut("a").unwrap().account = Some("work".to_owned());
+        let refusal = ctx
+            .before_apply_refusal(&new, &compute_diff(&old, &new))
+            .unwrap();
+        assert_eq!(refusal.kind, BeforeApplyKind::AccountBinding);
+    }
+
+    /// K1: oracle is `CapabilityClash`; this control already passes the stub.
+    #[test]
+    fn k1_capability_clash_kind() {
+        use crate::capability::{CapabilityBackend, CapabilityExecutor};
+        use std::sync::Arc;
+
+        let (_dir, path, _) = setup();
+        let ctx = crate::config_reload::replace_test_support::unshared(&path).with_capabilities(
+            Some(Arc::new(CapabilityBackend::new(
+                "edits",
+                Arc::new(CapabilityExecutor::new()),
+            ))),
+        );
+        let old = ctx.live_config.get();
+        let mut new = (*old).clone();
+        new.backends
+            .insert("edits".to_owned(), new.backends["a"].clone());
+        let refusal = ctx
+            .before_apply_refusal(&new, &compute_diff(&old, &new))
+            .unwrap();
+        assert_eq!(refusal.kind, BeforeApplyKind::CapabilityClash);
     }
 }

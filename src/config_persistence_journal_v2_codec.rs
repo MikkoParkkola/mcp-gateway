@@ -6,10 +6,16 @@ use super::*;
 use serde_json::Value;
 
 pub(super) fn terminal_matches(record: &FrozenRecord, decision: &Decision) -> bool {
-    let Ok(Value::Object(mut payload)) = serde_json::from_slice(&record.payload_json) else { return false; };
-    payload.remove("result").and_then(|value| serde_json::from_value::<ResultClass>(value).ok())
+    let Ok(Value::Object(mut payload)) = serde_json::from_slice(&record.payload_json) else {
+        return false;
+    };
+    payload
+        .remove("result")
+        .and_then(|value| serde_json::from_value::<ResultClass>(value).ok())
         == Some(decision.result)
-        && payload.remove("reason").and_then(|value| serde_json::from_value::<Reason>(value).ok())
+        && payload
+            .remove("reason")
+            .and_then(|value| serde_json::from_value::<Reason>(value).ok())
             == Some(decision.reason)
 }
 
@@ -54,16 +60,33 @@ pub(super) fn decode(bytes: &[u8]) -> Result<JournalV2, JournalError> {
     let wire: Wire = serde_json::from_slice(bytes).map_err(|_| JournalError::Unreadable)?;
     let mut state = JournalV2 {
         version: wire.version,
-        binding: wire.binding.map(LogId::from_journal).transpose().map_err(|_| JournalError::InvalidState)?,
+        binding: wire
+            .binding
+            .map(LogId::from_journal)
+            .transpose()
+            .map_err(|_| JournalError::InvalidState)?,
         phase: wire.phase,
-        original_revision: wire.original_revision.as_deref().map(FileRevision::parse_journal).transpose()?,
-        new_revision: wire.new_revision.as_deref().map(FileRevision::parse_journal).transpose()?,
+        original_revision: wire
+            .original_revision
+            .as_deref()
+            .map(FileRevision::parse_journal)
+            .transpose()?,
+        new_revision: wire
+            .new_revision
+            .as_deref()
+            .map(FileRevision::parse_journal)
+            .transpose()?,
         pending: None,
-        fact: wire.fact.map(|fact| Ok::<_, JournalError>(match fact {
-            FactWire::Untouched => Fact::Untouched,
-            FactWire::Committed(r) => Fact::Committed(FileRevision::parse_journal(&r)?),
-            FactWire::RolledBack(r) => Fact::RolledBack(FileRevision::parse_journal(&r)?),
-        })).transpose()?,
+        fact: wire
+            .fact
+            .map(|fact| {
+                Ok::<_, JournalError>(match fact {
+                    FactWire::Untouched => Fact::Untouched,
+                    FactWire::Committed(r) => Fact::Committed(FileRevision::parse_journal(&r)?),
+                    FactWire::RolledBack(r) => Fact::RolledBack(FileRevision::parse_journal(&r)?),
+                })
+            })
+            .transpose()?,
         writer: wire.writer,
         attempts: wire.attempts,
     };
@@ -88,7 +111,10 @@ pub(super) fn encode(state: &JournalV2) -> Result<Vec<u8>, JournalError> {
         version: state.version,
         binding: state.binding.as_ref().map(|id| id.as_str().to_owned()),
         phase: state.phase,
-        original_revision: state.original_revision.as_ref().map(|r| r.as_str().to_owned()),
+        original_revision: state
+            .original_revision
+            .as_ref()
+            .map(|r| r.as_str().to_owned()),
         new_revision: state.new_revision.as_ref().map(|r| r.as_str().to_owned()),
         pending: state.pending.as_ref().map(|p| PendingWire {
             action: match p.action {
@@ -107,7 +133,8 @@ pub(super) fn encode(state: &JournalV2) -> Result<Vec<u8>, JournalError> {
         attempts: state.attempts.clone(),
     };
     // Value's ordered maps preserve the canonical golden wire, including actors.
-    serde_json::to_value(wire).and_then(|value| serde_json::to_vec(&value))
+    serde_json::to_value(wire)
+        .and_then(|value| serde_json::to_vec(&value))
         .map_err(|_| JournalError::Persist)
 }
 
@@ -126,16 +153,25 @@ pub(super) mod attribution {
     use super::*;
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Wire { actor: Value }
-    pub(crate) fn serialize<S: serde::Serializer>(actor: &Option<Attribution>, s: S) -> Result<S::Ok, S::Error> {
+    struct Wire {
+        actor: Value,
+    }
+    pub(crate) fn serialize<S: serde::Serializer>(
+        actor: &Option<Attribution>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
         actor.serialize(s)
     }
-    pub(crate) fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Attribution>, D::Error> {
-        Option::<Wire>::deserialize(d)?.map(|wire| {
-            let bytes = serde_json::to_vec(&wire.actor).map_err(serde::de::Error::custom)?;
-            crate::security::audit::AuditWho::from_persisted(&bytes)
-                .map(|actor| Attribution { actor })
-                .map_err(|_| serde::de::Error::custom("invalid journal actor"))
-        }).transpose()
+    pub(crate) fn deserialize<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<Attribution>, D::Error> {
+        Option::<Wire>::deserialize(d)?
+            .map(|wire| {
+                let bytes = serde_json::to_vec(&wire.actor).map_err(serde::de::Error::custom)?;
+                crate::security::audit::AuditWho::from_persisted(&bytes)
+                    .map(|actor| Attribution { actor })
+                    .map_err(|_| serde::de::Error::custom("invalid journal actor"))
+            })
+            .transpose()
     }
 }

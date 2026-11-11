@@ -10,12 +10,13 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::{ReplaceError, SecretStep};
+use super::{RefusalClass, ReplaceError, SecretStep};
 use crate::config::{Config, EnvOverlay, PENDING_SLOT_PREFIX, reserved_slot_reference};
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::lock::Locked;
 use crate::config_reload::ReloadContext;
 use crate::config_reload::reload_context::EvaluatedReload;
+use crate::config_reload::reload_context::refusals::BeforeApplyKind;
 
 /// Each slot's `env:` reference and the stand-in its name resolves to: a
 /// fresh random value per slot per save, so two slots never stand in as
@@ -82,21 +83,39 @@ impl ReloadContext {
     /// anything, in its order, for a candidate the config writer validates
     /// before any store entry exists. The reload still runs them again on the
     /// written bytes; this only refuses earlier.
-    fn refuse_candidate(&self, evaluated: EvaluatedReload) -> std::result::Result<(), String> {
+    fn refuse_candidate(&self, evaluated: EvaluatedReload) -> Result<(), ReplaceError> {
+        let invalid = |reason| ReplaceError::ReloadRefused {
+            class: RefusalClass::Invalid,
+            reason,
+        };
         if let Some(refusal) =
             crate::security::posture::reload_refusal(self.live_config.running(), &evaluated.config)
         {
-            return Err(refusal);
+            return Err(invalid(refusal));
         }
-        self.restart_only_refusal(&evaluated)?;
+        self.restart_only_refusal(&evaluated).map_err(invalid)?;
         if evaluated.patch.is_empty() {
             return Ok(());
         }
-        self.refuse_before_apply(&evaluated.config, &evaluated.patch)?;
+        if let Some(refusal) = self.before_apply_refusal(&evaluated.config, &evaluated.patch) {
+            return Err(ReplaceError::ReloadRefused {
+                class: match refusal.kind {
+                    BeforeApplyKind::NetworkPosture => RefusalClass::Posture,
+                    BeforeApplyKind::AccountBinding | BeforeApplyKind::CapabilityClash => {
+                        RefusalClass::Invalid
+                    }
+                },
+                reason: refusal.text,
+            });
+        }
         self.live_config
             .prepare(evaluated.config, &evaluated.overlay)
             .map(drop)
-            .map_err(|reason| crate::config_reload::reload_context::nothing_published(&reason))
+            .map_err(|reason| {
+                invalid(crate::config_reload::reload_context::nothing_published(
+                    &reason,
+                ))
+            })
     }
 
     /// Refuse `template`, before any entry exists, when the reload would
@@ -136,8 +155,10 @@ impl ReloadContext {
         })
         .await
         .map_err(|e| ReplaceError::Failed(format!("the config check task failed: {e}")))?;
-        let evaluated = evaluated
-            .map_err(|e| ReplaceError::ReloadRefused(format!("Failed to parse config: {e}")))?;
+        let evaluated = evaluated.map_err(|e| ReplaceError::ReloadRefused {
+            class: RefusalClass::Invalid,
+            reason: format!("Failed to parse config: {e}"),
+        })?;
         if let Some(step) = step {
             refuse_shared_credentials(step, &evaluated.config, &evaluated.overlay)?;
         }
@@ -147,8 +168,10 @@ impl ReloadContext {
         // goes in only as carried over unchanged, and none while it runs.
         #[cfg(feature = "firewall")]
         {
-            let refused =
-                |e: String| ReplaceError::ReloadRefused(format!("Failed to validate config: {e}"));
+            let refused = |e: String| ReplaceError::ReloadRefused {
+                class: RefusalClass::Invalid,
+                reason: format!("Failed to validate config: {e}"),
+            };
             crate::security::firewall::refuse_while_running(
                 self.live_config.running(),
                 &evaluated.config,
@@ -166,7 +189,6 @@ impl ReloadContext {
             inputs: evaluated.inputs,
             configured: evaluated.configured,
         })
-        .map_err(ReplaceError::ReloadRefused)
     }
 
     /// `Err(NoConfigFile)` when the file read under this lock is gone now.

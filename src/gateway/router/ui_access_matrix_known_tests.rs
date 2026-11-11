@@ -153,7 +153,8 @@ async fn matrix_known_receipt_cells_moved_for_findings_line() {
 
 /// The six `other-receipt` 200 cells that moved, each with why: the seeded
 /// call has no decision object, so the receipt's `findings` text changed from
-/// the old placeholder to the reader's by-version line.
+/// the old placeholder to the reader's by-version line; the receipt also
+/// reports the log's `signing_anchor`, so the digest covers both.
 const MOVED_FOR_FINDINGS_LINE: [(&str, &str); 6] = [
     (
         "AdminKey",
@@ -188,7 +189,7 @@ fn the_moved_receipt_cells_carry_the_new_digest() {
         );
         assert_eq!(
             expected.get(&key).map(String::as_str),
-            Some("200:b5e993923abe"),
+            Some("200:b57068468436"),
             "{reason}"
         );
     }

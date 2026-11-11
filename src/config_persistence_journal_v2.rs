@@ -131,8 +131,9 @@ pub(crate) enum JournalError {
 
 pub(crate) fn open(locked: &Locked) -> Result<Option<OpenJournal>, JournalError> {
     let path = super::journal_path(&locked.target);
-    let Some(text) = crate::config::read_recovery_journal_v2(&path)
-        .map_err(|_| JournalError::Unreadable)? else {
+    let Some(text) =
+        crate::config::read_recovery_journal_v2(&path).map_err(|_| JournalError::Unreadable)?
+    else {
         return Ok(None);
     };
     match serde_json::from_str::<serde_json::Value>(&text)
@@ -150,7 +151,10 @@ pub(crate) fn create_intended(
     locked: &Locked,
     state: JournalV2,
 ) -> Result<JournalSession, JournalError> {
-    if state.phase != Phase::Intended || state.pending.is_some() || state.fact != Some(Fact::Untouched) {
+    if state.phase != Phase::Intended
+        || state.pending.is_some()
+        || state.fact != Some(Fact::Untouched)
+    {
         return Err(JournalError::InvalidState);
     }
     let bytes = state.encode()?;
@@ -166,8 +170,13 @@ pub(crate) fn create_intended(
     };
     let result = publish();
     let _ = std::fs::remove_file(&scratch);
-    result.and_then(|()| sync_dir_of(&path)).map_err(|_| JournalError::Persist)?;
-    Ok(JournalSession { target: locked.target.clone(), state })
+    result
+        .and_then(|()| sync_dir_of(&path))
+        .map_err(|_| JournalError::Persist)?;
+    Ok(JournalSession {
+        target: locked.target.clone(),
+        state,
+    })
 }
 
 #[derive(Debug)]
@@ -181,7 +190,8 @@ impl JournalSession {
         let bytes = self.state.encode()?;
         let path = super::journal_path(&self.target);
         write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)
-            .and_then(|()| sync_dir_of(&path)).map_err(|_| JournalError::Persist)
+            .and_then(|()| sync_dir_of(&path))
+            .map_err(|_| JournalError::Persist)
     }
 
     pub(crate) fn stage(
@@ -190,8 +200,13 @@ impl JournalSession {
         new_revision: FileRevision,
     ) -> Result<(), JournalError> {
         let original_revision = FileRevision::of(original);
-        if self.state.phase != Phase::Intended || self.state.pending.is_some()
-            || self.state.original_revision.as_ref().is_some_and(|r| r != &original_revision)
+        if self.state.phase != Phase::Intended
+            || self.state.pending.is_some()
+            || self
+                .state
+                .original_revision
+                .as_ref()
+                .is_some_and(|r| r != &original_revision)
         {
             return Err(JournalError::InvalidState);
         }
@@ -211,7 +226,12 @@ impl JournalSession {
         if self.state.phase != Phase::Staged || self.state.pending.is_some() {
             return Err(JournalError::InvalidState);
         }
-        self.state.pending = Some(Pending { action, expected, pre_action, tried: false });
+        self.state.pending = Some(Pending {
+            action,
+            expected,
+            pre_action,
+            tried: false,
+        });
         self.state.fact = None;
         self.persist()
     }
@@ -221,7 +241,11 @@ impl JournalSession {
         action: Action,
         proof: &CommitToken,
     ) -> Result<(), JournalError> {
-        let pending = self.state.pending.as_ref().ok_or(JournalError::InvalidState)?;
+        let pending = self
+            .state
+            .pending
+            .as_ref()
+            .ok_or(JournalError::InvalidState)?;
         if pending.action != action || &pending.expected != proof.revision() {
             return Err(JournalError::InvalidState);
         }
@@ -238,14 +262,23 @@ impl JournalSession {
         token: &IntentId,
         decision: Decision,
     ) -> Result<(), JournalError> {
-        let owner = self.state.writer.iter_mut().chain(self.state.attempts.iter_mut())
-            .find(|owner| &owner.token == token).ok_or(JournalError::InvalidState)?;
+        let owner = self
+            .state
+            .writer
+            .iter_mut()
+            .chain(self.state.attempts.iter_mut())
+            .find(|owner| &owner.token == token)
+            .ok_or(JournalError::InvalidState)?;
         if let Some(existing) = &owner.decision {
             // Retry the sync too: a prior persist may have failed after rename.
-            if existing == &decision { return self.persist(); }
+            if existing == &decision {
+                return self.persist();
+            }
             let mut stopped = existing.clone();
             stopped.delivery_stopped = true;
-            if stopped != decision { return Err(JournalError::ChangedDecision); }
+            if stopped != decision {
+                return Err(JournalError::ChangedDecision);
+            }
         }
         decision.validate()?;
         owner.decision = Some(decision);
@@ -254,18 +287,25 @@ impl JournalSession {
 
     pub(crate) fn finish(&mut self) -> Result<(), JournalError> {
         self.state.validate()?;
-        if self.state.pending.is_some() || self.state.fact.is_none()
+        if self.state.pending.is_some()
+            || self.state.fact.is_none()
             || (matches!(self.state.fact, Some(Fact::Committed(_)))
                 && self.state.phase != Phase::Accepted)
-            || !self.state.writer.iter()
-            .chain(&self.state.attempts).all(TokenState::finished)
+            || !self
+                .state
+                .writer
+                .iter()
+                .chain(&self.state.attempts)
+                .all(TokenState::finished)
         {
             return Err(JournalError::Finish);
         }
-        super::remove_if_present(&super::original_path(&self.target)).map_err(|_| JournalError::Finish)?;
+        super::remove_if_present(&super::original_path(&self.target))
+            .map_err(|_| JournalError::Finish)?;
         #[cfg(test)]
         observe::note(&self.target, observe::Event::OriginalUnlinked);
-        super::remove_if_present(&super::journal_path(&self.target)).map_err(|_| JournalError::Finish)?;
+        super::remove_if_present(&super::journal_path(&self.target))
+            .map_err(|_| JournalError::Finish)?;
         #[cfg(test)]
         observe::note(&self.target, observe::Event::JournalUnlinked);
         sync_dir_of(&super::journal_path(&self.target)).map_err(|_| JournalError::Finish)?;
@@ -289,14 +329,19 @@ impl JournalV2 {
         match action {
             Action::Forward => &self.original_revision,
             Action::Restore => &self.new_revision,
-        }.as_ref().ok_or(JournalError::InvalidState)
+        }
+        .as_ref()
+        .ok_or(JournalError::InvalidState)
     }
 
     fn validate(&self) -> Result<(), JournalError> {
-        if self.version != 2 { return Err(JournalError::UnsupportedVersion); }
+        if self.version != 2 {
+            return Err(JournalError::UnsupportedVersion);
+        }
         if (self.pending.is_some() && self.fact.is_some())
-            || (self.phase == Phase::Accepted && (self.new_revision.is_none()
-                || self.fact != self.new_revision.clone().map(Fact::Committed)))
+            || (self.phase == Phase::Accepted
+                && (self.new_revision.is_none()
+                    || self.fact != self.new_revision.clone().map(Fact::Committed)))
             || (self.binding.is_none() && (self.writer.is_some() || !self.attempts.is_empty()))
         {
             return Err(JournalError::InvalidState);
@@ -308,8 +353,12 @@ impl JournalV2 {
         }
         let mut tokens = std::collections::HashSet::new();
         for owner in self.writer.iter().chain(&self.attempts) {
-            if !tokens.insert(owner.token.0.as_str()) { return Err(JournalError::InvalidState); }
-            if let Some(decision) = &owner.decision { decision.validate()?; }
+            if !tokens.insert(owner.token.0.as_str()) {
+                return Err(JournalError::InvalidState);
+            }
+            if let Some(decision) = &owner.decision {
+                decision.validate()?;
+            }
         }
         Ok(())
     }
@@ -318,36 +367,64 @@ impl JournalV2 {
 impl Decision {
     fn validate(&self) -> Result<(), JournalError> {
         let valid = match self.terminal {
-            TerminalRole::Outcome => self.result != ResultClass::Unproven
-                && !matches!(self.reason, Reason::Abandoned | Reason::RenamedNotDurable | Reason::LeftToRecovery),
-            TerminalRole::Abandoned => self.result != ResultClass::Written && self.reason == Reason::Abandoned,
+            TerminalRole::Outcome => {
+                self.result != ResultClass::Unproven
+                    && !matches!(
+                        self.reason,
+                        Reason::Abandoned | Reason::RenamedNotDurable | Reason::LeftToRecovery
+                    )
+            }
+            TerminalRole::Abandoned => {
+                self.result != ResultClass::Written && self.reason == Reason::Abandoned
+            }
         };
-        if valid { Ok(()) } else { Err(JournalError::InvalidState) }
+        if valid {
+            Ok(())
+        } else {
+            Err(JournalError::InvalidState)
+        }
     }
 }
 
 impl TokenState {
     fn finished(&self) -> bool {
-        if self.intent.parked.is_some() || self.records.iter().any(|r| r.parked.is_some()) { return false; }
-        if self.handed_over { return true; }
-        let Some(decision) = &self.decision else { return false; };
+        if self.intent.parked.is_some() || self.records.iter().any(|r| r.parked.is_some()) {
+            return false;
+        }
+        if self.handed_over {
+            return true;
+        }
+        let Some(decision) = &self.decision else {
+            return false;
+        };
         let terminal = match decision.terminal {
             TerminalRole::Outcome => Role::Outcome,
             TerminalRole::Abandoned => Role::Abandoned,
         };
-        let mut terminals = self.records.iter()
+        let mut terminals = self
+            .records
+            .iter()
             .filter(|r| matches!(r.role, Role::Outcome | Role::Abandoned));
-        let Some(first) = terminals.next() else { return false; };
+        let Some(first) = terminals.next() else {
+            return false;
+        };
         // Retries collapse by frozen content, never by delivery state or digest alone.
-        if first.role != terminal || !codec::terminal_matches(first, decision)
-            || !terminals.all(|r| r.role == terminal && r.payload_json == first.payload_json
-                && r.attribution == first.attribution && r.caller_digest == first.caller_digest)
+        if first.role != terminal
+            || !codec::terminal_matches(first, decision)
+            || !terminals.all(|r| {
+                r.role == terminal
+                    && r.payload_json == first.payload_json
+                    && r.attribution == first.attribution
+                    && r.caller_digest == first.caller_digest
+            })
         {
             return false;
         }
-        self.intent.delivered && self.intent_counter.is_some()
+        self.intent.delivered
+            && self.intent_counter.is_some()
             && self.records.iter().all(|r| r.delivered)
-            && (!decision.delivery_stopped || self.records.iter().any(|r| r.role == Role::DeliveryStopped))
+            && (!decision.delivery_stopped
+                || self.records.iter().any(|r| r.role == Role::DeliveryStopped))
     }
 }
 
@@ -355,14 +432,14 @@ impl TokenState {
 mod codec;
 
 #[cfg(test)]
-#[path = "config_persistence_journal_v2_observe.rs"]
-mod observe;
+#[path = "config_persistence_journal_v2_codec_tests.rs"]
+mod codec_tests;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_fixtures.rs"]
 mod fixtures;
 #[cfg(test)]
-#[path = "config_persistence_journal_v2_codec_tests.rs"]
-mod codec_tests;
+#[path = "config_persistence_journal_v2_observe.rs"]
+mod observe;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_state_tests.rs"]
 mod state_tests;

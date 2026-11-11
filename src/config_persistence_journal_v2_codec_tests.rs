@@ -54,7 +54,11 @@ fn journal_versions() {
         } else {
             Recovered::RolledBack
         };
-        assert_eq!(journal::recover(&path).expect(ROW), expected, "{ROW}: v1 recovery");
+        assert_eq!(
+            journal::recover(&path).expect(ROW),
+            expected,
+            "{ROW}: v1 recovery"
+        );
         assert_eq!(
             std::fs::read(&path).expect(ROW),
             if all_renamed { NEW } else { OLD },
@@ -67,13 +71,29 @@ fn journal_versions() {
     }
     let (_dir, path, locked) = config();
     let journal_path = journal::journal_path(&path);
-    write_atomic(&journal_path, JOURNAL_V2_ATTRIBUTION, FileMode::Private, Symlink::Replace)
-        .expect(ROW);
+    write_atomic(
+        &journal_path,
+        JOURNAL_V2_ATTRIBUTION,
+        FileMode::Private,
+        Symlink::Replace,
+    )
+    .expect(ROW);
     let current = reopened(&locked, ROW);
     assert_eq!(current.version, 2, "{ROW}: v2 parsed");
-    assert_eq!(bytes(&path), JOURNAL_V2_ATTRIBUTION, "{ROW}: v2 bytes preserved");
-    assert!(journal::recover(&path).is_err(), "{ROW}: legacy recovery refuses v2");
-    assert_eq!(bytes(&path), JOURNAL_V2_ATTRIBUTION, "{ROW}: unhandled v2 retained");
+    assert_eq!(
+        bytes(&path),
+        JOURNAL_V2_ATTRIBUTION,
+        "{ROW}: v2 bytes preserved"
+    );
+    assert!(
+        journal::recover(&path).is_err(),
+        "{ROW}: legacy recovery refuses v2"
+    );
+    assert_eq!(
+        bytes(&path),
+        JOURNAL_V2_ATTRIBUTION,
+        "{ROW}: unhandled v2 retained"
+    );
     let mut unknown: Value = serde_json::from_slice(JOURNAL_V2_ATTRIBUTION).expect(ROW);
     unknown["version"] = json!(99);
     let unknown = serde_json::to_vec(&unknown).expect(ROW);
@@ -89,16 +109,32 @@ fn journal_versions() {
         Ok(revision.clone()),
         "{ROW}: lowercase revision decoded"
     );
-    for bad in ["a".repeat(63), "A".repeat(64), "g".repeat(64), "a".repeat(65)] {
-        assert!(FileRevision::parse_journal(&bad).is_err(), "{ROW}: invalid revision");
+    for bad in [
+        "a".repeat(63),
+        "A".repeat(64),
+        "g".repeat(64),
+        "a".repeat(65),
+    ] {
+        assert!(
+            FileRevision::parse_journal(&bad).is_err(),
+            "{ROW}: invalid revision"
+        );
     }
     let id = checked(LogId::from_journal("opaque-log:not-a-uuid".into()), ROW);
-    assert_eq!(id.as_str(), "opaque-log:not-a-uuid", "{ROW}: opaque identity retained");
+    assert_eq!(
+        id.as_str(),
+        "opaque-log:not-a-uuid",
+        "{ROW}: opaque identity retained"
+    );
     for bad in [String::new(), "x".repeat(1_048_576)] {
         assert!(LogId::from_journal(bad).is_err(), "{ROW}: invalid identity");
     }
     for role in Role::ALL {
-        assert_eq!(Role::from_event(role.event()), Some(role), "{ROW}: every role decodes");
+        assert_eq!(
+            Role::from_event(role.event()),
+            Some(role),
+            "{ROW}: every role decodes"
+        );
     }
     for (fixture, role) in [
         (JOURNAL_V2_HANDED_OVER, Role::Intent(IntentKind::Save)),
@@ -109,8 +145,15 @@ fn journal_versions() {
         (JOURNAL_V2_ROOT, Role::RecoveryIntent),
     ] {
         let state = round_trip(fixture, ROW);
-        let owner = state.writer.as_ref().or_else(|| state.attempts.first()).expect(ROW);
-        assert_eq!(owner.intent.role, role, "{ROW}: exact journal intent role {role:?}");
+        let owner = state
+            .writer
+            .as_ref()
+            .or_else(|| state.attempts.first())
+            .expect(ROW);
+        assert_eq!(
+            owner.intent.role, role,
+            "{ROW}: exact journal intent role {role:?}"
+        );
     }
     assert_eq!(
         Role::Intent(IntentKind::KeyCreate).event(),
@@ -118,14 +161,21 @@ fn journal_versions() {
         "{ROW}: sixth intent has a typed event"
     );
     let accepted = round_trip(JOURNAL_V2_ACCEPTED, ROW);
-    assert_eq!(accepted.phase, Phase::Accepted, "{ROW}: valid accepted control");
+    assert_eq!(
+        accepted.phase,
+        Phase::Accepted,
+        "{ROW}: valid accepted control"
+    );
     assert_eq!(
         accepted.fact,
         accepted.new_revision.map(Fact::Committed),
         "{ROW}: accepted control has a matching committed fact"
     );
     let pending = round_trip(JOURNAL_V2_PENDING, ROW);
-    assert_eq!(pending.fact, None, "{ROW}: valid pending control has no fact");
+    assert_eq!(
+        pending.fact, None,
+        "{ROW}: valid pending control has no fact"
+    );
     let action = pending.pending.expect(ROW);
     assert_eq!(
         Some(action.pre_action),
@@ -133,10 +183,19 @@ fn journal_versions() {
         "{ROW}: pending control derives the stored source revision"
     );
     for (case, fixture) in [
-        ("accepted without new revision", JOURNAL_V2_INVALID_ACCEPTED_NO_REVISION),
+        (
+            "accepted without new revision",
+            JOURNAL_V2_INVALID_ACCEPTED_NO_REVISION,
+        ),
         ("accepted without fact", JOURNAL_V2_INVALID_ACCEPTED_NO_FACT),
-        ("accepted with untouched fact", JOURNAL_V2_INVALID_ACCEPTED_UNTOUCHED),
-        ("accepted with mismatched fact", JOURNAL_V2_INVALID_ACCEPTED_WRONG_REVISION),
+        (
+            "accepted with untouched fact",
+            JOURNAL_V2_INVALID_ACCEPTED_UNTOUCHED,
+        ),
+        (
+            "accepted with mismatched fact",
+            JOURNAL_V2_INVALID_ACCEPTED_WRONG_REVISION,
+        ),
         ("pending and fact together", JOURNAL_V2_INVALID_PENDING_FACT),
     ] {
         assert_eq!(
@@ -144,13 +203,16 @@ fn journal_versions() {
             Err(JournalError::InvalidState),
             "{ROW}: {case} rejected by decode"
         );
-        write_atomic(&journal_path, fixture, FileMode::Private, Symlink::Replace)
-            .expect(ROW);
+        write_atomic(&journal_path, fixture, FileMode::Private, Symlink::Replace).expect(ROW);
         assert!(
             matches!(open(&locked), Err(JournalError::InvalidState)),
             "{ROW}: {case} rejected on open"
         );
-        assert_eq!(bytes(&path), fixture, "{ROW}: {case} preserves invalid evidence");
+        assert_eq!(
+            bytes(&path),
+            fixture,
+            "{ROW}: {case} preserves invalid evidence"
+        );
     }
     durable_transitions(ROW);
 
@@ -172,11 +234,10 @@ fn journal_versions() {
             bounded.resize(size, b' ');
             write_atomic(&journal_path, &bounded, FileMode::Private, Symlink::Replace)
                 .map_err(|error| format!("write error: {error:?}"))?;
-            let before = std::fs::read(&journal_path)
-                .map_err(|error| format!("read error: {error:?}"))?;
+            let before =
+                std::fs::read(&journal_path).map_err(|error| format!("read error: {error:?}"))?;
             let opened = open(&locked);
-            let retained = std::fs::read(&journal_path)
-                .is_ok_and(|after| after == bounded);
+            let retained = std::fs::read(&journal_path).is_ok_and(|after| after == bounded);
             let accepted = if size == 1_048_576 {
                 matches!(&opened, Ok(Some(OpenJournal::Current(state))) if state == &current)
             } else {
@@ -186,17 +247,23 @@ fn journal_versions() {
                 Ok(())
             } else {
                 Err(format!(
-                    "{} bytes, open={opened:?}, bytes_retained={retained}", before.len(),
+                    "{} bytes, open={opened:?}, bytes_retained={retained}",
+                    before.len(),
                 ))
             }
         });
     }
     for (case, fixture) in [
-        ("G1_duplicate_writer_attempt", JOURNAL_V2_DUPLICATE_WRITER_ATTEMPT),
+        (
+            "G1_duplicate_writer_attempt",
+            JOURNAL_V2_DUPLICATE_WRITER_ATTEMPT,
+        ),
         ("G1_duplicate_attempts", JOURNAL_V2_DUPLICATE_ATTEMPTS),
     ] {
         collect_case(
-            &mut failures, ROW, case,
+            &mut failures,
+            ROW,
+            case,
             "decode=Err(InvalidState), open=Err(InvalidState), unchanged journal bytes",
             || {
                 let (_dir, path, locked) = config();
@@ -205,10 +272,10 @@ fn journal_versions() {
                 write_atomic(&journal_path, fixture, FileMode::Private, Symlink::Replace)
                     .map_err(|error| format!("write error: {error:?}"))?;
                 let opened = open(&locked);
-                let retained = std::fs::read(&journal_path)
-                    .is_ok_and(|after| after == fixture);
+                let retained = std::fs::read(&journal_path).is_ok_and(|after| after == fixture);
                 if matches!(&decoded, Err(JournalError::InvalidState))
-                    && matches!(&opened, Err(JournalError::InvalidState)) && retained
+                    && matches!(&opened, Err(JournalError::InvalidState))
+                    && retained
                 {
                     Ok(())
                 } else {
@@ -220,8 +287,10 @@ fn journal_versions() {
         );
     }
     assert!(
-        failures.is_empty(), "{ROW}: {} case(s) failed:\n{}",
-        failures.len(), failures.join("\n"),
+        failures.is_empty(),
+        "{ROW}: {} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n"),
     );
 }
 
@@ -234,8 +303,15 @@ fn durable_transitions(row: &str) {
     let mut owner = checked(create_intended(&locked, initial.clone()), row);
     crash_fs::cut(dir.path(), Mode::DropAll);
     drop(armed);
-    assert!(journal::exists(&path), "{row}: create is durable before returning");
-    assert_eq!(reopened(&locked, row), initial, "{row}: durable intended state");
+    assert!(
+        journal::exists(&path),
+        "{row}: create is durable before returning"
+    );
+    assert_eq!(
+        reopened(&locked, row),
+        initial,
+        "{row}: durable intended state"
+    );
     let before = bytes(&path);
     assert!(
         create_intended(&locked, initial).is_err(),
@@ -243,12 +319,20 @@ fn durable_transitions(row: &str) {
     );
     assert_eq!(bytes(&path), before, "{row}: existing owner untouched");
     let armed = crash_fs::arm_config(&path);
-    assert_eq!(owner.stage(OLD, FileRevision::of(NEW)), Ok(()), "{row}: stage");
+    assert_eq!(
+        owner.stage(OLD, FileRevision::of(NEW)),
+        Ok(()),
+        "{row}: stage"
+    );
     crash_fs::cut(dir.path(), Mode::DropAll);
     drop(armed);
     let staged = reopened(&locked, row);
     assert_eq!(staged.phase, Phase::Staged, "{row}: staged phase durable");
-    assert_eq!(staged.new_revision, Some(FileRevision::of(NEW)), "{row}: new revision");
+    assert_eq!(
+        staged.new_revision,
+        Some(FileRevision::of(NEW)),
+        "{row}: new revision"
+    );
     assert_eq!(
         std::fs::read(journal::original_path(&path)).expect(row),
         OLD,
@@ -261,34 +345,64 @@ fn durable_transitions(row: &str) {
     );
     let proof = commit::commit(&locked, &path, Action::Forward, NEW).expect(row);
     let armed = crash_fs::arm_config(&path);
-    assert_eq!(owner.record_fact(Action::Forward, &proof), Ok(()), "{row}: real A proof");
+    assert_eq!(
+        owner.record_fact(Action::Forward, &proof),
+        Ok(()),
+        "{row}: real A proof"
+    );
     crash_fs::cut(dir.path(), Mode::DropAll);
     drop(armed);
     let recorded = reopened(&locked, row);
-    assert_eq!(recorded.phase, Phase::Staged, "{row}: fact checked before accepted persist");
+    assert_eq!(
+        recorded.phase,
+        Phase::Staged,
+        "{row}: fact checked before accepted persist"
+    );
     assert_eq!(
         recorded.fact,
         Some(Fact::Committed(FileRevision::of(NEW))),
         "{row}: record_fact is durable before any later persist"
     );
-    assert_eq!(recorded.pending, None, "{row}: record_fact durably clears pending");
+    assert_eq!(
+        recorded.pending, None,
+        "{row}: record_fact durably clears pending"
+    );
     let armed = crash_fs::arm_config(&path);
     owner.state.phase = Phase::Accepted;
     assert_eq!(owner.persist(), Ok(()), "{row}: persist accepted state");
     crash_fs::cut(dir.path(), Mode::DropAll);
     drop(armed);
     let accepted = reopened(&locked, row);
-    assert_eq!(accepted.phase, Phase::Accepted, "{row}: durable accepted state");
-    assert_eq!(accepted.fact, Some(Fact::Committed(FileRevision::of(NEW))), "{row}: fact");
-    assert_eq!(accepted.pending, None, "{row}: pending and fact cannot coexist");
+    assert_eq!(
+        accepted.phase,
+        Phase::Accepted,
+        "{row}: durable accepted state"
+    );
+    assert_eq!(
+        accepted.fact,
+        Some(Fact::Committed(FileRevision::of(NEW))),
+        "{row}: fact"
+    );
+    assert_eq!(
+        accepted.pending, None,
+        "{row}: pending and fact cannot coexist"
+    );
     let writer = owner.state.writer.as_mut().expect(row);
     writer.intent.delivered = true;
     writer.intent_counter = Some(7);
     let token = writer.token.clone();
-    assert_eq!(owner.persist(), Ok(()), "{row}: persist acknowledged intent");
+    assert_eq!(
+        owner.persist(),
+        Ok(()),
+        "{row}: persist acknowledged intent"
+    );
     let decision = decision(ResultClass::Written, Reason::Committed);
     let armed = crash_fs::arm_config(&path);
-    assert_eq!(owner.decide(&token, decision.clone()), Ok(()), "{row}: first decision");
+    assert_eq!(
+        owner.decide(&token, decision.clone()),
+        Ok(()),
+        "{row}: first decision"
+    );
     crash_fs::cut(dir.path(), Mode::DropAll);
     drop(armed);
     assert_eq!(
@@ -307,10 +421,18 @@ fn golden_journal_v2_attribution_decode() {
     ] {
         let state = round_trip(fixture, ROW);
         let writer = state.writer.expect(ROW);
-        assert_eq!(writer.intent.role, Role::Intent(IntentKind::KeyCreate), "{ROW}: role");
+        assert_eq!(
+            writer.intent.role,
+            Role::Intent(IntentKind::KeyCreate),
+            "{ROW}: role"
+        );
         let actor = writer.intent.attribution.expect(ROW).actor;
         let expected: Value = serde_json::from_slice(actor_bytes).expect(ROW);
-        assert_eq!(serde_json::to_value(&actor).expect(ROW), expected, "{ROW}: exact actor");
+        assert_eq!(
+            serde_json::to_value(&actor).expect(ROW),
+            expected,
+            "{ROW}: exact actor"
+        );
         assert_eq!(
             actor.principal.as_str(),
             expected["principal"].as_str().expect(ROW),
@@ -341,8 +463,15 @@ fn golden_journal_v2_root_decode() {
     let intent = &state.attempts[0].intent;
     assert_eq!(intent.role, Role::RecoveryIntent, "{ROW}: root role");
     let payload: Value = serde_json::from_slice(&intent.payload_json).expect(ROW);
-    assert_eq!(payload.get("root"), Some(&Value::Bool(true)), "{ROW}: explicit root marker");
-    assert!(payload.get("settles").is_none(), "{ROW}: no invented predecessor");
+    assert_eq!(
+        payload.get("root"),
+        Some(&Value::Bool(true)),
+        "{ROW}: explicit root marker"
+    );
+    assert!(
+        payload.get("settles").is_none(),
+        "{ROW}: no invented predecessor"
+    );
 }
 
 #[test]
@@ -350,8 +479,15 @@ fn golden_journal_v2_parked_decode() {
     const ROW: &str = "golden_journal_v2_parked_decode";
     let state = round_trip(JOURNAL_V2_PARKED, ROW);
     let intent = state.writer.expect(ROW).intent;
-    assert_eq!(intent.parked, Some(ParkReason::InvalidPayload), "{ROW}: parked reason");
-    assert_eq!(intent.payload_json, b"{invalid", "{ROW}: rejected bytes unchanged");
+    assert_eq!(
+        intent.parked,
+        Some(ParkReason::InvalidPayload),
+        "{ROW}: parked reason"
+    );
+    assert_eq!(
+        intent.payload_json, b"{invalid",
+        "{ROW}: rejected bytes unchanged"
+    );
     assert!(!intent.delivered, "{ROW}: rejection is not delivery");
 }
 
@@ -361,8 +497,14 @@ fn golden_journal_v2_handed_over_decode() {
     let state = round_trip(JOURNAL_V2_HANDED_OVER, ROW);
     let writer = state.writer.as_ref().expect(ROW);
     assert!(writer.handed_over, "{ROW}: ownership flag retained");
-    assert!(!writer.intent.delivered, "{ROW}: decode does not invent delivery");
-    assert!(writer.records.is_empty(), "{ROW}: decode does not freeze records");
+    assert!(
+        !writer.intent.delivered,
+        "{ROW}: decode does not invent delivery"
+    );
+    assert!(
+        writer.records.is_empty(),
+        "{ROW}: decode does not freeze records"
+    );
     let (_dir, path, locked) = config();
     write_atomic(
         &journal::journal_path(&path),
@@ -371,8 +513,16 @@ fn golden_journal_v2_handed_over_decode() {
         Symlink::Replace,
     )
     .expect(ROW);
-    assert_eq!(reopened(&locked, ROW), state, "{ROW}: open does not freeze or deliver");
-    assert_eq!(bytes(&path), JOURNAL_V2_HANDED_OVER, "{ROW}: open leaves owner unchanged");
+    assert_eq!(
+        reopened(&locked, ROW),
+        state,
+        "{ROW}: open does not freeze or deliver"
+    );
+    assert_eq!(
+        bytes(&path),
+        JOURNAL_V2_HANDED_OVER,
+        "{ROW}: open leaves owner unchanged"
+    );
 }
 
 #[test]
@@ -389,10 +539,21 @@ fn reason_codec_s6a() {
         (REFUSED, Reason::Refused),
         (WRITER_DIED, Reason::WriterDied),
     ] {
-        assert_eq!(Reason::from_journal(bytes), Ok(reason), "{ROW}: fixed reason decodes");
-        assert_eq!(serde_json::to_vec(&reason).expect(ROW), bytes, "{ROW}: exact spelling");
+        assert_eq!(
+            Reason::from_journal(bytes),
+            Ok(reason),
+            "{ROW}: fixed reason decodes"
+        );
+        assert_eq!(
+            serde_json::to_vec(&reason).expect(ROW),
+            bytes,
+            "{ROW}: exact spelling"
+        );
     }
-    assert!(Reason::from_journal(UNKNOWN).is_err(), "{ROW}: unknown rejected by codec");
+    assert!(
+        Reason::from_journal(UNKNOWN).is_err(),
+        "{ROW}: unknown rejected by codec"
+    );
     for (fixture, result, reason, terminal, settled_by, delivery_stopped) in [
         (
             JOURNAL_V2_DECISION_WRITTEN,
@@ -442,12 +603,27 @@ fn reason_codec_s6a() {
     }
     for (case, fixture) in [
         ("Outcome/Unproven", JOURNAL_V2_INVALID_OUTCOME_UNPROVEN),
-        ("Outcome/Abandoned reason", JOURNAL_V2_INVALID_OUTCOME_ABANDONED),
-        ("Outcome/RenamedNotDurable", JOURNAL_V2_INVALID_OUTCOME_RENAMED),
-        ("Outcome/LeftToRecovery", JOURNAL_V2_INVALID_OUTCOME_DEFERRED),
+        (
+            "Outcome/Abandoned reason",
+            JOURNAL_V2_INVALID_OUTCOME_ABANDONED,
+        ),
+        (
+            "Outcome/RenamedNotDurable",
+            JOURNAL_V2_INVALID_OUTCOME_RENAMED,
+        ),
+        (
+            "Outcome/LeftToRecovery",
+            JOURNAL_V2_INVALID_OUTCOME_DEFERRED,
+        ),
         ("Abandoned/Written", JOURNAL_V2_INVALID_ABANDONED_WRITTEN),
-        ("Abandoned/NotWritten/Refused", JOURNAL_V2_INVALID_ABANDONED_REFUSED),
-        ("Abandoned/Unproven/Refused", JOURNAL_V2_INVALID_ABANDONED_UNPROVEN_REFUSED),
+        (
+            "Abandoned/NotWritten/Refused",
+            JOURNAL_V2_INVALID_ABANDONED_REFUSED,
+        ),
+        (
+            "Abandoned/Unproven/Refused",
+            JOURNAL_V2_INVALID_ABANDONED_UNPROVEN_REFUSED,
+        ),
     ] {
         assert_eq!(
             JournalV2::decode(fixture),
@@ -462,17 +638,38 @@ fn record_principal_persisted_decode() {
     const ROW: &str = "record_principal_persisted_decode";
     for principal in ["0123ab45cd67", "ABCDEF012345", ""] {
         let decoded = checked(RecordPrincipal::from_persisted(principal), ROW);
-        assert_eq!(decoded.as_str(), principal, "{ROW}: exact principal, no rekeying");
+        assert_eq!(
+            decoded.as_str(),
+            principal,
+            "{ROW}: exact principal, no rekeying"
+        );
     }
     for fixture in [AUDIT_WHO_PRINCIPAL, AUDIT_WHO_NONE] {
         let actor = checked(AuditWho::from_persisted(fixture), ROW);
         let expected: Value = serde_json::from_slice(fixture).expect(ROW);
-        assert_eq!(serde_json::to_value(&actor).expect(ROW), expected, "{ROW}: all fields");
+        assert_eq!(
+            serde_json::to_value(&actor).expect(ROW),
+            expected,
+            "{ROW}: all fields"
+        );
         let encoded = serde_json::to_vec(&actor).expect(ROW);
-        assert_eq!(encoded, fixture, "{ROW}: stable actor bytes and exact empty sentinel");
+        assert_eq!(
+            encoded, fixture,
+            "{ROW}: stable actor bytes and exact empty sentinel"
+        );
     }
-    for bad in ["0", "0123ab45cd6", "0123ab45cd678", "0123ab45cd6g", "none", "é123ab45cd6"] {
-        assert!(RecordPrincipal::from_persisted(bad).is_err(), "{ROW}: malformed principal");
+    for bad in [
+        "0",
+        "0123ab45cd6",
+        "0123ab45cd678",
+        "0123ab45cd6g",
+        "none",
+        "é123ab45cd6",
+    ] {
+        assert!(
+            RecordPrincipal::from_persisted(bad).is_err(),
+            "{ROW}: malformed principal"
+        );
         let mut actor: Value = serde_json::from_slice(AUDIT_WHO_PRINCIPAL).expect(ROW);
         actor["principal"] = json!(bad);
         assert!(

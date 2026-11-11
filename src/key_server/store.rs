@@ -27,8 +27,9 @@ use super::oidc::VerifiedIdentity;
 
 /// A temporary gateway token issued after OIDC verification.
 ///
-/// Output only, like the identity it carries: a token is never read back
-/// from bytes.
+/// Never read back from bytes, and never written out: the bearer it holds is
+/// a live credential, and the identity it carries is written to audit
+/// records only in its keyed hash form.
 ///
 /// ```compile_fail,E0277
 /// fn read(bytes: &str) -> mcp_gateway::key_server::TemporaryToken {
@@ -36,14 +37,22 @@ use super::oidc::VerifiedIdentity;
 /// }
 /// ```
 ///
-/// Writing one out compiles:
+/// nor written out:
 ///
-/// ```
+/// ```compile_fail,E0277
 /// fn write(token: &mcp_gateway::key_server::TemporaryToken) -> String {
 ///     serde_json::to_string(token).expect("a token")
 /// }
 /// ```
-#[derive(Clone, Serialize)]
+///
+/// Reading its fields compiles:
+///
+/// ```
+/// fn jti(token: &mcp_gateway::key_server::TemporaryToken) -> &str {
+///     &token.jti
+/// }
+/// ```
+#[derive(Clone)]
 pub struct TemporaryToken {
     /// Unique token identifier (used for revocation).
     pub jti: String,
@@ -58,7 +67,6 @@ pub struct TemporaryToken {
     /// Expires-at (Unix epoch seconds).
     pub exp: u64,
     /// Client IP at issuance (for audit).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub client_ip: Option<IpAddr>,
 }
 

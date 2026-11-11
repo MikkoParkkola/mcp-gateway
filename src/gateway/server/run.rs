@@ -17,8 +17,8 @@ use super::support::log_startup_banner;
 use super::test_seams;
 use super::warmstart::{WarmStartMode, WarmerGuard, build_warm_start_list};
 use super::{
-    BuiltMetaMcp, counter_wiring, events_wiring, expand_home_path, identity_grants, listener,
-    persistence, spawn_export_task, spawn_health_loop, spawn_idle_reaper, start_checks,
+    BuiltMetaMcp, counter_wiring, events_wiring, expand_home_path, health_wiring, identity_grants,
+    listener, persistence, spawn_export_task, spawn_health_loop, spawn_idle_reaper, start_checks,
     task_runtime, tools_changed, window_saver,
 };
 use crate::capability::CapabilityWatcher;
@@ -103,6 +103,10 @@ impl Gateway {
         // Restored before anything is served or reloaded.
         let (counters, counter_saver) =
             counter_wiring::start(&data_dir, &meta_mcp, shutdown_tx.subscribe());
+        // The gateway's own health history: saved once before anything is
+        // served; it never stops the start.
+        let (health, health_saver) =
+            health_wiring::start(&data_dir, &counters, shutdown_tx.subscribe());
         // The web UI's open decisions: built, replayed and kept current here.
         #[cfg(feature = "webui")]
         let _decisions = crate::gateway::ui::decisions::start(
@@ -179,6 +183,13 @@ impl Gateway {
         let session_lifecycle =
             Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
         multiplexer.spawn_reaper_on(Arc::clone(&session_lifecycle));
+        let health_sampler = health.spawn_sampler(
+            {
+                let multiplexer = Arc::clone(&multiplexer);
+                move || multiplexer.session_count()
+            },
+            shutdown_tx.subscribe(),
+        );
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let auth_config = Arc::new(ResolvedAuthConfig::try_from_config_keyed(
             &self.config.auth,
@@ -274,7 +285,8 @@ impl Gateway {
         self.test_seams.report_inflight(&inflight);
 
         // Create key server if enabled
-        let key_server = self.start_key_server(&shutdown_tx)?;
+        let key_server =
+            self.start_key_server(&shutdown_tx, &data_dir, transparency_log.as_ref())?;
 
         let agent_auth = self.build_agent_auth()?;
 
@@ -663,7 +675,8 @@ impl Gateway {
         let paths = (ranker_path.clone(), transition_path.clone());
         // Ends on the shutdown broadcast, like the cost saver.
         drop(counter_saver);
-        let more = vec![counters.shutdown_save()];
+        drop((health_saver, health_sampler));
+        let more = vec![counters.shutdown_save(), health.shutdown_save()];
         persistence::save_state_on_shutdown(ranker, paths.0, tracker, paths.1, cost, more).await;
         // Awaited after the state saves, not before: its own deadline runs
         // from the broadcast, so a stalled window disk never delays them.

@@ -13,7 +13,7 @@ fn names(list: &[&str]) -> Vec<String> {
     list.iter().map(|n| (*n).to_string()).collect()
 }
 
-fn rule(cn: &str, allow_tools: &[&str], deny_tools: &[&str]) -> PolicyRuleConfig {
+pub(crate) fn rule(cn: &str, allow_tools: &[&str], deny_tools: &[&str]) -> PolicyRuleConfig {
     PolicyRuleConfig {
         match_criteria: CertMatchConfig {
             cn: Some(cn.to_string()),

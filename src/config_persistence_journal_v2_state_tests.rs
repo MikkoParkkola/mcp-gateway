@@ -30,7 +30,10 @@ fn terminal_blocks_finish() {
     journal::stage_original(&path, OLD).expect(ROW);
     let mut owner = session(&locked, state);
     let before = bytes(&path);
-    assert!(owner.finish().is_err(), "{ROW}: intent plus deferred is not terminal");
+    assert!(
+        owner.finish().is_err(),
+        "{ROW}: intent plus deferred is not terminal"
+    );
     assert_eq!(bytes(&path), before, "{ROW}: journal retained unchanged");
     assert_eq!(
         std::fs::read(journal::original_path(&path)).expect(ROW),
@@ -51,7 +54,10 @@ fn terminal_blocks_finish() {
     writer.records.push(invalid);
     seed(&path, &owner.state);
     let before = bytes(&path);
-    assert!(owner.finish().is_err(), "{ROW}: unresolved Invalid evidence blocks cleanup");
+    assert!(
+        owner.finish().is_err(),
+        "{ROW}: unresolved Invalid evidence blocks cleanup"
+    );
     assert_eq!(bytes(&path), before, "{ROW}: rejected evidence retained");
 
     for missing in ["intent", "deferred"] {
@@ -88,19 +94,37 @@ fn terminal_blocks_finish() {
             Err(JournalError::Finish),
             "{ROW}: delivered terminal cannot bypass undelivered {missing}"
         );
-        assert_eq!(bytes(&path), before, "{ROW}: {missing} retains journal bytes");
-        assert_eq!(owner.state, state, "{ROW}: {missing} retains in-memory state");
+        assert_eq!(
+            bytes(&path),
+            before,
+            "{ROW}: {missing} retains journal bytes"
+        );
+        assert_eq!(
+            owner.state, state,
+            "{ROW}: {missing} retains in-memory state"
+        );
         assert_eq!(
             std::fs::read(journal::original_path(&path)).expect(ROW),
             OLD,
             "{ROW}: {missing} retains original bytes"
         );
-        assert!(observe::events(&path).is_empty(), "{ROW}: {missing} prevents cleanup");
+        assert!(
+            observe::events(&path).is_empty(),
+            "{ROW}: {missing} prevents cleanup"
+        );
         let writer = owner.state.writer.as_mut().expect(ROW);
         writer.intent.delivered = true;
         writer.records[0].delivered = true;
-        assert_eq!(owner.persist(), Ok(()), "{ROW}: acknowledge missing {missing}");
-        assert_eq!(owner.finish(), Ok(()), "{ROW}: all delivered permits cleanup");
+        assert_eq!(
+            owner.persist(),
+            Ok(()),
+            "{ROW}: acknowledge missing {missing}"
+        );
+        assert_eq!(
+            owner.finish(),
+            Ok(()),
+            "{ROW}: all delivered permits cleanup"
+        );
         assert!(
             !journal::exists(&path) && !journal::original_path(&path).exists(),
             "{ROW}: completing {missing} removes both artifacts"
@@ -114,9 +138,18 @@ fn terminal_blocks_finish() {
             ("result mismatch", "G2_result_mismatch"),
             ("reason mismatch", "G2_reason_mismatch"),
             ("equal terminal collapse", "K1_equal_terminal_collapse"),
-            ("conflicting terminal payload", "K1_conflicting_terminal_payload"),
-            ("conflicting terminal attribution", "K1_conflicting_terminal_attribution"),
-            ("conflicting terminal caller digest", "K1_conflicting_terminal_caller_digest"),
+            (
+                "conflicting terminal payload",
+                "K1_conflicting_terminal_payload",
+            ),
+            (
+                "conflicting terminal attribution",
+                "K1_conflicting_terminal_attribution",
+            ),
+            (
+                "conflicting terminal caller digest",
+                "K1_conflicting_terminal_caller_digest",
+            ),
         ] {
             let case_id = format!("{terminal_role:?}_{case_id}");
             let expected = if case == "equal terminal collapse" {
@@ -208,12 +241,20 @@ fn terminal_blocks_finish() {
                 let removed = matches!(&journal_after, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
                     && matches!(&original_after, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
                 let passed = if case == "equal terminal collapse" {
-                    finished == Ok(()) && removed && events == vec![
-                        Event::OriginalUnlinked, Event::JournalUnlinked, Event::DirectorySynced,
-                    ]
+                    finished == Ok(())
+                        && removed
+                        && events
+                            == vec![
+                                Event::OriginalUnlinked,
+                                Event::JournalUnlinked,
+                                Event::DirectorySynced,
+                            ]
                 } else {
-                    finished == Err(JournalError::Finish) && journal_retained
-                        && state_retained && original_retained && events.is_empty()
+                    finished == Err(JournalError::Finish)
+                        && journal_retained
+                        && state_retained
+                        && original_retained
+                        && events.is_empty()
                 };
                 drop(watching);
                 if passed {
@@ -229,8 +270,10 @@ fn terminal_blocks_finish() {
         }
     }
     assert!(
-        failures.is_empty(), "{ROW}: {} case(s) failed:\n{}",
-        failures.len(), failures.join("\n"),
+        failures.is_empty(),
+        "{ROW}: {} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n"),
     );
 }
 
@@ -269,7 +312,11 @@ fn overwrite_decision() {
         );
         let after = bytes(&path);
         assert_eq!(after, before, "{ROW}: persisted bytes unchanged");
-        assert_eq!(crate::hashing::sha256_hex(&after), digest, "{ROW}: persisted hash unchanged");
+        assert_eq!(
+            crate::hashing::sha256_hex(&after),
+            digest,
+            "{ROW}: persisted hash unchanged"
+        );
         assert_eq!(
             owner.state.writer.as_ref().expect(ROW).decision,
             Some(original.clone()),
@@ -281,7 +328,11 @@ fn overwrite_decision() {
         Ok(()),
         "{ROW}: identical decision accepted"
     );
-    assert_eq!(bytes(&path), before, "{ROW}: identical decision preserves bytes");
+    assert_eq!(
+        bytes(&path),
+        before,
+        "{ROW}: identical decision preserves bytes"
+    );
     let mut stopped = original.clone();
     stopped.delivery_stopped = true;
     let armed = crash_fs::arm_config(&path);
@@ -299,20 +350,30 @@ fn overwrite_decision() {
     );
     let stopped_bytes = bytes(&path);
     let stopped_digest = crate::hashing::sha256_hex(&stopped_bytes);
-    assert_ne!(stopped_bytes, before, "{ROW}: allowed flag transition persists");
+    assert_ne!(
+        stopped_bytes, before,
+        "{ROW}: allowed flag transition persists"
+    );
     assert_eq!(
         owner.decide(&token, stopped.clone()),
         Ok(()),
         "{ROW}: identical stopped decision accepted"
     );
-    assert_eq!(bytes(&path), stopped_bytes, "{ROW}: stopped retry preserves bytes");
+    assert_eq!(
+        bytes(&path),
+        stopped_bytes,
+        "{ROW}: stopped retry preserves bytes"
+    );
     assert_eq!(
         owner.decide(&token, original),
         Err(JournalError::ChangedDecision),
         "{ROW}: delivery_stopped true to false is forbidden"
     );
     let after = bytes(&path);
-    assert_eq!(after, stopped_bytes, "{ROW}: reverse transition preserves bytes");
+    assert_eq!(
+        after, stopped_bytes,
+        "{ROW}: reverse transition preserves bytes"
+    );
     assert_eq!(
         crate::hashing::sha256_hex(&after),
         stopped_digest,
@@ -352,15 +413,18 @@ fn finish_original_before_journal() {
     let original_path = journal::original_path(&path);
     let audit_path = dir.path().join("audit/log.jsonl");
     let audit_before = std::fs::read(&audit_path).expect(ROW);
-    let before_syncs = fault::synced(&journal_path)
-        + fault::synced(&original_path)
-        + fault::synced(&path);
+    let before_syncs =
+        fault::synced(&journal_path) + fault::synced(&original_path) + fault::synced(&path);
     let watching = observe::watch(&path);
     let armed = crash_fs::arm_config(&path);
     assert_eq!(owner.finish(), Ok(()), "{ROW}: completed owner finishes");
     assert_eq!(
         observe::events(&path),
-        vec![Event::OriginalUnlinked, Event::JournalUnlinked, Event::DirectorySynced],
+        vec![
+            Event::OriginalUnlinked,
+            Event::JournalUnlinked,
+            Event::DirectorySynced
+        ],
         "{ROW}: unlink original, unlink journal, then exactly one directory sync"
     );
     assert_eq!(
@@ -380,10 +444,25 @@ fn finish_original_before_journal() {
         !original_path.exists() && !journal_path.exists(),
         "{ROW}: DropAll cannot resurrect either artifact"
     );
-    assert!(matches!(open(&locked), Ok(None)), "{ROW}: reopen sees no owner");
-    assert_eq!(std::fs::read(&path).expect(ROW), OLD, "{ROW}: no A write retry");
-    assert_eq!(fault::synced(&path), target_syncs, "{ROW}: no A commit or verify retry");
-    assert_eq!(std::fs::read(audit_path).expect(ROW), audit_before, "{ROW}: no B append retry");
+    assert!(
+        matches!(open(&locked), Ok(None)),
+        "{ROW}: reopen sees no owner"
+    );
+    assert_eq!(
+        std::fs::read(&path).expect(ROW),
+        OLD,
+        "{ROW}: no A write retry"
+    );
+    assert_eq!(
+        fault::synced(&path),
+        target_syncs,
+        "{ROW}: no A commit or verify retry"
+    );
+    assert_eq!(
+        std::fs::read(audit_path).expect(ROW),
+        audit_before,
+        "{ROW}: no B append retry"
+    );
     drop(watching);
 }
 
@@ -414,20 +493,31 @@ fn begin_action_derives_pre_action() {
         );
         let pending = owner.state.pending.as_ref().expect(ROW);
         assert_eq!(
-            pending.pre_action,
-            pre_action,
+            pending.pre_action, pre_action,
             "{ROW}: {action:?} derives pre_action before decode can rebuild it"
         );
         assert_eq!(pending.expected, expected, "{ROW}: live expected revision");
         assert_eq!(pending.action, action, "{ROW}: live action");
-        assert_eq!(owner.state.fact, None, "{ROW}: begin clears fact immediately");
+        assert_eq!(
+            owner.state.fact, None,
+            "{ROW}: begin clears fact immediately"
+        );
         crash_fs::cut(dir.path(), Mode::DropAll);
         drop(armed);
         let loaded = reopened(&locked, ROW);
-        assert_eq!(loaded.fact, None, "{ROW}: pending clears fact, including Restore committed");
+        assert_eq!(
+            loaded.fact, None,
+            "{ROW}: pending clears fact, including Restore committed"
+        );
         let pending = loaded.pending.expect(ROW);
-        assert_eq!(pending.pre_action, pre_action, "{ROW}: action selects stored source revision");
-        assert_eq!(pending.expected, expected, "{ROW}: expected is independent of pre_action");
+        assert_eq!(
+            pending.pre_action, pre_action,
+            "{ROW}: action selects stored source revision"
+        );
+        assert_eq!(
+            pending.expected, expected,
+            "{ROW}: expected is independent of pre_action"
+        );
         assert_eq!(pending.action, action, "{ROW}: action retained");
         let wire: Value = serde_json::from_slice(&bytes(&path)).expect(ROW);
         assert!(
@@ -456,7 +546,14 @@ fn begin_action_derives_pre_action() {
             Err(JournalError::InvalidState),
             "{ROW}: missing source revision rejected"
         );
-        assert_eq!(bytes(&path), before, "{ROW}: missing source leaves bytes unchanged");
-        assert_eq!(owner.state, state, "{ROW}: missing source leaves state unchanged");
+        assert_eq!(
+            bytes(&path),
+            before,
+            "{ROW}: missing source leaves bytes unchanged"
+        );
+        assert_eq!(
+            owner.state, state,
+            "{ROW}: missing source leaves state unchanged"
+        );
     }
 }

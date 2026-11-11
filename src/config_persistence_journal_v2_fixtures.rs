@@ -35,7 +35,9 @@ pub(super) fn collect_case(
         }
         Ok(Err(detail)) => detail,
         Err(panic) => {
-            let detail = panic.downcast_ref::<String>().map(String::as_str)
+            let detail = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
                 .or_else(|| panic.downcast_ref::<&str>().copied())
                 .unwrap_or("non-string panic payload");
             format!("panic: {detail}")
@@ -48,12 +50,9 @@ pub(super) fn config() -> (tempfile::TempDir, PathBuf, Locked) {
     let dir = tempfile::tempdir().expect("fixture directory");
     let path = dir.path().join("gateway.yaml");
     write_atomic(&path, OLD, FileMode::Private, Symlink::Replace).expect("fixture config");
-    let held = lock::lock_config_blocking_deferred(
-        &path,
-        Instant::now() + Duration::from_secs(2),
-        |_| {},
-    )
-    .expect("fixture lock");
+    let held =
+        lock::lock_config_blocking_deferred(&path, Instant::now() + Duration::from_secs(2), |_| {})
+            .expect("fixture lock");
     let path = held.target.clone();
     (dir, path, held)
 }
@@ -295,10 +294,8 @@ pub(super) const AUDIT_WHO_PRINCIPAL: &[u8] = concat!(
 )
 .as_bytes();
 
-pub(super) const AUDIT_WHO_NONE: &[u8] = concat!(
-    r#"{"principal":"","account":"gateway"}"#,
-)
-.as_bytes();
+pub(super) const AUDIT_WHO_NONE: &[u8] =
+    concat!(r#"{"principal":"","account":"gateway"}"#,).as_bytes();
 
 // Literal wire-contract goldens: specified independently of JournalV2 and its codec.
 pub(super) const JOURNAL_V2_ADOPT: &[u8] = concat!(

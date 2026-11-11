@@ -17,6 +17,7 @@ use crate::gateway::oauth::{GatewayKeyPair, jwks_handler};
 use crate::key_server::handler::key_server_routes;
 use crate::key_server::oidc::{OidcError, VerifiedIdentity};
 use crate::key_server::policy::PolicyEngine;
+use crate::key_server::store::TokenStore;
 use crate::key_server::{InMemoryTokenStore, KeyServer, OidcVerifier};
 
 pub(crate) const ISS_A: &str = "https://idp-a.example";
@@ -52,19 +53,21 @@ pub(crate) fn config_yaml(allowed_domains_a: &str, extra: &str) -> String {
 
 impl Harness {
     pub(crate) async fn start(yaml: &str) -> Self {
+        let store: Arc<dyn TokenStore> = Arc::new(InMemoryTokenStore::new());
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("local_addr");
         let yaml = yaml.replace("JWKS", &format!("http://{addr}/.well-known/jwks.json"));
         let config = load(&yaml).expect("harness config loads");
         let key = Arc::new(GatewayKeyPair::generate().expect("keypair"));
         let ks = Arc::new(KeyServer {
-            store: Arc::new(InMemoryTokenStore::new()),
+            store,
             oidc: Arc::new(OidcVerifier::with_http_client(
                 config.oidc.clone(),
                 reqwest::Client::new(),
             )),
             policy: Arc::new(PolicyEngine::new(config.policies.clone())),
             config,
+            email_key: crate::key_server::email_hash::EmailHashKey::for_test(),
         });
         let jwks = Router::new()
             .route("/.well-known/jwks.json", get(jwks_handler))

@@ -100,6 +100,11 @@ pub(crate) mod rotation_fault {
 pub(crate) mod pager;
 #[path = "transparency_log_segments.rs"]
 pub(crate) mod segments;
+#[path = "transparency_log_sigstart.rs"]
+pub(crate) mod sigstart;
+#[cfg(test)]
+#[path = "transparency_log_sigstart_fixture.rs"]
+pub(crate) mod sigstart_fixture;
 #[cfg(test)]
 #[path = "transparency_log_temp.rs"]
 pub(crate) mod temp;
@@ -131,6 +136,7 @@ pub use verify::{
     FailedCheck, VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries,
     verify_log, verify_log_signed,
 };
+pub(crate) use verify::{Malformed, log_contains_entry};
 
 use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
 pub use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
@@ -765,6 +771,9 @@ mod recovery_tests;
 #[cfg(test)]
 #[path = "transparency_log_rotation_tests.rs"]
 mod rotation_tests;
+#[cfg(test)]
+#[path = "transparency_log_sigstart_tests.rs"]
+mod sigstart_tests;
 #[cfg(test)]
 #[path = "transparency_log_tests.rs"]
 mod tests;
