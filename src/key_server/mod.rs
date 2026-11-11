@@ -32,6 +32,9 @@
 //! configuration. When disabled, no overhead is incurred.
 
 pub mod audit;
+/// The per-identity token cap holds under concurrent mints.
+#[cfg(test)]
+mod cap_race_tests;
 /// The installation key behind `email_hash`.
 pub(crate) mod email_hash;
 /// Where the `email_hash` installation key lives.
@@ -108,6 +111,8 @@ pub struct KeyServer {
     pub config: KeyServerConfig,
     /// The installation key behind every audit record's `email_hash`.
     pub(crate) email_key: Arc<email_hash::EmailHashKey>,
+    /// How many credential-revocation signals this key server has sent.
+    pub(crate) revocation_signals: std::sync::atomic::AtomicU64,
 }
 
 impl KeyServer {
@@ -115,7 +120,7 @@ impl KeyServer {
     /// its audit records hash emails with.
     #[must_use]
     pub(crate) fn new(config: KeyServerConfig, email_key: Arc<email_hash::EmailHashKey>) -> Self {
-        let store = Arc::new(InMemoryTokenStore::new());
+        let store = Arc::new(InMemoryTokenStore::for_config(&config));
         let oidc = Arc::new(OidcVerifier::new(config.oidc.clone()));
         let policy = Arc::new(PolicyEngine::new(config.policies.clone()));
 
@@ -125,7 +130,17 @@ impl KeyServer {
             policy,
             config,
             email_key,
+            revocation_signals: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// A credential this key server issued may have been revoked: wake every
+    /// listener re-check (process-wide), and count it here, so a row can
+    /// read exactly this server's signals.
+    pub(crate) fn credentials_changed(&self) {
+        self.revocation_signals
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::events::credentials_changed();
     }
 
     /// Log one WARN per identity provider whose subjects are email
@@ -413,8 +428,10 @@ mod tests {
             ("mcpgw_nameless_subject", "", "https://issuer.invalid"),
             ("mcpgw_nameless_issuer", "sub", ""),
         ] {
-            ks.store
-                .insert(TemporaryToken {
+            store::activate_for_test(
+                ks.store.as_ref(),
+                ks.config.token_ttl_secs,
+                TemporaryToken {
                     jti: format!("jti-{bearer}"),
                     token: bearer.to_string(),
                     identity: identity(subject, "u@corp.invalid", issuer),
@@ -422,8 +439,8 @@ mod tests {
                     iat: 0,
                     exp: u64::MAX,
                     client_ip: None,
-                })
-                .await;
+                },
+            );
             assert!(ks.store.get(bearer).await.is_some(), "the store holds it");
             assert!(
                 ks.validate_token(bearer).await.is_none(),
@@ -449,7 +466,7 @@ mod tests {
             exp: u64::MAX,
             client_ip: None,
         };
-        ks.store.insert(token).await;
+        store::activate_for_test(ks.store.as_ref(), ks.config.token_ttl_secs, token);
         let (client, _) = ks
             .validate_token("mcpgw_empty_backends")
             .await
@@ -467,8 +484,10 @@ mod tests {
             crate::key_server::email_hash::EmailHashKey::for_test(),
         );
         let text = "mcpgw_runtime_principal";
-        ks.store
-            .insert(TemporaryToken {
+        store::activate_for_test(
+            ks.store.as_ref(),
+            ks.config.token_ttl_secs,
+            TemporaryToken {
                 jti: "jti-runtime".to_string(),
                 token: text.to_string(),
                 identity: identity("sub", "u@corp.invalid", "https://issuer.invalid"),
@@ -476,8 +495,8 @@ mod tests {
                 iat: 0,
                 exp: u64::MAX,
                 client_ip: None,
-            })
-            .await;
+            },
+        );
         let (client, _) = ks.validate_token(text).await.expect("token is live");
         let p = client.principal.storage_form();
         assert_ne!(p, crate::gateway::auth::principal_of(text).storage_form());

@@ -46,6 +46,8 @@ mod execution_context;
 mod executor;
 #[cfg(feature = "webui")]
 pub(crate) mod file_writer;
+#[cfg(feature = "webui")]
+mod file_writer_headers;
 pub mod hash;
 #[cfg(test)]
 mod linear_get_issue_tests;
