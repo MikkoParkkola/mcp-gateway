@@ -148,6 +148,11 @@ pub(crate) fn kept_dirs_for(path: &Path) -> Vec<Arc<tempfile::TempDir>> {
         .collect()
 }
 
+/// Whether `dir` lies under `real`, resolving existing symlinked ancestors of both.
+pub(crate) fn is_under(dir: &Path, real: &Path) -> bool {
+    norm(dir).starts_with(norm(real))
+}
+
 /// `path` made absolute, its deepest existing ancestor canonicalised, and the
 /// rest re-appended: the one form every comparison here uses (`/tmp` and
 /// `/private/tmp` are one dir on macOS). A `..` in the part that does not
