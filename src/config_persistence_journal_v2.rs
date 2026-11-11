@@ -15,6 +15,8 @@ use crate::config_persistence::{FileMode, Symlink, sync_dir_of, write_atomic};
 use crate::security::transparency_log::identity::LogId;
 use crate::security::transparency_log::settle::{Attribution, Reason, Role};
 
+pub(crate) const MAX_JOURNAL_BYTES: usize = 1_048_576;
+
 /// The journal-owned token, distinct from the legacy appender's returned id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -235,7 +237,10 @@ impl JournalSession {
         expected: FileRevision,
     ) -> Result<(), JournalError> {
         let pre_action = self.state.pre_action(action)?.clone();
-        if self.state.phase != Phase::Staged || self.state.pending.is_some() {
+        if self.state.phase != Phase::Staged
+            || self.state.pending.is_some()
+            || &expected != self.state.destination(action)?
+        {
             return Err(JournalError::InvalidState);
         }
         self.state.pending = Some(Pending {
@@ -308,7 +313,7 @@ impl JournalSession {
                 .writer
                 .iter()
                 .chain(&self.state.attempts)
-                .all(TokenState::finished)
+                .all(|owner| owner.finished(&self.state.attempts))
         {
             return Err(JournalError::Finish);
         }
@@ -346,6 +351,15 @@ impl JournalV2 {
         .ok_or(JournalError::InvalidState)
     }
 
+    fn destination(&self, action: Action) -> Result<&FileRevision, JournalError> {
+        match action {
+            Action::Forward => &self.new_revision,
+            Action::Restore => &self.original_revision,
+        }
+        .as_ref()
+        .ok_or(JournalError::InvalidState)
+    }
+
     fn validate(&self) -> Result<(), JournalError> {
         if self.version != 2 {
             return Err(JournalError::UnsupportedVersion);
@@ -359,8 +373,17 @@ impl JournalV2 {
             return Err(JournalError::InvalidState);
         }
         if let Some(pending) = &self.pending
-            && &pending.pre_action != self.pre_action(pending.action)?
+            && (&pending.pre_action != self.pre_action(pending.action)?
+                || &pending.expected != self.destination(pending.action)?)
         {
+            return Err(JournalError::InvalidState);
+        }
+        let fact_matches = match &self.fact {
+            Some(Fact::Committed(r)) => Some(r) == self.new_revision.as_ref(),
+            Some(Fact::RolledBack(r)) => Some(r) == self.original_revision.as_ref(),
+            _ => true,
+        };
+        if !fact_matches {
             return Err(JournalError::InvalidState);
         }
         let mut tokens = std::collections::HashSet::new();
@@ -371,6 +394,12 @@ impl JournalV2 {
             if let Some(decision) = &owner.decision {
                 decision.validate()?;
             }
+            let mut deferred = owner.records.iter().filter(|r| r.role == Role::Deferred);
+            if let Some(first) = deferred.next()
+                && !deferred.all(|r| r.same_content(first))
+            {
+                return Err(JournalError::InvalidState);
+            }
         }
         Ok(())
     }
@@ -379,15 +408,29 @@ impl JournalV2 {
 impl Decision {
     fn validate(&self) -> Result<(), JournalError> {
         let valid = match self.terminal {
-            TerminalRole::Outcome => {
-                self.result != ResultClass::Unproven
-                    && !matches!(
-                        self.reason,
-                        Reason::Abandoned | Reason::RenamedNotDurable | Reason::LeftToRecovery
-                    )
-            }
+            TerminalRole::Outcome => match self.result {
+                ResultClass::Written => matches!(
+                    self.reason,
+                    Reason::Committed | Reason::RolledBack | Reason::KeptNew
+                ),
+                ResultClass::NotWritten => matches!(
+                    self.reason,
+                    Reason::RolledBack
+                        | Reason::NothingPending
+                        | Reason::DeletedDuringCompute
+                        | Reason::ComputeRefused
+                        | Reason::SecretsRefused
+                        | Reason::WriterDied
+                        | Reason::Panicked
+                        | Reason::OperatorAbandoned
+                        | Reason::Moved
+                        | Reason::Refused
+                ),
+                ResultClass::Unproven => false,
+            },
             TerminalRole::Abandoned => {
-                self.result != ResultClass::Written && self.reason == Reason::Abandoned
+                matches!(self.result, ResultClass::NotWritten | ResultClass::Unproven)
+                    && self.reason == Reason::Abandoned
             }
         };
         if valid {
@@ -399,7 +442,7 @@ impl Decision {
 }
 
 impl TokenState {
-    fn finished(&self) -> bool {
+    fn finished(&self, attempts: &[TokenState]) -> bool {
         if self.intent.parked.is_some() || self.records.iter().any(|r| r.parked.is_some()) {
             return false;
         }
@@ -422,13 +465,8 @@ impl TokenState {
         };
         // Retries collapse by frozen content, never by delivery state or digest alone.
         if first.role != terminal
-            || !codec::terminal_matches(first, decision)
-            || !terminals.all(|r| {
-                r.role == terminal
-                    && r.payload_json == first.payload_json
-                    && r.attribution == first.attribution
-                    && r.caller_digest == first.caller_digest
-            })
+            || !codec::terminal_matches(first, decision, self, attempts)
+            || !terminals.all(|r| r.role == terminal && r.same_content(first))
         {
             return false;
         }
@@ -437,6 +475,14 @@ impl TokenState {
             && self.records.iter().all(|r| r.delivered)
             && (!decision.delivery_stopped
                 || self.records.iter().any(|r| r.role == Role::DeliveryStopped))
+    }
+}
+
+impl FrozenRecord {
+    fn same_content(&self, other: &Self) -> bool {
+        self.payload_json == other.payload_json
+            && self.attribution == other.attribution
+            && self.caller_digest == other.caller_digest
     }
 }
 

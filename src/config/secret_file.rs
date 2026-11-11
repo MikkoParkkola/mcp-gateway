@@ -11,6 +11,9 @@ use std::path::Path;
 
 use crate::{Error, Result};
 
+#[cfg(test)]
+use crate::config_persistence::journal::v2::MAX_JOURNAL_BYTES;
+
 /// The UPGRADING-4.0 item that documents this rule. One place to renumber.
 #[cfg(unix)]
 const UPGRADE_ITEM: u32 = 35;
@@ -115,7 +118,7 @@ impl SecretFile {
         match self {
             Self::Reference => Some(64 * 1024),
             #[cfg(test)]
-            Self::RecoveryJournalV2 => Some(1_048_576),
+            Self::RecoveryJournalV2 => Some(MAX_JOURNAL_BYTES as u64),
             _ => None,
         }
     }

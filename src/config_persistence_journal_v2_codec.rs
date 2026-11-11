@@ -4,15 +4,49 @@
 
 use serde_json::Value;
 
+use crate::security::transparency_log::settle::role_fields;
+
 use super::{
     Action, Attribution, Decision, Deserialize, Fact, FileRevision, FrozenRecord, JournalError,
-    JournalV2, LogId, Pending, Phase, Reason, ResultClass, Role, Serialize, TokenState,
+    JournalV2, LogId, MAX_JOURNAL_BYTES, Pending, Phase, Reason, ResultClass, Role, Serialize,
+    TokenState,
 };
 
-pub(super) fn terminal_matches(record: &FrozenRecord, decision: &Decision) -> bool {
+pub(super) fn terminal_matches(
+    record: &FrozenRecord,
+    decision: &Decision,
+    owner: &TokenState,
+    attempts: &[TokenState],
+) -> bool {
     let Ok(Value::Object(mut payload)) = serde_json::from_slice(&record.payload_json) else {
         return false;
     };
+    let Some(counter) = owner.intent_counter else {
+        return false;
+    };
+    // Settle adds the journal-owned token before checking these same role fields.
+    payload.insert("token".into(), Value::String(owner.intent_id.0.clone()));
+    if role_fields(record.role, &payload).is_err()
+        || payload.get("intent_counter").and_then(Value::as_u64) != Some(counter)
+    {
+        return false;
+    }
+    let linkage_matches = match (payload.get("settled_by"), &decision.settled_by) {
+        (None, None) => true,
+        (Some(by), Some(token)) if record.role == Role::Outcome => {
+            by["token"].as_str() == Some(token.0.as_str())
+                && attempts.iter().any(|attempt| {
+                    &attempt.intent_id == token
+                        && attempt.intent.role == Role::RecoveryIntent
+                        && attempt.intent_counter.is_some()
+                        && by["intent_counter"].as_u64() == attempt.intent_counter
+                })
+        }
+        _ => false,
+    };
+    if !linkage_matches {
+        return false;
+    }
     payload
         .remove("result")
         .and_then(|value| serde_json::from_value::<ResultClass>(value).ok())
@@ -137,9 +171,13 @@ pub(super) fn encode(state: &JournalV2) -> Result<Vec<u8>, JournalError> {
         attempts: state.attempts.clone(),
     };
     // Value's ordered maps preserve the canonical golden wire, including actors.
-    serde_json::to_value(wire)
+    let bytes = serde_json::to_value(wire)
         .and_then(|value| serde_json::to_vec(&value))
-        .map_err(|_| JournalError::Persist)
+        .map_err(|_| JournalError::Persist)?;
+    if bytes.len() > MAX_JOURNAL_BYTES {
+        return Err(JournalError::Persist);
+    }
+    Ok(bytes)
 }
 
 pub(super) mod role {
