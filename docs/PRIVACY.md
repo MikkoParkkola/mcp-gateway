@@ -59,8 +59,12 @@ browser makes. Those are reviewed by hand against this page.
   (`src/control_plane/export.rs:384`, `FileExportSink`).
 - **The web UI loads nothing from other hosts.** Both the dashboard (`/ui`,
   `/ui/classic`) and the new shell serve their scripts from the gateway itself
-  and send a `script-src 'self'` content security policy
-  (`src/gateway/ui/mod.rs`, `src/gateway/ui/shell.rs:77`).
+  and send a content security policy that lets the browser load and connect to
+  the gateway's own origin only (`src/gateway/ui/mod.rs`,
+  `src/gateway/ui/shell.rs:77`). The new shell's policy is `script-src 'self'`;
+  the dashboard's keeps `'unsafe-inline'` for its own inline script, which
+  limits what it can fetch, not what it can run. A test refuses any
+  off-origin script, style, font or connection source in the UI files.
 
 ## Where it connects
 
