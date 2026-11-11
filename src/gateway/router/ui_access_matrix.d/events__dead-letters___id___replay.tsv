@@ -1,0 +1,211 @@
+# path, method, request shape, caller, answer. One route per file; a digest named in ../ui_access_matrix_bodies.tsv is written as status:@name.
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	AdminKey	405
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	AdminKeyUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	AuthOff	405
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	Bearer	405
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	OidcAdmin	405
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	OidcAuditor	405
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	OidcDeveloper	405
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	OidcDeveloperNoIssuer	405
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	OidcDeveloperNoSubject	405
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	OidcReviewer	405
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	OidcUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	Session	405
+/ui/api/events/dead-letters/{id}/replay	DELETE	plain	StandardKey	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	AdminKey	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	AdminKeyUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	AuthOff	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	Bearer	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	OidcAdmin	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	OidcAuditor	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	OidcDeveloper	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	OidcDeveloperNoIssuer	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	OidcDeveloperNoSubject	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	OidcReviewer	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	OidcUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	Session	405
+/ui/api/events/dead-letters/{id}/replay	GET	bad-query	StandardKey	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	AdminKey	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	AdminKeyUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	AuthOff	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	Bearer	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	GET	plain	OidcAdmin	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	OidcAuditor	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	OidcDeveloper	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	OidcDeveloperNoIssuer	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	OidcDeveloperNoSubject	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	OidcReviewer	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	OidcUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	Session	405
+/ui/api/events/dead-letters/{id}/replay	GET	plain	StandardKey	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	AdminKey	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	AdminKeyUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	AuthOff	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	Bearer	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	NoKey	401
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	NoKeyPublicStatus	401
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	OidcAdmin	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	OidcAuditor	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	OidcDeveloper	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	OidcDeveloperNoIssuer	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	OidcDeveloperNoSubject	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	OidcReviewer	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	OidcUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	Session	405
+/ui/api/events/dead-letters/{id}/replay	HEAD	plain	StandardKey	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	AdminKey	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	AdminKeyUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	AuthOff	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	Bearer	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	OidcAdmin	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	OidcAuditor	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	OidcDeveloper	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	OidcDeveloperNoIssuer	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	OidcDeveloperNoSubject	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	OidcReviewer	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	OidcUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	Session	405
+/ui/api/events/dead-letters/{id}/replay	OPTIONS	plain	StandardKey	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	AdminKey	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	AdminKeyUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	AuthOff	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	Bearer	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	OidcAdmin	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	OidcAuditor	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	OidcDeveloper	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	OidcDeveloperNoSubject	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	OidcReviewer	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	OidcUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	Session	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-json	StandardKey	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	AdminKey	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	AdminKeyUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	AuthOff	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	Bearer	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	OidcAdmin	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	OidcAuditor	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	OidcDeveloper	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	OidcDeveloperNoSubject	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	OidcReviewer	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	OidcUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	Session	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	bad-type	StandardKey	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	AdminKey	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	AdminKeyUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	AuthOff	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	Bearer	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	OidcAdmin	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	OidcAuditor	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	OidcDeveloper	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	OidcDeveloperNoIssuer	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	OidcDeveloperNoSubject	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	OidcReviewer	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	OidcUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	Session	405
+/ui/api/events/dead-letters/{id}/replay	PATCH	json	StandardKey	405
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	AdminKey	404
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	AdminKeyUnmapped	404
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	AuthOff	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	Bearer	404
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	Session	404
+/ui/api/events/dead-letters/{id}/replay	POST	bad-json	StandardKey	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	AdminKey	404
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	AdminKeyUnmapped	404
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	AuthOff	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	Bearer	404
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	OidcAdmin	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	OidcAuditor	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	OidcReviewer	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	Session	404
+/ui/api/events/dead-letters/{id}/replay	POST	bad-type	StandardKey	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	json	AdminKey	404
+/ui/api/events/dead-letters/{id}/replay	POST	json	AdminKeyUnmapped	404
+/ui/api/events/dead-letters/{id}/replay	POST	json	AuthOff	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	json	Bearer	404
+/ui/api/events/dead-letters/{id}/replay	POST	json	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	POST	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	POST	json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	POST	json	Session	404
+/ui/api/events/dead-letters/{id}/replay	POST	json	StandardKey	403:error="Admin authentication required"
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	AdminKey	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	AdminKeyUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	AuthOff	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	Bearer	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	OidcAdmin	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	OidcAuditor	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	OidcDeveloper	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	OidcDeveloperNoSubject	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	OidcReviewer	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	OidcUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	Session	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-json	StandardKey	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	AdminKey	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	AdminKeyUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	AuthOff	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	Bearer	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	OidcAdmin	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	OidcAuditor	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	OidcDeveloper	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	OidcDeveloperNoSubject	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	OidcReviewer	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	OidcUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	Session	405
+/ui/api/events/dead-letters/{id}/replay	PUT	bad-type	StandardKey	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	AdminKey	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	AdminKeyUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	AuthOff	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	Bearer	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	NoKey	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	PUT	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/dead-letters/{id}/replay	PUT	json	OidcAdmin	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	OidcAuditor	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	OidcDeveloper	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	OidcDeveloperNoIssuer	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	OidcDeveloperNoSubject	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	OidcReviewer	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	OidcUnmapped	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	Session	405
+/ui/api/events/dead-letters/{id}/replay	PUT	json	StandardKey	405

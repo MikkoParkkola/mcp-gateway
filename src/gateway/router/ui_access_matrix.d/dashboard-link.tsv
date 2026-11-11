@@ -1,0 +1,211 @@
+# path, method, request shape, caller, answer. One route per file; a digest named in ../ui_access_matrix_bodies.tsv is written as status:@name.
+/ui/api/dashboard-link	DELETE	plain	AdminKey	405
+/ui/api/dashboard-link	DELETE	plain	AdminKeyUnmapped	405
+/ui/api/dashboard-link	DELETE	plain	AuthOff	405
+/ui/api/dashboard-link	DELETE	plain	Bearer	405
+/ui/api/dashboard-link	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	DELETE	plain	OidcAdmin	405
+/ui/api/dashboard-link	DELETE	plain	OidcAuditor	405
+/ui/api/dashboard-link	DELETE	plain	OidcDeveloper	405
+/ui/api/dashboard-link	DELETE	plain	OidcDeveloperNoIssuer	405
+/ui/api/dashboard-link	DELETE	plain	OidcDeveloperNoSubject	405
+/ui/api/dashboard-link	DELETE	plain	OidcReviewer	405
+/ui/api/dashboard-link	DELETE	plain	OidcUnmapped	405
+/ui/api/dashboard-link	DELETE	plain	Session	405
+/ui/api/dashboard-link	DELETE	plain	StandardKey	405
+/ui/api/dashboard-link	GET	bad-query	AdminKey	405
+/ui/api/dashboard-link	GET	bad-query	AdminKeyUnmapped	405
+/ui/api/dashboard-link	GET	bad-query	AuthOff	405
+/ui/api/dashboard-link	GET	bad-query	Bearer	405
+/ui/api/dashboard-link	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	GET	bad-query	OidcAdmin	405
+/ui/api/dashboard-link	GET	bad-query	OidcAuditor	405
+/ui/api/dashboard-link	GET	bad-query	OidcDeveloper	405
+/ui/api/dashboard-link	GET	bad-query	OidcDeveloperNoIssuer	405
+/ui/api/dashboard-link	GET	bad-query	OidcDeveloperNoSubject	405
+/ui/api/dashboard-link	GET	bad-query	OidcReviewer	405
+/ui/api/dashboard-link	GET	bad-query	OidcUnmapped	405
+/ui/api/dashboard-link	GET	bad-query	Session	405
+/ui/api/dashboard-link	GET	bad-query	StandardKey	405
+/ui/api/dashboard-link	GET	plain	AdminKey	405
+/ui/api/dashboard-link	GET	plain	AdminKeyUnmapped	405
+/ui/api/dashboard-link	GET	plain	AuthOff	405
+/ui/api/dashboard-link	GET	plain	Bearer	405
+/ui/api/dashboard-link	GET	plain	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	GET	plain	OidcAdmin	405
+/ui/api/dashboard-link	GET	plain	OidcAuditor	405
+/ui/api/dashboard-link	GET	plain	OidcDeveloper	405
+/ui/api/dashboard-link	GET	plain	OidcDeveloperNoIssuer	405
+/ui/api/dashboard-link	GET	plain	OidcDeveloperNoSubject	405
+/ui/api/dashboard-link	GET	plain	OidcReviewer	405
+/ui/api/dashboard-link	GET	plain	OidcUnmapped	405
+/ui/api/dashboard-link	GET	plain	Session	405
+/ui/api/dashboard-link	GET	plain	StandardKey	405
+/ui/api/dashboard-link	HEAD	plain	AdminKey	405
+/ui/api/dashboard-link	HEAD	plain	AdminKeyUnmapped	405
+/ui/api/dashboard-link	HEAD	plain	AuthOff	405
+/ui/api/dashboard-link	HEAD	plain	Bearer	405
+/ui/api/dashboard-link	HEAD	plain	NoKey	401
+/ui/api/dashboard-link	HEAD	plain	NoKeyPublicStatus	401
+/ui/api/dashboard-link	HEAD	plain	OidcAdmin	405
+/ui/api/dashboard-link	HEAD	plain	OidcAuditor	405
+/ui/api/dashboard-link	HEAD	plain	OidcDeveloper	405
+/ui/api/dashboard-link	HEAD	plain	OidcDeveloperNoIssuer	405
+/ui/api/dashboard-link	HEAD	plain	OidcDeveloperNoSubject	405
+/ui/api/dashboard-link	HEAD	plain	OidcReviewer	405
+/ui/api/dashboard-link	HEAD	plain	OidcUnmapped	405
+/ui/api/dashboard-link	HEAD	plain	Session	405
+/ui/api/dashboard-link	HEAD	plain	StandardKey	405
+/ui/api/dashboard-link	OPTIONS	plain	AdminKey	405
+/ui/api/dashboard-link	OPTIONS	plain	AdminKeyUnmapped	405
+/ui/api/dashboard-link	OPTIONS	plain	AuthOff	405
+/ui/api/dashboard-link	OPTIONS	plain	Bearer	405
+/ui/api/dashboard-link	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	OPTIONS	plain	OidcAdmin	405
+/ui/api/dashboard-link	OPTIONS	plain	OidcAuditor	405
+/ui/api/dashboard-link	OPTIONS	plain	OidcDeveloper	405
+/ui/api/dashboard-link	OPTIONS	plain	OidcDeveloperNoIssuer	405
+/ui/api/dashboard-link	OPTIONS	plain	OidcDeveloperNoSubject	405
+/ui/api/dashboard-link	OPTIONS	plain	OidcReviewer	405
+/ui/api/dashboard-link	OPTIONS	plain	OidcUnmapped	405
+/ui/api/dashboard-link	OPTIONS	plain	Session	405
+/ui/api/dashboard-link	OPTIONS	plain	StandardKey	405
+/ui/api/dashboard-link	PATCH	bad-json	AdminKey	405
+/ui/api/dashboard-link	PATCH	bad-json	AdminKeyUnmapped	405
+/ui/api/dashboard-link	PATCH	bad-json	AuthOff	405
+/ui/api/dashboard-link	PATCH	bad-json	Bearer	405
+/ui/api/dashboard-link	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	PATCH	bad-json	OidcAdmin	405
+/ui/api/dashboard-link	PATCH	bad-json	OidcAuditor	405
+/ui/api/dashboard-link	PATCH	bad-json	OidcDeveloper	405
+/ui/api/dashboard-link	PATCH	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/dashboard-link	PATCH	bad-json	OidcDeveloperNoSubject	405
+/ui/api/dashboard-link	PATCH	bad-json	OidcReviewer	405
+/ui/api/dashboard-link	PATCH	bad-json	OidcUnmapped	405
+/ui/api/dashboard-link	PATCH	bad-json	Session	405
+/ui/api/dashboard-link	PATCH	bad-json	StandardKey	405
+/ui/api/dashboard-link	PATCH	bad-type	AdminKey	405
+/ui/api/dashboard-link	PATCH	bad-type	AdminKeyUnmapped	405
+/ui/api/dashboard-link	PATCH	bad-type	AuthOff	405
+/ui/api/dashboard-link	PATCH	bad-type	Bearer	405
+/ui/api/dashboard-link	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	PATCH	bad-type	OidcAdmin	405
+/ui/api/dashboard-link	PATCH	bad-type	OidcAuditor	405
+/ui/api/dashboard-link	PATCH	bad-type	OidcDeveloper	405
+/ui/api/dashboard-link	PATCH	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/dashboard-link	PATCH	bad-type	OidcDeveloperNoSubject	405
+/ui/api/dashboard-link	PATCH	bad-type	OidcReviewer	405
+/ui/api/dashboard-link	PATCH	bad-type	OidcUnmapped	405
+/ui/api/dashboard-link	PATCH	bad-type	Session	405
+/ui/api/dashboard-link	PATCH	bad-type	StandardKey	405
+/ui/api/dashboard-link	PATCH	json	AdminKey	405
+/ui/api/dashboard-link	PATCH	json	AdminKeyUnmapped	405
+/ui/api/dashboard-link	PATCH	json	AuthOff	405
+/ui/api/dashboard-link	PATCH	json	Bearer	405
+/ui/api/dashboard-link	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	PATCH	json	OidcAdmin	405
+/ui/api/dashboard-link	PATCH	json	OidcAuditor	405
+/ui/api/dashboard-link	PATCH	json	OidcDeveloper	405
+/ui/api/dashboard-link	PATCH	json	OidcDeveloperNoIssuer	405
+/ui/api/dashboard-link	PATCH	json	OidcDeveloperNoSubject	405
+/ui/api/dashboard-link	PATCH	json	OidcReviewer	405
+/ui/api/dashboard-link	PATCH	json	OidcUnmapped	405
+/ui/api/dashboard-link	PATCH	json	Session	405
+/ui/api/dashboard-link	PATCH	json	StandardKey	405
+/ui/api/dashboard-link	POST	bad-json	AdminKey	200
+/ui/api/dashboard-link	POST	bad-json	AdminKeyUnmapped	200
+/ui/api/dashboard-link	POST	bad-json	AuthOff	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-json	Bearer	200
+/ui/api/dashboard-link	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	POST	bad-json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-json	Session	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-json	StandardKey	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-type	AdminKey	200
+/ui/api/dashboard-link	POST	bad-type	AdminKeyUnmapped	200
+/ui/api/dashboard-link	POST	bad-type	AuthOff	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-type	Bearer	200
+/ui/api/dashboard-link	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	POST	bad-type	OidcAdmin	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-type	OidcAuditor	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-type	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-type	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-type	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-type	OidcReviewer	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-type	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-type	Session	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	bad-type	StandardKey	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	json	AdminKey	200
+/ui/api/dashboard-link	POST	json	AdminKeyUnmapped	200
+/ui/api/dashboard-link	POST	json	AuthOff	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	json	Bearer	200
+/ui/api/dashboard-link	POST	json	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	POST	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	POST	json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	json	Session	403:error="Admin authentication required"
+/ui/api/dashboard-link	POST	json	StandardKey	403:error="Admin authentication required"
+/ui/api/dashboard-link	PUT	bad-json	AdminKey	405
+/ui/api/dashboard-link	PUT	bad-json	AdminKeyUnmapped	405
+/ui/api/dashboard-link	PUT	bad-json	AuthOff	405
+/ui/api/dashboard-link	PUT	bad-json	Bearer	405
+/ui/api/dashboard-link	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	PUT	bad-json	OidcAdmin	405
+/ui/api/dashboard-link	PUT	bad-json	OidcAuditor	405
+/ui/api/dashboard-link	PUT	bad-json	OidcDeveloper	405
+/ui/api/dashboard-link	PUT	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/dashboard-link	PUT	bad-json	OidcDeveloperNoSubject	405
+/ui/api/dashboard-link	PUT	bad-json	OidcReviewer	405
+/ui/api/dashboard-link	PUT	bad-json	OidcUnmapped	405
+/ui/api/dashboard-link	PUT	bad-json	Session	405
+/ui/api/dashboard-link	PUT	bad-json	StandardKey	405
+/ui/api/dashboard-link	PUT	bad-type	AdminKey	405
+/ui/api/dashboard-link	PUT	bad-type	AdminKeyUnmapped	405
+/ui/api/dashboard-link	PUT	bad-type	AuthOff	405
+/ui/api/dashboard-link	PUT	bad-type	Bearer	405
+/ui/api/dashboard-link	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	PUT	bad-type	OidcAdmin	405
+/ui/api/dashboard-link	PUT	bad-type	OidcAuditor	405
+/ui/api/dashboard-link	PUT	bad-type	OidcDeveloper	405
+/ui/api/dashboard-link	PUT	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/dashboard-link	PUT	bad-type	OidcDeveloperNoSubject	405
+/ui/api/dashboard-link	PUT	bad-type	OidcReviewer	405
+/ui/api/dashboard-link	PUT	bad-type	OidcUnmapped	405
+/ui/api/dashboard-link	PUT	bad-type	Session	405
+/ui/api/dashboard-link	PUT	bad-type	StandardKey	405
+/ui/api/dashboard-link	PUT	json	AdminKey	405
+/ui/api/dashboard-link	PUT	json	AdminKeyUnmapped	405
+/ui/api/dashboard-link	PUT	json	AuthOff	405
+/ui/api/dashboard-link	PUT	json	Bearer	405
+/ui/api/dashboard-link	PUT	json	NoKey	401:error.code=-32000
+/ui/api/dashboard-link	PUT	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/dashboard-link	PUT	json	OidcAdmin	405
+/ui/api/dashboard-link	PUT	json	OidcAuditor	405
+/ui/api/dashboard-link	PUT	json	OidcDeveloper	405
+/ui/api/dashboard-link	PUT	json	OidcDeveloperNoIssuer	405
+/ui/api/dashboard-link	PUT	json	OidcDeveloperNoSubject	405
+/ui/api/dashboard-link	PUT	json	OidcReviewer	405
+/ui/api/dashboard-link	PUT	json	OidcUnmapped	405
+/ui/api/dashboard-link	PUT	json	Session	405
+/ui/api/dashboard-link	PUT	json	StandardKey	405

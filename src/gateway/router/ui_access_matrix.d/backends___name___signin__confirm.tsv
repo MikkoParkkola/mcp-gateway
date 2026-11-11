@@ -1,0 +1,211 @@
+# path, method, request shape, caller, answer. One route per file; a digest named in ../ui_access_matrix_bodies.tsv is written as status:@name.
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	AdminKey	405
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	AdminKeyUnmapped	405
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	AuthOff	405
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	Bearer	405
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	OidcAdmin	405
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	OidcAuditor	405
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	OidcDeveloper	405
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	OidcReviewer	405
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	OidcUnmapped	405
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	Session	405
+/ui/api/backends/{name}/signin/confirm	DELETE	plain	StandardKey	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	AdminKey	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	AdminKeyUnmapped	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	AuthOff	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	Bearer	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	OidcAdmin	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	OidcAuditor	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	OidcDeveloper	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	OidcReviewer	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	OidcUnmapped	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	Session	405
+/ui/api/backends/{name}/signin/confirm	GET	bad-query	StandardKey	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	AdminKey	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	AdminKeyUnmapped	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	AuthOff	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	Bearer	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	GET	plain	OidcAdmin	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	OidcAuditor	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	OidcDeveloper	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	OidcReviewer	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	OidcUnmapped	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	Session	405
+/ui/api/backends/{name}/signin/confirm	GET	plain	StandardKey	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	AdminKey	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	AdminKeyUnmapped	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	AuthOff	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	Bearer	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	NoKey	401
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	NoKeyPublicStatus	401
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	OidcAdmin	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	OidcAuditor	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	OidcDeveloper	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	OidcReviewer	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	OidcUnmapped	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	Session	405
+/ui/api/backends/{name}/signin/confirm	HEAD	plain	StandardKey	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	AdminKey	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	AdminKeyUnmapped	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	AuthOff	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	Bearer	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	OidcAdmin	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	OidcAuditor	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	OidcDeveloper	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	OidcReviewer	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	OidcUnmapped	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	Session	405
+/ui/api/backends/{name}/signin/confirm	OPTIONS	plain	StandardKey	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	AdminKey	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	AdminKeyUnmapped	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	AuthOff	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	Bearer	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	OidcAdmin	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	OidcAuditor	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	OidcDeveloper	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	OidcReviewer	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	OidcUnmapped	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	Session	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-json	StandardKey	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	AdminKey	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	AdminKeyUnmapped	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	AuthOff	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	Bearer	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	OidcAdmin	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	OidcAuditor	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	OidcDeveloper	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	OidcReviewer	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	OidcUnmapped	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	Session	405
+/ui/api/backends/{name}/signin/confirm	PATCH	bad-type	StandardKey	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	AdminKey	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	AdminKeyUnmapped	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	AuthOff	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	Bearer	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	PATCH	json	OidcAdmin	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	OidcAuditor	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	OidcDeveloper	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	OidcReviewer	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	OidcUnmapped	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	Session	405
+/ui/api/backends/{name}/signin/confirm	PATCH	json	StandardKey	405
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	AdminKey	400
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	AdminKeyUnmapped	400
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	AuthOff	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	Bearer	400
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	Session	400
+/ui/api/backends/{name}/signin/confirm	POST	bad-json	StandardKey	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	AdminKey	400
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	AdminKeyUnmapped	400
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	AuthOff	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	Bearer	400
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	OidcAdmin	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	OidcAuditor	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	OidcReviewer	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	Session	400
+/ui/api/backends/{name}/signin/confirm	POST	bad-type	StandardKey	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	json	AdminKey	400
+/ui/api/backends/{name}/signin/confirm	POST	json	AdminKeyUnmapped	400
+/ui/api/backends/{name}/signin/confirm	POST	json	AuthOff	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	json	Bearer	400
+/ui/api/backends/{name}/signin/confirm	POST	json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	POST	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	POST	json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	POST	json	Session	400
+/ui/api/backends/{name}/signin/confirm	POST	json	StandardKey	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	AdminKey	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	AdminKeyUnmapped	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	AuthOff	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	Bearer	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	OidcAdmin	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	OidcAuditor	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	OidcDeveloper	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	OidcReviewer	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	OidcUnmapped	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	Session	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-json	StandardKey	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	AdminKey	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	AdminKeyUnmapped	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	AuthOff	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	Bearer	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	OidcAdmin	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	OidcAuditor	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	OidcDeveloper	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	OidcReviewer	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	OidcUnmapped	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	Session	405
+/ui/api/backends/{name}/signin/confirm	PUT	bad-type	StandardKey	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	AdminKey	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	AdminKeyUnmapped	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	AuthOff	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	Bearer	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	PUT	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin/confirm	PUT	json	OidcAdmin	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	OidcAuditor	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	OidcDeveloper	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	OidcReviewer	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	OidcUnmapped	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	Session	405
+/ui/api/backends/{name}/signin/confirm	PUT	json	StandardKey	405

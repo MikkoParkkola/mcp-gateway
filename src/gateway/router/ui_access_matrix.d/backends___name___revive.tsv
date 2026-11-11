@@ -1,0 +1,211 @@
+# path, method, request shape, caller, answer. One route per file; a digest named in ../ui_access_matrix_bodies.tsv is written as status:@name.
+/ui/api/backends/{name}/revive	DELETE	plain	AdminKey	405
+/ui/api/backends/{name}/revive	DELETE	plain	AdminKeyUnmapped	405
+/ui/api/backends/{name}/revive	DELETE	plain	AuthOff	405
+/ui/api/backends/{name}/revive	DELETE	plain	Bearer	405
+/ui/api/backends/{name}/revive	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	DELETE	plain	OidcAdmin	405
+/ui/api/backends/{name}/revive	DELETE	plain	OidcAuditor	405
+/ui/api/backends/{name}/revive	DELETE	plain	OidcDeveloper	405
+/ui/api/backends/{name}/revive	DELETE	plain	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/revive	DELETE	plain	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/revive	DELETE	plain	OidcReviewer	405
+/ui/api/backends/{name}/revive	DELETE	plain	OidcUnmapped	405
+/ui/api/backends/{name}/revive	DELETE	plain	Session	405
+/ui/api/backends/{name}/revive	DELETE	plain	StandardKey	405
+/ui/api/backends/{name}/revive	GET	bad-query	AdminKey	405
+/ui/api/backends/{name}/revive	GET	bad-query	AdminKeyUnmapped	405
+/ui/api/backends/{name}/revive	GET	bad-query	AuthOff	405
+/ui/api/backends/{name}/revive	GET	bad-query	Bearer	405
+/ui/api/backends/{name}/revive	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	GET	bad-query	OidcAdmin	405
+/ui/api/backends/{name}/revive	GET	bad-query	OidcAuditor	405
+/ui/api/backends/{name}/revive	GET	bad-query	OidcDeveloper	405
+/ui/api/backends/{name}/revive	GET	bad-query	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/revive	GET	bad-query	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/revive	GET	bad-query	OidcReviewer	405
+/ui/api/backends/{name}/revive	GET	bad-query	OidcUnmapped	405
+/ui/api/backends/{name}/revive	GET	bad-query	Session	405
+/ui/api/backends/{name}/revive	GET	bad-query	StandardKey	405
+/ui/api/backends/{name}/revive	GET	plain	AdminKey	405
+/ui/api/backends/{name}/revive	GET	plain	AdminKeyUnmapped	405
+/ui/api/backends/{name}/revive	GET	plain	AuthOff	405
+/ui/api/backends/{name}/revive	GET	plain	Bearer	405
+/ui/api/backends/{name}/revive	GET	plain	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	GET	plain	OidcAdmin	405
+/ui/api/backends/{name}/revive	GET	plain	OidcAuditor	405
+/ui/api/backends/{name}/revive	GET	plain	OidcDeveloper	405
+/ui/api/backends/{name}/revive	GET	plain	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/revive	GET	plain	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/revive	GET	plain	OidcReviewer	405
+/ui/api/backends/{name}/revive	GET	plain	OidcUnmapped	405
+/ui/api/backends/{name}/revive	GET	plain	Session	405
+/ui/api/backends/{name}/revive	GET	plain	StandardKey	405
+/ui/api/backends/{name}/revive	HEAD	plain	AdminKey	405
+/ui/api/backends/{name}/revive	HEAD	plain	AdminKeyUnmapped	405
+/ui/api/backends/{name}/revive	HEAD	plain	AuthOff	405
+/ui/api/backends/{name}/revive	HEAD	plain	Bearer	405
+/ui/api/backends/{name}/revive	HEAD	plain	NoKey	401
+/ui/api/backends/{name}/revive	HEAD	plain	NoKeyPublicStatus	401
+/ui/api/backends/{name}/revive	HEAD	plain	OidcAdmin	405
+/ui/api/backends/{name}/revive	HEAD	plain	OidcAuditor	405
+/ui/api/backends/{name}/revive	HEAD	plain	OidcDeveloper	405
+/ui/api/backends/{name}/revive	HEAD	plain	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/revive	HEAD	plain	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/revive	HEAD	plain	OidcReviewer	405
+/ui/api/backends/{name}/revive	HEAD	plain	OidcUnmapped	405
+/ui/api/backends/{name}/revive	HEAD	plain	Session	405
+/ui/api/backends/{name}/revive	HEAD	plain	StandardKey	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	AdminKey	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	AdminKeyUnmapped	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	AuthOff	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	Bearer	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	OPTIONS	plain	OidcAdmin	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	OidcAuditor	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	OidcDeveloper	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	OidcReviewer	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	OidcUnmapped	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	Session	405
+/ui/api/backends/{name}/revive	OPTIONS	plain	StandardKey	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	AdminKey	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	AdminKeyUnmapped	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	AuthOff	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	Bearer	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	PATCH	bad-json	OidcAdmin	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	OidcAuditor	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	OidcDeveloper	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	OidcReviewer	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	OidcUnmapped	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	Session	405
+/ui/api/backends/{name}/revive	PATCH	bad-json	StandardKey	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	AdminKey	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	AdminKeyUnmapped	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	AuthOff	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	Bearer	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	PATCH	bad-type	OidcAdmin	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	OidcAuditor	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	OidcDeveloper	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	OidcReviewer	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	OidcUnmapped	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	Session	405
+/ui/api/backends/{name}/revive	PATCH	bad-type	StandardKey	405
+/ui/api/backends/{name}/revive	PATCH	json	AdminKey	405
+/ui/api/backends/{name}/revive	PATCH	json	AdminKeyUnmapped	405
+/ui/api/backends/{name}/revive	PATCH	json	AuthOff	405
+/ui/api/backends/{name}/revive	PATCH	json	Bearer	405
+/ui/api/backends/{name}/revive	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	PATCH	json	OidcAdmin	405
+/ui/api/backends/{name}/revive	PATCH	json	OidcAuditor	405
+/ui/api/backends/{name}/revive	PATCH	json	OidcDeveloper	405
+/ui/api/backends/{name}/revive	PATCH	json	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/revive	PATCH	json	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/revive	PATCH	json	OidcReviewer	405
+/ui/api/backends/{name}/revive	PATCH	json	OidcUnmapped	405
+/ui/api/backends/{name}/revive	PATCH	json	Session	405
+/ui/api/backends/{name}/revive	PATCH	json	StandardKey	405
+/ui/api/backends/{name}/revive	POST	bad-json	AdminKey	404
+/ui/api/backends/{name}/revive	POST	bad-json	AdminKeyUnmapped	404
+/ui/api/backends/{name}/revive	POST	bad-json	AuthOff	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-json	Bearer	404
+/ui/api/backends/{name}/revive	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	POST	bad-json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-json	Session	404
+/ui/api/backends/{name}/revive	POST	bad-json	StandardKey	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-type	AdminKey	404
+/ui/api/backends/{name}/revive	POST	bad-type	AdminKeyUnmapped	404
+/ui/api/backends/{name}/revive	POST	bad-type	AuthOff	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-type	Bearer	404
+/ui/api/backends/{name}/revive	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	POST	bad-type	OidcAdmin	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-type	OidcAuditor	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-type	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-type	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-type	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-type	OidcReviewer	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-type	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	bad-type	Session	404
+/ui/api/backends/{name}/revive	POST	bad-type	StandardKey	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	json	AdminKey	404
+/ui/api/backends/{name}/revive	POST	json	AdminKeyUnmapped	404
+/ui/api/backends/{name}/revive	POST	json	AuthOff	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	json	Bearer	404
+/ui/api/backends/{name}/revive	POST	json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	POST	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	POST	json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	POST	json	Session	404
+/ui/api/backends/{name}/revive	POST	json	StandardKey	403:error="Admin authentication required"
+/ui/api/backends/{name}/revive	PUT	bad-json	AdminKey	405
+/ui/api/backends/{name}/revive	PUT	bad-json	AdminKeyUnmapped	405
+/ui/api/backends/{name}/revive	PUT	bad-json	AuthOff	405
+/ui/api/backends/{name}/revive	PUT	bad-json	Bearer	405
+/ui/api/backends/{name}/revive	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	PUT	bad-json	OidcAdmin	405
+/ui/api/backends/{name}/revive	PUT	bad-json	OidcAuditor	405
+/ui/api/backends/{name}/revive	PUT	bad-json	OidcDeveloper	405
+/ui/api/backends/{name}/revive	PUT	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/revive	PUT	bad-json	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/revive	PUT	bad-json	OidcReviewer	405
+/ui/api/backends/{name}/revive	PUT	bad-json	OidcUnmapped	405
+/ui/api/backends/{name}/revive	PUT	bad-json	Session	405
+/ui/api/backends/{name}/revive	PUT	bad-json	StandardKey	405
+/ui/api/backends/{name}/revive	PUT	bad-type	AdminKey	405
+/ui/api/backends/{name}/revive	PUT	bad-type	AdminKeyUnmapped	405
+/ui/api/backends/{name}/revive	PUT	bad-type	AuthOff	405
+/ui/api/backends/{name}/revive	PUT	bad-type	Bearer	405
+/ui/api/backends/{name}/revive	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	PUT	bad-type	OidcAdmin	405
+/ui/api/backends/{name}/revive	PUT	bad-type	OidcAuditor	405
+/ui/api/backends/{name}/revive	PUT	bad-type	OidcDeveloper	405
+/ui/api/backends/{name}/revive	PUT	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/revive	PUT	bad-type	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/revive	PUT	bad-type	OidcReviewer	405
+/ui/api/backends/{name}/revive	PUT	bad-type	OidcUnmapped	405
+/ui/api/backends/{name}/revive	PUT	bad-type	Session	405
+/ui/api/backends/{name}/revive	PUT	bad-type	StandardKey	405
+/ui/api/backends/{name}/revive	PUT	json	AdminKey	405
+/ui/api/backends/{name}/revive	PUT	json	AdminKeyUnmapped	405
+/ui/api/backends/{name}/revive	PUT	json	AuthOff	405
+/ui/api/backends/{name}/revive	PUT	json	Bearer	405
+/ui/api/backends/{name}/revive	PUT	json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/revive	PUT	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/revive	PUT	json	OidcAdmin	405
+/ui/api/backends/{name}/revive	PUT	json	OidcAuditor	405
+/ui/api/backends/{name}/revive	PUT	json	OidcDeveloper	405
+/ui/api/backends/{name}/revive	PUT	json	OidcDeveloperNoIssuer	405
+/ui/api/backends/{name}/revive	PUT	json	OidcDeveloperNoSubject	405
+/ui/api/backends/{name}/revive	PUT	json	OidcReviewer	405
+/ui/api/backends/{name}/revive	PUT	json	OidcUnmapped	405
+/ui/api/backends/{name}/revive	PUT	json	Session	405
+/ui/api/backends/{name}/revive	PUT	json	StandardKey	405
