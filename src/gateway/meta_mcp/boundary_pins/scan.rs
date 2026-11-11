@@ -40,6 +40,33 @@ fn probe_only(meta: &syn::Meta) -> bool {
     }
 }
 
+/// Derive names, including derives under any depth of `cfg_attr`.
+pub(super) fn derives_in(attrs: &[syn::Attribute]) -> std::collections::BTreeSet<String> {
+    type Metas = syn::punctuated::Punctuated<syn::Meta, syn::Token![,]>;
+    fn walk_meta(meta: &syn::Meta, out: &mut std::collections::BTreeSet<String>) {
+        let syn::Meta::List(list) = meta else { return };
+        let Ok(args) = list.parse_args_with(Metas::parse_terminated) else {
+            return;
+        };
+        if list.path.is_ident("derive") {
+            for arg in &args {
+                if let Some(last) = arg.path().segments.last() {
+                    out.insert(last.ident.to_string());
+                }
+            }
+        } else if list.path.is_ident("cfg_attr") {
+            for arg in args.iter().skip(1) {
+                walk_meta(arg, out);
+            }
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for attr in attrs {
+        walk_meta(&attr.meta, &mut out);
+    }
+    out
+}
+
 /// What the walk reports: every production node, with where it sits.
 pub(super) trait Sink {
     /// An attribute on a production node; `owner` names the node kind.

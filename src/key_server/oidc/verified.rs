@@ -5,12 +5,11 @@
 //! through, the stable actor id, and the read-only accessors.
 //! Re-exported as `crate::key_server::oidc::VerifiedIdentity`.
 
-use serde::Serialize;
-
 /// Verified identity extracted from a valid OIDC ID token.
 ///
-/// Output only: it is written to audit records, but nothing can read one back
-/// from bytes, since bytes are not a verification:
+/// Nothing can read one back from bytes, since bytes are not a verification,
+/// and nothing writes one out: audit records carry its keyed hash form
+/// instead (`SafeIdentity`), never the raw identity:
 ///
 /// ```compile_fail,E0277
 /// fn read(bytes: &str) -> mcp_gateway::key_server::oidc::VerifiedIdentity {
@@ -18,11 +17,19 @@ use serde::Serialize;
 /// }
 /// ```
 ///
-/// Writing one out compiles:
+/// nor write one out:
 ///
-/// ```
+/// ```compile_fail,E0277
 /// fn write(identity: &mcp_gateway::key_server::oidc::VerifiedIdentity) -> String {
 ///     serde_json::to_string(identity).expect("an identity")
+/// }
+/// ```
+///
+/// Reading it through its accessors compiles:
+///
+/// ```
+/// fn subject(identity: &mcp_gateway::key_server::oidc::VerifiedIdentity) -> &str {
+///     identity.subject()
 /// }
 /// ```
 ///
@@ -69,20 +76,33 @@ use serde::Serialize;
 ///     identity.subject = String::new();
 /// }
 /// ```
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone)]
 pub struct VerifiedIdentity {
     /// OIDC `sub` claim (opaque user ID).
     subject: String,
     /// Email address from the token claims.
     email: String,
     /// Display name (optional).
-    #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     /// Group memberships (from custom claims).
-    #[serde(default)]
     groups: Vec<String>,
     /// Issuer URL.
     issuer: String,
+}
+
+/// Names the email, name and groups only by presence, as `IdTokenClaims`
+/// does: a stray `?identity` cannot log them.
+impl std::fmt::Debug for VerifiedIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let shown = super::shown;
+        f.debug_struct("VerifiedIdentity")
+            .field("subject", &self.subject)
+            .field("email", &shown(!self.email.is_empty()))
+            .field("name", &shown(self.name.is_some()))
+            .field("groups", &shown(!self.groups.is_empty()))
+            .field("issuer", &self.issuer)
+            .finish()
+    }
 }
 
 impl VerifiedIdentity {

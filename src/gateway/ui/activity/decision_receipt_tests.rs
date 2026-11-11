@@ -9,7 +9,7 @@ use super::access::Access;
 use super::decision_fixtures::{assert_no_sentinel, call, decision, finding, write_chained};
 use super::reader::{Line, Which};
 use super::receipt::{parse_id, receipt};
-use super::rows::row_id;
+use super::rows::{Check, row_id};
 use crate::security::decision_record::read as evidence;
 
 /// The receipt body of one call carrying `decision` (or none).
@@ -22,9 +22,12 @@ fn receipt_of(decision: Option<Value>) -> Value {
         log: Which::Invocation,
         entry: entries[0].clone(),
         segment: 0,
+        span: None,
     };
     let id = parse_id(&row_id(&line).unwrap()).unwrap();
-    let body = receipt(&path, &id, &Access::All, None).unwrap().unwrap();
+    let body = receipt(&path, &id, &Access::All, &Check::bare(None))
+        .unwrap()
+        .unwrap();
     assert_no_sentinel(&body.to_string());
     body
 }

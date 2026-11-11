@@ -72,6 +72,14 @@ pub struct KeyServerConfig {
     /// If `None`, revocation endpoints return 503.
     #[serde(default)]
     pub admin_token: Option<String>,
+    /// The installation key for audit records' `email_hash`, as a secret
+    /// reference (`env:`, `file:`, keychain) resolving to exactly 64 lowercase
+    /// hex digits (`openssl rand -hex 32`). Optional: when unset, the first
+    /// enabled start generates a key in `key-server-email-hmac.json` under the
+    /// gateway data directory. Left out of a rendered config when unset, so
+    /// every existing config reads as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_email_hmac_secret_ref: Option<String>,
     /// Accept a raw OIDC ID token (JWT) as a bearer directly on the gateway
     /// endpoint — "delegated auth" — instead of requiring a prior token
     /// exchange. Default `false`: leaving it off keeps the auth surface
@@ -97,6 +105,10 @@ impl std::fmt::Debug for KeyServerConfig {
             .field("oidc", &self.oidc)
             .field("policies", &self.policies)
             .field("admin_token", &redact_opt(&self.admin_token))
+            .field(
+                "audit_email_hmac_secret_ref",
+                &redact_opt(&self.audit_email_hmac_secret_ref),
+            )
             .field("delegated_bearer", &self.delegated_bearer)
             .finish()
     }
@@ -129,6 +141,7 @@ impl Default for KeyServerConfig {
             oidc: Vec::new(),
             policies: Vec::new(),
             admin_token: None,
+            audit_email_hmac_secret_ref: None,
             delegated_bearer: false,
         }
     }
@@ -150,6 +163,24 @@ impl KeyServerConfig {
                 .resolve("key_server.admin_token", overlay)
                 .map(Some)
         })
+    }
+
+    /// Resolve `audit_email_hmac_secret_ref` to its text, when set.
+    ///
+    /// # Errors
+    ///
+    /// When the reference cannot be resolved.
+    pub fn resolve_audit_email_hmac(
+        &self,
+        overlay: &crate::config::EnvOverlay,
+    ) -> Result<Option<String>> {
+        self.audit_email_hmac_secret_ref
+            .as_ref()
+            .map_or(Ok(None), |t| {
+                crate::config::secret_ref::SecretRef::parse(t)
+                    .resolve("key_server.audit_email_hmac_secret_ref", overlay)
+                    .map(Some)
+            })
     }
 
     /// Validate the key-server config at load time (MIK-6784, GW.4).

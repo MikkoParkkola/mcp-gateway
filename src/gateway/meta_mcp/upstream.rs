@@ -242,6 +242,11 @@ impl UpstreamRecovery for NativeUpstreamTasks {
             let Some(backend) = self.eligible(&handle.backend).await else {
                 return UpstreamAnswer::Unavailable;
             };
+            // Before the poll: nothing is sent for a task whose secrets
+            // changed, so its log never meets an old value.
+            if let Some(withheld) = secrets::withheld(&backend, handle) {
+                return withheld;
+            }
             let deadline = deadline.min(backend.request_timeout());
             // The declaration is the transport's, and `tasks/get` is one of the two
             // methods it will carry it on. One attempt, no retry loop, no other
@@ -257,7 +262,13 @@ impl UpstreamRecovery for NativeUpstreamTasks {
             )
             .await
             {
-                Ok(Ok(response)) => read_query(response),
+                // On the terminal answer again: a rotation during the poll.
+                Ok(Ok(response)) => match read_query(response) {
+                    answer @ (UpstreamAnswer::Completed(_) | UpstreamAnswer::Failed(_)) => {
+                        secrets::withheld(&backend, handle).unwrap_or(answer)
+                    }
+                    answer => answer,
+                },
                 Ok(Err(error)) => {
                     tracing::warn!(backend = %handle.backend, %error, "upstream tasks/get unavailable");
                     UpstreamAnswer::Unavailable
@@ -392,6 +403,9 @@ pub(crate) struct UpstreamSubmission {
     /// The gateway task this submission belongs to.
     task_id: String,
     handle: parking_lot::Mutex<Option<String>>,
+    /// What the send injected, armed for the same target; opened by the
+    /// same scope function as this slot.
+    dispatched: std::sync::Arc<crate::security::dispatched::Slot>,
 }
 
 impl UpstreamSubmission {
@@ -401,6 +415,9 @@ impl UpstreamSubmission {
             tool: tool.to_owned(),
             task_id: task_id.to_owned(),
             handle: parking_lot::Mutex::new(None),
+            dispatched: std::sync::Arc::new(crate::security::dispatched::Slot::armed_for(
+                server, tool,
+            )),
         }
     }
 
@@ -427,6 +444,12 @@ impl UpstreamSubmission {
     pub(crate) fn handle(&self) -> Option<String> {
         self.handle.lock().clone()
     }
+
+    /// What the dispatch's send injected, `None` when no send of the armed
+    /// target wrote it (stored as missing, which withholds).
+    pub(crate) fn dispatched(&self) -> Option<crate::security::dispatched::Dispatched> {
+        self.dispatched.value()
+    }
 }
 
 tokio::task_local! {
@@ -434,14 +457,20 @@ tokio::task_local! {
     static UPSTREAM_SUBMISSION: std::sync::Arc<UpstreamSubmission>;
 }
 
-/// Run `future` with `submission` armed for this task and nothing else.
-/// A plain function, not an `async fn`: an `async fn` would hold `future` twice
-/// (the argument beside the task-local future that owns it).
+/// Run `future` with `submission` armed for this task and nothing else: the
+/// handle's slot and the slot for what the send injected, together. The one
+/// place either is opened. A plain function, not an `async fn`: an `async fn`
+/// would hold `future` twice (the argument beside the task-local future that
+/// owns it).
 pub(crate) fn with_upstream_submission<F: std::future::Future>(
     submission: std::sync::Arc<UpstreamSubmission>,
     future: F,
 ) -> impl std::future::Future<Output = F::Output> {
-    UPSTREAM_SUBMISSION.scope(submission, future)
+    let dispatched = std::sync::Arc::clone(&submission.dispatched);
+    UPSTREAM_SUBMISSION.scope(
+        submission,
+        crate::security::dispatched::scope(dispatched, future),
+    )
 }
 
 /// The armed slot for THIS dispatch of `(server, tool)`, or `None`.
@@ -654,6 +683,10 @@ impl MetaMcp {
 pub(crate) const RECOVERED_ERROR_WITHHELD: &str =
     "the upstream task failed; its error was withheld by the configured response policy";
 
+#[path = "upstream_secrets.rs"]
+mod secrets;
+pub(crate) use secrets::WITHHELD as SECRETS_WITHHELD;
+
 #[cfg(test)]
 #[path = "upstream/error_policy_tests.rs"]
 mod error_policy_tests;
@@ -669,6 +702,10 @@ mod login_scope_tests;
 #[cfg(test)]
 #[path = "upstream/cancel_delivery_tests.rs"]
 mod cancel_delivery_tests;
+
+#[cfg(test)]
+#[path = "upstream/secret_check_tests.rs"]
+mod secret_check_tests;
 
 #[cfg(test)]
 mod tests {
