@@ -20,10 +20,12 @@ fn row(event: &str) -> serde_json::Map<String, serde_json::Value> {
 async fn a_row_that_is_not_an_issuance_is_never_attempted() {
     let dir = tempfile::tempdir().unwrap();
     let log = open_log(&dir, AuditFailurePolicy::BestEffort);
+    let size = |l: &crate::security::TransparencyLogger| std::fs::metadata(l.path()).map_or(0, |m| m.len());
+    let before = size(&log);
     let out = log.append_issuance_row(row("admin_action"), AuditEnvelope::gateway()).await;
     assert!(matches!(out, IssuanceWrite::NotAttempted(_)), "{out:?}");
     assert_eq!(out.label(), "not_attempted");
-    assert_eq!(std::fs::metadata(log.path()).map_or(0, |m| m.len()), 0);
+    assert_eq!(size(&log), before, "nothing was written");
 }
 
 /// The four raw outcomes keep their own fixed labels.

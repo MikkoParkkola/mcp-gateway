@@ -58,7 +58,7 @@ The chart mounts two writable volumes:
 The configuration is mounted read-only from its ConfigMap at `/etc/mcp-gateway`; back it up
 where you keep your chart values.
 
-Set `audit.existingClaim` for any deployment whose audit history matters. The chart has no
+Set `audit.existingClaim` for any deployment whose audit history matters. With the key server on, every minted token writes a `token.issued` audit row first; with the audit log fail-closed, a mint that cannot write it answers 503 and issues no token, so the audit volume must be writable and durable. The chart has no
 value that puts `accounts.store_dir`, `accounts.authority_dir` or `control_plane.store_dir` on
 persistent storage, so point those settings at a volume you mount yourself.
 

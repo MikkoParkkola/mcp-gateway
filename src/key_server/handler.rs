@@ -319,7 +319,6 @@ fn clock_refusal() -> axum::response::Response {
 /// land; the slot is released and no bearer exists). Under `BestEffort` the
 /// mint goes on with a fixed-label warning and counter. Neither policy skips
 /// the reservation or identity checks that follow.
-#[allow(dead_code)]
 async fn record_issuance(ks: &KeyServer, event: &AuditEvent) -> Option<axum::response::Response> {
     use crate::security::audit::{AuditEnvelope, AuditFailurePolicy};
     use crate::security::transparency_log::issuance::IssuanceWrite;
@@ -401,6 +400,10 @@ pub(super) async fn issue(
     // The issuance attempt: it names the JTI, never a validity window.
     let ev = AuditEvent::issued(&token, &ks.email_key);
     audit::emit(&ev);
+    if let Some(refusal) = record_issuance(ks, &ev).await {
+        // Dropping the reservation releases the slot: no bearer exists.
+        return refusal;
+    }
 
     let Ok(now) = crate::clock::unix_secs() else {
         return clock_refusal();
