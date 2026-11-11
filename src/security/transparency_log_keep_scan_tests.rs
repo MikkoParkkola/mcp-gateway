@@ -105,15 +105,15 @@ fn temp_log_only(text: &str) -> bool {
             "tempfile_in(",
             "temp_dir(",
         ]
-            .iter()
-            .any(|constructor| {
-                text.match_indices(*constructor).any(|(at, _)| {
-                    text[..at]
-                        .bytes()
-                        .next_back()
-                        .is_none_or(|c| c.is_ascii() && !c.is_ascii_alphanumeric() && c != b'_')
-                })
+        .iter()
+        .any(|constructor| {
+            text.match_indices(*constructor).any(|(at, _)| {
+                text[..at]
+                    .bytes()
+                    .next_back()
+                    .is_none_or(|c| c.is_ascii() && !c.is_ascii_alphanumeric() && c != b'_')
             })
+        })
 }
 
 fn test_sources(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
