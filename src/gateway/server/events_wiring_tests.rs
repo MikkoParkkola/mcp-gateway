@@ -16,16 +16,15 @@ use crate::gateway::meta_mcp::MetaMcp;
 
 /// Wire a gateway's events as the server does, with `events.enabled` and
 /// `events.sources.operational` as given.
-fn wire(
-    events: bool,
-    operational: bool,
-) -> (
+type Wired = (
     Arc<MetaMcp>,
     Arc<BackendRegistry>,
     Arc<CounterStore>,
     Arc<tempfile::TempDir>,
     Arc<parking_lot::RwLock<WebhookRegistry>>,
-) {
+);
+
+fn wire(events: bool, operational: bool) -> Wired {
     // The gateway's events opener keeps the registered dir its store lives in.
     let dir = crate::test_dir_keep::kept_tempdir();
     let mut config = Config::default();
