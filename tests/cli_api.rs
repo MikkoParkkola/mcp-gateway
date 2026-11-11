@@ -176,7 +176,10 @@ fn without_last_used(mut value: Value) -> Value {
     match &mut value {
         Value::Object(map) => {
             if let Some(at) = map.remove("last_used") {
-                assert!(at.is_string() || at.is_null(), "last_used is a timestamp: {at}");
+                assert!(
+                    at.is_string() || at.is_null(),
+                    "last_used is a timestamp: {at}"
+                );
             }
             map.values_mut()
                 .for_each(|v| *v = without_last_used(v.take()));
