@@ -54,6 +54,8 @@ mod policies_tests;
 mod preview;
 mod preview_identity;
 mod refusals;
+#[cfg(test)]
+mod restart_tests;
 mod secret_slots;
 pub(crate) mod session;
 mod settings;

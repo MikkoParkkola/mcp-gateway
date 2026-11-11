@@ -299,6 +299,10 @@ fn paths() -> Vec<&'static str> {
         routes::UI_SETTINGS_DIFF,
         routes::UI_SETTINGS,
         routes::UI_RELOAD,
+        // PR1 red: regenerate every /ui/api/gateway/restart cell in the TSV
+        // from BEGIN MATRIX..END MATRIX after implementation; never hand-write
+        // cells or bless today's missing-route answers (includes POST valid).
+        "/ui/api/gateway/restart",
         routes::UI_DASHBOARD_LINK,
         routes::UI_PREVIEWS,
         routes::UI_CAPABILITIES,
@@ -473,6 +477,7 @@ fn request(
 fn valid_body(path: &str) -> Option<Value> {
     let rollback = json!({"summary": "none", "step": "none"});
     Some(match path {
+        "/ui/api/gateway/restart" => json!({"confirm": "matrix-restart-confirm"}),
         p if p == routes::UI_SETTINGS_DIFF => json!({"fields": []}),
         p if p == routes::UI_SETTINGS => json!({
             "base_revision": "0".repeat(64), "fields": [],
