@@ -45,6 +45,7 @@ mod email_subject_tests;
 pub mod handler;
 #[cfg(test)]
 mod identity_rules_tests;
+mod issuance;
 /// The mint's issuance row under the failure policy.
 #[cfg(test)]
 pub(crate) mod issuance_row_tests;

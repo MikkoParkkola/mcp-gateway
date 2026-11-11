@@ -380,7 +380,7 @@ fn only_the_issuance_helper_appends_from_the_key_server() {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap();
-        let production = text.split("#[cfg(test)]").next().unwrap_or("");
+        let production = crate::test_source_text::production_text(&text);
         if banned.iter().any(|b| production.contains(b)) {
             users.push(name);
         }
