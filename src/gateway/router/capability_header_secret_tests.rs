@@ -422,10 +422,15 @@ async fn assert_r5_parse_refused(after: &str, other: &str) {
         ] {
             let (status, body) = fx.send(request).await;
             assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&body).expect("JSON"),
-                answer
-            );
+            // The validate contract keeps its own keys (`valid`, `status`, the
+            // pin and a null diff and digest); what it says about the text is
+            // the save's fixed error list, with no submitted byte.
+            let validated = serde_json::from_str::<serde_json::Value>(&body).expect("JSON");
+            assert_eq!(validated["errors"], answer["errors"], "{body}");
+            assert_eq!(validated["valid"], false, "{body}");
+            assert!(validated["diff"].is_null(), "no diff: {body}");
+            assert!(validated["sha256"].is_null(), "no digest: {body}");
+            assert!(!body.contains(LITERAL), "{body}");
         }
         messages.push((top.to_owned(), detail.to_owned()));
         assert_eq!(std::fs::read_to_string(&fx.file).expect("the file"), before);
