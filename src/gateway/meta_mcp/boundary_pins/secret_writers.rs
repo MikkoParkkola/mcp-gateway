@@ -343,7 +343,7 @@ fn w1_init_is_stored_and_bound_to_its_executable_custody_row() {
             .items
             .iter()
             .any(|item| matches!(item, syn::Item::Fn(f)
-        if f.sig.ident == case && f.attrs.iter().any(|a| a.path().is_ident("test"))))
+        if f.sig.ident == case && f.attrs.iter().any(|a| a.path().get_ident().is_some_and(|name| name == "test"))))
     );
     let key = (
         "src/cli_support/init.rs".to_owned(),
