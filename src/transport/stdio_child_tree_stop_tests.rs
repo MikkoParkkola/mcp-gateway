@@ -136,6 +136,60 @@ impl Drop for EndOnDrop {
 /// on: only the kill ends it.
 const MARKS_TERM: &str = "trap 'echo termed > term.mark' TERM\nwhile :; do sleep 0.05; done";
 
+/// A hurry keeps SIGTERM even when a reaper tick consumes part of its 300 ms.
+/// Red if the hurried tree is killed without a preceding SIGTERM phase.
+#[tokio::test]
+async fn a_hurried_tree_keeps_its_term_phase_after_a_reaper_tick() {
+    use super::super::super::reaper::{HURRY_WINDOW, KILL_RESERVE};
+    let (w, t) = started(
+        "trap '' TERM\necho ready > ready.mark\nwhile :; do sleep 0.05; done",
+        None,
+    )
+    .await;
+    let end = EndOnDrop::new(&t);
+    poll_until("the TERM handler is installed", || {
+        w.path().join("ready.mark").exists()
+    })
+    .await;
+    with_tree(&t, |tree| {
+        let now = std::time::Instant::now();
+        tree.set_ending(
+            Ending::Graceful {
+                eof: Duration::from_secs(60),
+                term: Duration::from_secs(30),
+            },
+            Some(Arc::clone(end.deadline())),
+        );
+        assert!(matches!(tree.reap_step(now), Reap::Pending));
+        let cut = end.deadline().hurry(now);
+        assert!(cut <= now + KILL_RESERVE + HURRY_WINDOW);
+        let kill = cut
+            .checked_sub(KILL_RESERVE)
+            .expect("the hurry cut leaves the kill reserve");
+        let before_kill = |ms: u64| {
+            kill.checked_sub(Duration::from_millis(ms))
+                .expect("the hurry window exceeds the probe offset")
+        };
+        // Model a tick's latency without making the row race a 300 ms clock.
+        tree.reap_step(now + Duration::from_millis(10));
+        tree.reap_step(before_kill(101));
+        assert_eq!(tree.term_signals_sent, 0);
+        tree.reap_step(before_kill(100));
+        assert_eq!(tree.term_signals_sent, 1, "SIGTERM precedes the kill");
+        assert_eq!(tree.group_signals_sent, 0, "the term phase is retained");
+        tree.reap_step(kill);
+        assert!(
+            tree.group_signals_sent > 0,
+            "the kill still lands at the cut"
+        );
+    })
+    .await;
+    tokio::time::timeout(Duration::from_secs(10), t.close())
+        .await
+        .expect("tree reaped")
+        .expect("close");
+}
+
 /// Close `t` under a plan ending at `own_plan_end`, and wait for the handover.
 async fn close_under(t: &Arc<StdioTransport>, own_plan_end: tokio::time::Instant) {
     let closing = Arc::clone(t);

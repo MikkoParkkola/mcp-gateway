@@ -181,6 +181,11 @@ impl AbortOnDrop {
         Self(handle)
     }
 
+    /// Join normally while retaining cancellation protection on drop.
+    pub(super) fn join_mut(&mut self) -> &mut tokio::task::JoinHandle<()> {
+        &mut self.0
+    }
+
     /// Abort the task and wait until it has ended, so nothing it was doing
     /// can land after this returns.
     #[cfg_attr(
