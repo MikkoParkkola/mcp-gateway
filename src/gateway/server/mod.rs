@@ -50,9 +50,6 @@ mod remote_provenance_start_tests;
 mod replica_state_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_driver_tests;
-mod restart_floor;
-#[cfg(test)]
-mod restart_floor_tests;
 mod run;
 mod run_steps;
 mod run_wiring;

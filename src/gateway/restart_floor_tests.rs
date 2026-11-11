@@ -201,8 +201,8 @@ fn a_checkpoint_past_the_deadline_cancels() {
 fn a_deadline_already_past_cancels_before_any_pause() {
     let log = Log::default();
     let mut a = three(&log, None);
+    // An instant taken before the run is already past when the run checks it.
     let past = Instant::now();
-    std::thread::sleep(Duration::from_millis(2));
     let c = expect_cancel(&mut a, past);
     assert_eq!(c.reason, CancelReason::DeadlineExceeded);
     assert!(
