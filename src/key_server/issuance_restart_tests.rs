@@ -135,6 +135,31 @@ async fn restart_child() {
         EmailHashKey::for_test(),
     )
     .with_issuance_log(Arc::clone(&log));
+    if case == "mark_unreadable_rotating" {
+        // A directory where the mark file goes: unreadable and unwritable.
+        let hwm = dir.join("audit.jsonl.hwm");
+        let _ = std::fs::remove_file(&hwm);
+        std::fs::create_dir(&hwm).expect("a directory in the mark's place");
+        let mut lines = Vec::new();
+        for _ in 0..3 {
+            let response = mint(&ks).await;
+            let status = response.status().as_u16();
+            let jti = if status == 200 {
+                let bearer = bearer_of(response).await;
+                ks.store.get(&bearer).await.expect("valid bearer").jti
+            } else {
+                "-".to_owned()
+            };
+            lines.push(format!("{status} {jti}"));
+        }
+        let written = std::fs::File::create(dir.join(JTI_FILE)).and_then(|mut f| {
+            use std::io::Write as _;
+            f.write_all(lines.join("\n").as_bytes())?;
+            f.sync_all()
+        });
+        assert!(written.is_ok());
+        std::process::abort();
+    }
     // Two mints: the second shows later appends still land after the fault.
     let mut jtis = Vec::new();
     for _ in 0..2 {
@@ -219,4 +244,28 @@ fn a_failed_high_water_mark_write_during_a_rotation_loses_no_row() {
         "the log reopens on the stale mark: {:?}",
         reopened.err()
     );
+}
+
+/// An unreadable and unwritable mark at a rotation (a directory in its
+/// place): what the key server answers is whatever the log does, but a mint
+/// answered 200 must never lack its row, and a refused one must say so with
+/// a 503. Prints nothing on its own; the observed answers are the finding.
+/// Mutant: skip the append (200 without a row).
+#[test]
+fn an_unreadable_mark_at_a_rotation_never_acknowledges_a_mint_without_its_row() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let lines = run_child(dir.path(), "mark_unreadable_rotating");
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    for line in &lines {
+        let (status, jti) = line.split_once(' ').expect("status and jti");
+        match status {
+            "200" => assert!(
+                row_present(dir.path(), jti),
+                "acknowledged without a row: {line}"
+            ),
+            "503" => {}
+            other => panic!("unexpected answer {other}: {lines:?}"),
+        }
+    }
+    eprintln!("MARK-UNREADABLE-ANSWERS {lines:?}");
 }
