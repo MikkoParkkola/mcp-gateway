@@ -52,7 +52,7 @@ fn server(log: &Arc<TransparencyLogger>) -> crate::key_server::KeyServer {
         .with_issuance_log(Arc::clone(log))
 }
 
-async fn mint(ks: &crate::key_server::KeyServer) -> axum::response::Response {
+pub(crate) async fn mint(ks: &crate::key_server::KeyServer) -> axum::response::Response {
     let identity = VerifiedIdentity::for_test(
         "sub",
         EMAIL,
@@ -76,7 +76,7 @@ fn has_row(dir: &tempfile::TempDir, jti: Option<&str>) -> bool {
     .expect("the log reads")
 }
 
-async fn bearer_of(response: axum::response::Response) -> String {
+pub(crate) async fn bearer_of(response: axum::response::Response) -> String {
     let body = axum::body::to_bytes(response.into_body(), 1 << 20)
         .await
         .expect("body");
