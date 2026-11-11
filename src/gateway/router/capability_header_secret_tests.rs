@@ -291,8 +291,7 @@ async fn capedit_a_refused_json_credential_is_echoed_nowhere() {
 
 /// r4: prove loader acceptance before judging the save's exact refusal.
 async fn assert_review_refused(after: &str, field: &str) {
-    crate::capability::parser::parse_capability_text(after, std::path::Path::new("kept.yaml"))
-        .expect("the loader accepts this form before the editor's credential check");
+    crate::capability::parse_capability(after).expect("the loader accepts this form before the editor's credential check");
     let (status, body, fx, before) = save(after).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     let answer: serde_json::Value = serde_json::from_str(&body).expect("a JSON answer");
