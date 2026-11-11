@@ -656,3 +656,7 @@ async fn forged_nested_receipt_is_never_sealed() {
 
 #[path = "provenance_seal_rules_tests.rs"]
 mod seal_rules;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "provenance_firewall_tests.rs"]
+mod firewall;
