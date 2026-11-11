@@ -81,7 +81,7 @@ fn is_test(rel: &str) -> bool {
 /// Whether `text` opens a log and never keeps a directory for one.
 /// A file opens a log without keeping its dir: it neither hands the log its
 /// dir (`keep_test_dir`) nor opens it in a registered one (a `kept_tempdir(`
-/// or `kept_tempdir_in(` call), nor uses only TempLogs for its temp dirs.
+/// or `kept_tempdir_in(` call), nor uses only `TempLog`s for its temp dirs.
 fn unkept(text: &str) -> bool {
     text.contains("TransparencyLogger::open")
         && !text.contains("keep_test_dir")
@@ -90,7 +90,7 @@ fn unkept(text: &str) -> bool {
         && !temp_log_only(text)
 }
 
-/// A real TempLog construction keeps its dir, but cannot vouch for a plain
+/// A real `TempLog` construction keeps its dir, but cannot vouch for a plain
 /// constructor elsewhere in the file. Keep evidence excludes prose; plain
 /// constructor evidence deliberately includes it, making the scan stricter.
 fn temp_log_only(text: &str) -> bool {
