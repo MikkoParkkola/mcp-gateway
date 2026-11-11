@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::secret_values::{Syntax, credential_name};
 #[allow(deprecated)] // the deprecated writer stays reachable by name until 5.0
 pub use crate::config_persistence::write_config;
 use crate::{
@@ -216,21 +217,11 @@ pub(crate) fn credential_refusals(
     }
 }
 
-/// Whether `name` names a credential: the shared rule's credential words, or
-/// an HTTP authentication header (`Authorization`, `Proxy-Authorization`,
-/// `Cookie`). Dashes count as underscores, leading dashes are dropped.
-fn credential_name(name: &str) -> bool {
-    let name = name.trim_start_matches('-').replace('-', "_");
-    let lower = name.to_ascii_lowercase();
-    ["authorization", "proxy_authorization", "cookie"].contains(&lower.as_str())
-        || crate::config::secret_values::names_a_credential(&name)
-}
-
 /// Whether `value` would be written as text holding a secret: any value but
 /// an empty one, a whole `${VAR}` template or a whole secret reference (a
 /// literal default or literal text beside a template counts as text).
 fn literal_value(value: &str) -> bool {
-    !value.is_empty() && classify(value) != Ok(ValueClass::Kept)
+    !value.is_empty() && classify(value, &Syntax::Dollar) != Ok(ValueClass::Kept)
 }
 
 /// A URL holding userinfo, or a credential-named query parameter with a
@@ -298,26 +289,7 @@ fn command_carries_credential(command: &str) -> bool {
     })
 }
 
-pub(crate) use crate::config::secret_values::{ValueClass, classify};
-
-/// Each refused `env`/`headers` value of `backend` as `(code, field)`, sorted
-/// by field; the value itself is never part of it.
-pub(crate) fn literal_refusals(
-    backend: &crate::config::BackendConfig,
-) -> Vec<(&'static str, String)> {
-    let env = backend.env.iter().map(|(k, v)| ("env", k, v));
-    let headers = backend.headers.iter().map(|(k, v)| ("headers", k, v));
-    let mut refused: Vec<_> = env
-        .chain(headers)
-        .filter_map(|(map, key, value)| {
-            classify(value)
-                .err()
-                .map(|code| (code, format!("{map}.{key}")))
-        })
-        .collect();
-    refused.sort_by(|a, b| a.1.cmp(&b.1));
-    refused
-}
+pub(crate) use crate::config::secret_values::{ValueClass, classify, literal_refusals};
 
 /// The add's refusal for a refused value: names each field and code, never
 /// a value, and carries [`LITERAL_IN_VALUE`].

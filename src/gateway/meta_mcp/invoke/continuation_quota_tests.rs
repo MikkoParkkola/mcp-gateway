@@ -53,8 +53,10 @@ async fn t1a_key_server_token_has_no_api_key_identity() {
         crate::config::KeyServerConfig::default(),
         crate::key_server::email_hash::EmailHashKey::for_test(),
     );
-    ks.store
-        .insert(crate::key_server::TemporaryToken {
+    crate::key_server::store::activate_for_test(
+        ks.store.as_ref(),
+        ks.config.token_ttl_secs,
+        crate::key_server::TemporaryToken {
             jti: "jti-mik-8659".to_owned(),
             token: "mcpgw_mik_8659_token".to_owned(),
             identity: crate::key_server::oidc::VerifiedIdentity::for_test(
@@ -68,8 +70,8 @@ async fn t1a_key_server_token_has_no_api_key_identity() {
             iat: 0,
             exp: u64::MAX,
             client_ip: None,
-        })
-        .await;
+        },
+    );
     let (client, _) = ks
         .validate_token("mcpgw_mik_8659_token")
         .await

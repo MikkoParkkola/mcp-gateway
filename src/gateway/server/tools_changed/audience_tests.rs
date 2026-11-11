@@ -111,7 +111,7 @@ async fn a4_policy_hidden_capability_change_tells_only_the_caller_who_sees_it() 
 /// Principals A and B, each warm on their own slot of `beta`.
 async fn duo() -> (World, String, String) {
     let w = World::start().await;
-    let (a, b) = (w.principal("A").await, w.principal("B").await);
+    let (a, b) = (w.principal("A"), w.principal("B"));
     w.slot_serves("beta", "A", vec![tool("a_tool", "a")]);
     w.slot_serves("beta", "B", vec![tool("b_tool", "b")]);
     assert!(
@@ -177,7 +177,7 @@ async fn b3_a_revocation_mid_stream_tells_only_the_revoked_principal() {
 #[tokio::test]
 async fn b4_an_unlisted_backend_slot_change_tells_a_caller_who_never_listed_it() {
     let (w, _a, _b) = duo().await;
-    let c = w.principal("C").await;
+    let c = w.principal("C");
     let mut ear_c = w.legacy("c", &c).await;
     w.store_user("beta", "B", vec![tool("b_tool", "b3")]);
     assert_eq!(
@@ -192,7 +192,7 @@ async fn b4_an_unlisted_backend_slot_change_tells_a_caller_who_never_listed_it()
 #[tokio::test]
 async fn b6_a_required_backend_is_silent_to_a_cold_caller() {
     let (w, _a, b) = duo().await;
-    let c = w.principal("C").await;
+    let c = w.principal("C");
     let mut ear_c = w.legacy("c", &c).await;
     w.slot_serves("gamma", "B", vec![tool("g", "g")]);
     assert!(w.discovered(&b, "gamma").await.contains(&"g".to_string()));
@@ -410,7 +410,7 @@ async fn a7_a_surfaced_change_under_code_mode_sends_nothing() {
 #[tokio::test]
 async fn b5_a_search_only_caller_is_silent_for_another_principals_slot() {
     let (w, _a, _b) = duo().await;
-    let d = w.principal("D").await;
+    let d = w.principal("D");
     let _ = w
         .post(
             &d,
@@ -446,7 +446,7 @@ async fn l3_a_warmed_listen_listener_is_silent_for_another_principals_slot() {
 #[tokio::test]
 async fn l2_one_nudge_tells_only_the_credentials_that_see_the_change() {
     let w = World::start().await;
-    let p = w.principal("P").await;
+    let p = w.principal("P");
     let mut ears = [
         w.listen(DENY).await,
         w.listen(STD).await,

@@ -337,7 +337,6 @@ src/identity_propagation/account_strategies_resolve.rs	resolve	transient_mint_re
 src/identity_propagation/account_strategies_resolve.rs	revalidate	transient_mint_refusal	1	not-a-decision	a credential mint failure
 src/identity_propagation/account_strategies_view.rs	audit_transient_refusal	audit_refusal	1	not-delivered	audit row
 src/identity_propagation/account_strategies_view.rs	transient_mint_refusal	audit_transient_refusal	1	not-delivered	audit row
-src/key_server/handler.rs	exchange_token	token_cap_refusal	1	no-record	the key server's token endpoint
 src/oauth/client/destination.rs	check_destination	cleartext_refusal	1	recorded	in a tool call's lazy start, recorded at the join (transport/http/startup.rs connect_as, interactive callers only); the login and discovery flows outside a call have no call record
 src/oauth/client/destination.rs	client_for	cleartext_refusal	1	no-record	the interactive OAuth login and registration flows, not a tool call
 src/oauth/client/destination.rs	finish	refuse_hop	2	recorded	a redirect hop in the detached token refresh, which has no cell: the caller records it at the join (transport detach_token_step, capability credentials, lazy start)

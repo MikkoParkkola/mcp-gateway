@@ -11,6 +11,7 @@ use std::path::Path;
 const CALLERS: &[(&str, usize)] = &[
     ("src/config_reload/generation.rs", 1),
     ("src/gateway/ui/keys_create.rs", 1),
+    ("src/gateway/ui/keys_revoke.rs", 1),
 ];
 
 fn production_sources() -> Vec<(String, String)> {
