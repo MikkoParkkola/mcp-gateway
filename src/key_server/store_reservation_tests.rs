@@ -23,13 +23,7 @@ const TTL: u64 = 3600;
 const WINDOW: u64 = 30;
 
 fn identity(issuer: &str, subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_string(),
-        email: "u@corp.invalid".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: issuer.to_string(),
-    }
+    VerifiedIdentity::for_test(subject, "u@corp.invalid", None, Vec::new(), issuer)
 }
 
 fn request(issuer: &str, jti: &str) -> ReservationRequest {
