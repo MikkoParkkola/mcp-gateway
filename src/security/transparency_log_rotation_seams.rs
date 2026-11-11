@@ -100,6 +100,34 @@ impl Drop for StallRelease {
     }
 }
 
+/// Files whose real `sync_all` succeeded, by (device, inode); keyed per file
+/// so other tests' syncs cannot mask a skipped one.
+#[cfg(all(test, unix))]
+static SYNCED: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
+
+/// Record one successful real sync of `file`.
+#[cfg(test)]
+pub(crate) fn note_synced(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = file.metadata()?;
+        SYNCED.lock().unwrap().push((meta.dev(), meta.ino()));
+    }
+    #[cfg(not(unix))]
+    let _ = file;
+    Ok(())
+}
+
+/// How many real syncs the file at `path` has had so far.
+#[cfg(all(test, unix))]
+pub(crate) fn syncs_of(path: &std::path::Path) -> usize {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).unwrap();
+    let key = (meta.dev(), meta.ino());
+    SYNCED.lock().unwrap().iter().filter(|k| **k == key).count()
+}
+
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct TestHooks {
@@ -113,8 +141,6 @@ pub(crate) struct TestHooks {
     /// Holds settle's blocking task before it starts.
     pub(crate) settle_start: std::sync::Mutex<Option<std::sync::Arc<StallGate>>>,
     pub(crate) fault_fired: std::sync::atomic::AtomicUsize,
-    /// Real `sync_all` calls on the active file that succeeded.
-    pub(crate) syncs_done: std::sync::atomic::AtomicUsize,
     /// Envelope evidence only; D7 reconstructs caller fields and the hash independently.
     pub(crate) partial_write_trace: std::sync::Mutex<Option<String>>,
     /// Runs once after a partial write, before `write_line` can call `cut_back`.
@@ -143,13 +169,6 @@ impl super::super::TransparencyLogger {
     pub(crate) fn arm_after_partial_write(&self, callback: Option<Box<dyn Fn() + Send + Sync>>) {
         *self.hooks.after_partial_write.lock().unwrap() = callback;
     }
-    /// Successful real syncs of the active file so far.
-    pub(crate) fn syncs_done(&self) -> usize {
-        self.hooks
-            .syncs_done
-            .load(std::sync::atomic::Ordering::Acquire)
-    }
-
     pub(crate) fn write_faults_fired(&self) -> usize {
         self.hooks
             .fault_fired

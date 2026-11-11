@@ -795,5 +795,7 @@ fn finish_pending_expiry(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 #[path = "transparency_log_rotation_seams.rs"]
 mod seams;
+#[cfg(all(test, unix))]
+pub(crate) use seams::syncs_of;
 #[cfg(test)]
-pub(crate) use seams::{StallGate, StallRelease, TestHooks, WriteFault};
+pub(crate) use seams::{StallGate, StallRelease, TestHooks, WriteFault, note_synced};

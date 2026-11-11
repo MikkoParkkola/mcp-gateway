@@ -17,6 +17,8 @@ use crate::config_persistence::journal;
 use crate::config_persistence::journal::drain::{DrainError, JournalDrain};
 use crate::config_persistence::lock;
 use crate::security::transparency_log::rotation::WriteFault;
+#[cfg(unix)]
+use crate::security::transparency_log::rotation::syncs_of;
 use crate::security::transparency_log::settle::Reason;
 
 #[test]
@@ -110,10 +112,12 @@ fn audit_sync_failure_not_acknowledged() {
                 "{ROW}: no delivered flag without a synced append"
             );
             live.log.arm_write_fault(None);
-            let synced = live.log.syncs_done();
+            #[cfg(unix)]
+            let synced = syncs_of(&live.log_path);
             retry(&mut owner, &live, ROW);
+            #[cfg(unix)]
             assert!(
-                live.log.syncs_done() > synced,
+                syncs_of(&live.log_path) > synced,
                 "{ROW}: the acknowledged append really synced the file"
             );
             let writer = state_of(&owner).writer.as_ref().expect(ROW);
