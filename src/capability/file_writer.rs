@@ -349,6 +349,61 @@ fn message(message: impl std::fmt::Display) -> FieldError {
     }
 }
 
+/// The provider entries of `text` by the loader's own scalar-name semantics:
+/// string deserialization keeps the source text of a name (even `TRUE` or
+/// `0x7b`), which a `Value` tree has already normalized. When the document
+/// does not deserialize that way, fall back to the tree so a malformed
+/// unrelated key cannot hide a header from inspection.
+fn provider_entries_of(text: &str, doc: &crate::yaml::Value) -> Vec<(String, crate::yaml::Value)> {
+    use crate::yaml::Value;
+
+    struct Entries;
+    impl<'de> serde::de::Visitor<'de> for Entries {
+        type Value = Vec<(String, Value)>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a provider mapping")
+        }
+        fn visit_map<M: serde::de::MapAccess<'de>>(
+            self,
+            mut map: M,
+        ) -> Result<Self::Value, M::Error> {
+            let mut entries = Vec::new();
+            while let Some(entry) = map.next_entry()? {
+                entries.push(entry);
+            }
+            Ok(entries)
+        }
+    }
+    fn entries<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Vec<(String, Value)>, D::Error> {
+        de.deserialize_map(Entries)
+    }
+    #[derive(serde::Deserialize)]
+    struct NamedProviders {
+        #[serde(deserialize_with = "entries")]
+        providers: Vec<(String, Value)>,
+    }
+    if let Ok(named) = crate::yaml::from_str::<NamedProviders>(text) {
+        return named.providers;
+    }
+    doc.as_mapping()
+        .into_iter()
+        .flatten()
+        .filter(|(key, _)| key.untag_ref().as_str() == Some("providers"))
+        .filter_map(|(_, value)| value.as_mapping())
+        .flatten()
+        .map(|(name, provider)| {
+            let name = match name.untag_ref() {
+                Value::String(s) => s.clone(),
+                Value::Bool(b) => b.to_string(),
+                Value::Number(n) => n.to_string(),
+                Value::Null => "null".to_string(),
+                _ => "[non-scalar]".to_string(),
+            };
+            (name, provider.clone())
+        })
+        .collect()
+}
+
 /// Judge the sent headers before pin, schema or concurrency errors can carry
 /// their bytes in a diagnostic or diff. Read YAML without the capability
 /// schema, so unrelated invalid fields cannot hide a credential header.
@@ -404,63 +459,8 @@ fn refuse_literal_headers(text: &str) -> Result<(), Refused> {
             }
         }
     };
-    // String deserialization keeps the loader's scalar source text (even
-    // `TRUE` or `0x7b`), which a Value tree has already normalized.
-    #[derive(serde::Deserialize)]
-    struct NamedProviders {
-        #[serde(deserialize_with = "provider_entries")]
-        providers: Vec<(String, Value)>,
-    }
-    fn provider_entries<'de, D: serde::Deserializer<'de>>(
-        de: D,
-    ) -> Result<Vec<(String, Value)>, D::Error> {
-        struct Entries;
-        impl<'de> serde::de::Visitor<'de> for Entries {
-            type Value = Vec<(String, Value)>;
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("a provider mapping")
-            }
-            fn visit_map<M: serde::de::MapAccess<'de>>(
-                self,
-                mut map: M,
-            ) -> Result<Self::Value, M::Error> {
-                let mut entries = Vec::new();
-                while let Some(entry) = map.next_entry()? {
-                    entries.push(entry);
-                }
-                Ok(entries)
-            }
-        }
-        de.deserialize_map(Entries)
-    }
-    let named = crate::yaml::from_str::<NamedProviders>(text).ok();
-    let providers: Vec<_> = if let Some(named) = &named {
-        named
-            .providers
-            .iter()
-            .map(|(k, v)| (k.clone(), v))
-            .collect()
-    } else {
-        // A malformed unrelated key must not hide a header from inspection.
-        doc.as_mapping()
-            .into_iter()
-            .flatten()
-            .filter(|(key, _)| key.untag_ref().as_str() == Some("providers"))
-            .filter_map(|(_, value)| value.as_mapping())
-            .flatten()
-            .map(|(name, provider)| {
-                let name = match name.untag_ref() {
-                    Value::String(s) => s.clone(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Number(n) => n.to_string(),
-                    Value::Null => "null".to_string(),
-                    _ => "[non-scalar]".to_string(),
-                };
-                (name, provider)
-            })
-            .collect()
-    };
-    for (name, provider) in providers {
+    let providers = provider_entries_of(text, &doc);
+    for (name, provider) in &providers {
         if name == "fallback"
             && let Some(entries) = provider.as_sequence()
         {
@@ -468,7 +468,7 @@ fn refuse_literal_headers(text: &str) -> Result<(), Refused> {
                 check(&format!("fallback[{index}]"), entry);
             }
         } else {
-            check(&name, provider);
+            check(name, provider);
         }
     }
     if errors.is_empty() {
