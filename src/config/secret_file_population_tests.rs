@@ -195,6 +195,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "writability probe",
     ),
     (
+        "src/security/transparency_log_sigstart.rs",
+        "reads the audit log's own files: its signing anchor, `.hwm` and segments, to judge unsigned entries; no secret",
+    ),
+    (
         "src/health_history/file.rs",
         "the gateway's own health.json in its data directory: numbers and fixed words, never a client's data; nothing secret",
     ),
