@@ -569,3 +569,10 @@ description = "no passthrough event lease is held unless the process has a zero 
 source = "src/security/dump_guard.rs"
 probe = "none"
 reason = "on a host where the guard applies, a lease answers the same with or without it; its absence shows only as a core file written after a crash, which a live probe of a running install cannot cause"
+
+[[control]]
+id = "ui-key-revoke"
+description = "DELETE /ui/api/keys/{name} requires gateway admin credentials, a matching revision and an unambiguous key identity; success requires a durable audit record and a lock-held receipt proving the selected identities are absent from live authorization"
+source = "src/gateway/ui/keys_revoke.rs"
+probe = "none"
+reason = "a positive live probe would revoke an operator credential; request, identity, writer-order and receipt behavior are pinned by the keys_revoke_*_tests.rs suites"
