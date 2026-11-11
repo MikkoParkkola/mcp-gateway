@@ -74,7 +74,18 @@ fn init(ws: &Workspace) {
         "with no launcher on PATH, init must say which starters it skipped\n{}",
         show(&init)
     );
+    // Without a keychain init says its token goes to files; that notice may
+    // continue on the next line, so skip it up to the next "Skipped" line.
+    let mut in_store_notice = false;
     for line in stderr.lines().filter(|l| !l.trim().is_empty()) {
+        if line.contains("secrets go to files") {
+            in_store_notice = true;
+            continue;
+        }
+        if in_store_notice && !line.starts_with("Skipped '") {
+            continue;
+        }
+        in_store_notice = false;
         assert!(
             line.starts_with("Skipped '") && line.contains("is not on PATH"),
             "unexpected init stderr line {line:?}\n{}",
