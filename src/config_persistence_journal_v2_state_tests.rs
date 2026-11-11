@@ -287,7 +287,7 @@ fn terminal_consistency_state(
             "conflicting terminal attribution" => {
                 retry.attribution = Some(Attribution {
                     actor: crate::security::audit::AuditWho::from_persisted(AUDIT_WHO_PRINCIPAL)
-                    .map_err(|error| format!("attribution error: {error:?}"))?,
+                        .map_err(|error| format!("attribution error: {error:?}"))?,
                 });
             }
             "conflicting terminal caller digest" => {
