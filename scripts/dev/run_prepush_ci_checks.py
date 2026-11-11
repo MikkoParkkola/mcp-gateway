@@ -164,6 +164,20 @@ def _no_cargo(tmp):
         stub.chmod(0o755)
 
 
+def _drop_all_but_logs(tmp):
+    """Remove everything under `tmp` except `logs/`. Each clone is a full
+    checkout (about 300 MB here), so a kept scratch directory must be logs only."""
+    if not tmp.exists():
+        return
+    for entry in tmp.iterdir():
+        if entry.name == "logs":
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
+
+
 def _execute(command, workdir, timeout_s, tmp):
     """(rc, output, timed_out): `command` under bash -o pipefail in its own process group."""
     env = {**os.environ, "TMPDIR": str(tmp), "PATH": f"{tmp / 'no-cargo'}{os.pathsep}{os.environ.get('PATH', '')}"}
@@ -384,33 +398,36 @@ def run(
     workers = workers or workers_for(os.cpu_count())
     parsed = sorted((parse(l) for l in lines), key=lambda l: -l.seconds)
     tmp = Path(tempfile.mkdtemp(prefix="prepush-ci-"))
-    _no_cargo(tmp)
-    backstop_at = time.monotonic() + backstop_s
-    bounds = {"line_timeout_s": line_timeout_s, "setup_s": setup_timeout_s,
-              "backstop_at": backstop_at, "backstop_s": backstop_s}
-    ctx = {"head": head, "merge_base": merge_base, "base_tip": base_tip}
-    results = _pool(parsed, repo=repo, commit=head, ctx=ctx, tmp=tmp, workers=workers,
-                    executor=executor, **bounds)
-    failures = [r for r in results if r and r.status]
-    # Every line's rc and duration, slowest first, so the budget is debuggable (X24).
-    per_line = [f"  rc {r.rc} {r.seconds:5.1f} s  {r.command}" for r in results]
-    # The slowest lines by measured time keep slowness visible without failing anyone (GATE.6).
-    slowest = sorted(results, key=lambda r: -r.seconds)[:5]
-    per_line.append(f"CI script checks: {workers} workers; slowest: "
-                    + ", ".join(f"{r.command} {r.seconds:.1f} s" for r in slowest))
-    if not failures:
-        shutil.rmtree(tmp, ignore_errors=True)
-        return Report(rc=0, text="\n".join([*per_line, f"CI script checks: {len(results)} passed"]))
-    text = [*per_line, f"CI script checks: {len(failures)} of {len(results)} failed (logs kept in {tmp})"]
-    for n, result in enumerate(failures):
-        line = next(l for l in parsed if l.command == result.command)
-        text.append(f"\n[{result.status}] {result.command}" + (f": {result.note}" if result.note else ""))
-        if result.log:
-            text.append(f"  log: {result.log}")
-        text.extend(result.output.splitlines()[-TAIL_LINES:])
-        if executor is None and result.status != "skipped":
-            text.append(_base_rerun(result, line, repo=repo, ctx=ctx, tmp=tmp, n=n, **bounds))
-    return Report(rc=1, failures=failures, text="\n".join(text))
+    try:
+        _no_cargo(tmp)
+        backstop_at = time.monotonic() + backstop_s
+        bounds = {"line_timeout_s": line_timeout_s, "setup_s": setup_timeout_s,
+                  "backstop_at": backstop_at, "backstop_s": backstop_s}
+        ctx = {"head": head, "merge_base": merge_base, "base_tip": base_tip}
+        results = _pool(parsed, repo=repo, commit=head, ctx=ctx, tmp=tmp, workers=workers,
+                        executor=executor, **bounds)
+        failures = [r for r in results if r and r.status]
+        # Every line's rc and duration, slowest first, so the budget is debuggable (X24).
+        per_line = [f"  rc {r.rc} {r.seconds:5.1f} s  {r.command}" for r in results]
+        # The slowest lines by measured time keep slowness visible without failing anyone (GATE.6).
+        slowest = sorted(results, key=lambda r: -r.seconds)[:5]
+        per_line.append(f"CI script checks: {workers} workers; slowest: "
+                        + ", ".join(f"{r.command} {r.seconds:.1f} s" for r in slowest))
+        if not failures:
+            shutil.rmtree(tmp, ignore_errors=True)
+            return Report(rc=0, text="\n".join([*per_line, f"CI script checks: {len(results)} passed"]))
+        text = [*per_line, f"CI script checks: {len(failures)} of {len(results)} failed (logs kept in {tmp})"]
+        for n, result in enumerate(failures):
+            line = next(l for l in parsed if l.command == result.command)
+            text.append(f"\n[{result.status}] {result.command}" + (f": {result.note}" if result.note else ""))
+            if result.log:
+                text.append(f"  log: {result.log}")
+            text.extend(result.output.splitlines()[-TAIL_LINES:])
+            if executor is None and result.status != "skipped":
+                text.append(_base_rerun(result, line, repo=repo, ctx=ctx, tmp=tmp, n=n, **bounds))
+        return Report(rc=1, failures=failures, text="\n".join(text))
+    finally:
+        _drop_all_but_logs(tmp)
 
 
 def run_rust(targets, *, cargo, repo, merge_base, base_tip) -> Report:

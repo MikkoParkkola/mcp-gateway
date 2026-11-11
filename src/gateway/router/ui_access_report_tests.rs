@@ -12,7 +12,7 @@ use axum::http::StatusCode;
 use serde_json::Value;
 
 use super::{
-    ADMIN_KEY, CALLERS, Caller, DEV, Gateway, ISSUER, OTHER_DEV, STANDARD_KEY, STORE_WRITES,
+    ADMIN_KEY, CALLERS, Caller, DEV, Gateway, ISSUER, OTHER_DEV, STANDARD_KEY, attributes,
     expected, fixture, request, send, session, valid_body,
 };
 use crate::gateway::router::create_router;
@@ -23,7 +23,7 @@ use crate::gateway::ui::plain_rows;
 /// that reaches it, with a store where the role check sits behind one.
 fn deciding_shape(path: &str, method: &str) -> &'static str {
     match method {
-        "POST" if STORE_WRITES.contains(&path) => "valid+store",
+        "POST" if attributes(path).store_writes => "valid+store",
         "POST" if valid_body(path).is_some() => "valid",
         "POST" | "PUT" | "PATCH" => "json",
         _ => "plain",
