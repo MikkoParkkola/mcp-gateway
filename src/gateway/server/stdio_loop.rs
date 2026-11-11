@@ -36,6 +36,10 @@ impl Gateway {
         R: tokio::io::AsyncRead + Unpin + Send + 'static,
         W: tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
+        let orphan = stdio_shutdown::orphan_watch(
+            #[cfg(test)]
+            self.test_seams.parent_pid.clone(),
+        );
         info!(
             version = env!("CARGO_PKG_VERSION"),
             "Starting MCP Gateway (stdio mode)"
@@ -218,7 +222,7 @@ impl Gateway {
         // unbounded queue would turn a stalled reader into operator-process
         // memory growth.
         let (writer, queue) = self.stdout_queue(&meta_mcp);
-        let mut writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
+        let writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
 
         // MIK-8278: decide this session's tool-list changes and tell its
         // client, and watch the capability catalogue as HTTP does. The
@@ -652,90 +656,108 @@ impl Gateway {
             }
         }
 
-        // The read loop is over: the session is ending, so nothing more is
-        // announced, though accepted requests still drain (MIK-8278).
-        announcer.stop();
-        // A first list still waiting answers now (`first_list_wait`).
-        first_list.end();
-        // `writer.is_closed()` as well as the flag: stdout can die during the
-        // wait for a line that never comes, and the loop then leaves by the EOF
-        // arm. Reporting that as an ordinary EOF would hand the operator the
-        // one message that hides why the session ended.
-        if stdout_died || writer.is_closed() {
-            warn!("stdio: stdout is gone, refusing further requests and shutting down");
-        } else {
-            info!("stdio: EOF reached, shutting down");
-        }
-        // EOF drains, it does not abort (design §6): every request the loop
-        // accepted still gets its response. Outstanding prompts are failed
-        // first — their answers can only arrive on the pipe that just closed —
-        // and `close` is terminal, so a question raised inside the drain window
-        // is refused rather than left waiting out the bridge's own timeout.
-        channel.close();
-        // One deadline for the drain and the writer join (MIK-7272.LIFE.1):
-        // a client that stops reading stdout blocks the writer, and the two
-        // together still end within one `STDIO_DRAIN_TIMEOUT`, not two. Every
-        // await after them ends by `shutdown_deadline` (MIK-7685).
+        let hurry = self.stdio_hurry(orphan);
         let deadline = tokio::time::Instant::now() + STDIO_DRAIN_TIMEOUT;
         let shutdown_deadline = deadline + stdio_shutdown::STDIO_TEARDOWN_TIMEOUT;
-        #[cfg(test)]
-        self.test_seams.stdio_drain_started.notify_one();
-        if tokio::time::timeout_at(deadline, async {
-            while let Some(joined) = dispatches.join_next().await {
-                if let Err(e) = joined
-                    && !e.is_cancelled()
-                {
-                    warn!("stdio: dispatch task failed during drain: {e}");
+        let writer_task = AbortOnDrop::new(writer_task);
+        let gateway = &self;
+        let before = async move {
+            let mut writer_task = writer_task;
+            // The read loop is over: the session is ending, so nothing more is
+            // announced, though accepted requests still drain (MIK-8278).
+            announcer.stop();
+            // A first list still waiting answers now (`first_list_wait`).
+            first_list.end();
+            // `writer.is_closed()` as well as the flag: stdout can die during the
+            // wait for a line that never comes, and the loop then leaves by the EOF
+            // arm. Reporting that as an ordinary EOF would hand the operator the
+            // one message that hides why the session ended.
+            if stdout_died || writer.is_closed() {
+                warn!("stdio: stdout is gone, refusing further requests and shutting down");
+            } else {
+                info!("stdio: EOF reached, shutting down");
+            }
+            // EOF drains, it does not abort (design §6): every request the loop
+            // accepted still gets its response. Outstanding prompts are failed
+            // first — their answers can only arrive on the pipe that just closed —
+            // and `close` is terminal, so a question raised inside the drain window
+            // is refused rather than left waiting out the bridge's own timeout.
+            channel.close();
+            // One deadline for the drain and the writer join (MIK-7272.LIFE.1):
+            // a client that stops reading stdout blocks the writer, and the two
+            // together still end within one `STDIO_DRAIN_TIMEOUT`, not two. Every
+            // await after them ends by `shutdown_deadline` (MIK-7685).
+            #[cfg(test)]
+            gateway.test_seams.stdio_drain_started.notify_one();
+            if tokio::time::timeout_at(deadline, async {
+                while let Some(joined) = dispatches.join_next().await {
+                    if let Err(e) = joined
+                        && !e.is_cancelled()
+                    {
+                        warn!("stdio: dispatch task failed during drain: {e}");
+                    }
+                }
+            })
+            .await
+            .is_err()
+            {
+                warn!(
+                    timeout = ?STDIO_DRAIN_TIMEOUT,
+                    "stdio: dispatch drain timed out; aborting what is left"
+                );
+                let abort = dispatches.shutdown();
+                stdio_shutdown::bounded_step(shutdown_deadline, "dispatch abort", abort).await;
+            }
+            // Abort the saver: no new tick is scheduled after this. `drop` does not
+            // await the abort, so a tick already past its interval may still start
+            // its thread, and a tick thread may still be writing. Either is safe:
+            // every save holds the sink lock, and the final save below waits for
+            // it, so no two saves overlap and no delta is counted twice (MIK-8364).
+            drop(telemetry_saver);
+            // A hurry keeps only what delivers replies: the final saves wait
+            // behind the parent's kill, so they are dropped. What they would
+            // have written (observations and spend since the last periodic
+            // save, up to five minutes) is lost; in-flight task rows are
+            // settled by the next open.
+            let hurried = || gateway.backends.stop_deadline().is_hurried();
+            if !hurried() {
+                Self::persist_stdio_telemetry_bounded(shutdown_deadline, &protocol_telemetry_sink)
+                    .await;
+                #[cfg(feature = "cost-governance")]
+                if let Some(enforcer) = &meta_mcp.budget_enforcer {
+                    let (enforcer, dir) = (Arc::clone(enforcer), data_dir.clone());
+                    stdio_shutdown::final_cost_save(shutdown_deadline, cost_saver, enforcer, dir)
+                        .await;
                 }
             }
-        })
-        .await
-        .is_err()
-        {
-            warn!(
-                timeout = ?STDIO_DRAIN_TIMEOUT,
-                "stdio: dispatch drain timed out; aborting what is left"
-            );
-            let abort = dispatches.shutdown();
-            stdio_shutdown::bounded_step(shutdown_deadline, "dispatch abort", abort).await;
-        }
-        // Abort the saver: no new tick is scheduled after this. `drop` does not
-        // await the abort, so a tick already past its interval may still start
-        // its thread, and a tick thread may still be writing. Either is safe:
-        // every save holds the sink lock, and the final save below waits for
-        // it, so no two saves overlap and no delta is counted twice (MIK-8364).
-        drop(telemetry_saver);
-        Self::persist_stdio_telemetry_bounded(shutdown_deadline, &protocol_telemetry_sink).await;
-        #[cfg(feature = "cost-governance")]
-        if let Some(enforcer) = &meta_mcp.budget_enforcer {
-            let (enforcer, dir) = (Arc::clone(enforcer), data_dir.clone());
-            stdio_shutdown::final_cost_save(shutdown_deadline, cost_saver, enforcer, dir).await;
-        }
-        // Every sender gone, then the writer joined: the task drains its queue
-        // and returns, which is what flushes the responses the drain produced.
-        // The announcer holds a sender too: stopped when the read loop ended,
-        // dropped before the join so the queue can close.
-        drop(announcer);
-        drop(writer);
-        drop(channel);
-        match tokio::time::timeout_at(deadline, &mut writer_task).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => warn!(%error, "stdio: the stdout writer did not finish cleanly"),
-            Err(_) => {
-                writer_task.abort();
-                warn!("stdio: stdout is not being read; unwritten frames are dropped");
+            // Every sender gone, then the writer joined: the task drains its queue
+            // and returns, which is what flushes the responses the drain produced.
+            // The announcer holds a sender too: stopped when the read loop ended,
+            // dropped before the join so the queue can close.
+            drop(announcer);
+            drop(writer);
+            drop(channel);
+            match tokio::time::timeout_at(deadline, writer_task.join_mut()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => warn!(%error, "stdio: the stdout writer did not finish cleanly"),
+                Err(_) => {
+                    writer_task.join_mut().abort();
+                    warn!("stdio: stdout is not being read; unwritten frames are dropped");
+                }
             }
-        }
-        // Stop sweeping and probing before tearing the backends down. Both tasks
-        // hold an Arc on the registry and have no shutdown channel in this mode,
-        // so leaving either running keeps the registry alive after run_stdio
-        // returns. Dropping the guards here is explicit; they would also fire on
-        // any other exit path, which is the point of them.
-        drop(idle_reaper);
-        drop(health_loop);
-        let left = shutdown_deadline.saturating_duration_since(tokio::time::Instant::now());
-        override_drain.drain(&self.backends, left).await;
-        self.stdio_teardown(shutdown_deadline, warmer, task_store)
+            // Stop sweeping and probing before tearing the backends down. Both tasks
+            // hold an Arc on the registry and have no shutdown channel in this mode,
+            // so leaving either running keeps the registry alive after run_stdio
+            // returns. Dropping the guards here is explicit; they would also fire on
+            // any other exit path, which is the point of them.
+            drop(idle_reaper);
+            drop(health_loop);
+            if !hurried() {
+                let left = shutdown_deadline.saturating_duration_since(tokio::time::Instant::now());
+                override_drain.drain(&gateway.backends, left).await;
+            }
+        };
+        self.stdio_teardown(shutdown_deadline, warmer, task_store, hurry, before)
             .await;
         Ok(())
     }
