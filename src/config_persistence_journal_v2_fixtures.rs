@@ -565,3 +565,8 @@ pub(super) const JOURNAL_V2_DUPLICATE_ATTEMPTS: &[u8] = br#"{
                   "delivered":true,"parked":null},"records":[]
     }]
 }"#;
+
+#[path = "config_persistence_journal_v2_r2_cases.rs"]
+pub(super) mod r2_cases;
+#[path = "config_persistence_journal_v2_r2_fixtures.rs"]
+pub(super) mod r2_fixtures;

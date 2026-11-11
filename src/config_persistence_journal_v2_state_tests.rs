@@ -66,6 +66,7 @@ fn terminal_blocks_finish() {
 
     let mut failures = Vec::new();
     terminal_consistency_cases(&mut failures);
+    r2_cases::terminal_cases(&mut failures);
     assert!(
         failures.is_empty(),
         "{ROW}: {} case(s) failed:\n{}",

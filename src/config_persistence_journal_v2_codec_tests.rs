@@ -66,6 +66,7 @@ fn journal_versions() {
 
     let mut failures = Vec::new();
     journal_boundary_cases(&current, &mut failures);
+    r2_cases::journal_cases(&mut failures);
     assert!(
         failures.is_empty(),
         "{ROW}: {} case(s) failed:\n{}",
