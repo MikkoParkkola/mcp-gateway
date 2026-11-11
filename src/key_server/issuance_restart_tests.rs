@@ -23,7 +23,7 @@ const CASE: &str = "MCP_GW_TEST_ISSUANCE_RESTART_CASE";
 const DIR: &str = "MCP_GW_TEST_ISSUANCE_RESTART_DIR";
 const JTI_FILE: &str = "jti.txt";
 
-fn log_config(dir: &Path) -> Arc<TransparencyLogConfig> {
+fn log_config(dir: &Path, rotating: bool) -> Arc<TransparencyLogConfig> {
     Arc::new(TransparencyLogConfig {
         enabled: true,
         path: dir.join("audit.jsonl").to_string_lossy().into_owned(),
@@ -31,7 +31,11 @@ fn log_config(dir: &Path) -> Arc<TransparencyLogConfig> {
         shared_secret: String::new(),
         // Small enough that the mint's row forces a rotation.
         rotation: RotationConfig {
-            max_segment_bytes: 700,
+            max_segment_bytes: if rotating {
+                700
+            } else {
+                RotationConfig::default().max_segment_bytes
+            },
             ..RotationConfig::default()
         },
     })
@@ -48,6 +52,8 @@ fn run_child(dir: &Path, case: &str) -> String {
         ])
         .env(CASE, case)
         .env(DIR, dir)
+        // The parent keeps the directory, so the child reports no unkept log.
+        .env("MCP_GATEWAY_TEST_KEPT_DIRS", dir)
         .output()
         .expect("the child runs");
     assert!(
@@ -84,7 +90,7 @@ async fn restart_child() {
     };
     let dir = std::path::PathBuf::from(dir);
     let log = Arc::new(
-        TransparencyLogger::open(log_config(&dir))
+        TransparencyLogger::open(log_config(&dir, case == "rotation"))
             .expect("opens")
             .with_failure_policy(AuditFailurePolicy::FailClosed),
     );
@@ -134,7 +140,7 @@ fn a_confirmed_row_survives_an_abrupt_death_across_a_rotation() {
         })
         .count();
     assert!(sealed >= 1, "the mint's row crossed a segment rotation");
-    let reopened = TransparencyLogger::open(log_config(dir.path()));
+    let reopened = TransparencyLogger::open(log_config(dir.path(), true));
     assert!(
         reopened.is_ok(),
         "the log reopens after the death: {:?}",
