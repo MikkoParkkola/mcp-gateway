@@ -30,6 +30,7 @@ pub(crate) mod provenance_public;
 pub mod result_extractor;
 mod result_provenance;
 mod schema_bounds;
+pub(crate) mod seal_strip;
 mod validator;
 pub use assistant::{
     TrustAssistantAutomationAction, TrustAssistantAutomationStatus, TrustAssistantPrompt,

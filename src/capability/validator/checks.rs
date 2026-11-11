@@ -509,6 +509,37 @@ fn check_path_selector_schema(
 
 // ── CAP-006 placeholder helpers ───────────────────────────────────────────────
 
+/// A system reference or a declared input's root, shared with credential
+/// header checks. Expression exemptions belong to each caller, not here.
+pub(crate) fn is_known_placeholder(placeholder: &str, schema_props: &HashSet<String>) -> bool {
+    const RUNTIME_PLACEHOLDERS: &[&str] = &[
+        "access_token",
+        "refresh_token",
+        "api_key",
+        "bearer_token",
+        "auth_token",
+        "timestamp",
+    ];
+    if placeholder.starts_with("env.")
+        || placeholder.starts_with("keychain.")
+        || placeholder.starts_with("oauth.")
+        || RUNTIME_PLACEHOLDERS.contains(&placeholder)
+        || placeholder.ends_with("_auth_header")
+    {
+        return true;
+    }
+
+    // Preserve the validator's array-index precedence over dotted access.
+    let root = if let Some(index) = placeholder.find('[') {
+        &placeholder[..index]
+    } else if let Some(index) = placeholder.find('.') {
+        &placeholder[..index]
+    } else {
+        placeholder
+    };
+    !placeholder.is_empty() && schema_props.contains(root)
+}
+
 /// Scan `text` for `{placeholder}` patterns and report any not in `schema_props`.
 ///
 /// Skips `{env.VAR}` style references — those are not schema parameters.
@@ -520,32 +551,6 @@ fn check_placeholders_in_text(
     issues: &mut Vec<Issue>,
 ) {
     for placeholder in extract_placeholders(text) {
-        // System-resolved references are not schema parameters.
-        // env.VAR — environment variable substitution
-        // keychain.KEY — macOS Keychain lookup
-        // oauth.PROVIDER — OAuth token injection
-        // access_token / refresh_token — OAuth runtime injection
-        // api_key — runtime API key injection
-        // timestamp — computed auth timestamp
-        // *_auth_header — computed HMAC/auth headers
-        const RUNTIME_PLACEHOLDERS: &[&str] = &[
-            "access_token",
-            "refresh_token",
-            "api_key",
-            "bearer_token",
-            "auth_token",
-            "timestamp",
-        ];
-        if placeholder.starts_with("env.")
-            || placeholder.starts_with("keychain.")
-            || placeholder.starts_with("oauth.")
-            || RUNTIME_PLACEHOLDERS.contains(&placeholder.as_str())
-            // Computed auth headers (e.g. {podcast_index_auth_header})
-            || placeholder.ends_with("_auth_header")
-        {
-            continue;
-        }
-
         // Template expressions (e.g. {{input.wait ? 'wait' : ''}}) start with
         // '{' when the outer braces have already been stripped.  These are
         // evaluated at runtime, not simple schema references.
@@ -553,20 +558,7 @@ fn check_placeholders_in_text(
             continue;
         }
 
-        // Array-index access patterns like `symbols[0]` or `holdings[0].symbol`
-        // reference a top-level schema property that is an array.  Extract the
-        // root property name and validate that instead.
-        let prop_name = if let Some(bracket_pos) = placeholder.find('[') {
-            &placeholder[..bracket_pos]
-        } else if let Some(dot_pos) = placeholder.find('.') {
-            // Nested property access like `foo.bar` — check the root property.
-            // (env/keychain/oauth prefixes are already handled above.)
-            &placeholder[..dot_pos]
-        } else {
-            placeholder.as_str()
-        };
-
-        if !schema_props.contains(prop_name) {
+        if !is_known_placeholder(&placeholder, schema_props) {
             issues.push(Issue::error(
                 "CAP-006",
                 format!(

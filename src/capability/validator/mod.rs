@@ -48,6 +48,8 @@ use std::collections::HashMap;
 use super::CapabilityDefinition;
 
 mod checks;
+#[cfg(feature = "webui")]
+pub(crate) use checks::is_known_placeholder;
 
 #[cfg(test)]
 mod tests;

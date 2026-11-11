@@ -25,7 +25,11 @@ async fn key_server_with_token() -> (
     ));
     let token = temporary_token();
     let (credential, jti) = (bearer(&token.token), token.jti.clone());
-    key_server.store.insert(token).await;
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        token,
+    );
     (key_server, credential, jti)
 }
 
@@ -142,7 +146,11 @@ async fn a_token_revoked_after_its_copy_is_queued_is_written_nothing() {
     let (key_server, revoked_credential, jti) = key_server_with_token().await;
     let kept_token = temporary_token();
     let kept_credential = bearer(&kept_token.token);
-    key_server.store.insert(kept_token).await;
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        kept_token,
+    );
     let multiplexer = multiplexer(&key_server);
     let (_, mut kept) = open(&multiplexer, kept_credential).await;
     let (_, mut revoked) = open(&multiplexer, revoked_credential).await;

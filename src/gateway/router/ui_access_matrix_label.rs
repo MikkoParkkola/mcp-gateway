@@ -176,7 +176,7 @@ pub(super) fn cell(path: &str, status: StatusCode, body: &[u8]) -> String {
     let code = status.as_u16();
     let refused = matches!(code, 401 | 403);
     let scoped = status.is_success()
-        && SCOPED.contains(&path)
+        && attributes(path).scoped
         && path != routes::UI_ACTIVITY
         && path != routes::UI_ACTIVITY_EXPORT;
     if (refused || scoped)
@@ -225,7 +225,7 @@ pub(super) fn cell_hash(path: &str, status: StatusCode, body: &[u8]) -> String {
         seen.dedup();
         return format!("{code}:{}", seen.join(","));
     }
-    if status.is_success() && SCOPED.contains(&path) && !body.is_empty() {
+    if status.is_success() && attributes(path).scoped && !body.is_empty() {
         let canonical = if let Ok(mut v) = serde_json::from_slice::<Value>(body) {
             strip(&mut v);
             if path == routes::UI_STATUS
