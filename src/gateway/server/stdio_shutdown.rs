@@ -234,6 +234,8 @@ impl Gateway {
             crate::gateway::task_service::execution::ExpirySweep,
         )>,
     ) {
+        #[cfg(test)]
+        self.test_seams.stdio_before_backends_hold.pause().await;
         // Awaited, not left to the drop guard: an abort is asynchronous, so a
         // retry task mid-`ensure_started` would otherwise still be starting a
         // backend while `stop_all` drains it, delaying shutdown and logging

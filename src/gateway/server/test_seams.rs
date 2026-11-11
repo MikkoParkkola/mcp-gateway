@@ -52,6 +52,9 @@ pub(super) struct TestSeams {
     /// other session in the test binary stops on it.
     #[cfg(test)]
     pub(super) stdio_dispatch_hold: std::sync::Arc<crate::test_pause::Slot>,
+    /// Holds post-drain cleanup after the reply drain has completed.
+    #[cfg(test)]
+    pub(super) stdio_before_backends_hold: crate::test_pause::Slot,
     /// Notified when this gateway's stdio read loop has stopped and the
     /// drain begins (MIK-8364 drain-window row).
     #[cfg(test)]

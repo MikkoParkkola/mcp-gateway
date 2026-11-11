@@ -334,6 +334,41 @@ mod hurry {
         }
     }
 
+    #[tokio::test]
+    async fn a_hurry_during_post_drain_cleanup_does_not_repoll_the_finished_drain() {
+        let (mut gateway, _dir, _entered) = fixture().await;
+        let hurry = gateway.hurry_trigger_for_test();
+        let deadline = gateway.backends.stop_deadline();
+        let (reached, release) = gateway.test_seams.stdio_before_backends_hold.arm();
+        let (stdin, input) = tokio::io::duplex(65536);
+        let (output, _reader) = tokio::io::duplex(65536);
+        let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
+        drop(stdin);
+        // This point is reached only after the read loop and `before` finish.
+        named("post-drain cleanup held", reached.notified()).await;
+        assert_eq!(deadline.get(), None, "ordinary backend stop has not begun");
+        hurry.send(()).expect("late signal listener is installed");
+        named(
+            "hurry moves the registry deadline",
+            wait_for(|| deadline.get().is_some()),
+        )
+        .await;
+        release.notify_one();
+        let cut = deadline
+            .get()
+            .expect("hurry published the registry deadline");
+        assert!(
+            cut <= std::time::Instant::now()
+                + crate::transport::KILL_RESERVE_FOR_TEST
+                + crate::transport::HURRY_WINDOW
+        );
+        timeout(ROW_BOUND, task)
+            .await
+            .expect("hurried stop ends")
+            .expect("the serve task does not panic")
+            .expect("run_stdio_on returns Ok");
+    }
+
     /// A signal remains effective after backend stopping starts.
     /// Red if the listener disappears when pre-backend shutdown finishes.
     #[tokio::test]
