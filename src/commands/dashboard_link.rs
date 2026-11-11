@@ -6,6 +6,8 @@
 //! The admin credential comes from the environment only. An argument would
 //! land in shell history and in every process listing on the machine.
 
+use crate::cli::stdout::println;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Human and JSON rendering for the `trust` commands.
 
+use crate::cli::stdout::println;
+
 use mcp_gateway::{
     cli::output::OutputFormat,
     trust::{

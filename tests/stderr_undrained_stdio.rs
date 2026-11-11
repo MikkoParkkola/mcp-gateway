@@ -194,16 +194,23 @@ async fn l1j_b_the_last_line_survives_a_full_stderr_at_exit() {
 /// exit, which a process test cannot tell apart while stderr keeps up.
 #[test]
 fn l1j_c_the_flush_guard_outlives_the_runtime() {
-    let main = include_str!("../src/main.rs");
-    let bound = main
+    let entry = include_str!("../src/cli/entry.rs");
+    let run = entry
+        .split_once("pub fn run(args: Cli) -> ExitCode {\n")
+        .expect("cli::run exists")
+        .1
+        .split_once("\n}")
+        .expect("cli::run ends")
+        .0;
+    let bound = run
         .find("let _flush_logs = match setup_tracing(")
-        .expect("main binds the flush guard");
-    let runs = main[bound..]
+        .expect("cli::run binds the flush guard");
+    let runs = run[bound..]
         .find("runtime::block_on(")
         .map(|at| bound + at)
         .expect("the runtime runs after the guard is bound");
     assert!(
-        !main[bound..runs].contains("drop(_flush_logs"),
+        !run[bound..runs].contains("drop(_flush_logs"),
         "the flush guard is dropped before the runtime runs"
     );
 }

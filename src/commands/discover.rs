@@ -6,6 +6,8 @@
 //! SSRF check -> parallel probe -> format detection -> `OpenAPI` conversion ->
 //! quality scoring -> dedup -> write YAML files (or dry-run report).
 
+use crate::cli::stdout::println;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 

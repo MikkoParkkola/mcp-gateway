@@ -3,6 +3,8 @@
 //! `cap discover`: finding MCP servers on this machine, the shadow scan, and
 //! printing what either found. Moved from `cap.rs` for the file-size ceiling.
 
+use crate::cli::stdout::println;
+
 use std::io::Write as _;
 use std::process::ExitCode;
 
@@ -60,7 +62,11 @@ pub(super) async fn cap_discover(
             print_discovered_servers(&servers, &format);
             if write_config {
                 let _ = writeln!(say, "\n📝 Writing discovered servers to config...");
-                match crate::write_discovered_to_config(&servers, config_path.as_deref(), mode) {
+                match crate::cli::entry::write_discovered_to_config(
+                    &servers,
+                    config_path.as_deref(),
+                    mode,
+                ) {
                     Ok((path, written, skipped)) => {
                         let _ = writeln!(
                             say,
@@ -166,7 +172,11 @@ async fn cap_discover_shadow(
         }
 
         let apply_path = output_config_path.unwrap_or_else(|| compare_config_path.clone());
-        match crate::write_discovered_to_config(&adoptable_servers, Some(&apply_path), mode) {
+        match crate::cli::entry::write_discovered_to_config(
+            &adoptable_servers,
+            Some(&apply_path),
+            mode,
+        ) {
             // The counts are what the writer wrote and skipped: it applies
             // the shared adopt rule and skips `capabilities.name`.
             Ok((path, adopted, refused)) => {

@@ -1,27 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! How the runtime ends once `run` returned (MIK-7683).
+//! How the runtime ends once `dispatch` returned.
 
-use mcp_gateway::cli::Command;
+use crate::cli::Command;
 
-/// How long a serving gateway's runtime may wait, after `run` returned, for
-/// blocking-pool work still running. Stdio (MIK-7683): a stdout write a client
+/// How long a serving gateway's runtime may wait, after `dispatch` returned, for
+/// blocking-pool work still running. Stdio: a stdout write a client
 /// stopped reading, which the serve loop already gave up on at its drain
 /// deadline. HTTP (MIK-8084): a task-store or audit write stuck on a stalled
 /// mount. On a healthy disk what is left is a few millisecond writes, and
 /// everything network-bound (request drain, custody refresh) was awaited
-/// inside `run` under `server.shutdown_timeout`; without a bound the process
+/// inside `dispatch` under `server.shutdown_timeout`; without a bound the process
 /// never exits.
 pub(crate) const SERVE_RUNTIME_SHUTDOWN_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(10);
 
-/// How long `doctor`'s runtime may wait, after `run` returned, for
+/// How long `doctor`'s runtime may wait, after `dispatch` returned, for
 /// blocking-pool work still running: doctor's npm lookup resolves names
 /// on the blocking pool, and a stalled DNS lookup must not hold the exit.
 pub(crate) const DOCTOR_RUNTIME_SHUTDOWN_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(1);
 
-/// What `main` does with the runtime once `run` returned.
+/// What `cli::run` does with the runtime once `dispatch` returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeShutdown {
     /// Wait for every blocking-pool task. Every command but `serve` and
@@ -48,7 +48,7 @@ impl RuntimeShutdown {
 }
 
 /// The runtime, shut down by its mode when dropped: on the normal path and on
-/// a panic out of `run` alike.
+/// a panic out of `dispatch` alike.
 struct ShutdownGuard {
     runtime: Option<tokio::runtime::Runtime>,
     mode: RuntimeShutdown,
@@ -79,6 +79,7 @@ pub(crate) fn shut_down(runtime: tokio::runtime::Runtime, mode: RuntimeShutdown)
     let left_running = started.elapsed() >= timeout;
     if left_running {
         tracing::error!(
+            target: "mcp_gateway::runtime",
             ?timeout,
             "shutdown exited with blocking work still running after the bound \
              (a disk or mount write that never returned; under doctor, its 1 s bound, \

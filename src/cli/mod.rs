@@ -30,6 +30,7 @@
 pub mod api;
 pub mod completion;
 pub mod dashboard_link;
+pub(crate) mod entry;
 pub mod events;
 pub mod identity;
 pub mod invoke;
@@ -47,6 +48,7 @@ use clap_complete::Shell;
 
 use crate::cli::output::OutputFormat;
 
+pub use entry::run;
 pub use identity::{IdentityCommand, IdentityGrantScopeArg, IdentityGrantsCommand};
 pub use setup::SetupCommand;
 pub use skills::SkillsCommand;
@@ -57,8 +59,7 @@ pub use subcommands::{
 };
 
 // ── Config-export CLI types ───────────────────────────────────────────────────
-// Defined here (library crate) so both the CLI parser and the binary-only
-// `commands/config_export.rs` can share the same type definitions.
+// Shared by the CLI parser and `commands/config_export.rs`.
 
 /// Connection mode for the exported client config entry.
 #[cfg(feature = "config-export")]
@@ -168,7 +169,7 @@ pub struct Cli {
 
     /// Subcommand to run (defaults to server mode when omitted)
     #[command(subcommand)]
-    pub command: Option<Command>,
+    pub(crate) command: Option<Command>,
 }
 
 /// Offline administration of the personal-account custody store.
@@ -241,7 +242,7 @@ fn parse_off_switch(value: &str) -> bool {
 
 /// Top-level subcommands
 #[derive(Subcommand, Debug)]
-pub enum Command {
+pub(crate) enum Command {
     /// Start the gateway server (default when no subcommand is given)
     #[command(about = "Start the gateway server")]
     Serve {
