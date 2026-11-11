@@ -113,6 +113,8 @@ mod hurry {
     use tokio::io::AsyncWriteExt;
 
     const ROW_BOUND: Duration = Duration::from_secs(15);
+    /// Under `ROW_BOUND`, so a stuck step is named before the generic wait fails.
+    const NAMED_STEP_BOUND: Duration = Duration::from_secs(14);
 
     #[derive(Default)]
     struct ReplyBackend {
@@ -267,7 +269,7 @@ mod hurry {
 
     /// Name the step a stuck wait belongs to, so a red row says where it stopped.
     async fn named<T>(step: &str, wait: impl std::future::Future<Output = T>) -> T {
-        timeout(ROW_BOUND - Duration::from_secs(1), wait)
+        timeout(NAMED_STEP_BOUND, wait)
             .await
             .unwrap_or_else(|_| panic!("{step}: not reached"))
     }
