@@ -1,2 +1,5 @@
 # file	fn	callee	count	class	note (classes: see delivery_framing.rs)
 src/commands/api.rs	gateway_failure	http_refusal	1	no-record	CLI api command: classifies the gateway's HTTP refusal into an exit code and stderr report on the client, no call delivery
+src/gateway/ui/keys_revoke.rs	refused	config_refusal	1	no-record	admin UI key revoke: the config writer's guarded read refused gateway.yaml, fixed text, no call delivery
+src/gateway/ui/keys_revoke.rs	revoke_key	config_refusal	2	no-record	admin UI key revoke: the route's own read of gateway.yaml failed or the reload context is absent, fixed text, no call delivery
+src/gateway/ui/keys_revoke.rs	revoke_key	refuse_multi_user_flip	1	no-record	admin UI key revoke: refuses a removal that would flip the running multi-user status before any write, no call delivery

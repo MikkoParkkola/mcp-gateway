@@ -10,7 +10,7 @@
 //!
 //! | Event | When |
 //! |-------|------|
-//! | `token.issued` | A new temporary token is successfully issued |
+//! | `token.issued` | A token's issuance was attempted: logged before the token is activated, so a mint refused at activation (403, 503) leaves this line and no token |
 //! | `token.used` | A temporary token is validated for a request |
 //! | `token.revoked` | A token is explicitly revoked via `DELETE /auth/token/{jti}` |
 //! | `token.denied` | OIDC verification or policy matching failed |

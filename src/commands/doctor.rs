@@ -5,6 +5,8 @@
 //! Performs a series of diagnostic checks and prints a pass/fail/warn table.
 //! Exit code is `SUCCESS` when all required checks pass, `FAILURE` otherwise.
 
+use crate::cli::stdout::println;
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

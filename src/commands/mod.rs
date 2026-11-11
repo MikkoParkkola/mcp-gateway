@@ -5,6 +5,8 @@
 //! Each public function corresponds to a top-level `Command` variant and
 //! returns an `ExitCode` so `main` can remain a thin dispatcher.
 
+use crate::cli::stdout::println;
+
 mod accounts;
 #[cfg(feature = "webui")]
 mod add_remove;

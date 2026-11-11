@@ -294,18 +294,11 @@ pub(crate) fn store_backend_with(
         // A value the shared rule refuses (a literal default, literal text
         // beside a template) is refused here too, by field and code, before
         // any store opens: kept, it would reach gateway.yaml as text.
-        let mut refused: Vec<String> = [(false, &backend.env), (true, &backend.headers)]
+        let refused: Vec<String> = crate::config::secret_values::literal_refusals(backend)
             .into_iter()
-            .flat_map(|(header, map)| {
-                map.iter().filter_map(move |(key, value)| {
-                    crate::config::secret_values::classify(value)
-                        .err()
-                        .map(|code| format!("{code} ({})", field_of(header, key)))
-                })
-            })
+            .map(|(code, field)| format!("{code} ({field})"))
             .collect();
         if !refused.is_empty() {
-            refused.sort();
             return Err(format!(
                 "backend '{name}' holds values written as text that may be secrets: {}; nothing was written",
                 refused.join(", ")
@@ -393,7 +386,7 @@ fn stored_literals(
     keep_as_text: &[String],
 ) -> Vec<(bool, String, String)> {
     use crate::config::secret_values::{
-        ValueClass, classify, stores_env_value, stores_header_value,
+        Syntax, ValueClass, classify, stores_env_value, stores_header_value,
     };
     let mut literals = Vec::new();
     for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
@@ -406,7 +399,7 @@ fn stored_literals(
             } else {
                 stores_env_value(key, value)
             };
-            if classify(value) == Ok(ValueClass::Stored)
+            if classify(value, &Syntax::Dollar) == Ok(ValueClass::Stored)
                 && by_rule
                 && !keep_as_text.contains(&field_of(header, key))
             {

@@ -771,7 +771,7 @@
       "blocked_on": "none",
       "evidence": [
         "src/gateway/router/body_limit_tests.rs",
-        "src/main_tests.rs",
+        "src/cli/main_tests.rs",
         "tests/c1_unrecognised_config_keys.rs"
       ],
       "note": "Graded 2026-09-25 (C8, PR #946, merged as f1b54c147). server.max_body_size is enforced on every route through one router-wide DefaultBodyLimit layer, and /mcp and /mcp/{name} read bodies through helpers::read_body, which honours it; server.request_timeout is retired and fails the load as an unrecognised key. Red-first run 36138044119 (the five C8 tests only); green CI 36157390694 and Docker 36157390397 at d2f24acfd. Mutants: webhook route unlimited #953 run 36138445179; /mcp hard-coded 10 MiB #950 run 36138435188; /mcp/{name} unlimited #952 run 36138439661; request_timeout accepted #954 run 36138449548; each went red."

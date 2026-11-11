@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Safe protocol import preview and draft-apply command handlers.
 
+use crate::cli::stdout::println;
+
 use std::{path::Path, process::ExitCode};
 
 use mcp_gateway::{

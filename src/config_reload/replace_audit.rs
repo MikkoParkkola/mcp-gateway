@@ -33,6 +33,8 @@ pub(crate) enum IntentKind {
     Restore,
     /// A web UI API key create.
     KeyCreate,
+    /// An API key revoke, including unchanged-byte reconciliation.
+    KeyRevoke,
     /// A web UI backend route's edit of one backend, named, never a value.
     Backend {
         operation: BackendOp,
@@ -193,6 +195,7 @@ impl IntentSink for LogSink {
             IntentKind::Adopt => "config_adopt_intent",
             IntentKind::Restore => "config_restore_intent",
             IntentKind::KeyCreate => "config_key_create_intent",
+            IntentKind::KeyRevoke => "config_key_revoke_intent",
             IntentKind::Backend { .. } => "config_backend_intent",
         };
         let mut fields = serde_json::Map::new();
@@ -249,7 +252,32 @@ pub(crate) async fn replace_audited(
     audit: Audit,
     wait: Duration,
 ) -> Result<ReplaceOutcome, ReplaceError> {
-    super::spawn_locked(ctx, replace, audit, wait).await
+    super::spawn_locked(ctx, replace, audit, wait, None)
+        .await
+        .map(|(outcome, _)| outcome)
+}
+
+/// The same audited transaction, with a revoke receipt taken before unlocking.
+pub(crate) async fn replace_audited_revoke(
+    ctx: Arc<ReloadContext>,
+    replace: Replace,
+    audit: Audit,
+    wait: Duration,
+    check: super::receipt::RevokeCheck,
+) -> Result<super::receipt::RevokeReceipt, ReplaceError> {
+    if !matches!(
+        &audit,
+        Audit::Required {
+            kind: IntentKind::KeyRevoke,
+            ..
+        }
+    ) {
+        return Err(ReplaceError::AuditRefused(
+            "revoke requires its audit intent".into(),
+        ));
+    }
+    let (_, receipt) = super::spawn_locked(ctx, replace, audit, wait, Some(check)).await?;
+    receipt.ok_or_else(|| ReplaceError::Failed("missing revoke receipt".into()))
 }
 
 /// With anything pending (a crashed write's journal, or a reload `owed`

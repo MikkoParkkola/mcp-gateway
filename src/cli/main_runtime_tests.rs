@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! How the runtime ends once `run` returned (MIK-7683, MIK-8084).
+//! How the runtime ends once `dispatch` returned.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use mcp_gateway::cli::Command;
+use crate::cli::Command;
 
 use super::{RuntimeShutdown, SERVE_RUNTIME_SHUTDOWN_TIMEOUT, block_on, shut_down};
 
@@ -32,7 +32,9 @@ fn stuck_task(runtime: &tokio::runtime::Runtime) -> mpsc::Sender<()> {
     release
 }
 
-#[path = "test_support/error_capture.rs"]
+// The library's log capture is the one keeper `error_capture` shares.
+use crate::test_log_capture as interest;
+#[path = "../test_support/error_capture.rs"]
 mod error_capture;
 use error_capture::errors_logged;
 
@@ -64,14 +66,14 @@ fn every_serve_mode_bounds_the_runtime_shutdown() {
 #[test]
 fn doctor_bounds_the_runtime_shutdown_at_one_second() {
     use clap::Parser as _;
-    let doctor = mcp_gateway::cli::Cli::try_parse_from(["mcp-gateway", "doctor"])
+    let doctor = crate::cli::Cli::try_parse_from(["mcp-gateway", "doctor"])
         .expect("doctor parses")
         .command;
     assert_eq!(
         RuntimeShutdown::of(doctor.as_ref()),
         RuntimeShutdown::Bounded(Duration::from_secs(1))
     );
-    let init = mcp_gateway::cli::Cli::try_parse_from(["mcp-gateway", "init"])
+    let init = crate::cli::Cli::try_parse_from(["mcp-gateway", "init"])
         .expect("init parses")
         .command;
     assert_eq!(
@@ -140,25 +142,44 @@ fn block_on_returns_behind_a_stuck_blocking_task() {
 
 /// `MIK-8084.SHUTDOWN.2`: blocking work already running that finishes inside
 /// the bound (a flush) completes before the shutdown returns, which then
-/// reports and logs nothing.
+/// reports and logs nothing. The flush waits on a channel, not a timer: the
+/// shutdown runs on its own thread and must NOT have returned while the flush
+/// is held; only after the test releases it does the shutdown finish.
 #[test]
 fn a_flush_inside_the_bound_completes_and_logs_nothing() {
     let runtime = runtime();
     let flushed = Arc::new(AtomicBool::new(false));
     let done = Arc::clone(&flushed);
     let (started, running) = mpsc::channel();
+    let (release, held) = mpsc::channel::<()>();
     runtime.spawn_blocking(move || {
         started.send(()).expect("the test waits for the start");
-        std::thread::sleep(Duration::from_millis(100));
+        held.recv().expect("the test releases the flush");
         done.store(true, Ordering::SeqCst);
     });
     running
         .recv_timeout(Duration::from_secs(5))
         .expect("the flush starts");
-    let mut left_running = true;
-    let logged = errors_logged(|| {
-        left_running = shut_down(runtime, RuntimeShutdown::Bounded(Duration::from_secs(5)));
+    let shutdown = std::thread::spawn(move || {
+        let mut left_running = true;
+        let logged = errors_logged(|| {
+            left_running = shut_down(runtime, RuntimeShutdown::Bounded(Duration::from_secs(5)));
+        });
+        (left_running, logged)
     });
+    // A shutdown that waits for the flush cannot finish before the release, so
+    // this poll never fails it; one that returns without waiting finishes
+    // within a few yields. A count, not a timer.
+    let returned_early = (0..100_000).any(|_| {
+        std::thread::yield_now();
+        shutdown.is_finished()
+    });
+    assert!(
+        !returned_early,
+        "the shutdown returned while the flush was still running"
+    );
+    release.send(()).expect("the flush is still waiting");
+    let (left_running, logged) = shutdown.join().expect("the shutdown thread ends");
     assert!(flushed.load(Ordering::SeqCst), "the flush was cut");
     assert!(!left_running, "a finished flush reported as left running");
     assert!(logged.is_empty(), "a clean shutdown logged: {logged:?}");
