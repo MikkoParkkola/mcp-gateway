@@ -385,6 +385,14 @@ def ui_tests_apt_errors() -> list[str]:
             out.append("ui-tests: the system-library step does not retry apt (-o Acquire::Retries=5)")
         if "||" not in run:
             out.append("ui-tests: the system-library step fails the job when apt is down; it must warn and go on")
+        # Observed on this change's own run during the outage: apt's retries multiplied against a dead DNS
+        # held the step for the job's whole 15 minutes until the timeout cancelled the job. Every apt and
+        # install-deps command in the step must be bounded by `timeout`.
+        for line in run.splitlines():
+            code = line.strip()
+            if ("apt-get " in code or "install-deps" in code) and not code.startswith(("#", "printf")):
+                if "timeout " not in code:
+                    out.append(f"ui-tests: an unbounded command in the system-library step: {code[:60]}")
     return out
 
 

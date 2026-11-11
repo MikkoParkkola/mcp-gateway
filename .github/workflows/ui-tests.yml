@@ -79,9 +79,10 @@ jobs:
         run: |
           # Playwright's own `apt-get update` takes this setting too, not only the one below.
           printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update \
-            || echo "::warning::apt-get update failed; trying the library install anyway"
-          npx playwright install-deps chromium \
+          # `timeout`: dead DNS multiplied by apt's retries once held this step for the whole job limit.
+          sudo timeout 120 apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update \
+            || echo "::warning::the package index update failed or timed out; trying the library install anyway"
+          timeout 300 npx playwright install-deps chromium \
             || echo "::warning::the system libraries were not installed (apt mirror unreachable); relying on the hosted image's"
       - name: Run the browser tests
         env:
