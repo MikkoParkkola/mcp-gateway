@@ -62,6 +62,94 @@ fn prepare_tool_metadata_drops_only_the_violating_tool() {
     assert_eq!(tools[0].name, "keep");
 }
 
+/// Validates names across schema levels. Red if a nested case-insensitive duplicate stays listed.
+#[test]
+fn a_nested_duplicate_header_name_excludes_the_tool() {
+    let mut tools = vec![
+        sample_tool("keep"),
+        tool_with_schema(
+            "drop",
+            json!({"type": "object", "properties": {
+                "tenant": {"type": "string", "x-mcp-header": "Tenant"},
+                "filter": {"type": "object", "properties": {
+                    "tenant": {"type": "string", "x-mcp-header": "tenant"}
+                }}
+            }}),
+        ),
+    ];
+
+    prepare_tool_metadata(
+        "beeper",
+        &std::collections::BTreeMap::new(),
+        crate::backend::Judging::Judge,
+        &mut tools,
+    );
+
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["keep"]
+    );
+}
+
+/// Applies the existing unsupported-number rule recursively. Red if a nested invalid declaration stays listed.
+#[test]
+fn a_nested_invalid_declaration_excludes_the_tool() {
+    let mut tools = vec![
+        sample_tool("keep"),
+        tool_with_schema(
+            "drop",
+            json!({"type": "object", "properties": {
+                "filter": {"type": "object", "properties": {
+                    "ratio": {"type": "number", "x-mcp-header": "Ratio"}
+                }}
+            }}),
+        ),
+    ];
+
+    prepare_tool_metadata(
+        "beeper",
+        &std::collections::BTreeMap::new(),
+        crate::backend::Judging::Judge,
+        &mut tools,
+    );
+
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["keep"]
+    );
+}
+
+/// Ignores schema levels beyond the mirror bound. Red if a deep unannotated tool is excluded.
+#[test]
+fn a_deep_schema_without_mirrors_stays_listed() {
+    let mut schema = json!({"type": "object", "properties": {}});
+    for _ in 0..40 {
+        schema = json!({"type": "object", "properties": {"nested": schema}});
+    }
+    let mut tools = vec![sample_tool("keep"), tool_with_schema("deep", schema)];
+
+    prepare_tool_metadata(
+        "beeper",
+        &std::collections::BTreeMap::new(),
+        crate::backend::Judging::Judge,
+        &mut tools,
+    );
+
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["keep", "deep"]
+    );
+}
+
 #[test]
 fn prepare_tool_metadata_drops_a_crlf_injection_attempt() {
     let mut tools = vec![tool_with_schema(
