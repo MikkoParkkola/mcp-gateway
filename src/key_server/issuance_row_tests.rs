@@ -136,10 +136,9 @@ async fn failclosed_every_non_confirmed_outcome_refuses_with_503() {
             StatusCode::SERVICE_UNAVAILABLE,
             "{cell:?}"
         );
-        assert!(
-            response
-                .headers()
-                .contains_key(axum::http::header::RETRY_AFTER),
+        assert_eq!(
+            response.headers().get(axum::http::header::RETRY_AFTER),
+            Some(&axum::http::HeaderValue::from_static("1")),
             "{cell:?}"
         );
         nothing_issued(&ks).await;
