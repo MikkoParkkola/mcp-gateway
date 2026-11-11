@@ -179,6 +179,12 @@ fn the_scan_tells_a_kept_log_from_an_unkept_one() {
         "tempfile::TempDir::new()",
         "tempfile::NamedTempFile::new()",
         "tempfile::Builder::new().tempdir()",
+        "tempfile::TempDir::with_prefix(\"x\")",
+        "tempfile::TempDir::with_suffix_in(\"x\", parent)",
+        "tempfile::Builder::new().tempfile()",
+        "tempfile::Builder::new().tempfile_in(parent)",
+        "tempfile::tempfile()",
+        "std::env::temp_dir()",
     ] {
         assert!(unkept(&format!(
             "let file = TempLog::new();\nlet dir = {constructor};\n\
@@ -209,6 +215,10 @@ fn the_scan_tells_a_kept_log_from_an_unkept_one() {
         "OtherTempDir::new()",
         "OtherNamedTempFile::new()",
         "FooBuilder::new()",
+        "other_temp_dir()",
+        "other_tempfile()",
+        "other_tempfile_in(parent)",
+        "OtherTempDir::with_prefix(x)",
     ] {
         assert!(!unkept(&format!(
             "let file = TempLog::new();\nlet other = {constructor};\n\
