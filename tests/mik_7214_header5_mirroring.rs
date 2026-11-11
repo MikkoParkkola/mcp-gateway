@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 
 use mcp_gateway::backend::Backend;
 use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
+use mcp_gateway::protocol::headers::decode_header_value;
 use mcp_gateway::protocol::param_headers::mirror_headers;
 
 /// What the mock backend saw on the `tools/call` POST.
@@ -235,6 +236,7 @@ async fn param_namespace_is_stripped_on_a_method_that_mirrors_nothing() {
     );
 }
 
+/// Preserves numeric and boolean cases. Red if control-character strings are dropped instead of encoded.
 #[test]
 fn only_losslessly_renderable_values_are_mirrored() {
     let schema = json!({
@@ -265,7 +267,129 @@ fn only_losslessly_renderable_values_are_mirrored() {
         vec![
             ("Mcp-Param-Count".to_string(), "42".to_string()),
             ("Mcp-Param-Flag".to_string(), "true".to_string()),
+            (
+                "Mcp-Param-Text".to_string(),
+                "=?base64?YWNtZQ1YLUluamVjdGVkOiAx?=".to_string(),
+            ),
         ],
-        "a float, an out-of-range integer and a control character must be dropped"
+        "a float and an out-of-range integer must be dropped; a control character must be encoded"
+    );
+    assert_eq!(
+        decode_header_value(&mirrored[2].1).as_deref(),
+        Some("acme\rX-Injected: 1")
+    );
+}
+
+/// Keeps an empty argument lossless. Red if the empty string is sentinel-wrapped.
+#[test]
+fn an_empty_string_argument_mirrors_as_an_empty_value() {
+    let schema = json!({"type": "object", "properties": {
+        "tenant": {"type": "string", "x-mcp-header": "Tenant"}
+    }});
+    let mirrored = mirror_headers(&schema, &json!({"tenant": ""}));
+
+    assert_eq!(
+        mirrored,
+        vec![("Mcp-Param-Tenant".to_string(), String::new())]
+    );
+    assert_eq!(decode_header_value(&mirrored[0].1).as_deref(), Some(""));
+}
+
+/// Encodes controls without losing the argument. Red if CR or tab values are dropped.
+#[test]
+fn a_control_character_value_is_encoded_not_dropped() {
+    let schema = json!({"type": "object", "properties": {
+        "tenant": {"type": "string", "x-mcp-header": "Tenant"}
+    }});
+    for (original, encoded) in [
+        ("a\rb", "=?base64?YQ1i?="),
+        ("tab\there", "=?base64?dGFiCWhlcmU=?="),
+    ] {
+        let mirrored = mirror_headers(&schema, &json!({"tenant": original}));
+
+        assert_eq!(
+            mirrored,
+            vec![("Mcp-Param-Tenant".to_string(), encoded.to_string())],
+            "control-character value {original:?} must be sentinel-encoded"
+        );
+        let value = &mirrored[0].1;
+        assert!(!value.contains('\r') && !value.contains('\n'));
+        assert_eq!(decode_header_value(value).as_deref(), Some(original));
+    }
+}
+
+/// Rejects a duplicate across schema levels. Red if a nested case-insensitive duplicate emits headers.
+#[test]
+fn a_nested_duplicate_header_name_excludes_the_tool() {
+    let schema = json!({"type": "object", "properties": {
+        "tenant": {"type": "string", "x-mcp-header": "Tenant"},
+        "filter": {"type": "object", "properties": {
+            "tenant": {"type": "string", "x-mcp-header": "tenant"}
+        }}
+    }});
+    let arguments = json!({"tenant": "outer", "filter": {"tenant": "inner"}});
+
+    assert!(mirror_headers(&schema, &arguments).is_empty());
+}
+
+/// Bounds mirroring to validated levels. Red if a depth-40 annotation mirrors or the depth-2 control does not.
+#[test]
+fn an_annotation_below_the_depth_bound_is_not_mirrored() {
+    for depth in [40, 2] {
+        let mut schema = json!({"type": "object", "properties": {
+            "tenant": {"type": "string", "x-mcp-header": "Tenant"}
+        }});
+        let mut arguments = json!({"tenant": "acme"});
+        for _ in 0..depth {
+            schema = json!({"type": "object", "properties": {"nested": schema}});
+            arguments = json!({"nested": arguments});
+        }
+
+        let mirrored = mirror_headers(&schema, &arguments);
+        if depth == 40 {
+            assert!(
+                mirrored.is_empty(),
+                "annotations beyond the bound are ignored"
+            );
+        } else {
+            assert_eq!(
+                mirrored,
+                vec![("Mcp-Param-Tenant".to_string(), "acme".to_string())],
+                "annotations within the bound are mirrored"
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_annotated_property_is_mirrored_and_spaced_value_is_encoded() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "owner": {"type": "string", "x-mcp-header": "Owner"},
+            "filter": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "x-mcp-header": "Repo"}
+                }
+            }
+        }
+    });
+    let arguments = json!({
+        "owner": "unity",
+        "filter": {"repo": "two words"}
+    });
+
+    let mirrored = mirror_headers(&schema, &arguments);
+
+    assert_eq!(
+        mirrored,
+        vec![
+            ("Mcp-Param-Owner".to_string(), "unity".to_string()),
+            (
+                "Mcp-Param-Repo".to_string(),
+                "=?base64?dHdvIHdvcmRz?=".to_string()
+            ),
+        ]
     );
 }

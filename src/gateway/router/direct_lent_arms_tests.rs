@@ -23,35 +23,41 @@ const BACKEND: &str = "lent-arms";
 const TOOL: &str = "lookup";
 const MARKER: &str = "served-by-the-loopback-peer";
 
-/// What the peer saw: each request's JSON-RPC method and `Authorization`.
-type Seen = Arc<Mutex<Vec<(String, String)>>>;
+/// What the peer saw: each request's JSON-RPC method and headers.
+type Seen = Arc<Mutex<Vec<(String, HeaderMap)>>>;
 
 /// A streamable HTTP MCP peer on loopback: a 2026 `server/discover`, one
 /// tool, and a call answered with [`MARKER`].
 async fn peer() -> (String, Seen) {
+    peer_with_tool(json!({
+        "name": TOOL,
+        "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}}
+    }))
+    .await
+}
+
+async fn peer_with_tool(tool: Value) -> (String, Seen) {
     let seen: Seen = Arc::default();
     let log = Arc::clone(&seen);
     let app = axum::Router::new().fallback(
         move |headers: HeaderMap, axum::Json(message): axum::Json<Value>| {
             let log = Arc::clone(&log);
+            let tool = tool.clone();
             async move {
                 let method = message["method"].as_str().unwrap_or_default().to_owned();
-                let auth = headers
-                    .get("authorization")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or_default()
-                    .to_owned();
-                log.lock().unwrap().push((method.clone(), auth));
+                log.lock().unwrap().push((method.clone(), headers));
                 let id = message.get("id").cloned().unwrap_or(Value::Null);
                 let result = match method.as_str() {
+                    "initialize" => json!({
+                        "protocolVersion": message["params"]["protocolVersion"],
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "lent-arms", "version": "0"}
+                    }),
                     "server/discover" => json!({
                         "supportedVersions": [crate::protocol::meta::MODERN_VERSIONS[0]],
                         "capabilities": {"tools": {}}
                     }),
-                    "tools/list" => json!({"tools": [{
-                        "name": TOOL,
-                        "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}}
-                    }]}),
+                    "tools/list" => json!({"tools": [tool]}),
                     "tools/call" => json!({"content": [{"type": "text", "text": MARKER}]}),
                     _ => json!({}),
                 };
@@ -190,8 +196,50 @@ async fn every_direct_route_arm_lends_the_checked_loan() {
         );
         let seen = seen.lock().unwrap().clone();
         assert!(
-            !seen.is_empty() && seen.iter().all(|(_, auth)| auth.starts_with("Bearer ")),
+            !seen.is_empty()
+                && seen.iter().all(|(_, headers)| headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    .is_some_and(|auth| auth.starts_with("Bearer "))),
             "{arm}: a request reached the backend without the caller's assertion: {seen:?}"
         );
     }
+}
+
+/// A tools/call through the router's direct route on a backend whose slot was never
+/// listed still carries its Mcp-Param mirror: the route's catalogue check fills the
+/// slot before the send. Red if the route stops filling a cold slot before the
+/// mirror reads it.
+#[tokio::test]
+async fn cold_slot_call_via_direct_route_is_mirrored() {
+    let (url, seen) = peer_with_tool(json!({
+        "name": "echo",
+        "inputSchema": {"type": "object", "properties": {
+            "tenant": {"type": "string", "x-mcp-header": "Tenant"}
+        }}
+    }))
+    .await;
+    let (router, _dirs) = gateway(url, Guarded::Sanitized).await;
+    assert!(seen.lock().unwrap().is_empty(), "the slot starts cold");
+
+    let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "echo", "arguments": {"tenant": "acme"}}});
+    let (status, answer) = post_direct(&router, &call).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(answer.get("error").is_none(), "{answer}");
+
+    let seen = seen.lock().unwrap();
+    let calls: Vec<_> = seen
+        .iter()
+        .filter(|(method, _)| method == "tools/call")
+        .collect();
+    assert_eq!(calls.len(), 1, "{seen:?}; {answer}");
+    assert_eq!(
+        calls[0]
+            .1
+            .get("Mcp-Param-Tenant")
+            .and_then(|value| value.to_str().ok()),
+        Some("acme"),
+        "the cold direct-route call must carry its parameter mirror: {seen:?}"
+    );
 }

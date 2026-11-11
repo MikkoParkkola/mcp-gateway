@@ -35,6 +35,11 @@ JOBS = {  # os: (shard job, aggregate job, aggregate name, shard name prefix)
     "macos": ("macos-shards", "macos-check", "macOS check", "macOS shard "),
 }
 EXTRA_NEEDS = {"windows-check": ["windows-clippy"]}
+# Every aggregate skips on a same-repo merge-train PR into the release line: merge-train judges its needs
+# itself from the base copy of this workflow (the ROLLUP_EXPECTS ids below).
+TRAIN_SKIP = ("!(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
+              " && github.event.pull_request.head.repo.full_name == github.repository"
+              " && startsWith(github.head_ref, 'train/'))")
 # `matrix.shard == 'x'` in any spacing or quoting an expression accepts.
 # The os-sensitive label's clause, as ci.yml's OS jobs spell it (test_os_label_routing.py
 # checks what it routes).
@@ -208,15 +213,18 @@ def workflow_problems(jobs: dict, st) -> list[str]:
         guard = str(shard.get("if", "")).strip()
         if guard.startswith("${{") and guard.endswith("}}"):
             guard = guard[3:-2].strip()
-        if str(agg.get("if", "")).replace(" ", "") != ("${{ !cancelled() && " + guard + " }}").replace(" ", ""):
-            out.append(f"{agg_key}: if must be !cancelled() plus the shards' own guard, exactly")
+        if str(agg.get("if", "")).replace(" ", "") != ("${{ !cancelled() && " + guard + " && " + TRAIN_SKIP + " }}").replace(" ", ""):
+            out.append(f"{agg_key}: if must be !cancelled(), the shards' own guard and the merge-train skip, exactly")
         for extra in EXTRA_NEEDS.get(agg_key, []):
             if str(jobs.get(extra, {}).get("if", "")) != str(shard.get("if", "")):
                 out.append(f"{extra}: if must equal {shard_key}'s guard")
-        runs = [s.get("run", "") for s in agg.get("steps", [])]
-        verdict = [r for r in runs if "scripts/ci/check_needs.py" in r]
-        if verdict != [f"python3 scripts/ci/check_needs.py {' '.join(want)}"]:
-            out.append(f"{agg_key}: verdict step {verdict} must pass exactly {want}")
+        steps = [s for s in agg.get("steps", []) if "scripts/ci/check_needs.py" in s.get("run", "")]
+        # The verdict's command, without the shellcheck note above it.
+        verdict = [" ".join(l.strip() for l in s.get("run", "").splitlines() if l.strip() and not l.strip().startswith("#"))
+                   for s in steps]
+        expects = [str((s.get("env") or {}).get("ROLLUP_EXPECTS", "")).split() for s in steps]
+        if verdict != ["python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS"] or expects != [want]:
+            out.append(f"{agg_key}: verdict step {verdict} with ROLLUP_EXPECTS {expects} must pass exactly {want}")
         envs = [s.get("env", {}).get("NEEDS") for s in agg.get("steps", []) if "run" in s]
         if "${{ toJSON(needs) }}" not in envs:
             out.append(f"{agg_key}: verdict step must read NEEDS from toJSON(needs)")
@@ -241,8 +249,12 @@ def self_test(jobs: dict, st) -> None:
         "renamed aggregate": lambda j: j["test"].__setitem__("name", "Tests (all)"),
         "shard named like the check": lambda j: j["macos-shards"].__setitem__("name", "macOS check"),
         "macOS shard without prefix": lambda j: j["macos-shards"].__setitem__("name", "mac shard x"),
-        "verdict skips a job": lambda j: j["windows-check"]["steps"][-1].__setitem__(
-            "run", "python3 scripts/ci/check_needs.py windows-shards"),
+        "verdict skips a job": lambda j: j["windows-check"]["steps"][-1]["env"].__setitem__(
+            "ROLLUP_EXPECTS", "windows-shards"),
+        "verdict ids typed into the run line": lambda j: j["windows-check"]["steps"][-1].__setitem__(
+            "run", "python3 scripts/ci/check_needs.py windows-shards windows-clippy"),
+        "merge-train skip dropped": lambda j: j["test"].__setitem__(
+            "if", str(j["test"]["if"]).replace(" && " + TRAIN_SKIP, "")),
         "leg dropped": lambda j: j["test-shards"]["strategy"]["matrix"].__setitem__("shard", ["lib-a"]),
         "fail-fast": lambda j: j["windows-shards"]["strategy"].__setitem__("fail-fast", True),
         "clippy guard drift": lambda j: j["windows-clippy"].__setitem__("if", "${{ true }}"),
@@ -276,12 +288,12 @@ def self_test(jobs: dict, st) -> None:
         shards = labelled_guard if "macos-shards" in clause_on else train_guard
         check = labelled_guard if "macos-check" in clause_on else train_guard
         j["macos-shards"]["if"] = "${{ " + shards + " }}"
-        j["macos-check"]["if"] = "${{ !cancelled() && " + check + " }}"
+        j["macos-check"]["if"] = "${{ !cancelled() && " + check + " && " + TRAIN_SKIP + " }}"
 
     def train_only(j):
         j["macos-shards"]["strategy"]["matrix"]["shard"] = legs_of(st, "macos")
         j["macos-shards"]["if"] = "${{ " + train_guard + " }}"
-        j["macos-check"]["if"] = "${{ !cancelled() && " + train_guard + " }}"
+        j["macos-check"]["if"] = "${{ !cancelled() && " + train_guard + " && " + TRAIN_SKIP + " }}"
 
     for name, form in (("train-only", train_only), ("labelled", labelled_form)):
         j = copy.deepcopy(jobs)
@@ -291,7 +303,7 @@ def self_test(jobs: dict, st) -> None:
         "expression without the label clause": lambda j: labelled_form(j, clause_on=()),
         "label clause on a static matrix": lambda j: (train_only(j), j["macos-shards"].__setitem__(
             "if", "${{ " + labelled_guard + " }}"), j["macos-check"].__setitem__(
-            "if", "${{ !cancelled() && " + labelled_guard + " }}")),
+            "if", "${{ !cancelled() && " + labelled_guard + " && " + TRAIN_SKIP + " }}")),
         "label clause on one macOS job": lambda j: labelled_form(j, clause_on=("macos-shards",)),
         "train list missing a shard": lambda j: labelled_form(j, b=["lib-b"]),
         "labelled list without lib": lambda j: labelled_form(j, a='["int"]'),

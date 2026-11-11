@@ -11,3 +11,8 @@ src/gateway/router/process_facts.rs	host_name	1	The host name resolved at start,
 src/gateway/router/process_facts.rs	resolve_host_name	1	Reads the host name from the environment or kernel, for display; decides nothing.
 src/gateway/router/process_facts.rs	node_name	1	The kernel node name, for display; decides nothing.
 src/gateway/router/process_facts.rs	node_name	2	No node name off Unix; decides nothing.
+src/gateway/server/counter_wiring.rs	save_now	1	Saves the counters file now (startup and shutdown); a failed save is logged and decides nothing about a request
+src/gateway/server/health_wiring.rs	start	1	Restores the health history and saves it once before serving; reports health, never refuses a request or a start
+src/gateway/server/health_wiring.rs	save_path	1	Chooses where this run saves health.json (nowhere when an unreadable file could not be moved aside); decides nothing about access
+src/gateway/server/health_wiring.rs	spawn_sampler	1	Starts the background task that samples memory and sessions for the health history; records numbers only
+src/gateway/server/health_wiring.rs	shutdown_save	1	Saves the health history at shutdown with the clean stop; a failed save is logged and decides nothing about access

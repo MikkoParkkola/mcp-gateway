@@ -130,8 +130,8 @@ mod replay;
 #[cfg(test)]
 pub(crate) use decision::take_refusal_kind;
 pub(crate) use decision::{
-    after_upstream_401, note_declared_effect, note_refused_by, note_send_refusal, noted,
-    take_refusal, take_route_noted, with_route_scope,
+    after_upstream_401, collect_allow, note_allowed_by, note_declared_effect, note_refused_by,
+    note_send_refusal, noted, take_refusal, take_route_noted, with_route_scope,
 };
 
 /// Most process notes one record carries (a playbook may run many).
@@ -306,6 +306,28 @@ pub(crate) fn note_cached_failure(failure: &Value) {
     note_cached(Answered::Replay);
     if failure.get(UNINSPECTED_MARKER).and_then(Value::as_bool) == Some(true) {
         note(|notes| notes.uninspected = true);
+    }
+}
+
+/// Whether a call's dispatch scope is open here, for a test hook that must
+/// act only inside it.
+#[cfg(test)]
+pub(crate) fn in_dispatch_scope_for_test() -> bool {
+    NOTES.try_with(|_| ()).is_ok()
+}
+
+/// Note `allow` into this call's notes directly, as another check of the
+/// same invocation would have, for a row that preloads an attribution.
+#[cfg(test)]
+pub(crate) fn preload_allow_for_test(allow: crate::security::decision_record::Allow) {
+    note(|notes| notes.decision.allowed(allow));
+}
+
+impl DispatchNotes {
+    /// What this call's gates noted about its decision, for a row to compare.
+    #[cfg(test)]
+    pub(crate) const fn decision_for_test(&self) -> &crate::security::decision_record::Noted {
+        &self.decision
     }
 }
 

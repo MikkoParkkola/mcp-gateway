@@ -22,8 +22,11 @@ pub(super) enum Renewal {
     Refused,
     /// Every headless grant failed: the person must authorize again.
     Exhausted,
-    /// The credential lock was busy: nothing ran, and the loop retries next
-    /// period without trying another grant on the same lease.
+    /// Nothing was renewed and nothing new is due from the person: the
+    /// credential lock was busy (nothing ran), or a sign-in under another
+    /// issuer was confirmed before the grant or while it was in flight (its
+    /// answer is not this backend's credential). The loop retries next period
+    /// without trying another grant on the same lease.
     Deferred,
 }
 
@@ -77,6 +80,10 @@ impl OAuthClient {
         self.renewal_pause.pause().await;
         match self.try_client_credentials(allowed).await {
             Ok(_) => Renewal::Renewed,
+            // A sign-in under another issuer landed while the grant was in
+            // flight: as at the entry check above, nothing is renewed and the
+            // token step re-discovers. Not exhausted: no new sign-in is due.
+            Err(_) if self.issuer_differs() => Renewal::Deferred,
             Err(e) if is_ssrf_refusal(&e) => self.refused(&e),
             // Its save met the busy lease: deferred, not exhausted, so no
             // misleading re-authorization warning follows.

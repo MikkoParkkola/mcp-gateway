@@ -139,14 +139,16 @@ impl AuthorizationError {
 
 /// The tool policy on `target`, as every transport's authorizer judges it: a
 /// refusal is `-32600` and names the policy entry that made it, for the
-/// decision record only.
+/// decision record only. An allow keeps the allow-list entry that admitted
+/// the call (D6): `Ok(None)` when no entry did (the policy is off, or its
+/// default action allowed, which names no entry).
 pub(crate) fn tool_policy_refusal(
     policy: &crate::security::ToolPolicy,
     target: ToolTarget<'_>,
-) -> Result<(), AuthorizationError> {
+) -> Result<Option<crate::security::rule_id::RuleId>, AuthorizationError> {
     policy
         .check_explained(target.server, target.tool)
-        .map(|_| ())
+        .map(Option::<&crate::security::rule_id::RuleId>::cloned)
         .map_err(|(e, rule)| {
             AuthorizationError::forbidden(
                 crate::security::decision_record::DecisionKind::ToolPolicy,
@@ -359,6 +361,9 @@ pub enum Emit {
 pub struct Decision<'a> {
     pub verdict: Result<(), AuthorizationError>,
     record: Option<Box<dyn FnOnce() + 'a>>,
+    /// The check that allowed, noted for the call's record when the
+    /// decision is emitted under [`Emit::Audit`] and the verdict allows.
+    allow: Option<crate::security::decision_record::Allow>,
 }
 
 impl<'a> Decision<'a> {
@@ -367,6 +372,7 @@ impl<'a> Decision<'a> {
         Self {
             verdict,
             record: None,
+            allow: None,
         }
     }
 
@@ -378,7 +384,22 @@ impl<'a> Decision<'a> {
         Self {
             verdict,
             record: Some(Box::new(record)),
+            allow: None,
         }
+    }
+
+    /// This decision, naming the check that allowed it; a lower rank already
+    /// held is kept.
+    #[must_use]
+    pub(crate) fn allowing(
+        mut self,
+        allow: Option<crate::security::decision_record::Allow>,
+    ) -> Self {
+        self.allow = match (self.allow, allow) {
+            (Some(held), Some(next)) if held.rank <= next.rank => Some(held),
+            (held, next) => next.or(held),
+        };
+        self
     }
 
     /// The verdict, writing the record first under [`Emit::Audit`].
@@ -390,6 +411,14 @@ impl<'a> Decision<'a> {
             && let Some(record) = self.record
         {
             record();
+        }
+        // Only an audited allow names its check: a listing or a silent
+        // recheck must never write into a call's notes.
+        if emit == Emit::Audit
+            && self.verdict.is_ok()
+            && let Some(allow) = self.allow
+        {
+            crate::gateway::meta_mcp::invoke::audit::note_allowed_by(allow);
         }
         self.verdict
     }
@@ -702,17 +731,23 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
         if target.server.is_empty() || target.tool.is_empty() {
             return Decision::of(Ok(()));
         }
-        Decision::of(
-            crate::security::validate_tool_name(target.tool)
-                .map_err(|e| {
-                    AuthorizationError::forbidden(
-                        crate::security::decision_record::DecisionKind::Syntax,
-                        INVALID_REQUEST,
-                        e.clone(),
-                    )
-                })
-                .and_then(|()| tool_policy_refusal(self.tool_policy, target)),
-        )
+        let verdict = crate::security::validate_tool_name(target.tool)
+            .map_err(|e| {
+                AuthorizationError::forbidden(
+                    crate::security::decision_record::DecisionKind::Syntax,
+                    INVALID_REQUEST,
+                    e.clone(),
+                )
+            })
+            .and_then(|()| tool_policy_refusal(self.tool_policy, target));
+        // D6: the allow-list entry that admitted the call is its allow.
+        let entry = verdict.as_ref().ok().cloned().flatten();
+        Decision::of(verdict.map(|_| ())).allowing(entry.map(|id| {
+            crate::security::decision_record::Allow::by(
+                crate::security::decision_record::AllowRank::ToolPolicy,
+                Some(id),
+            )
+        }))
     }
 
     /// stdio carries no per-caller backend scope.
@@ -734,6 +769,10 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
 #[cfg(test)]
 #[path = "authz_rule_id_tests.rs"]
 mod rule_id_tests;
+
+#[cfg(test)]
+#[path = "authz_allow_emit_tests.rs"]
+mod allow_emit_tests;
 #[cfg(test)]
 #[path = "authz_standing_tests.rs"]
 mod standing_tests;

@@ -9,8 +9,8 @@
 //! answers with the preview's patch. Either way nothing is written and no
 //! secret entry exists.
 #![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "first caller: the settings save route (U8 PR c)")
+    not(any(test, feature = "webui")),
+    expect(dead_code, reason = "settings routes require webui")
 )]
 
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use crate::config_reload::{ReloadContext, ReloadOutcome};
 use crate::secret_store::{NewSecretOwned, SaveError, SecretStore, StoreError, Vault};
 use crate::wiped_bytes::WipedBytes;
 
-use super::ui_diff::{PreviewRefused, Shown, UiRefused, changes_for, ui_diff};
+use super::ui_diff::{LOADER_REFUSED, PreviewRefused, Shown, UiRefused, changes_for, ui_diff};
 use super::{
     AuditPosture, Expected, FileRevision, IntentKind, Replace, ReplaceError, Replaced, SecretStep,
     replace_audited,
@@ -194,7 +194,7 @@ fn slot(id: FieldId, param: &Param) -> SlotId {
     SlotId(segments.collect())
 }
 
-/// The answer to a write that did not complete; the detail goes to the log.
+/// The fixed answer to a write that did not complete.
 const FAILED: &str =
     "the save did not complete; gateway.yaml may have changed, so preview it again before retrying";
 
@@ -229,31 +229,38 @@ fn map_error(error: ReplaceError, halt: Option<Halt>) -> Mapped {
         ReplaceError::Refused(_) if halt == Some(Halt::SlotMismatch) => {
             UiRefused::Unsupported("the edit's secret slots do not match".to_owned())
         }
-        ReplaceError::Refused(why) | ReplaceError::ReloadRefused(why) => UiRefused::Invalid(why),
+        ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused { class },
+        ReplaceError::Refused(_) => UiRefused::Invalid(LOADER_REFUSED.to_owned()),
         // No log under auth, or the log refused this save's intent: either
         // way the audit the save requires is not there, and nothing was
         // written (the adopt route answers both alike).
         ReplaceError::NoAuditLog | ReplaceError::AuditRefused(_) => UiRefused::NoAuditLog,
         ReplaceError::Busy => UiRefused::Busy,
-        ReplaceError::Secrets(SaveError::Refused(e) | SaveError::Store(e)) => {
-            UiRefused::SecretsRefused {
-                timeout: matches!(e, StoreError::TimedOut),
-            }
-        }
+        ReplaceError::Secrets(SaveError::Refused(e) | SaveError::Store(e)) => match e {
+            StoreError::Failed(_) => UiRefused::Failed(FAILED.to_owned()),
+            StoreError::TimedOut => UiRefused::SecretsRefused { timeout: true },
+            StoreError::Exists
+            | StoreError::Unavailable(_)
+            | StoreError::Empty
+            | StoreError::NotUtf8
+            | StoreError::TooLarge { .. } => UiRefused::SecretsRefused { timeout: false },
+        },
         ReplaceError::Secrets(SaveError::Commit(never)) => match never {},
         ReplaceError::NoConfigFile => UiRefused::Preview(PreviewRefused::NoConfigFile),
         ReplaceError::ConfigRefused(why) => UiRefused::Preview(PreviewRefused::Unread(why)),
         ReplaceError::Unsupported(why) => UiRefused::Preview(PreviewRefused::Untrusted(why)),
-        failure @ (ReplaceError::Stage(_)
-        | ReplaceError::Write(_)
-        | ReplaceError::Failed(_)
-        | ReplaceError::RollbackFailed { .. }
-        | ReplaceError::Unconfirmed { .. }) => {
-            tracing::warn!(error = ?failure, "settings save: the config write did not complete");
-            UiRefused::Failed(FAILED.to_owned())
-        }
+        ReplaceError::Stage(_) => write_failed("stage"),
+        ReplaceError::Write(_) => write_failed("write"),
+        ReplaceError::Failed(_) => write_failed("failed"),
+        ReplaceError::RollbackFailed { .. } => write_failed("rollback_failed"),
+        ReplaceError::Unconfirmed { .. } => write_failed("unconfirmed"),
     };
     Mapped::Refusal(refusal)
+}
+
+fn write_failed(variant: &'static str) -> UiRefused {
+    tracing::warn!(variant, "settings save: the config write did not complete");
+    UiRefused::Failed(FAILED.to_owned())
 }
 
 #[cfg(test)]

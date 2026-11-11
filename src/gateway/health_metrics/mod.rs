@@ -5,6 +5,7 @@
 
 pub(crate) mod clock;
 pub(crate) mod layers;
+pub(crate) mod memory;
 #[cfg(feature = "metrics")]
 pub(crate) mod process;
 
@@ -71,6 +72,18 @@ pub(crate) enum ErrorKind {
     Request,
     Internal,
     Backend,
+}
+
+impl ErrorKind {
+    /// This kind's slot in a per-kind count.
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            Self::Auth => 0,
+            Self::Request => 1,
+            Self::Internal => 2,
+            Self::Backend => 3,
+        }
+    }
 }
 
 /// The kind of error an answer with HTTP `status` and error `marker` gave

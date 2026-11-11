@@ -89,6 +89,36 @@ async fn api4_3_a_refused_add_leaves_gateway_yaml_unchanged_and_is_listed_withou
     assert!(!body.to_string().contains(CANARY), "{body}");
 }
 
+/// The same refused add over TLS: no cleartext problem, so the credential in
+/// the URL is listed under the generic code, still without its value.
+#[tokio::test]
+async fn api4_3b_a_refused_add_over_tls_is_listed_as_invalid_config() {
+    let (router, path, _tmp) = with_reload().await;
+    let before = std::fs::read(&path).unwrap();
+
+    let (status, body) = send_json(
+        &router,
+        Method::POST,
+        "/ui/api/backends",
+        Some(json!({
+            "name": "inventory",
+            "url": format!("https://10.0.4.7/mcp?token={CANARY}"),
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+
+    let (status, body) = send_json(&router, Method::GET, "/ui/api/refusals", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let list = body["refusals"].as_array().expect("a list");
+    assert_eq!(list.len(), 1, "{body}");
+    assert_eq!(list[0]["kind"], "add");
+    assert_eq!(list[0]["code"], "invalid_config");
+    assert_eq!(list[0]["backend"], "inventory");
+    assert!(!body.to_string().contains(CANARY), "{body}");
+}
+
 #[tokio::test]
 async fn api4_3_a_refused_reload_is_listed_and_an_applied_one_resolves_it() {
     let (router, path, _tmp) = with_reload().await;

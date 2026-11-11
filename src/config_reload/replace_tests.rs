@@ -146,7 +146,7 @@ async fn a_refused_reload_rolls_the_file_back() {
     .expect_err("the posture refuses the reload");
 
     assert!(
-        matches!(failure, ReplaceError::ReloadRefused(_)),
+        matches!(failure, ReplaceError::ReloadRefused { .. }),
         "{failure:?}"
     );
     assert_eq!(read(&path), START, "refused bytes never stay on disk");

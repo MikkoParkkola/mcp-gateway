@@ -30,8 +30,11 @@ use crate::secret_store::{
     NewSecretOwned, PendingSecrets, SaveError, SecretStore, Vault, create_secrets,
 };
 
-use super::ReloadContext;
 use crate::config_persistence::keyedit::Template;
+
+use super::ReloadContext;
+pub(crate) use super::replace_refusal::RefusalClass;
+pub(super) use super::replace_refusal::post_write_class;
 
 // The revision type lives with the config commit primitive, which every
 // build compiles; the replace path names it from there.
@@ -165,7 +168,7 @@ pub(crate) enum ReplaceError {
     Write(String),
     /// The reload refused the new bytes, or the check of them before any
     /// entry or write did; the original stands.
-    ReloadRefused(String),
+    ReloadRefused { class: RefusalClass, reason: String },
     /// Putting the original back failed; the journal stays `staged`.
     RollbackFailed { journal: PathBuf, error: String },
     /// The reload accepted the bytes but that could not be recorded
@@ -291,7 +294,7 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         // The rollback came back: a failed one is `RollbackFailed`.
         | ReplaceError::Unsupported(_)
         | ReplaceError::Write(_)
-        | ReplaceError::ReloadRefused(_) => Settle::Discard,
+        | ReplaceError::ReloadRefused { .. } => Settle::Discard,
         // The file on disk may name them; `Failed` proves nothing either way.
         ReplaceError::RollbackFailed { .. }
         | ReplaceError::Unconfirmed { .. }
@@ -614,7 +617,10 @@ impl ReloadContext {
             let reload = self
                 .reload_outcome_locked_at(target)
                 .await
-                .map_err(ReplaceError::ReloadRefused)?;
+                .map_err(|refusal| ReplaceError::ReloadRefused {
+                    class: post_write_class(&refusal),
+                    reason: refusal.text,
+                })?;
             return Ok(ReplaceOutcome {
                 revision: None,
                 kept_beside: None,
@@ -716,7 +722,10 @@ impl ReloadContext {
                 unkeep();
                 Err(Self::roll_back(
                     target,
-                    ReplaceError::ReloadRefused(refusal),
+                    ReplaceError::ReloadRefused {
+                        class: post_write_class(&refusal),
+                        reason: refusal.text,
+                    },
                 ))
             }
         }
