@@ -372,6 +372,7 @@ fn only_the_issuance_helper_appends_from_the_key_server() {
         "log_invocation(",
     ];
     let mut users = Vec::new();
+    let mut callers: Vec<(String, usize)> = Vec::new();
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
@@ -381,13 +382,22 @@ fn only_the_issuance_helper_appends_from_the_key_server() {
         let text = std::fs::read_to_string(&path).unwrap();
         let production = crate::test_source_text::production_text(&text);
         if banned.iter().any(|b| production.contains(b)) {
-            users.push(name);
+            users.push(name.clone());
+        }
+        let calls = production.matches("append_issuance_row(").count();
+        if calls > 0 {
+            callers.push((name, calls));
         }
     }
     assert_eq!(
         users,
         vec!["email_hmac_store.rs".to_owned()],
         "appenders: {users:?}"
+    );
+    assert_eq!(
+        callers,
+        vec![("issuance.rs".to_owned(), 1)],
+        "exactly one call of the issuance helper, in issuance.rs"
     );
     let record = std::fs::read_to_string(dir.join("issuance.rs")).unwrap();
     assert!(
