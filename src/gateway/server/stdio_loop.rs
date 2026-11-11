@@ -715,8 +715,10 @@ impl Gateway {
             // it, so no two saves overlap and no delta is counted twice (MIK-8364).
             drop(telemetry_saver);
             // A hurry keeps only what delivers replies: the final saves wait
-            // behind the parent's kill, so they are dropped (the next open
-            // settles what they would have written).
+            // behind the parent's kill, so they are dropped. What they would
+            // have written (observations and spend since the last periodic
+            // save, up to five minutes) is lost; in-flight task rows are
+            // settled by the next open.
             let hurried = || gateway.backends.stop_deadline().is_hurried();
             if !hurried() {
                 Self::persist_stdio_telemetry_bounded(shutdown_deadline, &protocol_telemetry_sink)

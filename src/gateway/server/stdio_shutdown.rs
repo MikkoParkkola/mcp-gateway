@@ -288,6 +288,7 @@ impl Gateway {
         // Pinned outside the select below: a hurry stops waiting for the
         // preparations that follow it, but replies already produced, and calls
         // the backend kill will fail, are still written before the cut.
+        let before = futures::FutureExt::fuse(before);
         tokio::pin!(before);
         let hurried = tokio::select! {
             biased;
@@ -323,7 +324,10 @@ impl Gateway {
             }
             () = async {
                 let stopped = bounded_step(backend_deadline, "backend stop", &mut stop);
-                if hurried.is_some() {
+                // A hurry that lands after the drain finished (during the
+                // post-drain cleanup) has nothing left to flush: a finished
+                // future is never polled again.
+                if hurried.is_some() && !futures::future::FusedFuture::is_terminated(&before) {
                     // The kill fails the calls it reaches, so their replies
                     // join those already produced; both go out before the cut.
                     let flushed =
