@@ -4,14 +4,18 @@
 
 use serde_json::Value;
 
+#[cfg(test)]
 use crate::security::transparency_log::settle::role_fields;
 
 use super::{
-    Action, Attribution, Decision, Deserialize, Fact, FileRevision, FrozenRecord, JournalError,
-    JournalV2, LogId, MAX_JOURNAL_BYTES, Pending, Phase, Reason, ResultClass, Role, Serialize,
-    TokenState,
+    Action, Attribution, Deserialize, Fact, FileRevision, JournalError, JournalV2, LogId, Pending,
+    Phase, Role, Serialize, TokenState,
 };
 
+#[cfg(test)]
+use super::{Decision, FrozenRecord, MAX_JOURNAL_BYTES, Reason, ResultClass};
+
+#[cfg(test)]
 pub(super) fn terminal_matches(
     record: &FrozenRecord,
     decision: &Decision,
@@ -144,6 +148,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<JournalV2, JournalError> {
     Ok(state)
 }
 
+#[cfg(test)]
 pub(super) fn encode(state: &JournalV2) -> Result<Vec<u8>, JournalError> {
     let wire = Wire {
         version: state.version,

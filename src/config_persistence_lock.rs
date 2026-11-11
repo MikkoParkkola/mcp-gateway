@@ -434,27 +434,29 @@ fn acquire(
     let mut counted = Waiting::default();
     loop {
         if let Some(held) = try_once(config, &lock, Owners::UserOrRoot)? {
-            // An unusable journal releases the lock and refuses, naming what
-            // to do by hand.
-            let (recovered, journal_pending) = match recovery {
-                Recovery::OnAcquire => (
-                    super::journal::recover(&target).map_err(|e| match e {
-                        super::journal::NotRecovered::Refused(why) => NotLocked::Refused(why),
-                        super::journal::NotRecovered::Failed(why) => NotLocked::Failed(why),
-                    })?,
-                    false,
-                ),
-                Recovery::Deferred => (Recovered::Nothing, super::journal::exists(&target)),
-            };
-            let existed = std::fs::symlink_metadata(&target).is_ok();
-            return Ok(Locked {
+            let mut locked = Locked {
                 target,
                 held,
-                recovered,
-                journal_pending,
+                recovered: Recovered::Nothing,
+                journal_pending: false,
                 dangling,
-                existed,
-            });
+                existed: false,
+            };
+            match recovery {
+                Recovery::OnAcquire => {
+                    refuse_pending_v2(&locked)?;
+                    locked.recovered =
+                        super::journal::recover(&locked.target).map_err(|error| match error {
+                            super::journal::NotRecovered::Refused(why) => NotLocked::Refused(why),
+                            super::journal::NotRecovered::Failed(why) => NotLocked::Failed(why),
+                        })?;
+                }
+                Recovery::Deferred => {
+                    locked.journal_pending = super::journal::exists(&locked.target);
+                }
+            }
+            locked.existed = std::fs::symlink_metadata(&locked.target).is_ok();
+            return Ok(locked);
         }
         if let Some(say) = on_wait.take() {
             say(&lock);
@@ -681,19 +683,30 @@ pub(crate) fn lock_file_blocking(
 mod tests;
 
 /// Dispatch an already held lock without recursively acquiring it.
-#[cfg(test)]
 pub(crate) fn dispatch_journal(
     locked: &Locked,
 ) -> Result<Option<super::journal::v2::OpenJournal>, super::journal::v2::JournalError> {
-    // stub: S6a2
-    let _ = locked;
-    Ok(None)
+    super::journal::v2::open(locked)
 }
 
 /// Refuse exposing a writer while a v2 owner still owes settlement.
-#[cfg(test)]
 pub(crate) fn refuse_pending_v2(locked: &Locked) -> Result<(), NotLocked> {
-    // stub: S6a2
-    let _ = locked;
-    Ok(())
+    use super::journal::v2::OpenJournal;
+
+    match dispatch_journal(locked) {
+        Ok(None) => Ok(()),
+        Ok(Some(OpenJournal::Legacy(legacy))) => {
+            drop(legacy);
+            Ok(())
+        }
+        Ok(Some(OpenJournal::Current(state))) => {
+            drop(state);
+            Err(NotLocked::Refused(
+                super::journal::SETTLEMENT_PENDING.to_owned(),
+            ))
+        }
+        Err(_) => Err(NotLocked::Refused(
+            super::journal::SETTLEMENT_UNCHECKED.to_owned(),
+        )),
+    }
 }

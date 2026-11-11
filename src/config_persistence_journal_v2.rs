@@ -4,13 +4,17 @@
 
 #[cfg(test)]
 use std::io::Write as _;
+#[cfg(test)]
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use super::Journal;
-use crate::config_persistence::commit::{Action, CommitToken, FileRevision};
+#[cfg(test)]
+use crate::config_persistence::commit::CommitToken;
+use crate::config_persistence::commit::{Action, FileRevision};
 use crate::config_persistence::lock::Locked;
+#[cfg(test)]
 use crate::config_persistence::{FileMode, Symlink, sync_dir_of, write_atomic};
 use crate::security::transparency_log::identity::LogId;
 use crate::security::transparency_log::settle::{Attribution, Reason, Role};
@@ -134,8 +138,11 @@ pub(crate) enum JournalError {
     Unreadable,
     InvalidState,
     UnsupportedVersion,
+    #[cfg(test)]
     ChangedDecision,
+    #[cfg(test)]
     Persist,
+    #[cfg(test)]
     Finish,
 }
 
@@ -192,12 +199,14 @@ pub(crate) fn create_intended(
     })
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct JournalSession {
     target: PathBuf,
     state: JournalV2,
 }
 
+#[cfg(test)]
 impl JournalSession {
     pub(crate) fn persist(&mut self) -> Result<(), JournalError> {
         #[cfg(test)]
@@ -354,6 +363,7 @@ impl JournalV2 {
         codec::decode(bytes)
     }
 
+    #[cfg(test)]
     pub(crate) fn encode(&self) -> Result<Vec<u8>, JournalError> {
         self.validate()?;
         codec::encode(self)
@@ -390,7 +400,8 @@ impl JournalV2 {
             return Err(JournalError::InvalidState);
         }
         if let Some(pending) = &self.pending
-            && (&pending.pre_action != self.pre_action(pending.action)?
+            && ((pending.tried && self.phase != Phase::Staged)
+                || &pending.pre_action != self.pre_action(pending.action)?
                 || &pending.expected != self.destination(pending.action)?)
         {
             return Err(JournalError::InvalidState);
@@ -461,6 +472,7 @@ impl Decision {
     }
 }
 
+#[cfg(test)]
 impl TokenState {
     fn finished(&self, attempts: &[TokenState]) -> bool {
         if self.intent.parked.is_some() || self.records.iter().any(|r| r.parked.is_some()) {

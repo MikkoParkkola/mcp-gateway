@@ -27,7 +27,10 @@ use crate::identity_grants::journal::resolved;
 
 const VERSION: u32 = 1;
 
-#[cfg(test)]
+pub(super) const SETTLEMENT_PENDING: &str = "A config write is awaiting audit settlement. Run mcp-gateway audit settle --abandon <journal> --yes.";
+pub(super) const SETTLEMENT_UNCHECKED: &str =
+    "Audit settlement state could not be checked safely; startup was refused.";
+
 #[path = "config_persistence_journal_v2.rs"]
 pub(crate) mod v2;
 #[cfg(test)]
@@ -340,6 +343,8 @@ fn read_checked(
     path: &Path,
     original: &Path,
 ) -> Result<Option<Journal>, NotRecovered> {
+    // Deferred startup also enters here before loading or recording a recovery.
+    refuse_v2_recovery(path)?;
     let journal = match read(path) {
         Ok(Some(journal)) => journal,
         Ok(None) => return Ok(None),
@@ -366,6 +371,21 @@ fn read_checked(
         )));
     }
     Ok(Some(journal))
+}
+
+/// Keep v2 settlement out of the legacy recovery and startup paths.
+fn refuse_v2_recovery(path: &Path) -> Result<(), NotRecovered> {
+    let text = crate::config::read_recovery_journal_v2(path)
+        .map_err(|_| NotRecovered::Refused(SETTLEMENT_UNCHECKED.to_owned()))?;
+    let Some(text) = text else {
+        return Ok(());
+    };
+    let fields: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|_| NotRecovered::Refused(SETTLEMENT_UNCHECKED.to_owned()))?;
+    if fields["version"].as_u64() == Some(2) {
+        return Err(NotRecovered::Refused(SETTLEMENT_PENDING.to_owned()));
+    }
+    Ok(())
 }
 
 /// The staged original's text, read through the config guard and checked

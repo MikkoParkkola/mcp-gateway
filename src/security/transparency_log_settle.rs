@@ -13,7 +13,6 @@
 
 use std::io;
 
-#[cfg(test)]
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -87,7 +86,6 @@ impl Role {
 }
 
 /// Why a write ended as it did: a closed set, never error text.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Reason {
@@ -120,7 +118,6 @@ impl Reason {
 pub(crate) struct InvalidReason;
 
 /// Actor metadata frozen beside caller payload bytes by journal owners.
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct Attribution {
     pub(crate) actor: crate::security::audit::AuditWho,
@@ -215,12 +212,17 @@ pub(crate) fn role_fields(role: Role, fields: &Map<String, Value>) -> Result<(),
         (Role::Outcome, Some(_)) => fault("settled_by", Mistyped)?,
         (_, Some(_)) => fault("settled_by", Forbidden)?,
     }
-    #[cfg(not(test))]
-    if role == Role::RecoveryIntent {
-        text_field(fields, "settles", "settles")?;
+    match (role, fields.get("root")) {
+        (Role::RecoveryIntent, Some(Value::Bool(true))) => {
+            if fields.contains_key("settles") {
+                fault("settles", Forbidden)?;
+            }
+        }
+        (Role::RecoveryIntent, None) => text_field(fields, "settles", "settles")?,
+        (Role::RecoveryIntent, Some(_)) => fault("root", Mistyped)?,
+        (_, Some(_)) => fault("root", Forbidden)?,
+        (_, None) => {}
     }
-    #[cfg(test)]
-    root_recovery_fields(role, fields)?;
     Ok(())
 }
 
@@ -468,17 +470,6 @@ impl TransparencyLogger {
     }
 }
 
-/// Shared root-recovery extension for the settle and verification validator.
-#[cfg(test)]
-pub(crate) fn root_recovery_fields(
-    role: Role,
-    fields: &Map<String, Value>,
-) -> Result<(), FieldFault> {
-    // stub: S6a2
-    let _ = (role, fields);
-    Ok(())
-}
-
 #[cfg(test)]
 impl TransparencyLogger {
     pub(crate) async fn settle_attributed(
@@ -489,10 +480,16 @@ impl TransparencyLogger {
         payload: Map<String, Value>,
         actor: crate::security::audit::AuditWho,
     ) -> Result<Appended, Unsettled> {
-        // stub: S6a2
-        let _ = (binding, token, role, payload, actor);
-        Err(Unsettled::Refused(io::Error::other(
-            "settlement unavailable",
-        )))
+        let mut fields = settle_fields(token, role, payload).map_err(Unsettled::Invalid)?;
+        crate::security::audit::AuditEnvelope::ok(actor).write_into(&mut fields);
+        let binding = binding.clone();
+        match self
+            .dispatch_bounded(None, move |log| log.settle_now(&binding, fields))
+            .await
+        {
+            Dispatch::NotStarted(error) => Err(Unsettled::Refused(error)),
+            Dispatch::Joined(settled) => settled,
+            Dispatch::Unconfirmed(error) => Err(Unsettled::Unconfirmed(error)),
+        }
     }
 }
