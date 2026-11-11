@@ -171,6 +171,27 @@ async fn direct_get(gw: &Gateway, path: &str) -> Value {
         .expect("JSON body")
 }
 
+/// `value` with every `last_used` removed, each one asserted a string first.
+fn without_last_used(mut value: Value) -> Value {
+    match &mut value {
+        Value::Object(map) => {
+            if let Some(at) = map.remove("last_used") {
+                assert!(
+                    at.is_string() || at.is_null(),
+                    "last_used is a timestamp: {at}"
+                );
+            }
+            map.values_mut()
+                .for_each(|v| *v = without_last_used(v.take()));
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|v| *v = without_last_used(v.take())),
+        _ => {}
+    }
+    value
+}
+
 async fn started() -> (tempfile::TempDir, Gateway) {
     let root = tempfile::tempdir().expect("root");
     let gw = Gateway::start(root.path(), config()).await;
@@ -184,7 +205,12 @@ async fn a1_api_get_prints_json_and_exits_0() {
     let run = api(&gw, Some(ADMIN), &["GET", "/ui/api/keys"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let printed: Value = serde_json::from_str(&run.stdout).expect("stdout is JSON");
-    assert_eq!(printed, direct_get(&gw, "/ui/api/keys").await);
+    // `last_used` moves with the clock, so the two reads can straddle a
+    // second boundary: it must be a timestamp or null, and the rest must match.
+    assert_eq!(
+        without_last_used(printed),
+        without_last_used(direct_get(&gw, "/ui/api/keys").await)
+    );
     assert!(
         run.stdout.contains("\n  \""),
         "pretty-printed: {}",

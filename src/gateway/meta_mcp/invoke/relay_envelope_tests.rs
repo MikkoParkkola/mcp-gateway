@@ -86,6 +86,7 @@ async fn a_built_task_envelope_is_read_as_one() {
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        vouching: crate::gateway::task_service::Vouching::Vouched,
         replay_snapshot: None,
     };
     let ((), receipts) = meta

@@ -4,6 +4,7 @@
 //! is one blocked row, read from its decision record: listed only when the
 //! record is a denial that says no invocation record was written for the call.
 
+use crate::gateway::ui::activity::rows::Check;
 use std::path::Path;
 
 use axum::http::StatusCode;
@@ -225,7 +226,7 @@ async fn a_refusal_appears_in_both_exports_and_its_receipt_shows_the_decision() 
     let listed = rows(&logs, &Access::All, ListQuery::default()).await;
     let refused = listed.iter().find(|r| r["tool"] == "refused").unwrap();
     let id = super::receipt::parse_id(refused["id"].as_str().unwrap()).unwrap();
-    let receipt = super::receipt::receipt(&logs.invocation, &id, &Access::All, None)
+    let receipt = super::receipt::receipt(&logs.invocation, &id, &Access::All, &Check::bare(None))
         .unwrap()
         .expect("the refusal has a receipt");
     assert_eq!(receipt["decision"]["reason"], "missing_grant", "{receipt}");
@@ -238,7 +239,7 @@ async fn a_refusal_appears_in_both_exports_and_its_receipt_shows_the_decision() 
         None,
         &super::rows::Filter::default(),
         &Access::All,
-        None,
+        &Check::bare(None),
         super::export::CAPS,
         super::export::csv_size,
     )

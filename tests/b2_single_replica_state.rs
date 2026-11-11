@@ -74,7 +74,10 @@ fn assert_refused(yaml: &str, reason: &str) {
 #[test]
 fn startup_refuses_key_server_with_two_replicas() {
     assert_refused(
-        "  replicas: 2\n  modern_protocol: false\nauth:\n  enabled: false\nkey_server:\n  enabled: true\n",
+        // The key server needs the audit log; with it set, the refusal this
+        // row is about (the in-memory token store at two replicas) is reached.
+        "  replicas: 2\n  modern_protocol: false\nauth:\n  enabled: false\nkey_server:\n  enabled: true\n\
+         security:\n  transparency_log:\n    enabled: true\n    path: audit/transparency.jsonl\n",
         "InMemoryTokenStore",
     );
 }

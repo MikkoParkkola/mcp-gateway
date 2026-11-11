@@ -77,6 +77,17 @@ struct Logs {
     secret: Option<Vec<u8>>,
 }
 
+impl Logs {
+    /// The anchors and secret one request checks rows with.
+    fn check(&self) -> rows::Check<'_> {
+        rows::Check::new(
+            self.secret.as_deref(),
+            &self.invocation,
+            self.governance.as_deref(),
+        )
+    }
+}
+
 fn logs(state: &AppState) -> Option<Logs> {
     let invocation = state.transparency_log.as_ref()?.path();
     let governance = state
@@ -244,7 +255,7 @@ async fn receipt_route(
     };
     blocking(
         state.process.activity_reads(),
-        move || match receipt::receipt(&log, &id, &access, logs.secret.as_deref()) {
+        move || match receipt::receipt(&log, &id, &access, &logs.check()) {
             Ok(Some(body)) => Json(body).into_response(),
             Ok(None) => not_kept(),
             Err(error) => {
@@ -362,13 +373,19 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
             .into_response();
         }
     };
+    let check = logs.check();
     let rows: Vec<Value> = page
         .lines
         .iter()
-        .filter_map(|line| row(line, logs.secret.as_deref()))
+        .filter_map(|line| row(line, &check))
         .collect();
     Json(json!({
         "rows": rows,
+        // Log-wide, even when every row here is valid.
+        "signing_anchor": {
+            "invocation": check.report(reader::Which::Invocation),
+            "governance": check.report(reader::Which::Governance),
+        },
         "next_cursor": page.next.as_ref().map(cursor::encode),
         "scan_exhausted": page.scan_exhausted,
         "cursor_reset": page.cursor_reset || parsed.token_reset,
@@ -465,7 +482,7 @@ fn export_response(
         logs.governance.as_deref(),
         &parsed.filter,
         access,
-        logs.secret.as_deref(),
+        &logs.check(),
         caps,
         size,
     ) {
@@ -533,3 +550,6 @@ mod scope_tests;
 #[cfg(test)]
 #[path = "security_tests.rs"]
 mod security_tests;
+#[cfg(test)]
+#[path = "sigstate_tests.rs"]
+mod sigstate_tests;

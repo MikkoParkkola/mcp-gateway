@@ -203,6 +203,7 @@ pub(super) async fn fixture_with(ttl_ms: Option<u64>, handle: Handle) -> Fixture
                             tool: TOOL.to_owned(),
                             arguments: json!({}),
                             handle: HANDLE.to_owned(),
+                            dispatched: Some(crate::security::dispatched::Dispatched::None),
                         },
                         Vec::new(),
                     ),

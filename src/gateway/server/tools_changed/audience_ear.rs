@@ -381,6 +381,7 @@ impl World {
     pub(super) async fn start_public() -> Self {
         let key_server = std::sync::Arc::new(crate::key_server::KeyServer::new(
             crate::config::KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
         ));
         Self::start_on(
             key_server,
@@ -447,6 +448,7 @@ impl World {
     pub(super) async fn start_mtls() -> Self {
         let key_server = std::sync::Arc::new(crate::key_server::KeyServer::new(
             crate::config::KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
         ));
         Self::start_on(
             key_server,
@@ -461,6 +463,7 @@ impl World {
     pub(super) async fn start_agent(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
         let key_server = std::sync::Arc::new(crate::key_server::KeyServer::new(
             crate::config::KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
         ));
         Self::start_on(
             key_server,
@@ -479,6 +482,7 @@ impl World {
     ) -> Self {
         let key_server = std::sync::Arc::new(crate::key_server::KeyServer::new(
             crate::config::KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
         ));
         Self::start_on(
             key_server,

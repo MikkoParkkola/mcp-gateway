@@ -339,3 +339,228 @@ async fn a_stored_answer_where_one_set_forms_anothers_value_is_refused() {
         "the formed value left: {wire}"
     );
 }
+
+/// A seal as the gateway writes it, signature `sig`.
+fn provenance(sig: &str) -> serde_json::Value {
+    serde_json::json!({ "receipt": { "tool": "t" }, "public_signature": { "payload": "p", "sig": sig } })
+}
+
+/// A stored answer sealed four ways (a tool result's own `_meta`, a task
+/// wire's `result`, an array element, and a chain answer's steps carried as
+/// JSON text), with `value` in its text and in the steps' text.
+fn sealed_answer(value: &str) -> crate::protocol::JsonRpcResponse {
+    let steps = serde_json::json!({ "results": [
+        { "result": { "text": format!("step {value}"), "_meta": { "provenance": provenance("s") } } },
+    ] });
+    crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({
+            "content": [{ "type": "text", "text": steps.to_string() }],
+            "text": format!("answer {value}"),
+            "_meta": { "provenance": provenance("s") },
+            "result": { "_meta": { "provenance": provenance("s") } },
+            "items": [[{ "_meta": { "provenance": provenance("s") } }]],
+        }),
+    )
+}
+
+fn holding(value: &str) -> Arc<NeedleSet> {
+    let set = Arc::new(NeedleSet::with_grace(GRACE));
+    set.pin_configured(
+        "a",
+        &ConfiguredSecrets::of(vec![explicit("headers.A", value)]),
+    );
+    set
+}
+
+/// A redaction drops every provenance seal in the stored answer, at any
+/// depth, in arrays and inside JSON text, and keeps each receipt: the seals
+/// were made over the unredacted bytes, and their payload carries those
+/// bytes' digest.
+#[tokio::test(start_paused = true)]
+async fn a_redacted_stored_answer_keeps_no_seal_anywhere() {
+    let mut answer = sealed_answer("held-secret-value");
+    let outcome = super::scrub_stored(&[holding("held-secret-value")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_eq!(outcome, Scrubbed::Redacted, "{wire}");
+    assert!(!wire.contains("held-secret-value"), "{wire}");
+    assert!(
+        !wire.contains("public_signature"),
+        "a seal was kept: {wire}"
+    );
+    assert_eq!(
+        wire.matches("receipt").count(),
+        4,
+        "a receipt was dropped: {wire}"
+    );
+}
+
+/// The scrub renames a key holding a marked value; a seal under a renamed
+/// key is gone too, since the seals come off before the scrub.
+#[tokio::test(start_paused = true)]
+async fn a_seal_under_a_key_the_scrub_renames_is_dropped() {
+    let mut answer = sealed_answer("plain-text");
+    let outcome = super::scrub_stored(&[holding("provenance")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_eq!(outcome, Scrubbed::Redacted, "{wire}");
+    assert!(
+        !wire.contains("public_signature"),
+        "a seal was kept: {wire}"
+    );
+}
+
+/// A held value inside a seal itself: nothing else is removed, but the seal
+/// stays off and the answer counts as redacted.
+#[tokio::test(start_paused = true)]
+async fn a_seal_holding_a_held_value_is_dropped() {
+    let mut answer = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({ "text": "plain", "_meta": { "provenance": provenance("sig-held-secret-value") } }),
+    );
+    let outcome = super::scrub_stored(&[holding("held-secret-value")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_ne!(outcome, Scrubbed::Refuse, "{wire}");
+    assert!(!wire.contains("held-secret-value"), "{wire}");
+    assert!(
+        !wire.contains("public_signature"),
+        "a seal was kept: {wire}"
+    );
+    assert!(wire.contains("receipt"), "the receipt stays: {wire}");
+}
+
+/// Control: with no value held anywhere, the answer goes out byte-identical,
+/// seals included, the ones in JSON text too.
+#[tokio::test(start_paused = true)]
+async fn a_stored_answer_keeps_its_seals_while_no_value_is_held() {
+    let mut answer = sealed_answer("plain-text");
+    let before = serde_json::to_string(&answer).expect("serializes");
+    let outcome = super::scrub_stored(&[Arc::new(NeedleSet::with_grace(GRACE))], &mut answer);
+    assert_eq!(outcome, Scrubbed::Clean);
+    assert_eq!(serde_json::to_string(&answer).expect("serializes"), before);
+}
+
+/// A held value only in the stored text as written, gone once the strip
+/// rewrites it compact: the stored answer is not put back, and the seal
+/// stays off.
+#[tokio::test(start_paused = true)]
+async fn a_held_value_only_in_the_text_the_strip_rewrote_is_not_put_back() {
+    let steps = "{\n  \"step\": \"held\",\n  \"_meta\": {\"provenance\": {\"receipt\": {}, \"public_signature\": {\"sig\": \"s\"}}}\n}";
+    let mut answer = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({ "content": [{ "type": "text", "text": steps }] }),
+    );
+    let outcome = super::scrub_stored(&[holding("\"step\": \"held\"")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_ne!(outcome, Scrubbed::Refuse, "{wire}");
+    assert!(
+        !wire.contains("public_signature"),
+        "a seal was kept: {wire}"
+    );
+    assert!(
+        !wire.contains("\\\"step\\\": \\\"held\\\""),
+        "the held value was put back: {wire}"
+    );
+}
+
+/// Text shaped as JSON that names a seal but will not parse may still carry
+/// it: a redacted answer holding one is refused.
+#[tokio::test(start_paused = true)]
+async fn a_redacted_answer_with_seal_text_that_will_not_parse_is_refused() {
+    let mut answer = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({
+            "text": "answer held-secret-value",
+            "content": [{ "type": "text", "text": "{\"_meta\": {\"provenance\": {\"public_signature\": \"p\"" }],
+        }),
+    );
+    let outcome = super::scrub_stored(&[holding("held-secret-value")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_eq!(outcome, Scrubbed::Refuse, "{wire}");
+    assert!(
+        answer.result.is_none(),
+        "a refused answer carries no result: {wire}"
+    );
+}
+
+/// While any value is held, a stored answer goes out with no seal even when
+/// the scrub removes nothing; its receipts stay.
+#[tokio::test(start_paused = true)]
+async fn a_stored_answer_is_unsealed_while_any_value_is_held() {
+    let mut answer = sealed_answer("plain-text");
+    let outcome = super::scrub_stored(&[holding("held-secret-value")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_eq!(outcome, Scrubbed::Clean, "{wire}");
+    assert!(
+        !wire.contains("public_signature"),
+        "a seal was kept: {wire}"
+    );
+    assert_eq!(
+        wire.matches("receipt").count(),
+        4,
+        "a receipt was dropped: {wire}"
+    );
+    assert!(wire.contains("plain-text"), "nothing else changed: {wire}");
+}
+
+/// Seal text behind a prose prefix that will not parse: a redacted answer
+/// holding it is refused.
+#[tokio::test(start_paused = true)]
+async fn a_redacted_answer_with_prose_led_seal_text_is_refused() {
+    let mut answer = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({
+            "text": "answer held-secret-value",
+            "note": "Result: {\"_meta\": {\"provenance\": {\"public_signature\": \"p\"",
+        }),
+    );
+    let outcome = super::scrub_stored(&[holding("held-secret-value")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_eq!(outcome, Scrubbed::Refuse, "{wire}");
+    assert!(
+        answer.result.is_none(),
+        "a refused answer carries no result: {wire}"
+    );
+}
+
+/// A held number inside a seal is never served: the seal is gone first.
+#[tokio::test(start_paused = true)]
+async fn a_held_number_inside_a_seal_is_not_served() {
+    let mut answer = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({ "text": "plain", "_meta": { "provenance": {
+            "receipt": { "tool": "t" }, "public_signature": { "n": 424_242 } } } }),
+    );
+    let outcome = super::scrub_stored(&[holding("424242")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_ne!(outcome, Scrubbed::Refuse, "{wire}");
+    assert!(
+        !wire.contains("424242"),
+        "the held number was served: {wire}"
+    );
+    assert!(
+        !wire.contains("public_signature"),
+        "a seal was kept: {wire}"
+    );
+}
+
+/// JSON text that names a seal but holds none is left byte for byte: only
+/// text a seal came out of is written back, so nothing else in it, such as a
+/// number past `f64` precision, is rewritten.
+#[tokio::test(start_paused = true)]
+async fn json_text_with_no_seal_in_it_is_left_as_stored() {
+    let text = r#"{"note": "public_signature", "n": 1.000000000000000000001}"#;
+    let mut answer = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({ "content": [{ "type": "text", "text": text }] }),
+    );
+    let outcome = super::scrub_stored(&[holding("held-secret-value")], &mut answer);
+    assert_eq!(outcome, Scrubbed::Clean);
+    assert_eq!(
+        answer
+            .result
+            .as_ref()
+            .and_then(|r| r.pointer("/content/0/text")),
+        Some(&serde_json::Value::from(text)),
+        "the text was rewritten"
+    );
+}

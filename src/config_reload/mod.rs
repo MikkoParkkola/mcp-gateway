@@ -293,7 +293,8 @@ pub(crate) use reload_context::replace::order as write_order;
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::{
     AuditPosture, BackendOp, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG,
-    RefusalClass, Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
+    RefusalClass, Replace, ReplaceError, ReplaceOutcome, Replaced, RevokeCheck, SecretStep,
+    replace_audited, replace_audited_revoke,
 };
 // The settings routes' reach into the save core: these named items only, each
 // already pub(crate) in its module; the rest of the two modules stays private.

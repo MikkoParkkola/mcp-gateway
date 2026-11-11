@@ -174,6 +174,8 @@ impl TaskStore {
             tool: tool.to_owned(),
             arguments: serde_json::json!({}),
             operation_digest: entry.record.admission.operation_digest.clone(),
+            // A legacy row: no fingerprint.
+            secret_fingerprint: None,
         });
     }
 }

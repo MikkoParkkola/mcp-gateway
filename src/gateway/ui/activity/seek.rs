@@ -22,6 +22,9 @@ const CHUNK: u64 = 64 * 1024;
 pub(super) struct Found {
     pub(super) entry: Value,
     pub(super) segment: u64,
+    /// The line's start and length (no newline), for the signing anchor.
+    pub(super) offset: u64,
+    pub(super) len: u64,
 }
 
 /// Reads made, for the O(log n) test.
@@ -82,6 +85,10 @@ fn next_line_start(file: &mut File, from: u64, reads: &mut Reads) -> io::Result<
     after_next_newline(file, from - 1, reads)
 }
 
+/// A readable record: its counter, its bytes, where its line starts, and
+/// the offset after it.
+type Readable = (u64, Vec<u8>, u64, u64);
+
 /// The first readable line at or after `start` and below `hi`, with its
 /// counter and the offset after it. Unreadable lines in between (torn,
 /// hand-edited, over the cap) are stepped over, so a bad line never hides
@@ -91,12 +98,12 @@ fn first_readable(
     start: u64,
     hi: u64,
     reads: &mut Reads,
-) -> io::Result<Option<(u64, Vec<u8>, u64)>> {
+) -> io::Result<Option<Readable>> {
     let mut at = start;
     while at < hi {
         match line_at(file, at, reads)? {
             Some((bytes, end)) => match counter_of(&bytes) {
-                Some(c) => return Ok(Some((c, bytes, end))),
+                Some(c) => return Ok(Some((c, bytes, at, end))),
                 None => at = end,
             },
             None => match after_next_newline(file, at, reads)? {
@@ -131,7 +138,7 @@ pub(super) fn oldest_counter(log: &Path, reads: &mut Reads) -> io::Result<Option
             continue;
         };
         let len = file.metadata()?.len();
-        if let Some((c, _, _)) = first_readable(&mut file, 0, len, reads)? {
+        if let Some((c, ..)) = first_readable(&mut file, 0, len, reads)? {
             return Ok(Some(c));
         }
     }
@@ -166,11 +173,17 @@ pub(super) fn seek(log: &Path, counter: u64, reads: &mut Reads) -> io::Result<Op
             continue;
         }
         match first_readable(&mut file, start, hi, reads)? {
-            Some((c, bytes, _)) if c == counter => {
+            Some((c, bytes, offset, _)) if c == counter => {
                 let entry = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-                return Ok(Some(Found { entry, segment }));
+                let len = bytes.len() as u64;
+                return Ok(Some(Found {
+                    entry,
+                    segment,
+                    offset,
+                    len,
+                }));
             }
-            Some((c, _, end)) if c < counter => lo = end,
+            Some((c, _, _, end)) if c < counter => lo = end,
             // Above the target, or nothing readable up to `hi`: the target,
             // if kept, starts below `start`.
             _ => hi = start,

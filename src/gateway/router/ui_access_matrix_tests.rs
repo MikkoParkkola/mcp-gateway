@@ -654,8 +654,7 @@ fn expected() -> Matrix {
         })
 }
 
-/// Every UI API answer a caller sees today, pinned before the
-/// guards move into one table. The refactor must leave this test unchanged.
+/// Every UI API answer, pinned before the guards move into one table.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ui_api_access_matrix_is_preserved() {
     let computed = compute().await;

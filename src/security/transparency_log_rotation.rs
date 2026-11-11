@@ -18,6 +18,7 @@ use serde_json::{Map, Value};
 use super::hwm_scan::{contradicted, hwm_missing_in, newest_finding};
 use super::identity::{self, LogId};
 use super::segments::{self, HighWater, Segment};
+use super::sigstart;
 use super::{
     MAX_TAIL_SCAN_BYTES, TransparencyLogConfig, chain_line, read_last_nonempty_line,
     recompute_entry_hash, verify_entry_sig,
@@ -228,6 +229,8 @@ pub(super) fn recover(
     // that held an id, or a mark that survived, the log it follows is gone.
     let gone = sealed.is_empty() && !std::fs::metadata(path).is_ok_and(|m| m.len() > 0);
     let hw = segments::read_hwm(path, secret, &config.key_id);
+    // Before tail repair writes anything (see `sigstart::plan`).
+    let plan = sigstart::plan(path, config, &sealed)?;
     let dropped = if std::fs::metadata(path).is_ok_and(|m| m.len() > 0) {
         repair_torn_tail(path, config, sealed.last(), hw.as_ref())?
     } else {
@@ -253,6 +256,14 @@ pub(super) fn recover(
         .then(|| identity::predecessor_evidence(held, hw.as_ref()))
         .flatten();
     let opened = identity::open_fields(&id, evidence);
+    // Written before the open record, so P lies at or before every record
+    // this open signs; its event waits for the announce phase below.
+    let anchor = sigstart::body_for(&plan, path, id.as_str())?;
+    if let Some(body) = &anchor {
+        sigstart::publish(path, body, secret)?;
+    }
+    #[cfg(test)]
+    super::kill::point(super::kill::At::AfterSigstart);
     let (mut state, below_mark) = reopen_tail(path, config, &sealed, hw.as_ref(), now, &opened)?;
     finish_pending_expiry(path)?;
     // The active file holds the finding from its open record or a marker,
@@ -328,10 +339,53 @@ pub(super) fn recover(
             true,
         )?;
     }
+    settle_anchor(path, config, &plan, anchor, &mut state)?;
     state.seg.id = file_id(&state.file)?;
     state.seg.sealed = segments::list_segments(path)?.len();
     segments::sync_dir(path)?;
     Ok((state, id))
+}
+
+/// After segment recovery: correct a first start's predicted seq, then write
+/// the record the plan owes and move the mark past it.
+fn settle_anchor(
+    path: &Path,
+    config: &TransparencyLogConfig,
+    plan: &sigstart::Plan,
+    mut anchor: Option<sigstart::SigStart>,
+    state: &mut Recovered,
+) -> io::Result<()> {
+    let secret = config.shared_secret.as_bytes();
+    // A first start predicted the new active file's seq; correct it before
+    // any caller record if reopen_tail chose another.
+    if let Some(body) = anchor
+        .as_mut()
+        .filter(|b| b.offset == 0 && b.state == sigstart::State::Open)
+        && body.segment_seq != state.seg.seq
+        && matches!(plan, sigstart::Plan::FirstStart)
+    {
+        body.segment_seq = state.seg.seq;
+        body.legacy = sigstart::legacy_below(path, body.segment_seq, 0)?;
+        sigstart::publish(path, body, secret)?;
+    }
+    #[cfg(test)]
+    super::kill::point(super::kill::At::BeforeAnnounce);
+    let mut announced = false;
+    sigstart::announce(plan, anchor.as_ref(), path, secret, |event, extra| {
+        announced = true;
+        chain_onto(state, config, housekeeping(event, &extra))
+    })?;
+    if announced {
+        write_mark(
+            path,
+            config,
+            state.counter,
+            &state.last_entry_hash,
+            state.seg.seq,
+            true,
+        )?;
+    }
+    Ok(())
 }
 
 /// Write `.hwm` at a tail: the last record's `counter` and `entry_hash`, in

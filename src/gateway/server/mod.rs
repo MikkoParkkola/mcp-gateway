@@ -28,6 +28,8 @@ mod cost_save_stamp_tests;
 mod counter_wiring;
 mod events_wiring;
 mod health_wiring;
+#[cfg(test)]
+mod key_server_start_tests;
 /// The startup notice that the read verdict runs with the firewall off.
 #[cfg(all(test, feature = "firewall"))]
 mod read_verdict_notice_tests;
