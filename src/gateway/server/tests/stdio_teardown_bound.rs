@@ -242,7 +242,8 @@ mod hurry {
         }
     }
 
-    async fn fixture() -> (Gateway, Arc<tempfile::TempDir>, Arc<AtomicBool>) {
+    /// A gateway with no backends: its backend stop is instant.
+    async fn bare_fixture() -> (Gateway, Arc<tempfile::TempDir>) {
         let dir = crate::test_dir_keep::kept_tempdir();
         let mut config = Config::default();
         config.tasks.store_dir = dir.path().join("tasks").display().to_string();
@@ -251,6 +252,11 @@ mod hurry {
             .await
             .expect("gateway boots")
             .with_data_dir(dir.path().to_path_buf());
+        (gateway, dir)
+    }
+
+    async fn fixture() -> (Gateway, Arc<tempfile::TempDir>, Arc<AtomicBool>) {
+        let (gateway, dir) = bare_fixture().await;
         let mut stuck = Backend::new(
             "stuck",
             BackendConfig::default(),
@@ -336,7 +342,9 @@ mod hurry {
 
     #[tokio::test]
     async fn a_hurry_during_post_drain_cleanup_does_not_repoll_the_finished_drain() {
-        let (mut gateway, _dir, _entered) = fixture().await;
+        // No backend to wait for: a flush that polls the finished drain would
+        // wait out the whole cut (about KILL_RESERVE) for nothing.
+        let (mut gateway, _dir) = bare_fixture().await;
         let hurry = gateway.hurry_trigger_for_test();
         let deadline = gateway.backends.stop_deadline();
         let (reached, release) = gateway.test_seams.stdio_before_backends_hold.arm();
@@ -362,9 +370,11 @@ mod hurry {
                 + crate::transport::KILL_RESERVE_FOR_TEST
                 + crate::transport::HURRY_WINDOW
         );
-        timeout(ROW_BOUND, task)
+        // The stop is instant and the cut is about KILL_RESERVE away: ending
+        // inside this bound means nothing waited on the finished drain.
+        timeout(Duration::from_secs(5), task)
             .await
-            .expect("hurried stop ends")
+            .expect("hurried stop ends before the cut")
             .expect("the serve task does not panic")
             .expect("run_stdio_on returns Ok");
     }
