@@ -5,7 +5,6 @@
 
 use std::io::Read;
 
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
 use super::*;
@@ -75,9 +74,8 @@ impl<R: Read> Read for Counting<R> {
 #[test]
 fn output_past_the_cap_keeps_its_last_line() {
     let mut text = "npm http fetch GET 200 https://registry.npmjs.org/x 12ms\n".repeat(4000);
-    text.push_str(&format!(
-        "npm error proxy http://x:{CRED}@127.0.0.1:9 refused"
-    ));
+    let last = format!("npm error proxy http://x:{CRED}@127.0.0.1:9 refused");
+    text.push_str(&last);
     assert!(text.len() > 3 * TAIL_BYTES);
     let mut reader = Counting {
         inner: text.as_bytes(),
