@@ -263,6 +263,25 @@ async fn r51_the_joined_bound_drops_no_record_and_misses_no_duplicate() {
     assert_eq!(manifest["answer_integrity_failed"], 1);
 }
 
+/// A delivery record edited to look like a listed row (an admin action) is
+/// still checked: its trace is poisoned, so the call reads the integrity
+/// failure, not a missing record.
+#[tokio::test]
+async fn r52_an_edited_record_that_looks_like_a_listed_row_still_poisons_its_trace() {
+    let fx = Fixture::new(Some(SECRET));
+    fx.call("gw-t");
+    fx.delivery("gw-t", &Dl::effect("delivered"));
+    let at = fx.delivery_index("gw-t");
+    fx.edit(at, |e| {
+        forge(e, "event", json!("admin_action"), false);
+    });
+    let (_, page) = get(&fx, &[]).await;
+    let r = row_of(&page, "gw-t");
+    assert_eq!(r["effect"], "unknown");
+    assert_eq!(r["answer_integrity"], "invalid");
+    assert_eq!(page["answer_integrity_failed"], 1);
+}
+
 #[tokio::test]
 async fn r33_no_secret_cannot_vouch() {
     let signed = Fixture::new(Some(SECRET));
