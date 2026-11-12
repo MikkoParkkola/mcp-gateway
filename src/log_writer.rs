@@ -11,7 +11,7 @@
 
 use std::io::{self, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -36,6 +36,9 @@ pub(crate) enum NoticeFormat {
 enum Msg {
     Line(Vec<u8>),
     Flush(SyncSender<()>),
+    /// The terminal stop's wake for an idle writer.
+    #[cfg(test)]
+    Stop,
 }
 
 struct Shared {
@@ -44,6 +47,26 @@ struct Shared {
     total: AtomicU64,
     queued_bytes: AtomicUsize,
     max_bytes: usize,
+    /// Set by the terminal stop: no clone enqueues after it.
+    closed: AtomicBool,
+    /// Sends that have registered and not finished: the writer's final drain
+    /// waits for zero, so a line past the closed check is never left behind.
+    inflight: AtomicUsize,
+    /// Test hook: parks a send that has registered as in flight, before it checks.
+    #[cfg(test)]
+    after_register: std::sync::Mutex<Option<test_sinks::Gate>>,
+    /// Test hook: parks a send that has passed the closed check.
+    #[cfg(test)]
+    after_check: std::sync::Mutex<Option<test_sinks::Gate>>,
+    /// Test hook: parks the writer after a drain pass of the terminal stop.
+    #[cfg(test)]
+    after_drain: std::sync::Mutex<Option<test_sinks::Gate>>,
+    /// Test hook: how many times the writer has come round to wait for a message.
+    #[cfg(test)]
+    idle_polls: AtomicUsize,
+    /// Test hook: how many times the writer found a sender in flight and waited.
+    #[cfg(test)]
+    inflight_waits: AtomicUsize,
 }
 
 /// The `MakeWriter` for the fmt layer: each event's line goes to the queue.
@@ -56,6 +79,10 @@ pub(crate) struct LossyStderr {
 /// Flushes the queue when dropped, within [`LOG_FLUSH_DEADLINE`].
 pub(crate) struct LogFlush {
     tx: SyncSender<Msg>,
+    #[cfg(test)]
+    shared: Arc<Shared>,
+    /// Taken by the terminal stop, which then owns the join.
+    worker: Option<thread::JoinHandle<FlushEnd>>,
 }
 
 /// One event's line, sent once when the fmt layer is done with it.
@@ -76,23 +103,79 @@ pub(crate) fn spawn(
         total: AtomicU64::new(0),
         queued_bytes: AtomicUsize::new(0),
         max_bytes: bytes,
+        closed: AtomicBool::new(false),
+        inflight: AtomicUsize::new(0),
+        #[cfg(test)]
+        after_register: std::sync::Mutex::new(None),
+        #[cfg(test)]
+        after_check: std::sync::Mutex::new(None),
+        #[cfg(test)]
+        after_drain: std::sync::Mutex::new(None),
+        #[cfg(test)]
+        idle_polls: AtomicUsize::new(0),
+        #[cfg(test)]
+        inflight_waits: AtomicUsize::new(0),
     });
     let for_thread = Arc::clone(&shared);
-    thread::Builder::new()
+    let worker = thread::Builder::new()
         .name("log-writer".into())
         .spawn(move || run(&rx, sink, &for_thread, format))?;
     Ok((
         LossyStderr {
             tx: tx.clone(),
-            shared,
+            shared: Arc::clone(&shared),
         },
-        LogFlush { tx },
+        LogFlush {
+            tx,
+            #[cfg(test)]
+            shared,
+            worker: Some(worker),
+        },
     ))
+}
+
+/// Marks a send as in flight until it returns, on every path.
+struct InFlight<'a>(&'a AtomicUsize);
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl LossyStderr {
     /// Queue `line`, or drop and count it. Never waits.
     fn send(&self, line: Vec<u8>) {
+        // A send that starts after the close never registers: a steady stream of
+        // them would keep the in-flight count above zero and the stop could
+        // never join. Only a send that raced the close gets past this check.
+        if self.shared.closed.load(Ordering::SeqCst) {
+            self.shared.total.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        // Register before the check (SeqCst, against the stop's store and the
+        // writer's load): either this send sees the close and counts the line,
+        // or the writer sees this send and waits for it.
+        self.shared.inflight.fetch_add(1, Ordering::SeqCst);
+        let _registered = InFlight(&self.shared.inflight);
+        #[cfg(test)]
+        {
+            let gate = self.shared.after_register.lock().expect("hook").clone();
+            if let Some(gate) = gate {
+                gate.pass();
+            }
+        }
+        if self.shared.closed.load(Ordering::SeqCst) {
+            self.shared.total.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        #[cfg(test)]
+        {
+            let gate = self.shared.after_check.lock().expect("hook").clone();
+            if let Some(gate) = gate {
+                gate.pass();
+            }
+        }
         let n = line.len();
         let q = &self.shared.queued_bytes;
         let mut cur = q.load(Ordering::Relaxed);
@@ -111,6 +194,36 @@ impl LossyStderr {
             q.fetch_sub(n, Ordering::AcqRel);
             self.shared.total.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Park every send that has registered as in flight, before its closed check.
+    #[cfg(test)]
+    pub(crate) fn park_after_register(&self, gate: &test_sinks::Gate) {
+        *self.shared.after_register.lock().expect("hook") = Some(gate.clone());
+    }
+
+    /// Park every send that has passed the closed check at `gate`.
+    #[cfg(test)]
+    pub(crate) fn park_after_check(&self, gate: &test_sinks::Gate) {
+        *self.shared.after_check.lock().expect("hook") = Some(gate.clone());
+    }
+
+    /// How many times the writer has come round to wait for a message.
+    #[cfg(test)]
+    pub(crate) fn idle_polls(&self) -> usize {
+        self.shared.idle_polls.load(Ordering::SeqCst)
+    }
+
+    /// How many times the writer found a sender in flight and waited for it.
+    #[cfg(test)]
+    pub(crate) fn inflight_waits(&self) -> usize {
+        self.shared.inflight_waits.load(Ordering::SeqCst)
+    }
+
+    /// Park the writer at `gate` after each drain pass of the terminal stop.
+    #[cfg(test)]
+    pub(crate) fn park_after_drain(&self, gate: &test_sinks::Gate) {
+        *self.shared.after_drain.lock().expect("hook") = Some(gate.clone());
     }
 
     /// Lines dropped so far.
@@ -158,6 +271,60 @@ impl Drop for EventLine<'_> {
     }
 }
 
+/// How the final flush of the stopped writer ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FlushEnd {
+    Clean,
+    SinkError,
+}
+
+/// How a terminal stop ended. Only a confirmed stop and join lets the process
+/// exec; a joined sink error alone does not forbid it.
+///
+/// The terminal stop is test-only until the restart slice calls it; that slice
+/// drops the `cfg(test)` gates on it, on `Msg::Stop` and on `LogFlush::shared`.
+#[derive(Debug)]
+#[cfg(test)]
+pub(crate) enum StopOutcome {
+    Joined(FlushEnd),
+    WorkerFailed,
+    /// The worker did not finish by the deadline; the caller keeps owning it.
+    NotJoined(thread::JoinHandle<FlushEnd>),
+}
+
+#[cfg(test)]
+impl StopOutcome {
+    pub(crate) fn permits_exec(&self) -> bool {
+        matches!(self, Self::Joined(_))
+    }
+}
+
+#[cfg(test)]
+impl LogFlush {
+    /// Terminal stop: close enqueue admission on every clone, drain what was
+    /// accepted, flush, and join the writer, all by `deadline`.
+    pub(crate) fn stop_and_join(mut self, deadline: Instant) -> StopOutcome {
+        // Admission closes first, so a clone cannot keep the queue busy. An idle
+        // writer wakes on the Stop message; a writer with a full queue is busy
+        // and sees the flag after its next message, so a failed try_send is fine.
+        self.shared.closed.store(true, Ordering::SeqCst);
+        let _ = self.tx.try_send(Msg::Stop);
+        let Some(worker) = self.worker.take() else {
+            return StopOutcome::WorkerFailed;
+        };
+        while !worker.is_finished() {
+            if Instant::now() >= deadline {
+                return StopOutcome::NotJoined(worker);
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        match worker.join() {
+            Ok(end) => StopOutcome::Joined(end),
+            Err(_) => StopOutcome::WorkerFailed,
+        }
+    }
+}
+
 /// What a flush attempt to enqueue its marker found.
 pub(crate) enum Sent {
     Yes,
@@ -190,6 +357,10 @@ pub(crate) fn flush_until(
 
 impl Drop for LogFlush {
     fn drop(&mut self) {
+        if self.worker.is_none() {
+            // A terminal stop already ran; it was bounded by its own deadline.
+            return;
+        }
         let (ack_tx, ack_rx) = mpsc::sync_channel(1);
         let mut marker = Some(Msg::Flush(ack_tx));
         flush_until(
@@ -216,30 +387,92 @@ impl Drop for LogFlush {
     }
 }
 
-/// The writer thread: one line at a time, until every sender is gone.
-fn run(rx: &Receiver<Msg>, mut sink: Box<dyn Write + Send>, shared: &Shared, format: NoticeFormat) {
+/// The writer thread: one line at a time, until every sender is gone or the
+/// terminal stop closes admission and the accepted lines are drained.
+fn run(
+    rx: &Receiver<Msg>,
+    mut sink: Box<dyn Write + Send>,
+    shared: &Shared,
+    format: NoticeFormat,
+) -> FlushEnd {
     let mut out = Out {
         sink: &mut *sink,
         broken: false,
     };
     let mut reported = 0_u64;
-    while let Ok(msg) = rx.recv() {
-        match msg {
-            Msg::Line(line) => {
-                shared.queued_bytes.fetch_sub(line.len(), Ordering::AcqRel);
-                if out.record(&line) {
-                    reported = out.notice(shared, reported, format);
-                } else {
-                    shared.total.fetch_add(1, Ordering::Relaxed);
+    loop {
+        #[cfg(test)]
+        shared.idle_polls.fetch_add(1, Ordering::SeqCst);
+        match rx.recv() {
+            #[cfg(test)]
+            Ok(Msg::Stop) => break,
+            Ok(msg) => {
+                reported = serve(msg, &mut out, shared, reported, format);
+                if shared.closed.load(Ordering::Acquire) {
+                    break;
                 }
             }
-            Msg::Flush(ack) => {
-                reported = out.notice(shared, reported, format);
-                let _ = out.sink.flush();
-                let _ = ack.try_send(());
-            }
+            Err(mpsc::RecvError) => return FlushEnd::Clean,
         }
     }
+    // Accepted before the close: still written. Senders already past the closed
+    // check finish first, and the drain keeps going while it waits for them; a
+    // late sender sees the flag and counts its line instead.
+    loop {
+        while let Ok(msg) = rx.try_recv() {
+            reported = serve(msg, &mut out, shared, reported, format);
+        }
+        #[cfg(test)]
+        {
+            let gate = shared.after_drain.lock().expect("hook").clone();
+            if let Some(gate) = gate {
+                gate.pass();
+            }
+        }
+        if shared.inflight.load(Ordering::SeqCst) == 0 {
+            break;
+        }
+        #[cfg(test)]
+        shared.inflight_waits.fetch_add(1, Ordering::SeqCst);
+        thread::yield_now();
+    }
+    // A sender's last act is the enqueue, then its guard drops: one more drain.
+    while let Ok(msg) = rx.try_recv() {
+        reported = serve(msg, &mut out, shared, reported, format);
+    }
+    out.notice(shared, reported, format);
+    match out.sink.flush() {
+        Ok(()) => FlushEnd::Clean,
+        Err(_) => FlushEnd::SinkError,
+    }
+}
+
+/// Handle one queued message; return the new drop-notice watermark.
+fn serve(
+    msg: Msg,
+    out: &mut Out<'_>,
+    shared: &Shared,
+    mut reported: u64,
+    format: NoticeFormat,
+) -> u64 {
+    match msg {
+        Msg::Line(line) => {
+            shared.queued_bytes.fetch_sub(line.len(), Ordering::AcqRel);
+            if out.record(&line) {
+                reported = out.notice(shared, reported, format);
+            } else {
+                shared.total.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        Msg::Flush(ack) => {
+            reported = out.notice(shared, reported, format);
+            let _ = out.sink.flush();
+            let _ = ack.try_send(());
+        }
+        #[cfg(test)]
+        Msg::Stop => {}
+    }
+    reported
 }
 
 struct Out<'s> {
@@ -301,6 +534,9 @@ pub(crate) fn notice_line(dropped: u64, format: NoticeFormat) -> String {
 #[path = "log_writer_sinks_tests.rs"]
 pub(crate) mod test_sinks;
 
+#[cfg(test)]
+#[path = "log_writer_stop_tests.rs"]
+mod stop_tests;
 #[cfg(test)]
 #[path = "log_writer_tests.rs"]
 mod tests;
