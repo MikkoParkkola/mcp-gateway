@@ -509,14 +509,23 @@ jobs:
   check:
     name: Clippy (pedantic)
     needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: clippy
+      # Runs on a release-line push too, and that run is what warms the cache: a pull request
+      # restores only caches saved on its base branch (or its own ref), and this job's cache was
+      # saved on pull-request refs alone, so every lane run rebuilt the ~350 dependencies for each
+      # of the job's eight cargo steps from cold (all of 3 runs sampled logged "No cache found").
+      # Restore on every run, save only on a push: a save on each PR ref wrote a 310 MB cache nothing
+      # else can read (33 such caches held the repository at its 10 GB limit, where eviction can push
+      # out the line's own cache).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.event_name == 'push' }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
       # The wall clock is read only in src/clock.rs (MIK-8202 AC.9). Clippy
       # ignores a disallowed path it cannot resolve, so each clippy.toml clock
