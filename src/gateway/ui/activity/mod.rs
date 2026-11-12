@@ -631,6 +631,9 @@ mod answer_profile_tests;
 #[path = "answer_progress_tests.rs"]
 mod answer_progress_tests;
 #[cfg(test)]
+#[path = "answer_reach_tests.rs"]
+mod answer_reach_tests;
+#[cfg(test)]
 #[path = "answer_receipt2_tests.rs"]
 mod answer_receipt2_tests;
 #[cfg(test)]
