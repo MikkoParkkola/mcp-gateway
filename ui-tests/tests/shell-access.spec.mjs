@@ -234,13 +234,19 @@ test.describe('access', () => {
   });
 
   /**
-   * Key A signs in, then out; key B signs in with its own count read held. `late` holds A's count
-   * answer until after the sign-out; otherwise A's answer lands at once. Either way B's sidebar
-   * must carry no count of A's.
+   * Key A signs in, then the session ends; key B signs in with its own count read held. `how`:
+   * 'late' holds A's count answer until after a sign-out; 'drawn' lets it land at once; 'expired'
+   * holds it and ends the session with a 401 from another read (no sign-out, so no epoch bump).
+   * In every case B's sidebar must carry no count of A's.
    */
-  async function countsAcrossIdentities(page, late) {
+  async function countsAcrossIdentities(page, how) {
+    const late = how !== 'drawn';
     const keyB = `${KEY}_b`;
     const state = { admin: false, access: access(), gate: KEY };
+    if (how === 'expired') {
+      await withFixturePages(page, { probes: true });
+      await page.route('**/ui/api/forbidden-probe', (r) => r.fulfill({ status: 401, json: {} }));
+    }
     await serve(page, state);
     let releaseA;
     const heldA = new Promise((r) => { releaseA = r; });
@@ -260,9 +266,10 @@ test.describe('access', () => {
     await page.keyboard.press('Enter');
     await expect(page.locator('#signin')).toBeHidden();
     if (!late) await expect(todoBadge(page)).toHaveText('7');
-    await page.getByRole('button', { name: 'Sign out' }).click();
+    if (how === 'expired') await navLink(page, 'access').click(); // its status read answers 401
+    else await page.getByRole('button', { name: 'Sign out' }).click();
     await expect(page.locator('#signin')).toBeVisible();
-    releaseA(); // A's answer, if it was held, lands now: after the sign-out, before B is in
+    releaseA(); // A's answer, if it was held, lands now: after the session ended, before B is in
     await page.waitForTimeout(300);
     state.gate = keyB;
     await page.locator('#signin-key').fill(keyB);
@@ -274,11 +281,15 @@ test.describe('access', () => {
   }
 
   test('A24 a count answer in flight at sign-out is not drawn for the next key', async ({ page }) => {
-    await countsAcrossIdentities(page, true);
+    await countsAcrossIdentities(page, 'late');
   });
 
   test('A25 the previous key\'s count is gone when the next key signs in', async ({ page }) => {
-    await countsAcrossIdentities(page, false);
+    await countsAcrossIdentities(page, 'drawn');
+  });
+
+  test('A26 a count answer in flight when a 401 ends the session is not shown to the next key', async ({ page }) => {
+    await countsAcrossIdentities(page, 'expired');
   });
 
   test('A12 history to a hidden route replaces it', async ({ page }) => {
