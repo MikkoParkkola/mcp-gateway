@@ -224,6 +224,54 @@ fn admintok_2_doctor_does_not_read_a_config_the_mode_check_refuses() {
     );
 }
 
+/// ADMINTOK.1 / macOS red: the shared harness pins the files store, so a spawned
+/// `init` never reaches the OS keychain. A fake `gdbus` and `secret-tool` mark
+/// every call; the pinned run leaves no mark, and a control run without the pin
+/// (`auto`) does reach the fake, so the row proves the pin and not an idle fake.
+#[test]
+fn admintok_1_the_harness_pin_keeps_init_off_the_os_keychain() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().expect("isolated init");
+    std::fs::create_dir(root.path().join("home")).expect("home");
+    let bin = root.path().join("fake-bin");
+    std::fs::create_dir(&bin).expect("fake bin");
+    let mark = root.path().join("keychain-touched");
+    for tool in ["gdbus", "secret-tool"] {
+        let path = bin.join(tool);
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\ntouch '{}'\nexit 1\n", mark.display()),
+        )
+        .expect("shim");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    }
+    let run = |name: &str, pinned: bool| {
+        let out_dir = root.path().join(name);
+        std::fs::create_dir(&out_dir).expect("output directory");
+        let mut cmd = command(root.path());
+        cmd.env("PATH", &bin)
+            .current_dir(&out_dir)
+            .args(["init", "--output"])
+            .arg(out_dir.join("gateway.yaml"));
+        if !pinned {
+            cmd.env_remove("MCP_GATEWAY_SECRETS__STORE");
+        }
+        let out = cmd.output().expect("init runs");
+        assert!(
+            out.status.success(),
+            "{name} init failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run("pinned", true);
+    assert!(!mark.exists(), "the pinned init reached the OS keychain");
+    run("control", false);
+    assert!(
+        mark.exists(),
+        "the control must reach the fake keychain, or this row proves nothing"
+    );
+}
+
 fn failure_root() -> tempfile::TempDir {
     let root = tempfile::tempdir().expect("isolated failure");
     std::fs::create_dir(root.path().join("home")).expect("home");
