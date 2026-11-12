@@ -438,9 +438,12 @@ mod shutdown_deadline_tests {
         .await;
         let elapsed = start.elapsed();
         drop(release);
-        assert!(
-            elapsed < SHUTDOWN_SAVES_TIMEOUT,
-            "the saves ran to their own {SHUTDOWN_SAVES_TIMEOUT:?}, not the given deadline: {elapsed:?}"
+        // Paused time moves only to the next timer, so the stop ends at the given
+        // deadline exactly: neither a timeout of its own nor skipped saves ends it
+        // at another instant.
+        assert_eq!(
+            elapsed, given,
+            "the saves did not end at the deadline they were given"
         );
     }
 }
