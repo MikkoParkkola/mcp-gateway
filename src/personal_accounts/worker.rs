@@ -66,6 +66,11 @@ pub(crate) enum CustodyError {
     /// Shutdown has begun; new work is refused rather than queued.
     #[error("custody is shutting down")]
     ShuttingDown,
+    /// A release could not start a thread and the store is held until the
+    /// process exits. Test-only until the release path lands.
+    #[cfg(test)]
+    #[error("the custody store could not be released and is held until exit")]
+    ReleaseStuck,
     #[error(transparent)]
     Account(#[from] AccountServiceError),
 }
@@ -310,6 +315,37 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         drop(drained);
         Ok(())
     }
+
+    /// Stub, red first: the bounded shutdown still releases synchronously.
+    #[cfg(test)]
+    pub(crate) async fn shutdown_by(
+        &self,
+        _deadline: tokio::time::Instant,
+    ) -> Result<ShutdownEnd, CustodyError> {
+        self.shutdown().await.map(|()| ShutdownEnd::Released)
+    }
+
+    /// Stub, red first: nothing is detached.
+    #[cfg(test)]
+    pub(crate) fn detach_release(&self) {}
+
+    /// Stub, red first: the test seam that makes the next release spawn fail.
+    #[cfg(test)]
+    pub(crate) fn fail_next_release_spawn(&self) {}
+}
+
+/// How a bounded custody shutdown ended.
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ShutdownEnd {
+    /// The store is dropped and both file locks are free.
+    Released,
+    /// The deadline passed while the release was still running off the stop path.
+    ReleasePending,
+    /// In-flight work still held a permit at the deadline; the store was not taken.
+    InFlightPending,
+    /// A spawn failed and the store is held until the process exits.
+    Stuck,
 }
 
 #[path = "worker_journeys.rs"]

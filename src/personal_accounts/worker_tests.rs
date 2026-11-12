@@ -186,6 +186,12 @@ type ProviderGates = Mutex<HashMap<String, (oneshot::Sender<()>, oneshot::Receiv
 struct ProviderState {
     calls: Mutex<Vec<String>>,
     gates: ProviderGates,
+    /// A stalled release: the provider's `Drop` signals entry, then waits for
+    /// the release (a hang guard bounds it). The service owns the provider, so
+    /// this is a real store release that does not return.
+    drop_gate: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    /// A release that panics inside the service's drop.
+    panic_on_drop: std::sync::atomic::AtomicBool,
 }
 
 impl ProviderState {
@@ -213,6 +219,27 @@ impl ProviderState {
 
 struct GatedProvider {
     state: Arc<ProviderState>,
+}
+
+/// How long a stalled release waits for its release before giving up.
+const RELEASE_HANG_GUARD: Duration = Duration::from_secs(20);
+
+impl Drop for GatedProvider {
+    fn drop(&mut self) {
+        if self.state.panic_on_drop.load(Ordering::SeqCst) {
+            panic!("the provider's drop panics");
+        }
+        let gate = self
+            .state
+            .drop_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some((entered, release)) = gate {
+            let _ = entered.send(());
+            let _ = release.recv_timeout(RELEASE_HANG_GUARD);
+        }
+    }
 }
 
 impl RefreshProvider for GatedProvider {
@@ -673,3 +700,5 @@ fn single_flight_survives_the_handle_for_one_account() {
 
 #[path = "worker_tests/concurrency_tests.rs"]
 mod concurrency_tests;
+#[path = "worker_tests/release_tests.rs"]
+mod release_tests;

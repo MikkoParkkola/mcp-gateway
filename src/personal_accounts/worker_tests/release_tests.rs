@@ -1,0 +1,421 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! The custody release off the stop path: a stalled release ends a bounded
+//! shutdown at its deadline, a later call never reports Released while a
+//! release is pending, and a failed spawn never drops the store on the caller.
+//!
+//! The stall is real: the provider's `Drop` runs inside the service's drop and
+//! blocks, so a synchronous release does not return. Rows that need a clock use
+//! a paused one, so no wall-clock window decides them; a past deadline gives a
+//! zero window with no clock at all.
+
+use std::path::Path;
+
+use super::*;
+
+// The library's log capture is the one keeper `error_capture` shares.
+use crate::test_log_capture as interest;
+#[path = "../../test_support/error_capture.rs"]
+mod error_capture;
+use error_capture::errors_logged;
+
+/// A hang bound only: every wait here is released by an event.
+const HANG_BOUND: Duration = Duration::from_secs(60);
+
+fn paused<F: Future>(fut: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .expect("paused runtime")
+        .block_on(fut)
+}
+
+/// The two ends of a stalled release: a signal that the drop was entered, and
+/// the release that lets it go.
+struct Stall {
+    entered: std::sync::mpsc::Receiver<()>,
+    release: std::sync::mpsc::Sender<()>,
+}
+
+impl Stall {
+    fn wait_entered(&self) {
+        self.entered
+            .recv_timeout(HANG_BOUND)
+            .expect("the release entered the stalled drop");
+    }
+
+    fn let_go(&self) {
+        let _ = self.release.send(());
+    }
+}
+
+fn stall_release(fx: &Fixture) -> Stall {
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    *fx.provider.drop_gate.lock().expect("drop gate") = Some((entered_tx, release_rx));
+    Stall {
+        entered: entered_rx,
+        release: release_tx,
+    }
+}
+
+/// Whether both file locks are free: the store opens, then is closed again.
+fn store_is_free(root: &Path) -> bool {
+    match PersonalAccountStore::open(config(root)) {
+        Ok(store) => {
+            drop(store);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// `MIK-9460.CUSTODY.1`: with the release stalled, a bounded shutdown ends at
+/// its deadline, not when the release returns; the release runs off the caller.
+#[test]
+fn a_stalled_release_ends_the_bounded_shutdown_at_its_deadline() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+
+    paused(async {
+        let fx = start(tmp.path(), 2);
+        let stall = stall_release(&fx);
+        let began = tokio::time::Instant::now();
+        let given = Duration::from_secs(2);
+        let end = refuse_scaffold(
+            fx.handle.shutdown_by(began + given).await,
+            "bounded shutdown",
+        )
+        .expect("an outcome");
+        assert_eq!(
+            end,
+            ShutdownEnd::ReleasePending,
+            "the release is still running"
+        );
+        assert_eq!(
+            began.elapsed(),
+            given,
+            "the stop ended at the given deadline"
+        );
+        stall.wait_entered();
+        stall.let_go();
+    });
+}
+
+/// `MIK-9460.CUSTODY.2`: a release that finishes inside the deadline behaves as
+/// today: Released, and the locks are free while the handle is still alive.
+#[test]
+fn a_release_inside_the_deadline_frees_the_locks() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+
+    paused(async {
+        let fx = start(tmp.path(), 2);
+        let end = refuse_scaffold(
+            fx.handle
+                .shutdown_by(tokio::time::Instant::now() + Duration::from_secs(2))
+                .await,
+            "bounded shutdown",
+        )
+        .expect("an outcome");
+        assert_eq!(end, ShutdownEnd::Released);
+        assert!(
+            store_is_free(tmp.path()),
+            "both locks are free after Released"
+        );
+        assert_eq!(
+            fx.observer_calls.load(Ordering::SeqCst),
+            0,
+            "nothing extra was released"
+        );
+    });
+}
+
+/// `MIK-9460.CUSTODY.3`: a release still running at the deadline is reported
+/// once, however many calls meet it, and no line names an account or a secret.
+#[test]
+fn a_pending_release_is_reported_once_and_names_no_account() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+
+    let log = errors_logged(|| {
+        paused(async {
+            let fx = start(tmp.path(), 2);
+            let stall = stall_release(&fx);
+            let past = tokio::time::Instant::now();
+            for call in ["first", "second"] {
+                let end =
+                    refuse_scaffold(fx.handle.shutdown_by(past).await, call).expect("outcome");
+                assert_eq!(end, ShutdownEnd::ReleasePending, "{call} call");
+            }
+            stall.wait_entered();
+            stall.let_go();
+        });
+    });
+    assert_eq!(log.lines().count(), 1, "exactly one report line: {log:?}");
+    for private in ["alice", "identity.example", "google-workspace-personal"] {
+        assert!(
+            !log.contains(private),
+            "the report names {private}: {log:?}"
+        );
+    }
+}
+
+/// In-flight work still holding a permit at the deadline: nothing is taken, the
+/// store stays held, and the call says so once.
+#[test]
+fn in_flight_work_past_the_deadline_leaves_the_store_untaken() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), grant())]);
+
+    let log = errors_logged(|| {
+        multi_thread(async {
+            let fx = start(tmp.path(), 2);
+            let (entered, release) = fx.provider.hold(&alice());
+            let op = {
+                let handle = Arc::clone(&fx.handle);
+                tokio::spawn(async move { handle.refresh_if_expired(&alice()).await })
+            };
+            tokio::time::timeout(HANG_BOUND, entered)
+                .await
+                .expect("the provider was entered")
+                .expect("entry signal");
+            // A past deadline: no clock decides this row.
+            let end = refuse_scaffold(
+                fx.handle.shutdown_by(tokio::time::Instant::now()).await,
+                "bounded shutdown",
+            )
+            .expect("outcome");
+            assert_eq!(end, ShutdownEnd::InFlightPending);
+            assert!(
+                !store_is_free(tmp.path()),
+                "the store was taken while work was in flight"
+            );
+            let _ = release.send(());
+            let _ = op.await;
+        });
+    });
+    assert_eq!(log.lines().count(), 1, "one report line: {log:?}");
+}
+
+/// A second, unbounded `shutdown()` during a pending release does not return
+/// until the release is done, and the locks are free after it: Ok means free.
+#[test]
+fn a_second_shutdown_waits_for_the_pending_release() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+
+    multi_thread(async {
+        let fx = start(tmp.path(), 2);
+        let stall = stall_release(&fx);
+        let first = refuse_scaffold(
+            fx.handle.shutdown_by(tokio::time::Instant::now()).await,
+            "first shutdown",
+        )
+        .expect("outcome");
+        assert_eq!(first, ShutdownEnd::ReleasePending);
+        stall.wait_entered();
+        let (second_fut, second_pending) = first_pending({
+            let handle = Arc::clone(&fx.handle);
+            async move { handle.shutdown().await }
+        });
+        let second = tokio::spawn(second_fut);
+        tokio::time::timeout(HANG_BOUND, second_pending)
+            .await
+            .expect("the second shutdown pends while the release is stalled")
+            .expect("pending signal");
+        assert!(
+            !second.is_finished(),
+            "the second shutdown returned during the stall"
+        );
+        stall.let_go();
+        refuse_scaffold(second.await.expect("task"), "second shutdown").expect("Ok means released");
+        assert!(
+            store_is_free(tmp.path()),
+            "the locks are free after the second Ok"
+        );
+    });
+}
+
+/// A late waiter: the release finished before the second call, which returns
+/// Released at once and finds the locks free.
+#[test]
+fn a_shutdown_after_the_release_finished_returns_released_at_once() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+
+    multi_thread(async {
+        let fx = start(tmp.path(), 2);
+        refuse_scaffold(fx.handle.shutdown().await, "first").expect("first");
+        let again = refuse_scaffold(
+            fx.handle.shutdown_by(tokio::time::Instant::now()).await,
+            "second",
+        )
+        .expect("outcome");
+        assert_eq!(again, ShutdownEnd::Released);
+        assert!(store_is_free(tmp.path()));
+    });
+}
+
+/// A failed release spawn never drops the store on the caller: the outcome is
+/// `Stuck`, nothing waits on it, nothing reports it released, and the locks stay
+/// held (the store is leaked to process exit, not dropped inline).
+#[test]
+fn a_failed_release_spawn_leaves_the_store_stuck_and_never_drops_it_inline() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+
+    paused(async {
+        let fx = start(tmp.path(), 2);
+        let stall = stall_release(&fx);
+        fx.handle.fail_next_release_spawn();
+        let end = refuse_scaffold(
+            fx.handle
+                .shutdown_by(tokio::time::Instant::now() + Duration::from_secs(2))
+                .await,
+            "bounded shutdown",
+        )
+        .expect("outcome");
+        assert_eq!(end, ShutdownEnd::Stuck);
+        assert!(
+            stall.entered.try_recv().is_err(),
+            "the stalled drop ran: the store was dropped inline on the caller"
+        );
+        assert!(
+            !store_is_free(tmp.path()),
+            "the locks must stay held when stuck"
+        );
+        // An unbounded call on a stuck store returns an error at once.
+        let unbounded = fx.handle.shutdown().await;
+        assert!(
+            matches!(unbounded, Err(CustodyError::ReleaseStuck)),
+            "unbounded shutdown on a stuck store: {unbounded:?}"
+        );
+        stall.let_go();
+    });
+}
+
+/// `detach_release()` never waits: with the release stalled it returns at once
+/// and the drop runs on another thread (the custody stage skipped at a zero
+/// window still leaves no store to drop on the runtime worker).
+#[test]
+fn detach_release_returns_at_once_and_the_drop_runs_elsewhere() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+
+    multi_thread(async {
+        let fx = start(tmp.path(), 2);
+        let stall = stall_release(&fx);
+        fx.handle.detach_release();
+        stall.wait_entered();
+        assert!(
+            !store_is_free(tmp.path()),
+            "the locks are held while the release is stalled"
+        );
+        stall.let_go();
+    });
+}
+
+/// The final owner is an in-flight operation: `detach_release()` takes the
+/// handle's reference, the operation holds the last one, and the release is only
+/// done when that operation lets go (the done signal comes from the service's
+/// own drop, wherever it happens).
+#[test]
+fn the_release_is_done_only_when_the_last_owner_lets_go() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), grant())]);
+
+    multi_thread(async {
+        let fx = start(tmp.path(), 2);
+        let (entered, release) = fx.provider.hold(&alice());
+        let op = {
+            let handle = Arc::clone(&fx.handle);
+            tokio::spawn(async move { handle.refresh_if_expired(&alice()).await })
+        };
+        tokio::time::timeout(HANG_BOUND, entered)
+            .await
+            .expect("the provider was entered")
+            .expect("entry signal");
+        fx.handle.detach_release();
+        assert!(
+            !store_is_free(tmp.path()),
+            "the operation still owns the store"
+        );
+        let _ = release.send(());
+        let _ = op.await;
+        refuse_scaffold(fx.handle.shutdown().await, "shutdown after the operation")
+            .expect("released");
+        assert!(store_is_free(tmp.path()));
+    });
+}
+
+/// A release thread that panics still signals done and reports once; the locks
+/// are free afterwards (unwinding dropped what was left).
+#[test]
+fn a_panicking_release_still_signals_done_and_frees_the_locks() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+
+    let log = errors_logged(|| {
+        paused(async {
+            let fx = start(tmp.path(), 2);
+            fx.provider.panic_on_drop.store(true, Ordering::SeqCst);
+            let end = refuse_scaffold(
+                fx.handle
+                    .shutdown_by(tokio::time::Instant::now() + Duration::from_secs(2))
+                    .await,
+                "bounded shutdown",
+            )
+            .expect("outcome");
+            assert_eq!(end, ShutdownEnd::Released, "the guard signals on unwind");
+            assert!(store_is_free(tmp.path()), "unwinding freed the locks");
+        });
+    });
+    assert_eq!(log.lines().count(), 1, "one report line: {log:?}");
+}
+
+/// Cancelling the bounded shutdown (the stop budget's timeout drops the future)
+/// strands nothing: the release thread keeps running and a later call sees it.
+#[test]
+fn cancelling_the_bounded_shutdown_strands_nothing() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+
+    paused(async {
+        let fx = start(tmp.path(), 2);
+        let stall = stall_release(&fx);
+        let far = tokio::time::Instant::now() + Duration::from_secs(600);
+        // Poll it once, then drop it: the way a stop timeout cancels a stage, with
+        // no clock deciding when.
+        let cancelled = tokio::select! {
+            biased;
+            _ = fx.handle.shutdown_by(far) => false,
+            () = std::future::ready(()) => true,
+        };
+        assert!(cancelled, "the shutdown pended and was cancelled");
+        stall.wait_entered();
+        let later = refuse_scaffold(
+            fx.handle.shutdown_by(tokio::time::Instant::now()).await,
+            "later call",
+        )
+        .expect("outcome");
+        assert_eq!(
+            later,
+            ShutdownEnd::ReleasePending,
+            "the slot was not stranded"
+        );
+        stall.let_go();
+    });
+}
