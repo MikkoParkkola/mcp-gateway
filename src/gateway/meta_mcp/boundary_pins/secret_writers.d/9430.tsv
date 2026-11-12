@@ -1,2 +1,2 @@
 # file	function	kind	count	class	reason
-src/cli_support/init.rs	write_init_files	persist:edit_config_text	1	stores	ADMINTOK.1: tests/init_admin_token.rs::admintok_1_init_writes_only_a_reference_and_one_store_entry; stores the generated bearer before publishing its filled reference
+src/cli_support/init.rs	write_init_files_with	persist:edit_config_text	1	stores	ADMINTOK.1: tests/init_admin_token.rs::admintok_1_init_writes_only_a_reference_and_one_store_entry; stores the generated bearer before publishing its filled reference

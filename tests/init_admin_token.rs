@@ -240,7 +240,8 @@ fn admintok_1_the_harness_pin_keeps_init_off_the_os_keychain() {
         let path = bin.join(tool);
         std::fs::write(
             &path,
-            format!("#!/bin/sh\ntouch '{}'\nexit 1\n", mark.display()),
+            // A shell redirect, not `touch`: the shim's PATH holds only this directory.
+            format!("#!/bin/sh\n: > '{}'\nexit 1\n", mark.display()),
         )
         .expect("shim");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("mode");

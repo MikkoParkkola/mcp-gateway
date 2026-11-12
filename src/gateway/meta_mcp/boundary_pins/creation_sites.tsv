@@ -6,7 +6,7 @@ src/capability/file_writer.rs	write	helper:write_atomic	1	helper	calls the crate
 src/capability/openapi/generated.rs	write_to_file	fs-write	1	no-secret	generated capability YAML; public
 src/capability/pin_file.rs	pin_file_until	helper:write_atomic	1	helper	calls the crate's write_atomic
 src/chains/checkpoint.rs	append	open-create	1	no-secret	chain checkpoints; not a trust decision
-src/cli_support/init.rs	write_init_files	file-create	1	no-secret	starter sample capability files; public (the config goes through the config writer)
+src/cli_support/init.rs	write_init_files_with	file-create	1	no-secret	starter sample capability files; public (the config goes through the config writer)
 src/commands/protocol_import.rs	apply_plan_to_directory	helper:write_atomic	2	helper	calls the crate's write_atomic
 src/commands/protocol_import.rs	write_atomic	helper:write_atomic	1	helper	calls the crate's write_atomic
 src/commands/trust.rs	write_cards_json	fs-write	1	no-secret	trust report output

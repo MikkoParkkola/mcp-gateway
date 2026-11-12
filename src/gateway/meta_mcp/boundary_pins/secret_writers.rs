@@ -347,7 +347,7 @@ fn w1_init_is_stored_and_bound_to_its_executable_custody_row() {
     );
     let key = (
         "src/cli_support/init.rs".to_owned(),
-        "write_init_files".to_owned(),
+        "write_init_files_with".to_owned(),
         "persist:edit_config_text".to_owned(),
     );
     assert_eq!(
@@ -361,7 +361,7 @@ fn w1_init_is_stored_and_bound_to_its_executable_custody_row() {
         .iter()
         .find(|(_, line)| {
             line.starts_with(
-                "src/cli_support/init.rs\twrite_init_files\tpersist:edit_config_text\t",
+                "src/cli_support/init.rs\twrite_init_files_with\tpersist:edit_config_text\t",
             )
         })
         .expect("one reviewed init row");
