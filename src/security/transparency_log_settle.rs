@@ -376,6 +376,18 @@ impl TransparencyLogger {
 }
 
 impl TransparencyLogger {
+    /// The log's id after a refresh from the file on disk. A log replaced
+    /// behind this handle is adopted by the refresh, which the cached
+    /// [`Self::log_id`] cannot see.
+    pub(crate) fn refreshed_log_id(&self) -> io::Result<LogId> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("transparency log mutex poisoned"))?;
+        self.refresh(&mut inner, true)?;
+        Ok(inner.log_id.clone())
+    }
+
     /// The id settle checks the binding against: the one the refresh left.
     #[cfg(not(test))]
     #[allow(clippy::unused_self)]

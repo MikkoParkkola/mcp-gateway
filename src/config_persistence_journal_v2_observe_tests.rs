@@ -19,6 +19,7 @@ pub(super) enum Event {
     FlagSynced,
     RestoreVerified,
     ForwardVerified,
+    BeforeAttemptPersist,
     AttemptPersisted,
     BeforeDecisionSync,
     DecisionPersisted,

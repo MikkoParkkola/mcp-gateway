@@ -195,7 +195,10 @@ impl JournalDrain {
         }
         if let Some(binding) = &journal.state.binding {
             let logger = log.as_ref().ok_or(DrainError::NoLogger)?;
-            if logger.as_ref().log_id() != *binding {
+            // Refreshed from the file on disk: a log replaced behind this
+            // handle is refused here, before any repair acts.
+            let current = logger.refreshed_log_id().map_err(|_| DrainError::Refused)?;
+            if current != *binding {
                 return Err(DrainError::OtherLog);
             }
         }
@@ -286,13 +289,17 @@ impl JournalDrain {
         if !owed || journal.state.binding.is_none() {
             return Ok(None);
         }
-        if let Some(attempt) = journal
+        let reused = journal
             .state
             .attempts
             .iter()
             .find(|owner| owner.decision.is_none())
-        {
-            return Ok(Some(attempt.intent_id.clone()));
+            .map(|owner| owner.intent_id.clone());
+        if let Some(token) = reused {
+            // An earlier persist of this attempt may have failed after it was
+            // added in memory: no repair acts before the attempt is durable.
+            journal.persist()?;
+            return Ok(Some(token));
         }
         let token = IntentId(uuid::Uuid::new_v4().simple().to_string());
         let mut payload = Map::new();
@@ -313,6 +320,8 @@ impl JournalDrain {
             records: Vec::new(),
             handed_over: false,
         });
+        #[cfg(test)]
+        fault::hit(&journal.target, fault::At::BeforeAttemptPersist)?;
         journal.persist()?;
         #[cfg(test)]
         fault::hit(&journal.target, fault::At::AttemptPersisted)?;

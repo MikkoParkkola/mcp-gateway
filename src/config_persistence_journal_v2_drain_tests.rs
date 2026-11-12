@@ -257,6 +257,93 @@ fn replace_audit_files(source: &std::path::Path, target: &std::path::Path) {
     }
 }
 
+/// A log replaced behind an already-open logger is refused before any repair
+/// acts: the cached id of the handle still equals the binding.
+#[cfg(unix)]
+#[test]
+fn log_replaced_behind_the_logger_is_refused_before_repair() {
+    const ROW: &str = "log_replaced_behind_the_logger_is_refused_before_repair";
+    let mut failures = Vec::new();
+    collect_case(
+        &mut failures,
+        ROW,
+        "file_swapped_after_open",
+        "OtherLog; config and journal bytes unchanged",
+        || {
+            let live = Live::new();
+            let foreign = Live::new();
+            let mut initial = state(&live.resolved);
+            staged(&mut initial);
+            let owner = live.seed(initial, ROW);
+            let config = bytes(&live.path);
+            let journal_bytes = std::fs::read(journal::journal_path(&live.path)).expect(ROW);
+            replace_audit_files(&foreign.log_path, &live.log_path);
+            let result = runtime(JournalDrain::run(owner, Some(Arc::clone(&live.log))));
+            assert!(
+                matches!(&result, Err(failure) if failure.error == DrainError::OtherLog),
+                "{ROW}: a replaced log is refused, got {:?}",
+                result.as_ref().err().map(|failure| &failure.error)
+            );
+            assert_eq!(bytes(&live.path), config, "{ROW}: config bytes unchanged");
+            assert_eq!(
+                std::fs::read(journal::journal_path(&live.path)).expect(ROW),
+                journal_bytes,
+                "{ROW}: no recovery attempt written before the refusal"
+            );
+            Ok(())
+        },
+    );
+    assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
+}
+
+/// A recovery attempt whose first persist failed is persisted again by the
+/// next repair on the same session, before that repair acts.
+#[test]
+fn a_reused_recovery_attempt_is_persisted_before_repair() {
+    const ROW: &str = "a_reused_recovery_attempt_is_persisted_before_repair";
+    let mut failures = Vec::new();
+    collect_case(
+        &mut failures,
+        ROW,
+        "persist_failed_then_repair_retried",
+        "the retry persists the attempt before it stops at the repair seam",
+        || {
+            let live = Live::new();
+            let mut initial = state(&live.resolved);
+            staged(&mut initial);
+            let mut owner = live.seed(initial, ROW);
+            let journal_path = journal::journal_path(&live.path);
+            let before = std::fs::read(&journal_path).expect(ROW);
+            let armed = fault::arm(&live.path, Fault::Fail(At::BeforeAttemptPersist));
+            assert!(
+                JournalDrain::repair(&mut owner, false).is_err(),
+                "{ROW}: the failed persist fails the repair"
+            );
+            drop(armed);
+            assert_eq!(
+                std::fs::read(&journal_path).expect(ROW),
+                before,
+                "{ROW}: the attempt is not durable after the failed persist"
+            );
+            let config = bytes(&live.path);
+            let armed = fault::arm(&live.path, Fault::Fail(At::RepairPaused));
+            assert!(
+                JournalDrain::repair(&mut owner, false).is_err(),
+                "{ROW}: the retry stops at the seam before acting"
+            );
+            drop(armed);
+            assert_ne!(
+                std::fs::read(&journal_path).expect(ROW),
+                before,
+                "{ROW}: the retry persisted the attempt before repairing"
+            );
+            assert_eq!(bytes(&live.path), config, "{ROW}: repair had not acted");
+            Ok(())
+        },
+    );
+    assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
+}
+
 #[test]
 fn journal_persist_uncertainty() {
     const ROW: &str = "journal_persist_uncertainty";

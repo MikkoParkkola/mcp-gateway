@@ -13,6 +13,7 @@ use crate::config_persistence::crash_fs::{self, Mode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum At {
+    BeforeAttemptPersist,
     AttemptPersisted,
     IntentAppended,
     BeforeDecisionSync,
@@ -142,6 +143,7 @@ pub(super) fn hit(path: &Path, at: At) -> Result<(), JournalError> {
 
 pub(super) fn event(at: At) -> Event {
     match at {
+        At::BeforeAttemptPersist => Event::BeforeAttemptPersist,
         At::AttemptPersisted => Event::AttemptPersisted,
         At::IntentAppended => Event::IntentAppended,
         At::BeforeDecisionSync => Event::BeforeDecisionSync,
