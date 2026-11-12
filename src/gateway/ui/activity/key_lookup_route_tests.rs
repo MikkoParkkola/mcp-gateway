@@ -135,6 +135,17 @@ impl Fx {
     }
 
     fn post(&self, who: AuthenticatedClient, body: &str) -> (StatusCode, Option<String>, Value) {
+        self.post_via(true, who, body)
+    }
+
+    /// `audited`: behind the admin audit layer, which runs the handler in its
+    /// own task. A row that reads a thread-local recorder goes without it.
+    fn post_via(
+        &self,
+        audited: bool,
+        who: AuthenticatedClient,
+        body: &str,
+    ) -> (StatusCode, Option<String>, Value) {
         let request = Request::builder()
             .method("POST")
             .uri(routes::UI_KEY_SERVER_LOOKUP_EMAIL)
@@ -144,7 +155,12 @@ impl Fx {
             .body(Body::from(body.to_owned()))
             .expect("request");
         self.rt.block_on(async {
-            let response = crate::gateway::ui::admin_audit::audited_api_router(&self.state)
+            let router = if audited {
+                crate::gateway::ui::admin_audit::audited_api_router(&self.state)
+            } else {
+                crate::gateway::ui::api_router()
+            };
+            let response = router
                 .with_state(self.state.clone())
                 .oneshot(request)
                 .await
@@ -361,13 +377,13 @@ fn attempts_and_throttles_are_counted_on_unlabelled_counters() {
     let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
     let handle = recorder.handle();
     telemetry_metrics::with_local_recorder(&recorder, || {
-        let (refused, _, _) = fx.post(anonymous_client(), "{}");
+        let (refused, _, _) = fx.post_via(false, anonymous_client(), "{}");
         assert!(refused == StatusCode::UNAUTHORIZED || refused == StatusCode::FORBIDDEN);
         for _ in 0..2 {
-            let (s, _, _) = fx.post(admin("a"), &json!({"email": EMAIL}).to_string());
+            let (s, _, _) = fx.post_via(false, admin("a"), &json!({"email": EMAIL}).to_string());
             assert_eq!(s, StatusCode::OK);
         }
-        let (third, _, _) = fx.post(admin("a"), &json!({"email": EMAIL}).to_string());
+        let (third, _, _) = fx.post_via(false, admin("a"), &json!({"email": EMAIL}).to_string());
         assert_eq!(third, StatusCode::TOO_MANY_REQUESTS);
     });
     let rendered = handle.render();
