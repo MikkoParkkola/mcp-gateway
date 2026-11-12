@@ -215,11 +215,11 @@ const BODY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 /// Read the body, bounded in size and in time. Called only after admission
 /// and the budget, so an unauthorized or over-budget caller's body is never
 /// waited for.
-pub(super) async fn read_body(request: axum::extract::Request) -> Result<Bytes, Response> {
+pub(super) async fn read_body(request: axum::extract::Request) -> Result<Bytes, Box<Response>> {
     let read = axum::body::to_bytes(request.into_body(), MAX_BODY);
     match tokio::time::timeout(BODY_DEADLINE, read).await {
         Ok(Ok(bytes)) => Ok(bytes),
-        Ok(Err(_)) => Err(finish(
+        Ok(Err(_)) => Err(Box::new(finish(
             refuse(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "the request body is too large",
@@ -227,8 +227,8 @@ pub(super) async fn read_body(request: axum::extract::Request) -> Result<Bytes, 
             "bad_request",
             0,
             0,
-        )),
-        Err(_) => Err(finish(
+        ))),
+        Err(_) => Err(Box::new(finish(
             refuse(
                 StatusCode::REQUEST_TIMEOUT,
                 "the request body took too long",
@@ -236,7 +236,7 @@ pub(super) async fn read_body(request: axum::extract::Request) -> Result<Bytes, 
             "bad_request",
             0,
             0,
-        )),
+        ))),
     }
 }
 
@@ -263,7 +263,7 @@ pub(super) async fn lookup(
     };
     let body = match read_body(request).await {
         Ok(body) => body,
-        Err(refusal) => return refusal,
+        Err(refusal) => return *refusal,
     };
     let parsed = serde_json::from_slice::<Request>(&body);
     drop(body);
