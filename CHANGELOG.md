@@ -124,6 +124,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   publishes the image it
   scanned, and `latest` goes only to the highest stable tag, so a 3.5.x
   release never takes `latest` from a newer line.
+- **No plugin registry is configured by default.** `plugin search` and
+  `plugin install` used a built-in registry address when
+  `marketplace.marketplace_url` was unset. They now refuse until you name a
+  registry, with `marketplace.marketplace_url` or `--marketplace-url`, and say
+  so. If you relied on the old default, set `marketplace.marketplace_url` to the
+  registry you trust.
+  ([#4819](https://github.com/MikkoParkkola/mcp-gateway/pull/4819))
 
 ### Deprecated
 
