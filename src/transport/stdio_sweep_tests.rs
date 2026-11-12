@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The sweep's order of signals, bounds and accounting, against an in-memory table.
+//! The sweep's order of signals, bounds and accounting, against an in-memory table
+//! that models what a real kernel does: a killed process reparents its children to
+//! init and then answers nothing, a stopped process cannot fork or exit, a pid can
+//! be reused, and a by-pid signal can land on a reused pid if the target was running
+//! when its identity was checked.
 
 use super::*;
 
@@ -26,8 +30,9 @@ fn cfg() -> SweepConfig {
 struct Proc {
     id: Identity,
     ppid: u32,
+    pgid: u32,
     state: ProcState,
-    /// Forks a new child on every table read while running.
+    /// Forks a new child on every table operation while running.
     churns: bool,
     /// Ignores SIGSTOP (stays running).
     ignores_stop: bool,
@@ -35,14 +40,22 @@ struct Proc {
 
 struct Fake {
     procs: Vec<Proc>,
-    /// Every signal the sweep sent: (pid, signal, how it was reached).
+    /// Every signal the sweep ATTEMPTED: (pid, start time it named, signal).
+    attempts: Vec<(u32, u64, Sig)>,
+    /// Every signal delivered: (pid, signal, how it was reached).
     log: Vec<(u32, Sig, Handle)>,
+    /// Signals that landed on a process other than the one named.
+    wrong: Vec<(u32, Sig)>,
     clock: Duration,
     tick: Duration,
-    handle: Handle,
+    /// Whether the kernel has handles; a sweep without a slot still goes by pid.
+    pidfd: bool,
     next_pid: u32,
     /// A signal that fails: (pid, signal, error).
     fail: Option<(u32, Sig, SignalError)>,
+    /// A by-pid target that is running when its identity is checked exits and its
+    /// pid is reused before the signal lands: (pid, start of the reusing process).
+    reuse_while_running: Option<(u32, u64)>,
 }
 
 impl Fake {
@@ -52,6 +65,7 @@ impl Fake {
             .map(|&(pid, ppid)| Proc {
                 id: id(pid),
                 ppid,
+                pgid: pid,
                 state: ProcState::Running,
                 churns: false,
                 ignores_stop: false,
@@ -59,12 +73,15 @@ impl Fake {
             .collect();
         Self {
             procs,
+            attempts: Vec::new(),
             log: Vec::new(),
+            wrong: Vec::new(),
             clock: Duration::ZERO,
             tick: ms(1),
-            handle: Handle::Held,
+            pidfd: true,
             next_pid: 1000,
             fail: None,
+            reuse_while_running: None,
         }
     }
 
@@ -82,11 +99,19 @@ impl Fake {
             .map_or(ProcState::Gone, |p| p.state)
     }
 
-    fn signals(&self, pid: u32) -> Vec<Sig> {
+    fn delivered(&self, pid: u32) -> Vec<Sig> {
         self.log
             .iter()
             .filter(|(p, _, _)| *p == pid)
             .map(|(_, sig, _)| *sig)
+            .collect()
+    }
+
+    fn attempted(&self, pid: u32) -> Vec<Sig> {
+        self.attempts
+            .iter()
+            .filter(|(p, _, _)| *p == pid)
+            .map(|(_, _, sig)| *sig)
             .collect()
     }
 
@@ -98,10 +123,9 @@ impl Fake {
             .map(|p| p.id.pid)
             .collect()
     }
-}
 
-impl ProcessTable for Fake {
-    fn read(&mut self) -> Vec<(Identity, u32)> {
+    /// Every operation costs time, and a running churner forks during it.
+    fn operate(&mut self) {
         self.clock += self.tick;
         let spawning: Vec<u32> = self
             .procs
@@ -111,15 +135,22 @@ impl ProcessTable for Fake {
             .collect();
         for parent in spawning {
             self.next_pid += 1;
-            let child = Proc {
+            let pgid = self.next_pid;
+            self.procs.push(Proc {
                 id: id(self.next_pid),
                 ppid: parent,
+                pgid,
                 state: ProcState::Running,
                 churns: false,
                 ignores_stop: false,
-            };
-            self.procs.push(child);
+            });
         }
+    }
+}
+
+impl ProcessTable for Fake {
+    fn read(&mut self) -> Vec<(Identity, u32)> {
+        self.operate();
         self.procs
             .iter()
             .filter(|p| p.state != ProcState::Gone)
@@ -128,33 +159,59 @@ impl ProcessTable for Fake {
     }
 
     fn state(&mut self, who: Identity) -> ProcState {
+        self.operate();
         self.procs
             .iter()
             .find(|p| p.id == who)
             .map_or(ProcState::Gone, |p| p.state)
     }
 
-    fn signal(&mut self, who: Identity, sig: Sig) -> Result<Handle, SignalError> {
-        let handle = self.handle;
+    fn signal(&mut self, who: Identity, sig: Sig, held: bool) -> Result<Handle, SignalError> {
+        self.operate();
+        self.attempts.push((who.pid, who.start, sig));
+        let handle = if held && self.pidfd {
+            Handle::Held
+        } else {
+            Handle::ByPid
+        };
         if let Some((pid, failing, error)) = self.fail
             && pid == who.pid
             && failing == sig
         {
             return Err(error);
         }
-        let Some(target) = self.procs.iter_mut().find(|p| p.id.pid == who.pid) else {
+        let Some(index) = self.procs.iter().position(|p| p.id.pid == who.pid) else {
             return Err(SignalError::Mismatch);
         };
-        if target.id != who {
+        if self.procs[index].id != who || self.procs[index].state == ProcState::Gone {
             return Err(SignalError::Mismatch);
         }
+        // By pid, a running target can exit and its pid be reused between the
+        // identity check and the delivery; a stopped one cannot exit.
+        if handle == Handle::ByPid
+            && self.procs[index].state == ProcState::Running
+            && let Some((pid, start)) = self.reuse_while_running
+            && pid == who.pid
+        {
+            self.procs[index].id = Identity { pid, start };
+            self.procs[index].ppid = 1;
+            self.wrong.push((pid, sig));
+            return Ok(handle);
+        }
         self.log.push((who.pid, sig, handle));
+        let target = &mut self.procs[index];
         match sig {
             Sig::Stop if !target.ignores_stop && target.state == ProcState::Running => {
                 target.state = ProcState::Stopped;
             }
             Sig::Cont if target.state == ProcState::Stopped => target.state = ProcState::Running,
-            Sig::Kill => target.state = ProcState::Gone,
+            Sig::Kill => {
+                target.state = ProcState::Gone;
+                let dead = who.pid;
+                for child in self.procs.iter_mut().filter(|p| p.ppid == dead) {
+                    child.ppid = 1;
+                }
+            }
             _ => {}
         }
         Ok(handle)
@@ -166,9 +223,13 @@ impl ProcessTable for Fake {
 }
 
 fn run(fake: &mut Fake, root: u32) -> SweepReport {
-    let mut sweep = Sweep::new(id(root), cfg());
+    run_with(fake, root, cfg(), &PidfdBudget::new(4096))
+}
+
+fn run_with(fake: &mut Fake, root: u32, config: SweepConfig, budget: &PidfdBudget) -> SweepReport {
+    let mut sweep = Sweep::new(id(root), config);
     sweep.snapshot(fake);
-    sweep.run(fake)
+    sweep.run(fake, budget)
 }
 
 /// The root and every descendant are frozen (root first), then killed.
@@ -186,7 +247,7 @@ fn the_root_is_frozen_first_and_killed_with_its_members() {
         "the root is frozen first"
     );
     for pid in [10, 11, 12] {
-        let sent = fake.signals(pid);
+        let sent = fake.delivered(pid);
         assert_eq!(sent.first(), Some(&Sig::Stop), "pid {pid} frozen first");
         assert_eq!(sent.last(), Some(&Sig::Kill), "pid {pid} killed last");
         assert_eq!(fake.state_of(pid), ProcState::Gone);
@@ -194,54 +255,63 @@ fn the_root_is_frozen_first_and_killed_with_its_members() {
     assert!(report.residual.is_empty(), "{report:?}");
 }
 
-/// A process that is no descendant (a detached helper, a daemon reparented to
-/// init) is never signalled.
-/// Red if the sweep signals a process outside the backend's tree.
+/// A process outside the tree (a helper that detached before the stop, a daemon
+/// reparented to init, a process in a member's group) is never even attempted,
+/// while the tree beside it dies.
+/// Red if the tree survives, or if anything outside it is signalled.
 #[test]
-fn a_process_outside_the_tree_is_never_signalled() {
-    let mut fake = Fake::new(&[(10, 1), (11, 10), (20, 1), (21, 20)]);
+fn a_process_outside_the_tree_is_never_attempted() {
+    let mut fake = Fake::new(&[(10, 1), (11, 10), (20, 1), (21, 20), (30, 1)]);
+    fake.proc(30).pgid = 11; // shares a member's group, no descendant
     run(&mut fake, 10);
-    assert_eq!(fake.signals(11).last(), Some(&Sig::Kill), "the tree dies");
-    assert!(fake.signals(20).is_empty() && fake.signals(21).is_empty());
-    assert_eq!(fake.state_of(20), ProcState::Running);
+    assert_eq!(fake.state_of(11), ProcState::Gone, "the tree dies");
+    for pid in [20, 21, 30] {
+        assert!(
+            fake.attempted(pid).is_empty(),
+            "pid {pid}: {:?}",
+            fake.attempts
+        );
+        assert_eq!(fake.state_of(pid), ProcState::Running);
+    }
 }
 
-/// A recorded pid that now belongs to a different process is skipped, never
-/// signalled.
-/// Red if a reused pid receives a signal.
+/// A recorded pid that now belongs to a different process is never delivered a
+/// signal; a sibling beside it is still killed.
+/// Red if the sibling survives, or if the reused pid is delivered anything.
 #[test]
-fn a_reused_pid_is_skipped_and_never_signalled() {
-    let mut fake = Fake::new(&[(10, 1), (11, 10)]);
+fn a_reused_pid_is_never_delivered_a_signal() {
+    let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 10)]);
     let mut sweep = Sweep::new(id(10), cfg());
     sweep.snapshot(&mut fake);
-    // The snapshot member 11 exits and an unrelated process takes its pid.
     fake.proc(11).id = Identity {
         pid: 11,
         start: 9_999,
     };
     fake.proc(11).ppid = 1;
-    let _ = sweep.run(&mut fake);
-    assert!(fake.signals(11).is_empty(), "{:?}", fake.log);
+    let _ = sweep.run(&mut fake, &PidfdBudget::new(4096));
+    assert_eq!(fake.state_of(12), ProcState::Gone, "the sibling is killed");
+    assert!(fake.delivered(11).is_empty(), "{:?}", fake.log);
+    assert!(fake.wrong.is_empty());
     assert_eq!(fake.state_of(11), ProcState::Running);
 }
 
-/// A leaf whose parent exited between the snapshot and the sweep is still a
-/// member and is killed.
+/// A helper attached at the snapshot that detaches (its parent exits) mid-stop is
+/// still a member and is killed.
 /// Red if the sweep needs a live parent chain at kill time.
 #[test]
-fn a_leaf_whose_parent_exited_after_the_snapshot_is_still_killed() {
+fn a_helper_that_detaches_mid_stop_still_dies() {
     let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 11)]);
     let mut sweep = Sweep::new(id(10), cfg());
     sweep.snapshot(&mut fake);
     fake.proc(11).state = ProcState::Gone;
     fake.proc(12).ppid = 1;
-    let report = sweep.run(&mut fake);
+    let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
     assert_eq!(fake.state_of(12), ProcState::Gone, "{:?}", fake.log);
     assert!(report.killed.contains(&id(12)));
 }
 
-/// The backend exited before the sweep (early leader exit); its leaf, reparented,
-/// was in the snapshot and is killed.
+/// The backend exited before the sweep (early leader exit); its reparented leaf was
+/// in the snapshot and is killed.
 /// Red if the sweep does nothing once the root is gone.
 #[test]
 fn a_leaf_of_a_backend_that_exited_first_is_killed() {
@@ -250,28 +320,26 @@ fn a_leaf_of_a_backend_that_exited_first_is_killed() {
     sweep.snapshot(&mut fake);
     fake.proc(10).state = ProcState::Gone;
     fake.proc(11).ppid = 1;
-    let _ = sweep.run(&mut fake);
+    let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
     assert_eq!(fake.state_of(11), ProcState::Gone, "{:?}", fake.log);
+    assert!(report.killed.contains(&id(11)));
 }
 
-/// A leaf that forks on every read is frozen before the last walk, so every
-/// identity a completed pass collected is killed, and the run ends inside its
-/// slices.
+/// A leaf that forks on every operation is frozen before the last walk, so every
+/// identity a completed pass collected is killed, and the run ends in its slices.
 /// Red if a collected identity survives or the run outlasts its slices.
 #[test]
 fn a_forking_leaf_is_frozen_and_every_collected_identity_dies() {
     let mut fake = Fake::new(&[(10, 1), (11, 10)]);
     fake.proc(11).churns = true;
     let report = run(&mut fake, 10);
-    assert!(
-        fake.procs.iter().all(|p| p.state == ProcState::Gone),
-        "survivors: {:?}",
-        fake.procs
-            .iter()
-            .filter(|p| p.state != ProcState::Gone)
-            .map(|p| p.id.pid)
-            .collect::<Vec<_>>()
-    );
+    let survivors: Vec<u32> = fake
+        .procs
+        .iter()
+        .filter(|p| p.state != ProcState::Gone)
+        .map(|p| p.id.pid)
+        .collect();
+    assert!(survivors.is_empty(), "survivors: {survivors:?}");
     assert!(
         fake.clock <= cfg().freeze_slice + cfg().kill_slice,
         "ran {:?}",
@@ -280,94 +348,182 @@ fn a_forking_leaf_is_frozen_and_every_collected_identity_dies() {
     assert!(report.passes >= 1);
 }
 
-/// A process that never confirms stopped within the slice is still killed, the
-/// frozen set is killed (never continued), and the rest is reported as residual.
-/// Red if expiry continues the frozen set or leaves anything stopped.
+/// A process that never confirms stopped is still killed within the slices, the
+/// frozen set is killed and never continued, and nothing is left stopped.
+/// Red if expiry continues the frozen set, leaves anything stopped or overruns.
 #[test]
 fn slice_expiry_kills_the_frozen_set_and_leaves_nothing_stopped() {
     let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 10)]);
     fake.proc(12).ignores_stop = true;
     let mut short = cfg();
     short.freeze_slice = ms(5);
-    let mut sweep = Sweep::new(id(10), short);
-    sweep.snapshot(&mut fake);
-    let report = sweep.run(&mut fake);
+    let report = run_with(&mut fake, 10, short, &PidfdBudget::new(4096));
     assert!(
         fake.stopped().is_empty(),
         "left stopped: {:?}",
         fake.stopped()
     );
-    assert!(!fake.signals(11).contains(&Sig::Cont), "{:?}", fake.log);
-    assert_eq!(fake.state_of(11), ProcState::Gone);
-    assert_eq!(fake.signals(12).last(), Some(&Sig::Kill));
-    assert!(report.residual.contains(&id(12)) || report.killed.contains(&id(12)));
+    assert!(
+        fake.log.iter().all(|(_, sig, _)| *sig != Sig::Cont),
+        "{:?}",
+        fake.log
+    );
+    for pid in [10, 11, 12] {
+        assert_eq!(fake.state_of(pid), ProcState::Gone, "pid {pid}");
+        assert!(report.killed.contains(&id(pid)), "pid {pid}: {report:?}");
+    }
+    assert!(
+        fake.clock <= short.freeze_slice + short.kill_slice,
+        "ran {:?}",
+        fake.clock
+    );
 }
 
-/// A kill that fails (denied) must not leave the process stopped: it is
-/// continued and counted residual.
+/// A kill that fails (denied) must not leave the process stopped: the attempts
+/// are stop, kill, continue, in that order, and the process is residual.
 /// Red if a process whose kill failed stays stopped.
 #[test]
-fn nothing_is_left_stopped_when_a_kill_fails() {
+fn a_failed_kill_is_followed_by_a_continue_and_a_residual() {
     let mut fake = Fake::new(&[(10, 1), (11, 10)]);
     fake.fail = Some((11, Sig::Kill, SignalError::Denied));
     let report = run(&mut fake, 10);
-    assert!(
-        fake.stopped().is_empty(),
-        "left stopped: {:?}",
-        fake.stopped()
-    );
-    assert_eq!(fake.state_of(11), ProcState::Running, "{:?}", fake.log);
-    assert!(report.residual.contains(&id(11)));
+    assert_eq!(fake.attempted(11), [Sig::Stop, Sig::Kill, Sig::Cont]);
+    assert_eq!(fake.state_of(11), ProcState::Running);
+    assert_eq!(report.residual, [id(11)]);
+    assert_eq!(fake.state_of(10), ProcState::Gone, "the root still dies");
 }
 
-/// A process already stopped by someone else is never continued by the sweep.
-/// Red if the sweep continues a process it did not stop.
+/// A continue goes only to a process the sweep itself stopped: one stopped by
+/// someone else is left as it was, while the process the sweep stopped is continued.
+/// Red if the sweep continues a process it did not stop, or skips its own.
 #[test]
 fn a_continue_goes_only_to_a_process_the_sweep_stopped() {
-    let mut fake = Fake::new(&[(10, 1), (11, 10)]);
-    fake.proc(11).state = ProcState::Stopped;
+    let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 10)]);
+    fake.proc(11).state = ProcState::Stopped; // stopped by a debugger
     fake.fail = Some((11, Sig::Kill, SignalError::Denied));
     run(&mut fake, 10);
-    assert!(!fake.signals(11).contains(&Sig::Cont), "{:?}", fake.log);
+    assert!(
+        !fake.attempted(11).contains(&Sig::Cont),
+        "{:?}",
+        fake.attempts
+    );
     assert_eq!(fake.state_of(11), ProcState::Stopped);
+    assert_eq!(fake.state_of(12), ProcState::Gone);
 }
 
-/// Every member reached by bare pid is stopped before it is killed, never
-/// verified and killed while running.
-/// Red if a by-pid member is killed without a stop first.
+/// By bare pid a running target can exit and its pid be reused before a signal
+/// lands; the sweep stops the target first (a stopped process cannot exit), so no
+/// signal ever reaches a reused pid, and every by-pid member is stopped before it
+/// is killed.
+/// Red if a by-pid member is killed without a stop first, or nothing is killed.
 #[test]
 fn a_by_pid_member_is_stopped_before_it_is_killed() {
     let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 11)]);
-    fake.handle = Handle::ByPid;
+    fake.pidfd = false;
+    fake.reuse_while_running = Some((11, 777));
     run(&mut fake, 10);
+    assert!(
+        fake.wrong.is_empty(),
+        "landed on a reused pid: {:?}",
+        fake.wrong
+    );
     for pid in [10, 11, 12] {
-        let sent = fake.signals(pid);
+        let sent = fake.delivered(pid);
         let kill = sent.iter().position(|s| *s == Sig::Kill).expect("killed");
         assert!(
             sent[..kill].contains(&Sig::Stop),
             "pid {pid} killed without a stop: {sent:?}"
         );
+        assert_eq!(fake.state_of(pid), ProcState::Gone);
     }
 }
 
-/// The set is capped; members past the cap are reported residual, and a member
-/// that died before the sweep is never signalled.
-/// Red if the cap is ignored or a dead member is signalled.
+/// The set is capped (lowest pids kept): exact accounting of who dies, who is
+/// reported residual, and that a member dropped by the cap is never touched; a
+/// member that died before the sweep is never signalled.
+/// Red if the cap is ignored, the accounting differs, or a dropped member is stopped.
 #[test]
-fn the_set_is_capped_and_a_dead_member_is_not_signalled() {
+fn the_cap_keeps_the_lowest_pids_and_reports_the_rest() {
     let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 10), (13, 10), (14, 10)]);
     let mut small = cfg();
     small.cap = 2;
     let mut sweep = Sweep::new(id(10), small);
     sweep.snapshot(&mut fake);
     fake.proc(14).state = ProcState::Gone;
-    let report = sweep.run(&mut fake);
-    assert!(fake.signals(14).is_empty(), "{:?}", fake.log);
+    let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
+    let mut killed = report.killed.clone();
+    killed.sort();
+    assert_eq!(killed, [id(10), id(11), id(12)], "{report:?}");
+    assert_eq!(report.residual, [id(13)], "{report:?}");
+    assert!(fake.attempted(13).is_empty() && fake.attempted(14).is_empty());
+    assert_eq!(fake.state_of(13), ProcState::Running);
+}
+
+/// Handles come from the shared budget: with one slot only one process is reached
+/// through a handle, the rest by pid (stopped first), every slot comes back, and
+/// everything dies.
+/// Red if the budget is ignored, a slot leaks, or the tree survives.
+#[test]
+fn the_sweep_draws_on_the_shared_budget_and_gives_slots_back() {
+    let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 10)]);
+    let budget = PidfdBudget::new(1);
+    run_with(&mut fake, 10, cfg(), &budget);
+    let held: std::collections::BTreeSet<u32> = fake
+        .log
+        .iter()
+        .filter(|(_, _, h)| *h == Handle::Held)
+        .map(|(p, _, _)| *p)
+        .collect();
+    assert_eq!(held.len(), 1, "one slot, one handle: {:?}", fake.log);
+    assert_eq!(budget.in_use(), 0, "a slot leaked");
+    for pid in [10, 11, 12] {
+        assert_eq!(fake.state_of(pid), ProcState::Gone, "pid {pid}");
+    }
+}
+
+/// A large frozen set is killed in full inside the slices.
+/// Red if the terminal kills are skipped or overrun the slices.
+#[test]
+fn a_large_frozen_set_is_killed_inside_the_slices() {
+    let mut tree: Vec<(u32, u32)> = vec![(10, 1)];
+    tree.extend((11..211).map(|pid| (pid, 10)));
+    let mut fake = Fake::new(&tree);
+    fake.tick = Duration::from_micros(50);
+    run(&mut fake, 10);
+    assert!(fake.procs.iter().all(|p| p.state == ProcState::Gone));
     assert!(
-        report.killed.len() <= 3,
-        "root plus at most the cap: {report:?}"
+        fake.clock <= cfg().freeze_slice + cfg().kill_slice,
+        "ran {:?}",
+        fake.clock
     );
-    assert!(!report.residual.is_empty(), "past the cap: {report:?}");
+}
+
+/// On every failure the table can inject, nothing the sweep stopped is left stopped.
+/// Red if any failure path leaves a process stopped.
+#[test]
+fn nothing_is_left_stopped_on_any_failure_path() {
+    let failures = [
+        (11, Sig::Stop, SignalError::Denied),
+        (11, Sig::Kill, SignalError::Denied),
+        (11, Sig::Kill, SignalError::Failed),
+        (11, Sig::Kill, SignalError::Mismatch),
+        (10, Sig::Kill, SignalError::Denied),
+    ];
+    for failure in failures {
+        let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 11)]);
+        fake.fail = Some(failure);
+        run(&mut fake, 10);
+        assert!(
+            fake.stopped().is_empty(),
+            "{failure:?}: left stopped {:?}",
+            fake.stopped()
+        );
+        assert_eq!(
+            fake.state_of(12),
+            ProcState::Gone,
+            "{failure:?}: the leaf still dies"
+        );
+    }
 }
 
 /// The held-handle budget is shared and gives slots back.

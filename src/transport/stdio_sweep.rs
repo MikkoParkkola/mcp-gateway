@@ -58,8 +58,10 @@ pub(super) trait ProcessTable {
     /// Every live process with its parent pid.
     fn read(&mut self) -> Vec<(Identity, u32)>;
     fn state(&mut self, id: Identity) -> ProcState;
-    /// Signal `id` only if it is still that process.
-    fn signal(&mut self, id: Identity, sig: Sig) -> Result<Handle, SignalError>;
+    /// Signal `id` only if it is still that process. `held` says the sweep holds
+    /// a budget slot for a handle (a pidfd) on this process; a table without
+    /// handles, or a sweep without a slot, reaches it by bare pid.
+    fn signal(&mut self, id: Identity, sig: Sig, held: bool) -> Result<Handle, SignalError>;
     /// A monotonic clock.
     fn now(&mut self) -> Duration;
 }
@@ -146,7 +148,11 @@ impl Sweep {
     pub(super) fn snapshot(&mut self, _table: &mut dyn ProcessTable) {}
 
     /// Freeze, verify and kill the members and the root; nothing is left stopped.
-    pub(super) fn run(&mut self, _table: &mut dyn ProcessTable) -> SweepReport {
+    pub(super) fn run(
+        &mut self,
+        _table: &mut dyn ProcessTable,
+        _budget: &PidfdBudget,
+    ) -> SweepReport {
         let _held = (&self.root, &self.cfg, &self.members);
         SweepReport::default()
     }
