@@ -700,7 +700,7 @@ mod plan_tests {
         }
     }
 
-    /// An unhurried stop at the 12 s minimum (3.65 s of waits) leaves SIGTERM at
+    /// An unhurried stop with 3.65 s of waits (the window of the failed CI run) leaves SIGTERM at
     /// least what a nested gateway needs to hurry and kill inside the outer's cut:
     /// the inner only learns to hurry at the SIGTERM, so a third of the waits
     /// (1.22 s) was under its worst case.
