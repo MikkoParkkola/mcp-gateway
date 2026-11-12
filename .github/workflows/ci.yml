@@ -990,13 +990,13 @@ jobs:
           persist-credentials: false
       - name: The check's own rows
         run: python3 scripts/ci/test_os_sensitive_diff.py
-      # HEAD is the pull request's merge with the base, so the diff against the base is exactly this pull request's.
+      # HEAD is the pull request's merge with the base, so its first parent is the base the merge was cut from and the
+      # diff against it is exactly this pull request's, however far the base has moved since.
       - name: The diff carries the label when it needs one
         env:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_REF: ${{ github.base_ref }}
-        run: python3 scripts/ci/os_sensitive_diff.py --base "origin/$BASE_REF" --head HEAD --pr "$PR_NUMBER" --labels "$LABELS"
+        run: python3 scripts/ci/os_sensitive_diff.py --base HEAD^1 --head HEAD --pr "$PR_NUMBER" --labels "$LABELS"
 
   # The os-int label's macOS job: the int shard alone (the bins, every integration test, the doc tests and the
   # examples build), as the merge train runs it, without the lib halves. The lane adds the label at READY, not on every

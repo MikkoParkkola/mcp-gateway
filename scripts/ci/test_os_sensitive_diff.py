@@ -53,6 +53,27 @@ def main() -> int:
         ("secret_store", "SecretStore", "keychain", "Keychain", "security_framework", "fs_lock", "flock", "fcntl",
          "O_EXLOCK", "keyring")], [True] * 10)
 
+    # Review findings (two seats, 2026-11-12): the parser, the lock APIs, the crate names.
+    deleted = ("diff --git a/src/x.rs b/src/x.rs\ndeleted file mode 100644\n--- a/src/x.rs\n+++ /dev/null\n"
+               "@@ -1,2 +0,0 @@\n-fn a() {}\n-    secret_store::drop_all();\n")
+    row("a removed line of a deleted file triggers, numbered in the old file",
+        [(p, n) for p, n, _ in osd.scan(deleted)], [("src/x.rs", 2)])
+    for shown in ('+++ "b/src/m\\303\\251.rs"', "+++ b/src/my file.rs\t"):
+        quoted = ("diff --git a/x b/x\n--- a/x\n" + shown + "\n@@ -1,0 +1,1 @@\n+    keychain::get();\n")
+        row(f"a quoted or spaced path is read ({shown.strip()!r})", len(osd.scan(quoted)), 1)
+    tricky = ("diff --git a/src/y.rs b/src/y.rs\n--- a/src/y.rs\n+++ b/src/y.rs\n@@ -5,1 +5,3 @@\n"
+              "-- flock note\n+++ added line that starts with plus plus\n+    flock(fd);\n+    after();\n")
+    row("a body line starting with '++ ' or '-- ' is content, not a header; numbers stay right",
+        [(p, n) for p, n, _ in osd.scan(tricky)], [("src/y.rs", 5), ("src/y.rs", 6)])
+    row("hyphenated crate names in Cargo.toml trigger",
+        [bool(osd.scan(diff("Cargo.toml", f'+{w} = "1"'))) for w in ("security-framework", "fd-lock", "secret-store", "fs2")],
+        [True] * 4)
+    row("std file locks trigger by their names",
+        [bool(osd.scan(diff("src/a.rs", f"+    {c}"))) for c in ("f.lock_shared()?;", "f.try_lock_exclusive()?;", "File::lock(&f)?;",
+                                                                   "use std::os::unix::fs::FileExt;")],
+        [True] * 4)
+    row("a bare Mutex lock does not trigger", osd.scan(diff("src/a.rs", "+    let g = state.lock();")), [])
+
     # The check: exit status, message and label.
     msg = osd.verdict(osd.scan(init), labels=[], pr=4839)
     row("unlabelled hit fails", msg is not None, True)
@@ -83,6 +104,17 @@ def main() -> int:
         row("the command exits 1 on an unlabelled hit", r.returncode, 1)
         row("and prints the add-label command", "gh pr edit 12 --add-label os-int" in r.stdout + r.stderr, True)
         row("the command exits 0 when labelled", run('["os-int"]').returncode, 0)
+        # The pull request's merge commit: its first parent is the base the merge was cut from. The base moves on with
+        # an OS-sensitive line of its own; the check must see only what the pull request brought.
+        git("checkout", "-q", "-b", "pr", "base~1"); (Path(tmp) / "b.rs").write_text("fn b() { keychain::open(); }\n")
+        git("add", "."); git("commit", "-q", "-m", "pr")
+        git("checkout", "-q", "base"); (Path(tmp) / "c.rs").write_text("fn c() { flock(1); }\n")
+        git("add", "."); git("commit", "-q", "-m", "base moves")
+        git("merge", "-q", "--no-ff", "-m", "merge", "pr")
+        moved = subprocess.run([sys.executable, str(Path(osd.__file__)), "--repo", tmp, "--base", "HEAD^1", "--head", "HEAD",
+                                "--pr", "12", "--labels", "[]"], capture_output=True, text=True)
+        row("against the first parent only the pull request's own hit counts", ("b.rs" in moved.stdout, "c.rs" in moved.stdout),
+            (True, False))
 
     for e in errors:
         print(f"os-sensitive-diff: {e}")

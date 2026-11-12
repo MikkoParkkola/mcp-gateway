@@ -288,7 +288,8 @@ start them. The macOS lib shard takes about 75 minutes, and the macOS runners al
 train, so the label is for changes that need it.
 **The `os-int` label.** A pull request whose diff adds or removes a Rust or TOML line that names
 the secret store, the keychain or a file lock (`secret_store`, `SecretStore`, `keychain`,
-`security_framework`, `fs_lock`, `flock`, `fcntl`, `keyring`) must carry `os-int`: the check
+`security_framework`, `fs_lock`, `flock`, `fcntl`, `keyring`, `fd-lock`, `lock_shared`; the
+crate names also with a hyphen) must carry `os-int`: the check
 `OS-sensitive diff carries the os-int label` fails until it does, and its message lists the matched
 lines and the command (`gh pr edit <n> --add-label os-int`). The label runs the macOS integration
 shard (`macOS int (os-int label)`) on the pull request, the shard a merge train runs, so a macOS

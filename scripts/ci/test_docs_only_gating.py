@@ -303,6 +303,17 @@ def lane_label_errors(jobs: dict) -> list[str]:
         for job, want in (("os-int-label", check_want), ("macos-int-lane", macos_want)):
             if runs(jobs[job], c) != want:
                 errors.append(f"{job}: {label} {'skips' if want else 'runs'}")
+    # The check reads the pull request's own diff: against the merge commit's first parent, not the moving base tip.
+    check_runs = " ".join(str(st.get("run", "")) for st in jobs["os-int-label"]["steps"])
+    if "os_sensitive_diff.py --base HEAD^1 --head HEAD" not in check_runs:
+        errors.append("os-int-label: the check must diff HEAD against HEAD^1 (the merge's first parent)")
+    # The lane's macOS job is the train's int shard, and only it: same command, with the shard named int.
+    lane_runs = [str(st.get("run", "")) for st in jobs["macos-int-lane"]["steps"] if "shard_tests.py" in str(st.get("run", ""))]
+    train = [str(st.get("run", "")) for st in jobs["macos-shards"]["steps"] if "shard_tests.py run macos " in str(st.get("run", ""))
+             and "run-prebuilt" not in str(st.get("run", ""))]
+    train_int = [r.replace("${{ matrix.shard }}", "int") for r in train if "matrix.shard" in r]
+    if lane_runs != train_int:
+        errors.append(f"macos-int-lane runs {lane_runs}, the train's int shard runs {train_int}")
     return errors
 
 
