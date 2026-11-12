@@ -532,19 +532,20 @@ fn what_a_token_binds_to_is_pinned_to_literal_digests() {
     assert_eq!(cursor_principal(None, &none), None);
 }
 
-/// A token that is alive when it opens but dead by the time its read has
-/// waited for a slot and run is refused at delivery, with the fixed answer,
-/// and its page is not handed over. Every reader slot is held for three
-/// seconds; the token has two seconds left.
+/// A token that is alive when it opens but dead by the time its page is read
+/// is refused at delivery, with the fixed answer, and its page is not handed
+/// over. The route's clock is the test clock: the first read (the start of the
+/// request) is inside the token's life, the second (delivery) is past its
+/// expiry but inside its chain's ceiling. No sleeps, so no race under load.
 /// Mutant: judge expiry only when the request starts.
 #[test]
-fn a_token_that_expires_while_its_read_waits_is_refused_at_delivery() {
+fn a_token_that_expires_while_its_read_runs_is_refused_at_delivery() {
     let fx = Fx::new();
     for subject in ["s1", "s2"] {
         fx.plant(subject, EMAIL, &fx.ks.email_key);
     }
     let who = admin("a");
-    let sealed_at = now_secs() - 298;
+    let sealed_at = now_secs();
     let token = fx.seal_by_hand(&who, &fx.scope(sealed_at), sealed_at);
     let request = Request::builder()
         .method("POST")
@@ -554,20 +555,15 @@ fn a_token_that_expires_while_its_read_waits_is_refused_at_delivery() {
         .extension(who)
         .body(Body::from(json!({"cursor": token, "limit": 1}).to_string()))
         .expect("request");
-    let reads = std::sync::Arc::clone(fx.state.process.activity_reads());
     fx.state.process.lookup_budget().reset_for_test();
+    let _clock = crate::clock::test_clock::queued(&[Some(sealed_at), Some(sealed_at + 400)]);
     let status = fx.rt.block_on(async {
-        let all = u32::try_from(reads.available_permits()).expect("a few permits");
-        let held = reads.acquire_many_owned(all).await.expect("the slots");
-        let answer = crate::gateway::ui::api_router()
+        crate::gateway::ui::api_router()
             .with_state(fx.state.clone())
-            .oneshot(request);
-        let release = async {
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            drop(held);
-        };
-        let (answer, ()) = tokio::join!(answer, release);
-        answer.expect("infallible").status()
+            .oneshot(request)
+            .await
+            .expect("infallible")
+            .status()
     });
     assert_eq!(
         status,
