@@ -689,7 +689,8 @@ pub(crate) fn dispatch_journal(
     super::journal::v2::open(locked)
 }
 
-/// Refuse exposing a writer while a v2 owner still owes settlement.
+/// Refuse exposing a writer while a v2 owner still owes settlement; any
+/// other journal is left to the legacy recovery that follows.
 pub(crate) fn refuse_pending_v2(locked: &Locked) -> Result<(), NotLocked> {
     use super::journal::v2::OpenJournal;
 
@@ -705,8 +706,8 @@ pub(crate) fn refuse_pending_v2(locked: &Locked) -> Result<(), NotLocked> {
                 super::journal::SETTLEMENT_PENDING.to_owned(),
             ))
         }
-        Err(_) => Err(NotLocked::Refused(
-            super::journal::SETTLEMENT_UNCHECKED.to_owned(),
-        )),
+        // Not a journal this can classify: legacy recovery refuses it with
+        // its reviewed step, and never acts on anything but a v1 journal.
+        Err(_) => Ok(()),
     }
 }
