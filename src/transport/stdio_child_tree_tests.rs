@@ -18,7 +18,10 @@ use std::time::Duration;
 use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
 
 use super::super::{PROTOCOL_VERSION, StdioTransport};
-use super::{ChildTree, Counts, Ending, Leader, REAP_DEADLINE, Reap, native_child};
+use super::{
+    ChildTree, Counts, Ending, Leader, NESTED_TERM_MARGIN, NESTED_TERM_NEED, PRE_REAP_GRACE,
+    PRE_REAP_SETTLE, REAP_DEADLINE, Reap, native_child,
+};
 use crate::transport::Transport;
 
 const ROW_LIMIT: Duration = Duration::from_secs(5);
@@ -770,3 +773,18 @@ fn a_line_after_the_transport_dropped_stops_the_reader() {
 /// stop deadline.
 #[path = "stdio_child_tree_stop_tests.rs"]
 mod stop;
+
+/// What a nested gateway needs after the SIGTERM that tells it to hurry is its
+/// hurried backend waits, the reap's grace and settle, and a margin: derived
+/// from the constants themselves, so changing the inner's reap path moves the
+/// outer's SIGTERM phase instead of silently reopening the gap.
+/// Red if the need is a literal, drops a term, or has no margin.
+#[test]
+fn the_nested_term_need_is_the_inner_hurried_path_plus_a_margin() {
+    let bare = super::super::reaper::HURRY_WINDOW + PRE_REAP_GRACE + PRE_REAP_SETTLE;
+    assert_eq!(NESTED_TERM_NEED, bare + NESTED_TERM_MARGIN);
+    assert!(
+        NESTED_TERM_MARGIN > Duration::ZERO,
+        "the need keeps a margin over the bare worst case"
+    );
+}

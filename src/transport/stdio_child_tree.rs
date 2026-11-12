@@ -515,6 +515,26 @@ const PRE_REAP_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 #[cfg(unix)]
 const PRE_REAP_SETTLE: std::time::Duration = std::time::Duration::from_millis(50);
 
+/// Slack added to the nested gateway's worst case below, for a kill or a reap
+/// that lands late on a busy host.
+#[cfg(unix)]
+const NESTED_TERM_MARGIN: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// What a nested gateway needs after the SIGTERM that tells it to hurry: its
+/// hurried backend waits ([`super::reaper::HURRY_WINDOW`]), then the reap's
+/// grace for a killed leader and its settle, plus a margin. An outer stop gives
+/// its SIGTERM wait at least this much when its waits can afford it, so the
+/// inner's own kill lands before the outer's. Derived here, beside the reap
+/// constants it depends on, so changing them moves it.
+#[cfg(unix)]
+pub(super) const NESTED_TERM_NEED: std::time::Duration = super::reaper::HURRY_WINDOW
+    .saturating_add(PRE_REAP_GRACE)
+    .saturating_add(PRE_REAP_SETTLE)
+    .saturating_add(NESTED_TERM_MARGIN);
+/// Windows has no SIGTERM phase.
+#[cfg(not(unix))]
+pub(super) const NESTED_TERM_NEED: std::time::Duration = std::time::Duration::ZERO;
+
 #[cfg(all(test, unix))]
 #[path = "stdio_child_tree_tests.rs"]
 mod tests;

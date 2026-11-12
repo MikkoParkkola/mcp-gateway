@@ -655,6 +655,8 @@ mod start_tests {
 /// Every caller's stop budget yields a plan that fits it, by construction.
 #[cfg(test)]
 mod plan_tests {
+    #[cfg(unix)]
+    use super::super::child_tree::NESTED_TERM_NEED;
     use super::{DEFAULT_STOP_BUDGET, Ending, KILL_RESERVE, MIN_PHASE, graceful_ending};
     use std::time::Duration;
 
@@ -687,6 +689,57 @@ mod plan_tests {
                 );
             }
         }
+    }
+
+    /// An unhurried stop at the 12 s minimum (3.65 s of waits) leaves SIGTERM at
+    /// least what a nested gateway needs to hurry and kill inside the outer's cut:
+    /// the inner only learns to hurry at the SIGTERM, so a third of the waits
+    /// (1.22 s) was under its worst case.
+    /// Red if the SIGTERM phase is back to a third of the waits.
+    #[cfg(unix)]
+    #[test]
+    fn the_sigterm_phase_covers_a_nested_gateways_hurried_path() {
+        let waits = Duration::from_millis(3_650);
+        let Ending::Graceful { eof, term } = graceful_ending(KILL_RESERVE + waits, true, None)
+        else {
+            panic!("waits above the minimum phase give a graceful ending");
+        };
+        assert_eq!(
+            term, NESTED_TERM_NEED,
+            "the SIGTERM phase is the nested need"
+        );
+        assert_eq!(eof + term, waits, "the split spends exactly the waits");
+    }
+
+    /// Small waits cannot afford the floor: SIGTERM takes at most half, so the
+    /// EOF wait is never starved.
+    /// Red if the floor takes more than half of the waits.
+    #[cfg(unix)]
+    #[test]
+    fn a_small_wait_keeps_half_for_eof_even_under_the_floor() {
+        let waits = Duration::from_secs(1);
+        assert_eq!(
+            graceful_ending(KILL_RESERVE + waits, true, None),
+            Ending::Graceful {
+                eof: waits / 2,
+                term: waits / 2,
+            }
+        );
+    }
+
+    /// Waits big enough that a third already covers the need are untouched.
+    /// Red if the floor reshapes a long stop.
+    #[cfg(unix)]
+    #[test]
+    fn a_long_wait_keeps_its_third_for_sigterm() {
+        let waits = Duration::from_secs(9);
+        assert_eq!(
+            graceful_ending(KILL_RESERVE + waits, true, None),
+            Ending::Graceful {
+                eof: waits - waits / 3,
+                term: waits / 3,
+            }
+        );
     }
 
     #[cfg(unix)]
