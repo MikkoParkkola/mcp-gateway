@@ -63,7 +63,11 @@ fn r52_the_window_edge_is_exact() {
         assert!(joiner.observe(&delivery("gw-t"), 1_000));
         let verdict = joiner.join(&call("gw-t"), seen(1_000 + distance));
         joiner.count(&verdict);
-        assert_eq!(is_found(&verdict), found, "distance {distance}: {verdict:?}");
+        assert_eq!(
+            is_found(&verdict),
+            found,
+            "distance {distance}: {verdict:?}"
+        );
         assert_eq!(joiner.delivery_beyond_window, usize::from(!found));
         if !found {
             assert_eq!(verdict, Joined::NoRecord(Searched::Finished));
