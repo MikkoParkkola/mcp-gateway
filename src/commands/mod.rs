@@ -22,6 +22,8 @@ pub(crate) mod color;
 mod config_export;
 pub mod config_write;
 #[cfg(feature = "webui")]
+mod audit_lookup;
+#[cfg(feature = "webui")]
 mod dashboard_link;
 #[cfg(feature = "discovery")]
 pub(crate) mod discover;
@@ -56,6 +58,8 @@ pub use audit::run_audit_command;
 pub use cap::run_cap_command;
 #[cfg(feature = "config-export")]
 pub use config_export::run_config_export;
+#[cfg(feature = "webui")]
+pub use audit_lookup::run_audit_lookup_command;
 #[cfg(feature = "webui")]
 pub use dashboard_link::{run_dashboard_link_args, run_events_command};
 pub use doctor::{StdioProbe, run_doctor_command, run_doctor_shadow_command};

@@ -29,6 +29,7 @@
 
 pub mod api;
 pub mod completion;
+pub mod audit_lookup;
 pub mod dashboard_link;
 pub(crate) mod entry;
 pub mod events;
