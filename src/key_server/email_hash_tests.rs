@@ -586,6 +586,31 @@ fn a_failed_normalization_check_fails_the_key() {
     ));
 }
 
+/// NORM.3: nothing a test injects can leave a failure stuck in the process: an
+/// injected check runs on every call (it is never cached), a failing one does
+/// not stop the next key from building with a passing one, and the real check's
+/// result is only cached once it has passed.
+/// Mutant: cache the injected result, or cache a failure.
+#[test]
+fn an_injected_check_runs_every_time_and_a_failure_is_never_cached() {
+    let runs = std::cell::Cell::new(0_u32);
+    let fail = || {
+        runs.set(runs.get() + 1);
+        Err::<(), String>("boom".into())
+    };
+    assert!(EmailHashKey::from_hex_checked(KEY_HEX, &fail).is_err());
+    assert!(EmailHashKey::from_hex_checked(KEY_HEX, &fail).is_err());
+    assert_eq!(runs.get(), 2, "an injected check must run on every call");
+    assert!(
+        EmailHashKey::from_hex_checked(KEY_HEX, &|| Ok(())).is_ok(),
+        "a failure injected before must not stick"
+    );
+    assert!(
+        EmailHashKey::from_hex(KEY_HEX).is_ok(),
+        "the real path is untouched by the injections"
+    );
+}
+
 /// NORM.5: a subject is hashed under its own domain tag and exactly as given:
 /// a subject that equals an email address does not collide with that email's
 /// hash, and subjects that differ only by case stay distinct (a subject is an
