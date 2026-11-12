@@ -7,30 +7,8 @@
 use serde_json::{Value, json};
 
 use super::answer_export_tests::{export_for, ndjson};
-use super::answer_fixture::{Dl, Fixture, SECRET};
+use super::answer_fixture::{Dl, Fixture, SECRET, forge};
 use super::answer_list_tests::{get, row_of};
-use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
-use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
-
-/// A valid, correctly signed call that carries no trace id.
-fn traceless_call(fx: &Fixture) {
-    let envelope = AuditEnvelope {
-        trace_id: None,
-        ..AuditEnvelope::ok(AuditWho::from_actor_id("c"))
-    };
-    fx.logger
-        .log_invocation_correlated(
-            CorrelationKey {
-                id: "s",
-                source: CorrelationSource::SessionId,
-            },
-            &envelope,
-            InvocationTarget::meta("srv", "tool"),
-            "sha256:aa",
-            Some("sha256:bb"),
-        )
-        .unwrap();
-}
 
 /// Two calls, then a delivery whose `trace_id` an attacker removed (which
 /// breaks its hash), then a later call.
@@ -84,10 +62,17 @@ async fn r57_a_failure_with_a_usable_trace_or_no_failure_changes_nothing_else() 
     assert_eq!(page["answer_integrity_failed"], 1);
 
     // A clean log keeps today's answers and never sets the flag, even with a
-    // valid line that names no trace.
-    let clean = Fixture::new(Some(SECRET));
+    // correctly hashed line that names no usable trace (the writer always
+    // generates one, so this is a forged empty trace on a log with no secret).
+    let clean = Fixture::new(None);
     clean.call("gw-a");
-    traceless_call(&clean);
+    clean.call("gw-x");
+    let x = clean
+        .lines()
+        .iter()
+        .position(|l| l["trace_id"] == "gw-x")
+        .unwrap();
+    clean.edit(x, |e| forge(e, "trace_id", json!(""), false));
     clean.call("gw-b");
     clean.delivery("gw-b", &Dl::effect("refused"));
     let (_, page) = get(&clean, &[]).await;
