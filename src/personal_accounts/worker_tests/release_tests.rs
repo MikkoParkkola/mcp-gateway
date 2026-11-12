@@ -448,3 +448,55 @@ fn cancelling_the_bounded_shutdown_strands_nothing() {
         stall.let_go();
     });
 }
+
+/// `MIK-9460.CUSTODY.4`: the stdio teardown cuts its custody step while an
+/// operation still holds a permit, then ends with the final no-wait detach. The
+/// store's last drop must then not happen on the thread that drops the gateway
+/// (the one that runs `run_stdio`): the detach took the handle's reference, so
+/// the operation's own thread drops last. Without the detach, the handle is the
+/// last owner and the gateway's drop releases the store on the caller.
+#[test]
+fn after_a_cut_custody_step_the_final_detach_keeps_the_last_drop_off_the_caller() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), grant())]);
+
+    multi_thread(async {
+        let fx = start(tmp.path(), 2);
+        let caller = std::thread::current().id();
+        let (entered, release) = fx.provider.hold(&alice());
+        let op = {
+            let handle = Arc::clone(&fx.handle);
+            tokio::spawn(async move { handle.refresh_if_expired(&alice()).await })
+        };
+        tokio::time::timeout(HANG_BOUND, entered)
+            .await
+            .expect("the provider was entered")
+            .expect("entry signal");
+        // The custody step, cut: an operation still holds a permit.
+        let cut = tokio::time::timeout(
+            HANG_BOUND,
+            fx.handle.shutdown_by(tokio::time::Instant::now()),
+        )
+        .await
+        .expect("the cut custody step returned instead of waiting for the operation");
+        let cut = refuse_scaffold(cut, "cut custody step").expect("outcome");
+        assert_eq!(cut, ShutdownEnd::InFlightPending);
+        // The end of the teardown.
+        fx.handle.detach_release();
+        let _ = release.send(());
+        let _ = op.await;
+        let provider = Arc::clone(&fx.provider);
+        // The gateway is dropped last, as `run_stdio` returns.
+        drop(fx);
+        let dropped_on = provider
+            .drop_thread
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the store was dropped by now");
+        assert_ne!(
+            dropped_on, caller,
+            "the last drop of the store ran on the thread that drops the gateway"
+        );
+    });
+}

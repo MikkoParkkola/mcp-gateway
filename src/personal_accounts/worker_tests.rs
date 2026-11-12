@@ -192,6 +192,8 @@ struct ProviderState {
     drop_gate: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     /// A release that panics inside the service's drop.
     panic_on_drop: std::sync::atomic::AtomicBool,
+    /// The thread the service's final drop ran on.
+    drop_thread: Mutex<Option<std::thread::ThreadId>>,
 }
 
 impl ProviderState {
@@ -226,6 +228,11 @@ const RELEASE_HANG_GUARD: Duration = Duration::from_secs(20);
 
 impl Drop for GatedProvider {
     fn drop(&mut self) {
+        *self
+            .state
+            .drop_thread
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(std::thread::current().id());
         if self.state.panic_on_drop.load(Ordering::SeqCst) {
             panic!("the provider's drop panics");
         }
