@@ -103,6 +103,23 @@ async fn save(
     decode(send(route, request).await).await
 }
 
+/// As [`save`], but with the given `base_revision` in place of the current one.
+async fn save_with_revision(
+    route: &Route,
+    revision: &str,
+    fields: &Value,
+    bearer: &str,
+) -> (StatusCode, Value) {
+    let mut request = request("POST", routes::UI_SETTINGS, Some(bearer), None);
+    request.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/json".parse().expect("content type"),
+    );
+    *request.body_mut() =
+        Body::from(json!({"base_revision": revision, "fields": fields}).to_string());
+    decode(send(route, request).await).await
+}
+
 async fn cli_session(route: &Route) -> String {
     let (status, body) = decode(
         send(
@@ -171,6 +188,29 @@ async fn a_cli_keys_session_cannot_save_an_auth_setting() {
     let (route, store) = fixture().await;
     let cookie = cli_session(&route).await;
     assert_refused(&route, &store, Some(&cookie)).await;
+}
+
+/// The refusal comes before the revision is judged: a malformed or a stale
+/// `base_revision` with an auth edit from a CLI key is refused as forbidden, not
+/// processed, and nothing is written or stored.
+#[tokio::test]
+async fn a_cli_keys_auth_save_is_refused_before_its_revision_is_judged() {
+    let (route, store) = fixture().await;
+    let before = std::fs::read(route.path()).expect("config bytes");
+    let fields = json!([secret(SAVED_SECRET)]);
+    let current = route.saved_body(&fields)["base_revision"]
+        .as_str()
+        .expect("revision text")
+        .to_owned();
+    let mut stale = current.clone();
+    let last = stale.pop().expect("a revision has characters");
+    stale.push(if last == '0' { '1' } else { '0' });
+    for revision in ["not-a-revision", stale.as_str()] {
+        let (status, body) = save_with_revision(&route, revision, &fields, CHILD).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{revision}: {body}");
+        assert_eq!(std::fs::read(route.path()).expect("config bytes"), before);
+        assert_eq!(store.calls(), 0, "no secret entry may be created");
+    }
 }
 
 #[tokio::test]

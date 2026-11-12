@@ -114,3 +114,26 @@ fn an_ended_session_reports_no_origin() {
         );
     }
 }
+
+#[test]
+fn an_unreadable_clock_reports_no_origin() {
+    let store = DashboardBootstrap::new();
+    let now = Now::read();
+    let limits = SessionLimits::default();
+    let (keys, key) = minting_table(now);
+    let handle = store.issue_session_until(
+        now,
+        &limits,
+        Bound {
+            not_after: None,
+            key: Some(key),
+        },
+    );
+    // A wall clock before 1970 cannot date the session: no verdict, no origin.
+    let before_epoch = Now {
+        mono: now.mono,
+        wall: std::time::UNIX_EPOCH - Duration::from_secs(1),
+    };
+    let checked = store.check_session_with_origin(&handle, before_epoch, &limits, Touch::No, &keys);
+    assert_eq!(checked, (SessionCheck::ClockUnreadable, None));
+}
