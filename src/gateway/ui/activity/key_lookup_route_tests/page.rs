@@ -401,3 +401,81 @@ fn a_dashboard_session_pages_only_its_own_tokens() {
         "the same session pages on: {second}"
     );
 }
+
+/// A token is judged again at delivery: inside its expiry and its chain's
+/// ceiling at that moment, not only at the start of the request. Mutant: skip
+/// the second check, or drop either bound.
+#[test]
+fn a_token_is_alive_until_its_expiry_and_its_chains_ceiling() {
+    let fx = Fx::new();
+    let who = admin("a");
+    let now = now_secs();
+    let token = fx.seal_by_hand(&who, &fx.scope(now), now);
+    let opened = super::super::key_lookup::open(
+        &fx.state,
+        &fingerprint(&who),
+        &token,
+        now,
+        &fx.ks.email_key,
+    )
+    .expect("opens");
+    assert!(opened.alive_at(now + 299));
+    assert!(opened.alive_at(now + 300), "the expiry second is the last");
+    assert!(!opened.alive_at(now + 301), "past its own expiry");
+    // A chain born 800 s ago, sealed fresh: its own expiry is far off but the
+    // ceiling (born + 900) ends it first.
+    let old = fx.seal_by_hand(&who, &fx.scope(now - 800), now);
+    let opened =
+        super::super::key_lookup::open(&fx.state, &fingerprint(&who), &old, now, &fx.ks.email_key)
+            .expect("opens inside the ceiling");
+    assert!(opened.alive_at(now + 100), "born + 900 is now + 100");
+    assert!(!opened.alive_at(now + 101), "past the chain ceiling");
+}
+
+/// A token the route would itself refuse for its length is never issued.
+/// Mutant: drop the length check in `seal`.
+#[test]
+fn a_token_longer_than_open_accepts_is_not_issued() {
+    let fx = Fx::new();
+    let who = admin("a");
+    let now = now_secs();
+    let mut scope = fx.scope(now);
+    scope.from = Some("2".repeat(4096));
+    assert!(
+        super::super::key_lookup::seal(&fx.state, &fingerprint(&who), &scope, now).is_none(),
+        "an oversized scope was sealed into a token open would refuse"
+    );
+}
+
+/// A dashboard session with an empty cookie handle has nothing to bind a token
+/// to: a result with a next page is the 503, and no token is minted.
+/// Mutant: accept an empty handle.
+#[test]
+fn a_dashboard_session_without_a_handle_is_given_no_token() {
+    let fx = Fx::new();
+    for subject in ["s1", "s2"] {
+        fx.plant(subject, EMAIL, &fx.ks.email_key);
+    }
+    let mut c = client(true, &["*"], CredentialKind::DashboardSession);
+    c.principal =
+        crate::gateway::record_principal::InternalPrincipal::new("dashboard-session".to_owned());
+    let request = Request::builder()
+        .method("POST")
+        .uri(routes::UI_KEY_SERVER_LOOKUP_EMAIL)
+        .header("content-type", "application/json")
+        .header("cookie", "mcp_gateway_session=")
+        .extension(fx.live.generation())
+        .extension(c)
+        .body(Body::from(json!({"email": EMAIL, "limit": 1}).to_string()))
+        .expect("request");
+    fx.state.process.lookup_budget().reset_for_test();
+    let status = fx.rt.block_on(async {
+        crate::gateway::ui::api_router()
+            .with_state(fx.state.clone())
+            .oneshot(request)
+            .await
+            .expect("infallible")
+            .status()
+    });
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}

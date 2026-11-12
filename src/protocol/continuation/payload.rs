@@ -43,6 +43,9 @@ pub enum ContinuationPurpose {
 /// The request digest every lookup page carries: a domain label, not a hash
 /// of anything. A page binds to a principal and a purpose, and its scope is
 /// sealed inside.
+/// How long one lookup page token lives: its own number, not the generic
+/// continuation lifetime, which a later change to that policy would move.
+const LOOKUP_PAGE_LIFETIME_SECS: u64 = 300;
 const LOOKUP_PAGE_DIGEST: &str = "lookup-email-page/v1";
 
 /// Lifetime of a preview confirmation: long enough to read what will run and
@@ -328,6 +331,7 @@ impl Payload {
         )
         .with_purpose(ContinuationPurpose::LookupPage);
         payload.lookup_scope = Some(lookup_scope);
+        payload.expires_at = now.saturating_add(LOOKUP_PAGE_LIFETIME_SECS);
         payload
     }
 

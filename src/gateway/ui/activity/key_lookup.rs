@@ -42,6 +42,8 @@ use crate::protocol::continuation::Payload;
 /// The most bytes of request body read; a lookup carries an email, a cursor
 /// and two timestamps.
 const MAX_BODY: usize = 8 * 1024;
+/// The longest `from` or `to` accepted: an RFC 3339 time is far shorter.
+const MAX_TIME: usize = 64;
 /// The longest email accepted, as in RFC 5321.
 const MAX_EMAIL: usize = 320;
 
@@ -107,6 +109,16 @@ pub(super) struct Opened {
     expires_at: u64,
 }
 
+impl Opened {
+    /// Whether the token is still inside its own expiry and its chain's
+    /// ceiling at `now`. Opening judged this at the start of the request; a
+    /// page that waited for a reader slot and a scan is judged again at the
+    /// moment it would be delivered.
+    pub(super) fn alive_at(&self, now: u64) -> bool {
+        now <= self.expires_at && now <= self.scope.born.saturating_add(CHAIN_CEILING_SECS)
+    }
+}
+
 /// The digest a token binds to; `None` when the caller has nothing to bind to,
 /// in which case no token is minted or opened. One function for both, so they
 /// cannot disagree.
@@ -119,17 +131,30 @@ fn cursor_principal(
     client: Option<&AuthenticatedClient>,
     headers: &axum::http::HeaderMap,
 ) -> Option<String> {
+    use crate::security::audit::CredentialKind;
     let client = client?;
     let principal = client.credential_principal()?;
-    if client.credential_kind == crate::security::audit::CredentialKind::DashboardSession {
-        let handle = crate::gateway::auth::session_cookie_value(headers)?;
-        return Some(crate::hashing::sha256_hex(
-            format!("dashboard-session\0{handle}").as_bytes(),
-        ));
+    let digest = |tag: &str, material: &str| {
+        crate::hashing::sha256_hex(format!("{tag}\0{material}").as_bytes())
+    };
+    match client.credential_kind {
+        // Every dashboard session carries the same principal: its own cookie
+        // handle is what tells two sessions apart. An empty handle is no
+        // session.
+        CredentialKind::DashboardSession => {
+            let handle = crate::gateway::auth::session_cookie_value(headers)?;
+            (!handle.is_empty()).then(|| digest("dashboard-session", &handle))
+        }
+        // A digest of the one secret the caller presented.
+        CredentialKind::StaticBearer
+        | CredentialKind::ApiKey
+        | CredentialKind::KeyServerToken
+        | CredentialKind::OidcBearer => {
+            Some(digest("credential-principal", principal.storage_form()))
+        }
+        // Nothing to bind a token to: no token is minted or opened.
+        CredentialKind::None | CredentialKind::LocalTransport => None,
     }
-    Some(crate::hashing::sha256_hex(
-        principal.storage_form().as_bytes(),
-    ))
 }
 
 /// Seal `scope` for `principal`, valid from `now`; `None` when it cannot be
@@ -145,7 +170,9 @@ pub(super) fn seal(
     }
     let json = serde_json::to_string(scope).ok()?;
     let payload = Payload::mint_lookup(principal.to_owned(), json, now);
-    state.continuation.keyring().mint(&payload).ok()
+    let token = state.continuation.keyring().mint(&payload).ok()?;
+    // A token `open` would refuse for its length is not issued.
+    (token.len() <= PAGE_TOKEN_MAX_LEN).then_some(token)
 }
 
 /// Open `token` for `principal`, or `None`: one answer for every reason it
@@ -256,7 +283,6 @@ struct Scan {
     /// `None` on a first page.
     start: Option<Cursor>,
     limit: usize,
-    now: u64,
 }
 
 /// Read one page of retained rows. A read that fails is an error answer, never
@@ -304,7 +330,8 @@ fn scan(s: &Scan) -> Response {
             let token = s
                 .principal
                 .as_deref()
-                .and_then(|p| seal(&s.state, p, &scope, s.now));
+                .zip(crate::clock::unix_secs().ok())
+                .and_then(|(p, minted)| seal(&s.state, p, &scope, minted));
             let Some(token) = token else {
                 return finish(
                     refuse(
@@ -405,6 +432,9 @@ fn check_first_page(raw: &str, from: Option<&str>, to: Option<&str>) -> Result<(
     let email = raw.trim();
     if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(char::is_control) {
         return Err("the email is not valid");
+    }
+    if from.is_some_and(|t| t.len() > MAX_TIME) || to.is_some_and(|t| t.len() > MAX_TIME) {
+        return Err("from and to must be RFC 3339 times");
     }
     let (Some(window_from), Some(window_to)) = (
         from.map_or(Some(None), |t| parse_time(t).map(Some)),
@@ -593,16 +623,17 @@ pub(super) async fn lookup(
         born,
         start,
         limit,
-        now,
     };
     let response = blocking(state.process.activity_reads(), move || scan(&job)).await;
     // The token is spent by the page it served, after that page was read: a
     // throttle, a failed read or a body that never arrived left it intact.
     if let Some(opened) = opened
         && response.status() == StatusCode::OK
-        && !spend(&state, &opened, now).await
     {
-        return bad_token();
+        let delivered = crate::clock::unix_secs().unwrap_or(u64::MAX);
+        if !opened.alive_at(delivered) || !spend(&state, &opened, delivered).await {
+            return bad_token();
+        }
     }
     response
 }
