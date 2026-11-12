@@ -41,8 +41,7 @@ fn open_existing(path: &Path, bound: usize) -> Result<Option<(File, Vec<u8>)>, H
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(HandoverError::Foreign),
     };
-    let meta = file.metadata().map_err(|_| HandoverError::Foreign)?;
-    if !meta.is_file() || !private_to_us(&meta) || meta.len() > bound as u64 {
+    if checked(&file)?.len() > bound as u64 {
         return Err(HandoverError::Foreign);
     }
     let mut bytes = Vec::new();
@@ -51,6 +50,17 @@ fn open_existing(path: &Path, bound: usize) -> Result<Option<(File, Vec<u8>)>, H
         .read_to_end(&mut bytes)
         .map_err(|_| HandoverError::Foreign)?;
     Ok(Some((file, bytes)))
+}
+
+/// The check every read of the file is behind: the OPENED handle is a regular file that is
+/// private to this user and has one link.
+fn checked(file: &File) -> Result<std::fs::Metadata, HandoverError> {
+    let meta = file.metadata().map_err(|_| HandoverError::Foreign)?;
+    if meta.is_file() && private_to_us(&meta) {
+        Ok(meta)
+    } else {
+        Err(HandoverError::Foreign)
+    }
 }
 
 #[cfg(unix)]
@@ -148,6 +158,9 @@ fn commit(
         Some(file) => file,
         None => open_guarded(path, true).map_err(|_| HandoverError::Write)?,
     };
+    // A file this call created passes by construction; the same check runs on every path so no
+    // read, including the seal's, is ever behind a handle that was not checked.
+    checked(&file).map_err(|_| HandoverError::Write)?;
     let from = match placement {
         Placement::Whole => frames.len(),
         Placement::Torn {
@@ -191,7 +204,9 @@ fn seal(file: &mut File, path: &Path, frames: &[Vec<u8>]) -> Result<(), Handover
     if have != want {
         return Err(HandoverError::Write);
     }
-    let at_path = File::open(path).map_err(|_| HandoverError::Write)?;
+    // Identity only, never read; a replaced path must not make the open wait.
+    let at_path =
+        crate::open_nonblocking::open_nonblocking(path).map_err(|_| HandoverError::Write)?;
     match (file_id(file), file_id(&at_path)) {
         (Ok(ours), Ok(theirs)) if ours == theirs => Ok(()),
         _ => Err(HandoverError::Write),

@@ -148,8 +148,8 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "src/config_persistence_journal_v2_drain_handover.rs",
         "the handover writer: opens the abandoned file (unix: no symlink follow, without waiting) \
          and checks the OPENED handle is a private regular file of this user with one link before \
-         it reads a byte; reads it only to prove it against the donor journal; it holds frozen \
-         journal records, not credentials",
+         any read, on every path (also for a file it created itself); reads it only to prove it \
+         against the donor journal; it holds frozen journal records, not credentials",
     ),
     (
         "src/config_persistence_lock.rs",
