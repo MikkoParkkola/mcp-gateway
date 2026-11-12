@@ -278,8 +278,8 @@ pub(super) type CostShutdown = (Arc<BudgetEnforcer>, PathBuf);
 pub(super) type CostShutdown = std::convert::Infallible;
 
 /// The HTTP shutdown's saves of search ranking, transition tracking and, with
-/// cost governance on, today's spend, all together under
-/// [`SHUTDOWN_SAVES_TIMEOUT`]. The periodic saver needs no stopping first:
+/// cost governance on, today's spend, all together under the stop budget's
+/// `deadline`. The periodic saver needs no stopping first:
 /// cost writes take turns and each snapshots the spend as it writes.
 pub(super) async fn save_state_on_shutdown(
     ranker: Arc<crate::ranking::SearchRanker>,
@@ -288,8 +288,8 @@ pub(super) async fn save_state_on_shutdown(
     transition_path: PathBuf,
     cost: Option<CostShutdown>,
     more: Vec<ShutdownSave>,
+    deadline: tokio::time::Instant,
 ) {
-    let deadline = tokio::time::Instant::now() + SHUTDOWN_SAVES_TIMEOUT;
     #[allow(unused_mut)]
     let mut saves: Vec<ShutdownSave> = vec![
         (

@@ -21,6 +21,9 @@ const TERMINAL_RESERVE: Duration = Duration::from_millis(2_250);
 /// before the total does.
 const LOGGER_TAIL: Duration = Duration::from_secs(2);
 
+/// The most an in-flight, override or task drain waits, whatever is left to Dp.
+pub(crate) const DRAIN_CAP: Duration = Duration::from_secs(10);
+
 /// The smallest total an HTTP stop accepts: every reserve plus the minimum
 /// listener grace.
 pub(crate) const HTTP_MIN_TOTAL: Duration = LISTENER_MIN
@@ -86,24 +89,29 @@ impl StopBudget {
         self.post_listener_end() - POST_RESERVE
     }
 
-    /// Dr: where the runtime wait ends, before the logger's share.
+    /// Dr: where the runtime wait ends, before the logger's share. Test-only
+    /// until the retirement slice waits on it.
+    #[cfg(test)]
     pub(crate) fn runtime_end(&self) -> Instant {
         self.end() - LOGGER_TAIL
     }
 
     /// The listener's grace for a stop whose total is `total`, known before any
     /// trigger exists: the listener is started first.
-    pub(crate) fn listener_grace_for(_total: Duration) -> Duration {
-        Duration::ZERO
+    pub(crate) fn listener_grace_for(total: Duration) -> Duration {
+        total.saturating_sub(POST_RESERVE + BACKEND_RESERVE + TERMINAL_RESERVE)
     }
 
     /// How long after the trigger Dp falls, for a window saver started before
     /// any trigger exists.
-    pub(crate) fn post_listener_offset(_total: Duration) -> Duration {
-        Duration::ZERO
+    pub(crate) fn post_listener_offset(total: Duration) -> Duration {
+        total.saturating_sub(BACKEND_RESERVE + TERMINAL_RESERVE)
     }
 
-    /// The listener's grace from the trigger.
+    /// The listener's grace from the trigger; production asks
+    /// [`Self::listener_grace_for`], before any trigger exists. Test-only: a row
+    /// holds the two together.
+    #[cfg(test)]
     pub(crate) fn listener_grace(&self) -> Duration {
         self.listener_end().saturating_duration_since(self.t0)
     }
