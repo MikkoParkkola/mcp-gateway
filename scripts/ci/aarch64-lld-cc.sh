@@ -5,8 +5,8 @@
 # fit: R_AARCH64_CALL26"; lld inserts range-extension thunks instead.
 # Without a rustup lld this is plain cc, so nothing is required to be installed.
 root="$(rustc --print sysroot 2>/dev/null)"
-dir="$root/lib/rustlib/aarch64-"*"-linux-gnu/bin/gcc-ld"
-for d in $dir; do
+# Only the wildcard expands: a sysroot path with a space stays one word.
+for d in "$root"/lib/rustlib/aarch64-*-linux-gnu/bin/gcc-ld; do
     if [ -x "$d/ld.lld" ]; then
         exec cc -B"$d" -fuse-ld=lld "$@"
     fi

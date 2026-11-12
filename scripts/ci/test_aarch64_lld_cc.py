@@ -21,13 +21,13 @@ WRAPPER = ROOT / "scripts/ci/aarch64-lld-cc.sh"
 TARGET = "aarch64-" + "unk" + "nown-linux-gnu"  # spelled out in two parts only to keep one word out of shell lines
 
 
-def run(with_lld: bool) -> tuple[list[str], str]:
+def run(with_lld: bool, spaced: bool = False) -> tuple[list[str], str]:
     """The arguments `cc` receives from the wrapper, under a fake rustc and a fake cc, and the gcc-ld dir."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         bindir = root / "bin"
         bindir.mkdir()
-        sysroot = root / "sysroot"
+        sysroot = root / ("sys root" if spaced else "sysroot")
         gcc_ld = sysroot / "lib/rustlib" / TARGET / "bin/gcc-ld"
         gcc_ld.mkdir(parents=True)
         if with_lld:
@@ -39,7 +39,7 @@ def run(with_lld: bool) -> tuple[list[str], str]:
             (bindir / name).chmod(0o755)
         env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
         out = subprocess.run(["sh", str(WRAPPER), "-o", "out", "a.o"], env=env, check=True,
-                             capture_output=True, text=True).stdout.split()
+                             capture_output=True, text=True).stdout.splitlines()
         return out, str(gcc_ld)
 
 
@@ -48,6 +48,9 @@ def main() -> int:
     args, gcc_ld = run(with_lld=True)
     if args != [f"-B{gcc_ld}", "-fuse-ld=lld", "-o", "out", "a.o"]:
         errors.append(f"with a rustup lld the wrapper passes {args}, want -B<gcc-ld> -fuse-ld=lld then the link line")
+    args, gcc_ld = run(with_lld=True, spaced=True)
+    if args != [f"-B{gcc_ld}", "-fuse-ld=lld", "-o", "out", "a.o"]:
+        errors.append(f"with a space in the sysroot the wrapper passes {args}, want the same link line with the whole path")
     args, _ = run(with_lld=False)
     if args != ["-o", "out", "a.o"]:
         errors.append(f"without a rustup lld the wrapper passes {args}, want the link line unchanged")
