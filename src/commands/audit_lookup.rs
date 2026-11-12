@@ -98,7 +98,8 @@ pub(crate) fn request_body(email: &str, args: &LookupEmailArgs) -> serde_json::V
     serde_json::Value::Object(body)
 }
 
-/// Ask the gateway at `base` and decode its answer strictly.
+/// Ask the gateway at `base` and decode its answer strictly. The shared
+/// admin client refuses a cleartext non-loopback target before it connects.
 ///
 /// # Errors
 ///
@@ -113,7 +114,6 @@ pub(crate) async fn lookup(
     const PATH: &str = "/ui/api/key-server/audit/lookup-email";
     let hide =
         |text: &str| mcp_gateway::cli::redact::text(text, &[token.to_string(), email.to_string()]);
-    super::dashboard_link::check_target(base)?;
     let endpoint = reqwest::Url::parse(&format!("{}{PATH}", base.trim_end_matches('/')))
         .map_err(|_| "the gateway URL is not valid".to_string())?;
     let body = request_body(email, args);
