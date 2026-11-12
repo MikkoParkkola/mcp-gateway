@@ -316,3 +316,93 @@ fn the_help_names_stdin_and_the_credential() {
     assert!(!help.contains("--email <"), "{help}");
     assert!(!help.contains("--email "), "no bare --email option: {help}");
 }
+
+/// MIK-9456.CLI.1: the email-length rule is its own bound, in bytes, so a
+/// multibyte address is counted by what it takes on the wire.
+/// Mutant: drop the 320-byte rule, or count characters.
+#[test]
+fn the_email_length_rule_is_in_bytes() {
+    let at_limit = format!("{}@b.invalid", "a".repeat(320 - "@b.invalid".len()));
+    assert_eq!(at_limit.len(), 320);
+    assert_eq!(
+        read_email(at_limit.as_bytes()).as_deref(),
+        Ok(at_limit.as_str())
+    );
+    let over = format!("{}@b.invalid", "a".repeat(321 - "@b.invalid".len()));
+    assert!(read_email(over.as_bytes()).is_err(), "321 bytes");
+    let wide_ok = "é".repeat(160);
+    assert_eq!(wide_ok.len(), 320);
+    assert!(
+        read_email(wide_ok.as_bytes()).is_ok(),
+        "160 two-byte characters"
+    );
+    let wide_over = "é".repeat(161);
+    assert!(read_email(wide_over.as_bytes()).is_err(), "322 bytes");
+}
+
+use super::run_with;
+
+fn code(exit: std::process::ExitCode) -> String {
+    format!("{exit:?}")
+}
+
+async fn run(base: &str, input: &[u8], token: Option<&'static str>) -> std::process::ExitCode {
+    let args = parse(&["--email-stdin", "--url", base]).expect("parses");
+    run_with(
+        args,
+        || Err("no config in this row".to_string()),
+        None,
+        None,
+        input,
+        move |name| {
+            (name == "MCP_GATEWAY_TOKEN")
+                .then(|| token.map(str::to_owned))
+                .flatten()
+        },
+    )
+    .await
+}
+
+/// MIK-9456.CLI.2: the composed command exits 0 on a good answer and nonzero
+/// on each failure class: no credential, no email on stdin, a refusal, an
+/// answer of the wrong shape, an unreachable gateway.
+/// Mutant: any failure class exits 0.
+#[tokio::test]
+async fn the_composed_command_exits_nonzero_on_every_failure_class() {
+    let ok = code(std::process::ExitCode::SUCCESS);
+    let fail = code(std::process::ExitCode::FAILURE);
+    let (good, seen) = stand_in(200, GOOD).await;
+    assert_eq!(code(run(&good, EMAIL.as_bytes(), Some(TOKEN)).await), ok);
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert_eq!(
+        code(run(&good, EMAIL.as_bytes(), None).await),
+        fail,
+        "no credential"
+    );
+    assert_eq!(code(run(&good, b"", Some(TOKEN)).await), fail, "no email");
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "neither failure sent a request"
+    );
+    let (refused, _) = stand_in(403, r#"{"error":"no"}"#).await;
+    assert_eq!(
+        code(run(&refused, EMAIL.as_bytes(), Some(TOKEN)).await),
+        fail,
+        "a refusal"
+    );
+    let (odd, _) = stand_in(200, "{}").await;
+    assert_eq!(
+        code(run(&odd, EMAIL.as_bytes(), Some(TOKEN)).await),
+        fail,
+        "wrong shape"
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    assert_eq!(
+        code(run(&dead, EMAIL.as_bytes(), Some(TOKEN)).await),
+        fail,
+        "unreachable"
+    );
+}
