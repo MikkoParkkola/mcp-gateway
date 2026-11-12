@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use super::super::super::abandoned::{
-    Placement, against_donor, canonical_frames, decode_frames, marked,
+    Placement, against_donor, canonical_frames, decode_frames, encode_frame, frames_of, marked,
 };
 use super::super::super::fixtures::{collect_case, config};
 use super::super::super::{JournalV2, Phase};
@@ -56,6 +56,11 @@ fn handover_undelivered_token_succeeds() {
     assert_eq!(journal_bytes(&rig.path), None, "{ROW}: the journal is gone");
     let bytes = file_bytes(&rig.path).expect("the abandoned file exists");
     assert_eq!(
+        bytes,
+        good_file(),
+        "{ROW}: byte for byte the frames the codec builds"
+    );
+    assert_eq!(
         against_donor(&bytes, &marked(&rig.donor)),
         Placement::Whole,
         "{ROW}: the file is exactly the donor's frames, flagged"
@@ -92,11 +97,16 @@ fn handover_binding_is_the_journals() {
     );
 }
 
-/// The bytes a successful handover of the standard rig writes: the reference good file.
+/// The file a handover of the standard rig must write, built from the frame builder and the
+/// codec alone so a row's own assertions, not this helper, are what fail without a handover.
 pub(super) fn good_file() -> Vec<u8> {
-    let mut rig = rig(|_| {});
-    assert_eq!(hand_over(&mut rig.session), Ok(()), "reference handover");
-    file_bytes(&rig.path).expect("reference file")
+    let rig = rig(|_| {});
+    frames_of(&marked(&rig.donor))
+        .expect("the donor is bound")
+        .iter()
+        .map(|frame| encode_frame(frame).expect("a frame fits"))
+        .collect::<Vec<_>>()
+        .concat()
 }
 
 /// Hand over a rig whose abandoned path already holds `existing`, expecting a refusal that
