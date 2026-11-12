@@ -430,6 +430,55 @@ fn bad_token() -> Response {
     )
 }
 
+/// What a request resolves to once it is judged: the search it runs.
+struct Resolved {
+    hash: String,
+    /// `None` on a first page.
+    start: Option<Cursor>,
+    born: u64,
+    from: Option<String>,
+    to: Option<String>,
+    /// The token to spend once its page is read; `None` on a first page.
+    opened: Option<Opened>,
+}
+
+/// A first page hashes the email, which goes no further: the suspended handler
+/// owns only the hash while it waits for a reader slot. A next page opens its
+/// token, last of all the checks. Both or neither of email and token was
+/// refused earlier.
+fn resolve(
+    ask: (Option<String>, Option<String>),
+    window: (Option<String>, Option<String>),
+    (state, key): (&AppState, &EmailHashKey),
+    principal: Option<&str>,
+    now: u64,
+) -> Result<Resolved, Box<Response>> {
+    match ask {
+        (Some(raw), None) => Ok(Resolved {
+            hash: key.hash(raw.trim()),
+            start: None,
+            born: now,
+            from: window.0,
+            to: window.1,
+            opened: None,
+        }),
+        (None, Some(token)) => {
+            let opened = principal
+                .and_then(|p| open(state, p, &token, now, key))
+                .ok_or_else(|| Box::new(bad_token()))?;
+            Ok(Resolved {
+                hash: opened.scope.hash.clone(),
+                start: Some(opened.scope.pos.clone()),
+                born: opened.scope.born,
+                from: opened.scope.from.clone(),
+                to: opened.scope.to.clone(),
+                opened: Some(opened),
+            })
+        }
+        _ => Err(Box::new(bad_token())),
+    }
+}
+
 pub(super) async fn lookup(
     State(state): State<Arc<AppState>>,
     guard: Guard,
@@ -505,36 +554,22 @@ pub(super) async fn lookup(
             0,
         );
     };
-    // The email is hashed here and goes no further: the suspended handler
-    // owns only the hash while it waits for a reader slot. A token, once the
-    // order above is past, is opened last.
-    let (hash, start, born, from, to, opened) = match (raw, token) {
-        (Some(raw), None) => (
-            ks.email_key.hash(raw.trim()),
-            None,
-            now,
-            from.map(str::to_owned),
-            to.map(str::to_owned),
-            None,
-        ),
-        (None, Some(token)) => {
-            let Some(opened) = principal
-                .as_deref()
-                .and_then(|p| open(&state, p, &token, now, &ks.email_key))
-            else {
-                return bad_token();
-            };
-            (
-                opened.scope.hash.clone(),
-                Some(opened.scope.pos.clone()),
-                opened.scope.born,
-                opened.scope.from.clone(),
-                opened.scope.to.clone(),
-                Some(opened),
-            )
-        }
-        // Both or neither was refused above.
-        _ => return bad_token(),
+    let Resolved {
+        hash,
+        start,
+        born,
+        from,
+        to,
+        opened,
+    } = match resolve(
+        (raw, token),
+        (from.map(str::to_owned), to.map(str::to_owned)),
+        (&state, &ks.email_key),
+        principal.as_deref(),
+        now,
+    ) {
+        Ok(resolved) => resolved,
+        Err(refusal) => return *refusal,
     };
     let job = Scan {
         state: Arc::clone(&state),

@@ -136,7 +136,7 @@ fn seal_and_open_round_trip_the_scope_for_one_principal_only() {
     scope.to = Some("2100-01-01T00:00:00Z".into());
     let token = fx.seal_by_hand(&who, &scope, now);
     let open = |principal: &str, token: &str| {
-        super::key_lookup::open(&fx.state, principal, token, now, &fx.ks.email_key)
+        super::super::key_lookup::open(&fx.state, principal, token, now, &fx.ks.email_key)
     };
     let got = open(&fingerprint(&who), &token)
         .expect("opens for its principal")
