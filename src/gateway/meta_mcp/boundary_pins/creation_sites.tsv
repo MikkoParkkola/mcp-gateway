@@ -75,7 +75,6 @@ src/config_persistence_journal.rs	begin	helper:create_new_private	1	helper	calls
 src/config_persistence_journal.rs	mark_all_renamed	helper:write_atomic	1	helper	calls the crate's write_atomic
 src/config_persistence_journal.rs	recover	helper:write_atomic	1	helper	calls the crate's write_atomic
 src/config_persistence_journal.rs	stage_original	helper:create_new_private	1	helper	calls the crate's create_new_private
-src/config_persistence_lock.rs	no_writer_possible	helper:create_new_private	1	helper	calls the crate's create_new_private
 src/config_persistence_scratch.rs	create_new_private	helper:create_file_private	1	helper	calls the crate's create_file_private
 src/config_persistence_scratch.rs	create_new_private	open-create	1	helper	the private create itself (0600 on unix)
 src/config_persistence_scratch.rs	create_private_replacing	helper:create_new_private	1	helper	calls the crate's create_new_private

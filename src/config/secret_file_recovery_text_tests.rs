@@ -213,7 +213,11 @@ fn the_recovery_and_config_reads_have_their_known_callers() {
     };
     assert_eq!(
         callers("read_recovery_text("),
-        ["config/secret_file.rs", "config_persistence_journal.rs"]
+        [
+            "config/secret_file.rs",
+            "config_persistence_journal.rs",
+            "config_persistence_journal_v2_drain.rs",
+        ]
     );
     assert_eq!(
         callers("read_config_text("),
