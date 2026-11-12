@@ -261,7 +261,7 @@ struct Scan {
 
 /// Read one page of retained rows. A read that fails is an error answer, never
 /// an empty result: an empty result must mean no retained row matched.
-fn scan(s: Scan) -> Response {
+fn scan(s: &Scan) -> Response {
     let version = u64::from(email_hash::VERSION);
     let window = (
         s.from.as_deref().and_then(parse_time),
@@ -384,6 +384,40 @@ pub(super) async fn read_body(request: axum::extract::Request) -> Result<Bytes, 
     }
 }
 
+/// A request is an email or a cursor, never both and never neither, and a
+/// next page takes its window from the cursor.
+fn check_shape(
+    email: Option<&str>,
+    cursor: Option<&str>,
+    window: (&Option<String>, &Option<String>),
+) -> Result<(), &'static str> {
+    if email.is_some() == cursor.is_some() {
+        return Err("send an email, or the cursor of the previous page, not both");
+    }
+    if cursor.is_some() && (window.0.is_some() || window.1.is_some()) {
+        return Err("a next page takes its window from the cursor");
+    }
+    Ok(())
+}
+
+/// What only a first page is judged on: the email and its window.
+fn check_first_page(raw: &str, from: Option<&str>, to: Option<&str>) -> Result<(), &'static str> {
+    let email = raw.trim();
+    if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(char::is_control) {
+        return Err("the email is not valid");
+    }
+    let (Some(window_from), Some(window_to)) = (
+        from.map_or(Some(None), |t| parse_time(t).map(Some)),
+        to.map_or(Some(None), |t| parse_time(t).map(Some)),
+    ) else {
+        return Err("from and to must be RFC 3339 times");
+    };
+    match (window_from, window_to) {
+        (Some(f), Some(t)) if f > t => Err("from must not be after to"),
+        _ => Ok(()),
+    }
+}
+
 fn bad_token() -> Response {
     finish(
         refuse(
@@ -434,30 +468,14 @@ pub(super) async fn lookup(
     else {
         return bad("the body must be a JSON object with an email or a cursor");
     };
-    // A request is an email or a cursor, never both and never neither.
-    if raw.is_some() == token.is_some() {
-        return bad("send an email, or the cursor of the previous page, not both");
-    }
-    if token.is_some() && (from.is_some() || to.is_some()) {
-        return bad("a next page takes its window from the cursor");
+    if let Err(message) = check_shape(raw.as_deref(), token.as_deref(), (&from, &to)) {
+        return bad(message);
     }
     let (from, to) = (from.as_deref(), to.as_deref());
-    if let Some(raw) = raw.as_deref() {
-        let email = raw.trim();
-        if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(char::is_control) {
-            return bad("the email is not valid");
-        }
-        let (Some(window_from), Some(window_to)) = (
-            from.map_or(Some(None), |t| parse_time(t).map(Some)),
-            to.map_or(Some(None), |t| parse_time(t).map(Some)),
-        ) else {
-            return bad("from and to must be RFC 3339 times");
-        };
-        if let (Some(f), Some(t)) = (window_from, window_to)
-            && f > t
-        {
-            return bad("from must not be after to");
-        }
+    if let Some(raw) = raw.as_deref()
+        && let Err(message) = check_first_page(raw, from, to)
+    {
+        return bad(message);
     }
     let limit = limit.unwrap_or(DEFAULT_LIMIT);
     if limit == 0 || limit > MAX_LIMIT {
@@ -531,7 +549,7 @@ pub(super) async fn lookup(
         limit,
         now,
     };
-    let response = blocking(state.process.activity_reads(), move || scan(job)).await;
+    let response = blocking(state.process.activity_reads(), move || scan(&job)).await;
     // The token is spent by the page it served, after that page was read: a
     // throttle, a failed read or a body that never arrived left it intact.
     if let Some(opened) = opened
