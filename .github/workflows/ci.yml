@@ -849,6 +849,8 @@ jobs:
       # on measurement (MIK-8482): the slowest shard took 25.5 min (#3944
       # run 1), against 35 min at the default in the Stage 0 probe.
       CARGO_BUILD_JOBS: 2
+      # Experiment: rustc's incremental session, restored with the whole target directory below.
+      CARGO_INCREMENTAL: 1
       # The labelled lane: lib-b runs alone, so it runs the lib-a half itself.
       MACOS_LIB_SOLO: ${{ contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
@@ -856,7 +858,23 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Experiment: the whole target directory with rustc's incremental session (rust-cache keeps neither the workspace
+      # crate nor its incremental state). One key per run, so each run saves; a later run restores the newest.
+      - name: Restore the incremental build cache
+        id: incr
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-incr-${{ github.run_id }}-${{ matrix.shard }}
+          restore-keys: macos-incr-
+      - name: Say what was restored
+        run: |
+          echo "cache-hit=${{ steps.incr.outputs.cache-hit }} matched=${{ steps.incr.outputs.cache-matched-key }}"
+          du -sh target ~/.cargo/registry 2>/dev/null || echo "no target directory yet"
+          date -u +%T
       # macOS is a shipped target (Homebrew, release binaries), so its tests
       # run here, not only compile (MIK-8174): signals, process groups, file
       # locks and paths behave differently on a Mac. The two skips are the
