@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tracing::error;
 
-use super::child_tree::{ChildTree, Ending, REAP_DEADLINE, Reap};
+use super::child_tree::{ChildTree, Ending, NESTED_TERM_NEED, REAP_DEADLINE, Reap};
 
 /// What a stop leaves a backend's tree after its stdin closes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,7 +179,9 @@ pub(crate) fn stop_deadline() -> Option<tokio::time::Instant> {
 /// kill, a third of the rest goes to the wait after SIGTERM and the remainder
 /// to the wait after EOF. Stdin that could not be closed (a writer holds it)
 /// gets no EOF wait, since the child never saw EOF. Windows has no SIGTERM.
-/// A hurried deadline keeps at least `MIN_PHASE` for SIGTERM when it fits.
+/// A hurried deadline keeps at least `MIN_PHASE` for SIGTERM when it fits. An
+/// unhurried stop keeps at least `NESTED_TERM_NEED` for it (capped so EOF keeps
+/// `MIN_PHASE`): a nested gateway only learns to hurry at the SIGTERM.
 pub(super) fn graceful_ending(
     budget: Duration,
     stdin_closed: bool,
@@ -189,6 +191,13 @@ pub(super) fn graceful_ending(
     let (eof, term) = match (cfg!(unix), stdin_closed) {
         (true, true) => {
             let term = deadline.map_or(waits / 3, |deadline| deadline.term_phase(waits));
+            // An unhurried stop keeps a SIGTERM phase a nested gateway can hurry
+            // inside, leaving the EOF wait at least the minimum phase.
+            let term = if deadline.is_some_and(StopDeadline::is_hurried) {
+                term
+            } else {
+                term.max(NESTED_TERM_NEED.min(waits.saturating_sub(MIN_PHASE)))
+            };
             (waits.saturating_sub(term), term)
         }
         (true, false) => (Duration::ZERO, waits),
@@ -712,19 +721,20 @@ mod plan_tests {
     }
 
     /// The floor takes from the EOF wait, so the EOF wait at the 12 s minimum
-    /// keeps a stated floor: a backend that saves on EOF keeps at least this much.
+    /// (3.4 s of waits, with the listener having used its whole grace) keeps a
+    /// stated share: at least half the waits, so a backend that saves on EOF
+    /// keeps most of the window.
     /// Red if the SIGTERM floor or a growing reap constant erodes the EOF wait.
     #[cfg(unix)]
     #[test]
-    fn the_eof_wait_at_the_minimum_keeps_its_stated_floor() {
-        const STATED_EOF_FLOOR: Duration = Duration::from_secs(2);
-        let waits = Duration::from_millis(3_650);
+    fn the_eof_wait_at_the_minimum_keeps_at_least_half_the_waits() {
+        let waits = Duration::from_millis(3_400);
         let Ending::Graceful { eof, .. } = graceful_ending(KILL_RESERVE + waits, true, None) else {
             panic!("waits above the minimum phase give a graceful ending");
         };
         assert!(
-            eof >= STATED_EOF_FLOOR,
-            "the EOF wait at the minimum is {eof:?}, under the stated {STATED_EOF_FLOOR:?}"
+            eof * 2 >= waits,
+            "the EOF wait at the minimum is {eof:?}, under half of {waits:?}"
         );
     }
 

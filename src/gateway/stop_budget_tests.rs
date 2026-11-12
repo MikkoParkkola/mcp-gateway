@@ -310,10 +310,16 @@ async fn a_step_before_the_backends_does_not_poll_after_db() {
 }
 
 /// What a stopping nested gateway needs, before the reaper's kill reserve, to
-/// take its own leaf down when its parent's stdin closes and SIGTERM follows: a
-/// hurried nested gateway took 2.3 s in the nested stop rows, plus a margin.
+/// take its own leaf down when its parent closes its stdin and then sends
+/// SIGTERM: the reaper's SIGTERM floor (the gateway only learns to hurry at the
+/// SIGTERM; measured 0.37 s from SIGTERM to exit, planned for its worst case
+/// plus a margin). The EOF phase before it is pinned by the reaper's own rows.
+/// Derived from the reaper's constant, so changing the inner's hurried path
+/// moves it.
 #[cfg(unix)]
-const NESTED_GATEWAY_NEED: Duration = Duration::from_millis(2_400);
+fn nested_gateway_need() -> Duration {
+    crate::transport::NESTED_TERM_NEED_FOR_TEST
+}
 
 /// The nested busy-gateway case, at the minimum and with the listener having
 /// used its whole grace: the backend stage must still leave a stopping nested
@@ -328,9 +334,10 @@ fn the_backend_stage_keeps_a_graceful_window_for_a_busy_nested_gateway() {
         .backend_end()
         .saturating_duration_since(b.post_listener_end());
     let graceful = backend_stage.saturating_sub(crate::transport::KILL_RESERVE_FOR_TEST);
+    let need = nested_gateway_need();
     assert!(
-        graceful >= NESTED_GATEWAY_NEED,
-        "the reaper's graceful window is {graceful:?}, under the {NESTED_GATEWAY_NEED:?} a busy nested gateway needs"
+        graceful >= need,
+        "the reaper's graceful window is {graceful:?}, under the {need:?} a busy nested gateway needs"
     );
     assert_eq!(graceful, ms(3_400), "the share kept over the kill reserve");
 }

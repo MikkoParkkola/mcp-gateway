@@ -498,6 +498,8 @@ mod child_tree;
 #[path = "stdio_reaper.rs"]
 mod reaper;
 #[cfg(all(test, unix))]
+pub(crate) use child_tree::NESTED_TERM_NEED as NESTED_TERM_NEED_FOR_TEST;
+#[cfg(all(test, unix))]
 pub(crate) use reaper::HURRY_WINDOW;
 #[cfg(all(test, unix))]
 pub(crate) use reaper::KILL_RESERVE as KILL_RESERVE_FOR_TEST;
