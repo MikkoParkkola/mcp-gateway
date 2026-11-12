@@ -97,3 +97,33 @@ fn state_serialises_in_snake_case() {
         "\"signed_unverifiable\""
     );
 }
+
+/// The recomputed hash borrows the entry's fields instead of cloning them; it
+/// must stay byte-identical to the hash of a cloned, filtered copy, on an
+/// entry with nested and escaped values, and agree with the logger's own hash.
+#[test]
+fn recompute_entry_hash_equals_the_hash_of_a_cloned_filtered_copy() {
+    use crate::security::transparency_log::recompute_entry_hash;
+
+    let nested = serde_json::json!({
+        "tool": "a\"b\n\u{1f600}", "n": [1, 2.5, null, {"z": 1, "a": [true]}],
+        "entry_hash": "sha256:x", "sig": "s", "key_id": "k",
+    });
+    let cloned: serde_json::Map<String, Value> = nested
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| !matches!(k.as_str(), "entry_hash" | "sig" | "key_id"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let want = crate::hashing::sha256_tagged(serde_json::to_string(&cloned).unwrap().as_bytes());
+    assert_eq!(recompute_entry_hash(&nested).unwrap(), want);
+
+    for signed in [false, true] {
+        let real = entry(signed);
+        assert_eq!(
+            recompute_entry_hash(&real).unwrap(),
+            real["entry_hash"].as_str().unwrap()
+        );
+    }
+}
