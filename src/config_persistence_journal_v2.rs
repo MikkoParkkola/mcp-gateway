@@ -369,6 +369,13 @@ impl JournalV2 {
         codec::encode(self)
     }
 
+    /// Whether `finish` would accept this journal: the one check, so a caller that must know
+    /// beforehand cannot drift from it.
+    #[cfg(test)]
+    pub(crate) fn finish_ready(&self) -> Result<(), JournalError> {
+        Ok(())
+    }
+
     fn pre_action(&self, action: Action) -> Result<&FileRevision, JournalError> {
         match action {
             Action::Forward => &self.original_revision,

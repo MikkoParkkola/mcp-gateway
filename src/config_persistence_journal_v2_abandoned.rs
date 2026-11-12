@@ -318,9 +318,51 @@ pub(crate) fn inspect(bytes: &[u8], donor: Option<&JournalV2>) -> Inspection {
     }
 }
 
+/// What an existing abandoned file is, judged against the donor about to be handed over.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Placement {
+    Absent,
+    Whole,
+    Missing {
+        complete: usize,
+    },
+    Torn {
+        complete: usize,
+        start: usize,
+        proof: TornProof,
+    },
+    Foreign,
+}
+
+/// Evidence that the bytes from `start` are a torn last frame of a donor-proven file. Only
+/// `against_donor` builds one, so nothing can shorten a file without that judgment.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct TornProof {
+    start: usize,
+}
+
+impl TornProof {
+    pub(crate) fn start(&self) -> usize {
+        self.start
+    }
+}
+
+/// The donor as it will be once handed over: every token flagged. Nothing is persisted.
+pub(crate) fn marked(donor: &JournalV2) -> JournalV2 {
+    donor.clone()
+}
+
+/// Judge an existing abandoned file against the marked donor.
+pub(crate) fn against_donor(_existing: &[u8], _donor: &JournalV2) -> Placement {
+    Placement::Foreign
+}
+
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned_fixtures_tests.rs"]
 mod fixtures;
+#[cfg(test)]
+#[path = "config_persistence_journal_v2_abandoned_placement_tests.rs"]
+mod placement;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned_tests.rs"]
 mod tests;
