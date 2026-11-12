@@ -19,7 +19,10 @@ const OUTSIDE: usize = 90;
 
 /// `gw-c1` and `gw-c2`, `fat` padding records, then `gw-c1`'s delivery.
 fn layout(fat: usize) -> Fixture {
-    let fx = Fixture::new(None);
+    fill(Fixture::new(None), fat)
+}
+
+fn fill(fx: Fixture, fat: usize) -> Fixture {
     fx.call("gw-c1");
     fx.call("gw-c2");
     for i in 0..fat {
@@ -90,7 +93,8 @@ async fn w1_a_delivery_inside_the_window_is_found_and_one_outside_is_not() {
 #[tokio::test]
 async fn w3_the_answer_does_not_depend_on_the_page_size() {
     for fat in [INSIDE, OUTSIDE] {
-        let fx = layout(fat);
+        // Small segments, as the look-above row does: each page reads across them.
+        let fx = fill(Fixture::rotating(None, 4096), fat);
         let whole = effects_at(&fx, "200").await;
         for limit in ["1", "2", "3"] {
             assert_eq!(
