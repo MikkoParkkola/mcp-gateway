@@ -167,17 +167,30 @@ impl ProcessTable for Timed {
     }
 }
 
-/// Measurement, not a gate: a root shell with `MEASURE_N` (default 1000)
+/// Measurement, not a gate: a root shell with 1000, then 4000,
 /// sleeping children, swept with real pidfds. Prints how long the freeze phase
 /// and the terminal kill phase take, for the design record. Run by hand:
 /// `cargo test --lib measure_the_kill_phase -- --ignored --nocapture`.
 #[test]
 #[ignore = "a measurement, run by hand with --nocapture"]
 fn measure_the_kill_phase_at_the_cap() {
-    let n: usize = std::env::var("MEASURE_N")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1000);
+    use rustix::process::{Resource, getrlimit, setrlimit};
+    // The pidfds of the largest run need descriptors: raise the soft limit.
+    let limit = getrlimit(Resource::Nofile);
+    setrlimit(
+        Resource::Nofile,
+        rustix::process::Rlimit {
+            current: limit.maximum,
+            maximum: limit.maximum,
+        },
+    )
+    .expect("raise the descriptor limit");
+    for n in [1000_usize, 4000] {
+        measure_one(n);
+    }
+}
+
+fn measure_one(n: usize) {
     let script = format!("i=0; while [ $i -lt {n} ]; do sleep 120 & i=$((i+1)); done; wait");
     let mut root = Command::new("sh")
         .args(["-c", &script])
