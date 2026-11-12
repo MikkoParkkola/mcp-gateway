@@ -12,7 +12,10 @@ fn the_start_time_keeps_microseconds_and_refuses_overflow() {
     assert_eq!(start_micros(1, 1_000_000), None, "usec is a fraction");
     assert_eq!(start_micros(u64::MAX, 0), None, "seconds overflow");
     let last = u64::MAX / 1_000_000 - 1;
-    assert_eq!(start_micros(last, 999_999), Some(last * 1_000_000 + 999_999));
+    assert_eq!(
+        start_micros(last, 999_999),
+        Some(last * 1_000_000 + 999_999)
+    );
 }
 
 #[test]
@@ -50,8 +53,16 @@ fn slots_are_capped_and_the_byte_length_fits_an_int() {
 fn a_fill_is_judged_against_its_buffer_not_the_kernels_claim() {
     assert_eq!(judge_fill(10, 100), Fill::Complete(10));
     assert_eq!(judge_fill(99, 100), Fill::Complete(99));
-    assert_eq!(judge_fill(100, 100), Fill::Again, "a full buffer lists again");
-    assert_eq!(judge_fill(i32::MAX, 100), Fill::Again, "a count past the buffer is never read");
+    assert_eq!(
+        judge_fill(100, 100),
+        Fill::Again,
+        "a full buffer lists again"
+    );
+    assert_eq!(
+        judge_fill(i32::MAX, 100),
+        Fill::Again,
+        "a count past the buffer is never read"
+    );
     assert_eq!(judge_fill(0, 100), Fill::Failed);
     assert_eq!(judge_fill(-1, 100), Fill::Failed);
 }

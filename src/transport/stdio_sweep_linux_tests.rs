@@ -114,7 +114,11 @@ fn a_wrong_start_time_is_never_signalled_either_way() {
         );
     }
     assert_eq!(table.state(stale), ProcState::Gone);
-    assert_eq!(table.state(real), ProcState::Running, "the child is untouched");
+    assert_eq!(
+        table.state(real),
+        ProcState::Running,
+        "the child is untouched"
+    );
     child.kill().expect("kill");
     child.wait().expect("reap");
 }
