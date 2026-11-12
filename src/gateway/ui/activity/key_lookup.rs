@@ -430,6 +430,37 @@ fn bad_token() -> Response {
     )
 }
 
+/// What a lookup cannot run without: the key server, its log's path and the
+/// clock. Each is its own refusal, and none is about a token.
+fn what_it_needs(
+    state: &AppState,
+) -> Result<(Arc<crate::key_server::KeyServer>, std::path::PathBuf, u64), Box<Response>> {
+    let refused =
+        |status, message, outcome| Box::new(finish(refuse(status, message), outcome, 0, 0));
+    let ks = state.key_server.clone().ok_or_else(|| {
+        refused(
+            StatusCode::NOT_FOUND,
+            "no key server is running",
+            "not_found",
+        )
+    })?;
+    let log = state.transparency_log.as_ref().ok_or_else(|| {
+        refused(
+            StatusCode::NOT_FOUND,
+            "no transparency log is configured",
+            "not_found",
+        )
+    })?;
+    let now = crate::clock::unix_secs().map_err(|_| {
+        refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the clock cannot be read",
+            "unavailable",
+        )
+    })?;
+    Ok((ks, log.path(), now))
+}
+
 /// What a request resolves to once it is judged: the search it runs.
 struct Resolved {
     hash: String,
@@ -530,29 +561,9 @@ pub(super) async fn lookup(
     if limit == 0 || limit > MAX_LIMIT {
         return bad("limit is out of range");
     }
-    let Some(ks) = state.key_server.clone() else {
-        return finish(
-            refuse(StatusCode::NOT_FOUND, "no key server is running"),
-            "not_found",
-            0,
-            0,
-        );
-    };
-    let Some(log) = state.transparency_log.as_ref() else {
-        return finish(
-            refuse(StatusCode::NOT_FOUND, "no transparency log is configured"),
-            "not_found",
-            0,
-            0,
-        );
-    };
-    let Ok(now) = crate::clock::unix_secs() else {
-        return finish(
-            refuse(StatusCode::SERVICE_UNAVAILABLE, "the clock cannot be read"),
-            "unavailable",
-            0,
-            0,
-        );
+    let (ks, log_path, now) = match what_it_needs(&state) {
+        Ok(found) => found,
+        Err(refusal) => return *refusal,
     };
     let Resolved {
         hash,
@@ -574,7 +585,7 @@ pub(super) async fn lookup(
     let job = Scan {
         state: Arc::clone(&state),
         principal,
-        log: log.path(),
+        log: log_path,
         key_id: ks.email_key.key_id(),
         hash,
         from,
