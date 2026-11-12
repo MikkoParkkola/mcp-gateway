@@ -127,6 +127,11 @@ test.describe('access', () => {
     await page.route('**/ui/api/decisions/count', (r) => r.fulfill({ status: 401, json: {} }));
     await page.goto('/ui/overview/status');
     await expect(page.locator('#signin')).toBeVisible();
+    // Deliver the held answer now, after the 401: it reports the session's access as narrowed.
+    const answered = page.waitForResponse('**/ui/api/status');
+    release();
+    await answered;
+    await page.waitForTimeout(300);
     // The answer that was in flight is dropped: its report does not narrow the
     // sidebar or draw the note under the sign-in view (a mutant that commits it fails here).
     await expect(note(page)).toHaveCount(0);
