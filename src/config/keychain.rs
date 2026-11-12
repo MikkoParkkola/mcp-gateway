@@ -96,8 +96,17 @@ pub(crate) fn confirm_absent(
     gap: std::time::Duration,
     mut still_there: impl FnMut() -> Result<bool, KeychainError>,
 ) -> Result<(), KeychainError> {
-    let _ = (attempts, gap, &mut still_there);
-    Ok(())
+    for attempt in 0..attempts {
+        if attempt > 0 {
+            std::thread::sleep(gap);
+        }
+        if !still_there()? {
+            return Ok(());
+        }
+    }
+    Err(KeychainError::Unavailable(format!(
+        "could not confirm removal: the entry is still readable after {attempts} checks"
+    )))
 }
 
 /// The reader an [`EnvOverlay`](super::EnvOverlay) resolves through. The
