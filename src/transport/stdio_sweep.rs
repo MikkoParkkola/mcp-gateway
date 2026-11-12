@@ -289,6 +289,10 @@ impl Sweep {
     }
 }
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "stdio_sweep_linux.rs"]
+mod linux;
+
 #[cfg(test)]
 #[path = "stdio_sweep_tests.rs"]
 mod tests;
