@@ -77,6 +77,7 @@ async fn r57_a_failure_with_a_usable_trace_or_no_failure_changes_nothing_else() 
     clean.delivery("gw-b", &Dl::effect("refused"));
     let (_, page) = get(&clean, &[]).await;
     assert_eq!(row_of(&page, "gw-a")["effect"], "no_record");
+    assert_eq!(row_of(&page, "")["effect"], "no_record");
     assert_eq!(row_of(&page, "gw-b")["effect"], "refused");
     assert!(page["answer_integrity_unattributed"].is_null());
     assert_eq!(page["answer_integrity_failed"], 0);
