@@ -178,3 +178,33 @@ async fn a_stage_that_finishes_early_hands_its_time_to_the_next() {
         "the freed time was available"
     );
 }
+
+#[test]
+fn the_listener_grace_for_a_total_is_what_the_budget_would_give() {
+    for (total, grace) in [
+        (ms(9_000), ms(100)),
+        (ms(30_000), ms(21_100)),
+        (ms(600_000), ms(591_100)),
+    ] {
+        let (_, budget) = at(total);
+        assert_eq!(
+            StopBudget::listener_grace_for(total),
+            grace,
+            "total {total:?}"
+        );
+        assert_eq!(budget.listener_grace(), grace, "total {total:?}");
+    }
+}
+
+#[test]
+fn the_post_listener_offset_for_a_total_is_dp_from_the_trigger() {
+    for (total, offset) in [(ms(9_000), ms(350)), (ms(30_000), ms(21_350))] {
+        let (t0, budget) = at(total);
+        assert_eq!(
+            StopBudget::post_listener_offset(total),
+            offset,
+            "total {total:?}"
+        );
+        assert_eq!(budget.post_listener_end() - t0, offset, "total {total:?}");
+    }
+}

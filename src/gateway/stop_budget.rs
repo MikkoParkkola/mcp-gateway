@@ -91,6 +91,18 @@ impl StopBudget {
         self.end() - LOGGER_TAIL
     }
 
+    /// The listener's grace for a stop whose total is `total`, known before any
+    /// trigger exists: the listener is started first.
+    pub(crate) fn listener_grace_for(_total: Duration) -> Duration {
+        Duration::ZERO
+    }
+
+    /// How long after the trigger Dp falls, for a window saver started before
+    /// any trigger exists.
+    pub(crate) fn post_listener_offset(_total: Duration) -> Duration {
+        Duration::ZERO
+    }
+
     /// The listener's grace from the trigger.
     pub(crate) fn listener_grace(&self) -> Duration {
         self.listener_end().saturating_duration_since(self.t0)
