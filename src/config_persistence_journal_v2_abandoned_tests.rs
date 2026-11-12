@@ -379,6 +379,11 @@ fn altered_frames_match_no_donor() {
             r#""payload_json":[123,34,108"#,
         ),
         (
+            "role",
+            r#""role":"config_save_intent""#,
+            r#""role":"config_save""#,
+        ),
+        (
             "owner facts",
             r#""intent_counter":null"#,
             r#""intent_counter":7"#,
