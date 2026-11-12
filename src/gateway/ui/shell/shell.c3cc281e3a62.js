@@ -25,6 +25,62 @@ const TABS = [['status', 'Status'], ['actions', 'Actions'], ['settings', 'Settin
 const PAGE_IDS = new Set(NAV.map(([id]) => id));
 const pages = new Map();
 
+// ---------------------------------------------------------------- access
+
+/**
+ * What the gateway said this key may open (`access` in GET /ui/api/status):
+ * `unknown` (not read yet, or dropped on sign-out or a 401), `all` (an answer
+ * with no usable report), or `report`. Only `report` hides anything. Hiding is
+ * presentation: the server's guards stay the authority for every route.
+ */
+let access = { kind: 'unknown', pages: new Map() };
+/** Counts the resets (sign-out, a 401): a status answer that started before one is dropped. */
+let accessResets = 0;
+
+const ALL_ACCESS = () => ({ kind: 'all', pages: new Map() });
+
+/** Parse a status body's `access` member; anything unusable reads as `all`. */
+function accessFrom(member) {
+  const list = member?.pages;
+  if (!Array.isArray(list)) return ALL_ACCESS();
+  const map = new Map();
+  for (const p of list) {
+    if (typeof p?.id !== 'string' || typeof p.open !== 'boolean' || !Array.isArray(p.tabs)) return ALL_ACCESS();
+    const tabs = new Map();
+    for (const t of p.tabs) {
+      if (typeof t?.id !== 'string' || typeof t.open !== 'boolean') return ALL_ACCESS();
+      tabs.set(t.id, t.open);
+    }
+    map.set(p.id, { open: p.open, tabs, reason: typeof p.reason === 'string' ? p.reason : '' });
+  }
+  return { kind: 'report', pages: map };
+}
+
+/** A page is open when the report says so and at least one of its listed tabs is open. */
+function pageOpen(id) {
+  if (access.kind !== 'report') return true;
+  const p = access.pages.get(id);
+  return !p || (p.open && [...p.tabs.values()].some(Boolean));
+}
+
+function tabOpen(id, tab) {
+  if (!pageOpen(id)) return false;
+  return access.kind !== 'report' || (access.pages.get(id)?.tabs.get(tab) ?? true);
+}
+
+/** Whether a parsed route may be drawn: its page, and its tab when it names one. */
+const routeOpen = ({ page, tab }) => pageOpen(page) && (tab === null || tabOpen(page, tab));
+
+/** The first open page and its first open tab (a registered one when the page has screens), or null. */
+function firstOpen() {
+  for (const [id] of NAV) {
+    if (!pageOpen(id)) continue;
+    const tab = visibleTabs(id)[0] ?? TABS.find(([t]) => tabOpen(id, t));
+    if (tab) return { page: id, object: null, tab: tab[0] };
+  }
+  return null;
+}
+
 /**
  * Register a page: `{title, subtitle, tabs: {status, actions, settings}, entries}`.
  * A null tab is hidden. The subtitle is the one line under the plate.
@@ -120,10 +176,13 @@ const loadAllScreens = () => Promise.allSettled(Object.keys(screens()).map(loadS
 export function entries() {
   const out = [];
   for (const [id, label] of NAV) {
+    if (!pageOpen(id)) continue;
     out.push({ label, path: `/ui/${id}`, kind: 'go' });
     for (const [tab, tabLabel] of visibleTabs(id)) out.push({ label: `${label} › ${tabLabel}`, path: `/ui/${id}/${tab}`, kind: 'go' });
     for (const e of pages.get(id)?.entries ?? []) {
       const kind = e.kind === 'action' || e.kind === 'setting' ? e.kind : 'go';
+      // An entry whose route the key may not open is not offered.
+      if (!routeOpen(parse(String(e.path)))) continue;
       out.push({ label: String(e.label), path: String(e.path), kind });
     }
   }
@@ -132,7 +191,7 @@ export function entries() {
 
 function visibleTabs(id) {
   const tabs = pages.get(id)?.tabs;
-  return tabs ? TABS.filter(([t]) => typeof tabs[t] === 'function') : [];
+  return tabs ? TABS.filter(([t]) => typeof tabs[t] === 'function' && tabOpen(id, t)) : [];
 }
 
 // ---------------------------------------------------------------- elements
@@ -1148,10 +1207,24 @@ function draw(seq, held = null) {
   if (!held) document.getElementById('content').removeAttribute('aria-busy');
   const route = parse(location.pathname);
   const label = NAV.find(([id]) => id === route.page)?.[1];
+  // A page or tab this key may not open is replaced, before its screen loads or its
+  // not-built state paints; the shell never draws the forbidden panel for it.
+  if (label && access.kind === 'report' && !routeOpen(route)) {
+    const dest = pageOpen(route.page) ? { ...route, tab: (visibleTabs(route.page)[0] ?? TABS.find(([t]) => tabOpen(route.page, t)))[0] } : firstOpen();
+    if (dest) {
+      go(pathFor(dest), { replace: true });
+      return;
+    }
+  }
   drawNav(route.page);
   const content = document.getElementById('content');
   const tabsNav = document.querySelector('nav.tabs');
   tabsNav.replaceChildren();
+  if (access.kind === 'report' && !firstOpen()) {
+    setHeader({ title: label ?? 'Not found', subtitle: null });
+    setContent(content, mark(state('empty', { title: 'No page is open to this key', body: 'Ask an admin for access.' })));
+    return;
+  }
 
   const tabNamed = route.tab === null || TABS.some(([t]) => t === route.tab);
   if (!label || !tabNamed) {
@@ -1169,7 +1242,7 @@ function draw(seq, held = null) {
     const current = () => seq === renderSeq && epoch === authEpoch;
     const loading = watchLoading(content, body, label, current);
     loadScreen(route.page).then(
-      () => { if (current()) draw(seq, { body, loading }); else loading.release(); },
+      () => accessSettled().then(() => { if (current()) draw(seq, { body, loading }); else loading.release(); }),
       (err) => loading.after(() => {
         if (!current()) return;
         showBanner(content, failure(err, routeKey(route), () => render()));
@@ -1260,7 +1333,9 @@ function draw(seq, held = null) {
   const loading = held?.loading ?? watchLoading(content, body, label, current);
   // Busy from the first render's start until it settles (data, error or empty), as a Retry is.
   content.setAttribute('aria-busy', 'true');
-  runTab(spec, route, body)
+  // The screen reads only once the first status attempt has settled, so a page this key may
+  // not open never loads or paints; a new report re-renders (a new seq) and this draw ends.
+  const run = () => runTab(spec, route, body)
     .then(() => {
       // The data is already in the body, under the loading state: let it go after its minimum.
       // Busy ends when the loading state does, never while it still covers the arrived content.
@@ -1272,6 +1347,8 @@ function draw(seq, held = null) {
       settle(err);
       content.removeAttribute('aria-busy');
     }));
+  if (held) run();
+  else accessSettled().then(() => { if (current()) run(); else loading.release(); });
 }
 
 /** How long a page may wait for its data before the shell says it is loading (UI1.17). */
@@ -1350,21 +1427,49 @@ function mark(node) {
   return node;
 }
 
+/** The one line under the sidebar saying why pages are hidden: the server's fixed reasons, as text. */
+function drawAccessNote(nav) {
+  let note = document.querySelector('.access-note');
+  const hidden = NAV.filter(([id]) => !pageOpen(id));
+  if (access.kind !== 'report' || hidden.length === 0) {
+    note?.remove();
+    return;
+  }
+  const reasons = [];
+  for (const [id] of hidden) {
+    const reason = access.pages.get(id)?.reason;
+    if (reason && !reasons.includes(reason)) reasons.push(reason);
+  }
+  if (!note) {
+    note = el('p', { class: 'access-note muted' });
+    nav.after(note);
+  }
+  note.textContent = `Some pages are hidden${reasons.length ? `: ${reasons.join('; ')}` : ''}.`;
+}
+
 /** The decisions count for the sidebar badge; null hides it. */
 const DECISIONS = { count: null };
 
 /** Build the sidebar once, then update it in place, so a focused link is never replaced. */
 function drawNav(current) {
   const nav = document.querySelector('nav.route-nav');
-  if (!nav.childElementCount) {
-    nav.append(...NAV.map(([id, label]) => el('a', { class: 'stn', href: `/ui/${id}`, 'data-page': id },
-      el('i', { 'aria-hidden': 'true' }), el('span', { class: 'lbl' }, label))));
-  }
+  // Keep the node of every page that stays open (a focused link is never replaced), insert a
+  // page that became open, remove one that closed, in sidebar order.
+  const have = new Map([...nav.children].map((a) => [a.dataset.page, a]));
+  const want = NAV.filter(([id]) => pageOpen(id));
+  want.forEach(([id, label], at) => {
+    const a = have.get(id) ?? el('a', { class: 'stn', href: `/ui/${id}`, 'data-page': id },
+      el('i', { 'aria-hidden': 'true' }), el('span', { class: 'lbl' }, label));
+    if (nav.children[at] !== a) nav.insertBefore(a, nav.children[at] ?? null);
+  });
+  for (const [id, a] of have) if (!want.some(([w]) => w === id)) a.remove();
+  drawAccessNote(nav);
   for (const a of nav.children) {
     if (a.dataset.page === current) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   }
   const decide = nav.querySelector(`[data-page="${NAV[1][0]}"]`);
+  if (!decide) return; // the key may not open To do: there is no link to carry a badge
   let badge = decide.querySelector('.count');
   const n = DECISIONS.count;
   // A count that failed reads "?", never a missing badge that looks like zero (UI1.22).
@@ -1597,17 +1702,38 @@ function streamFrame(frame) {
   dispatchEvent(new CustomEvent(`gateway-${frame.event}`, { detail }));
 }
 
+/** The first status attempt, started once: by a screen about to read, or after first paint. */
+let statusRead = null;
+const readStatus = () => (statusRead ??= loadWho());
+/** Settles when the first status attempt has (a failure or the deadline included): a screen reads after it. */
+const accessSettled = () => readStatus().then(() => {}, () => {});
+
+/**
+ * Take a new `access`. A report, or the end of one, redraws so the sidebar, tabs,
+ * palette and route follow; the other changes need no redraw (a waiting screen just goes on).
+ */
+function commitAccess(next) {
+  const was = access.kind;
+  access = next;
+  if (next.kind === 'report' || was === 'report') render();
+}
+
 /** Read who is signed in; when auth is on and nobody is, ask for sign-in. */
 async function loadWho() {
   const epoch = authEpoch;
+  const resets = accessResets;
   try {
-    const { auth } = await api('/ui/api/status');
+    // A status that accepts the connection and never answers must not hold every screen.
+    const body = await api('/ui/api/status', { signal: AbortSignal.timeout(KEY_CHECK_MS) });
+    const auth = body?.auth;
     if (epoch !== authEpoch) return true; // answered for a session that has since signed in
     if (auth?.enabled && !auth.signed_in) {
       showSignIn();
       return false;
     }
     showWho(auth);
+    // A sign-out or a 401 since this read began means its report is no longer this session's.
+    if (resets === accessResets) commitAccess(accessFrom(body?.access));
     return true;
   } catch {
     return false; // a 401 already shows sign-in; other failures show in the page states
@@ -1749,6 +1875,11 @@ async function signOut() {
  * storage, a cookie or the URL), so a reload asks for it again.
  */
 function showSignIn() {
+  accessResets++;
+  if (access.kind !== 'unknown') {
+    access = { kind: 'unknown', pages: new Map() };
+    drawNav(parse(location.pathname).page);
+  }
   closeStream();
   if (document.body.classList.contains('signed-out')) return;
   closeMenu();
@@ -1802,6 +1933,7 @@ async function signIn(ev) {
   button.textContent = 'Checking…';
   form.setAttribute('aria-busy', 'true');
   let auth = null;
+  let body = null;
   let message = '';
   let refused = false;
   try {
@@ -1812,7 +1944,10 @@ async function signIn(ev) {
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(KEY_CHECK_MS),
     });
-    if (reply.ok) auth = (await reply.json())?.auth ?? null;
+    if (reply.ok) {
+      body = await reply.json();
+      auth = body?.auth ?? null;
+    }
     else if (reply.status === 403) message = 'That key is valid, but it is not allowed into the web UI. Ask an admin for access.';
     else if (reply.status === 429) message = rateLimited(reply.headers.get('retry-after'));
     else if (reply.status !== 401) message = 'Could not reach the gateway. Try again.';
@@ -1838,6 +1973,7 @@ async function signIn(ev) {
   notice.hidden = true;
   notice.textContent = '';
   authEpoch++;
+  access = accessFrom(body?.access); // this identity's own answer, committed before render() below
   input.value = '';
   document.getElementById('signin').hidden = true;
   document.body.classList.remove('signed-out');
@@ -1931,7 +2067,7 @@ function boot() {
   afterFirstPaint(() => {
     openStream();
     refreshCounts();
-    loadWho().then(() => {
+    readStatus().then(() => {
       // Only a browser still signed out is told; one with a session has nothing to fix.
       // A key check the user has started owns the error line; a late startup
       // answer must not write over it.
