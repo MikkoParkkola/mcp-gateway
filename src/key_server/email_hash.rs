@@ -24,10 +24,9 @@ const DOMAIN: &[u8] = b"email-v1\0";
 /// fullwidth letters) stay distinct, and the domain is not IDNA-converted.
 ///
 /// The hash must be the same on every build, so no table here is the
-/// compiler's: lowercase is the crate's own frozen Unicode 17.0.0 table
-/// (`case_v1`), per code point and context-free (capital Sigma always becomes
-/// ordinary sigma: std's final-sigma rule needs two more property tables and
-/// cannot occur in a normal address); NFC is `icu_normalizer` and its data
+/// compiler's: lowercase is the crate's own frozen Unicode 17.0.0 tables
+/// (`case_v1`), reproducing the standard library's `str::to_lowercase` at that
+/// version exactly, final-sigma rule included; NFC is `icu_normalizer` and its data
 /// crate `icu_normalizer_data`, both pinned to an exact version in
 /// `Cargo.toml` (`cargo install` ignores Cargo.lock). A change that alters
 /// either table needs a new version, and `self_check` refuses to start a
@@ -37,13 +36,21 @@ pub(crate) fn normalize(email: &str) -> String {
     nfc.normalize(&lower_v1(&nfc.normalize(email))).into_owned()
 }
 
-/// Version 1's lowercase: each code point through the frozen table, ASCII by
-/// the locale-free ASCII rule. Context-free: a code point's output never
-/// depends on its neighbours.
+/// Version 1's lowercase: the standard library's `str::to_lowercase` at
+/// Unicode 17.0.0, over the crate's frozen tables. Each code point goes
+/// through the per-code-point table (ASCII by the locale-free ASCII rule);
+/// capital Sigma (U+03A3) follows Unicode's Final_Sigma rule: it becomes final
+/// sigma when a cased letter precedes it and none follows, skipping
+/// case-ignorable characters on both sides. That is the only context-sensitive
+/// rule in the default lowercase mapping (SpecialCasing.txt).
 pub(crate) fn lower_v1(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        if c.is_ascii() {
+    for (at, c) in text.char_indices() {
+        if c == '\u{3a3}' {
+            let word_final = case_v1::case_ignorable_then_cased(text[..at].chars().rev())
+                && !case_v1::case_ignorable_then_cased(text[at + c.len_utf8()..].chars());
+            out.push(if word_final { '\u{3c2}' } else { '\u{3c3}' });
+        } else if c.is_ascii() {
             out.push(c.to_ascii_lowercase());
         } else if let Some(mapped) = case_v1::lower(c) {
             out.extend(mapped);
@@ -63,7 +70,12 @@ const KNOWN_ANSWERS: &[(&str, &str)] = &[
     ("Ada.Lovelace", "ada.lovelace"),
     ("\u{130}x", "i\u{307}x"),
     ("\u{1e9e}", "\u{df}"),
-    ("\u{391}\u{3a3}", "\u{3b1}\u{3c3}"),
+    ("\u{391}\u{3a3}", "\u{3b1}\u{3c2}"),
+    (
+        "\u{391}\u{3a3}.\u{392}\u{3a3}",
+        "\u{3b1}\u{3c3}.\u{3b2}\u{3c2}",
+    ),
+    ("\u{3a3}", "\u{3c3}"),
     ("\u{13a0}", "\u{ab70}"),
     ("\u{1c90}", "\u{10d0}"),
     ("\u{212b}", "\u{e5}"),
