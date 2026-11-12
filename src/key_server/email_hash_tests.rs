@@ -724,7 +724,11 @@ fn generate_case_v1_table() {
     let mut lower: Vec<(u32, [u32; 3])> = Vec::new();
     let mut ignorable: Vec<u32> = Vec::new();
     let mut terminal: Vec<u32> = Vec::new();
+    let mut white: Vec<u32> = Vec::new();
     for c in all() {
+        if c.is_whitespace() {
+            white.push(u32::from(c));
+        }
         let mapped: Vec<u32> = c.to_lowercase().map(u32::from).collect();
         if mapped != [u32::from(c)] {
             assert!(
@@ -781,6 +785,7 @@ fn generate_case_v1_table() {
     for (name, points) in [
         ("CASE_IGNORABLE", &ignorable),
         ("CASED_TERMINAL", &terminal),
+        ("WHITE_SPACE", &white),
     ] {
         let r = ranges(points);
         text.push_str(&format!(

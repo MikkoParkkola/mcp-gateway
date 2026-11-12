@@ -21,7 +21,7 @@ pub(crate) const VERSION: u32 = 1;
 /// prefix, so its hashes cannot collide with these.
 const DOMAIN: &[u8] = b"email-v1\0";
 
-/// Normalization v1: NFC, Unicode lowercase, NFC again. The second NFC is
+/// Normalization v1: trim Unicode White_Space, NFC, Unicode lowercase, NFC again. The second NFC is
 /// needed because lowercasing can emit a decomposed sequence (U+0130 becomes
 /// `i` and a combining dot), so one pass alone is not stable under a second.
 /// Canonically equivalent spellings meet; compatibility forms (a ligature,
@@ -37,7 +37,8 @@ const DOMAIN: &[u8] = b"email-v1\0";
 /// build that normalizes differently.
 pub(crate) fn normalize(email: &str) -> String {
     let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc();
-    nfc.normalize(&lower_v1(&nfc.normalize(email))).into_owned()
+    nfc.normalize(&lower_v1(&nfc.normalize(trim_v1(email))))
+        .into_owned()
 }
 
 /// Version 1's lowercase: the standard library's `str::to_lowercase` at
@@ -47,9 +48,12 @@ pub(crate) fn normalize(email: &str) -> String {
 /// sigma when a cased letter precedes it and none follows, skipping
 /// case-ignorable characters on both sides. That is the only context-sensitive
 /// rule in the default lowercase mapping (SpecialCasing.txt).
-/// Version 1's trim (placeholder: replaced once the rows are proved red).
+/// Version 1's trim: Unicode White_Space at both ends, from the crate's frozen
+/// Unicode 17.0.0 list (not `str::trim`, which follows the toolchain). Inner
+/// whitespace stays, and so do characters that only look blank (zero-width
+/// space, byte-order mark), which are not White_Space.
 pub(crate) fn trim_v1(text: &str) -> &str {
-    text
+    text.trim_matches(case_v1::is_white_space)
 }
 
 pub(crate) fn lower_v1(text: &str) -> String {
@@ -77,6 +81,7 @@ pub(crate) fn lower_v1(text: &str) -> String {
 /// is part of the program.
 const KNOWN_ANSWERS: &[(&str, &str)] = &[
     ("Ada.Lovelace", "ada.lovelace"),
+    ("  \u{a0}Ada.Lovelace\u{3000}\t", "ada.lovelace"),
     ("\u{130}x", "i\u{307}x"),
     ("\u{1e9e}", "\u{df}"),
     ("\u{391}\u{3a3}", "\u{3b1}\u{3c2}"),
