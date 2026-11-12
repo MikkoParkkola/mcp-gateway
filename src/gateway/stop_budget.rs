@@ -119,6 +119,26 @@ impl StopBudget {
         self.listener_end().saturating_duration_since(self.t0)
     }
 
+    /// The budget of a stop whose listener has returned: the total was accepted
+    /// when the gateway started, so this never refuses, and every deadline
+    /// saturates at the trigger instead of failing. Test-only until `run` uses it.
+    #[cfg(test)]
+    pub(crate) fn fixed_at(_t0: Instant, _total: Duration) -> Self {
+        panic!("fixed_at: not implemented")
+    }
+
+    /// Run a stage that may use every moment left to Db, the end of the backend
+    /// stage: for a step that must finish before the backends are listed.
+    /// Test-only until `run` uses it.
+    #[cfg(test)]
+    pub(crate) async fn stage_until_backend_end<F: std::future::Future>(
+        &self,
+        _what: &'static str,
+        _work: F,
+    ) -> Option<F::Output> {
+        panic!("stage_until_backend_end: not implemented")
+    }
+
     /// What a post-listener stage may wait from `now`: its own `cap`, or what is
     /// left to Dp if that is less. Never renewed: after Dp it is zero.
     pub(crate) fn stage_window(&self, now: Instant, cap: Duration) -> Duration {

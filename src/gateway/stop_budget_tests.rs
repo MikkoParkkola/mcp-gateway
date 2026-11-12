@@ -208,3 +208,91 @@ fn the_post_listener_offset_for_a_total_is_dp_from_the_trigger() {
         assert_eq!(budget.post_listener_end() - t0, offset, "total {total:?}");
     }
 }
+
+/// A stage that starts at or after Dp has no time at all: its work is not even
+/// polled once, so it cannot do synchronous work that outlasts the deadline.
+#[tokio::test(start_paused = true)]
+async fn a_stage_that_starts_after_dp_does_not_poll_its_work() {
+    let (_t0, b) = at(Duration::from_secs(30));
+    tokio::time::advance(b.post_listener_end() - Instant::now() + ms(1)).await;
+    let polled = std::sync::atomic::AtomicBool::new(false);
+    let out = b
+        .stage("late", Duration::from_secs(10), async {
+            polled.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+        .await;
+    assert!(out.is_none(), "a late stage reports that it ran out");
+    assert!(
+        !polled.load(std::sync::atomic::Ordering::SeqCst),
+        "the late stage's work was polled once"
+    );
+}
+
+/// Exactly at Dp the window is zero too.
+#[tokio::test(start_paused = true)]
+async fn a_stage_that_starts_exactly_at_dp_does_not_poll_its_work() {
+    let (_t0, b) = at(Duration::from_secs(30));
+    tokio::time::advance(b.post_listener_end() - Instant::now()).await;
+    let polled = std::sync::atomic::AtomicBool::new(false);
+    let out = b
+        .stage("at dp", Duration::from_secs(10), async {
+            polled.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+        .await;
+    assert!(out.is_none());
+    assert!(!polled.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+/// The listener has returned, so the start check already accepted the total:
+/// the budget is built without a second refusal that would skip the whole stop.
+#[test]
+fn the_budget_after_the_listener_never_refuses_and_never_goes_before_the_trigger() {
+    for total in [ms(0), ms(1), ms(8_999), ms(9_000), Duration::from_secs(30)] {
+        let t0 = Instant::now();
+        let b = StopBudget::fixed_at(t0, total);
+        assert!(b.listener_end() >= t0, "Dl for {total:?}");
+        assert!(b.listener_end() <= b.post_listener_end(), "Dl <= Dp for {total:?}");
+        assert!(b.post_listener_end() <= b.backend_end(), "Dp <= Db for {total:?}");
+        assert!(b.backend_end() <= b.end(), "Db <= D for {total:?}");
+        assert_eq!(b.end(), t0 + total, "D for {total:?}");
+    }
+    let t0 = Instant::now();
+    let accepted = StopBudget::http(t0, ms(9_000)).expect("accepted");
+    let fixed = StopBudget::fixed_at(t0, ms(9_000));
+    assert_eq!(fixed.post_listener_end(), accepted.post_listener_end());
+    assert_eq!(fixed.backend_end(), accepted.backend_end());
+}
+
+/// A step that must finish before the backends are listed may use the time up
+/// to Db, even after Dp, but never past it.
+#[tokio::test(start_paused = true)]
+async fn a_step_before_the_backends_may_use_the_time_left_to_db_and_no_more() {
+    let (t0, b) = at(Duration::from_secs(30));
+    tokio::time::advance(b.post_listener_end() - Instant::now() + ms(1_000)).await;
+    let done = b
+        .stage_until_backend_end("late but allowed", async {
+            tokio::time::sleep(ms(2_000)).await;
+            9
+        })
+        .await;
+    assert_eq!(done, Some(9), "two seconds fit between Dp and Db");
+    let out = b.stage_until_backend_end("stuck", stuck()).await;
+    assert!(out.is_none());
+    assert_eq!(Instant::now(), b.backend_end(), "cut exactly at Db");
+    assert_eq!(Instant::now() - t0, ms(27_750));
+}
+
+/// After Db there is no time left for it either: its work is not polled.
+#[tokio::test(start_paused = true)]
+async fn a_step_before_the_backends_does_not_poll_after_db() {
+    let (_t0, b) = at(Duration::from_secs(30));
+    tokio::time::advance(b.backend_end() - Instant::now() + ms(1)).await;
+    let polled = std::sync::atomic::AtomicBool::new(false);
+    let out = b
+        .stage_until_backend_end("after db", async {
+            polled.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+        .await;
+    assert!(out.is_none());
+    assert!(!polled.load(std::sync::atomic::Ordering::SeqCst));
+}
