@@ -38,6 +38,7 @@ const node = (id) => ({ id, value: '', textContent: '', hidden: false, disabled:
   appendChild(c) { this.children.push(c); return c; },
   setAttribute() {}, focus() {}, addEventListener() {} });
 const dom = {};
+const put = (k, v) => Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true });
 globalThis.document = {
   getElementById: (id) => (dom[id] ??= node(id)),
   createElement: (tag) => ({ ...node(tag), tag }),
@@ -45,13 +46,13 @@ globalThis.document = {
   get cookie() { touched.push('document.cookie'); return ''; },
   set cookie(_) { touched.push('document.cookie='); },
 };
-globalThis.localStorage = trap('localStorage');
-globalThis.sessionStorage = trap('sessionStorage');
-globalThis.indexedDB = trap('indexedDB');
-globalThis.history = trap('history');
-globalThis.navigator = { sendBeacon: () => touched.push('sendBeacon') };
+put('localStorage', trap('localStorage'));
+put('sessionStorage', trap('sessionStorage'));
+put('indexedDB', trap('indexedDB'));
+put('history', trap('history'));
+put('navigator', { sendBeacon: () => touched.push('sendBeacon') });
 const realConsole = globalThis.console;
-globalThis.console = trap('console');
+put('console', trap('console'));
 const out = (v) => realConsole.log(JSON.stringify(v));
 const calls = [];
 let replies = [];
