@@ -57,6 +57,8 @@ struct Fx {
     log: Arc<TransparencyLogger>,
     ks: Arc<KeyServer>,
     dir: Arc<tempfile::TempDir>,
+    /// The Retry-After header of the last answer, if it had one.
+    retry_after: std::cell::RefCell<Option<String>>,
     _store: crate::gateway::router::tests::FixtureDir,
 }
 
@@ -106,6 +108,7 @@ impl Fx {
             log,
             ks,
             dir,
+            retry_after: std::cell::RefCell::new(None),
             _store: store,
         }
     }
@@ -190,10 +193,40 @@ impl Fx {
                 .headers()
                 .get("cache-control")
                 .map(|v| v.to_str().unwrap().to_owned());
+            *self.retry_after.borrow_mut() = response
+                .headers()
+                .get("retry-after")
+                .map(|v| v.to_str().unwrap().to_owned());
             let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
             let value = serde_json::from_slice(&bytes)
                 .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
             (status, cache, value)
+        })
+    }
+
+    /// POST whose body never arrives; the answer must come without it.
+    fn post_stalled(&self, who: AuthenticatedClient) -> StatusCode {
+        let body = Body::from_stream(futures::stream::pending::<
+            Result<axum::body::Bytes, std::io::Error>,
+        >());
+        let request = Request::builder()
+            .method("POST")
+            .uri(routes::UI_KEY_SERVER_LOOKUP_EMAIL)
+            .header("content-type", "application/json")
+            .extension(self.live.generation())
+            .extension(who)
+            .body(body)
+            .expect("request");
+        self.rt.block_on(async {
+            let answer = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                crate::gateway::ui::api_router()
+                    .with_state(self.state.clone())
+                    .oneshot(request),
+            )
+            .await
+            .expect("the route answered without waiting for the body");
+            answer.expect("infallible").status()
         })
     }
 
@@ -282,6 +315,17 @@ fn the_budget_is_shared_and_charges_malformed_attempts() {
     let (s3, cache, body) = fx.post(admin("three"), &json!({"email": EMAIL}).to_string());
     assert_eq!(s3, StatusCode::TOO_MANY_REQUESTS, "{body}");
     assert_eq!(cache.as_deref(), Some("no-store"));
+    let wait: u64 = fx
+        .retry_after
+        .borrow()
+        .clone()
+        .expect("a Retry-After")
+        .parse()
+        .expect("whole seconds");
+    assert!(
+        (1..=6).contains(&wait),
+        "a refill is at most six seconds away: {wait}"
+    );
 }
 
 /// MIK-9455.LOOKUP.2: hash match across segments, case-insensitive per the
@@ -437,4 +481,47 @@ fn the_key_id_and_version_are_part_of_the_match() {
     fx.plant_raw("other-key", &hash, 1, "0000");
     fx.plant_raw("other-version", &hash, 2, &key_id);
     assert_eq!(subjects(&fx.lookup(EMAIL, &json!({}))), vec!["right"]);
+}
+
+/// MIK-9455.LOOKUP.1 and .3: the body is not waited for before admission or
+/// the budget: an anonymous caller and an over-budget admin are answered at
+/// once though their body never arrives; an admitted caller whose body
+/// stalls is cut off with a 408.
+/// Mutant: extract the body before the guard or before the charge.
+#[test]
+fn a_body_that_never_arrives_is_not_waited_for_before_admission_or_payment() {
+    let fx = Fx::new();
+    let refused = fx.post_stalled(anonymous_client());
+    assert!(
+        refused == StatusCode::UNAUTHORIZED || refused == StatusCode::FORBIDDEN,
+        "{refused}"
+    );
+    assert_eq!(
+        fx.post_stalled(admin("a")),
+        StatusCode::REQUEST_TIMEOUT,
+        "an admitted stalled body"
+    );
+    assert_eq!(
+        fx.post_stalled(admin("a")),
+        StatusCode::REQUEST_TIMEOUT,
+        "the second permit"
+    );
+    assert_eq!(
+        fx.post_stalled(admin("a")),
+        StatusCode::TOO_MANY_REQUESTS,
+        "no permit left: answered without the body"
+    );
+}
+
+/// MIK-9455.LOOKUP.2: a window that ends before it starts is refused.
+/// Mutant: drop the check (a scan of an impossible interval).
+#[test]
+fn a_window_that_ends_before_it_starts_is_refused() {
+    let fx = Fx::new();
+    let (status, _, body) = fx.post(
+        admin("a"),
+        &json!({"email": EMAIL, "from": "2026-11-02T00:00:00Z", "to": "2026-11-01T00:00:00Z"})
+            .to_string(),
+    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }

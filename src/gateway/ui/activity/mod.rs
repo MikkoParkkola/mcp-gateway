@@ -61,11 +61,7 @@ pub(super) fn activity_router() -> Router<Arc<AppState>> {
         .route(routes::UI_ACTIVITY, get(list))
         .route(routes::UI_ACTIVITY_EXPORT, get(export_route))
         .route(routes::UI_ACTIVITY_RECEIPT, get(receipt_route))
-        .route(
-            routes::UI_KEY_SERVER_LOOKUP_EMAIL,
-            post(key_lookup::lookup)
-                .layer(axum::extract::DefaultBodyLimit::max(key_lookup::MAX_BODY)),
-        )
+        .route(routes::UI_KEY_SERVER_LOOKUP_EMAIL, post(key_lookup::lookup))
 }
 
 /// The list's query, as sent. Parsed by [`parse`].

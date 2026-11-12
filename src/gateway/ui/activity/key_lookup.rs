@@ -33,7 +33,7 @@ use crate::key_server::email_hash::{self, EmailHashKey};
 
 /// The most bytes of request body read; a lookup carries an email, a cursor
 /// and two timestamps.
-pub(super) const MAX_BODY: usize = 8 * 1024;
+const MAX_BODY: usize = 8 * 1024;
 /// The longest email accepted, as in RFC 5321.
 const MAX_EMAIL: usize = 320;
 
@@ -208,10 +208,45 @@ fn throttled(retry_after_secs: u64) -> Response {
     finish(response, "throttled", 0, 0)
 }
 
+/// How long the body may take to arrive once the caller is admitted and has
+/// paid: a slow body holds a connection, not a permit.
+#[cfg(not(test))]
+const BODY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+#[cfg(test)]
+const BODY_DEADLINE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Read the body, bounded in size and in time. Called only after admission
+/// and the budget, so an unauthorized or over-budget caller's body is never
+/// waited for.
+async fn read_body(request: axum::extract::Request) -> Result<Bytes, Response> {
+    let read = axum::body::to_bytes(request.into_body(), MAX_BODY);
+    match tokio::time::timeout(BODY_DEADLINE, read).await {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(_)) => Err(finish(
+            refuse(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "the request body is too large",
+            ),
+            "bad_request",
+            0,
+            0,
+        )),
+        Err(_) => Err(finish(
+            refuse(
+                StatusCode::REQUEST_TIMEOUT,
+                "the request body took too long",
+            ),
+            "bad_request",
+            0,
+            0,
+        )),
+    }
+}
+
 pub(super) async fn lookup(
     State(state): State<Arc<AppState>>,
     guard: Guard,
-    body: Result<Bytes, axum::extract::rejection::BytesRejection>,
+    request: axum::extract::Request,
 ) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
@@ -229,33 +264,39 @@ pub(super) async fn lookup(
             0,
         )
     };
-    let Ok(body) = body else {
-        return finish(
-            refuse(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "the request body is too large",
-            ),
-            "bad_request",
-            0,
-            0,
-        );
+    let body = match read_body(request).await {
+        Ok(body) => body,
+        Err(refusal) => return refusal,
     };
-    let Ok(request) = serde_json::from_slice::<Request>(&body) else {
+    let parsed = serde_json::from_slice::<Request>(&body);
+    drop(body);
+    let Ok(Request {
+        email: raw,
+        limit,
+        cursor,
+        from,
+        to,
+    }) = parsed
+    else {
         return bad("the body must be a JSON object with an email");
     };
-    let email = request.email.trim();
+    let email = raw.trim();
     if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(char::is_control) {
         return bad("the email is not valid");
     }
-    let from = request.from.as_deref();
-    let to = request.to.as_deref();
+    let (from, to) = (from.as_deref(), to.as_deref());
     let (Some(window_from), Some(window_to)) = (
         from.map_or(Some(None), |t| parse_time(t).map(Some)),
         to.map_or(Some(None), |t| parse_time(t).map(Some)),
     ) else {
         return bad("from and to must be RFC 3339 times");
     };
-    let limit = request.limit.unwrap_or(DEFAULT_LIMIT);
+    if let (Some(f), Some(t)) = (window_from, window_to)
+        && f > t
+    {
+        return bad("from must not be after to");
+    }
+    let limit = limit.unwrap_or(DEFAULT_LIMIT);
     if limit == 0 || limit > MAX_LIMIT {
         return bad("limit is out of range");
     }
@@ -275,7 +316,10 @@ pub(super) async fn lookup(
             0,
         );
     };
+    // The email is hashed here and goes no further: the suspended handler
+    // owns only the hash while it waits for a reader slot.
     let hash = ks.email_key.hash(email);
+    drop(raw);
     let scan_job = Scan {
         log: log.path(),
         bind: bind_of(&hash, &ks.email_key, from, to),
@@ -283,7 +327,7 @@ pub(super) async fn lookup(
         hash,
         limit,
         window: (window_from, window_to),
-        token: request.cursor,
+        token: cursor,
     };
     blocking(state.process.activity_reads(), move || scan(&scan_job)).await
 }
