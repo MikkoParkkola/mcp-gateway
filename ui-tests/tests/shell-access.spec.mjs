@@ -215,6 +215,9 @@ test.describe('access', () => {
     // Signing out drops the report: every page is drawn again, behind sign-in.
     await page.getByRole('button', { name: 'Sign out' }).click();
     await expect(page.locator('#signin')).toBeVisible();
+    // The report is gone with the session: the sidebar holds every page again, with no note.
+    for (const [id] of PAGES) await expect(navLink(page, id)).toHaveCount(1);
+    await expect(note(page)).toHaveCount(0);
     state.access = null;
     state.admin = true;
     await page.locator('#signin-key').fill(KEY);
@@ -229,6 +232,7 @@ test.describe('access', () => {
     await page.goto('/ui/overview/status');
     await shellReady(page);
     await expect(note(page)).toBeVisible();
+    const before = await page.evaluate(() => history.length);
     // As if the user pressed Back to an entry for the hidden page.
     await page.evaluate(() => {
       history.pushState(null, '', '/ui/policies/status');
@@ -236,6 +240,34 @@ test.describe('access', () => {
     });
     await expect(page).toHaveURL(/\/ui\/overview\/status$/);
     await expect(page.getByText('Not available to this key')).toHaveCount(0);
+    // The guard replaced the entry: only the entry this row pushed was added, so Back cannot trap.
+    expect(await page.evaluate(() => history.length)).toBe(before + 1);
+  });
+
+  test('A21 until the first status answer arrives every page is drawn and no note shows', async ({ page }) => {
+    let release;
+    const held = new Promise((r) => { release = r; });
+    await page.route('**/ui/api/status', async (route) => {
+      await held;
+      return route.fulfill({
+        json: { version: '4.0.0', auth: { enabled: true, signed_in: true, admin: false }, access: access({ hidden: { policies: ADMIN_ONLY } }) },
+      });
+    });
+    await page.goto('/ui/overview/status');
+    await page.waitForTimeout(400);
+    for (const [id] of PAGES) await expect(navLink(page, id)).toHaveCount(1);
+    await expect(note(page)).toHaveCount(0);
+    release();
+    await expect(navLink(page, 'policies')).toHaveCount(0);
+    await expect(note(page)).toBeVisible();
+  });
+
+  test('A22 a page that is open with every tab hidden is hidden', async ({ page }) => {
+    await serve(page, { admin: false, access: access({ hiddenTabs: { tools: TABS } }) });
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    await expect(navLink(page, 'tools')).toHaveCount(0);
+    await expect(navLink(page, 'overview')).toBeVisible();
   });
 
   test('A13 with no page open the frame shows the note and an empty state, with no redirect loop', async ({ page }) => {
