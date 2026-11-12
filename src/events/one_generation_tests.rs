@@ -93,7 +93,7 @@ mod admission {
     use super::*;
 
     #[test]
-    fn a_decision_is_judged_on_one_generation() {
+    fn an_admission_is_judged_on_one_generation() {
         let (services, old, holder) = restored_root();
         let key = Some(KeyCheck::Holder(&holder));
         assert!(services.admits_grant(key, Some("x"), Ok(at())));
@@ -110,7 +110,7 @@ mod operational_standing {
     use super::*;
 
     #[test]
-    fn a_decision_is_judged_on_one_generation() {
+    fn a_standing_is_judged_on_one_generation() {
         let (services, old, holder) = restored_root();
         assert!(services.binding_test_admin(&holder.principal, at()));
         assert!(
