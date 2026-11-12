@@ -99,6 +99,9 @@ pub(crate) struct CustodyHandle<P, O> {
     service: std::sync::Mutex<Option<Arc<AccountService<P, O>>>>,
     permits: Arc<Semaphore>,
     shutting_down: AtomicBool,
+    /// Test-only stub field: the real handle sets it when it reports; the stub never does.
+    #[cfg(test)]
+    reported: Arc<AtomicBool>,
     capacity: usize,
 }
 
@@ -131,6 +134,8 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
             )))),
             permits: Arc::new(Semaphore::new(capacity)),
             shutting_down: AtomicBool::new(false),
+            #[cfg(test)]
+            reported: Arc::new(AtomicBool::new(false)),
             capacity,
         })
     }
