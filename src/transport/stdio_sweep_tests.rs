@@ -66,6 +66,13 @@ struct Fake {
     ops: u32,
     /// The table applies the by-pid Kill gate, as the real tables do.
     strict_by_pid: bool,
+    /// A Cont to this pid fails.
+    cont_fails: Option<u32>,
+    /// This pid exists but the table cannot read it: absent from the rows,
+    /// listed as unreadable, the listing still complete.
+    foreign: Option<u32>,
+    /// Pids the sweep released a handle for.
+    released: Vec<u32>,
     /// Every table reading fails: no rows, flagged incomplete.
     blind: bool,
     /// The table cannot read this pid's state (an error, not an exit).
@@ -103,7 +110,10 @@ impl Fake {
             pidfd: true,
             next_pid: 1000,
             ops: 0,
-            strict_by_pid: false,
+            strict_by_pid: true,
+            cont_fails: None,
+            foreign: None,
+            released: Vec::new(),
             blind: false,
             unreadable: None,
             fail: None,
@@ -219,16 +229,18 @@ impl ProcessTable for Fake {
             return Listing {
                 rows: Vec::new(),
                 complete: false,
+                unreadable: Vec::new(),
             };
         }
         Listing {
             rows: self
                 .procs
                 .iter()
-                .filter(|p| p.state != ProcState::Gone)
+                .filter(|p| p.state != ProcState::Gone && self.foreign != Some(p.id.pid))
                 .map(|p| (p.id, p.ppid))
                 .collect(),
             complete: true,
+            unreadable: self.foreign.into_iter().collect(),
         }
     }
 
@@ -251,6 +263,9 @@ impl ProcessTable for Fake {
         } else {
             Handle::ByPid
         };
+        if sig == Sig::Cont && self.cont_fails == Some(who.pid) {
+            return Err(SignalError::Failed);
+        }
         if let Some((pid, failing, error)) = self.fail
             && pid == who.pid
             && failing == sig
@@ -304,6 +319,10 @@ impl ProcessTable for Fake {
 
     fn now(&mut self) -> Duration {
         self.clock
+    }
+
+    fn release(&mut self, id: Identity) {
+        self.released.push(id.pid);
     }
 }
 

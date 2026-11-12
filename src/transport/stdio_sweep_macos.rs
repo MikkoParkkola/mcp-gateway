@@ -155,11 +155,13 @@ fn table_read(probe: &mut dyn Probe) -> Listing {
         return Listing {
             rows: Vec::new(),
             complete: false,
+            unreadable: Vec::new(),
         };
     };
     let mut listing = Listing {
         rows: Vec::new(),
         complete: true,
+        unreadable: Vec::new(),
     };
     for pid in pids {
         match probe.info(pid) {
@@ -170,8 +172,14 @@ fn table_read(probe: &mut dyn Probe) -> Listing {
                 },
                 info.ppid,
             )),
-            Lookup::Missing(Miss::Gone | Miss::Foreign) => {}
-            Lookup::Missing(Miss::Failed) => listing.complete = false,
+            Lookup::Missing(Miss::Gone) => {}
+            // Not ours to read: left out of the rows, but a member among them
+            // is not pruned for being absent.
+            Lookup::Missing(Miss::Foreign) => listing.unreadable.push(pid),
+            Lookup::Missing(Miss::Failed) => {
+                listing.complete = false;
+                listing.unreadable.push(pid);
+            }
         }
     }
     listing
@@ -324,6 +332,10 @@ impl ProcessTable for MacTable {
 
     fn now(&mut self) -> std::time::Duration {
         self.origin.elapsed()
+    }
+
+    fn idle(&mut self) {
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
 

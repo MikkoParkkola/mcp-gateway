@@ -450,6 +450,11 @@ impl super::StdioTransport {
     fn hand_over_gracefully_now(&self, budget: Duration) {
         self.connected
             .store(false, std::sync::atomic::Ordering::SeqCst);
+        // Before the stdin close, the first signal of the stop: a backend that
+        // exits on EOF would otherwise reparent its descendants unrecorded.
+        if let Some(tree) = self.child.lock().tree.as_mut() {
+            tree.sweep_snapshot();
+        }
         let ending = graceful_ending(
             budget,
             self.close_stdin_now(),

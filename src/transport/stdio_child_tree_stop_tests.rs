@@ -343,8 +343,8 @@ fn a_second_earlier_stop_deadline_takes_effect_and_a_later_one_does_not() {
 /// Start a helper that stays attached to the backend by parent pid but leads
 /// its own session, so the backend's group kill never reaches it. The leaf's
 /// pid lands in `leaf.pid`. The backend ignores EOF and SIGTERM alike.
-async fn started_with_session_leaf() -> (tempfile::TempDir, Arc<StdioTransport>, u32) {
-    let after = "trap '' TERM
+async fn started_with_session_leaf(tail: &str) -> (tempfile::TempDir, Arc<StdioTransport>, u32) {
+    let after = format!("trap '' TERM
 cat > helper.py <<'PY'
 import os, subprocess, time
 null = subprocess.DEVNULL
@@ -354,8 +354,8 @@ os.rename('leaf.tmp', 'leaf.pid')
 time.sleep(60)
 PY
 python3 helper.py </dev/null >/dev/null 2>&1 &
-while :; do sleep 0.05; done";
-    let (w, t) = started(after, None).await;
+{tail}");
+    let (w, t) = started(&after, None).await;
     let leaf_file = w.path().join("leaf.pid");
     poll_until("the helper starts its leaf", || leaf_file.exists()).await;
     let leaf = std::fs::read_to_string(&leaf_file)
@@ -383,8 +383,23 @@ fn alive(pid: u32) -> bool {
 /// never reaches the leaf.
 #[tokio::test]
 async fn an_ordinary_close_kills_a_leaf_in_its_own_session() {
-    let (_w, t, leaf) = started_with_session_leaf().await;
+    let (_w, t, leaf) = started_with_session_leaf("while :; do sleep 0.05; done").await;
     assert!(alive(leaf), "the leaf runs before the stop");
     t.close().await.expect("close");
     poll_until("the leaf dies with the backend", || !alive(leaf)).await;
+}
+
+/// A backend that exits the moment its stdin closes reparents its helper before
+/// the reaper's first step; the sweep's snapshot, taken before the stdin close,
+/// still has the helper and its leaf. Red if the snapshot is taken only after
+/// the close: the helper is no longer a descendant and the leaf survives.
+#[tokio::test]
+async fn a_leaf_of_a_backend_that_exits_on_eof_is_killed() {
+    let (_w, t, leaf) = started_with_session_leaf("cat >/dev/null").await;
+    assert!(alive(leaf), "the leaf runs before the stop");
+    t.close().await.expect("close");
+    poll_until("the leaf dies although its backend exited on EOF", || {
+        !alive(leaf)
+    })
+    .await;
 }

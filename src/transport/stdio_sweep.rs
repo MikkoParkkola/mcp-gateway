@@ -75,6 +75,9 @@ pub(super) struct Listing {
     /// False when the listing or any entry failed to read for a reason other
     /// than the process being gone: absence from `rows` then proves nothing.
     pub(super) complete: bool,
+    /// Pids that exist but could not be read (not ours, or an error): a member
+    /// among them is not pruned for being absent from `rows`.
+    pub(super) unreadable: Vec<u32>,
 }
 
 /// The process table the sweep reads and signals through.
@@ -87,6 +90,12 @@ pub(super) trait ProcessTable {
     fn signal(&mut self, id: Identity, sig: Sig, held: bool) -> Result<Handle, SignalError>;
     /// A monotonic clock.
     fn now(&mut self) -> Duration;
+    /// Give back any handle held for `id` (a signal to it failed, so the sweep
+    /// does not keep its budget slot).
+    fn release(&mut self, _id: Identity) {}
+    /// Yield between two polls of a state, so waiting for a freeze to land does
+    /// not spin a core.
+    fn idle(&mut self) {}
 }
 
 /// The bounds one sweep runs under.
@@ -111,6 +120,8 @@ pub(super) struct SweepReport {
     pub(super) unknown: usize,
     /// Members a by-pid Kill was refused for, as not known to be stopped.
     pub(super) unconfirmed: usize,
+    /// Members the sweep stopped, could not kill, and could not continue.
+    pub(super) stuck_stopped: usize,
     /// Table readings that were incomplete (a failed listing or entry).
     pub(super) incomplete_reads: u32,
     pub(super) passes: u32,
@@ -208,8 +219,9 @@ impl Sweep {
         let rows = &listing.rows;
         if listing.complete {
             let live: BTreeSet<Identity> = rows.iter().map(|(who, _)| *who).collect();
-            self.members.retain(|who, _| live.contains(who));
-            self.dropped.retain(|who| live.contains(who));
+            let keep = |who: &Identity| live.contains(who) || listing.unreadable.contains(&who.pid);
+            self.members.retain(|who, _| keep(who));
+            self.dropped.retain(|who| keep(who));
         } else {
             // A member missing from a listing that failed may well be alive.
             self.incomplete_reads += 1;
@@ -218,7 +230,7 @@ impl Sweep {
         parents.insert(self.root.pid);
         let mut added = 0;
         loop {
-            let found: Vec<(Identity, u32)> = rows
+            let mut found: Vec<(Identity, u32)> = rows
                 .iter()
                 .filter(|(who, ppid)| {
                     parents.contains(ppid)
@@ -228,6 +240,8 @@ impl Sweep {
                 })
                 .copied()
                 .collect();
+            // The cap keeps the lowest pids, whatever order the table lists.
+            found.sort_by_key(|(who, _)| who.pid);
             if found.is_empty() {
                 break;
             }
@@ -270,26 +284,43 @@ impl Sweep {
                 if table.now() >= freeze_end || frozen.iter().any(|f| f.id == who) {
                     continue;
                 }
-                let ours = table.state(who) == ProcState::Running;
+                // Only a process seen already stopped (a debugger's stop) or already
+                // a zombie is not the sweep's to continue: an unreadable state is
+                // not proof that the stop was someone else's.
+                let ours = matches!(table.state(who), ProcState::Running | ProcState::Unknown);
                 let permit = budget.take();
-                let held = permit.is_some();
-                if table.signal(who, Sig::Stop, held).is_ok() {
-                    frozen.push(Frozen {
-                        id: who,
-                        held,
-                        ours,
-                    });
-                    permits.extend(permit);
+                match table.signal(who, Sig::Stop, permit.is_some()) {
+                    Ok(handle) => {
+                        let held = handle == Handle::Held;
+                        frozen.push(Frozen {
+                            id: who,
+                            held,
+                            ours,
+                        });
+                        permits.extend(permit.filter(|_| held));
+                    }
+                    Err(_) => table.release(who),
                 }
             }
+            // Confirmed, not assumed: only stopped, zombie or gone count.
             for entry in &frozen {
-                while table.now() < freeze_end && table.state(entry.id) == ProcState::Running {}
+                while table.now() < freeze_end
+                    && matches!(
+                        table.state(entry.id),
+                        ProcState::Running | ProcState::Unknown
+                    )
+                {
+                    table.idle();
+                }
             }
             if table.now() >= freeze_end {
                 break;
             }
             let listing = table.read();
-            if self.collect(&listing) == 0 {
+            let added = self.collect(&listing);
+            // Stable only on a COMPLETE listing that adds nothing: after a failed
+            // reading, keep walking until the slice ends.
+            if listing.complete && added == 0 {
                 break;
             }
             pending = self
@@ -308,7 +339,15 @@ impl Sweep {
         }
         for who in targets {
             let entry = frozen.iter().find(|f| f.id == who);
-            let held = entry.is_some_and(|f| f.held);
+            let mut held = entry.is_some_and(|f| f.held);
+            if entry.is_none()
+                && let Some(permit) = budget.take()
+            {
+                // Never frozen (the slice ended, or its stop failed): only a
+                // handle that names the exact process may kill it unstopped.
+                permits.push(permit);
+                held = true;
+            }
             match table.signal(who, Sig::Kill, held) {
                 Ok(_) => {
                     report.killed.push(who);
@@ -318,8 +357,11 @@ impl Sweep {
                 Err(_) => {}
             }
             if entry.is_some_and(|f| f.ours) {
-                let _ = table.signal(who, Sig::Cont, held);
-                report.continued.push(who);
+                if table.signal(who, Sig::Cont, held).is_ok() {
+                    report.continued.push(who);
+                } else {
+                    report.stuck_stopped += 1;
+                }
             }
             match table.state(who) {
                 ProcState::Gone => {}

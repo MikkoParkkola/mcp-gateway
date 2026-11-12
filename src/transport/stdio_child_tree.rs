@@ -41,6 +41,10 @@ pub(super) struct ChildTree {
     /// group kill.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     sweep: Option<super::sweep::Sweep>,
+    /// The leader's pid, so a start-time read that failed at construction is
+    /// retried at the first snapshot.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    sweep_root: Option<u32>,
     #[cfg(all(test, unix))]
     pub(super) term_signals_sent: usize,
     #[cfg(test)]
@@ -191,6 +195,8 @@ impl ChildTree {
             sweep: wrapper_pid
                 .and_then(super::sweep::PlatformTable::identity_of)
                 .map(|root| super::sweep::Sweep::new(root, super::sweep::config())),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            sweep_root: wrapper_pid,
             #[cfg(all(test, unix))]
             term_signals_sent: 0,
             #[cfg(test)]
@@ -295,30 +301,55 @@ impl ChildTree {
         }
     }
 
+    /// Record this tree's descendants now: called before the first signal of a
+    /// stop (including the stdin close) and on every reaper step before the
+    /// group kill. A start-time read that failed at construction is retried.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn sweep_snapshot(&mut self) {
+    pub(super) fn sweep_snapshot(&mut self) {
+        if self.sweep.is_none()
+            && !self.signals_closed
+            && let Some(root) = self
+                .sweep_root
+                .and_then(super::sweep::PlatformTable::identity_of)
+        {
+            self.sweep = Some(super::sweep::Sweep::new(root, super::sweep::config()));
+        }
         if let Some(sweep) = self.sweep.as_mut() {
             sweep.snapshot(&mut super::sweep::PlatformTable::new());
         }
     }
+
+    /// No descendant sweep on this platform.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[allow(clippy::unused_self)]
+    pub(super) fn sweep_snapshot(&mut self) {}
 
     /// Freeze, verify and kill every descendant, once, before the group kill.
     /// Residuals are logged as a count and pids only: never a command line.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn sweep_descendants(&mut self) {
         let Some(mut sweep) = self.sweep.take() else {
+            tracing::warn!(
+                backend = self.wrapper.id(),
+                "descendant sweep not run: the backend's start time could not be read"
+            );
             return;
         };
         let report = sweep.run(
             &mut super::sweep::PlatformTable::new(),
             super::sweep::process_budget(),
         );
-        if !report.residual.is_empty() || report.incomplete_reads > 0 || report.unconfirmed > 0 {
+        if !report.residual.is_empty()
+            || report.incomplete_reads > 0
+            || report.unconfirmed > 0
+            || report.stuck_stopped > 0
+        {
             tracing::warn!(
                 backend = self.wrapper.id(),
                 residual = report.residual.len(),
                 unreadable = report.unknown,
                 unconfirmed_stopped = report.unconfirmed,
+                stuck_stopped = report.stuck_stopped,
                 incomplete_reads = report.incomplete_reads,
                 killed = report.killed.len(),
                 continued = report.continued.len(),

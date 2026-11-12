@@ -172,11 +172,13 @@ impl ProcessTable for LinuxTable {
             return Listing {
                 rows: Vec::new(),
                 complete: false,
+                unreadable: Vec::new(),
             };
         };
         let mut listing = Listing {
             rows: Vec::new(),
             complete: true,
+            unreadable: Vec::new(),
         };
         for entry in dir {
             let Ok(entry) = entry else {
@@ -200,7 +202,10 @@ impl ProcessTable for LinuxTable {
                     stat.ppid,
                 )),
                 Lookup::Gone => {}
-                Lookup::Unreadable => listing.complete = false,
+                Lookup::Unreadable => {
+                    listing.complete = false;
+                    listing.unreadable.push(pid);
+                }
             }
         }
         listing
@@ -237,6 +242,14 @@ impl ProcessTable for LinuxTable {
 
     fn now(&mut self) -> Duration {
         self.origin.elapsed()
+    }
+
+    fn release(&mut self, id: Identity) {
+        self.fds.remove(&id);
+    }
+
+    fn idle(&mut self) {
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 
