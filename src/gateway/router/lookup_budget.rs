@@ -14,7 +14,7 @@ use std::num::NonZeroU32;
 use governor::Quota;
 use governor::clock::{Clock, MonotonicClock};
 
-use crate::failsafe::rate_limiter::{Acquire, RateLimiter};
+use crate::failsafe::{Acquire, RateLimiter};
 
 /// The sustained rate: ten a minute, one every six seconds.
 const PERMITS_PER_MINUTE: NonZeroU32 = NonZeroU32::new(10).expect("10 is nonzero");
