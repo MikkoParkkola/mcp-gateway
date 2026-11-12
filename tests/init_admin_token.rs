@@ -154,41 +154,41 @@ fn admintok_2_doctor_names_custody_without_value_even_on_resolution_failure() {
     }
 }
 
-/// ADMINTOK.2 / review: the custody line must not reopen a config path the
-/// guarded loader rejected. A FIFO has no writer here, so a blocking open would
-/// hang doctor forever instead of reporting the invalid config.
-#[cfg(unix)]
+/// ADMINTOK.2 / review: a config that parses but fails validation (a wrong
+/// type, an extra key) still gets its custody line, so an operator
+/// troubleshooting it can see where the token lives.
 #[test]
-fn admintok_2_doctor_returns_on_a_fifo_config_instead_of_blocking() {
-    let root = tempfile::tempdir().expect("isolated doctor");
-    std::fs::create_dir(root.path().join("home")).expect("home");
-    let fifo = root.path().join("gateway.yaml");
-    let made = std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .expect("mkfifo runs");
-    assert!(made.success(), "mkfifo must create the FIFO");
-    let mut child = command(root.path())
-        .args(["doctor", "--config"])
-        .arg(&fifo)
-        .args(["--format", "json", "--no-registry-check"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("doctor spawns");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let status = loop {
-        if let Some(status) = child.try_wait().expect("doctor status") {
-            break status;
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("doctor blocked opening a FIFO config");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
-    assert!(!status.success(), "a FIFO config must be reported invalid");
+fn admintok_2_doctor_names_custody_when_the_config_fails_validation() {
+    let (root, path, written, token) = initialized();
+    let original = std::fs::read_to_string(&path).expect("init output");
+    let wrong_type = original.replace("  port: 39400\n", "  port: not-a-port\n");
+    assert_ne!(
+        wrong_type, original,
+        "the port line must be present to break"
+    );
+    for broken in [wrong_type, format!("{original}\nnot_a_gateway_key: true\n")] {
+        write_owner_only(&path, &broken).expect("invalid config fixture");
+        let out = command(root.path())
+            .args(["doctor", "--config"])
+            .arg(&path)
+            .args(["--format", "json", "--no-registry-check"])
+            .output()
+            .expect("doctor");
+        assert!(!String::from_utf8_lossy(&out.stdout).contains(&token));
+        let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("doctor JSON");
+        let row = report["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .find(|row| row["label"] == "admin-token")
+            .expect("custody line on an invalid config");
+        assert!(
+            row["detail"]
+                .as_str()
+                .expect("detail")
+                .contains(&secret_slot(&written))
+        );
+    }
 }
 
 fn failure_root() -> tempfile::TempDir {
