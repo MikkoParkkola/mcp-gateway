@@ -4,7 +4,7 @@
 // The shell renders `status.access`: pages, tabs and palette entries a key may
 // open, one line saying why the rest are hidden, and no "Not available to this
 // key" after navigation. Hiding is presentation only; the server's guards stay
-// the authority (row A9 is a Rust row). Rows A1-A8 and A11-A14 of the access
+// the authority (row A9 is a Rust row). Rows A1-A8, A11-A14 and A16-A18 of the access
 // design for MIK-9008.PAGES.5. A1, A6 and A7 pass on the unchanged shell (they
 // pin what must not change); every other row is red first.
 import { test, expect, blockingViolations } from './base.mjs';
@@ -70,13 +70,91 @@ test.describe('access', () => {
     await expect(note(page).locator('b')).toHaveCount(0);
   });
 
-  test('A3 a deep link to a hidden page ends on the first open page, never on the forbidden panel', async ({ page }) => {
+  test('A3 a deep link to a hidden page ends on the first open page; its screen never loads and the forbidden panel never paints', async ({ page }) => {
+    await withFixturePages(page, { probes: true });
+    const reads = [];
+    page.on('request', (r) => r.url().includes('/ui/api/page-probe') && reads.push(r.url()));
+    await page.addInitScript(() => {
+      window.__forbidden = 0;
+      new MutationObserver(() => {
+        if (document.querySelector('#content [data-state="forbidden"]')) window.__forbidden++;
+      }).observe(document, { childList: true, subtree: true });
+    });
     await serve(page, { admin: false, access: access({ hidden: { policies: ADMIN_ONLY } }) });
     await page.goto('/ui/policies/status');
     await expect(page).toHaveURL(/\/ui\/overview\/status$/);
     await shellReady(page);
     await expect(page.getByText('Not available to this key')).toHaveCount(0);
-    await expect(page.locator('#content [data-state="forbidden"]')).toHaveCount(0);
+    expect(reads).toEqual([]);
+    expect(await page.evaluate(() => window.__forbidden)).toBe(0);
+  });
+
+  test('A16 a held status answer holds every screen; released with the page hidden, nothing of it ever renders', async ({ page }) => {
+    await withFixturePages(page, { probes: true });
+    const reads = [];
+    page.on('request', (r) => r.url().includes('/ui/api/page-probe') && reads.push(r.url()));
+    let release;
+    const held = new Promise((r) => { release = r; });
+    await page.route('**/ui/api/status', async (route) => {
+      await held;
+      return route.fulfill({
+        json: { version: '4.0.0', auth: { enabled: true, signed_in: true, admin: false }, access: access({ hidden: { policies: ADMIN_ONLY } }) },
+      });
+    });
+    await page.goto('/ui/policies/status');
+    await page.waitForTimeout(500);
+    expect(reads).toEqual([]);
+    await expect(page.locator('#content [data-rendered]')).toHaveCount(0);
+    release();
+    await expect(page).toHaveURL(/\/ui\/overview\/status$/);
+    await shellReady(page);
+    expect(reads).toEqual([]);
+  });
+
+  test('A17 a status answer still in flight when a 401 resets the session is dropped', async ({ page }) => {
+    await withFixturePages(page);
+    let release;
+    const held = new Promise((r) => { release = r; });
+    let first = true;
+    await page.route('**/ui/api/status', async (route) => {
+      const bearer = route.request().headers().authorization ?? '';
+      if (first) {
+        first = false;
+        await held;
+        return route.fulfill({
+          json: { version: '4.0.0', auth: { enabled: true, signed_in: true, admin: false }, access: access({ hidden: { policies: ADMIN_ONLY } }) },
+        });
+      }
+      const signedIn = bearer === `Bearer ${KEY}`;
+      return route.fulfill({ json: { version: '4.0.0', auth: { enabled: true, signed_in: signedIn, admin: signedIn } } });
+    });
+    await page.route('**/ui/api/forbidden-probe', (r) => r.fulfill({ status: 401, json: {} }));
+    await page.goto('/ui/access/status');
+    await expect(page.locator('#signin')).toBeVisible();
+    release();
+    await page.waitForTimeout(500);
+    await expect(page.locator('#signin')).toBeVisible();
+    await page.locator('#signin-key').fill(KEY);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#signin')).toBeHidden();
+    // The old report did not come back: Policies is open, with no note.
+    await expect(navLink(page, 'policies')).toBeVisible();
+    await expect(note(page)).toHaveCount(0);
+  });
+
+  test('A18 a malformed access member is read as every page open', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    for (const bad of ['not an object', { pages: 'x' }, { pages: [{ id: 'policies' }] }]) {
+      const state = { admin: false, access: bad };
+      await serve(page, state);
+      await page.goto('/ui/overview/status');
+      await shellReady(page);
+      for (const [id] of PAGES) await expect(navLink(page, id)).toBeVisible();
+      await expect(note(page)).toHaveCount(0);
+      await page.unroute('**/ui/api/status');
+    }
+    expect(errors).toEqual([]);
   });
 
   test('A4 a hidden tab is not in its bar, and its deep link lands on the first open tab', async ({ page }) => {
