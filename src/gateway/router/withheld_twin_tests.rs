@@ -78,7 +78,7 @@ pub(super) struct Twin {
     /// The backend the tool is surfaced on: `alpha`, or `alpha-pt` (passthrough).
     pub(super) server: &'static str,
     pub(super) audit: PathBuf,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 /// The second invocable tool, which asks one question and so mints a

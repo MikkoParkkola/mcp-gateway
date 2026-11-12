@@ -105,7 +105,7 @@ accounts:
 struct Gateway {
     router: axum::Router,
     _fixture: RevokeFixture,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 async fn gateway(shape: Shape) -> Gateway {

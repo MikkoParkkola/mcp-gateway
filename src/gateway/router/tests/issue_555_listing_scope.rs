@@ -122,7 +122,7 @@ fn capability_yaml(name: &str, extra: &str) -> String {
     )
 }
 
-async fn capability_backend() -> (Arc<CapabilityBackend>, tempfile::TempDir) {
+async fn capability_backend() -> (Arc<CapabilityBackend>, std::sync::Arc<tempfile::TempDir>) {
     let dir = crate::test_dir_keep::kept_tempdir();
     let files = [
         ("cap_open", "  chains_with: [cap_hidden]\n".to_string()),
@@ -231,7 +231,7 @@ pub(super) struct Fixture {
     pub(super) router: axum::Router,
     pub(super) state: Arc<crate::gateway::router::AppState>,
     pub(super) store: crate::gateway::router::tests::FixtureDir,
-    pub(super) caps: tempfile::TempDir,
+    pub(super) caps: std::sync::Arc<tempfile::TempDir>,
 }
 
 /// Build the fixture gateway. `tune` edits the Meta-MCP before it is frozen

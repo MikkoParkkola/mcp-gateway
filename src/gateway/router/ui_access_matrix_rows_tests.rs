@@ -12,7 +12,7 @@ const PLAIN: &str = "/ui/api/status\tGET\tplain\tAdminKey\t200\n";
 const NAMED: &str = "/ui/api/status\tGET\tplain\tNoKey\t401:@refused\n";
 
 struct Fixture {
-    _root: tempfile::TempDir,
+    _root: std::sync::Arc<tempfile::TempDir>,
     dir: PathBuf,
     bodies: PathBuf,
 }

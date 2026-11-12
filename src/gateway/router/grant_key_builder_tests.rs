@@ -62,7 +62,7 @@ async fn personal_caps(
     backend: &str,
     tool: &str,
     base_url: &str,
-) -> (Arc<CapabilityBackend>, tempfile::TempDir) {
+) -> (Arc<CapabilityBackend>, std::sync::Arc<tempfile::TempDir>) {
     let dir = crate::test_dir_keep::kept_tempdir();
     std::fs::write(
         dir.path().join(format!("{tool}.yaml")),

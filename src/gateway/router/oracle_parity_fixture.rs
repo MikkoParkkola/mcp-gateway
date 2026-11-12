@@ -221,7 +221,7 @@ pub(super) struct Twin {
     /// O3's drift switch.
     pub(super) drifted: Arc<std::sync::atomic::AtomicBool>,
     pub(super) audit: PathBuf,
-    pub(super) _dir: tempfile::TempDir,
+    pub(super) _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 /// What one call answered: status, body without `id`, and the backend's

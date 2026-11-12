@@ -19,7 +19,7 @@ const MARKER: &str = "refusing to send a capability credential in cleartext";
 fn keyed_caps() -> (
     Arc<crate::capability::CapabilityBackend>,
     Arc<crate::config::LiveEnv>,
-    tempfile::TempDir,
+    std::sync::Arc<tempfile::TempDir>,
 ) {
     let dir = crate::test_dir_keep::kept_tempdir();
     let file = dir.path().join("caps.env");
