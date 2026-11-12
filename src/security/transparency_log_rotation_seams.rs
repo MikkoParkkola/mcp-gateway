@@ -105,28 +105,6 @@ impl Drop for StallRelease {
 #[cfg(all(test, unix))]
 static SYNCED: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
 
-/// Record one successful real sync of `file`.
-#[cfg(all(test, unix))]
-pub(crate) fn note_synced(file: &std::fs::File) {
-    use std::os::unix::fs::MetadataExt;
-    if let Ok(meta) = file.metadata() {
-        SYNCED.lock().unwrap().push((meta.dev(), meta.ino()));
-    }
-}
-
-/// Off Unix the row does not observe syncs, so there is nothing to record.
-#[cfg(all(test, not(unix)))]
-pub(crate) fn note_synced(_file: &std::fs::File) {}
-
-/// How many real syncs the file at `path` has had so far.
-#[cfg(all(test, unix))]
-pub(crate) fn syncs_of(path: &std::path::Path) -> usize {
-    use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::metadata(path).unwrap();
-    let key = (meta.dev(), meta.ino());
-    SYNCED.lock().unwrap().iter().filter(|k| **k == key).count()
-}
-
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct TestHooks {
@@ -161,6 +139,28 @@ pub(crate) struct TestHooks {
 
 #[cfg(test)]
 impl super::super::TransparencyLogger {
+    /// Record one successful real sync of `file`.
+    #[cfg(unix)]
+    pub(crate) fn note_synced(file: &std::fs::File) {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(meta) = file.metadata() {
+            SYNCED.lock().unwrap().push((meta.dev(), meta.ino()));
+        }
+    }
+
+    /// Off Unix the row does not observe syncs, so there is nothing to record.
+    #[cfg(not(unix))]
+    pub(crate) fn note_synced(_file: &std::fs::File) {}
+
+    /// How many real syncs the file at `path` has had so far.
+    #[cfg(unix)]
+    pub(crate) fn syncs_of(path: &std::path::Path) -> usize {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::metadata(path).unwrap();
+        let key = (meta.dev(), meta.ino());
+        SYNCED.lock().unwrap().iter().filter(|k| **k == key).count()
+    }
+
     pub(crate) fn arm_write_fault(&self, fault: Option<WriteFault>) {
         *self.hooks.fault.lock().unwrap() = fault;
     }

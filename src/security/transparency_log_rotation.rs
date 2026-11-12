@@ -80,20 +80,6 @@ pub(super) fn is_oversized(e: &io::Error) -> bool {
         .is_some()
 }
 
-/// The log under a bound append was replaced while space was being freed:
-/// the append stopped before it wrote to, or expired anything in, the log
-/// that took its place.
-#[derive(Debug)]
-pub(super) struct LogReplaced;
-
-impl std::fmt::Display for LogReplaced {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("transparency log: the bound log was replaced while freeing space")
-    }
-}
-
-impl std::error::Error for LogReplaced {}
-
 /// Which segment the writer holds, and the file it opened.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SegState {
@@ -809,7 +795,5 @@ fn finish_pending_expiry(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 #[path = "transparency_log_rotation_seams.rs"]
 mod seams;
-#[cfg(all(test, unix))]
-pub(crate) use seams::syncs_of;
 #[cfg(test)]
-pub(crate) use seams::{StallGate, StallRelease, TestHooks, WriteFault, note_synced};
+pub(crate) use seams::{StallGate, StallRelease, TestHooks, WriteFault};

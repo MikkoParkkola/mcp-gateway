@@ -10,8 +10,8 @@ use serde_json::{Map, Value};
 
 use super::identity::{self, LogId};
 use super::rotation::{
-    EV_EXPIRED, EV_SEALED, FileId, LogReplaced, MAX_RECORD_BYTES, OversizedRecord, file_id,
-    housekeeping, now_secs, open_after_seal, path_id, record_head, recover, seal_of, write_mark,
+    EV_EXPIRED, EV_SEALED, FileId, MAX_RECORD_BYTES, OversizedRecord, file_id, housekeeping,
+    now_secs, open_after_seal, path_id, record_head, recover, seal_of, write_mark,
 };
 use super::segments::{self, HighWater, Segment};
 use super::{Inner, TransparencyLogger, chain_line, read_last_nonempty_line};
@@ -197,6 +197,20 @@ impl Subscribers {
         }
     }
 }
+
+/// The log under a bound append was replaced while space was being freed:
+/// the append stopped before it wrote to, or expired anything in, the log
+/// that took its place.
+#[derive(Debug)]
+pub(super) struct LogReplaced;
+
+impl std::fmt::Display for LogReplaced {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("transparency log: the bound log was replaced while freeing space")
+    }
+}
+
+impl std::error::Error for LogReplaced {}
 
 impl TransparencyLogger {
     /// Tell `reader` of every record of `kind` written from now on, at least
@@ -446,7 +460,7 @@ impl TransparencyLogger {
     #[cfg(test)]
     fn durable(file: &std::fs::File) -> io::Result<()> {
         file.sync_all()?;
-        super::rotation::note_synced(file);
+        Self::note_synced(file);
         Ok(())
     }
 
