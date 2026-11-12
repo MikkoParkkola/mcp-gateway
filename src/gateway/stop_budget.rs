@@ -18,7 +18,8 @@ const BACKEND_RESERVE: Duration = Duration::from_millis(6_400);
 /// Reserved for retirement: runtime and main-stack coordination, then the logger.
 const TERMINAL_RESERVE: Duration = Duration::from_millis(2_250);
 /// The logger's share of the terminal reserve: the runtime wait ends this long
-/// before the total does.
+/// before the total does. Test-only with `runtime_end`.
+#[cfg(test)]
 const LOGGER_TAIL: Duration = Duration::from_secs(2);
 
 /// The most an in-flight, override or task drain waits, whatever is left to Dp.
@@ -85,6 +86,8 @@ impl StopBudget {
     }
 
     /// Dl: where the listener grace ends, leaving the post-listener reserve.
+    /// Test-only: production asks `listener_grace_for`, before any trigger.
+    #[cfg(test)]
     pub(crate) fn listener_end(&self) -> Instant {
         self.post_listener_end() - POST_RESERVE
     }
