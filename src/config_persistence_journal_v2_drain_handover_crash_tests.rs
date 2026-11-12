@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Handover power-loss rows: cut the directory at a seam, reopen from what survived, and finish.
 
-use super::super::super::super::abandoned::{Placement, against_donor, marked};
-use super::super::super::super::fixtures::collect_case;
+use super::super::super::abandoned::{Placement, against_donor, marked};
+use super::super::super::fixtures::collect_case;
 use super::super::fault::{self, At, Fault};
 use super::super::fixtures::{acquire, reopen, state_of};
 use super::tests::{Rig, file_bytes, good_file, journal_bytes, rig};
