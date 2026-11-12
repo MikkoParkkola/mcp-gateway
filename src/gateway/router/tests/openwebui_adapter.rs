@@ -23,7 +23,7 @@ use tower::ServiceExt;
     reason = "one end-to-end auth scenario read as a single sequence is the point of the test"
 )]
 async fn openwebui_assertion_is_checked_after_real_gateway_authentication() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let env_path = dir.path().join("adapter.env");
     let secret = "fixture-adapter-signing-secret-123456789";
     crate::gateway::test_helpers::write_owner_only(&env_path, format!(
@@ -199,7 +199,7 @@ accounts:
     reason = "one end-to-end auth scenario read as a single sequence is the point of the test"
 )]
 async fn installations_sharing_one_header_each_verify_with_their_own_key() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let env_path = dir.path().join("shared-header.env");
     let desk_secret = "fixture-desk-installation-signing-secret-1";
     let laptop_secret = "fixture-laptop-installation-signing-secret-2";

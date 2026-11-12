@@ -142,7 +142,7 @@ async fn metrics_unset_token_is_401() {
 async fn metrics_token_missing_env_starts_and_401s() {
     const VAR: &str = "MCP_GATEWAY_C7_METRICS_UNSET_VAR";
     let reference = format!("env:{VAR}");
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
 
     // The loader `serve` uses accepts the reference with the variable unset.
     let path = dir.path().join("gateway.yaml");
@@ -179,7 +179,7 @@ async fn metrics_token_missing_env_starts_and_401s() {
 #[tokio::test]
 async fn metrics_token_env_resolves() {
     const VAR: &str = "MCP_GATEWAY_C7_METRICS_SET_VAR";
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut config = with_token(Some(&format!("env:{VAR}")));
     env_file(&dir, &mut config, &format!("{VAR}=t"));
     let (router, _store) = router_with(config).await;

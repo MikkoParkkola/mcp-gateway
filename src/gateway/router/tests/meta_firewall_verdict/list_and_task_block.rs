@@ -152,7 +152,7 @@ async fn a_blocked_direct_tool_list_is_refused() {
 /// writes exactly one Block record to the firewall's audit log.
 #[tokio::test]
 async fn a_blocked_direct_tool_list_writes_one_block_record() {
-    let audit_dir = tempfile::tempdir().unwrap();
+    let audit_dir = crate::test_dir_keep::kept_tempdir();
     let audit_log = audit_dir.path().join("firewall-audit.jsonl");
     let meta = super::response_firewall(Vec::new());
     let handler = Arc::new(

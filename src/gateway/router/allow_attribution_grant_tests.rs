@@ -72,7 +72,7 @@ pub(super) async fn owned_with(rows: Vec<IdentityGrant>, signing: Signing) -> Ow
         );
         drop(axum::serve(listener, app).await);
     });
-    let caps_dir = tempfile::tempdir().expect("a capability directory");
+    let caps_dir = crate::test_dir_keep::kept_tempdir();
     std::fs::write(
         caps_dir.path().join(format!("{PROBE}.yaml")),
         personal_probe(port),
