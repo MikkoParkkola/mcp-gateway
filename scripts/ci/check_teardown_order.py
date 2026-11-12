@@ -219,6 +219,7 @@ def self_test() -> int:
         ("a temp dir, a StdioSession", "fn t() {\n    let d = tempdir().unwrap();\n    let s = StdioSession::start(cmd).spawn();\n}\n", 0),
         ("a lone try_wait poll is not a wait", "fn t() {\n    let d = tempdir().unwrap();\n    let mut c = cmd.spawn().unwrap();\n    let _ = c.try_wait();\n}\n", 1),
         ("a thread spawn is not a process spawn", "fn t() {\n    let d = tempdir().unwrap();\n    std::thread::spawn(|| ());\n    tokio::spawn(async {});\n}\n", 0),
+        ("a method spawn with an argument is a task, not a process", "fn t() {\n    let d = tempdir().unwrap();\n    rt.spawn(async {});\n    scope.spawn(|| ());\n}\n", 0),
         ("a fn that builds a type with a waiting Drop", "struct G { c: Child }\nimpl Drop for G { fn drop(&mut self) { self.c.wait(); } }\nfn t() {\n    let d = tempdir().unwrap();\n    let c = cmd.spawn().unwrap();\n    let g = G { c };\n}\n", 0),
         ("a fn that builds a type without a Drop", "struct G { c: Child }\nfn t() {\n    let d = tempdir().unwrap();\n    let c = cmd.spawn().unwrap();\n    let g = G { c };\n}\n", 1),
         ("a spawn but no temp dir", "fn t() {\n    let c = cmd.spawn().unwrap();\n}\n", 0),
