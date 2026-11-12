@@ -167,6 +167,17 @@ fn foreign_receipt_is_not_acknowledged() {
                 Err(DrainError::OtherLog),
                 "{ROW}: a receipt for another log is refused"
             );
+            assert!(
+                live.records()
+                    .iter()
+                    .all(|record| record["token"] != WRITER),
+                "{ROW}: nothing was written to the log that took its place"
+            );
+            assert_eq!(
+                live.records().len(),
+                foreign.records().len(),
+                "{ROW}: the replacing log gained no record"
+            );
             reread(&mut owner);
             let writer = state_of(&owner).writer.as_ref().expect(ROW);
             assert!(

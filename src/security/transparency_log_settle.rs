@@ -352,7 +352,8 @@ impl TransparencyLogger {
         }
         // Once the write begins, a failure may have left bytes, or a sync
         // unproven: Unconfirmed, whatever the cut-back did.
-        match self.append_refreshed(&mut inner, fields, true) {
+        match self.append_refreshed(&mut inner, fields, true, Some(binding)) {
+            Err(e) if super::rotation::is_replaced(&e) => return Err(Unsettled::OtherLog),
             Err(e) if super::rotation::is_oversized(&e) => {
                 return Err(Unsettled::Invalid(InvalidPayload::Oversized));
             }

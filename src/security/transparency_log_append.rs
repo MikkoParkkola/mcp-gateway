@@ -10,8 +10,8 @@ use serde_json::{Map, Value};
 
 use super::identity::{self, LogId};
 use super::rotation::{
-    EV_EXPIRED, EV_SEALED, FileId, MAX_RECORD_BYTES, OversizedRecord, file_id, housekeeping,
-    now_secs, open_after_seal, path_id, record_head, recover, seal_of, write_mark,
+    EV_EXPIRED, EV_SEALED, FileId, LogReplaced, MAX_RECORD_BYTES, OversizedRecord, file_id,
+    housekeeping, now_secs, open_after_seal, path_id, record_head, recover, seal_of, write_mark,
 };
 use super::segments::{self, HighWater, Segment};
 use super::{Inner, TransparencyLogger, chain_line, read_last_nonempty_line};
@@ -251,7 +251,7 @@ impl TransparencyLogger {
         resync: bool,
     ) -> io::Result<String> {
         self.refresh(inner, resync)?;
-        self.append_refreshed(inner, fields, resync)
+        self.append_refreshed(inner, fields, resync, None)
     }
 
     /// Bring `inner` to the log on disk before an append: every append
@@ -278,6 +278,7 @@ impl TransparencyLogger {
         inner: &mut Inner,
         fields: Map<String, Value>,
         resync: bool,
+        bound: Option<&LogId>,
     ) -> io::Result<String> {
         let published = self.subscribers.wants(&fields).then(|| fields.clone());
         let path = self.path();
@@ -321,7 +322,7 @@ impl TransparencyLogger {
                 if e.kind() == io::ErrorKind::StorageFull
                     && rot.on_disk_full == OnDiskFull::ExpireOldest =>
             {
-                self.free_space(inner, &path, &self.lease, e)?;
+                self.free_space(inner, &path, &self.lease, e, bound)?;
                 let retried = self.write_record(inner, &path, fields, resync);
                 if let Err(e) = segments::ensure_reserve(&path) {
                     tracing::warn!(error = %e, "audit log: disk-full reserve not recreated");
@@ -678,6 +679,7 @@ impl TransparencyLogger {
         path: &Path,
         g: &ExclusiveFileLock,
         cause: io::Error,
+        bound: Option<&LogId>,
     ) -> io::Result<()> {
         if segments::list_segments(path)?.is_empty() {
             return Err(cause);
@@ -696,6 +698,11 @@ impl TransparencyLogger {
         let on_active = path_id(path).is_ok_and(|id| id == inner.seg.id);
         if !on_active {
             self.rebuild(inner, path, g)?;
+            // A log put in place of the bound one: refuse before any expiry
+            // or retried write reaches it.
+            if bound.is_some_and(|bound| inner.log_id != *bound) {
+                return Err(io::Error::other(LogReplaced));
+            }
         }
         let oldest = segments::list_segments(path)?;
         let Some(oldest) = oldest.first() else {

@@ -80,6 +80,26 @@ pub(super) fn is_oversized(e: &io::Error) -> bool {
         .is_some()
 }
 
+/// The log under a bound append was replaced while space was being freed:
+/// nothing was written to the log that took its place.
+#[derive(Debug)]
+pub(super) struct LogReplaced;
+
+impl std::fmt::Display for LogReplaced {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("transparency log: the bound log was replaced while freeing space")
+    }
+}
+
+impl std::error::Error for LogReplaced {}
+
+/// Whether `e` is the replaced-log refusal.
+pub(super) fn is_replaced(e: &io::Error) -> bool {
+    e.get_ref()
+        .and_then(|inner| inner.downcast_ref::<LogReplaced>())
+        .is_some()
+}
+
 /// Which segment the writer holds, and the file it opened.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SegState {
