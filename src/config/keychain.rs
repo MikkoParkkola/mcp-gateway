@@ -82,7 +82,7 @@ pub(crate) fn bounded<T: Send + 'static>(
 /// between asks. The whole wait stays well inside [`BOUND`].
 #[cfg(any(windows, test))]
 pub(crate) const CONFIRM_ATTEMPTS: u32 = 8;
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 pub(crate) const CONFIRM_GAP: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// A delete is done only when the entry is seen gone. Credential Manager can
