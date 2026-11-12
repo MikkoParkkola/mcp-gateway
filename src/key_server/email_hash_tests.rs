@@ -487,7 +487,11 @@ fn production_sources(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
             if name != "tests" {
                 production_sources(&path, out);
             }
-        } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") {
+        } else if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("rs"))
+            && !name.ends_with("_tests.rs")
+        {
             let source = std::fs::read_to_string(&path).expect("a readable source file");
             // Test-only items blanked, then comments and string literals blanked: what
             // is left is the code that ships.
