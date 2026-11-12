@@ -10,8 +10,9 @@ use super::dashboard_link::DashboardLinkTls;
 /// Arguments of `mcp-gateway audit lookup-email`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct LookupEmailArgs {
-    /// Read the email from standard input (one line). Required: there is no
-    /// positional email and no `--email VALUE`.
+    /// Read the email from standard input (one line). Required: the email is
+    /// never an argument, so it stays out of shell history and process lists.
+    /// The credential is read from `MCP_GATEWAY_TOKEN`.
     #[arg(long, required = true)]
     pub email_stdin: bool,
     /// Gateway base URL (default as for `dashboard-link`).
