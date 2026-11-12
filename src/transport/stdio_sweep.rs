@@ -26,6 +26,8 @@ pub(super) enum ProcState {
     Stopped,
     Zombie,
     Gone,
+    /// The table could not read it (an error, not an exit): never taken for gone.
+    Unknown,
 }
 
 /// The signals the sweep sends.
@@ -53,10 +55,18 @@ pub(super) enum SignalError {
     Failed,
 }
 
+/// One reading of the process table.
+pub(super) struct Listing {
+    /// Every process the table could read, with its parent pid.
+    pub(super) rows: Vec<(Identity, u32)>,
+    /// False when the listing or any entry failed to read for a reason other
+    /// than the process being gone: absence from `rows` then proves nothing.
+    pub(super) complete: bool,
+}
+
 /// The process table the sweep reads and signals through.
 pub(super) trait ProcessTable {
-    /// Every live process with its parent pid.
-    fn read(&mut self) -> Vec<(Identity, u32)>;
+    fn read(&mut self) -> Listing;
     fn state(&mut self, id: Identity) -> ProcState;
     /// Signal `id` only if it is still that process. `held` says the sweep holds
     /// a budget slot for a handle (a pidfd) on this process; a table without
@@ -84,6 +94,10 @@ pub(super) struct SweepReport {
     pub(super) continued: Vec<Identity>,
     /// Members not confirmed gone, and members dropped past the cap.
     pub(super) residual: Vec<Identity>,
+    /// Residual members whose state the table could not read.
+    pub(super) unknown: usize,
+    /// Table readings that were incomplete (a failed listing or entry).
+    pub(super) incomplete_reads: u32,
     pub(super) passes: u32,
 }
 
@@ -144,6 +158,8 @@ pub(super) struct Sweep {
     members: BTreeMap<Identity, u32>,
     /// Descendants past the cap, never touched, reported at the end.
     dropped: BTreeSet<Identity>,
+    /// Incomplete table readings so far.
+    incomplete_reads: u32,
 }
 
 /// What the sweep stopped, and whether the stop was its own.
@@ -161,21 +177,28 @@ impl Sweep {
             cfg,
             members: BTreeMap::new(),
             dropped: BTreeSet::new(),
+            incomplete_reads: 0,
         }
     }
 
     /// Record the descendants now, before the first signal of the stop.
     pub(super) fn snapshot(&mut self, table: &mut dyn ProcessTable) {
-        let rows = table.read();
-        self.collect(&rows);
+        let listing = table.read();
+        self.collect(&listing);
     }
 
     /// Add every live descendant of the root and of every member, drop the dead,
     /// and hold the cap (lowest pids kept).
-    fn collect(&mut self, rows: &[(Identity, u32)]) -> usize {
-        let live: BTreeSet<Identity> = rows.iter().map(|(who, _)| *who).collect();
-        self.members.retain(|who, _| live.contains(who));
-        self.dropped.retain(|who| live.contains(who));
+    fn collect(&mut self, listing: &Listing) -> usize {
+        let rows = &listing.rows;
+        if listing.complete {
+            let live: BTreeSet<Identity> = rows.iter().map(|(who, _)| *who).collect();
+            self.members.retain(|who, _| live.contains(who));
+            self.dropped.retain(|who| live.contains(who));
+        } else {
+            // A member missing from a listing that failed may well be alive.
+            self.incomplete_reads += 1;
+        }
         let mut parents: BTreeSet<u32> = self.members.keys().map(|who| who.pid).collect();
         parents.insert(self.root.pid);
         let mut added = 0;
@@ -214,9 +237,9 @@ impl Sweep {
     ) -> SweepReport {
         let mut report = SweepReport::default();
         let freeze_end = table.now() + self.cfg.freeze_slice;
-        let rows = table.read();
-        self.collect(&rows);
-        let root_live = rows.iter().any(|(who, _)| *who == self.root);
+        let listing = table.read();
+        self.collect(&listing);
+        let root_live = !listing.complete || listing.rows.iter().any(|(who, _)| *who == self.root);
         let mut frozen: Vec<Frozen> = Vec::new();
         let mut permits: Vec<Permit<'_>> = Vec::new();
         // Freeze: the root first, then the members, re-walking from the frozen
@@ -250,8 +273,8 @@ impl Sweep {
             if table.now() >= freeze_end {
                 break;
             }
-            let rows = table.read();
-            if self.collect(&rows) == 0 {
+            let listing = table.read();
+            if self.collect(&listing) == 0 {
                 break;
             }
             pending = self
@@ -279,11 +302,17 @@ impl Sweep {
                 let _ = table.signal(who, Sig::Cont, held);
                 report.continued.push(who);
             }
-            if table.state(who) != ProcState::Gone {
-                report.residual.push(who);
+            match table.state(who) {
+                ProcState::Gone => {}
+                ProcState::Unknown => {
+                    report.unknown += 1;
+                    report.residual.push(who);
+                }
+                _ => report.residual.push(who),
             }
         }
         report.residual.extend(self.dropped.iter().copied());
+        report.incomplete_reads = self.incomplete_reads;
         drop(permits);
         report
     }

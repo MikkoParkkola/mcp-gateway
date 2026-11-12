@@ -13,9 +13,9 @@
 //! functions with no platform types, so its rows run on every host.
 #![allow(unsafe_code)]
 
-use super::ProcState;
 #[cfg(target_os = "macos")]
-use super::{Handle, Identity, ProcessTable, Sig, SignalError};
+use super::{Handle, ProcessTable, Sig, SignalError};
+use super::{Identity, Listing, ProcState};
 
 /// `p_stat` values from `<sys/proc.h>`.
 const SSTOP: u32 = 4;
@@ -46,17 +46,18 @@ fn start_micros(sec: u64, usec: u64) -> Option<u64> {
     sec.checked_mul(1_000_000)?.checked_add(usec)
 }
 
-/// Pid slots for a fill, from the pid count the size call reported: the count
-/// plus a quarter and a fixed margin, since processes start between the calls.
-fn slots_for(estimate: i32) -> Option<usize> {
+/// Pid slots for a fill and the byte length handed to the kernel for them, from
+/// the pid count the size call reported: the count plus a quarter and a fixed
+/// margin, since processes start between the calls. One source for both, so the
+/// buffer and the length it is told can never disagree.
+fn slots_for(estimate: i32) -> Option<(usize, i32)> {
     let estimate = usize::try_from(estimate).ok().filter(|count| *count > 0)?;
     let slots = estimate
         .checked_add(estimate / 4)?
         .checked_add(64)?
         .min(SLOT_CAP);
-    // The same limit the byte length handed to the kernel has to respect.
-    i32::try_from(slots.checked_mul(size_of::<i32>())?).ok()?;
-    Some(slots)
+    let bytes = i32::try_from(slots.checked_mul(size_of::<i32>())?).ok()?;
+    Some((slots, bytes))
 }
 
 /// How a fill ended.
@@ -86,72 +87,175 @@ fn judge_fill(returned: i32, slots: usize) -> Fill {
 }
 
 /// The process record as the table reads it.
-#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Info {
     ppid: u32,
     start: u64,
     state: ProcState,
 }
 
-#[cfg(target_os = "macos")]
-fn list_pids() -> Option<Vec<u32>> {
-    for _ in 0..LIST_ATTEMPTS {
-        // SAFETY: contract 1 and 6: a null buffer with a zero length is the
-        // documented size query; it writes nothing and returns a count.
-        let estimate = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-        let slots = slots_for(estimate)?;
-        let mut pids = vec![0_i32; slots];
-        let bytes = i32::try_from(slots.checked_mul(size_of::<i32>())?).ok()?;
-        // SAFETY: contract 1 and 2: `pids` is a live, writable buffer of exactly
-        // `bytes` bytes, 4-byte aligned as an `i32` slice, and the kernel writes
-        // at most `bytes` into it.
-        let returned = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
-        match judge_fill(returned, slots) {
-            Fill::Complete(count) => {
-                return Some(
-                    pids[..count]
-                        .iter()
-                        .filter_map(|pid| u32::try_from(*pid).ok().filter(|pid| *pid > 0))
-                        .collect(),
-                );
-            }
-            Fill::Again => {}
-            Fill::Failed => return None,
-        }
-    }
-    None
+/// Why a record could not be had.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Miss {
+    /// No such process: an exit, which the table may believe.
+    Gone,
+    /// Not ours to read (another user's process): it cannot be a descendant the
+    /// gateway may signal, so it is left out rather than called a failure.
+    Foreign,
+    /// Any other failure: says nothing about whether the process exists.
+    Failed,
 }
 
-#[cfg(target_os = "macos")]
-fn info_of(pid: u32) -> Option<Info> {
-    let size = i32::try_from(size_of::<libc::proc_bsdinfo>()).ok()?;
-    let mut record = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-    // SAFETY: contract 1 and 3: `record` is a live, writable, properly aligned
-    // `proc_bsdinfo` of exactly `size` bytes, and the kernel writes at most `size`.
-    let returned = unsafe {
-        libc::proc_pidinfo(
-            i32::try_from(pid).ok()?,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            record.as_mut_ptr().cast(),
-            size,
-        )
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Lookup {
+    Found(Info),
+    Missing(Miss),
+}
+
+/// `errno` values of `ESRCH` and `EPERM` (the same on macOS and Linux).
+const ESRCH: i32 = 3;
+const EPERM: i32 = 1;
+
+fn miss_of(errno: Option<i32>) -> Miss {
+    match errno {
+        Some(ESRCH) => Miss::Gone,
+        Some(EPERM) => Miss::Foreign,
+        _ => Miss::Failed,
+    }
+}
+
+/// Decode the fields of a `proc_bsdinfo` record the kernel returned for
+/// `asked`. A record that names another pid, or whose start time does not fit,
+/// is a failure, never a process.
+fn decode(asked: u32, pid: u32, ppid: u32, status: u32, sec: u64, usec: u64) -> Lookup {
+    if pid != asked {
+        return Lookup::Missing(Miss::Failed);
+    }
+    match start_micros(sec, usec) {
+        Some(start) => Lookup::Found(Info {
+            ppid,
+            start,
+            state: status_of(status),
+        }),
+        None => Lookup::Missing(Miss::Failed),
+    }
+}
+
+/// What the table needs from libproc: the real calls on macOS, a script in rows.
+trait Probe {
+    /// Every pid, or `None` when the listing failed.
+    fn list(&mut self) -> Option<Vec<u32>>;
+    fn info(&mut self, pid: u32) -> Lookup;
+}
+
+/// The whole table. A failed listing or a failed entry makes it incomplete: the
+/// sweep must not read absence from it as an exit.
+fn table_read(probe: &mut dyn Probe) -> Listing {
+    let Some(pids) = probe.list() else {
+        return Listing {
+            rows: Vec::new(),
+            complete: false,
+        };
     };
-    if returned != size {
-        return None;
+    let mut listing = Listing {
+        rows: Vec::new(),
+        complete: true,
+    };
+    for pid in pids {
+        match probe.info(pid) {
+            Lookup::Found(info) => listing.rows.push((
+                Identity {
+                    pid,
+                    start: info.start,
+                },
+                info.ppid,
+            )),
+            Lookup::Missing(Miss::Gone | Miss::Foreign) => {}
+            Lookup::Missing(Miss::Failed) => listing.complete = false,
+        }
     }
-    // SAFETY: contract 3: the call returned the full record size, so every
-    // field was written; the type is plain integers and arrays, for which the
-    // zeroed start state is valid in any case.
-    let record = unsafe { record.assume_init() };
-    if record.pbi_pid != pid {
-        return None;
+    listing
+}
+
+/// A member's state. A read that failed, or that is not ours to make, is not an
+/// exit: it is `Unknown`.
+fn table_state(probe: &mut dyn Probe, id: Identity) -> ProcState {
+    match probe.info(id.pid) {
+        Lookup::Found(info) if info.start == id.start => info.state,
+        Lookup::Found(_) | Lookup::Missing(Miss::Gone) => ProcState::Gone,
+        Lookup::Missing(Miss::Foreign | Miss::Failed) => ProcState::Unknown,
     }
-    Some(Info {
-        ppid: record.pbi_ppid,
-        start: start_micros(record.pbi_start_tvsec, record.pbi_start_tvusec)?,
-        state: status_of(record.pbi_status),
-    })
+}
+
+/// libproc itself.
+#[cfg(target_os = "macos")]
+struct Libproc;
+
+#[cfg(target_os = "macos")]
+impl Probe for Libproc {
+    fn list(&mut self) -> Option<Vec<u32>> {
+        for _ in 0..LIST_ATTEMPTS {
+            // SAFETY: contract 1 and 6: a null buffer with a zero length is the
+            // documented size query; it writes nothing and returns a count.
+            let estimate = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+            let (slots, bytes) = slots_for(estimate)?;
+            let mut pids = vec![0_i32; slots];
+            // SAFETY: contract 1 and 2: `pids` is a live, writable buffer of
+            // exactly `bytes` bytes, 4-byte aligned as an `i32` slice, and the
+            // kernel writes at most `bytes` into it.
+            let returned = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+            match judge_fill(returned, slots) {
+                Fill::Complete(count) => {
+                    return Some(
+                        pids[..count]
+                            .iter()
+                            .filter_map(|pid| u32::try_from(*pid).ok().filter(|pid| *pid > 0))
+                            .collect(),
+                    );
+                }
+                Fill::Again => {}
+                Fill::Failed => return None,
+            }
+        }
+        None
+    }
+
+    fn info(&mut self, pid: u32) -> Lookup {
+        let Some((asked, size)) = i32::try_from(pid)
+            .ok()
+            .zip(i32::try_from(size_of::<libc::proc_bsdinfo>()).ok())
+        else {
+            return Lookup::Missing(Miss::Failed);
+        };
+        let mut record = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+        // SAFETY: contract 1 and 3: `record` is a live, writable, properly
+        // aligned `proc_bsdinfo` of exactly `size` bytes, and the kernel writes
+        // at most `size`.
+        let returned = unsafe {
+            libc::proc_pidinfo(
+                asked,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                record.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        if returned != size {
+            return Lookup::Missing(miss_of(std::io::Error::last_os_error().raw_os_error()));
+        }
+        // SAFETY: contract 3: the call returned the full record size, so every
+        // field was written; the type is plain integers and arrays, for which
+        // the zeroed start state is valid in any case.
+        let record = unsafe { record.assume_init() };
+        decode(
+            pid,
+            record.pbi_pid,
+            record.pbi_ppid,
+            record.pbi_status,
+            record.pbi_start_tvsec,
+            record.pbi_start_tvusec,
+        )
+    }
 }
 
 /// One sweep's table.
@@ -170,37 +274,24 @@ impl MacTable {
 
     /// The pid with the start time that tells it from a later process.
     pub(in crate::transport::stdio) fn identity_of(pid: u32) -> Option<Identity> {
-        Some(Identity {
-            pid,
-            start: info_of(pid)?.start,
-        })
+        match Libproc.info(pid) {
+            Lookup::Found(info) => Some(Identity {
+                pid,
+                start: info.start,
+            }),
+            Lookup::Missing(_) => None,
+        }
     }
 }
 
 #[cfg(target_os = "macos")]
 impl ProcessTable for MacTable {
-    fn read(&mut self) -> Vec<(Identity, u32)> {
-        list_pids()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|pid| {
-                let info = info_of(pid)?;
-                Some((
-                    Identity {
-                        pid,
-                        start: info.start,
-                    },
-                    info.ppid,
-                ))
-            })
-            .collect()
+    fn read(&mut self) -> Listing {
+        table_read(&mut Libproc)
     }
 
     fn state(&mut self, id: Identity) -> ProcState {
-        match info_of(id.pid) {
-            Some(info) if info.start == id.start => info.state,
-            _ => ProcState::Gone,
-        }
+        table_state(&mut Libproc, id)
     }
 
     /// By pid only: there is no handle to hold. The identity is re-read
@@ -211,8 +302,11 @@ impl ProcessTable for MacTable {
             .ok()
             .and_then(Pid::from_raw)
             .ok_or(SignalError::Failed)?;
-        if info_of(id.pid).map(|info| info.start) != Some(id.start) {
-            return Err(SignalError::Mismatch);
+        match Libproc.info(id.pid) {
+            Lookup::Found(info) if info.start == id.start => {}
+            Lookup::Found(_) | Lookup::Missing(Miss::Gone) => return Err(SignalError::Mismatch),
+            Lookup::Missing(Miss::Foreign) => return Err(SignalError::Denied),
+            Lookup::Missing(Miss::Failed) => return Err(SignalError::Failed),
         }
         let signal = match sig {
             Sig::Stop => Signal::STOP,

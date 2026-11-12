@@ -21,7 +21,9 @@ fn identity(child: &Child) -> Identity {
     let pid = child.id();
     Identity {
         pid,
-        start: read_stat(pid).expect("a live child has a stat").start,
+        start: LinuxTable::identity_of(pid)
+            .expect("a live child has a stat")
+            .start,
     }
 }
 
@@ -69,7 +71,7 @@ fn the_table_lists_a_child_under_this_process() {
     let mut child = sleeper();
     let id = identity(&child);
     let me = std::process::id();
-    let rows = LinuxTable::new().read();
+    let rows = LinuxTable::new().read().rows;
     assert!(rows.contains(&(id, me)), "child {id:?} under {me}");
     child.kill().expect("kill");
     child.wait().expect("reap");
@@ -148,7 +150,7 @@ struct Timed {
 }
 
 impl ProcessTable for Timed {
-    fn read(&mut self) -> Vec<(Identity, u32)> {
+    fn read(&mut self) -> Listing {
         self.inner.read()
     }
     fn state(&mut self, id: Identity) -> ProcState {
@@ -209,6 +211,7 @@ fn measure_one(n: usize) {
     let kids = |table: &mut Timed| {
         table
             .read()
+            .rows
             .iter()
             .filter(|(_, ppid)| *ppid == root_id.pid)
             .count()
@@ -244,4 +247,35 @@ fn measure_one(n: usize) {
         "every child and the root are killed"
     );
     root.wait().expect("reap");
+}
+
+#[test]
+fn a_read_error_is_unreadable_never_gone() {
+    use std::io::{Error, ErrorKind};
+    let stat = line("p", 'S');
+    assert!(matches!(lookup_of(Ok(stat)), Lookup::Found(_)));
+    assert_eq!(
+        lookup_of(Err(Error::from(ErrorKind::NotFound))),
+        Lookup::Gone,
+        "no such file is an exit"
+    );
+    assert_eq!(
+        lookup_of(Err(Error::from_raw_os_error(ESRCH))),
+        Lookup::Gone,
+        "a task that exits mid-read"
+    );
+    for err in [
+        Error::from(ErrorKind::PermissionDenied),
+        Error::from_raw_os_error(5), // EIO
+        Error::from(ErrorKind::Interrupted),
+    ] {
+        assert_eq!(lookup_of(Err(err)), Lookup::Unreadable);
+    }
+    assert_eq!(lookup_of(Ok("garbage".to_owned())), Lookup::Unreadable);
+}
+
+#[test]
+fn an_unreadable_identity_is_refused_as_a_failure_not_a_mismatch() {
+    assert_eq!(refusal(&Check::Unreadable), SignalError::Failed);
+    assert_eq!(refusal(&Check::Different), SignalError::Mismatch);
 }

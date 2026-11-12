@@ -313,15 +313,17 @@ impl ChildTree {
             &mut super::sweep::PlatformTable::new(),
             super::sweep::process_budget(),
         );
-        if !report.residual.is_empty() {
+        if !report.residual.is_empty() || report.incomplete_reads > 0 {
             tracing::warn!(
                 backend = self.wrapper.id(),
                 residual = report.residual.len(),
+                unreadable = report.unknown,
+                incomplete_reads = report.incomplete_reads,
                 killed = report.killed.len(),
                 continued = report.continued.len(),
                 passes = report.passes,
                 pids = ?report.residual.iter().map(|who| who.pid).collect::<Vec<_>>(),
-                "descendant sweep left processes it could not confirm gone"
+                "descendant sweep could not confirm every descendant gone (process table errors counted as unreadable)"
             );
         }
     }

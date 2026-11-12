@@ -55,6 +55,10 @@ struct Fake {
     /// Whether the kernel has handles; a sweep without a slot still goes by pid.
     pidfd: bool,
     next_pid: u32,
+    /// Every table reading fails: no rows, flagged incomplete.
+    blind: bool,
+    /// The table cannot read this pid's state (an error, not an exit).
+    unreadable: Option<u32>,
     /// A signal that fails: (pid, signal, error).
     fail: Option<(u32, Sig, SignalError)>,
     /// A by-pid target that is running when its identity is checked exits and its
@@ -84,6 +88,8 @@ impl Fake {
             tick: ms(1),
             pidfd: true,
             next_pid: 1000,
+            blind: false,
+            unreadable: None,
             fail: None,
             reuse_while_running: None,
         }
@@ -153,17 +159,30 @@ impl Fake {
 }
 
 impl ProcessTable for Fake {
-    fn read(&mut self) -> Vec<(Identity, u32)> {
+    fn read(&mut self) -> Listing {
         self.operate();
-        self.procs
-            .iter()
-            .filter(|p| p.state != ProcState::Gone)
-            .map(|p| (p.id, p.ppid))
-            .collect()
+        if self.blind {
+            return Listing {
+                rows: Vec::new(),
+                complete: false,
+            };
+        }
+        Listing {
+            rows: self
+                .procs
+                .iter()
+                .filter(|p| p.state != ProcState::Gone)
+                .map(|p| (p.id, p.ppid))
+                .collect(),
+            complete: true,
+        }
     }
 
     fn state(&mut self, who: Identity) -> ProcState {
         self.operate();
+        if self.unreadable == Some(who.pid) {
+            return ProcState::Unknown;
+        }
         self.procs
             .iter()
             .find(|p| p.id == who)
@@ -566,4 +585,65 @@ fn the_pidfd_limit_is_floored_capped_and_leaves_a_reserve() {
         4096,
         "capped at 4096"
     );
+}
+
+/// A listing that fails is not a listing that says the tree is gone: members
+/// recorded before it are still killed, and the failed reading is counted.
+/// Red if a failed listing prunes the members, or is not reported.
+#[test]
+fn a_failed_listing_does_not_hide_members_from_the_kill() {
+    let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 11)]);
+    let mut sweep = Sweep::new(id(10), cfg());
+    sweep.snapshot(&mut fake);
+    fake.blind = true;
+    let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
+    fake.blind = false;
+    for pid in [10, 11, 12] {
+        assert_eq!(
+            fake.state_of(pid),
+            ProcState::Gone,
+            "pid {pid}: {:?}",
+            fake.log
+        );
+    }
+    assert!(report.killed.contains(&id(12)), "{report:?}");
+    assert!(report.incomplete_reads >= 1, "{report:?}");
+    assert!(fake.stopped().is_empty());
+}
+
+/// A member whose kill failed and whose state cannot be read is not taken for
+/// gone: it is a residual counted as unreadable, though its kill was attempted.
+/// Red if an unreadable state counts as gone (no residual), or goes uncounted.
+#[test]
+fn an_unreadable_member_is_a_residual_counted_as_unknown() {
+    let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 11)]);
+    fake.unreadable = Some(12);
+    fake.fail = Some((12, Sig::Kill, SignalError::Failed));
+    let report = run(&mut fake, 10);
+    assert!(
+        fake.attempted(12).contains(&Sig::Kill),
+        "the kill was attempted"
+    );
+    assert_eq!(report.unknown, 1, "{report:?}");
+    assert!(report.residual.contains(&id(12)), "{report:?}");
+    assert!(
+        !report.residual.contains(&id(11)),
+        "a readable member is confirmed"
+    );
+    // Its pre-stop state was unreadable, so the sweep cannot prove the stop was
+    // its own and does not continue it: it is reported, not resumed blind.
+    assert_eq!(fake.stopped(), vec![12]);
+}
+
+/// A complete listing still prunes: the dead are not signalled.
+/// Red if completeness is ignored and nothing is ever pruned.
+#[test]
+fn a_complete_listing_still_prunes_the_dead() {
+    let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 11)]);
+    let mut sweep = Sweep::new(id(10), cfg());
+    sweep.snapshot(&mut fake);
+    fake.proc(12).state = ProcState::Gone;
+    let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
+    assert!(fake.attempted(12).is_empty(), "{:?}", fake.attempts);
+    assert_eq!(report.incomplete_reads, 0);
 }

@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use rustix::process::{Pid, PidfdFlags, Signal, kill_process, pidfd_open, pidfd_send_signal};
 
-use super::{Handle, Identity, ProcState, ProcessTable, Sig, SignalError};
+use super::{Handle, Identity, Listing, ProcState, ProcessTable, Sig, SignalError};
 
 /// What `/proc/<pid>/stat` says about a process.
 #[derive(Debug, PartialEq, Eq)]
@@ -46,8 +46,55 @@ fn parse_stat(text: &str) -> Option<Stat> {
     })
 }
 
-fn read_stat(pid: u32) -> Option<Stat> {
-    parse_stat(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+/// What one `stat` read told: the process, its absence, or a failure that says
+/// nothing about whether it exists. Only the first two may be believed.
+#[derive(Debug, PartialEq, Eq)]
+enum Lookup {
+    Found(Stat),
+    /// The process does not exist (no such file, or it exited mid-read).
+    Gone,
+    /// Any other error, or text that does not parse: not "gone".
+    Unreadable,
+}
+
+/// `ESRCH`: reading a task's `/proc` file as it exits fails with this.
+const ESRCH: i32 = 3;
+
+fn lookup_of(read: std::io::Result<String>) -> Lookup {
+    match read {
+        Ok(text) => parse_stat(&text).map_or(Lookup::Unreadable, Lookup::Found),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Lookup::Gone,
+        Err(err) if err.raw_os_error() == Some(ESRCH) => Lookup::Gone,
+        Err(_) => Lookup::Unreadable,
+    }
+}
+
+fn read_stat(pid: u32) -> Lookup {
+    lookup_of(std::fs::read_to_string(format!("/proc/{pid}/stat")))
+}
+
+/// Whether `id` still names the process it was taken from.
+#[derive(Debug, PartialEq, Eq)]
+enum Check {
+    Same,
+    /// Gone, or the pid now belongs to a process with another start time.
+    Different,
+    Unreadable,
+}
+
+fn check(id: Identity) -> Check {
+    match read_stat(id.pid) {
+        Lookup::Found(stat) if stat.start == id.start => Check::Same,
+        Lookup::Found(_) | Lookup::Gone => Check::Different,
+        Lookup::Unreadable => Check::Unreadable,
+    }
+}
+
+fn refusal(check: &Check) -> SignalError {
+    match check {
+        Check::Unreadable => SignalError::Failed,
+        _ => SignalError::Mismatch,
+    }
 }
 
 fn signal_of(sig: Sig) -> Signal {
@@ -86,10 +133,13 @@ impl LinuxTable {
 
     /// The pid with the start time that tells it from a later process.
     pub(in crate::transport::stdio) fn identity_of(pid: u32) -> Option<Identity> {
-        Some(Identity {
-            pid,
-            start: read_stat(pid)?.start,
-        })
+        match read_stat(pid) {
+            Lookup::Found(stat) => Some(Identity {
+                pid,
+                start: stat.start,
+            }),
+            _ => None,
+        }
     }
 
     /// The descriptor for `id`, opened first and checked second; `None` when the
@@ -105,8 +155,9 @@ impl LinuxTable {
                 let Ok(fd) = pidfd_open(pid, PidfdFlags::empty()) else {
                     return Ok(None);
                 };
-                if read_stat(id.pid).map(|s| s.start) != Some(id.start) {
-                    return Err(SignalError::Mismatch);
+                match check(id) {
+                    Check::Same => {}
+                    other => return Err(refusal(&other)),
                 }
                 slot.insert(fd)
             }
@@ -116,28 +167,50 @@ impl LinuxTable {
 }
 
 impl ProcessTable for LinuxTable {
-    fn read(&mut self) -> Vec<(Identity, u32)> {
+    fn read(&mut self) -> Listing {
         let Ok(dir) = std::fs::read_dir("/proc") else {
-            return Vec::new();
+            return Listing {
+                rows: Vec::new(),
+                complete: false,
+            };
         };
-        dir.filter_map(|entry| {
-            let pid: u32 = entry.ok()?.file_name().to_str()?.parse().ok()?;
-            let stat = read_stat(pid)?;
-            Some((
-                Identity {
-                    pid,
-                    start: stat.start,
-                },
-                stat.ppid,
-            ))
-        })
-        .collect()
+        let mut listing = Listing {
+            rows: Vec::new(),
+            complete: true,
+        };
+        for entry in dir {
+            let Ok(entry) = entry else {
+                listing.complete = false;
+                continue;
+            };
+            // Non-numeric names (`self`, `sys`, ...) are not processes.
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            match read_stat(pid) {
+                Lookup::Found(stat) => listing.rows.push((
+                    Identity {
+                        pid,
+                        start: stat.start,
+                    },
+                    stat.ppid,
+                )),
+                Lookup::Gone => {}
+                Lookup::Unreadable => listing.complete = false,
+            }
+        }
+        listing
     }
 
     fn state(&mut self, id: Identity) -> ProcState {
         match read_stat(id.pid) {
-            Some(stat) if stat.start == id.start => stat.state,
-            _ => ProcState::Gone,
+            Lookup::Found(stat) if stat.start == id.start => stat.state,
+            Lookup::Found(_) | Lookup::Gone => ProcState::Gone,
+            Lookup::Unreadable => ProcState::Unknown,
         }
     }
 
@@ -149,8 +222,9 @@ impl ProcessTable for LinuxTable {
                 .map_err(denied);
         }
         let pid = pid_of(id).ok_or(SignalError::Failed)?;
-        if read_stat(id.pid).map(|s| s.start) != Some(id.start) {
-            return Err(SignalError::Mismatch);
+        match check(id) {
+            Check::Same => {}
+            other => return Err(refusal(&other)),
         }
         kill_process(pid, signal)
             .map(|()| Handle::ByPid)
