@@ -736,6 +736,14 @@ mod plan_tests {
             eof * 2 >= waits,
             "the EOF wait at the minimum is {eof:?}, under half of {waits:?}"
         );
+        // The numbers the upgrade note tells operators: a change here is a change
+        // to that note, so the split is pinned exactly.
+        assert_eq!(eof, Duration::from_millis(1_900), "EOF wait at the minimum");
+        assert_eq!(
+            waits - eof,
+            NESTED_TERM_NEED,
+            "SIGTERM wait at the minimum is the nested need (1.5 s)"
+        );
     }
 
     /// The floor is met whenever the waits can afford it, leaving EOF at least the
