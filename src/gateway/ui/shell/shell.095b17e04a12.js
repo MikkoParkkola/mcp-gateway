@@ -34,8 +34,6 @@ const pages = new Map();
  * presentation: the server's guards stay the authority for every route.
  */
 let access = { kind: 'unknown', pages: new Map() };
-/** Counts the resets (sign-out, a 401): a status answer that started before one is dropped. */
-let accessResets = 0;
 
 const ALL_ACCESS = () => ({ kind: 'all', pages: new Map() });
 
@@ -1509,7 +1507,6 @@ let countSeq = 0;
  */
 export async function refreshCounts() {
   const epoch = authEpoch;
-  const resets = accessResets; // a session that ended since this read began (a 401) owns no count
   const seq = ++countSeq;
   let next = null;
   try {
@@ -1520,7 +1517,7 @@ export async function refreshCounts() {
     // To do queue, so a missing route is now a failure like any other.
     next = 'unavailable';
   }
-  if (epoch !== authEpoch || resets !== accessResets || seq !== countSeq) return; // a newer read, or another identity, owns the badge now
+  if (epoch !== authEpoch || seq !== countSeq) return; // a newer read, or another identity, owns the badge now
   DECISIONS.count = next;
   drawNav(parse(location.pathname).page);
   if (COUNT_SEEN.epoch !== epoch) {
@@ -1734,7 +1731,6 @@ function commitAccess(next) {
 /** Read who is signed in; when auth is on and nobody is, ask for sign-in. */
 async function loadWho() {
   const epoch = authEpoch;
-  const resets = accessResets;
   try {
     // A status that accepts the connection and never answers must not hold every screen.
     const body = await api('/ui/api/status', { signal: AbortSignal.timeout(KEY_CHECK_MS) });
@@ -1745,8 +1741,7 @@ async function loadWho() {
       return false;
     }
     showWho(auth);
-    // A sign-out or a 401 since this read began means its report is no longer this session's.
-    if (resets === accessResets) commitAccess(accessFrom(body?.access));
+    commitAccess(accessFrom(body?.access));
     return true;
   } catch {
     return false; // a 401 already shows sign-in; other failures show in the page states
@@ -1849,14 +1844,14 @@ function markKey(refused) {
 
 async function signOut() {
   bearer = null;
-  const epoch = ++authEpoch;
-  // The identity changed with no re-render: a load still running can no longer clear this itself.
+  // The identity changes with no re-render: showSignIn below advances the epoch, so a load still running can no longer clear this itself.
   document.getElementById('content').removeAttribute('aria-busy');
   showWho(null);
   // Its own status line, apart from the key check's error: a key typed while
   // the logout is pending must not hide this, nor this overwrite its answer.
   const notice = document.querySelector('.signin-notice');
   showSignIn();
+  const epoch = authEpoch;
   signinMessage(notice, 'Ending the session on the gateway…', { subject: 'signin-session' });
   let ended = false;
   try {
@@ -1888,7 +1883,8 @@ async function signOut() {
  * storage, a cookie or the URL), so a reload asks for it again.
  */
 function showSignIn() {
-  accessResets++;
+  // Every session end goes through here: reads of the session that ended are dropped by the epoch.
+  authEpoch++;
   // The count belongs to the identity that is leaving: the next one starts with none.
   const hadCount = DECISIONS.count !== null;
   DECISIONS.count = null;
