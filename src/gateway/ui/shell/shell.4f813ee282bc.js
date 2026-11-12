@@ -1988,7 +1988,6 @@ async function signIn(ev) {
   notice.hidden = true;
   notice.textContent = '';
   authEpoch++;
-  DECISIONS.count = null; // a count read for another identity is never this one's; its own read fills it
   access = accessFrom(body?.access); // this identity's own answer, committed before render() below
   input.value = '';
   document.getElementById('signin').hidden = true;
