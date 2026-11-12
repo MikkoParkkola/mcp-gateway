@@ -211,3 +211,93 @@ async fn an_unreachable_gateway_is_an_error() {
     drop(listener);
     assert!(ask(&base).await.is_err());
 }
+
+/// MIK-9456.CLI.3: a redirect is not followed (the next hop was not checked
+/// and would carry the bearer), so a 307 is an error and the hop is never hit.
+/// Mutant: follow redirects.
+#[tokio::test]
+async fn a_redirect_is_not_followed() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let hits = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&hits);
+    let hop = axum::Router::new().fallback(move || {
+        let seen = Arc::clone(&seen);
+        async move {
+            seen.fetch_add(1, Ordering::SeqCst);
+            axum::Json(json!({"rows": []}))
+        }
+    });
+    let hop_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let hop_url = format!("http://{}/x", hop_listener.local_addr().expect("addr"));
+    tokio::spawn(async move { axum::serve(hop_listener, hop).await });
+    let redirector = axum::Router::new().fallback(move || {
+        let to = hop_url.clone();
+        async move {
+            (
+                axum::http::StatusCode::TEMPORARY_REDIRECT,
+                [(axum::http::header::LOCATION, to)],
+            )
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("addr"));
+    tokio::spawn(async move { axum::serve(listener, redirector).await });
+    assert!(ask(&base).await.is_err());
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "the redirect target was reached"
+    );
+}
+
+/// MIK-9456.CLI.3: the credential is never sent in cleartext to a non-loopback
+/// host: refused before any connection.
+/// Mutant: skip the target check.
+#[tokio::test]
+async fn a_cleartext_non_loopback_target_is_refused() {
+    let message = ask("http://10.255.255.1:9").await.expect_err("refused");
+    assert!(message.contains("cleartext"), "{message}");
+}
+
+/// MIK-9456.CLI.3: the command writes no file (no request history, no
+/// cache) and offers no key or file shortcut: its source holds no file
+/// creation or write call, and its only read is stdin.
+/// Mutant: write a history file, or read the email from a file.
+#[test]
+fn the_command_writes_no_file_and_reads_no_key_file() {
+    let source = include_str!("audit_lookup.rs");
+    for banned in [
+        "File::create",
+        "fs::write",
+        "OpenOptions",
+        "create_dir",
+        "read_to_string(",
+        "fs::read",
+        "dirs::",
+        "home_dir",
+    ] {
+        assert!(!source.contains(banned), "the command uses {banned}");
+    }
+}
+
+/// MIK-9456.CLI.4: the help names the stdin flag and the credential's
+/// environment variable, and never offers `--email VALUE`.
+/// Mutant: drop the flag's docs.
+#[test]
+fn the_help_names_stdin_and_the_credential() {
+    use clap::CommandFactory as _;
+    let mut root = Cli::command();
+    let audit = root.find_subcommand_mut("audit").expect("audit");
+    let lookup = audit
+        .find_subcommand_mut("lookup-email")
+        .expect("lookup-email");
+    let help = lookup.render_long_help().to_string();
+    assert!(help.contains("--email-stdin"), "{help}");
+    assert!(!help.contains("--email <"), "{help}");
+    assert!(!help.contains("--email "), "no bare --email option: {help}");
+}
