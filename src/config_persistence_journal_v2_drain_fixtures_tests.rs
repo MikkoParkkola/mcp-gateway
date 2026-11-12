@@ -164,13 +164,7 @@ impl Live {
         let path = resolved.join("gateway.yaml");
         replace_bytes(&path, OLD);
         let log_path = audit.join("audit.jsonl");
-        let config = Arc::new(TransparencyLogConfig {
-            enabled: true,
-            path: log_path.to_string_lossy().into_owned(),
-            key_id: "s6a2-fixture".into(),
-            rotation,
-            ..Default::default()
-        });
+        let config = audit_config(&log_path, rotation);
         let log = Arc::new(TransparencyLogger::open(Arc::clone(&config)).expect("fixture log"));
         log.keep_test_dir(Arc::clone(&dir));
         Self {
@@ -260,6 +254,29 @@ impl Live {
         assert!(verdict.is_ok(), "{row}: reader must return a verdict");
         assert!(verdict.expect(row).ok, "{row}: verified chain and pairing");
     }
+}
+
+/// The one audit-log configuration every fixture and child process uses.
+fn audit_config(log_path: &Path, rotation: RotationConfig) -> Arc<TransparencyLogConfig> {
+    Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: log_path.to_string_lossy().into_owned(),
+        key_id: "s6a2-fixture".into(),
+        rotation,
+        ..Default::default()
+    })
+}
+
+#[cfg(unix)]
+/// A child process's audit log, in the `audit` directory beside its config
+/// directory. The parent test keeps that directory alive for the child's life.
+pub(super) fn open_child_log(config_dir: &Path, row: &str) -> Arc<TransparencyLogger> {
+    let log_path = config_dir
+        .parent()
+        .expect("fixture root")
+        .join("audit/audit.jsonl");
+    let config = audit_config(&log_path, RotationConfig::default());
+    Arc::new(TransparencyLogger::open(config).expect(row))
 }
 
 pub(super) fn records_at(path: &Path) -> Vec<Value> {

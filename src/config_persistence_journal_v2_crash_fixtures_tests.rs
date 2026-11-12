@@ -18,7 +18,7 @@ use super::fixtures::{
     staged, state, state_of, terminal_count,
 };
 #[cfg(unix)]
-use super::fixtures::{payload, records_at};
+use super::fixtures::{open_child_log, payload, records_at};
 use crate::config_persistence::commit::{Action, FileRevision, SyncKey};
 use crate::config_persistence::crash_fs::{self, Mode};
 use crate::config_persistence::journal::{self, fault as a_fault};
@@ -26,9 +26,7 @@ use crate::config_persistence::journal::{self, fault as a_fault};
 use crate::security::transparency_log::rotation::WriteFault;
 use crate::security::transparency_log::settle::{Reason, Role};
 #[cfg(unix)]
-use crate::security::transparency_log::{
-    TransparencyLogConfig, TransparencyLogger, VerifyMode, verify_audit_log,
-};
+use crate::security::transparency_log::{VerifyMode, verify_audit_log};
 
 pub(super) const ATTEMPT_OUTCOME: &[u8] =
     br#"{"intent_counter":4,"kind":"settle.recovery","reason":"rolled_back","result":"written"}"#;
@@ -185,19 +183,7 @@ pub(super) fn child(row: &str, at: At) -> bool {
     let directory = std::path::PathBuf::from(directory);
     let path = directory.join("gateway.yaml");
     let owner = reopen(acquire(&path));
-    let config = Arc::new(TransparencyLogConfig {
-        enabled: true,
-        path: directory
-            .parent()
-            .expect("fixture root")
-            .join("audit/audit.jsonl")
-            .to_string_lossy()
-            .into_owned(),
-        key_id: "s6a2-fixture".into(),
-        ..Default::default()
-    });
-    // This directory belongs to the parent process, which outlives this child.
-    let log = Arc::new(TransparencyLogger::open(config).expect(row));
+    let log = open_child_log(&directory, row);
     let recover = std::env::var_os("S6A2_RECOVER").is_some();
     let overlay = crash_fs::arm_config(&path);
     let watch = observe::watch(&path);
