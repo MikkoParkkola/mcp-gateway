@@ -245,7 +245,11 @@ test.describe('access', () => {
     const state = { admin: false, access: access(), gate: KEY };
     if (how === 'expired') {
       await withFixturePages(page, { probes: true });
-      await page.route('**/ui/api/forbidden-probe', (r) => r.fulfill({ status: 401, json: {} }));
+      // Only the first key's read is refused: key B, signing in on the same address, reads it fine.
+      await page.route('**/ui/api/forbidden-probe', (r) => (
+        (r.request().headers().authorization ?? '') === `Bearer ${KEY}`
+          ? r.fulfill({ status: 401, json: {} })
+          : r.fulfill({ json: {} })));
     }
     await serve(page, state);
     let releaseA;
