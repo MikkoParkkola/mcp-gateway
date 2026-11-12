@@ -433,6 +433,7 @@ pub fn mint_step_resume(
         purpose: ContinuationPurpose::BackendInput,
         next_step: None,
         rounds_used: 0,
+        lookup_scope: None,
         hold_key: plan.hold_key.clone(),
         expires_at: plan.expires_at,
         issued_at: now,

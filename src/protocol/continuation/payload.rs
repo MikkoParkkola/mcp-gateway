@@ -33,7 +33,17 @@ pub enum ContinuationPurpose {
     /// added. It continues no backend exchange and holds nothing:
     /// the second request carries the same body and this token, single use.
     PreviewConfirm,
+    /// Carries one admin email lookup from a page to the next: the keyed hash
+    /// and window of the search, sealed, so the next page needs no email. It
+    /// continues no exchange and holds nothing; its single use is the
+    /// ledger's job.
+    LookupPage,
 }
+
+/// The request digest every lookup page carries: a domain label, not a hash
+/// of anything. A page binds to a principal and a purpose, and its scope is
+/// sealed inside.
+const LOOKUP_PAGE_DIGEST: &str = "lookup-email-page/v1";
 
 /// Lifetime of a preview confirmation: long enough to read what will run and
 /// press the button, short enough that a stale one is useless.
@@ -104,6 +114,13 @@ pub struct Payload {
     /// continuation sequence at a single step.
     #[serde(default)]
     pub rounds_used: u32,
+    /// The scope of one email lookup, as JSON, for a [`ContinuationPurpose::LookupPage`].
+    ///
+    /// Sealed like everything else here: it holds the keyed hash of an email,
+    /// which the client must never read. Absent on every envelope that is not
+    /// a lookup page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lookup_scope: Option<String>,
 }
 
 impl std::fmt::Debug for Payload {
@@ -125,6 +142,8 @@ impl std::fmt::Debug for Payload {
             // anything, and both are what a stalled chain is traced by.
             .field("next_step", &self.next_step)
             .field("rounds_used", &self.rounds_used)
+            // The keyed hash of a person's email: never in a log.
+            .field("lookup_scope", &self.lookup_scope.as_ref().map(|_| "<redacted>"))
             .finish()
     }
 }
@@ -221,6 +240,7 @@ impl Payload {
             hold_key,
             next_step: None,
             rounds_used: 0,
+            lookup_scope: None,
         }
     }
 
@@ -284,6 +304,43 @@ impl Payload {
         .with_purpose(ContinuationPurpose::PreviewConfirm);
         payload.expires_at = now.saturating_add(PREVIEW_CONFIRM_LIFETIME_SECS);
         payload
+    }
+
+    /// Seal one lookup page for `principal_fingerprint`, valid for
+    /// [`CONTINUATION_LIFETIME_SECS`] from `now`.
+    ///
+    /// `lookup_scope` is the lookup's own JSON. No backend, no replica, no
+    /// hold; the request digest is a fixed domain label, because the scope is
+    /// itself sealed and the principal is what the redemption checks.
+    #[must_use]
+    pub fn mint_lookup(principal_fingerprint: String, lookup_scope: String, now: u64) -> Self {
+        let mut payload = Self::mint(
+            String::new(),
+            None,
+            principal_fingerprint,
+            LOOKUP_PAGE_DIGEST.to_owned(),
+            String::new(),
+            String::new(),
+            now,
+        )
+        .with_purpose(ContinuationPurpose::LookupPage);
+        payload.lookup_scope = Some(lookup_scope);
+        payload
+    }
+
+    /// The sealed lookup scope, for the one principal this page was minted for
+    /// and only when this is a [`ContinuationPurpose::LookupPage`].
+    ///
+    /// # Errors
+    ///
+    /// [`ContinuationError::NotAuthentic`] for another purpose, another
+    /// principal, or a page that carries no scope: one answer for all three.
+    pub fn lookup_scope_for(&self, principal_fingerprint: &str) -> Result<&str, ContinuationError> {
+        self.require_purpose(ContinuationPurpose::LookupPage)?;
+        self.redeemable_by(principal_fingerprint, LOOKUP_PAGE_DIGEST)?;
+        self.lookup_scope
+            .as_deref()
+            .ok_or(ContinuationError::NotAuthentic)
     }
 
     /// Refuse a payload whose domain is not `expected`.
