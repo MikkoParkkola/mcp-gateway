@@ -254,6 +254,31 @@ async fn a_cli_keys_dashboard_session_cannot_create_a_key() {
 
 #[cfg(feature = "webui")]
 #[tokio::test]
+async fn a_cli_keys_dashboard_session_cannot_mint_a_link_or_a_handoff() {
+    use super::e5_dashboard_session_tests::link::{bootstrap_value, mint, session_handle};
+    use super::e5_dashboard_session_tests::{redeem, send};
+    let (state, _store, _dir, _keys) = fixture().await;
+    let minted = mint(&state, Some(CHILD), None).await;
+    assert_eq!(minted.status, StatusCode::OK, "{}", minted.body);
+    let value = bootstrap_value(minted.json()["link"].as_str().expect("link"));
+    let out = send(&state, redeem(&value, None)).await;
+    assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
+    let handle = session_handle(&out);
+    assert_eq!(state.dashboard_bootstrap.peek(), None, "the link is spent");
+
+    // The cookie alone must not renew access through a fresh link.
+    // Handoffs start with this same link; /dashboard/handoff only redeems codes.
+    let out = mint(&state, None, Some(&handle)).await;
+    assert_eq!(out.status, StatusCode::FORBIDDEN, "{}", out.body);
+    assert_eq!(
+        state.dashboard_bootstrap.peek(),
+        None,
+        "a refused session mint must not leave an outstanding link"
+    );
+}
+
+#[cfg(feature = "webui")]
+#[tokio::test]
 async fn a_link_minted_by_the_child_is_refused_after_root_removal() {
     use super::e5_dashboard_session_tests::link::{bootstrap_value, mint};
     use super::e5_dashboard_session_tests::{redeem, send};

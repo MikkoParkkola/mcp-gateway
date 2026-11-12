@@ -278,6 +278,13 @@ impl ResolvedAuthConfig {
     /// table carries an approver binding and has that quota principal. Display
     /// names can collide or change, so a restriction on CLI keys is judged by
     /// this identity, never by a key's name.
+    ///
+    /// Matching by quota principal is exact because no two credentials can share
+    /// one: `validate_distinct_principals` refuses it at load and at reload.
+    /// Rows in `config_reload/principal_collision_tests.rs` pin that:
+    /// `two_keys_sharing_a_principal_fail_to_load`,
+    /// `a_reload_that_introduces_a_shared_principal_is_refused` and
+    /// `a_cli_key_sharing_a_principal_with_an_ordinary_key_fails_to_load`.
     #[cfg(feature = "webui")]
     pub(crate) fn is_cli_key_quota(&self, quota: &QuotaPrincipal) -> bool {
         self.api_keys()
