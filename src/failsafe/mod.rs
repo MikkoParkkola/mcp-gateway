@@ -14,8 +14,6 @@ pub use circuit_breaker::{
 #[cfg(feature = "webui")]
 pub(crate) use health::Slow;
 pub use health::{HealthMetrics, HealthTracker};
-use rate_limiter::Acquire;
-#[cfg(feature = "webui")]
 pub(crate) use rate_limiter::Acquire;
 pub use rate_limiter::RateLimiter;
 pub(crate) use retry::with_retry_unless;
