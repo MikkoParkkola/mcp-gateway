@@ -24,6 +24,9 @@ const PROTOCOL_VERSION: &str = "2025-11-25";
 const READY_BOUND: Duration = Duration::from_secs(60);
 /// How long a gateway's stop may take before its leaves must be gone: above the 30 s parent timeout, with slack for a loaded host.
 const STOP_BOUND: Duration = Duration::from_secs(45);
+/// The smallest `server.shutdown_timeout` an HTTP gateway accepts. A start below it
+/// is refused, so a row that starts a gateway with it also proves it is accepted.
+const HTTP_MINIMUM: Duration = Duration::from_millis(12_500);
 /// How long a stdio gateway sent SIGTERM with stdin still open may take to exit. Its worst case is
 /// the 30 s drain, the 10 s teardown bound and the 10 s serve-runtime shutdown bound (the blocked
 /// stdin reader keeps the runtime waiting until that bound), 50 s in all, plus slack for a loaded
@@ -101,13 +104,13 @@ fn write_inner_config(root: &Path, leaves: &[&str], inner_stop: Duration) -> Pat
     }
     save(root, "inner.yaml", &config)
 }
-fn write_outer_config(root: &Path, inner: &Path, seconds: u64) -> PathBuf {
+fn write_outer_config(root: &Path, inner: &Path, total: Duration) -> PathBuf {
     // Record the inner before exec so cleanup also covers failure during warm start.
     std::fs::write(root.join("inner.py"), "import os, sys\nwith open('inner.pid', 'w') as f: f.write(str(os.getpid()))\nos.execv(sys.argv[1], sys.argv[1:])\n").expect("launcher");
     let mut config = base_config(root, "outer");
     config.server.host = "127.0.0.1".into();
     config.server.port = gateway_bin::ANY_PORT;
-    config.server.shutdown_timeout = Duration::from_secs(seconds);
+    config.server.shutdown_timeout = total;
     let mut inner_backend = backend(
         root,
         format!(
@@ -269,12 +272,12 @@ fn alive_pids(pids: &[u32]) -> Vec<u32> {
         .collect()
 }
 
-async fn run(seconds: u64, inner_stop: Duration, leaves: &[&str]) {
+async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path().to_path_buf();
     let root = root.as_path();
     let inner = write_inner_config(root, leaves, inner_stop);
-    let config = write_outer_config(root, &inner, seconds);
+    let config = write_outer_config(root, &inner, total);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
     let mut command = tokio::process::Command::from(gateway_bin::command(
         &root.join("home"),
@@ -369,30 +372,30 @@ async fn run(seconds: u64, inner_stop: Duration, leaves: &[&str]) {
     drop(stdin);
 }
 
-/// A busy inner stops its leaf within the 12 s parent budget plus slack.
+/// A busy inner stops its leaf within the minimum parent budget plus slack.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
-    run(12, Duration::from_secs(8), &["leaf"]).await;
+    run(HTTP_MINIMUM, Duration::from_secs(8), &["leaf"]).await;
 }
 /// The same ownership claim holds with a 30 s parent budget.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it_30s() {
-    run(30, Duration::from_secs(8), &["leaf"]).await;
+    run(Duration::from_secs(30), Duration::from_secs(8), &["leaf"]).await;
 }
-/// Both busy leaves stop within one 12 s parent budget plus 15 s slack.
+/// Both busy leaves stop within one minimum parent budget plus 15 s slack.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_two_leaves_within_one_deadline() {
-    run(12, Duration::from_secs(8), &["leaf_a", "leaf_b"]).await;
+    run(HTTP_MINIMUM, Duration::from_secs(8), &["leaf_a", "leaf_b"]).await;
 }
 
 /// A nested gateway whose own stop outlasts its parent's plan leaves no leaf or grandchild alive.
 /// Red if a stopping stdio gateway ignores its parent's SIGTERM and lets its leaves' waits run past its own kill.
 #[tokio::test]
 async fn a_nested_gateway_whose_own_stop_outlasts_its_parents_plan_leaves_no_leaf() {
-    run(12, Duration::from_secs(30), &["leaf_a", "leaf_b"]).await;
+    run(HTTP_MINIMUM, Duration::from_secs(30), &["leaf_a", "leaf_b"]).await;
 }
 
 /// Each nested hurry must fit its parent's remaining kill window, rather than

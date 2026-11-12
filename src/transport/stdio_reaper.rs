@@ -720,30 +720,27 @@ mod plan_tests {
         assert_eq!(eof + term, waits, "the split spends exactly the waits");
     }
 
-    /// The floor takes from the EOF wait, so the EOF wait at the 12 s minimum
-    /// (3.4 s of waits, with the listener having used its whole grace) keeps a
-    /// stated share: at least half the waits, so a backend that saves on EOF
-    /// keeps most of the window.
-    /// Red if the SIGTERM floor or a growing reap constant erodes the EOF wait.
+    /// The SIGTERM floor takes from the EOF wait, so the minimum total carries a
+    /// window big enough that the EOF wait is no shorter than it was before the
+    /// floor: a third-split of the previous 3.4 s window gave 2.27 s. At the
+    /// minimum's window (3.9 s) EOF is 2.4 s and SIGTERM is the nested need; these
+    /// are the numbers the upgrade note gives operators, so they are pinned exactly.
+    /// Red if the floor or a growing reap constant erodes the EOF wait.
     #[cfg(unix)]
     #[test]
-    fn the_eof_wait_at_the_minimum_keeps_at_least_half_the_waits() {
-        let waits = Duration::from_millis(3_400);
-        let Ending::Graceful { eof, .. } = graceful_ending(KILL_RESERVE + waits, true, None) else {
+    fn the_eof_wait_at_the_minimum_is_no_shorter_than_before_the_floor() {
+        let before = Duration::from_millis(3_400) * 2 / 3;
+        let waits = Duration::from_millis(3_900);
+        let Ending::Graceful { eof, term } = graceful_ending(KILL_RESERVE + waits, true, None)
+        else {
             panic!("waits above the minimum phase give a graceful ending");
         };
         assert!(
-            eof * 2 >= waits,
-            "the EOF wait at the minimum is {eof:?}, under half of {waits:?}"
+            eof >= before,
+            "EOF wait {eof:?} is under the old {before:?}"
         );
-        // The numbers the upgrade note tells operators: a change here is a change
-        // to that note, so the split is pinned exactly.
-        assert_eq!(eof, Duration::from_millis(1_900), "EOF wait at the minimum");
-        assert_eq!(
-            waits - eof,
-            NESTED_TERM_NEED,
-            "SIGTERM wait at the minimum is the nested need (1.5 s)"
-        );
+        assert_eq!(eof, Duration::from_millis(2_400), "EOF wait at the minimum");
+        assert_eq!(term, NESTED_TERM_NEED, "SIGTERM wait is the nested need");
     }
 
     /// The floor is met whenever the waits can afford it, leaving EOF at least the
