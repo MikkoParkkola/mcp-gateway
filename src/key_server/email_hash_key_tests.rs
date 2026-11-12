@@ -3,7 +3,7 @@
 //! The key's construction check and the subject hash: rows that need the key.
 
 use super::super::check_runs;
-use super::{EmailHashKey, KEY2_HEX, KEY_HEX, KeyTextError};
+use super::{EmailHashKey, KEY_HEX, KEY2_HEX, KeyTextError};
 
 /// NORM.3: building a key runs the normalization check, once per process: every
 /// construction path goes through `from_hex`, so no caller can hash on a build

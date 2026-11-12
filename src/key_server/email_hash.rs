@@ -144,7 +144,9 @@ static CHECK_STATE: std::sync::Mutex<(bool, usize)> = std::sync::Mutex::new((fal
 /// stuck in a process-wide cell.
 fn process_check() -> Result<(), String> {
     // A poisoned lock still holds a valid (passed, runs) pair.
-    let mut state = CHECK_STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut state = CHECK_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if state.0 {
         return Ok(());
     }
@@ -157,7 +159,10 @@ fn process_check() -> Result<(), String> {
 /// How many times the real check has run in this process (rows read it).
 #[cfg(test)]
 pub(crate) fn check_runs() -> usize {
-    CHECK_STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).1
+    CHECK_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .1
 }
 
 /// [`self_check_with`] on the real normalization.
