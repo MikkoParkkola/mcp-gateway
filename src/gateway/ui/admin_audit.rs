@@ -54,6 +54,27 @@ pub(super) fn attach_selection(
     response.extensions_mut().insert(AuditDetail(detail));
 }
 
+/// Record an email lookup on its own `admin_action` record: the operation, a
+/// fixed outcome, and counts. Never the email, the hash or the cursor.
+pub(super) fn attach_lookup(
+    response: &mut Response,
+    outcome: &'static str,
+    results: usize,
+    scanned: u64,
+) {
+    let mut detail = serde_json::Map::new();
+    detail.insert(
+        "lookup".into(),
+        serde_json::json!({
+            "operation": "lookup_email",
+            "outcome": outcome,
+            "results": results,
+            "bytes_scanned": scanned,
+        }),
+    );
+    response.extensions_mut().insert(AuditDetail(detail));
+}
+
 /// [`super::api_router`] with the layer on every route in it (E1-f).
 pub fn audited_api_router(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     super::api_router().route_layer(axum::middleware::from_fn_with_state(

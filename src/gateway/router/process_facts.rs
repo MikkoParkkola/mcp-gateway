@@ -74,6 +74,9 @@ pub struct ProcessFacts {
     /// process in production and once per state in a test, so one test's reads
     /// never hold another's slots.
     activity_reads: Arc<tokio::sync::Semaphore>,
+    /// The one budget every admin email lookup is charged to, in any session.
+    #[cfg(feature = "webui")]
+    lookup_budget: super::LookupBudget,
 }
 
 /// The most Activity reads (list, receipt, export, live-stream pages) running
@@ -94,7 +97,15 @@ impl ProcessFacts {
             host_name: resolve_host_name(),
             refused_at_start: OnceLock::new(),
             activity_reads: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_READS)),
+            #[cfg(feature = "webui")]
+            lookup_budget: super::LookupBudget::new(),
         }
+    }
+
+    /// The process-wide budget of the admin email lookup.
+    #[cfg(feature = "webui")]
+    pub(crate) fn lookup_budget(&self) -> &super::LookupBudget {
+        &self.lookup_budget
     }
 
     /// The read slots Activity reads take, [`MAX_CONCURRENT_READS`] of them.
