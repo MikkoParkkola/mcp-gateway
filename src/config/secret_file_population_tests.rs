@@ -63,10 +63,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "doctor reads /proc/swaps and /sys/block/dm-*/dm/uuid; kernel tables, no secret",
     ),
     (
-        "src/commands/doctor.rs",
-        "doctor reads the operator-named config text once to name where auth.bearer_token lives (a reference, or `legacy literal in config`); the value is never printed, and the config itself is loaded through the guarded loader first",
-    ),
-    (
         "src/commands/config_export/mod.rs",
         "third-party MCP client config JSON edited to add the gateway entry; no gateway secret",
     ),

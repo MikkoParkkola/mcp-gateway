@@ -202,13 +202,13 @@ pub async fn run_doctor_command(
     let (config_result, config) = check_config(config_path, fix);
     results.push(config_result);
 
-    if let Some(written) = resolve_config_path(config_path)
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| crate::yaml::from_str::<crate::yaml::Value>(&text).ok())
-    {
-        let shown = mcp_gateway::config::secret_slot(
-            written["auth"]["bearer_token"].as_str().unwrap_or(""),
-        );
+    // References are shown as written, from a literal load through the guarded
+    // reader; the evaluated `config` holds their values.
+    let literal = resolve_config_path(config_path)
+        .and_then(|path| mcp_gateway::config::Config::load_literal(Some(&path)).ok());
+    if let Some(written) = &literal {
+        let shown =
+            mcp_gateway::config::secret_slot(written.auth.bearer_token.as_deref().unwrap_or(""));
         let detail = if shown == "<set>" {
             "legacy literal in config"
         } else {
@@ -232,10 +232,6 @@ pub async fn run_doctor_command(
     results.extend(check_port_and_gateway_runtime(&config).await);
 
     // ── 3. Backend env vars ────────────────────────────────────────────────
-    // References are shown as written, from a literal load;
-    // the evaluated `config` holds their values.
-    let literal = resolve_config_path(config_path)
-        .and_then(|path| mcp_gateway::config::Config::load_literal(Some(&path)).ok());
     for (name, backend) in config.enabled_backends() {
         let written = literal.as_ref().and_then(|l| l.backends.get(name));
         results.extend(check_backend_env(name, backend, written));
