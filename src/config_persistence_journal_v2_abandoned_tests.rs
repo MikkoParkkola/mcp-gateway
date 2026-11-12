@@ -6,8 +6,8 @@ use super::super::fixtures::{AUDIT_WHO_PRINCIPAL, collect_case};
 use super::super::{IntentId, JournalV2, ParkReason, TokenState};
 use super::fixtures::{
     ATTRIBUTION_JSON, HANDED_OVER_JSON, HANDED_OVER_LEN, HANDED_OVER_SHA, RECORD_0_JSON,
-    RECORD_0_LEN, RECORD_0_SHA, attributed_journal, attribution, donor, file, frame_bytes,
-    handed_over, parked, record_0, record_1, reframe, root,
+    RECORD_0_LEN, attributed_journal, attribution, donor, file, frame_bytes, handed_over, parked,
+    record_0, record_1, reframe, root,
 };
 use super::{
     Cause, FrameFault, Inspection, OwnerFacts, Slot, Tail, canonical_frames, decode_frames,
@@ -313,7 +313,7 @@ fn corrupt(at: usize, cause: Cause) -> Inspection {
     Inspection::Corrupt { at, cause }
 }
 
-fn tail_without_donor() -> Result<(), String> {
+fn tail_without_donor() {
     let (first, second) = (handed_over(), record_0());
     let bytes = file(&[&first, &torn(&second, 10)]);
     let read = decode_frames(&bytes).expect("a torn tail is not a fault");
@@ -327,10 +327,9 @@ fn tail_without_donor() -> Result<(), String> {
         corrupt(1, Cause::TailWithoutDonor),
         "no donor: never repairable"
     );
-    Ok(())
 }
 
-fn complete_corrupt_frames() -> Result<(), String> {
+fn complete_corrupt_frames() {
     let (first, second, third) = (handed_over(), record_0(), record_1());
     let bad_sum = frame_bytes(RECORD_0_JSON, RECORD_0_LEN, &"0".repeat(64));
     let donor = donor();
@@ -357,10 +356,9 @@ fn complete_corrupt_frames() -> Result<(), String> {
             donor.is_some()
         );
     }
-    Ok(())
 }
 
-fn altered_frames_match_no_donor() -> Result<(), String> {
+fn altered_frames_match_no_donor() {
     let donor = donor();
     let tail = torn(&record_0(), 10);
     let variants = [
@@ -404,10 +402,9 @@ fn altered_frames_match_no_donor() -> Result<(), String> {
             "a checksum-valid frame differing only in its {what}"
         );
     }
-    Ok(())
 }
 
-fn unrelated_owner_proves_nothing() -> Result<(), String> {
+fn unrelated_owner_proves_nothing() {
     let mut state: JournalV2 = donor();
     let writer = state.writer.as_mut().expect("writer");
     writer.handed_over = false;
@@ -433,10 +430,9 @@ fn unrelated_owner_proves_nothing() -> Result<(), String> {
         corrupt(0, Cause::DonorMismatch),
         "another owner's handover does not prove this token's"
     );
-    Ok(())
 }
 
-fn early_newline_is_a_length_fault() -> Result<(), String> {
+fn early_newline_is_a_length_fault() {
     // Declared longer than the JSON that precedes the newline: a complete corrupt frame,
     // never a torn tail, so a matching donor must not make it repairable.
     let longer = frame_bytes(HANDED_OVER_JSON, HANDED_OVER_LEN + 5, HANDED_OVER_SHA);
@@ -452,10 +448,9 @@ fn early_newline_is_a_length_fault() -> Result<(), String> {
         corrupt(1, Cause::Wire(FrameFault::Length)),
         "inspect with a matching donor"
     );
-    Ok(())
 }
 
-fn over_cap_is_refused_before_allocation() -> Result<(), String> {
+fn over_cap_is_refused_before_allocation() {
     let header = format!("99999999\t{HANDED_OVER_SHA}\t{HANDED_OVER_JSON}\n");
     assert_eq!(
         decode_frames(header.as_bytes()).map(|read| read.frames.len()),
@@ -474,10 +469,9 @@ fn over_cap_is_refused_before_allocation() -> Result<(), String> {
         Err(FrameFault::Length),
         "an over-cap declared length is refused even when the body is cut short"
     );
-    Ok(())
 }
 
-fn surplus_bytes_are_a_length_fault() -> Result<(), String> {
+fn surplus_bytes_are_a_length_fault() {
     let mut bytes = attribution();
     bytes.pop();
     bytes.extend_from_slice(b"xx\n");
@@ -496,10 +490,9 @@ fn surplus_bytes_are_a_length_fault() -> Result<(), String> {
         Err(FrameFault::Length),
         "a frame whose terminator is not a newline"
     );
-    Ok(())
 }
 
-fn another_version_is_a_field_fault() -> Result<(), String> {
+fn another_version_is_a_field_fault() {
     let other = ATTRIBUTION_JSON.replace(r#""v":1"#, r#""v":2"#);
     assert_ne!(
         other, ATTRIBUTION_JSON,
@@ -510,10 +503,9 @@ fn another_version_is_a_field_fault() -> Result<(), String> {
         Err(FrameFault::Field),
         "a version other than 1"
     );
-    Ok(())
 }
 
-fn donor_proof_is_an_exact_prefix() -> Result<(), String> {
+fn donor_proof_is_an_exact_prefix() {
     let (i, r0, r1) = (handed_over(), record_0(), record_1());
     let donor = donor();
     let cases = [
@@ -543,10 +535,9 @@ fn donor_proof_is_an_exact_prefix() -> Result<(), String> {
     for (what, bytes, expected) in cases {
         assert_eq!(inspect(&bytes, Some(&donor)), expected, "{what}");
     }
-    Ok(())
 }
 
-fn tail_beyond_the_donor_is_refused() -> Result<(), String> {
+fn tail_beyond_the_donor_is_refused() {
     let (i, r0, r1) = (handed_over(), record_0(), record_1());
     let bytes = file(&[&i, &r0, &r1, &torn(&r1, 10)]);
     assert_eq!(
@@ -554,10 +545,9 @@ fn tail_beyond_the_donor_is_refused() -> Result<(), String> {
         corrupt(3, Cause::TailBeyondDonor),
         "a torn frame after the donor's whole sequence is surplus"
     );
-    Ok(())
 }
 
-fn newline_less_final_frame_is_a_tail() -> Result<(), String> {
+fn newline_less_final_frame_is_a_tail() {
     let (i, r0, r1) = (handed_over(), record_0(), record_1());
     let without_newline = r1[..r1.len() - 1].to_vec();
     let bytes = file(&[&i, &r0, &without_newline]);
@@ -579,7 +569,6 @@ fn newline_less_final_frame_is_a_tail() -> Result<(), String> {
         corrupt(2, Cause::TailWithoutDonor),
         "without a donor"
     );
-    Ok(())
 }
 
 fn every_offset_classifies_consistently() -> Result<(), String> {
@@ -633,7 +622,8 @@ fn every_offset_classifies_consistently() -> Result<(), String> {
 fn abandoned_corrupt_without_donor() {
     const ROW: &str = "abandoned_corrupt_without_donor";
     let mut failures = Vec::new();
-    let cases: [(&str, &str, fn() -> Result<(), String>); 11] = [
+    type Case = (&'static str, &'static str, fn());
+    let cases: [Case; 11] = [
         (
             "tail_without_donor",
             "a torn tail with no donor is Corrupt",
@@ -691,7 +681,10 @@ fn abandoned_corrupt_without_donor() {
         ),
     ];
     for (name, expected, run) in cases {
-        collect_case(&mut failures, ROW, name, expected, run);
+        collect_case(&mut failures, ROW, name, expected, || {
+            run();
+            Ok(())
+        });
     }
     collect_case(
         &mut failures,

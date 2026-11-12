@@ -116,7 +116,7 @@ pub(crate) fn encode_frame(frame: &AbandonedFrame) -> Result<Vec<u8>, FrameFault
 
 /// What the bytes at one offset are.
 enum Next {
-    Frame(AbandonedFrame, usize),
+    Frame(Box<AbandonedFrame>, usize),
     Incomplete,
     Fault(FrameFault),
 }
@@ -173,7 +173,7 @@ fn next_frame(bytes: &[u8], at: usize) -> Next {
     }
     let end = at + (rest.len() - body.len()) + length + 1;
     match parse(json) {
-        Ok(frame) => Next::Frame(frame, end),
+        Ok(frame) => Next::Frame(Box::new(frame), end),
         Err(fault) => Next::Fault(fault),
     }
 }
@@ -200,7 +200,7 @@ fn read(bytes: &[u8]) -> Result<FrameRead, (usize, FrameFault)> {
     while at < bytes.len() {
         match next_frame(bytes, at) {
             Next::Frame(frame, end) => {
-                frames.push(frame);
+                frames.push(*frame);
                 at = end;
             }
             Next::Incomplete => {
