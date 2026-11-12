@@ -65,9 +65,24 @@ fn stdin_is_read_bounded_and_trimmed_to_one_line() {
     assert!(read_email(&[0xff, 0xfe][..]).is_err(), "not UTF-8");
     let long = "a".repeat(MAX_EMAIL_INPUT + 1);
     assert!(read_email(long.as_bytes()).is_err(), "over the bound");
-    // A reader that never ends is cut off at the bound, not read to the end.
-    let endless = std::io::repeat(b'a');
-    assert!(read_email(endless).is_err());
+    // A long input is cut off at the bound, not read to the end.
+    struct Counting<'a>(&'a std::cell::Cell<usize>, usize);
+    impl std::io::Read for Counting<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = buf.len().min(self.1);
+            buf[..n].fill(b'a');
+            self.1 -= n;
+            self.0.set(self.0.get() + n);
+            Ok(n)
+        }
+    }
+    let read = std::cell::Cell::new(0);
+    assert!(read_email(Counting(&read, 1 << 20)).is_err());
+    assert!(
+        read.get() <= MAX_EMAIL_INPUT + 1,
+        "read {} bytes",
+        read.get()
+    );
 }
 
 /// MIK-9456.CLI.1: the body is built in memory from the email and the flags,
