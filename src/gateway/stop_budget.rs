@@ -77,7 +77,9 @@ impl StopBudget {
         Self { t0, total }
     }
 
-    /// D: the end of the whole stop.
+    /// D: the end of the whole stop. Test-only: the stages are given Db, Dp and
+    /// Dl, and nothing in production waits on D itself until retirement does.
+    #[cfg(test)]
     pub(crate) fn end(&self) -> Instant {
         self.t0 + self.total
     }
