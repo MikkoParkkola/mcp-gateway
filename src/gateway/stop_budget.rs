@@ -103,20 +103,27 @@ impl StopBudget {
             .saturating_duration_since(now)
             .min(cap)
     }
-}
 
-impl StopBudget {
     /// Run one post-listener stage under its own `cap` or what is left to Dp,
     /// whichever is less; `None` when it ran out (logged by `what`) so the stop
     /// goes on to the next stage. Never renewed: a stage that starts after Dp
     /// gets no time at all.
     pub(crate) async fn stage<F: std::future::Future>(
         &self,
-        _what: &'static str,
-        _cap: Duration,
-        _work: F,
+        what: &'static str,
+        cap: Duration,
+        work: F,
     ) -> Option<F::Output> {
-        None
+        let window = self.stage_window(Instant::now(), cap);
+        if let Ok(done) = tokio::time::timeout(window, work).await {
+            Some(done)
+        } else {
+            tracing::warn!(
+                stage = what,
+                "stop stage ran out of its window; the stop goes on"
+            );
+            None
+        }
     }
 }
 
