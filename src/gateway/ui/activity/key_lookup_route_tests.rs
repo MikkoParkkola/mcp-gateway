@@ -54,14 +54,11 @@ fn admin(name: &str) -> AuthenticatedClient {
     c
 }
 
-/// The digest of `who`'s credential principal, as the route binds tokens.
+/// The digest `who`'s tokens bind to: the route's own function, so a row cannot
+/// drift from what the route does.
 fn fingerprint(who: &AuthenticatedClient) -> String {
-    crate::hashing::sha256_hex(
-        who.credential_principal()
-            .expect("a credential principal")
-            .storage_form()
-            .as_bytes(),
-    )
+    super::key_lookup::cursor_principal(Some(who), &axum::http::HeaderMap::new())
+        .expect("a credential principal")
 }
 
 struct Fx {

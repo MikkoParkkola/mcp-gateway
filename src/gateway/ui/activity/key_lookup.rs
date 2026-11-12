@@ -127,7 +127,7 @@ impl Opened {
 /// session carries the same constant principal, so a session binds to its own
 /// cookie handle instead (hashed, never sent anywhere): two browser sessions
 /// cannot open each other's tokens.
-fn cursor_principal(
+pub(super) fn cursor_principal(
     client: Option<&AuthenticatedClient>,
     headers: &axum::http::HeaderMap,
 ) -> Option<String> {
