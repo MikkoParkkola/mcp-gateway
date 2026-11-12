@@ -49,6 +49,7 @@ async fn scoped_gateway(rules: &[&str]) -> Gateway {
         )),
         config,
         email_key: crate::key_server::email_hash::EmailHashKey::for_test(),
+        issuance_log: None,
         revocation_signals: std::sync::atomic::AtomicU64::new(0),
     };
     let auth = AuthConfig {
