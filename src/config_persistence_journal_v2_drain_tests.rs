@@ -10,7 +10,7 @@ use super::super::{IntentId, JournalError, ParkReason, ResultClass};
 use super::fault::{self, At, Fault};
 use super::fixtures::{
     Live, OUTCOME, SAVE, WRITER, actor, attributed, decided, payload, reread, retry, runtime,
-    state, state_of, terminal_count,
+    staged, state, state_of, terminal_count,
 };
 use crate::config_persistence::crash_fs::{self, Mode};
 use crate::config_persistence::journal;
@@ -345,6 +345,33 @@ fn wrong_log_is_not_rebound() {
             assert!(
                 journal::journal_path(&live.path).exists(),
                 "{ROW}: owner retained"
+            );
+            Ok(())
+        },
+    );
+    collect_case(
+        &mut failures,
+        ROW,
+        "foreign_logger_before_repair",
+        "OtherLog refuses before any repair work",
+        || {
+            let live = Live::new();
+            let foreign = Live::new();
+            let mut initial = state(&live.resolved);
+            staged(&mut initial);
+            let owner = live.seed(initial, ROW);
+            let before = bytes(&live.path);
+            let journal_before = std::fs::read(journal::journal_path(&live.path)).expect(ROW);
+            let result = runtime(JournalDrain::run(owner, Some(Arc::clone(&foreign.log))));
+            assert!(
+                matches!(&result, Err(failure) if failure.error == DrainError::OtherLog),
+                "{ROW}: a repairable owner still refuses the other log first"
+            );
+            assert_eq!(bytes(&live.path), before, "{ROW}: config bytes unchanged");
+            assert_eq!(
+                std::fs::read(journal::journal_path(&live.path)).expect(ROW),
+                journal_before,
+                "{ROW}: no recovery attempt written before the refusal"
             );
             Ok(())
         },
