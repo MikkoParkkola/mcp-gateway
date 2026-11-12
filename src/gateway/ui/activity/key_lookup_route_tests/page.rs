@@ -430,6 +430,14 @@ fn a_token_is_alive_until_its_expiry_and_its_chains_ceiling() {
             .expect("opens inside the ceiling");
     assert!(opened.alive_at(now + 100), "born + 900 is now + 100");
     assert!(!opened.alive_at(now + 101), "past the chain ceiling");
+    // Opening itself refuses a chain already past its ceiling: the check at
+    // open is not left to the one at delivery, which answers the same way.
+    let past = fx.seal_by_hand(&who, &fx.scope(now - 1000), now);
+    assert!(
+        super::super::key_lookup::open(&fx.state, &fingerprint(&who), &past, now, &fx.ks.email_key)
+            .is_none(),
+        "open accepted a chain past its ceiling"
+    );
 }
 
 /// A token the route would itself refuse for its length is never issued.
