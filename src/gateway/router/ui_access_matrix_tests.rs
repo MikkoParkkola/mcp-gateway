@@ -541,6 +541,10 @@ async fn compute() -> (Matrix, Vec<Pins>) {
                         for shape in shapes(method, path) {
                             let req = (method, path, shape);
                             let before = (shape == "valid").then(|| fingerprint(&fx.state));
+                            // The email lookup's process-wide budget is pinned by its
+                            // own rows: here every cell starts with it full, so the
+                            // cell records the guard's answer, not the order of cells.
+                            fx.state.process.lookup_budget().reset_for_test();
                             let (status, body) =
                                 send(&router, request(caller, req, &fx, Some(&cookie))).await;
                             // A body that parses reaches the guard; whatever
