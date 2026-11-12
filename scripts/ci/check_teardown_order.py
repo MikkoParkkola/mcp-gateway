@@ -11,9 +11,12 @@ the final `rmdir`, which fails and is ignored, and the directory is left in TMPD
 
 This scans every `struct Name { .. }` in tests/ and src/ for a TempDir field declared before a Child or ChildGuard
 field and refuses it, naming the file, line, struct and both fields. A struct that pairs a bare `Child` (which neither
-kills nor waits when dropped) with a TempDir should also carry an `impl Drop for <Struct>` in the same file; a
-`ChildGuard` is trusted to wait. The order is an error; the missing Drop is a warning (four older stdio harnesses
-still lack one), to become an error once they are fixed. Named and tuple structs are scanned; comments, string, raw-string and char literals are
+kills nor waits when dropped) with a TempDir must also carry an `impl Drop for <Struct>` in the same file; a
+`ChildGuard` or `gateway_bin::Reaped` is trusted to wait. Both are errors.
+
+A function under tests/ that makes a temp dir and spawns a process (`.spawn()`) must also own or wait for the child:
+`Reaped`, `StdioSession` (whose Drop waits), `ChildGuard`, `.stop(`/`.reap(`/`.wait(`/`.try_wait(`/`.kill().await`/`wait_with_output`
+or an explicit `shutdown(`. Otherwise the temp dir can be removed while the live child still writes into it. Named and tuple structs are scanned; comments, string, raw-string and char literals are
 blanked first; borrowed and `PhantomData` fields own nothing and are skipped. It fails if tests/ or src/ is missing or
 holds no Rust file, so a wrong working directory cannot pass silently. `--self-test` runs the scanner on fixtures.
 
@@ -121,9 +124,30 @@ def scan(text: str) -> list[tuple[int, str, str, str]]:
     return found
 
 
+FN = re.compile(r"\bfn\s+(\w+)[^{;]*\{")
+LOCAL_TMP = re.compile(r"\b(?:tempfile::)?tempdir(?:_in)?\s*\(|\bTempDir::new(?:_in)?\b|\.tempdir(?:_in)?\s*\(")
+SPAWNS = re.compile(r"\.spawn\s*\(")
+OWNS_CHILD = re.compile(r"\bReaped\b|\bStdioSession\b|\bChildGuard\b|\.stop\s*\(|\.reap(?:_within)?\s*\(|\.wait\s*\(|wait_with_output|\.try_wait\s*\(|\.kill\s*\(\s*\)\s*\.await|\bshutdown\s*\(")
+
+
+def scan_locals(text: str) -> list[tuple[int, str]]:
+    """(line, function) for each function that makes a temp dir and spawns a process but never owns or waits for it."""
+    clean = strip_comments(text)
+    found = []
+    for m in FN.finditer(clean):
+        depth, j = 1, m.end()
+        while j < len(clean) and depth:
+            depth += {"{": 1, "}": -1}.get(clean[j], 0); j += 1
+        body = clean[m.end():j - 1]
+        tmp = LOCAL_TMP.search(body)
+        if tmp and SPAWNS.search(body) and not OWNS_CHILD.search(body):
+            found.append((clean.count("\n", 0, m.end() + tmp.start()) + 1, m.group(1)))
+    return found
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[2]
-    bad, warn, scanned = [], [], 0
+    bad, scanned = [], 0
     for base in ("tests", "src"):
         if not (root / base).is_dir():
             print(f"::error::teardown order: {root / base} is missing; nothing scanned")
@@ -136,16 +160,18 @@ def main() -> int:
                     bad.append(f"{rel}:{line}: struct {struct} declares {tname} (TempDir) before {cname} (a child process): "
                                f"the directory is removed first; declare the child above the TempDir and make its drop wait")
                 else:
-                    warn.append(f"{rel}:{line}: struct {struct} pairs {tname} (TempDir) with a bare Child but has no "
+                    bad.append(f"{rel}:{line}: struct {struct} pairs {tname} (TempDir) with a bare Child but has no "
                                f"`impl Drop for {struct}`: a bare Child neither kills nor waits, so add a Drop that does, or use a guard")
+    for path in sorted((root / "tests").rglob("*.rs")):
+        for line, fn in scan_locals(path.read_text(errors="replace")):
+            bad.append(f"{path.relative_to(root)}:{line}: fn {fn} makes a temp dir and spawns a process but never owns or waits for "
+                       f"it (use gateway_bin::Reaped with Teardown::DrainThenRemove, or wait for the child before the dir goes)")
     if scanned == 0:
         print("::error::teardown order: no Rust file under tests/ or src/; nothing scanned")
         return 1
-    for w in warn:
-        print(f"::warning::{w}")
     for b in bad:
         print(f"::error::{b}")
-    print(f"teardown order: {scanned} file(s), {len(bad)} struct(s) drop a TempDir before a child, {len(warn)} warned (no waiting Drop)")
+    print(f"teardown order: {scanned} file(s), {len(bad)} problem(s) where a temp dir can be removed under a live child")
     return 1 if bad else 0
 
 
@@ -182,11 +208,27 @@ def self_test() -> int:
         ok = got == want
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} {label}: {got} found, want {want}")
+    local = [
+        ("a temp dir and a bare spawn", "fn t() {\n    let d = tempfile::tempdir().unwrap();\n    let c = cmd.spawn().unwrap();\n}\n", 1),
+        ("a temp dir, a spawn and Reaped", "fn t() {\n    let d = tempdir().unwrap();\n    let c = Reaped::new(cmd.spawn().unwrap());\n}\n", 0),
+        ("a temp dir, a spawn and a wait", "fn t() {\n    let d = tempdir().unwrap();\n    let mut c = cmd.spawn().unwrap();\n    c.wait().await;\n}\n", 0),
+        ("a temp dir, a StdioSession", "fn t() {\n    let d = tempdir().unwrap();\n    let s = StdioSession::start(cmd).spawn();\n}\n", 0),
+        ("a spawn but no temp dir", "fn t() {\n    let c = cmd.spawn().unwrap();\n}\n", 0),
+        ("a temp dir but no spawn", "fn t() {\n    let d = tempdir().unwrap();\n    cmd.output();\n}\n", 0),
+        ("a spawn named only in a comment", "fn t() {\n    let d = tempdir().unwrap();\n    // cmd.spawn() is elsewhere\n}\n", 0),
+        ("two functions, one bare", "fn a() { let d = tempdir(); let c = x.spawn(); }\nfn b() { let d = tempdir(); let c = x.spawn(); c.wait(); }\n", 1),
+        ("the line names the temp dir", "\n\nfn t() {\n    let d = tempdir().unwrap();\n    let c = x.spawn().unwrap();\n}\n", 1),
+    ]
+    for label, source, want in local:
+        got = len(scan_locals(source))
+        ok = got == want
+        wrong += not ok
+        print(f"{'ok   ' if ok else 'WRONG'} local scan, {label}: {got} found, want {want}")
     line = scan("\n\nstruct G {\n    _tmp: TempDir,\n    child: Child,\n}\n")
     ok = line == [(4, "G", "_tmp", "child")]
     wrong += not ok
     print(f"{'ok   ' if ok else 'WRONG'} the report names the TempDir field's line, the struct and both fields: {line}")
-    print(f"self-test: {len(cases) + 1 - wrong} ok, {wrong} wrong")
+    print(f"self-test: {len(cases) + len(local) + 1 - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 

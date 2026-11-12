@@ -58,36 +58,12 @@ while IFS= read -r line; do
 done
 "#;
 
-/// Field order is the teardown order: the child comes first and `Drop` waits for it to exit, so nothing the gateway
-/// writes (its config lock, its state) can land in `tmp_dir` while the directory is being removed.
+/// The gateway process owns the temp directory it runs in (`gateway_bin::Reaped`): on drop it is ended with SIGTERM
+/// and waited for, and the directory is removed only once the gateway has exited by itself, never under a live writer.
 struct Gateway {
-    child: tokio::process::Child,
-    tmp_dir: Option<tempfile::TempDir>,
+    process: gateway_bin::Reaped,
     log: PathBuf,
     url: String,
-}
-
-impl Drop for Gateway {
-    fn drop(&mut self) {
-        // Kill, then wait (bounded): `kill_on_drop` alone only sends the kill and returns, and the temp directory
-        // used to be removed before the child was gone, leaving `.gateway.yaml.lock` behind.
-        let _ = self.child.start_kill();
-        for _ in 0..100 {
-            if matches!(self.child.try_wait(), Ok(Some(_))) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        // Not reaped in 5 s: keep the directory rather than remove it under a live writer. The leftover then fails
-        // the shard's temp-directory check loudly, where removing it would fail intermittently.
-        if let Some(tmp) = self.tmp_dir.take() {
-            let kept = tmp.keep();
-            eprintln!(
-                "gateway child still running after kill; kept {}",
-                kept.display()
-            );
-        }
-    }
 }
 
 impl Gateway {
@@ -130,9 +106,11 @@ impl Gateway {
             .kill_on_drop(true)
             .spawn()
             .expect("serve spawns");
+        let mut process = gateway_bin::Reaped::new(child)
+            .with_teardown(gateway_bin::Teardown::DrainThenRemove);
+        process.owning(tmp);
         let mut gateway = Self {
-            tmp_dir: Some(tmp),
-            child,
+            process,
             log,
             // Learned from the child's `Listening` line in `wait_ready`.
             url: String::new(),
@@ -149,7 +127,7 @@ impl Gateway {
         let deadline = tokio::time::Instant::now() + READY_BOUND;
         let http = http_client();
         loop {
-            if let Some(status) = self.child.try_wait().expect("child status") {
+            if let Some(status) = self.process.child_mut().try_wait().expect("child status") {
                 panic!("serve exited before ready ({status})\n{}", self.logs());
             }
             if self.url.is_empty()

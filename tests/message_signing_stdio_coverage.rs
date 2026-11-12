@@ -25,16 +25,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 use signing_gateway::{BACKEND, BackendFixture, KEY, TOOL, child_command, fixture_config, invoke};
+use signing_gateway::gateway_bin::{Reaped, Teardown};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::process::{ChildStdin, ChildStdout};
 
 const KEY_ID: &str = "signing-test-current";
 const SENTINEL: &str = "stdio-signing-backend-echo";
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct StdioGateway {
-    child: Child,
-    _directory: tempfile::TempDir,
+    process: Reaped,
     input: Option<ChildStdin>,
     output: Lines<BufReader<ChildStdout>>,
     child_pid: u32,
@@ -59,8 +59,11 @@ impl StdioGateway {
         let input = child.stdin.take().expect("gateway stdin");
         let output = BufReader::new(child.stdout.take().expect("gateway stdout")).lines();
         let mut gateway = Self {
-            child,
-            _directory: directory,
+            process: {
+                let mut process = Reaped::new(child).with_teardown(Teardown::DrainThenRemove);
+                process.owning(directory);
+                process
+            },
             input: Some(input),
             output,
             child_pid,
@@ -153,7 +156,7 @@ impl StdioGateway {
 
     async fn finish(mut self) {
         drop(self.input.take());
-        let status = tokio::time::timeout(IO_TIMEOUT, self.child.wait())
+        let status = tokio::time::timeout(IO_TIMEOUT, self.process.child_mut().wait())
             .await
             .expect("bounded successful stdio EOF exit")
             .expect("wait for stdio child");

@@ -18,9 +18,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use signing_gateway::{BackendFixture, HttpGateway, child_command, fixture_config};
-use tempfile::TempDir;
+use signing_gateway::gateway_bin::{Reaped, Teardown};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::process::{ChildStdin, ChildStdout};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 const UTF8_BYTE_LIMIT: &str = "at most 256 UTF-8 bytes";
@@ -225,8 +225,7 @@ async fn http_tools_list_at(gateway: &HttpGateway, session: &str, path: &str, id
 }
 
 struct StdioGateway {
-    _child: Child,
-    _directory: TempDir,
+    _process: Reaped,
     input: ChildStdin,
     output: Lines<BufReader<ChildStdout>>,
 }
@@ -250,8 +249,11 @@ impl StdioGateway {
         let input = child.stdin.take().expect("gateway stdin");
         let output = BufReader::new(child.stdout.take().expect("gateway stdout")).lines();
         let mut gateway = Self {
-            _child: child,
-            _directory: directory,
+            _process: {
+                let mut process = Reaped::new(child).with_teardown(Teardown::DrainThenRemove);
+                process.owning(directory);
+                process
+            },
             input,
             output,
         };
