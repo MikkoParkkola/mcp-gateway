@@ -22,32 +22,16 @@ static KEY: LazyLock<[u8; 32]> = LazyLock::new(rand::random);
 #[derive(Serialize, Deserialize)]
 struct Wire {
     v: u8,
-    /// What the token is bound to (the key-server lookup binds its safe
-    /// filter, never the email); `None` for Activity's own tokens.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    bind: Option<String>,
     #[serde(flatten)]
     cursor: Cursor,
 }
 
 pub(super) fn encode(cursor: &Cursor) -> String {
-    encode_with(&*KEY, cursor, None)
+    encode_with(&*KEY, cursor)
 }
 
 pub(super) fn decode(token: &str) -> Option<Cursor> {
     decode_with(&*KEY, token)
-        .filter(|(_, bind)| bind.is_none())
-        .map(|(c, _)| c)
-}
-
-/// A token for `cursor` bound to `bind`: it decodes only for the same bind.
-pub(super) fn encode_bound(cursor: &Cursor, bind: &str) -> String {
-    encode_with(&*KEY, cursor, Some(bind))
-}
-
-/// The cursor of `token` when it is bound to exactly `bind`.
-pub(super) fn decode_bound(token: &str, bind: &str) -> Option<Cursor> {
-    decode_with(&*KEY, token).and_then(|(c, b)| (b.as_deref() == Some(bind)).then_some(c))
 }
 
 fn mac(key: &[u8]) -> Hmac<Sha256> {
@@ -55,10 +39,9 @@ fn mac(key: &[u8]) -> Hmac<Sha256> {
     <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length")
 }
 
-fn encode_with(key: &[u8], cursor: &Cursor, bind: Option<&str>) -> String {
+fn encode_with(key: &[u8], cursor: &Cursor) -> String {
     let body = serde_json::to_vec(&Wire {
         v: 1,
-        bind: bind.map(str::to_owned),
         cursor: cursor.clone(),
     })
     // invariant: a cursor is two optional pairs of integers and an optional string; serialising it cannot fail.
@@ -72,7 +55,7 @@ fn encode_with(key: &[u8], cursor: &Cursor, bind: Option<&str>) -> String {
     )
 }
 
-fn decode_with(key: &[u8], token: &str) -> Option<(Cursor, Option<String>)> {
+fn decode_with(key: &[u8], token: &str) -> Option<Cursor> {
     let (body, tag) = token.split_once('.')?;
     let body = URL_SAFE_NO_PAD.decode(body).ok()?;
     let tag = URL_SAFE_NO_PAD.decode(tag).ok()?;
@@ -80,7 +63,7 @@ fn decode_with(key: &[u8], token: &str) -> Option<(Cursor, Option<String>)> {
     m.update(&body);
     m.verify_slice(&tag).ok()?;
     let wire: Wire = serde_json::from_slice(&body).ok()?;
-    (wire.v == 1).then_some((wire.cursor, wire.bind))
+    (wire.v == 1).then_some(wire.cursor)
 }
 
 #[cfg(test)]
@@ -103,15 +86,15 @@ mod tests {
     fn a_token_round_trips_under_its_key() {
         let key = [7u8; 32];
         assert_eq!(
-            decode_with(&key, &encode_with(&key, &cursor(), None)),
-            Some((cursor(), None))
+            decode_with(&key, &encode_with(&key, &cursor())),
+            Some(cursor())
         );
     }
 
     #[test]
     fn a_flipped_byte_or_another_key_decodes_as_nothing() {
         let key = [7u8; 32];
-        let token = encode_with(&key, &cursor(), None);
+        let token = encode_with(&key, &cursor());
         assert_eq!(
             decode_with(&[8u8; 32], &token),
             None,

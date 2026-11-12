@@ -6,9 +6,16 @@
 //! is hashed with the installation key for the one request and never stored,
 //! logged or echoed.
 //!
-//! Order matters: admission (gateway-wide admin only) first, then the shared
-//! budget, then the body is parsed, then the email is hashed, then the
-//! blocking scan. Nothing before admission reads the body's content.
+//! The next page is asked for with a sealed token alone: the token carries the
+//! keyed hash, the window and the log position, sealed by the continuation
+//! keyring and bound to the credential principal that got it, so the email is
+//! sent once and never again.
+//!
+//! Order matters: admission (gateway-wide admin only), the shared budget, the
+//! bounded body, the request's shape, the limit, the key server and log, and
+//! only then the email is hashed or the token opened, then the blocking scan.
+//! Every refusal that is not about the token comes before the token is
+//! opened, so no other answer tells a holder whether a token is genuine.
 
 use std::sync::Arc;
 
@@ -20,16 +27,17 @@ use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, FixedOffset};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::reader::{Cursor, Limits, Line, read_page};
-use super::{DEFAULT_LIMIT, MAX_LIMIT, PAGE_SCAN_BYTES, blocking, cursor};
+use super::{DEFAULT_LIMIT, MAX_LIMIT, PAGE_SCAN_BYTES, blocking};
+use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::Charge;
 use crate::gateway::ui::AppState;
 use crate::gateway::ui::admin_audit::attach_lookup;
 use crate::gateway::ui::errors::flat_error;
 use crate::gateway::ui::guard::Guard;
 use crate::key_server::email_hash::{self, EmailHashKey};
+use crate::protocol::continuation::Payload;
 
 /// The most bytes of request body read; a lookup carries an email, a cursor
 /// and two timestamps.
@@ -41,7 +49,7 @@ const MAX_EMAIL: usize = 320;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
-    email: String,
+    email: Option<String>,
     limit: Option<usize>,
     cursor: Option<String>,
     from: Option<String>,
@@ -71,21 +79,101 @@ fn parse_time(text: &str) -> Option<DateTime<FixedOffset>> {
     DateTime::parse_from_rfc3339(text).ok()
 }
 
-/// The digest a page token is bound to: the keyed hash, its version and key,
-/// and the time window. Not the email.
-fn bind_of(hash: &str, key: &EmailHashKey, from: Option<&str>, to: Option<&str>) -> String {
-    let mut sha = Sha256::new();
-    for part in [
-        hash,
-        &email_hash::VERSION.to_string(),
-        &key.key_id(),
-        from.unwrap_or(""),
-        to.unwrap_or(""),
-    ] {
-        sha.update(part.as_bytes());
-        sha.update([0]);
+/// A sealed page token lives this long, and a chain of pages from the first
+/// one no longer than the ceiling.
+const CHAIN_CEILING_SECS: u64 = 900;
+/// A token longer than this is refused before anything is decoded.
+const PAGE_TOKEN_MAX_LEN: usize = 2048;
+
+/// Everything the next page needs, sealed in the token. No email. No `Debug`:
+/// the keyed hash of a person's email is not for a log.
+#[derive(serde::Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PageScope {
+    pub(super) hash: String,
+    pub(super) version: u64,
+    pub(super) key_id: String,
+    pub(super) from: Option<String>,
+    pub(super) to: Option<String>,
+    pub(super) pos: Cursor,
+    /// When the first page of this search was answered.
+    pub(super) born: u64,
+}
+
+/// A scope that opened, and what spending its token needs.
+pub(super) struct Opened {
+    pub(super) scope: PageScope,
+    jti: String,
+    expires_at: u64,
+}
+
+/// The digest of the credential principal a token binds to; `None` when the
+/// caller has no credential principal, in which case no token is minted or
+/// opened. One function for both, so they cannot disagree.
+fn cursor_principal(client: Option<&AuthenticatedClient>) -> Option<String> {
+    client
+        .and_then(AuthenticatedClient::credential_principal)
+        .map(|p| crate::hashing::sha256_hex(p.storage_form().as_bytes()))
+}
+
+/// Seal `scope` for `principal`, valid from `now`; `None` when it cannot be
+/// sealed (no principal, or the keyring refuses).
+pub(super) fn seal(
+    state: &AppState,
+    principal: &str,
+    scope: &PageScope,
+    now: u64,
+) -> Option<String> {
+    if principal.is_empty() {
+        return None;
     }
-    hex::encode(&sha.finalize()[..16])
+    let json = serde_json::to_string(scope).ok()?;
+    let payload = Payload::mint_lookup(principal.to_owned(), json, now);
+    state.continuation.keyring().mint(&payload).ok()
+}
+
+/// Open `token` for `principal`, or `None`: one answer for every reason it
+/// would not open (malformed, tampered, another process or principal, another
+/// purpose, expired, past the chain ceiling, a hash key or version that is no
+/// longer current). No reason is logged or counted.
+pub(super) fn open(
+    state: &AppState,
+    principal: &str,
+    token: &str,
+    now: u64,
+    key: &EmailHashKey,
+) -> Option<Opened> {
+    if principal.is_empty() || token.is_empty() || token.len() > PAGE_TOKEN_MAX_LEN {
+        return None;
+    }
+    let payload = state.continuation.keyring().open(token, now).ok()?;
+    let scope: PageScope =
+        serde_json::from_str(payload.lookup_scope_for(principal).ok()?).ok()?;
+    let shaped = scope.hash.len() == key.hash("").len()
+        && scope.hash.bytes().all(|b| b.is_ascii_hexdigit());
+    let from = scope.from.as_deref().map(parse_time);
+    let to = scope.to.as_deref().map(parse_time);
+    let window_ok = match (from, to) {
+        (Some(None), _) | (_, Some(None)) => false,
+        (Some(Some(f)), Some(Some(t))) => f <= t,
+        _ => true,
+    };
+    let current = scope.version == u64::from(email_hash::VERSION) && scope.key_id == key.key_id();
+    let young = scope.born <= now && now <= scope.born.saturating_add(CHAIN_CEILING_SECS);
+    (shaped && window_ok && current && young).then(|| Opened {
+        jti: payload.jti.clone(),
+        expires_at: payload.expires_at,
+        scope,
+    })
+}
+
+/// Spend the token of `opened`: true once, false for every later try.
+async fn spend(state: &AppState, opened: &Opened, now: u64) -> bool {
+    state
+        .continuation
+        .ledger()
+        .consume(&opened.jti, opened.expires_at, now)
+        .await
 }
 
 /// Whether `entry` is an issuance row of this hash, key and version, inside
@@ -140,33 +228,39 @@ fn row_of(line: &Line) -> Value {
 
 /// Everything a scan needs, owned so it can move onto the blocking pool.
 struct Scan {
+    state: Arc<AppState>,
+    /// The caller's principal digest; `None` mints no token.
+    principal: Option<String>,
     log: std::path::PathBuf,
     hash: String,
     key_id: String,
-    bind: String,
+    from: Option<String>,
+    to: Option<String>,
+    /// Where the first page of this search began, carried forward.
+    born: u64,
+    /// `None` on a first page.
+    start: Option<Cursor>,
     limit: usize,
-    window: (Option<DateTime<FixedOffset>>, Option<DateTime<FixedOffset>>),
-    token: Option<String>,
+    now: u64,
 }
 
 /// Read one page of retained rows. A read that fails is an error answer, never
 /// an empty result: an empty result must mean no retained row matched.
-fn scan(s: &Scan) -> Response {
-    let given = s.token.is_some();
-    let decoded: Option<Cursor> = s
-        .token
-        .as_deref()
-        .and_then(|t| cursor::decode_bound(t, &s.bind));
+fn scan(s: Scan) -> Response {
     let version = u64::from(email_hash::VERSION);
+    let window = (
+        s.from.as_deref().and_then(parse_time),
+        s.to.as_deref().and_then(parse_time),
+    );
     let page = read_page(
         &s.log,
         None,
-        decoded.as_ref(),
+        s.start.as_ref(),
         Limits {
             matches: s.limit,
             bytes: PAGE_SCAN_BYTES,
         },
-        |line| matches(line, &s.hash, version, &s.key_id, s.window),
+        |line| matches(line, &s.hash, version, &s.key_id, window),
     );
     let Ok(page) = page else {
         return finish(
@@ -180,12 +274,41 @@ fn scan(s: &Scan) -> Response {
         );
     };
     let rows: Vec<Value> = page.lines.iter().map(row_of).collect();
-    let next = page.next.as_ref().map(|c| cursor::encode_bound(c, &s.bind));
+    let next = match page.next {
+        None => None,
+        Some(pos) => {
+            let scope = PageScope {
+                hash: s.hash.clone(),
+                version,
+                key_id: s.key_id.clone(),
+                from: s.from.clone(),
+                to: s.to.clone(),
+                pos,
+                born: s.born,
+            };
+            let token = s
+                .principal
+                .as_deref()
+                .and_then(|p| seal(&s.state, p, &scope, s.now));
+            let Some(token) = token else {
+                return finish(
+                    refuse(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "a page token cannot be issued now",
+                    ),
+                    "unavailable",
+                    0,
+                    0,
+                );
+            };
+            Some(token)
+        }
+    };
     let body = json!({
         "rows": rows,
         "next_cursor": next,
         "scan_exhausted": page.scan_exhausted,
-        "cursor_reset": page.cursor_reset || (given && decoded.is_none()),
+        "cursor_reset": page.cursor_reset,
         "unreadable": page.unreadable.len(),
         "scope": "retained",
     });
@@ -246,6 +369,18 @@ pub(super) async fn read_body(request: axum::extract::Request) -> Result<Bytes, 
     }
 }
 
+fn bad_token() -> Response {
+    finish(
+        refuse(
+            StatusCode::BAD_REQUEST,
+            "the page token is not valid; run the lookup again",
+        ),
+        "bad_request",
+        0,
+        0,
+    )
+}
+
 pub(super) async fn lookup(
     State(state): State<Arc<AppState>>,
     guard: Guard,
@@ -254,6 +389,7 @@ pub(super) async fn lookup(
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
+    let principal = cursor_principal(guard.client.as_ref());
     telemetry_metrics::counter!("mcp_key_server_lookup_attempts_total").increment(1);
     if let Charge::Throttled { retry_after_secs } = state.process.lookup_budget().charge() {
         telemetry_metrics::counter!("mcp_key_server_lookup_throttled_total").increment(1);
@@ -276,28 +412,37 @@ pub(super) async fn lookup(
     let Ok(Request {
         email: raw,
         limit,
-        cursor,
+        cursor: token,
         from,
         to,
     }) = parsed
     else {
-        return bad("the body must be a JSON object with an email");
+        return bad("the body must be a JSON object with an email or a cursor");
     };
-    let email = raw.trim();
-    if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(char::is_control) {
-        return bad("the email is not valid");
+    // A request is an email or a cursor, never both and never neither.
+    if raw.is_some() == token.is_some() {
+        return bad("send an email, or the cursor of the previous page, not both");
+    }
+    if token.is_some() && (from.is_some() || to.is_some()) {
+        return bad("a next page takes its window from the cursor");
     }
     let (from, to) = (from.as_deref(), to.as_deref());
-    let (Some(window_from), Some(window_to)) = (
-        from.map_or(Some(None), |t| parse_time(t).map(Some)),
-        to.map_or(Some(None), |t| parse_time(t).map(Some)),
-    ) else {
-        return bad("from and to must be RFC 3339 times");
-    };
-    if let (Some(f), Some(t)) = (window_from, window_to)
-        && f > t
-    {
-        return bad("from must not be after to");
+    if let Some(raw) = raw.as_deref() {
+        let email = raw.trim();
+        if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(char::is_control) {
+            return bad("the email is not valid");
+        }
+        let (Some(window_from), Some(window_to)) = (
+            from.map_or(Some(None), |t| parse_time(t).map(Some)),
+            to.map_or(Some(None), |t| parse_time(t).map(Some)),
+        ) else {
+            return bad("from and to must be RFC 3339 times");
+        };
+        if let (Some(f), Some(t)) = (window_from, window_to)
+            && f > t
+        {
+            return bad("from must not be after to");
+        }
     }
     let limit = limit.unwrap_or(DEFAULT_LIMIT);
     if limit == 0 || limit > MAX_LIMIT {
@@ -319,18 +464,66 @@ pub(super) async fn lookup(
             0,
         );
     };
+    let Ok(now) = crate::clock::unix_secs() else {
+        return finish(
+            refuse(StatusCode::SERVICE_UNAVAILABLE, "the clock cannot be read"),
+            "unavailable",
+            0,
+            0,
+        );
+    };
     // The email is hashed here and goes no further: the suspended handler
-    // owns only the hash while it waits for a reader slot.
-    let hash = ks.email_key.hash(email);
-    drop(raw);
-    let scan_job = Scan {
+    // owns only the hash while it waits for a reader slot. A token, once the
+    // order above is past, is opened last.
+    let (hash, start, born, from, to, opened) = match (raw, token) {
+        (Some(raw), None) => (
+            ks.email_key.hash(raw.trim()),
+            None,
+            now,
+            from.map(str::to_owned),
+            to.map(str::to_owned),
+            None,
+        ),
+        (None, Some(token)) => {
+            let Some(opened) = principal
+                .as_deref()
+                .and_then(|p| open(&state, p, &token, now, &ks.email_key))
+            else {
+                return bad_token();
+            };
+            (
+                opened.scope.hash.clone(),
+                Some(opened.scope.pos.clone()),
+                opened.scope.born,
+                opened.scope.from.clone(),
+                opened.scope.to.clone(),
+                Some(opened),
+            )
+        }
+        // Both or neither was refused above.
+        _ => return bad_token(),
+    };
+    let job = Scan {
+        state: Arc::clone(&state),
+        principal,
         log: log.path(),
-        bind: bind_of(&hash, &ks.email_key, from, to),
         key_id: ks.email_key.key_id(),
         hash,
+        from,
+        to,
+        born,
+        start,
         limit,
-        window: (window_from, window_to),
-        token: cursor,
+        now,
     };
-    blocking(state.process.activity_reads(), move || scan(&scan_job)).await
+    let response = blocking(state.process.activity_reads(), move || scan(job)).await;
+    // The token is spent by the page it served, after that page was read: a
+    // throttle, a failed read or a body that never arrived left it intact.
+    if let Some(opened) = opened
+        && response.status() == StatusCode::OK
+        && !spend(&state, &opened, now).await
+    {
+        return bad_token();
+    }
+    response
 }

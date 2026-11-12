@@ -794,7 +794,9 @@ fn seal_and_open_round_trip_the_scope_for_one_principal_only() {
     let open = |principal: &str, token: &str| {
         super::key_lookup::open(&fx.state, principal, token, now, &fx.ks.email_key)
     };
-    let got = open(&fingerprint(&who), &token).expect("opens for its principal");
+    let got = open(&fingerprint(&who), &token)
+        .expect("opens for its principal")
+        .scope;
     assert_eq!(got.hash, scope.hash);
     assert_eq!(got.from, scope.from);
     assert_eq!(got.to, scope.to);
