@@ -419,6 +419,7 @@ fn request(
 fn valid_body(path: &str) -> Option<Value> {
     let rollback = json!({"summary": "none", "step": "none"});
     Some(match path {
+        "/ui/api/gateway/restart" => json!({"confirm": "matrix-restart-confirm"}),
         p if p == routes::UI_SETTINGS_DIFF => json!({"fields": []}),
         p if p == routes::UI_SETTINGS => json!({
             "base_revision": "0".repeat(64), "fields": [],
