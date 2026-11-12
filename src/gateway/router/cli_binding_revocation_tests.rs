@@ -184,3 +184,125 @@ async fn removal_survives_a_clock_rolled_back() {
         );
     }
 }
+
+/// Attach the real key writer to the revocation fixture, using editable block YAML.
+#[cfg(feature = "webui")]
+async fn enable_key_creation(state: &mut Arc<super::AppState>, dir: &std::path::Path) {
+    let path = dir.join("gateway.yaml");
+    let config = serde_json::json!({
+        "secrets": {"store": "files"},
+        "auth": {"enabled": true, "api_keys": state.live_config.get().auth.api_keys},
+    });
+    let text = crate::yaml::to_string(&config).expect("block YAML");
+    reload_text(state, dir, text).await;
+    Arc::get_mut(state).expect("state is unique").config_path = Some(path.clone());
+    let context = crate::config_reload::ReloadContext::new(
+        path,
+        Arc::clone(&state.live_config),
+        Arc::clone(&state.backends),
+        crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    )
+    .expect("the registry pairs with the config");
+    state.meta_mcp.set_reload_context(Arc::new(context));
+}
+
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_cli_keys_dashboard_session_cannot_create_a_key() {
+    use super::e5_dashboard_session_tests::link::{bootstrap_value, mint, session_handle};
+    use super::e5_dashboard_session_tests::{redeem, request, send, with_audit};
+    let (mut state, _store, dir, keys) = fixture().await;
+    enable_key_creation(&mut state, dir.path()).await;
+    let (_log, _audit_dir) = with_audit(&mut state);
+    let minted = mint(&state, Some(CHILD), None).await;
+    assert_eq!(minted.status, StatusCode::OK, "{}", minted.body);
+    let value = bootstrap_value(minted.json()["link"].as_str().expect("link"));
+    let out = send(&state, redeem(&value, None)).await;
+    assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
+    let handle = session_handle(&out);
+    let path = dir.path().join("gateway.yaml");
+    let before = std::fs::read(&path).expect("config bytes");
+    let auth = Arc::clone(state.live_config.generation().auth());
+    let body = serde_json::json!({
+        "name": "session-successor", "backends": ["*"],
+        "revision": crate::config_reload::FileRevision::of(&before).as_str(),
+    });
+    // The cookie is the sole credential; same-origin metadata passes the browser guard.
+    let mut req = request("POST", "/ui/api/keys", Some(&handle), None, false);
+    let host = format!("127.0.0.1:{}", state.live_config.running().server.port);
+    for (name, value) in [
+        ("origin", format!("http://{host}")),
+        ("host", host),
+        ("sec-fetch-site", "same-origin".into()),
+        ("content-type", "application/json".into()),
+    ] {
+        req.headers_mut().insert(name, value.parse().expect("header"));
+    }
+    *req.body_mut() = axum::body::Body::from(body.to_string());
+    let out = send(&state, req).await;
+    // A CLI-derived session must not mint an unbound successor or mutate either key table.
+    assert_eq!(out.status, StatusCode::FORBIDDEN, "{}", out.body);
+    assert_eq!(std::fs::read(&path).expect("config bytes"), before);
+    assert!(Arc::ptr_eq(&auth, state.live_config.generation().auth()));
+    assert_eq!(state.live_config.generation().auth().api_keys().len(), keys.len());
+}
+
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_link_minted_by_the_child_is_refused_after_root_removal() {
+    use super::e5_dashboard_session_tests::link::{bootstrap_value, mint};
+    use super::e5_dashboard_session_tests::{redeem, send};
+    let (state, _store, dir, keys) = fixture().await;
+    let minted = mint(&state, Some(CHILD), None).await;
+    assert_eq!(minted.status, StatusCode::OK, "{}", minted.body);
+    let value = bootstrap_value(minted.json()["link"].as_str().expect("link"));
+    // Keeping the child configured must not preserve a link backed by the removed root.
+    remove_root(&state, dir.path(), &keys).await;
+    let out = send(&state, redeem(&value, None)).await;
+    assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
+    assert!(out.set_cookie().is_empty(), "{}", out.set_cookie());
+}
+
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_session_minted_by_the_child_ends_with_the_root() {
+    use super::e5_dashboard_session_tests::link::{bootstrap_value, mint, session_handle};
+    use super::e5_dashboard_session_tests::{get, redeem, send};
+    let (state, _store, dir, keys) = fixture().await;
+    let minted = mint(&state, Some(CHILD), None).await;
+    assert_eq!(minted.status, StatusCode::OK, "{}", minted.body);
+    let value = bootstrap_value(minted.json()["link"].as_str().expect("link"));
+    let out = send(&state, redeem(&value, None)).await;
+    assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
+    let handle = session_handle(&out);
+    let out = send(&state, get("/ui/api/status", Some(&handle))).await;
+    assert_eq!(out.status, StatusCode::OK, "{}", out.body);
+    // Reuse the accepted cookie: the next request must recheck the child's approver.
+    remove_root(&state, dir.path(), &keys).await;
+    let out = send(&state, get("/ui/api/status", Some(&handle))).await;
+    assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
+}
+
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_handoff_minted_by_the_child_is_refused_after_root_removal() {
+    use super::e5_dashboard_session_tests::handoff::{code_from_link, submit};
+    use super::e5_dashboard_session_tests::{link::mint, send};
+    let (state, _store, dir, keys) = fixture().await;
+    let mut config = (*state.live_config.get()).clone();
+    config.server.public_url = Some("https://gw.example".into());
+    state.live_config.set(config);
+    let minted = mint(&state, Some(CHILD), None).await;
+    assert_eq!(minted.status, StatusCode::OK, "{}", minted.body);
+    let (out, code) = code_from_link(&state).await;
+    assert!(out.set_cookie().is_empty(), "handoff has not issued a session");
+    remove_root(&state, dir.path(), &keys).await;
+    // Keep the proxy origin valid after the file reload, isolating credential revocation.
+    let mut config = (*state.live_config.get()).clone();
+    config.server.public_url = Some("https://gw.example".into());
+    state.live_config.set(config);
+    let out = send(&state, submit(&code, None)).await;
+    assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
+    assert!(out.set_cookie().is_empty(), "{}", out.set_cookie());
+}

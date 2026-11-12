@@ -136,6 +136,86 @@ fn a_cli_key_caller_cannot_create_a_key() {
 }
 
 #[test]
+fn a_same_named_ordinary_key_is_not_refused_as_a_cli_key() {
+    let ordinary = ApiKeyConfig {
+        name: CLI_NAME.into(),
+        ..root_key()
+    };
+    let keys = vec![cli_key(), ordinary];
+    let auth = resolved(keys.clone());
+    let (client, named) = auth
+        .validate_token_with_origin(ROOT)
+        .expect("ordinary key validates");
+    let cli = auth.validate_token(CLI_SECRET).expect("CLI key validates");
+    assert!(client.quota_principal.is_some());
+    assert_ne!(client.quota_principal, cli.quota_principal);
+    // Only the running table has colliding labels: the loader rejects
+    // duplicate names in the backing file before an allowed create can write.
+    let fx = Fixture::new(Setup {
+        running: AuthConfig {
+            enabled: true,
+            api_keys: keys,
+            ..AuthConfig::default()
+        },
+        ..Setup::default()
+    });
+    let mut call = Call::new(&fx.body("successor"));
+    call.client = client;
+    call.named = named;
+    let sent = fx.post(call);
+    assert_eq!(sent.status, StatusCode::CREATED, "{}", sent.body);
+    assert!(fx.file_keys().iter().any(|key| key.name == "successor"));
+}
+
+#[test]
+fn a_cli_key_is_refused_even_when_a_same_named_key_is_listed_first() {
+    let ordinary = ApiKeyConfig {
+        name: CLI_NAME.into(),
+        ..root_key()
+    };
+    // Reverse the collision in the running table; keep the backing file
+    // loadable so refusal cannot be credited to duplicate-name validation.
+    let fx = Fixture::new(Setup {
+        running: AuthConfig {
+            enabled: true,
+            api_keys: vec![ordinary, cli_key()],
+            ..AuthConfig::default()
+        },
+        ..Setup::default()
+    });
+    let call = as_cli_key(&fx.body("successor"));
+    assert!(call.client.quota_principal.is_some());
+    refused(&fx, call, StatusCode::FORBIDDEN);
+}
+
+#[test]
+fn a_cli_key_renamed_after_it_authenticated_is_still_refused() {
+    let renamed = ApiKeyConfig {
+        name: "cli:renamed".into(),
+        ..cli_key()
+    };
+    let auth = resolved(vec![root_key(), renamed.clone()]);
+    let current = auth
+        .validate_token(CLI_SECRET)
+        .expect("renamed CLI key validates");
+    let fx = Fixture::new(Setup {
+        running: AuthConfig {
+            enabled: true,
+            api_keys: vec![root_key(), renamed],
+            ..AuthConfig::default()
+        },
+        ..Setup::default()
+    });
+    // The request retains its authenticated name; only the generation's
+    // label changed, so the same quota principal must still be refused.
+    let call = as_cli_key(&fx.body("successor"));
+    assert_eq!(call.named.as_ref().expect("named CLI key").name(), CLI_NAME);
+    assert!(call.client.quota_principal.is_some());
+    assert_eq!(call.client.quota_principal, current.quota_principal);
+    refused(&fx, call, StatusCode::FORBIDDEN);
+}
+
+#[test]
 fn a_named_admin_and_the_static_bearer_still_create() {
     // One fixture per caller: each create answers the fixture's one known
     // secret, so a second create in the same file would share its digest.
