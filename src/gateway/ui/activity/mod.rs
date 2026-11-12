@@ -13,6 +13,7 @@ mod cursor;
 mod export;
 pub(in crate::gateway::ui) mod forward;
 mod joiner;
+mod key_lookup;
 mod reader;
 mod receipt;
 mod receipt_scan;
@@ -28,7 +29,7 @@ use std::sync::Arc;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -60,6 +61,11 @@ pub(super) fn activity_router() -> Router<Arc<AppState>> {
         .route(routes::UI_ACTIVITY, get(list))
         .route(routes::UI_ACTIVITY_EXPORT, get(export_route))
         .route(routes::UI_ACTIVITY_RECEIPT, get(receipt_route))
+        .route(
+            routes::UI_KEY_SERVER_LOOKUP_EMAIL,
+            post(key_lookup::lookup)
+                .layer(axum::extract::DefaultBodyLimit::max(key_lookup::MAX_BODY)),
+        )
 }
 
 /// The list's query, as sent. Parsed by [`parse`].

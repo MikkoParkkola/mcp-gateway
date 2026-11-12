@@ -57,9 +57,8 @@ pub struct RateLimiter<C: Clock + Clone + Send + Sync = MonotonicClock> {
     /// a rebuild and the calls racing it see one bucket.
     inner: Mutex<Option<State<C>>>,
     clock: C,
-    /// Quota configuration
-    rps: u32,
-    burst: u32,
+    /// The quota each rebuilt bucket takes.
+    quota: Quota,
 }
 
 impl RateLimiter {
@@ -75,15 +74,28 @@ impl<C: Clock + Clone + Send + Sync> RateLimiter<C> {
             enabled: AtomicBool::new(config.enabled),
             inner: Mutex::new(None),
             clock,
-            rps: config.requests_per_second,
-            burst: config.burst_size,
+            quota: Quota::per_second(
+                NonZeroU32::new(config.requests_per_second).unwrap_or(NonZeroU32::MIN),
+            )
+            .allow_burst(NonZeroU32::new(config.burst_size).unwrap_or(NonZeroU32::MIN)),
+        }
+    }
+
+    /// A limiter that is always on, for one fixed `quota`: no config, no
+    /// enable switch. It shares [`Self::acquire`]'s clock-step handling and
+    /// wait calculation.
+    #[cfg(feature = "webui")]
+    pub(crate) fn always_on(quota: Quota, clock: C) -> Self {
+        Self {
+            enabled: AtomicBool::new(true),
+            inner: Mutex::new(None),
+            clock,
+            quota,
         }
     }
 
     fn bucket(&self) -> Bucket<C> {
-        let quota = Quota::per_second(NonZeroU32::new(self.rps).unwrap_or(NonZeroU32::MIN))
-            .allow_burst(NonZeroU32::new(self.burst).unwrap_or(NonZeroU32::MIN));
-        GovernorLimiter::direct_with_clock(quota, self.clock.clone())
+        GovernorLimiter::direct_with_clock(self.quota, self.clock.clone())
     }
 
     /// Try to acquire a permit
