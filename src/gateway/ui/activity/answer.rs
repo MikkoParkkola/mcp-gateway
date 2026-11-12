@@ -32,7 +32,7 @@ pub(super) const MAX_JOINED: usize = 16_384;
 pub(super) const NOT_SCANNED: &str = "answer not scanned";
 pub(super) const NOT_RECORDED: &str = "findings not recorded for this answer";
 pub(super) const INCOMPLETE: &str = "not stated: the join was incomplete";
-pub(super) const NO_RECORD: &str = "no delivery record found";
+pub(super) const NO_RECORD: &str = "no delivery record within 256 KiB after the call";
 
 /// The effect a row states; also the `effect=` filter's values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
