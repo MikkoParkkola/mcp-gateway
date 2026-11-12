@@ -132,28 +132,32 @@ pub(crate) fn self_check_with(normalizer: &dyn Fn(&str) -> String) -> Result<(),
     Ok(())
 }
 
-/// Set once the real check has passed in this process.
-static CHECK_PASSED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-/// How many times the real check has run.
-static CHECK_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Whether the real check has passed in this process, and how many times it ran.
+/// One lock covers both, so the check runs exactly once until it passes: two
+/// threads building their first keys cannot both run it, and the count is final
+/// as soon as any key has been built.
+static CHECK_STATE: std::sync::Mutex<(bool, usize)> = std::sync::Mutex::new((false, 0));
 
 /// The check every key's construction goes through: the real [`self_check`], run
 /// until it passes once in this process. Only a success is remembered: a failure
 /// is not cached, so it is judged again at the next key, and it can never be
 /// stuck in a process-wide cell.
 fn process_check() -> Result<(), String> {
-    if CHECK_PASSED.get().is_some() {
+    // A poisoned lock still holds a valid (passed, runs) pair.
+    let mut state = CHECK_STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if state.0 {
         return Ok(());
     }
-    CHECK_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    state.1 += 1;
     self_check()?;
-    let _ = CHECK_PASSED.set(());
+    state.0 = true;
     Ok(())
 }
 
 /// How many times the real check has run in this process (rows read it).
+#[cfg(test)]
 pub(crate) fn check_runs() -> usize {
-    CHECK_RUNS.load(std::sync::atomic::Ordering::Relaxed)
+    CHECK_STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).1
 }
 
 /// [`self_check_with`] on the real normalization.
@@ -198,12 +202,16 @@ impl EmailHashKey {
     /// Parse the stored or configured text: exactly 64 lowercase hex digits,
     /// with one trailing newline allowed (the record key file's rule).
     pub(crate) fn from_hex(text: &str) -> Result<Self, KeyTextError> {
-        Self::from_hex_checked(text, &process_check)
+        let key = Self::parse_hex(text)?;
+        process_check().map_err(KeyTextError::Normalization)?;
+        Ok(key)
     }
 
     /// [`Self::from_hex`] with the normalization check passed in, so a row can
-    /// give it a failing or counting one. The text is judged first; then the
+    /// give it a failing one. Test-only: no production code can build a key
+    /// with a check of its own choosing. The text is judged first; then the
     /// check runs, and a failure fails the key, with the check's own words.
+    #[cfg(test)]
     pub(crate) fn from_hex_checked(
         text: &str,
         check: &dyn Fn() -> Result<(), String>,

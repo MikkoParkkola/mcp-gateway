@@ -8,7 +8,8 @@ use super::{EmailHashKey, KEY2_HEX, KEY_HEX, KeyTextError};
 /// NORM.3: building a key runs the normalization check, once per process: every
 /// construction path goes through `from_hex`, so no caller can hash on a build
 /// that was never checked. The counter moves only inside the once-per-process
-/// initializer, so a `from_hex` that skips the check leaves it at zero.
+/// lock, so a `from_hex` that skips the check leaves it at zero, and once any
+/// key has been built the count is final: no later or parallel build moves it.
 /// Mutant: drop the check from `from_hex`, or run it on every key.
 #[test]
 fn building_a_key_runs_the_normalization_check_once_per_process() {
@@ -104,5 +105,16 @@ fn a_subject_hashes_under_its_own_domain_and_exactly() {
     assert_ne!(
         key.hash_subject("ada@corp.invalid"),
         key.hash("ada@corp.invalid")
+    );
+    // Exact bytes: padding and a decomposed accent are part of a subject.
+    assert_ne!(
+        key.hash_subject(" sub-1 "),
+        key.hash_subject("sub-1"),
+        "a subject is not trimmed"
+    );
+    assert_ne!(
+        key.hash_subject("e\u{301}"),
+        key.hash_subject("\u{e9}"),
+        "a subject is not NFC-normalized"
     );
 }
