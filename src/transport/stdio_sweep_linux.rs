@@ -70,17 +70,25 @@ fn denied(err: rustix::io::Errno) -> SignalError {
 }
 
 /// One sweep's table: the descriptors it holds close when the table drops.
-pub(super) struct LinuxTable {
+pub(in crate::transport::stdio) struct LinuxTable {
     fds: HashMap<Identity, OwnedFd>,
     origin: Instant,
 }
 
 impl LinuxTable {
-    pub(super) fn new() -> Self {
+    pub(in crate::transport::stdio) fn new() -> Self {
         Self {
             fds: HashMap::new(),
             origin: Instant::now(),
         }
+    }
+
+    /// The pid with the start time that tells it from a later process.
+    pub(in crate::transport::stdio) fn identity_of(pid: u32) -> Option<Identity> {
+        Some(Identity {
+            pid,
+            start: read_stat(pid)?.start,
+        })
     }
 
     /// The descriptor for `id`, opened first and checked second; `None` when the

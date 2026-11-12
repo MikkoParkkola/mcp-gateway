@@ -289,9 +289,44 @@ impl Sweep {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
 #[path = "stdio_sweep_linux.rs"]
 mod linux;
+pub(super) use linux::LinuxTable;
+
+/// The share of a backend's kill reserve the sweep may spend freezing and
+/// re-walking, and then on the terminal kills. Both sit inside the reaper's own
+/// kill reserve, so the gateway's stop deadline holds by construction.
+const FREEZE_SLICE: Duration = Duration::from_millis(150);
+const KILL_SLICE: Duration = Duration::from_millis(100);
+/// The most descendants one sweep holds; the rest are reported as residual.
+const MEMBER_CAP: usize = 256;
+/// Descriptors the gateway keeps for its own sockets and files.
+const FD_RESERVE: usize = 512;
+
+/// The bounds every backend's sweep runs under.
+pub(super) fn config() -> SweepConfig {
+    SweepConfig {
+        freeze_slice: FREEZE_SLICE,
+        kill_slice: KILL_SLICE,
+        cap: MEMBER_CAP,
+    }
+}
+
+/// The one pidfd budget of this process, sized from its descriptor limit.
+pub(super) fn process_budget() -> &'static PidfdBudget {
+    static BUDGET: std::sync::OnceLock<PidfdBudget> = std::sync::OnceLock::new();
+    BUDGET.get_or_init(|| {
+        let nofile = rustix::process::getrlimit(rustix::process::Resource::Nofile)
+            .current
+            .and_then(|limit| usize::try_from(limit).ok())
+            .unwrap_or(1024);
+        let limit = PidfdBudget::limit_for(nofile, FD_RESERVE);
+        if limit < 4096 {
+            tracing::info!(limit, nofile, "descendant sweep: pidfd budget below its cap");
+        }
+        PidfdBudget::new(limit)
+    })
+}
 
 #[cfg(test)]
 #[path = "stdio_sweep_tests.rs"]
