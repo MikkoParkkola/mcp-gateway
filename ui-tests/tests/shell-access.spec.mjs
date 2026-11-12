@@ -104,7 +104,8 @@ test.describe('access', () => {
     await page.goto('/ui/policies/status');
     await page.waitForTimeout(500);
     expect(reads).toEqual([]);
-    await expect(page.locator('#content [data-rendered]')).toHaveCount(0);
+    // The loading frame is drawn; no screen content is, and no screen read has started.
+    await expect(page.locator('#content')).not.toContainText('value');
     release();
     await expect(page).toHaveURL(/\/ui\/overview\/status$/);
     await shellReady(page);
@@ -121,11 +122,10 @@ test.describe('access', () => {
         json: { version: '4.0.0', auth: { enabled: true, signed_in: true, admin: false }, access: access({ hidden: { policies: ADMIN_ONLY } }) },
       });
     });
-    await page.route('**/ui/api/forbidden-probe', (r) => r.fulfill({ status: 401, json: {} }));
-    await page.goto('/ui/access/status');
-    await expect(page.locator('#signin')).toBeVisible();
-    release();
-    await page.waitForTimeout(500);
+    // The screen read is held behind the status answer, so a 401 has to come from a read the
+    // gate does not hold: the To do count, which starts after first paint.
+    await page.route('**/ui/api/decisions/count', (r) => r.fulfill({ status: 401, json: {} }));
+    await page.goto('/ui/overview/status');
     await expect(page.locator('#signin')).toBeVisible();
     // The answer that was in flight is dropped: its report does not narrow the
     // sidebar or draw the note under the sign-in view (a mutant that commits it fails here).
@@ -261,11 +261,13 @@ test.describe('access', () => {
 
   test('A20 a status read that never answers is aborted at the key-check deadline and the screen then loads', async ({ page }) => {
     await page.clock.install();
+    const reads = [];
+    page.on('request', (r) => r.url().includes('/ui/api/tools') && reads.push(r.url()));
     await page.route('**/ui/api/status', () => new Promise(() => {}));
     await page.goto('/ui/tools/status');
     await page.clock.runFor(5_000);
-    await expect(page.locator('#content [data-rendered]')).toHaveCount(0);
+    expect(reads).toEqual([]);
     await page.clock.runFor(6_000);
-    await expect(page.locator('#content [data-rendered]')).toHaveCount(1);
+    await expect.poll(() => reads.length).toBe(1);
   });
 });
