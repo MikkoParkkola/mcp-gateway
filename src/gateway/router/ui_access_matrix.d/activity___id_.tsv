@@ -4,8 +4,8 @@
 /ui/api/activity/{id}	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/activity/{id}	DELETE	plain	AuthOff	405
 /ui/api/activity/{id}	DELETE	plain	Bearer	405
-/ui/api/activity/{id}	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	DELETE	plain	OidcAdmin	405
 /ui/api/activity/{id}	DELETE	plain	OidcAuditor	405
 /ui/api/activity/{id}	DELETE	plain	OidcDeveloper	405
@@ -17,49 +17,49 @@
 /ui/api/activity/{id}	DELETE	plain	StandardKey	405
 /ui/api/activity/{id}	GET	bad-query	AdminKey	404
 /ui/api/activity/{id}	GET	bad-query	AdminKeyUnmapped	404
-/ui/api/activity/{id}	GET	bad-query	AuthOff	401:@b_ca730ec7
+/ui/api/activity/{id}	GET	bad-query	AuthOff	401:error="Authentication required"
 /ui/api/activity/{id}	GET	bad-query	Bearer	404
-/ui/api/activity/{id}	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	GET	bad-query	OidcAdmin	404
 /ui/api/activity/{id}	GET	bad-query	OidcAuditor	404
 /ui/api/activity/{id}	GET	bad-query	OidcDeveloper	404
-/ui/api/activity/{id}	GET	bad-query	OidcDeveloperNoIssuer	403:@b_4e89aa84
-/ui/api/activity/{id}	GET	bad-query	OidcDeveloperNoSubject	403:@b_4e89aa84
-/ui/api/activity/{id}	GET	bad-query	OidcReviewer	403:@b_4e89aa84
-/ui/api/activity/{id}	GET	bad-query	OidcUnmapped	403:@b_4e89aa84
+/ui/api/activity/{id}	GET	bad-query	OidcDeveloperNoIssuer	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/{id}	GET	bad-query	OidcDeveloperNoSubject	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/{id}	GET	bad-query	OidcReviewer	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/{id}	GET	bad-query	OidcUnmapped	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
 /ui/api/activity/{id}	GET	bad-query	Session	404
-/ui/api/activity/{id}	GET	bad-query	StandardKey	403:@b_4e89aa84
-/ui/api/activity/{id}	GET	other-receipt	AdminKey	200:5931fd1bfcce
-/ui/api/activity/{id}	GET	other-receipt	AdminKeyUnmapped	200:5931fd1bfcce
-/ui/api/activity/{id}	GET	other-receipt	AuthOff	401:@b_ca730ec7
-/ui/api/activity/{id}	GET	other-receipt	Bearer	200:5931fd1bfcce
-/ui/api/activity/{id}	GET	other-receipt	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	GET	other-receipt	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/activity/{id}	GET	other-receipt	OidcAdmin	200:5931fd1bfcce
-/ui/api/activity/{id}	GET	other-receipt	OidcAuditor	200:5931fd1bfcce
+/ui/api/activity/{id}	GET	bad-query	StandardKey	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/{id}	GET	other-receipt	AdminKey	200:dev-2,https://issuer-matrix,kind="call",matrix-standard-key,tool_1
+/ui/api/activity/{id}	GET	other-receipt	AdminKeyUnmapped	200:dev-2,https://issuer-matrix,kind="call",matrix-standard-key,tool_1
+/ui/api/activity/{id}	GET	other-receipt	AuthOff	401:error="Authentication required"
+/ui/api/activity/{id}	GET	other-receipt	Bearer	200:dev-2,https://issuer-matrix,kind="call",matrix-standard-key,tool_1
+/ui/api/activity/{id}	GET	other-receipt	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	GET	other-receipt	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/activity/{id}	GET	other-receipt	OidcAdmin	200:dev-2,https://issuer-matrix,kind="call",matrix-standard-key,tool_1
+/ui/api/activity/{id}	GET	other-receipt	OidcAuditor	200:dev-2,https://issuer-matrix,kind="call",matrix-standard-key,tool_1
 /ui/api/activity/{id}	GET	other-receipt	OidcDeveloper	404
-/ui/api/activity/{id}	GET	other-receipt	OidcDeveloperNoIssuer	403:@b_4e89aa84
-/ui/api/activity/{id}	GET	other-receipt	OidcDeveloperNoSubject	403:@b_4e89aa84
-/ui/api/activity/{id}	GET	other-receipt	OidcReviewer	403:@b_4e89aa84
-/ui/api/activity/{id}	GET	other-receipt	OidcUnmapped	403:@b_4e89aa84
-/ui/api/activity/{id}	GET	other-receipt	Session	200:5931fd1bfcce
-/ui/api/activity/{id}	GET	other-receipt	StandardKey	403:@b_4e89aa84
+/ui/api/activity/{id}	GET	other-receipt	OidcDeveloperNoIssuer	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/{id}	GET	other-receipt	OidcDeveloperNoSubject	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/{id}	GET	other-receipt	OidcReviewer	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/{id}	GET	other-receipt	OidcUnmapped	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/{id}	GET	other-receipt	Session	200:dev-2,https://issuer-matrix,kind="call",matrix-standard-key,tool_1
+/ui/api/activity/{id}	GET	other-receipt	StandardKey	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
 /ui/api/activity/{id}	GET	plain	AdminKey	404
 /ui/api/activity/{id}	GET	plain	AdminKeyUnmapped	404
-/ui/api/activity/{id}	GET	plain	AuthOff	401:@b_ca730ec7
+/ui/api/activity/{id}	GET	plain	AuthOff	401:error="Authentication required"
 /ui/api/activity/{id}	GET	plain	Bearer	404
-/ui/api/activity/{id}	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	GET	plain	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	GET	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	GET	plain	OidcAdmin	404
 /ui/api/activity/{id}	GET	plain	OidcAuditor	404
 /ui/api/activity/{id}	GET	plain	OidcDeveloper	404
-/ui/api/activity/{id}	GET	plain	OidcDeveloperNoIssuer	403:@b_4e89aa84
-/ui/api/activity/{id}	GET	plain	OidcDeveloperNoSubject	403:@b_4e89aa84
-/ui/api/activity/{id}	GET	plain	OidcReviewer	403:@b_4e89aa84
-/ui/api/activity/{id}	GET	plain	OidcUnmapped	403:@b_4e89aa84
+/ui/api/activity/{id}	GET	plain	OidcDeveloperNoIssuer	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/{id}	GET	plain	OidcDeveloperNoSubject	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/{id}	GET	plain	OidcReviewer	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/{id}	GET	plain	OidcUnmapped	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
 /ui/api/activity/{id}	GET	plain	Session	404
-/ui/api/activity/{id}	GET	plain	StandardKey	403:@b_4e89aa84
+/ui/api/activity/{id}	GET	plain	StandardKey	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
 /ui/api/activity/{id}	HEAD	plain	AdminKey	404
 /ui/api/activity/{id}	HEAD	plain	AdminKeyUnmapped	404
 /ui/api/activity/{id}	HEAD	plain	AuthOff	401
@@ -79,8 +79,8 @@
 /ui/api/activity/{id}	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/activity/{id}	OPTIONS	plain	AuthOff	405
 /ui/api/activity/{id}	OPTIONS	plain	Bearer	405
-/ui/api/activity/{id}	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	OPTIONS	plain	OidcAdmin	405
 /ui/api/activity/{id}	OPTIONS	plain	OidcAuditor	405
 /ui/api/activity/{id}	OPTIONS	plain	OidcDeveloper	405
@@ -94,8 +94,8 @@
 /ui/api/activity/{id}	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/activity/{id}	PATCH	bad-json	AuthOff	405
 /ui/api/activity/{id}	PATCH	bad-json	Bearer	405
-/ui/api/activity/{id}	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	PATCH	bad-json	OidcAdmin	405
 /ui/api/activity/{id}	PATCH	bad-json	OidcAuditor	405
 /ui/api/activity/{id}	PATCH	bad-json	OidcDeveloper	405
@@ -109,8 +109,8 @@
 /ui/api/activity/{id}	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/activity/{id}	PATCH	bad-type	AuthOff	405
 /ui/api/activity/{id}	PATCH	bad-type	Bearer	405
-/ui/api/activity/{id}	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	PATCH	bad-type	OidcAdmin	405
 /ui/api/activity/{id}	PATCH	bad-type	OidcAuditor	405
 /ui/api/activity/{id}	PATCH	bad-type	OidcDeveloper	405
@@ -124,8 +124,8 @@
 /ui/api/activity/{id}	PATCH	json	AdminKeyUnmapped	405
 /ui/api/activity/{id}	PATCH	json	AuthOff	405
 /ui/api/activity/{id}	PATCH	json	Bearer	405
-/ui/api/activity/{id}	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	PATCH	json	OidcAdmin	405
 /ui/api/activity/{id}	PATCH	json	OidcAuditor	405
 /ui/api/activity/{id}	PATCH	json	OidcDeveloper	405
@@ -139,8 +139,8 @@
 /ui/api/activity/{id}	POST	bad-json	AdminKeyUnmapped	405
 /ui/api/activity/{id}	POST	bad-json	AuthOff	405
 /ui/api/activity/{id}	POST	bad-json	Bearer	405
-/ui/api/activity/{id}	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	POST	bad-json	OidcAdmin	405
 /ui/api/activity/{id}	POST	bad-json	OidcAuditor	405
 /ui/api/activity/{id}	POST	bad-json	OidcDeveloper	405
@@ -154,8 +154,8 @@
 /ui/api/activity/{id}	POST	bad-type	AdminKeyUnmapped	405
 /ui/api/activity/{id}	POST	bad-type	AuthOff	405
 /ui/api/activity/{id}	POST	bad-type	Bearer	405
-/ui/api/activity/{id}	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	POST	bad-type	OidcAdmin	405
 /ui/api/activity/{id}	POST	bad-type	OidcAuditor	405
 /ui/api/activity/{id}	POST	bad-type	OidcDeveloper	405
@@ -169,8 +169,8 @@
 /ui/api/activity/{id}	POST	json	AdminKeyUnmapped	405
 /ui/api/activity/{id}	POST	json	AuthOff	405
 /ui/api/activity/{id}	POST	json	Bearer	405
-/ui/api/activity/{id}	POST	json	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	POST	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	POST	json	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	POST	json	OidcAdmin	405
 /ui/api/activity/{id}	POST	json	OidcAuditor	405
 /ui/api/activity/{id}	POST	json	OidcDeveloper	405
@@ -184,8 +184,8 @@
 /ui/api/activity/{id}	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/activity/{id}	PUT	bad-json	AuthOff	405
 /ui/api/activity/{id}	PUT	bad-json	Bearer	405
-/ui/api/activity/{id}	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	PUT	bad-json	OidcAdmin	405
 /ui/api/activity/{id}	PUT	bad-json	OidcAuditor	405
 /ui/api/activity/{id}	PUT	bad-json	OidcDeveloper	405
@@ -199,8 +199,8 @@
 /ui/api/activity/{id}	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/activity/{id}	PUT	bad-type	AuthOff	405
 /ui/api/activity/{id}	PUT	bad-type	Bearer	405
-/ui/api/activity/{id}	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	PUT	bad-type	OidcAdmin	405
 /ui/api/activity/{id}	PUT	bad-type	OidcAuditor	405
 /ui/api/activity/{id}	PUT	bad-type	OidcDeveloper	405
@@ -214,8 +214,8 @@
 /ui/api/activity/{id}	PUT	json	AdminKeyUnmapped	405
 /ui/api/activity/{id}	PUT	json	AuthOff	405
 /ui/api/activity/{id}	PUT	json	Bearer	405
-/ui/api/activity/{id}	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/activity/{id}	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/{id}	PUT	json	NoKey	401:error.code=-32000
+/ui/api/activity/{id}	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/{id}	PUT	json	OidcAdmin	405
 /ui/api/activity/{id}	PUT	json	OidcAuditor	405
 /ui/api/activity/{id}	PUT	json	OidcDeveloper	405

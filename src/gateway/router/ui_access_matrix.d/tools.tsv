@@ -3,8 +3,8 @@
 /ui/api/tools	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/tools	DELETE	plain	AuthOff	405
 /ui/api/tools	DELETE	plain	Bearer	405
-/ui/api/tools	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/tools	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/tools	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools	DELETE	plain	OidcAdmin	405
 /ui/api/tools	DELETE	plain	OidcAuditor	405
 /ui/api/tools	DELETE	plain	OidcDeveloper	405
@@ -16,34 +16,34 @@
 /ui/api/tools	DELETE	plain	StandardKey	405
 /ui/api/tools	GET	bad-query	AdminKey	200
 /ui/api/tools	GET	bad-query	AdminKeyUnmapped	200
-/ui/api/tools	GET	bad-query	AuthOff	403:@b_ca730ec7
+/ui/api/tools	GET	bad-query	AuthOff	403:error="Authentication required"
 /ui/api/tools	GET	bad-query	Bearer	200
-/ui/api/tools	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/tools	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/tools	GET	bad-query	OidcAdmin	403:@b_ca730ec7
-/ui/api/tools	GET	bad-query	OidcAuditor	403:@b_ca730ec7
-/ui/api/tools	GET	bad-query	OidcDeveloper	403:@b_ca730ec7
-/ui/api/tools	GET	bad-query	OidcDeveloperNoIssuer	403:@b_ca730ec7
-/ui/api/tools	GET	bad-query	OidcDeveloperNoSubject	403:@b_ca730ec7
-/ui/api/tools	GET	bad-query	OidcReviewer	403:@b_ca730ec7
-/ui/api/tools	GET	bad-query	OidcUnmapped	403:@b_ca730ec7
+/ui/api/tools	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/tools	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/tools	GET	bad-query	OidcAdmin	403:error="Authentication required"
+/ui/api/tools	GET	bad-query	OidcAuditor	403:error="Authentication required"
+/ui/api/tools	GET	bad-query	OidcDeveloper	403:error="Authentication required"
+/ui/api/tools	GET	bad-query	OidcDeveloperNoIssuer	403:error="Authentication required"
+/ui/api/tools	GET	bad-query	OidcDeveloperNoSubject	403:error="Authentication required"
+/ui/api/tools	GET	bad-query	OidcReviewer	403:error="Authentication required"
+/ui/api/tools	GET	bad-query	OidcUnmapped	403:error="Authentication required"
 /ui/api/tools	GET	bad-query	Session	200
-/ui/api/tools	GET	bad-query	StandardKey	403:@b_ca730ec7
+/ui/api/tools	GET	bad-query	StandardKey	403:error="Authentication required"
 /ui/api/tools	GET	plain	AdminKey	200
 /ui/api/tools	GET	plain	AdminKeyUnmapped	200
-/ui/api/tools	GET	plain	AuthOff	403:@b_ca730ec7
+/ui/api/tools	GET	plain	AuthOff	403:error="Authentication required"
 /ui/api/tools	GET	plain	Bearer	200
-/ui/api/tools	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/tools	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/tools	GET	plain	OidcAdmin	403:@b_ca730ec7
-/ui/api/tools	GET	plain	OidcAuditor	403:@b_ca730ec7
-/ui/api/tools	GET	plain	OidcDeveloper	403:@b_ca730ec7
-/ui/api/tools	GET	plain	OidcDeveloperNoIssuer	403:@b_ca730ec7
-/ui/api/tools	GET	plain	OidcDeveloperNoSubject	403:@b_ca730ec7
-/ui/api/tools	GET	plain	OidcReviewer	403:@b_ca730ec7
-/ui/api/tools	GET	plain	OidcUnmapped	403:@b_ca730ec7
+/ui/api/tools	GET	plain	NoKey	401:error.code=-32000
+/ui/api/tools	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/tools	GET	plain	OidcAdmin	403:error="Authentication required"
+/ui/api/tools	GET	plain	OidcAuditor	403:error="Authentication required"
+/ui/api/tools	GET	plain	OidcDeveloper	403:error="Authentication required"
+/ui/api/tools	GET	plain	OidcDeveloperNoIssuer	403:error="Authentication required"
+/ui/api/tools	GET	plain	OidcDeveloperNoSubject	403:error="Authentication required"
+/ui/api/tools	GET	plain	OidcReviewer	403:error="Authentication required"
+/ui/api/tools	GET	plain	OidcUnmapped	403:error="Authentication required"
 /ui/api/tools	GET	plain	Session	200
-/ui/api/tools	GET	plain	StandardKey	403:@b_ca730ec7
+/ui/api/tools	GET	plain	StandardKey	403:error="Authentication required"
 /ui/api/tools	HEAD	plain	AdminKey	200
 /ui/api/tools	HEAD	plain	AdminKeyUnmapped	200
 /ui/api/tools	HEAD	plain	AuthOff	403
@@ -63,8 +63,8 @@
 /ui/api/tools	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/tools	OPTIONS	plain	AuthOff	405
 /ui/api/tools	OPTIONS	plain	Bearer	405
-/ui/api/tools	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/tools	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/tools	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools	OPTIONS	plain	OidcAdmin	405
 /ui/api/tools	OPTIONS	plain	OidcAuditor	405
 /ui/api/tools	OPTIONS	plain	OidcDeveloper	405
@@ -78,8 +78,8 @@
 /ui/api/tools	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/tools	PATCH	bad-json	AuthOff	405
 /ui/api/tools	PATCH	bad-json	Bearer	405
-/ui/api/tools	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/tools	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/tools	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools	PATCH	bad-json	OidcAdmin	405
 /ui/api/tools	PATCH	bad-json	OidcAuditor	405
 /ui/api/tools	PATCH	bad-json	OidcDeveloper	405
@@ -93,8 +93,8 @@
 /ui/api/tools	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/tools	PATCH	bad-type	AuthOff	405
 /ui/api/tools	PATCH	bad-type	Bearer	405
-/ui/api/tools	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/tools	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/tools	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools	PATCH	bad-type	OidcAdmin	405
 /ui/api/tools	PATCH	bad-type	OidcAuditor	405
 /ui/api/tools	PATCH	bad-type	OidcDeveloper	405
@@ -108,8 +108,8 @@
 /ui/api/tools	PATCH	json	AdminKeyUnmapped	405
 /ui/api/tools	PATCH	json	AuthOff	405
 /ui/api/tools	PATCH	json	Bearer	405
-/ui/api/tools	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/tools	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/tools	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools	PATCH	json	OidcAdmin	405
 /ui/api/tools	PATCH	json	OidcAuditor	405
 /ui/api/tools	PATCH	json	OidcDeveloper	405
@@ -123,8 +123,8 @@
 /ui/api/tools	POST	bad-json	AdminKeyUnmapped	405
 /ui/api/tools	POST	bad-json	AuthOff	405
 /ui/api/tools	POST	bad-json	Bearer	405
-/ui/api/tools	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/tools	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/tools	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools	POST	bad-json	OidcAdmin	405
 /ui/api/tools	POST	bad-json	OidcAuditor	405
 /ui/api/tools	POST	bad-json	OidcDeveloper	405
@@ -138,8 +138,8 @@
 /ui/api/tools	POST	bad-type	AdminKeyUnmapped	405
 /ui/api/tools	POST	bad-type	AuthOff	405
 /ui/api/tools	POST	bad-type	Bearer	405
-/ui/api/tools	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/tools	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/tools	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools	POST	bad-type	OidcAdmin	405
 /ui/api/tools	POST	bad-type	OidcAuditor	405
 /ui/api/tools	POST	bad-type	OidcDeveloper	405
@@ -153,8 +153,8 @@
 /ui/api/tools	POST	json	AdminKeyUnmapped	405
 /ui/api/tools	POST	json	AuthOff	405
 /ui/api/tools	POST	json	Bearer	405
-/ui/api/tools	POST	json	NoKey	401:@b_de6b5592
-/ui/api/tools	POST	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools	POST	json	NoKey	401:error.code=-32000
+/ui/api/tools	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools	POST	json	OidcAdmin	405
 /ui/api/tools	POST	json	OidcAuditor	405
 /ui/api/tools	POST	json	OidcDeveloper	405
@@ -168,8 +168,8 @@
 /ui/api/tools	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/tools	PUT	bad-json	AuthOff	405
 /ui/api/tools	PUT	bad-json	Bearer	405
-/ui/api/tools	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/tools	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/tools	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools	PUT	bad-json	OidcAdmin	405
 /ui/api/tools	PUT	bad-json	OidcAuditor	405
 /ui/api/tools	PUT	bad-json	OidcDeveloper	405
@@ -183,8 +183,8 @@
 /ui/api/tools	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/tools	PUT	bad-type	AuthOff	405
 /ui/api/tools	PUT	bad-type	Bearer	405
-/ui/api/tools	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/tools	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/tools	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools	PUT	bad-type	OidcAdmin	405
 /ui/api/tools	PUT	bad-type	OidcAuditor	405
 /ui/api/tools	PUT	bad-type	OidcDeveloper	405
@@ -198,8 +198,8 @@
 /ui/api/tools	PUT	json	AdminKeyUnmapped	405
 /ui/api/tools	PUT	json	AuthOff	405
 /ui/api/tools	PUT	json	Bearer	405
-/ui/api/tools	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/tools	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools	PUT	json	NoKey	401:error.code=-32000
+/ui/api/tools	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools	PUT	json	OidcAdmin	405
 /ui/api/tools	PUT	json	OidcAuditor	405
 /ui/api/tools	PUT	json	OidcDeveloper	405

@@ -3,8 +3,8 @@
 /ui/api/import/openapi/preview	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/import/openapi/preview	DELETE	plain	AuthOff	405
 /ui/api/import/openapi/preview	DELETE	plain	Bearer	405
-/ui/api/import/openapi/preview	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/import/openapi/preview	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	DELETE	plain	OidcAdmin	405
 /ui/api/import/openapi/preview	DELETE	plain	OidcAuditor	405
 /ui/api/import/openapi/preview	DELETE	plain	OidcDeveloper	405
@@ -18,8 +18,8 @@
 /ui/api/import/openapi/preview	GET	bad-query	AdminKeyUnmapped	405
 /ui/api/import/openapi/preview	GET	bad-query	AuthOff	405
 /ui/api/import/openapi/preview	GET	bad-query	Bearer	405
-/ui/api/import/openapi/preview	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/import/openapi/preview	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	GET	bad-query	OidcAdmin	405
 /ui/api/import/openapi/preview	GET	bad-query	OidcAuditor	405
 /ui/api/import/openapi/preview	GET	bad-query	OidcDeveloper	405
@@ -33,8 +33,8 @@
 /ui/api/import/openapi/preview	GET	plain	AdminKeyUnmapped	405
 /ui/api/import/openapi/preview	GET	plain	AuthOff	405
 /ui/api/import/openapi/preview	GET	plain	Bearer	405
-/ui/api/import/openapi/preview	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/import/openapi/preview	GET	plain	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	GET	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	GET	plain	OidcAdmin	405
 /ui/api/import/openapi/preview	GET	plain	OidcAuditor	405
 /ui/api/import/openapi/preview	GET	plain	OidcDeveloper	405
@@ -63,8 +63,8 @@
 /ui/api/import/openapi/preview	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/import/openapi/preview	OPTIONS	plain	AuthOff	405
 /ui/api/import/openapi/preview	OPTIONS	plain	Bearer	405
-/ui/api/import/openapi/preview	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/import/openapi/preview	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	OPTIONS	plain	OidcAdmin	405
 /ui/api/import/openapi/preview	OPTIONS	plain	OidcAuditor	405
 /ui/api/import/openapi/preview	OPTIONS	plain	OidcDeveloper	405
@@ -78,8 +78,8 @@
 /ui/api/import/openapi/preview	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/import/openapi/preview	PATCH	bad-json	AuthOff	405
 /ui/api/import/openapi/preview	PATCH	bad-json	Bearer	405
-/ui/api/import/openapi/preview	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/import/openapi/preview	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	PATCH	bad-json	OidcAdmin	405
 /ui/api/import/openapi/preview	PATCH	bad-json	OidcAuditor	405
 /ui/api/import/openapi/preview	PATCH	bad-json	OidcDeveloper	405
@@ -93,8 +93,8 @@
 /ui/api/import/openapi/preview	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/import/openapi/preview	PATCH	bad-type	AuthOff	405
 /ui/api/import/openapi/preview	PATCH	bad-type	Bearer	405
-/ui/api/import/openapi/preview	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/import/openapi/preview	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	PATCH	bad-type	OidcAdmin	405
 /ui/api/import/openapi/preview	PATCH	bad-type	OidcAuditor	405
 /ui/api/import/openapi/preview	PATCH	bad-type	OidcDeveloper	405
@@ -108,8 +108,8 @@
 /ui/api/import/openapi/preview	PATCH	json	AdminKeyUnmapped	405
 /ui/api/import/openapi/preview	PATCH	json	AuthOff	405
 /ui/api/import/openapi/preview	PATCH	json	Bearer	405
-/ui/api/import/openapi/preview	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/import/openapi/preview	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	PATCH	json	OidcAdmin	405
 /ui/api/import/openapi/preview	PATCH	json	OidcAuditor	405
 /ui/api/import/openapi/preview	PATCH	json	OidcDeveloper	405
@@ -123,8 +123,8 @@
 /ui/api/import/openapi/preview	POST	bad-json	AdminKeyUnmapped	400
 /ui/api/import/openapi/preview	POST	bad-json	AuthOff	400
 /ui/api/import/openapi/preview	POST	bad-json	Bearer	400
-/ui/api/import/openapi/preview	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/import/openapi/preview	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	POST	bad-json	OidcAdmin	400
 /ui/api/import/openapi/preview	POST	bad-json	OidcAuditor	400
 /ui/api/import/openapi/preview	POST	bad-json	OidcDeveloper	400
@@ -138,8 +138,8 @@
 /ui/api/import/openapi/preview	POST	bad-type	AdminKeyUnmapped	415
 /ui/api/import/openapi/preview	POST	bad-type	AuthOff	415
 /ui/api/import/openapi/preview	POST	bad-type	Bearer	415
-/ui/api/import/openapi/preview	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/import/openapi/preview	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	POST	bad-type	OidcAdmin	415
 /ui/api/import/openapi/preview	POST	bad-type	OidcAuditor	415
 /ui/api/import/openapi/preview	POST	bad-type	OidcDeveloper	415
@@ -151,25 +151,25 @@
 /ui/api/import/openapi/preview	POST	bad-type	StandardKey	415
 /ui/api/import/openapi/preview	POST	json	AdminKey	422
 /ui/api/import/openapi/preview	POST	json	AdminKeyUnmapped	422
-/ui/api/import/openapi/preview	POST	json	AuthOff	403:@b_078e5133
+/ui/api/import/openapi/preview	POST	json	AuthOff	403:error="Admin authentication required"
 /ui/api/import/openapi/preview	POST	json	Bearer	422
-/ui/api/import/openapi/preview	POST	json	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	POST	json	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/import/openapi/preview	POST	json	OidcAdmin	403:@b_078e5133
-/ui/api/import/openapi/preview	POST	json	OidcAuditor	403:@b_078e5133
-/ui/api/import/openapi/preview	POST	json	OidcDeveloper	403:@b_078e5133
-/ui/api/import/openapi/preview	POST	json	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/import/openapi/preview	POST	json	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/import/openapi/preview	POST	json	OidcReviewer	403:@b_078e5133
-/ui/api/import/openapi/preview	POST	json	OidcUnmapped	403:@b_078e5133
+/ui/api/import/openapi/preview	POST	json	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	POST	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/import/openapi/preview	POST	json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/import/openapi/preview	POST	json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/import/openapi/preview	POST	json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/import/openapi/preview	POST	json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/import/openapi/preview	POST	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/import/openapi/preview	POST	json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/import/openapi/preview	POST	json	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/import/openapi/preview	POST	json	Session	422
-/ui/api/import/openapi/preview	POST	json	StandardKey	403:@b_078e5133
+/ui/api/import/openapi/preview	POST	json	StandardKey	403:error="Admin authentication required"
 /ui/api/import/openapi/preview	PUT	bad-json	AdminKey	405
 /ui/api/import/openapi/preview	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/import/openapi/preview	PUT	bad-json	AuthOff	405
 /ui/api/import/openapi/preview	PUT	bad-json	Bearer	405
-/ui/api/import/openapi/preview	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/import/openapi/preview	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	PUT	bad-json	OidcAdmin	405
 /ui/api/import/openapi/preview	PUT	bad-json	OidcAuditor	405
 /ui/api/import/openapi/preview	PUT	bad-json	OidcDeveloper	405
@@ -183,8 +183,8 @@
 /ui/api/import/openapi/preview	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/import/openapi/preview	PUT	bad-type	AuthOff	405
 /ui/api/import/openapi/preview	PUT	bad-type	Bearer	405
-/ui/api/import/openapi/preview	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/import/openapi/preview	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	PUT	bad-type	OidcAdmin	405
 /ui/api/import/openapi/preview	PUT	bad-type	OidcAuditor	405
 /ui/api/import/openapi/preview	PUT	bad-type	OidcDeveloper	405
@@ -198,8 +198,8 @@
 /ui/api/import/openapi/preview	PUT	json	AdminKeyUnmapped	405
 /ui/api/import/openapi/preview	PUT	json	AuthOff	405
 /ui/api/import/openapi/preview	PUT	json	Bearer	405
-/ui/api/import/openapi/preview	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/import/openapi/preview	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/import/openapi/preview	PUT	json	NoKey	401:error.code=-32000
+/ui/api/import/openapi/preview	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	PUT	json	OidcAdmin	405
 /ui/api/import/openapi/preview	PUT	json	OidcAuditor	405
 /ui/api/import/openapi/preview	PUT	json	OidcDeveloper	405

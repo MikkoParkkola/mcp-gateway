@@ -4,8 +4,8 @@
 /ui/api/activity/export	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/activity/export	DELETE	plain	AuthOff	405
 /ui/api/activity/export	DELETE	plain	Bearer	405
-/ui/api/activity/export	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/activity/export	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/activity/export	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	DELETE	plain	OidcAdmin	405
 /ui/api/activity/export	DELETE	plain	OidcAuditor	405
 /ui/api/activity/export	DELETE	plain	OidcDeveloper	405
@@ -19,8 +19,8 @@
 /ui/api/activity/export	GET	bad-query	AdminKeyUnmapped	400
 /ui/api/activity/export	GET	bad-query	AuthOff	400
 /ui/api/activity/export	GET	bad-query	Bearer	400
-/ui/api/activity/export	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/activity/export	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/activity/export	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	GET	bad-query	OidcAdmin	400
 /ui/api/activity/export	GET	bad-query	OidcAuditor	400
 /ui/api/activity/export	GET	bad-query	OidcDeveloper	400
@@ -32,34 +32,34 @@
 /ui/api/activity/export	GET	bad-query	StandardKey	400
 /ui/api/activity/export	GET	csv	AdminKey	200:tool_0,tool_1,tool_2
 /ui/api/activity/export	GET	csv	AdminKeyUnmapped	200:tool_0,tool_1,tool_2
-/ui/api/activity/export	GET	csv	AuthOff	401:@b_ca730ec7
+/ui/api/activity/export	GET	csv	AuthOff	401:error="Authentication required"
 /ui/api/activity/export	GET	csv	Bearer	200:tool_0,tool_1,tool_2
-/ui/api/activity/export	GET	csv	NoKey	401:@b_de6b5592
-/ui/api/activity/export	GET	csv	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	GET	csv	NoKey	401:error.code=-32000
+/ui/api/activity/export	GET	csv	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	GET	csv	OidcAdmin	200:tool_0,tool_1,tool_2
 /ui/api/activity/export	GET	csv	OidcAuditor	200:tool_0,tool_1,tool_2
 /ui/api/activity/export	GET	csv	OidcDeveloper	200:tool_0
-/ui/api/activity/export	GET	csv	OidcDeveloperNoIssuer	403:@b_4e89aa84
-/ui/api/activity/export	GET	csv	OidcDeveloperNoSubject	403:@b_4e89aa84
-/ui/api/activity/export	GET	csv	OidcReviewer	403:@b_4e89aa84
-/ui/api/activity/export	GET	csv	OidcUnmapped	403:@b_4e89aa84
+/ui/api/activity/export	GET	csv	OidcDeveloperNoIssuer	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/export	GET	csv	OidcDeveloperNoSubject	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/export	GET	csv	OidcReviewer	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/export	GET	csv	OidcUnmapped	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
 /ui/api/activity/export	GET	csv	Session	200:tool_0,tool_1,tool_2
-/ui/api/activity/export	GET	csv	StandardKey	403:@b_4e89aa84
+/ui/api/activity/export	GET	csv	StandardKey	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
 /ui/api/activity/export	GET	plain	AdminKey	409
 /ui/api/activity/export	GET	plain	AdminKeyUnmapped	409
-/ui/api/activity/export	GET	plain	AuthOff	401:@b_ca730ec7
+/ui/api/activity/export	GET	plain	AuthOff	401:error="Authentication required"
 /ui/api/activity/export	GET	plain	Bearer	409
-/ui/api/activity/export	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/activity/export	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	GET	plain	NoKey	401:error.code=-32000
+/ui/api/activity/export	GET	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	GET	plain	OidcAdmin	409
 /ui/api/activity/export	GET	plain	OidcAuditor	409
 /ui/api/activity/export	GET	plain	OidcDeveloper	409
-/ui/api/activity/export	GET	plain	OidcDeveloperNoIssuer	403:@b_4e89aa84
-/ui/api/activity/export	GET	plain	OidcDeveloperNoSubject	403:@b_4e89aa84
-/ui/api/activity/export	GET	plain	OidcReviewer	403:@b_4e89aa84
-/ui/api/activity/export	GET	plain	OidcUnmapped	403:@b_4e89aa84
+/ui/api/activity/export	GET	plain	OidcDeveloperNoIssuer	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/export	GET	plain	OidcDeveloperNoSubject	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/export	GET	plain	OidcReviewer	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity/export	GET	plain	OidcUnmapped	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
 /ui/api/activity/export	GET	plain	Session	409
-/ui/api/activity/export	GET	plain	StandardKey	403:@b_4e89aa84
+/ui/api/activity/export	GET	plain	StandardKey	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
 /ui/api/activity/export	HEAD	plain	AdminKey	409
 /ui/api/activity/export	HEAD	plain	AdminKeyUnmapped	409
 /ui/api/activity/export	HEAD	plain	AuthOff	401
@@ -79,8 +79,8 @@
 /ui/api/activity/export	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/activity/export	OPTIONS	plain	AuthOff	405
 /ui/api/activity/export	OPTIONS	plain	Bearer	405
-/ui/api/activity/export	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/activity/export	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/activity/export	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	OPTIONS	plain	OidcAdmin	405
 /ui/api/activity/export	OPTIONS	plain	OidcAuditor	405
 /ui/api/activity/export	OPTIONS	plain	OidcDeveloper	405
@@ -94,8 +94,8 @@
 /ui/api/activity/export	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/activity/export	PATCH	bad-json	AuthOff	405
 /ui/api/activity/export	PATCH	bad-json	Bearer	405
-/ui/api/activity/export	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/activity/export	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/activity/export	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	PATCH	bad-json	OidcAdmin	405
 /ui/api/activity/export	PATCH	bad-json	OidcAuditor	405
 /ui/api/activity/export	PATCH	bad-json	OidcDeveloper	405
@@ -109,8 +109,8 @@
 /ui/api/activity/export	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/activity/export	PATCH	bad-type	AuthOff	405
 /ui/api/activity/export	PATCH	bad-type	Bearer	405
-/ui/api/activity/export	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/activity/export	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/activity/export	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	PATCH	bad-type	OidcAdmin	405
 /ui/api/activity/export	PATCH	bad-type	OidcAuditor	405
 /ui/api/activity/export	PATCH	bad-type	OidcDeveloper	405
@@ -124,8 +124,8 @@
 /ui/api/activity/export	PATCH	json	AdminKeyUnmapped	405
 /ui/api/activity/export	PATCH	json	AuthOff	405
 /ui/api/activity/export	PATCH	json	Bearer	405
-/ui/api/activity/export	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/activity/export	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/activity/export	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	PATCH	json	OidcAdmin	405
 /ui/api/activity/export	PATCH	json	OidcAuditor	405
 /ui/api/activity/export	PATCH	json	OidcDeveloper	405
@@ -139,8 +139,8 @@
 /ui/api/activity/export	POST	bad-json	AdminKeyUnmapped	405
 /ui/api/activity/export	POST	bad-json	AuthOff	405
 /ui/api/activity/export	POST	bad-json	Bearer	405
-/ui/api/activity/export	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/activity/export	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/activity/export	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	POST	bad-json	OidcAdmin	405
 /ui/api/activity/export	POST	bad-json	OidcAuditor	405
 /ui/api/activity/export	POST	bad-json	OidcDeveloper	405
@@ -154,8 +154,8 @@
 /ui/api/activity/export	POST	bad-type	AdminKeyUnmapped	405
 /ui/api/activity/export	POST	bad-type	AuthOff	405
 /ui/api/activity/export	POST	bad-type	Bearer	405
-/ui/api/activity/export	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/activity/export	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/activity/export	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	POST	bad-type	OidcAdmin	405
 /ui/api/activity/export	POST	bad-type	OidcAuditor	405
 /ui/api/activity/export	POST	bad-type	OidcDeveloper	405
@@ -169,8 +169,8 @@
 /ui/api/activity/export	POST	json	AdminKeyUnmapped	405
 /ui/api/activity/export	POST	json	AuthOff	405
 /ui/api/activity/export	POST	json	Bearer	405
-/ui/api/activity/export	POST	json	NoKey	401:@b_de6b5592
-/ui/api/activity/export	POST	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	POST	json	NoKey	401:error.code=-32000
+/ui/api/activity/export	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	POST	json	OidcAdmin	405
 /ui/api/activity/export	POST	json	OidcAuditor	405
 /ui/api/activity/export	POST	json	OidcDeveloper	405
@@ -184,8 +184,8 @@
 /ui/api/activity/export	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/activity/export	PUT	bad-json	AuthOff	405
 /ui/api/activity/export	PUT	bad-json	Bearer	405
-/ui/api/activity/export	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/activity/export	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/activity/export	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	PUT	bad-json	OidcAdmin	405
 /ui/api/activity/export	PUT	bad-json	OidcAuditor	405
 /ui/api/activity/export	PUT	bad-json	OidcDeveloper	405
@@ -199,8 +199,8 @@
 /ui/api/activity/export	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/activity/export	PUT	bad-type	AuthOff	405
 /ui/api/activity/export	PUT	bad-type	Bearer	405
-/ui/api/activity/export	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/activity/export	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/activity/export	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	PUT	bad-type	OidcAdmin	405
 /ui/api/activity/export	PUT	bad-type	OidcAuditor	405
 /ui/api/activity/export	PUT	bad-type	OidcDeveloper	405
@@ -214,8 +214,8 @@
 /ui/api/activity/export	PUT	json	AdminKeyUnmapped	405
 /ui/api/activity/export	PUT	json	AuthOff	405
 /ui/api/activity/export	PUT	json	Bearer	405
-/ui/api/activity/export	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/activity/export	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity/export	PUT	json	NoKey	401:error.code=-32000
+/ui/api/activity/export	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity/export	PUT	json	OidcAdmin	405
 /ui/api/activity/export	PUT	json	OidcAuditor	405
 /ui/api/activity/export	PUT	json	OidcDeveloper	405

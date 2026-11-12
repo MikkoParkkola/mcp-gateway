@@ -3,8 +3,8 @@
 /ui/api/metrics/series	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/metrics/series	DELETE	plain	AuthOff	405
 /ui/api/metrics/series	DELETE	plain	Bearer	405
-/ui/api/metrics/series	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/metrics/series	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/metrics/series	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/metrics/series	DELETE	plain	OidcAdmin	405
 /ui/api/metrics/series	DELETE	plain	OidcAuditor	405
 /ui/api/metrics/series	DELETE	plain	OidcDeveloper	405
@@ -16,34 +16,34 @@
 /ui/api/metrics/series	DELETE	plain	StandardKey	405
 /ui/api/metrics/series	GET	bad-query	AdminKey	503
 /ui/api/metrics/series	GET	bad-query	AdminKeyUnmapped	503
-/ui/api/metrics/series	GET	bad-query	AuthOff	403:@b_078e5133
+/ui/api/metrics/series	GET	bad-query	AuthOff	403:error="Admin authentication required"
 /ui/api/metrics/series	GET	bad-query	Bearer	503
-/ui/api/metrics/series	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/metrics/series	GET	bad-query	OidcAdmin	403:@b_078e5133
-/ui/api/metrics/series	GET	bad-query	OidcAuditor	403:@b_078e5133
-/ui/api/metrics/series	GET	bad-query	OidcDeveloper	403:@b_078e5133
-/ui/api/metrics/series	GET	bad-query	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/metrics/series	GET	bad-query	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/metrics/series	GET	bad-query	OidcReviewer	403:@b_078e5133
-/ui/api/metrics/series	GET	bad-query	OidcUnmapped	403:@b_078e5133
+/ui/api/metrics/series	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/metrics/series	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/metrics/series	GET	bad-query	OidcAdmin	403:error="Admin authentication required"
+/ui/api/metrics/series	GET	bad-query	OidcAuditor	403:error="Admin authentication required"
+/ui/api/metrics/series	GET	bad-query	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/metrics/series	GET	bad-query	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/metrics/series	GET	bad-query	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/metrics/series	GET	bad-query	OidcReviewer	403:error="Admin authentication required"
+/ui/api/metrics/series	GET	bad-query	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/metrics/series	GET	bad-query	Session	503
-/ui/api/metrics/series	GET	bad-query	StandardKey	403:@b_078e5133
+/ui/api/metrics/series	GET	bad-query	StandardKey	403:error="Admin authentication required"
 /ui/api/metrics/series	GET	plain	AdminKey	503
 /ui/api/metrics/series	GET	plain	AdminKeyUnmapped	503
-/ui/api/metrics/series	GET	plain	AuthOff	403:@b_078e5133
+/ui/api/metrics/series	GET	plain	AuthOff	403:error="Admin authentication required"
 /ui/api/metrics/series	GET	plain	Bearer	503
-/ui/api/metrics/series	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/metrics/series	GET	plain	OidcAdmin	403:@b_078e5133
-/ui/api/metrics/series	GET	plain	OidcAuditor	403:@b_078e5133
-/ui/api/metrics/series	GET	plain	OidcDeveloper	403:@b_078e5133
-/ui/api/metrics/series	GET	plain	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/metrics/series	GET	plain	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/metrics/series	GET	plain	OidcReviewer	403:@b_078e5133
-/ui/api/metrics/series	GET	plain	OidcUnmapped	403:@b_078e5133
+/ui/api/metrics/series	GET	plain	NoKey	401:error.code=-32000
+/ui/api/metrics/series	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/metrics/series	GET	plain	OidcAdmin	403:error="Admin authentication required"
+/ui/api/metrics/series	GET	plain	OidcAuditor	403:error="Admin authentication required"
+/ui/api/metrics/series	GET	plain	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/metrics/series	GET	plain	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/metrics/series	GET	plain	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/metrics/series	GET	plain	OidcReviewer	403:error="Admin authentication required"
+/ui/api/metrics/series	GET	plain	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/metrics/series	GET	plain	Session	503
-/ui/api/metrics/series	GET	plain	StandardKey	403:@b_078e5133
+/ui/api/metrics/series	GET	plain	StandardKey	403:error="Admin authentication required"
 /ui/api/metrics/series	HEAD	plain	AdminKey	503
 /ui/api/metrics/series	HEAD	plain	AdminKeyUnmapped	503
 /ui/api/metrics/series	HEAD	plain	AuthOff	403
@@ -63,8 +63,8 @@
 /ui/api/metrics/series	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/metrics/series	OPTIONS	plain	AuthOff	405
 /ui/api/metrics/series	OPTIONS	plain	Bearer	405
-/ui/api/metrics/series	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/metrics/series	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/metrics/series	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/metrics/series	OPTIONS	plain	OidcAdmin	405
 /ui/api/metrics/series	OPTIONS	plain	OidcAuditor	405
 /ui/api/metrics/series	OPTIONS	plain	OidcDeveloper	405
@@ -78,8 +78,8 @@
 /ui/api/metrics/series	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/metrics/series	PATCH	bad-json	AuthOff	405
 /ui/api/metrics/series	PATCH	bad-json	Bearer	405
-/ui/api/metrics/series	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/metrics/series	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/metrics/series	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/metrics/series	PATCH	bad-json	OidcAdmin	405
 /ui/api/metrics/series	PATCH	bad-json	OidcAuditor	405
 /ui/api/metrics/series	PATCH	bad-json	OidcDeveloper	405
@@ -93,8 +93,8 @@
 /ui/api/metrics/series	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/metrics/series	PATCH	bad-type	AuthOff	405
 /ui/api/metrics/series	PATCH	bad-type	Bearer	405
-/ui/api/metrics/series	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/metrics/series	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/metrics/series	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/metrics/series	PATCH	bad-type	OidcAdmin	405
 /ui/api/metrics/series	PATCH	bad-type	OidcAuditor	405
 /ui/api/metrics/series	PATCH	bad-type	OidcDeveloper	405
@@ -108,8 +108,8 @@
 /ui/api/metrics/series	PATCH	json	AdminKeyUnmapped	405
 /ui/api/metrics/series	PATCH	json	AuthOff	405
 /ui/api/metrics/series	PATCH	json	Bearer	405
-/ui/api/metrics/series	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/metrics/series	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/metrics/series	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/metrics/series	PATCH	json	OidcAdmin	405
 /ui/api/metrics/series	PATCH	json	OidcAuditor	405
 /ui/api/metrics/series	PATCH	json	OidcDeveloper	405
@@ -123,8 +123,8 @@
 /ui/api/metrics/series	POST	bad-json	AdminKeyUnmapped	405
 /ui/api/metrics/series	POST	bad-json	AuthOff	405
 /ui/api/metrics/series	POST	bad-json	Bearer	405
-/ui/api/metrics/series	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/metrics/series	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/metrics/series	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/metrics/series	POST	bad-json	OidcAdmin	405
 /ui/api/metrics/series	POST	bad-json	OidcAuditor	405
 /ui/api/metrics/series	POST	bad-json	OidcDeveloper	405
@@ -138,8 +138,8 @@
 /ui/api/metrics/series	POST	bad-type	AdminKeyUnmapped	405
 /ui/api/metrics/series	POST	bad-type	AuthOff	405
 /ui/api/metrics/series	POST	bad-type	Bearer	405
-/ui/api/metrics/series	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/metrics/series	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/metrics/series	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/metrics/series	POST	bad-type	OidcAdmin	405
 /ui/api/metrics/series	POST	bad-type	OidcAuditor	405
 /ui/api/metrics/series	POST	bad-type	OidcDeveloper	405
@@ -153,8 +153,8 @@
 /ui/api/metrics/series	POST	json	AdminKeyUnmapped	405
 /ui/api/metrics/series	POST	json	AuthOff	405
 /ui/api/metrics/series	POST	json	Bearer	405
-/ui/api/metrics/series	POST	json	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	POST	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/metrics/series	POST	json	NoKey	401:error.code=-32000
+/ui/api/metrics/series	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/metrics/series	POST	json	OidcAdmin	405
 /ui/api/metrics/series	POST	json	OidcAuditor	405
 /ui/api/metrics/series	POST	json	OidcDeveloper	405
@@ -168,8 +168,8 @@
 /ui/api/metrics/series	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/metrics/series	PUT	bad-json	AuthOff	405
 /ui/api/metrics/series	PUT	bad-json	Bearer	405
-/ui/api/metrics/series	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/metrics/series	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/metrics/series	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/metrics/series	PUT	bad-json	OidcAdmin	405
 /ui/api/metrics/series	PUT	bad-json	OidcAuditor	405
 /ui/api/metrics/series	PUT	bad-json	OidcDeveloper	405
@@ -183,8 +183,8 @@
 /ui/api/metrics/series	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/metrics/series	PUT	bad-type	AuthOff	405
 /ui/api/metrics/series	PUT	bad-type	Bearer	405
-/ui/api/metrics/series	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/metrics/series	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/metrics/series	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/metrics/series	PUT	bad-type	OidcAdmin	405
 /ui/api/metrics/series	PUT	bad-type	OidcAuditor	405
 /ui/api/metrics/series	PUT	bad-type	OidcDeveloper	405
@@ -198,8 +198,8 @@
 /ui/api/metrics/series	PUT	json	AdminKeyUnmapped	405
 /ui/api/metrics/series	PUT	json	AuthOff	405
 /ui/api/metrics/series	PUT	json	Bearer	405
-/ui/api/metrics/series	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/metrics/series	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/metrics/series	PUT	json	NoKey	401:error.code=-32000
+/ui/api/metrics/series	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/metrics/series	PUT	json	OidcAdmin	405
 /ui/api/metrics/series	PUT	json	OidcAuditor	405
 /ui/api/metrics/series	PUT	json	OidcDeveloper	405
