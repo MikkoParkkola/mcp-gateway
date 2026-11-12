@@ -708,3 +708,25 @@ fn a_by_pid_kill_of_a_running_member_is_refused_and_reported() {
         assert_eq!(fake.state_of(pid), ProcState::Gone, "pid {pid}");
     }
 }
+
+/// The slices come from the measurement at the cap, not from a round number:
+/// freeze at least twice the Linux freeze at 4000 members (326 ms), terminal room
+/// at least five times the Linux kill phase there (141 ms), together at most
+/// half of the reaper's kill reserve.
+/// Red if either slice is cut below its derivation or the pair outgrows the reserve.
+#[test]
+fn the_slices_are_sized_from_the_measured_cap() {
+    assert!(
+        FREEZE_SLICE >= Duration::from_millis(2 * 326),
+        "{FREEZE_SLICE:?}"
+    );
+    assert!(
+        TERMINAL_ROOM >= Duration::from_millis(5 * 141),
+        "{TERMINAL_ROOM:?}"
+    );
+    assert!(
+        FREEZE_SLICE + TERMINAL_ROOM <= crate::transport::stdio::reaper::KILL_RESERVE / 2,
+        "{FREEZE_SLICE:?} + {TERMINAL_ROOM:?}"
+    );
+    assert_eq!(config().freeze_slice, FREEZE_SLICE);
+}

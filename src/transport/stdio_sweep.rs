@@ -355,9 +355,21 @@ pub(super) type PlatformTable = LinuxTable;
 pub(super) type PlatformTable = MacTable;
 
 /// The share of a backend's kill reserve the sweep may spend freezing and
-/// re-walking. It sits inside the reaper's own kill reserve, so the gateway's
-/// stop deadline holds by construction.
-const FREEZE_SLICE: Duration = Duration::from_millis(250);
+/// re-walking: twice the Linux freeze measured at the 4000-member cap (326 ms,
+/// real children and pidfds), so a table at its cap is frozen before the kills
+/// begin and no unfrozen member can still fork while they go out.
+const FREEZE_SLICE: Duration = Duration::from_millis(700);
+/// The room the terminal kills are guaranteed after the freeze, checked at
+/// compile time against the reaper's kill reserve: five times the Linux kill
+/// phase measured at the cap (141 ms), as the margin for macOS, whose cost per
+/// member (a libproc read, then stop, verify and kill) is not measured. The
+/// kills themselves are never cut, since a cut would leave stopped processes.
+pub(super) const TERMINAL_ROOM: Duration = Duration::from_millis(700);
+const _: () = assert!(
+    FREEZE_SLICE.as_millis() + TERMINAL_ROOM.as_millis()
+        <= super::reaper::KILL_RESERVE.as_millis() / 2,
+    "the sweep may take at most half of the reaper's kill reserve"
+);
 /// Descriptors the gateway keeps for its own sockets and files.
 const FD_RESERVE: usize = 512;
 
