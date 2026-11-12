@@ -282,6 +282,21 @@ async fn r52_an_edited_record_that_looks_like_a_listed_row_still_poisons_its_tra
     assert_eq!(page["answer_integrity_failed"], 1);
 }
 
+/// The check on listed-kind lines is for tampering only: a legacy call row,
+/// written before signing began and so unsigned, does not poison its own trace,
+/// and a delivery record signed after it still reaches the call.
+#[tokio::test]
+async fn r53_a_legacy_call_row_does_not_poison_its_own_trace() {
+    let legacy = Fixture::new(None);
+    legacy.call("gw-t");
+    let signed = legacy.reopened_with(SECRET);
+    signed.delivery("gw-t", &Dl::effect("delivered"));
+    let (_, page) = get(&signed, &[]).await;
+    let r = row_of(&page, "gw-t");
+    assert_eq!(r["effect"], "delivered");
+    assert_eq!(page["answer_integrity_failed"], 0);
+}
+
 #[tokio::test]
 async fn r33_no_secret_cannot_vouch() {
     let signed = Fixture::new(Some(SECRET));
