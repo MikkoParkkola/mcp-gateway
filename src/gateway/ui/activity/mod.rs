@@ -647,6 +647,9 @@ mod answer_stream_tests;
 #[path = "answer_unattributed_tests.rs"]
 mod answer_unattributed_tests;
 #[cfg(test)]
+#[path = "answer_window_tests.rs"]
+mod answer_window_tests;
+#[cfg(test)]
 #[path = "decision_export_tests.rs"]
 mod decision_export_tests;
 #[cfg(test)]
