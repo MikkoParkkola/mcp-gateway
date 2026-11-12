@@ -947,3 +947,41 @@ fn a_cursor_request_is_charged_to_the_shared_budget() {
         "burst 2, then throttled, bad tokens included"
     );
 }
+
+/// Two requests that present one token at the same moment: both may scan (the
+/// token is spent after its page is read, so a throttle or a failed read does
+/// not burn it), but the ledger lets exactly one deliver. The other gets the
+/// fixed refusal and its page is dropped. The cost of the race is one extra
+/// read under the shared budget, bound to the same principal and the same
+/// data; the loser learns nothing the winner did not.
+/// Mutant: deliver on both (spend ignored), or deliver on neither.
+#[test]
+fn two_requests_with_one_token_deliver_exactly_one_page() {
+    let fx = Fx::new();
+    for subject in ["s1", "s2", "s3"] {
+        fx.plant(subject, EMAIL, &fx.ks.email_key);
+    }
+    let first = fx.lookup(EMAIL, &json!({"limit": 1}));
+    let token = first["next_cursor"].as_str().expect("cursor").to_owned();
+    fx.state.process.lookup_budget().reset_for_test();
+    let call = || {
+        let request = Request::builder()
+            .method("POST")
+            .uri(routes::UI_KEY_SERVER_LOOKUP_EMAIL)
+            .header("content-type", "application/json")
+            .extension(fx.live.generation())
+            .extension(admin("a"))
+            .body(Body::from(json!({"cursor": token, "limit": 1}).to_string()))
+            .expect("request");
+        let router = crate::gateway::ui::api_router().with_state(fx.state.clone());
+        async move { router.oneshot(request).await.expect("infallible").status() }
+    };
+    let (one, two) = fx.rt.block_on(async { tokio::join!(call(), call()) });
+    let mut got = [one, two];
+    got.sort();
+    assert_eq!(
+        got,
+        [StatusCode::OK, StatusCode::BAD_REQUEST],
+        "exactly one request delivers the page"
+    );
+}
