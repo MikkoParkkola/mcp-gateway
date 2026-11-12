@@ -51,8 +51,8 @@ fn seen(above: u64) -> Seen {
     }
 }
 
-fn is_found(joined: &Joined) -> bool {
-    matches!(joined, Joined::Found(_))
+fn is_found(verdict: &Joined) -> bool {
+    matches!(verdict, Joined::Found(_))
 }
 
 #[test]
@@ -61,12 +61,12 @@ fn r52_the_window_edge_is_exact() {
         let check = Check::bare(None);
         let mut joiner = Joiner::new(&check);
         assert!(joiner.observe(&delivery("gw-t"), 1_000));
-        let joined = joiner.join(&call("gw-t"), seen(1_000 + distance));
-        joiner.count(&joined);
-        assert_eq!(is_found(&joined), found, "distance {distance}: {joined:?}");
+        let verdict = joiner.join(&call("gw-t"), seen(1_000 + distance));
+        joiner.count(&verdict);
+        assert_eq!(is_found(&verdict), found, "distance {distance}: {verdict:?}");
         assert_eq!(joiner.delivery_beyond_window, usize::from(!found));
         if !found {
-            assert_eq!(joined, Joined::NoRecord(Searched::Finished));
+            assert_eq!(verdict, Joined::NoRecord(Searched::Finished));
         }
     }
 }
@@ -78,16 +78,16 @@ fn r53_a_duplicate_reaches_by_its_nearest_record_and_counts_once_beyond() {
     let mut joiner = Joiner::new(&check);
     joiner.observe(&delivery("gw-t"), 0);
     joiner.observe(&delivery("gw-t"), 200 * 1024);
-    let joined = joiner.join(&call("gw-t"), seen(300 * 1024));
-    assert_eq!(joined, Joined::Incomplete(Why::Duplicate));
+    let verdict = joiner.join(&call("gw-t"), seen(300 * 1024));
+    assert_eq!(verdict, Joined::Incomplete(Why::Duplicate));
     // Both beyond: no record, counted once.
     let check = Check::bare(None);
     let mut joiner = Joiner::new(&check);
     joiner.observe(&delivery("gw-t"), 0);
     joiner.observe(&delivery("gw-t"), 10);
-    let joined = joiner.join(&call("gw-t"), seen(W + 11));
-    joiner.count(&joined);
-    assert_eq!(joined, Joined::NoRecord(Searched::Finished));
+    let verdict = joiner.join(&call("gw-t"), seen(W + 11));
+    joiner.count(&verdict);
+    assert_eq!(verdict, Joined::NoRecord(Searched::Finished));
     assert_eq!(joiner.delivery_beyond_window, 1);
 }
 
@@ -100,12 +100,12 @@ fn r54_a_tombstone_reaches_only_inside_the_window() {
         for i in 0..=MAX_PENDING {
             joiner.observe(&delivery(&format!("gw-o{i}")), 0);
         }
-        let joined = joiner.join(&call("gw-t"), seen(distance));
-        joiner.count(&joined);
+        let verdict = joiner.join(&call("gw-t"), seen(distance));
+        joiner.count(&verdict);
         assert_eq!(
-            joined == Joined::Incomplete(Why::Evicted),
+            verdict == Joined::Incomplete(Why::Evicted),
             evicted,
-            "distance {distance}: {joined:?}"
+            "distance {distance}: {verdict:?}"
         );
         assert_eq!(joiner.delivery_beyond_window, usize::from(!evicted));
     }
@@ -129,13 +129,13 @@ fn r56_a_reopened_trace_keeps_its_reason_through_compaction_inside_the_window() 
     let mut joiner = Joiner::new(&check);
     joiner.observe(&delivery("gw-t"), 0);
     assert!(is_found(&joiner.join(&call("gw-t"), seen(10))));
-    // A second, tampered record reopens the joined trace as poisoned.
+    // A second, tampered record reopens the verdict trace as poisoned.
     joiner.observe(&edited("gw-t"), 20);
     for i in 0..(2 * MAX_PENDING + 10) {
         joiner.observe(&delivery(&format!("gw-o{i}")), 30);
     }
-    let joined = joiner.join(&call("gw-t"), seen(1_000));
-    assert_eq!(joined, Joined::Incomplete(Why::Invalid));
+    let verdict = joiner.join(&call("gw-t"), seen(1_000));
+    assert_eq!(verdict, Joined::Incomplete(Why::Invalid));
 }
 
 #[test]
