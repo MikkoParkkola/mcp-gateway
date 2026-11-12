@@ -469,16 +469,25 @@ fn a_request_is_an_email_or_a_cursor_never_both_or_neither() {
     fx.plant("s2", EMAIL, &fx.ks.email_key);
     let first = fx.lookup(EMAIL, &json!({"limit": 1}));
     let token = first["next_cursor"].as_str().expect("cursor").to_owned();
-    for body in [
-        json!({"email": EMAIL, "cursor": token}),
-        json!({"limit": 1}),
-        json!({"cursor": token, "from": "2000-01-01T00:00:00Z"}),
-        json!({"cursor": token, "to": "2100-01-01T00:00:00Z"}),
-        json!({"cursor": token, "extra": 1}),
+    // Each shape error is refused by the shape check itself, in its own words:
+    // not by a later layer that happens to refuse the same request.
+    for (body, words) in [
+        (json!({"email": EMAIL, "cursor": token}), "not both"),
+        (json!({"limit": 1}), "not both"),
+        (
+            json!({"cursor": token, "from": "2000-01-01T00:00:00Z"}),
+            "window",
+        ),
+        (
+            json!({"cursor": token, "to": "2100-01-01T00:00:00Z"}),
+            "window",
+        ),
+        (json!({"cursor": token, "extra": 1}), "JSON object"),
     ] {
         fx.state.process.lookup_budget().reset_for_test();
         let (status, _, answer) = fx.post(admin("a"), &body.to_string());
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {answer}");
+        assert!(answer.to_string().contains(words), "{body}: {answer}");
         assert!(!answer.to_string().contains(EMAIL), "{answer}");
     }
 }
