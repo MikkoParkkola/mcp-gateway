@@ -340,6 +340,8 @@ fn a_second_earlier_stop_deadline_takes_effect_and_a_later_one_does_not() {
     );
 }
 
+/// The helper and its leaf sleep 600 s, far beyond `HANG_BOUND`: a leaf that merely
+/// expired inside the wait would make a row pass without any sweep.
 /// Start a helper that stays attached to the backend by parent pid but leads
 /// its own session, so the backend's group kill never reaches it. The leaf's
 /// pid lands in `leaf.pid`. The backend ignores EOF and SIGTERM alike.
@@ -348,10 +350,10 @@ async fn started_with_session_leaf(tail: &str) -> (tempfile::TempDir, Arc<StdioT
 cat > helper.py <<'PY'
 import os, subprocess, time
 null = subprocess.DEVNULL
-leaf = subprocess.Popen(['sleep', '60'], start_new_session=True, stdin=null, stdout=null, stderr=null)
+leaf = subprocess.Popen(['sleep', '600'], start_new_session=True, stdin=null, stdout=null, stderr=null)
 open('leaf.tmp', 'w').write(str(leaf.pid))
 os.rename('leaf.tmp', 'leaf.pid')
-time.sleep(60)
+time.sleep(600)
 PY
 python3 helper.py </dev/null >/dev/null 2>&1 &
 {tail}");
