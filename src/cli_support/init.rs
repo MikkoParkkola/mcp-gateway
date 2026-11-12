@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use crate::config_persistence::keyedit::{self, Change, FieldPath, Segment};
-use crate::secret_store::{LOCK_WAIT, NewSecretOwned, PendingSecrets, create_secrets};
+use crate::secret_store::{LOCK_WAIT, NewSecretOwned, PendingSecrets, SecretStore, create_secrets};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Creates an init config and samples, storing its generated admin credential.
 /// Returns only the reference. Existing files are refused.
@@ -14,6 +15,26 @@ pub(crate) fn write_init_files(
     template: &str,
     samples: &[(PathBuf, &str)],
 ) -> Result<String, String> {
+    let env_store = std::env::var_os("MCP_GATEWAY_SECRETS__STORE");
+    write_init_files_with(
+        crate::config::keychain::os_secret_store(),
+        env_store.as_deref(),
+        destination,
+        template,
+        samples,
+    )
+}
+
+/// The init writer with explicit inputs for store selection.
+/// The environment input is reserved; selection still follows the template.
+pub(crate) fn write_init_files_with(
+    os: Option<Arc<dyn SecretStore + Send + Sync>>,
+    env_store: Option<&std::ffi::OsStr>,
+    destination: &Path,
+    template: &str,
+    samples: &[(PathBuf, &str)],
+) -> Result<String, String> {
+    let _ = env_store;
     let destination = crate::identity_grants::journal::resolved(destination);
     let dir = destination.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -47,7 +68,9 @@ pub(crate) fn write_init_files(
                 return Err(format!("{} is not an absent sample target", path.display()));
             }
         }
-        let chosen = crate::secret_store::choose_store(choice, dir).map_err(|e| e.to_string())?;
+        let chosen =
+            crate::secret_store::choose_with(choice, dir, os).map_err(|e| e.to_string())?;
+        crate::secret_store::log_choice(choice, &chosen);
         let vault = crate::secret_store::Vault::for_config_dir(dir).map_err(|e| e.to_string())?;
         let secret = NewSecretOwned {
             field: slot.display(),

@@ -683,3 +683,7 @@ mod shown_tests;
 #[cfg(test)]
 #[path = "cli_support_store_tests.rs"]
 mod store_tests;
+
+#[cfg(test)]
+#[path = "cli_support/init_store_tests.rs"]
+mod init_store_tests;
