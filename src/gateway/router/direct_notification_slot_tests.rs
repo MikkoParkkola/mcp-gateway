@@ -61,7 +61,10 @@ fn request_binding(secret: &str) -> String {
 struct Fixture {
     router: axum::Router,
     seen: Seen,
-    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
+    _dirs: (
+        Arc<tempfile::TempDir>,
+        crate::gateway::router::tests::FixtureDir,
+    ),
 }
 
 /// A required-passthrough backend behind auth with two same-label keys, whose
@@ -85,7 +88,7 @@ async fn fixture() -> Fixture {
             }),
         );
     }
-    let audit = tempfile::tempdir().expect("tempdir");
+    let audit = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
