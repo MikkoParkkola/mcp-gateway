@@ -413,8 +413,7 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
         Arc::clone(&auth_config),
     ));
     let subscriptions = test_subscriptions(&live_config, None, &agent_auth);
-    let store_dir =
-        crate::test_dir_keep::kept_tempdir();
+    let store_dir = crate::test_dir_keep::kept_tempdir();
     let (task_service, task_executor) = crate::gateway::task_service::open_runtime_with_admission(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,
