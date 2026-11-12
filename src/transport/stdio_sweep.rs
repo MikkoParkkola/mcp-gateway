@@ -100,6 +100,19 @@ pub(super) fn is_stray_stop(member: Identity, found: Identity, state: ProcState)
     found.pid == member.pid && found.start > member.start && state == ProcState::Stopped
 }
 
+/// Resume the stranger a stray by-pid stop may have landed on, and count what
+/// came of it.
+fn rescue_stray(table: &mut dyn ProcessTable, member: Identity, report: &mut SweepReport) {
+    match table.rescue(member) {
+        Rescue::Resumed => report.rescued += 1,
+        Rescue::NothingToDo => {}
+        Rescue::Failed => {
+            report.stop_mismatch += 1;
+            report.residual.push(member);
+        }
+    }
+}
+
 /// The process table the sweep reads and signals through.
 pub(super) trait ProcessTable {
     fn read(&mut self) -> Listing;
@@ -388,14 +401,7 @@ impl Sweep {
                 // may have landed on it. Resume it if it is a stopped reuser;
                 // the old identity has nothing left to continue or kill.
                 Err(SignalError::Mismatch) if entry.is_some() && !held => {
-                    match table.rescue(who) {
-                        Rescue::Resumed => report.rescued += 1,
-                        Rescue::NothingToDo => {}
-                        Rescue::Failed => {
-                            report.stop_mismatch += 1;
-                            report.residual.push(who);
-                        }
-                    }
+                    rescue_stray(table, who, &mut report);
                     continue;
                 }
                 Err(_) => {}
@@ -414,6 +420,15 @@ impl Sweep {
                     report.residual.push(who);
                 }
                 _ => report.residual.push(who),
+            }
+        }
+        // A member frozen by pid whose identity left the set before the kill (the
+        // re-walk found its pid held by someone else): its stop may have landed
+        // on that stranger, and there is nothing left to kill under the old name.
+        let targeted: BTreeSet<Identity> = self.members.keys().copied().collect();
+        for entry in &frozen {
+            if !entry.held && entry.id != self.root && !targeted.contains(&entry.id) {
+                rescue_stray(table, entry.id, &mut report);
             }
         }
         report.residual.extend(self.dropped.iter().copied());
