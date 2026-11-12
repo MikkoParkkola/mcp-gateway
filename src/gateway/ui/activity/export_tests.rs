@@ -500,6 +500,8 @@ fn the_whole_download_stays_within_the_byte_cap() {
         sources: Vec::new(),
         unreadable: 0,
         truncated: super::Truncated::Bytes,
+        join_incomplete: 0,
+        answer_integrity_failed: 0,
         signing_anchor: ["no_secret"; 2],
     })
     .len();

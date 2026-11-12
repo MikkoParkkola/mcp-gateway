@@ -36,6 +36,7 @@ history.txt
 # Local cargo config (the shared cargo-audit config is tracked, MIK-8577)
 .cargo/*
 !.cargo/audit.toml
+!.cargo/config.toml
 
 # Internal planning docs, strategic positioning, and competitive intelligence
 docs/plans/

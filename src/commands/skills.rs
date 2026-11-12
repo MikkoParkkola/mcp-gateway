@@ -14,6 +14,8 @@
 //! executed.  The CLI surfaces the content so humans/agents can decide what
 //! to do with it.
 
+use crate::cli::stdout::println;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 

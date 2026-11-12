@@ -9,8 +9,9 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-#[path = "interest.rs"]
-mod interest;
+// The including module provides `interest`, the one keeper: the library's log
+// capture, or the fresh-process test's own copy of interest.rs.
+use super::interest;
 
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<Vec<u8>>>);

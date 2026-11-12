@@ -3,8 +3,8 @@
 /ui/api/previews	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/previews	DELETE	plain	AuthOff	405
 /ui/api/previews	DELETE	plain	Bearer	405
-/ui/api/previews	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/previews	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/previews	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	DELETE	plain	OidcAdmin	405
 /ui/api/previews	DELETE	plain	OidcAuditor	405
 /ui/api/previews	DELETE	plain	OidcDeveloper	405
@@ -18,8 +18,8 @@
 /ui/api/previews	GET	bad-query	AdminKeyUnmapped	405
 /ui/api/previews	GET	bad-query	AuthOff	405
 /ui/api/previews	GET	bad-query	Bearer	405
-/ui/api/previews	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/previews	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/previews	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	GET	bad-query	OidcAdmin	405
 /ui/api/previews	GET	bad-query	OidcAuditor	405
 /ui/api/previews	GET	bad-query	OidcDeveloper	405
@@ -33,8 +33,8 @@
 /ui/api/previews	GET	plain	AdminKeyUnmapped	405
 /ui/api/previews	GET	plain	AuthOff	405
 /ui/api/previews	GET	plain	Bearer	405
-/ui/api/previews	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/previews	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	GET	plain	NoKey	401:error.code=-32000
+/ui/api/previews	GET	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	GET	plain	OidcAdmin	405
 /ui/api/previews	GET	plain	OidcAuditor	405
 /ui/api/previews	GET	plain	OidcDeveloper	405
@@ -63,8 +63,8 @@
 /ui/api/previews	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/previews	OPTIONS	plain	AuthOff	405
 /ui/api/previews	OPTIONS	plain	Bearer	405
-/ui/api/previews	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/previews	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/previews	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	OPTIONS	plain	OidcAdmin	405
 /ui/api/previews	OPTIONS	plain	OidcAuditor	405
 /ui/api/previews	OPTIONS	plain	OidcDeveloper	405
@@ -78,8 +78,8 @@
 /ui/api/previews	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/previews	PATCH	bad-json	AuthOff	405
 /ui/api/previews	PATCH	bad-json	Bearer	405
-/ui/api/previews	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/previews	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/previews	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	PATCH	bad-json	OidcAdmin	405
 /ui/api/previews	PATCH	bad-json	OidcAuditor	405
 /ui/api/previews	PATCH	bad-json	OidcDeveloper	405
@@ -93,8 +93,8 @@
 /ui/api/previews	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/previews	PATCH	bad-type	AuthOff	405
 /ui/api/previews	PATCH	bad-type	Bearer	405
-/ui/api/previews	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/previews	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/previews	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	PATCH	bad-type	OidcAdmin	405
 /ui/api/previews	PATCH	bad-type	OidcAuditor	405
 /ui/api/previews	PATCH	bad-type	OidcDeveloper	405
@@ -108,8 +108,8 @@
 /ui/api/previews	PATCH	json	AdminKeyUnmapped	405
 /ui/api/previews	PATCH	json	AuthOff	405
 /ui/api/previews	PATCH	json	Bearer	405
-/ui/api/previews	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/previews	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/previews	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	PATCH	json	OidcAdmin	405
 /ui/api/previews	PATCH	json	OidcAuditor	405
 /ui/api/previews	PATCH	json	OidcDeveloper	405
@@ -123,8 +123,8 @@
 /ui/api/previews	POST	bad-json	AdminKeyUnmapped	400
 /ui/api/previews	POST	bad-json	AuthOff	400
 /ui/api/previews	POST	bad-json	Bearer	400
-/ui/api/previews	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/previews	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/previews	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	POST	bad-json	OidcAdmin	400
 /ui/api/previews	POST	bad-json	OidcAuditor	400
 /ui/api/previews	POST	bad-json	OidcDeveloper	400
@@ -138,8 +138,8 @@
 /ui/api/previews	POST	bad-type	AdminKeyUnmapped	415
 /ui/api/previews	POST	bad-type	AuthOff	415
 /ui/api/previews	POST	bad-type	Bearer	415
-/ui/api/previews	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/previews	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/previews	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	POST	bad-type	OidcAdmin	415
 /ui/api/previews	POST	bad-type	OidcAuditor	415
 /ui/api/previews	POST	bad-type	OidcDeveloper	415
@@ -153,8 +153,8 @@
 /ui/api/previews	POST	json	AdminKeyUnmapped	422
 /ui/api/previews	POST	json	AuthOff	422
 /ui/api/previews	POST	json	Bearer	422
-/ui/api/previews	POST	json	NoKey	401:@b_de6b5592
-/ui/api/previews	POST	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	POST	json	NoKey	401:error.code=-32000
+/ui/api/previews	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	POST	json	OidcAdmin	422
 /ui/api/previews	POST	json	OidcAuditor	422
 /ui/api/previews	POST	json	OidcDeveloper	422
@@ -166,25 +166,25 @@
 /ui/api/previews	POST	json	StandardKey	422
 /ui/api/previews	POST	valid	AdminKey	422
 /ui/api/previews	POST	valid	AdminKeyUnmapped	422
-/ui/api/previews	POST	valid	AuthOff	403:@b_078e5133
+/ui/api/previews	POST	valid	AuthOff	403:error="Admin authentication required"
 /ui/api/previews	POST	valid	Bearer	422
-/ui/api/previews	POST	valid	NoKey	401:@b_de6b5592
-/ui/api/previews	POST	valid	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/previews	POST	valid	OidcAdmin	403:@b_078e5133
-/ui/api/previews	POST	valid	OidcAuditor	403:@b_078e5133
-/ui/api/previews	POST	valid	OidcDeveloper	403:@b_078e5133
-/ui/api/previews	POST	valid	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/previews	POST	valid	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/previews	POST	valid	OidcReviewer	403:@b_078e5133
-/ui/api/previews	POST	valid	OidcUnmapped	403:@b_078e5133
+/ui/api/previews	POST	valid	NoKey	401:error.code=-32000
+/ui/api/previews	POST	valid	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/previews	POST	valid	OidcAdmin	403:error="Admin authentication required"
+/ui/api/previews	POST	valid	OidcAuditor	403:error="Admin authentication required"
+/ui/api/previews	POST	valid	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/previews	POST	valid	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/previews	POST	valid	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/previews	POST	valid	OidcReviewer	403:error="Admin authentication required"
+/ui/api/previews	POST	valid	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/previews	POST	valid	Session	422
-/ui/api/previews	POST	valid	StandardKey	403:@b_078e5133
+/ui/api/previews	POST	valid	StandardKey	403:error="Admin authentication required"
 /ui/api/previews	PUT	bad-json	AdminKey	405
 /ui/api/previews	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/previews	PUT	bad-json	AuthOff	405
 /ui/api/previews	PUT	bad-json	Bearer	405
-/ui/api/previews	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/previews	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/previews	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	PUT	bad-json	OidcAdmin	405
 /ui/api/previews	PUT	bad-json	OidcAuditor	405
 /ui/api/previews	PUT	bad-json	OidcDeveloper	405
@@ -198,8 +198,8 @@
 /ui/api/previews	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/previews	PUT	bad-type	AuthOff	405
 /ui/api/previews	PUT	bad-type	Bearer	405
-/ui/api/previews	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/previews	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/previews	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	PUT	bad-type	OidcAdmin	405
 /ui/api/previews	PUT	bad-type	OidcAuditor	405
 /ui/api/previews	PUT	bad-type	OidcDeveloper	405
@@ -213,8 +213,8 @@
 /ui/api/previews	PUT	json	AdminKeyUnmapped	405
 /ui/api/previews	PUT	json	AuthOff	405
 /ui/api/previews	PUT	json	Bearer	405
-/ui/api/previews	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/previews	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/previews	PUT	json	NoKey	401:error.code=-32000
+/ui/api/previews	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/previews	PUT	json	OidcAdmin	405
 /ui/api/previews	PUT	json	OidcAuditor	405
 /ui/api/previews	PUT	json	OidcDeveloper	405

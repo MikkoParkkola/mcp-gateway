@@ -2,15 +2,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The wall clock, read in one place (MIK-8202).
 //!
-//! Twin-copy invariant: this file compiles into two crates, the library
-//! (`lib.rs`) and the binary (`main.rs`, `#[path = "clock.rs"]`, for the CLI
-//! commands). Any state in it exists twice: each copy has its own statics and
-//! thread-locals, and an override set through one copy never reaches the
-//! other. The only override both copies see is the environment's
-//! `MCP_GATEWAY_TEST_CLOCK` (debug builds only). So mutable shared state
-//! (a `static` outside the `test_clock` thread-locals, a `Mutex`, `RwLock`,
-//! `Atomic*`, `OnceLock` or `LazyLock`) may never be added here; a lexical
-//! test in `clock_tests.rs` holds that line.
+//! Shared by the gateway and CLI commands through the library. Keep the
+//! clock seam free of mutable shared state: no `static` outside the
+//! `test_clock` thread-locals, `Mutex`, `RwLock`, `Atomic*`, `OnceLock` or
+//! `LazyLock`. A lexical test in `clock_tests.rs` holds that line. The
+//! environment's `MCP_GATEWAY_TEST_CLOCK` remains debug-build-only.
 //!
 //! A host clock earlier than 1970 makes `SystemTime::duration_since(UNIX_EPOCH)`
 //! fail and makes chrono's `Utc::now()` panic (chrono 0.4.45 `utc.rs`,

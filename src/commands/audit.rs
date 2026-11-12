@@ -3,6 +3,8 @@
 //! `mcp-gateway audit`: verify the transparency log's chain, check an
 //! Activity export offline, or show one session's entries.
 
+use crate::cli::stdout::println;
+
 use std::process::ExitCode;
 
 use mcp_gateway::cli::AuditCommand;

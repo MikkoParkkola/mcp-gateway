@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Kubernetes enterprise command handlers.
 
+use crate::cli::stdout::println;
+
 use std::{
     path::Path,
     process::{Command as ProcessCommand, ExitCode},

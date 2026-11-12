@@ -3,8 +3,8 @@
 /ui/api/backends/{name}/signin	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/backends/{name}/signin	DELETE	plain	AuthOff	405
 /ui/api/backends/{name}/signin	DELETE	plain	Bearer	405
-/ui/api/backends/{name}/signin	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/backends/{name}/signin	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/backends/{name}/signin	DELETE	plain	OidcAdmin	405
 /ui/api/backends/{name}/signin	DELETE	plain	OidcAuditor	405
 /ui/api/backends/{name}/signin	DELETE	plain	OidcDeveloper	405
@@ -18,8 +18,8 @@
 /ui/api/backends/{name}/signin	GET	bad-query	AdminKeyUnmapped	405
 /ui/api/backends/{name}/signin	GET	bad-query	AuthOff	405
 /ui/api/backends/{name}/signin	GET	bad-query	Bearer	405
-/ui/api/backends/{name}/signin	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/backends/{name}/signin	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/backends/{name}/signin	GET	bad-query	OidcAdmin	405
 /ui/api/backends/{name}/signin	GET	bad-query	OidcAuditor	405
 /ui/api/backends/{name}/signin	GET	bad-query	OidcDeveloper	405
@@ -33,8 +33,8 @@
 /ui/api/backends/{name}/signin	GET	plain	AdminKeyUnmapped	405
 /ui/api/backends/{name}/signin	GET	plain	AuthOff	405
 /ui/api/backends/{name}/signin	GET	plain	Bearer	405
-/ui/api/backends/{name}/signin	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/backends/{name}/signin	GET	plain	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	GET	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/backends/{name}/signin	GET	plain	OidcAdmin	405
 /ui/api/backends/{name}/signin	GET	plain	OidcAuditor	405
 /ui/api/backends/{name}/signin	GET	plain	OidcDeveloper	405
@@ -63,8 +63,8 @@
 /ui/api/backends/{name}/signin	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/backends/{name}/signin	OPTIONS	plain	AuthOff	405
 /ui/api/backends/{name}/signin	OPTIONS	plain	Bearer	405
-/ui/api/backends/{name}/signin	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/backends/{name}/signin	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/backends/{name}/signin	OPTIONS	plain	OidcAdmin	405
 /ui/api/backends/{name}/signin	OPTIONS	plain	OidcAuditor	405
 /ui/api/backends/{name}/signin	OPTIONS	plain	OidcDeveloper	405
@@ -78,8 +78,8 @@
 /ui/api/backends/{name}/signin	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/backends/{name}/signin	PATCH	bad-json	AuthOff	405
 /ui/api/backends/{name}/signin	PATCH	bad-json	Bearer	405
-/ui/api/backends/{name}/signin	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/backends/{name}/signin	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/backends/{name}/signin	PATCH	bad-json	OidcAdmin	405
 /ui/api/backends/{name}/signin	PATCH	bad-json	OidcAuditor	405
 /ui/api/backends/{name}/signin	PATCH	bad-json	OidcDeveloper	405
@@ -93,8 +93,8 @@
 /ui/api/backends/{name}/signin	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/backends/{name}/signin	PATCH	bad-type	AuthOff	405
 /ui/api/backends/{name}/signin	PATCH	bad-type	Bearer	405
-/ui/api/backends/{name}/signin	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/backends/{name}/signin	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/backends/{name}/signin	PATCH	bad-type	OidcAdmin	405
 /ui/api/backends/{name}/signin	PATCH	bad-type	OidcAuditor	405
 /ui/api/backends/{name}/signin	PATCH	bad-type	OidcDeveloper	405
@@ -108,8 +108,8 @@
 /ui/api/backends/{name}/signin	PATCH	json	AdminKeyUnmapped	405
 /ui/api/backends/{name}/signin	PATCH	json	AuthOff	405
 /ui/api/backends/{name}/signin	PATCH	json	Bearer	405
-/ui/api/backends/{name}/signin	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/backends/{name}/signin	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/backends/{name}/signin	PATCH	json	OidcAdmin	405
 /ui/api/backends/{name}/signin	PATCH	json	OidcAuditor	405
 /ui/api/backends/{name}/signin	PATCH	json	OidcDeveloper	405
@@ -121,55 +121,55 @@
 /ui/api/backends/{name}/signin	PATCH	json	StandardKey	405
 /ui/api/backends/{name}/signin	POST	bad-json	AdminKey	400
 /ui/api/backends/{name}/signin	POST	bad-json	AdminKeyUnmapped	400
-/ui/api/backends/{name}/signin	POST	bad-json	AuthOff	403:@b_078e5133
+/ui/api/backends/{name}/signin	POST	bad-json	AuthOff	403:error="Admin authentication required"
 /ui/api/backends/{name}/signin	POST	bad-json	Bearer	400
-/ui/api/backends/{name}/signin	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/backends/{name}/signin	POST	bad-json	OidcAdmin	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	bad-json	OidcAuditor	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	bad-json	OidcDeveloper	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	bad-json	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	bad-json	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	bad-json	OidcReviewer	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	bad-json	OidcUnmapped	403:@b_078e5133
+/ui/api/backends/{name}/signin	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin	POST	bad-json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	bad-json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	bad-json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	bad-json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	bad-json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	bad-json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	bad-json	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/backends/{name}/signin	POST	bad-json	Session	400
-/ui/api/backends/{name}/signin	POST	bad-json	StandardKey	403:@b_078e5133
+/ui/api/backends/{name}/signin	POST	bad-json	StandardKey	403:error="Admin authentication required"
 /ui/api/backends/{name}/signin	POST	bad-type	AdminKey	400
 /ui/api/backends/{name}/signin	POST	bad-type	AdminKeyUnmapped	400
-/ui/api/backends/{name}/signin	POST	bad-type	AuthOff	403:@b_078e5133
+/ui/api/backends/{name}/signin	POST	bad-type	AuthOff	403:error="Admin authentication required"
 /ui/api/backends/{name}/signin	POST	bad-type	Bearer	400
-/ui/api/backends/{name}/signin	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/backends/{name}/signin	POST	bad-type	OidcAdmin	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	bad-type	OidcAuditor	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	bad-type	OidcDeveloper	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	bad-type	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	bad-type	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	bad-type	OidcReviewer	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	bad-type	OidcUnmapped	403:@b_078e5133
+/ui/api/backends/{name}/signin	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin	POST	bad-type	OidcAdmin	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	bad-type	OidcAuditor	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	bad-type	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	bad-type	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	bad-type	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	bad-type	OidcReviewer	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	bad-type	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/backends/{name}/signin	POST	bad-type	Session	400
-/ui/api/backends/{name}/signin	POST	bad-type	StandardKey	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	json	AdminKey	403:5db73c4b6cb8
-/ui/api/backends/{name}/signin	POST	json	AdminKeyUnmapped	403:5db73c4b6cb8
-/ui/api/backends/{name}/signin	POST	json	AuthOff	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	json	Bearer	403:5db73c4b6cb8
-/ui/api/backends/{name}/signin	POST	json	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	POST	json	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/backends/{name}/signin	POST	json	OidcAdmin	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	json	OidcAuditor	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	json	OidcDeveloper	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	json	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	json	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	json	OidcReviewer	403:@b_078e5133
-/ui/api/backends/{name}/signin	POST	json	OidcUnmapped	403:@b_078e5133
+/ui/api/backends/{name}/signin	POST	bad-type	StandardKey	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	json	AdminKey	403:error="dashboard_session_required"
+/ui/api/backends/{name}/signin	POST	json	AdminKeyUnmapped	403:error="dashboard_session_required"
+/ui/api/backends/{name}/signin	POST	json	AuthOff	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	json	Bearer	403:error="dashboard_session_required"
+/ui/api/backends/{name}/signin	POST	json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	POST	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/backends/{name}/signin	POST	json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/backends/{name}/signin	POST	json	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/backends/{name}/signin	POST	json	Session	404
-/ui/api/backends/{name}/signin	POST	json	StandardKey	403:@b_078e5133
+/ui/api/backends/{name}/signin	POST	json	StandardKey	403:error="Admin authentication required"
 /ui/api/backends/{name}/signin	PUT	bad-json	AdminKey	405
 /ui/api/backends/{name}/signin	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/backends/{name}/signin	PUT	bad-json	AuthOff	405
 /ui/api/backends/{name}/signin	PUT	bad-json	Bearer	405
-/ui/api/backends/{name}/signin	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/backends/{name}/signin	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/backends/{name}/signin	PUT	bad-json	OidcAdmin	405
 /ui/api/backends/{name}/signin	PUT	bad-json	OidcAuditor	405
 /ui/api/backends/{name}/signin	PUT	bad-json	OidcDeveloper	405
@@ -183,8 +183,8 @@
 /ui/api/backends/{name}/signin	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/backends/{name}/signin	PUT	bad-type	AuthOff	405
 /ui/api/backends/{name}/signin	PUT	bad-type	Bearer	405
-/ui/api/backends/{name}/signin	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/backends/{name}/signin	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/backends/{name}/signin	PUT	bad-type	OidcAdmin	405
 /ui/api/backends/{name}/signin	PUT	bad-type	OidcAuditor	405
 /ui/api/backends/{name}/signin	PUT	bad-type	OidcDeveloper	405
@@ -198,8 +198,8 @@
 /ui/api/backends/{name}/signin	PUT	json	AdminKeyUnmapped	405
 /ui/api/backends/{name}/signin	PUT	json	AuthOff	405
 /ui/api/backends/{name}/signin	PUT	json	Bearer	405
-/ui/api/backends/{name}/signin	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/backends/{name}/signin	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/backends/{name}/signin	PUT	json	NoKey	401:error.code=-32000
+/ui/api/backends/{name}/signin	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/backends/{name}/signin	PUT	json	OidcAdmin	405
 /ui/api/backends/{name}/signin	PUT	json	OidcAuditor	405
 /ui/api/backends/{name}/signin	PUT	json	OidcDeveloper	405
