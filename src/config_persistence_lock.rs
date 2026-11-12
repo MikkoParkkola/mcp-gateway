@@ -695,7 +695,9 @@ pub(crate) fn refuse_pending_v2(locked: &Locked) -> Result<(), NotLocked> {
     use super::journal::v2::OpenJournal;
 
     match dispatch_journal(locked) {
-        Ok(None) => Ok(()),
+        // No journal, or one this cannot classify: legacy recovery refuses it
+        // with its reviewed step, and never acts on anything but a v1 journal.
+        Ok(None) | Err(_) => Ok(()),
         Ok(Some(OpenJournal::Legacy(legacy))) => {
             drop(legacy);
             Ok(())
@@ -706,8 +708,5 @@ pub(crate) fn refuse_pending_v2(locked: &Locked) -> Result<(), NotLocked> {
                 super::journal::SETTLEMENT_PENDING.to_owned(),
             ))
         }
-        // Not a journal this can classify: legacy recovery refuses it with
-        // its reviewed step, and never acts on anything but a v1 journal.
-        Err(_) => Ok(()),
     }
 }
