@@ -385,6 +385,11 @@ fn altered_frames_match_no_donor() -> Result<(), String> {
             r#""intent_counter":null"#,
             r#""intent_counter":7"#,
         ),
+        (
+            "binding",
+            r#""log_id":"opaque-log:fixture""#,
+            r#""log_id":"opaque-log:other""#,
+        ),
     ];
     for (what, from, to) in variants {
         assert!(
@@ -454,6 +459,13 @@ fn over_cap_is_refused_before_allocation() -> Result<(), String> {
         inspect(header.as_bytes(), None),
         corrupt(0, Cause::Wire(FrameFault::Length)),
         "inspect agrees"
+    );
+    // No newline in the body: only the cap, not the early-newline rule, can refuse it.
+    let unterminated = format!("99999999\t{HANDED_OVER_SHA}\t{HANDED_OVER_JSON}");
+    assert_eq!(
+        decode_frames(unterminated.as_bytes()).map(|read| read.frames.len()),
+        Err(FrameFault::Length),
+        "an over-cap declared length is refused even when the body is cut short"
     );
     Ok(())
 }
