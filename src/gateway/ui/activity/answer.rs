@@ -24,6 +24,10 @@ pub(super) const RECEIPT_SCAN: u64 = DELIVERY_WINDOW;
 pub(super) const MAX_PENDING: usize = 256;
 /// Tombstones held per read.
 pub(super) const MAX_EVICTED: usize = 4_096;
+/// Delivery records already joined to a call row, kept per read so a second
+/// call row of the same trace still finds its record. Past this, completed
+/// traces stay in the pending map as before and use its bounds again.
+pub(super) const MAX_JOINED: usize = 16_384;
 
 pub(super) const NOT_SCANNED: &str = "answer not scanned";
 pub(super) const NOT_RECORDED: &str = "findings not recorded for this answer";

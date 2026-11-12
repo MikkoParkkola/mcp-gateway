@@ -97,3 +97,48 @@ fn state_serialises_in_snake_case() {
         "\"signed_unverifiable\""
     );
 }
+
+/// The recomputed hash borrows the entry's fields instead of cloning them; it
+/// must stay byte-identical to the hash of a cloned, filtered copy, on an
+/// entry with nested and escaped values, and agree with the logger's own hash.
+#[test]
+fn recompute_entry_hash_equals_the_hash_of_a_cloned_filtered_copy() {
+    use crate::security::transparency_log::recompute_entry_hash;
+
+    let nested = serde_json::json!({
+        "tool": "a\"b\n\u{1f600}", "n": [1, 2.5, null, {"z": 1, "a": [true]}],
+        "entry_hash": "sha256:x", "sig": "s", "key_id": "k",
+    });
+    let cloned: serde_json::Map<String, Value> = nested
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| !matches!(k.as_str(), "entry_hash" | "sig" | "key_id"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let want = crate::hashing::sha256_tagged(serde_json::to_string(&cloned).unwrap().as_bytes());
+    assert_eq!(recompute_entry_hash(&nested).unwrap(), want);
+
+    // Only top-level keys are excluded; the same names nested stay in the hash.
+    let deep = serde_json::json!({"a": {"sig": 1, "key_id": 2, "entry_hash": 3}, "sig": 4});
+    let kept = serde_json::json!({"a": {"sig": 1, "key_id": 2, "entry_hash": 3}});
+    assert_eq!(
+        recompute_entry_hash(&deep).unwrap(),
+        crate::hashing::sha256_tagged(serde_json::to_string(&kept).unwrap().as_bytes())
+    );
+    // An entry holding only excluded keys hashes the empty object; a non-object is refused.
+    let only = serde_json::json!({"entry_hash": "x", "sig": "y", "key_id": "z"});
+    assert_eq!(
+        recompute_entry_hash(&only).unwrap(),
+        crate::hashing::sha256_tagged(b"{}")
+    );
+    assert!(recompute_entry_hash(&serde_json::json!([1])).is_err());
+
+    for signed in [false, true] {
+        let real = entry(signed);
+        assert_eq!(
+            recompute_entry_hash(&real).unwrap(),
+            real["entry_hash"].as_str().unwrap()
+        );
+    }
+}
