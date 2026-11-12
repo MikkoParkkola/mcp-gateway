@@ -25,8 +25,9 @@ use crate::security::transparency_log::signature::SignatureState;
 
 pub(super) use super::reader::Seen;
 
-/// What is held for one trace.
-/// Where the line that failed integrity and names no trace sits.
+/// Where the first line seen that failed integrity and names no trace sits.
+/// First seen is not always the newest: a cursor's look-above folds earlier
+/// records forward, so a page and an export may report different lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Position {
     segment: u64,
@@ -41,6 +42,7 @@ impl Position {
     }
 }
 
+/// What is held for one trace.
 enum Held {
     One(Delivery),
     Bad(Why),
@@ -311,8 +313,14 @@ impl Joiner<'_, '_> {
 
     /// The join for a call line. Does not count: see [`Self::count`].
     pub(super) fn join(&mut self, line: &Line, seen: Seen) -> Joined {
-        let Some(trace) = str_of(&line.entry, "trace_id") else {
-            return Joined::NoRecord(Searched::NoTrace);
+        let Some(trace) = usable_trace(line) else {
+            // A call with no trace cannot be matched to a delivery, so a failure
+            // that names no trace cannot be ruled out for it either.
+            return if self.unattributed.is_some() {
+                Joined::Incomplete(Why::Unattributed)
+            } else {
+                Joined::NoRecord(Searched::NoTrace)
+            };
         };
         if self.overflowed {
             return Joined::Incomplete(Why::Overflow);

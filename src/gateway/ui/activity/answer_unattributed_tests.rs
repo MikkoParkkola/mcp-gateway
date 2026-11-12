@@ -143,6 +143,35 @@ fn r61_the_answer_integrity_values_are_a_closed_set() {
     assert_eq!(shown, ["duplicate", "indeterminate", "invalid", "unsigned"]);
 }
 
+/// A call with no usable trace cannot be matched to a delivery, so it is not
+/// exempt: the failure cannot be ruled out for it. List and receipt agree.
+#[tokio::test]
+async fn r62_an_older_call_without_a_trace_is_covered_too() {
+    // No secret: the forged empty trace keeps a valid hash, and the later
+    // delivery fails its hash after its trace is removed.
+    let fx = Fixture::new(None);
+    fx.call("gw-x");
+    let x = fx
+        .lines()
+        .iter()
+        .position(|l| l["trace_id"] == "gw-x")
+        .unwrap();
+    fx.edit(x, |e| forge(e, "trace_id", json!(""), false));
+    fx.call("gw-b");
+    fx.delivery("gw-b", &Dl::effect("refused"));
+    let at = fx.delivery_index("gw-b");
+    fx.edit(at, |e| {
+        e.as_object_mut().unwrap().remove("trace_id");
+    });
+    let (_, page) = get(&fx, &[]).await;
+    let listed = row_of(&page, "");
+    assert_eq!(listed["effect"], "unknown", "{listed}");
+    assert_eq!(listed["answer_integrity"], "indeterminate", "{listed}");
+    let receipt = super::answer_receipt_tests::rcpt(&fx, "");
+    assert_eq!(receipt["effect"], "unknown");
+    assert_eq!(receipt["answer_integrity"], "indeterminate");
+}
+
 /// The receipt reads the same answer as the list for a call the failure covers.
 #[tokio::test]
 async fn r60_the_receipt_agrees_with_the_list() {

@@ -66,7 +66,11 @@ pub(super) fn scan(
     call: &Line,
     check: &Check<'_>,
 ) -> io::Result<Scanned> {
-    let trace = call.entry.get("trace_id").and_then(Value::as_str);
+    let trace = call
+        .entry
+        .get("trace_id")
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty());
     let mut joiner = Joiner::new(check);
     // The call is judged first, as the list judges it: a call whose own line was
     // tampered with poisons its trace here too.
@@ -119,9 +123,7 @@ pub(super) fn scan(
                 .get("trace_id")
                 .and_then(Value::as_str)
                 .is_none_or(str::is_empty);
-            if trace.is_some()
-                && (untraced || entry.get("trace_id").and_then(Value::as_str) == trace)
-            {
+            if untraced || entry.get("trace_id").and_then(Value::as_str) == trace {
                 let line = Line {
                     log: Which::Invocation,
                     entry: entry.clone(),
