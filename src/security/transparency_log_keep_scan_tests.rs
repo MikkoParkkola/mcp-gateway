@@ -96,8 +96,8 @@ fn temp_log_only(text: &str) -> bool {
 }
 
 /// Whether `text` makes a temp dir of its own, by any of the plain
-/// constructors. `test_tempdir::tempdir()` is the Windows-normalised helper for
-/// allowed-folder paths and is not one.
+/// constructors. The match is on raw source, prose included: stricter, never
+/// looser.
 fn plain_temp_dir(text: &str) -> bool {
     [
         "tempdir(",
@@ -112,11 +112,10 @@ fn plain_temp_dir(text: &str) -> bool {
     .iter()
     .any(|constructor| {
         text.match_indices(*constructor).any(|(at, _)| {
-            !text[..at].ends_with("test_tempdir::")
-                && text[..at]
-                    .bytes()
-                    .next_back()
-                    .is_none_or(|c| c.is_ascii() && !c.is_ascii_alphanumeric() && c != b'_')
+            text[..at]
+                .bytes()
+                .next_back()
+                .is_none_or(|c| c.is_ascii() && !c.is_ascii_alphanumeric() && c != b'_')
         })
     })
 }
@@ -262,6 +261,12 @@ fn the_scan_tells_a_kept_log_from_an_unkept_one() {
 /// file-level scan above cannot see which temp dir a log lands in. A plain
 /// temp dir in any router source is a dir no log keeps (590 "temp dir no test
 /// kept" lines in one lib run came from these); take it from `kept_tempdir()`.
+/// [`plain_temp_dir`] for a router source: `test_tempdir::tempdir()`, the
+/// Windows-normalised helper for allowed-folder paths, is the one exemption.
+fn router_plain_temp_dir(text: &str) -> bool {
+    plain_temp_dir(&text.replace("test_tempdir::tempdir(", "windows_normalised("))
+}
+
 #[test]
 fn no_router_source_makes_a_plain_temp_dir() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -274,13 +279,14 @@ fn no_router_source_makes_a_plain_temp_dir() {
     );
     let plain: Vec<&str> = sources
         .iter()
-        .filter(|(_, text)| plain_temp_dir(text))
+        .filter(|(_, text)| router_plain_temp_dir(text))
         .map(|(rel, _)| rel.as_str())
         .collect();
     assert!(
         plain.is_empty(),
         "router sources make a temp dir of their own (use `crate::test_dir_keep::kept_tempdir()`, \
-         which a log opened inside it keeps): {plain:?}"
+         or `kept_tempdir_in(parent)` to keep the parent, which a log opened inside it keeps): \
+         {plain:?}"
     );
 }
 
@@ -294,5 +300,9 @@ fn the_router_scan_tells_a_plain_temp_dir_from_a_kept_one() {
         "let d = crate::test_dir_keep::kept_tempdir();"
     ));
     assert!(!plain_temp_dir("let d = kept_tempdir_in(parent);"));
-    assert!(!plain_temp_dir("let d = crate::test_tempdir::tempdir();"));
+    assert!(!router_plain_temp_dir(
+        "let d = crate::test_tempdir::tempdir();"
+    ));
+    // A TempLog may not vouch for the helper's unregistered directory.
+    assert!(plain_temp_dir("let d = crate::test_tempdir::tempdir();"));
 }
