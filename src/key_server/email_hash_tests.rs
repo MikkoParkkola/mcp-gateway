@@ -176,7 +176,7 @@ fn the_final_nfc_pass_composes_and_reorders() {
     assert!(two.starts_with("i\u{316}\u{307}"), "{two:?}");
 }
 
-use super::case_v1::{CASE_IGNORABLE, CASED_TERMINAL, LOWER_V1};
+use super::case_v1::{CASE_IGNORABLE, CASED_TERMINAL, LOWER_V1, WHITE_SPACE};
 use super::{lower_v1, normalize};
 
 fn all_scalars() -> impl Iterator<Item = char> {
@@ -357,6 +357,12 @@ fn the_tables_are_well_formed_and_not_empty() {
             prev_hi = Some(hi);
         }
     }
+    let points: u32 = WHITE_SPACE.iter().map(|&(lo, hi)| hi - lo + 1).sum();
+    assert_eq!(points, 25, "Unicode 17.0.0 has 25 White_Space code points");
+    assert!(
+        WHITE_SPACE.windows(2).all(|w| w[0].1 + 1 < w[1].0),
+        "White_Space ranges overlap or abut"
+    );
     for &(lo, hi) in &CASE_IGNORABLE {
         assert!(
             !CASED_TERMINAL.iter().any(|&(l, h)| l <= hi && lo <= h),
@@ -380,7 +386,11 @@ fn table_digest() -> String {
             bytes.extend(v.to_le_bytes());
         }
     }
-    for (tag, table) in [(1_u8, &CASE_IGNORABLE[..]), (2, &CASED_TERMINAL[..])] {
+    for (tag, table) in [
+        (1_u8, &CASE_IGNORABLE[..]),
+        (2, &CASED_TERMINAL[..]),
+        (3, &WHITE_SPACE[..]),
+    ] {
         bytes.push(tag);
         for (lo, hi) in table {
             bytes.extend(lo.to_le_bytes());
@@ -573,17 +583,34 @@ fn the_key_server_start_runs_the_self_check_before_any_key() {
     );
 }
 
-/// NORM.4: surrounding ASCII whitespace never changes the hash, so the email an
-/// IdP sends and the address an admin types meet however they are padded;
-/// whitespace inside the address and non-ASCII whitespace (no-break space,
-/// ideographic space) are part of the address and do change it. ASCII only
-/// keeps the rule free of any Unicode table.
-/// Mutant: no trim, a trim of both ends dropped, an inner or non-ASCII trim.
+/// NORM.4: surrounding Unicode White_Space never changes the hash, so the email
+/// an IdP sends and the address an admin pastes meet however they are padded:
+/// ASCII, no-break space (U+00A0), ideographic space (U+3000), next line
+/// (U+0085) and the rest of the Unicode 17 White_Space set. Whitespace inside
+/// the address, and characters that merely look blank (zero-width space,
+/// byte-order mark), are part of the address and do change it.
+/// Mutant: no trim, one end only, an ASCII-only trim, an inner trim.
 #[test]
-fn padding_does_not_change_the_hash_and_inner_or_unicode_whitespace_does() {
+fn padding_does_not_change_the_hash_and_inner_or_blank_looking_characters_do() {
     let key = EmailHashKey::for_test();
     let bare = key.hash("Ada.Lovelace@corp.invalid");
-    for pad in ["", " ", "\t", "\r\n", " \n\t ", "\u{b}\u{c}"] {
+    for pad in [
+        "",
+        " ",
+        "\t",
+        "\r\n",
+        " \n\t ",
+        "\u{b}\u{c}",
+        "\u{a0}",
+        "\u{3000}",
+        "\u{2003}",
+        "\u{85}",
+        "\u{2028}\u{2029}",
+        "\u{1680}",
+        "\u{202f}",
+        "\u{205f}",
+        "\u{200a}",
+    ] {
         assert_eq!(
             key.hash(&format!("{pad}Ada.Lovelace@corp.invalid{pad}")),
             bare,
@@ -605,12 +632,43 @@ fn padding_does_not_change_the_hash_and_inner_or_unicode_whitespace_does() {
         bare,
         "inner whitespace is kept"
     );
-    for pad in ["\u{a0}", "\u{3000}", "\u{2003}"] {
+    assert_ne!(
+        key.hash("Ada.\u{a0}Lovelace@corp.invalid"),
+        bare,
+        "an inner no-break space is kept"
+    );
+    for blank in ["\u{200b}", "\u{feff}", "\u{2060}", "\u{180e}"] {
         assert_ne!(
-            key.hash(&format!("{pad}Ada.Lovelace@corp.invalid")),
+            key.hash(&format!("{blank}Ada.Lovelace@corp.invalid")),
             bare,
-            "{pad:?} is not ASCII whitespace and must not be trimmed"
+            "{blank:?} is not White_Space and must not be trimmed"
         );
+    }
+}
+
+/// NORM.4: the frozen trim is exactly the standard library's trim at Unicode
+/// 17.0.0, for every scalar value as padding on either side; on a later
+/// toolchain the frozen list decides and this stands down.
+/// Mutant: drop or add a code point in the White_Space table.
+#[test]
+fn trim_v1_is_std_trim_for_every_code_point_at_unicode_17() {
+    if !std_is_unicode_17() {
+        return;
+    }
+    for c in all_scalars() {
+        for text in [
+            format!("{c}x{c}"),
+            format!("{c}{c}x"),
+            format!("x{c}{c}"),
+            c.to_string(),
+        ] {
+            assert_eq!(
+                super::trim_v1(&text),
+                text.trim(),
+                "U+{:04X} in {text:?}",
+                u32::from(c)
+            );
+        }
     }
 }
 

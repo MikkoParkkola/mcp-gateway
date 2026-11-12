@@ -47,6 +47,11 @@ pub(crate) fn normalize(email: &str) -> String {
 /// sigma when a cased letter precedes it and none follows, skipping
 /// case-ignorable characters on both sides. That is the only context-sensitive
 /// rule in the default lowercase mapping (SpecialCasing.txt).
+/// Version 1's trim (placeholder: replaced once the rows are proved red).
+pub(crate) fn trim_v1(text: &str) -> &str {
+    text
+}
+
 pub(crate) fn lower_v1(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for (at, c) in text.char_indices() {

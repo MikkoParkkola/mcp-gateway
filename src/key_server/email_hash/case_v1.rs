@@ -1965,6 +1965,8 @@ pub(super) static CASE_IGNORABLE: [(u32, u32); 464] = [
     (0xe0100, 0xe01ef),
 ];
 
+pub(super) static WHITE_SPACE: [(u32, u32); 0] = [];
+
 pub(super) static CASED_TERMINAL: [(u32, u32); 151] = [
     (0x41, 0x5a),
     (0x61, 0x7a),
