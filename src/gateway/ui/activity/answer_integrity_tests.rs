@@ -324,6 +324,21 @@ async fn r54_a_call_with_a_stripped_signature_reads_the_same_in_list_and_receipt
     assert_eq!(receipt["answer_integrity"], "unsigned", "the receipt");
 }
 
+/// The receipt judges a legacy call like the list does: a call written before
+/// signing began (unsigned, with a secret now configured) is not tampering, and
+/// a delivery signed after it still reaches the call.
+#[tokio::test]
+async fn r55_a_legacy_call_reads_delivered_in_its_receipt() {
+    let legacy = Fixture::new(None);
+    legacy.call("gw-t");
+    let signed = legacy.reopened_with(SECRET);
+    signed.delivery("gw-t", &Dl::effect("delivered"));
+    let receipt = rcpt(&signed, "gw-t");
+    assert_eq!(receipt["effect"], "delivered");
+    assert_ne!(receipt["answer_integrity"], "unsigned");
+    assert_ne!(receipt["answer_integrity"], "invalid");
+}
+
 #[tokio::test]
 async fn r33_no_secret_cannot_vouch() {
     let signed = Fixture::new(Some(SECRET));
