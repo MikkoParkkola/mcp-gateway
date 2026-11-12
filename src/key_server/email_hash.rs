@@ -23,6 +23,9 @@ pub(crate) const VERSION: u32 = 1;
 /// prefix, so its hashes cannot collide with these.
 const DOMAIN: &[u8] = b"email-v1\0";
 
+/// The subject hash's own domain: a subject is not an address.
+const SUBJECT_DOMAIN: &[u8] = b"subject-v1\0";
+
 /// Normalization v1: trim Unicode `White_Space`, NFC, Unicode lowercase, NFC again. The second NFC is
 /// needed because lowercasing can emit a decomposed sequence (U+0130 becomes
 /// `i` and a combining dot), so one pass alone is not stable under a second.
@@ -129,9 +132,28 @@ pub(crate) fn self_check_with(normalizer: &dyn Fn(&str) -> String) -> Result<(),
     Ok(())
 }
 
-/// Stub until the rows are proved red: how many times the check ran.
+/// Set once the real check has passed in this process.
+static CHECK_PASSED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+/// How many times the real check has run.
+static CHECK_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The check every key's construction goes through: the real [`self_check`], run
+/// until it passes once in this process. Only a success is remembered: a failure
+/// is not cached, so it is judged again at the next key, and it can never be
+/// stuck in a process-wide cell.
+fn process_check() -> Result<(), String> {
+    if CHECK_PASSED.get().is_some() {
+        return Ok(());
+    }
+    CHECK_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    self_check()?;
+    let _ = CHECK_PASSED.set(());
+    Ok(())
+}
+
+/// How many times the real check has run in this process (rows read it).
 pub(crate) fn check_runs() -> usize {
-    0
+    CHECK_RUNS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// [`self_check_with`] on the real normalization.
@@ -176,6 +198,22 @@ impl EmailHashKey {
     /// Parse the stored or configured text: exactly 64 lowercase hex digits,
     /// with one trailing newline allowed (the record key file's rule).
     pub(crate) fn from_hex(text: &str) -> Result<Self, KeyTextError> {
+        Self::from_hex_checked(text, &process_check)
+    }
+
+    /// [`Self::from_hex`] with the normalization check passed in, so a row can
+    /// give it a failing or counting one. The text is judged first; then the
+    /// check runs, and a failure fails the key, with the check's own words.
+    pub(crate) fn from_hex_checked(
+        text: &str,
+        check: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Self, KeyTextError> {
+        let key = Self::parse_hex(text)?;
+        check().map_err(KeyTextError::Normalization)?;
+        Ok(key)
+    }
+
+    fn parse_hex(text: &str) -> Result<Self, KeyTextError> {
         let digits = text.strip_suffix('\n').unwrap_or(text);
         if digits.len() != 2 * KEY_BYTES {
             return Err(KeyTextError::Length(digits.chars().count()));
@@ -191,17 +229,16 @@ impl EmailHashKey {
         Ok(Self(WipedBytes::new(bytes)))
     }
 
-    /// Stub until the rows are proved red: no check yet.
-    pub(crate) fn from_hex_checked(
-        text: &str,
-        _check: &dyn Fn() -> Result<(), String>,
-    ) -> Result<Self, KeyTextError> {
-        Self::from_hex(text)
-    }
-
-    /// Stub until the rows are proved red: the subject hashed as an email.
+    /// The hash of an OIDC `subject` for a log field: HMAC-SHA256 under this key
+    /// of its own domain tag (`subject-v1`) and the identifier's exact bytes. A
+    /// subject is an opaque, case-sensitive identifier, not an address, so it
+    /// does not go through [`normalize`]: no trim, no case folding, and a subject
+    /// that equals an email address does not collide with that email's hash.
     pub(crate) fn hash_subject(&self, subject: &str) -> String {
-        self.hash(subject)
+        let mut message = Vec::with_capacity(SUBJECT_DOMAIN.len() + subject.len());
+        message.extend_from_slice(SUBJECT_DOMAIN);
+        message.extend_from_slice(subject.as_bytes());
+        crate::hashing::hmac_sha256_hex(self.0.as_bytes(), &message)
     }
 
     /// The key id: lowercase hex SHA-256 of the decoded bytes. Names the key
