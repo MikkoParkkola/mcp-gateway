@@ -244,6 +244,42 @@ pub(crate) fn canonical_frames(donor: &JournalV2) -> Vec<(IntentId, Slot)> {
     sequence
 }
 
+/// The token-level facts an intent frame carries; one source for the frames a handover writes
+/// and the check that proves them.
+fn owner_facts(donor: &JournalV2, token: &TokenState) -> OwnerFacts {
+    OwnerFacts {
+        decision: token.decision.clone(),
+        handed_over: token.handed_over,
+        intent_counter: token.intent_counter,
+        root: donor.writer.is_none(),
+    }
+}
+
+/// The frames a handover of `donor` writes, in `canonical_frames` order. `None` without a
+/// binding: a frame names its log.
+pub(crate) fn frames_of(donor: &JournalV2) -> Option<Vec<AbandonedFrame>> {
+    let log_id = donor.binding.clone()?;
+    let mut frames = Vec::new();
+    for token in tokens(donor) {
+        let frame = |slot, record: &FrozenRecord, owner| AbandonedFrame {
+            log_id: log_id.clone(),
+            intent_id: token.intent_id.clone(),
+            slot,
+            record: record.clone(),
+            owner,
+        };
+        frames.push(frame(
+            Slot::Intent,
+            &token.intent,
+            Some(owner_facts(donor, token)),
+        ));
+        for (index, record) in token.records.iter().enumerate() {
+            frames.push(frame(Slot::Record(index), record, None));
+        }
+    }
+    Some(frames)
+}
+
 /// Whether the donor proves one frame: its token is handed over, the binding is the donor's,
 /// and the whole record, and on an intent frame the owner facts, equal the donor's.
 fn proves(donor: &JournalV2, frame: &AbandonedFrame) -> bool {
@@ -255,12 +291,7 @@ fn proves(donor: &JournalV2, frame: &AbandonedFrame) -> bool {
         Slot::Record(index) => token.records.get(index),
     };
     let facts = match frame.slot {
-        Slot::Intent => Some(OwnerFacts {
-            decision: token.decision.clone(),
-            handed_over: token.handed_over,
-            intent_counter: token.intent_counter,
-            root: donor.writer.is_none(),
-        }),
+        Slot::Intent => Some(owner_facts(donor, token)),
         Slot::Record(_) => None,
     };
     token.handed_over
