@@ -35,7 +35,7 @@ fn golden_abandoned_attribution_decode() {
             assert_eq!(read.tail, Tail::Clean, "{ROW}: the whole file is consumed");
             assert_eq!(read.frames.len(), 1, "{ROW}: one frame");
             let frame = &read.frames[0];
-            assert_eq!(frame.token, writer(), "{ROW}: token");
+            assert_eq!(frame.intent_id, writer(), "{ROW}: token");
             assert_eq!(frame.slot, Slot::Intent, "{ROW}: slot");
             assert_eq!(
                 frame.log_id.as_str(),
@@ -109,7 +109,7 @@ fn golden_abandoned_root_decode() {
             assert_eq!(read.frames.len(), 1, "{ROW}: one frame");
             let frame = &read.frames[0];
             assert_eq!(
-                frame.token,
+                frame.intent_id,
                 IntentId("attempt-1".to_owned()),
                 "{ROW}: token"
             );
@@ -192,7 +192,7 @@ fn golden_abandoned_handed_over_decode() {
             let donor = donor();
             let token = donor.writer.as_ref().expect(ROW);
             assert!(token.handed_over, "{ROW}: the donor stays handed over");
-            assert_eq!(frame.token, token.intent_id, "{ROW}: the donor's token");
+            assert_eq!(frame.intent_id, token.intent_id, "{ROW}: the donor's token");
             assert_eq!(
                 frame.record, token.intent,
                 "{ROW}: the donor's intent record"

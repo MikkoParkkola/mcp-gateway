@@ -49,7 +49,7 @@ pub(crate) struct OwnerFacts {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AbandonedFrame {
     pub(super) log_id: LogId,
-    pub(super) token: IntentId,
+    pub(super) intent_id: IntentId,
     pub(super) slot: Slot,
     pub(super) record: FrozenRecord,
     pub(super) owner: Option<OwnerFacts>,
@@ -100,7 +100,7 @@ pub(crate) fn encode_frame(frame: &AbandonedFrame) -> Result<Vec<u8>, FrameFault
         owner: frame.owner.clone(),
         record: frame.record.clone(),
         slot: frame.slot,
-        token: frame.token.clone(),
+        token: frame.intent_id.clone(),
         v: VERSION,
     };
     let value = serde_json::to_value(&wire).map_err(|_| FrameFault::Json)?;
@@ -192,7 +192,7 @@ fn parse(json: &[u8]) -> Result<AbandonedFrame, FrameFault> {
     }
     Ok(AbandonedFrame {
         log_id: LogId::from_journal(wire.log_id).map_err(|_| FrameFault::Field)?,
-        token: wire.token,
+        intent_id: wire.token,
         slot: wire.slot,
         record: wire.record,
         owner: wire.owner,
@@ -247,7 +247,7 @@ pub(crate) fn canonical_frames(donor: &JournalV2) -> Vec<(IntentId, Slot)> {
 /// Whether the donor proves one frame: its token is handed over, the binding is the donor's,
 /// and the whole record, and on an intent frame the owner facts, equal the donor's.
 fn proves(donor: &JournalV2, frame: &AbandonedFrame) -> bool {
-    let Some(token) = tokens(donor).find(|token| token.intent_id == frame.token) else {
+    let Some(token) = tokens(donor).find(|token| token.intent_id == frame.intent_id) else {
         return false;
     };
     let record = match frame.slot {
@@ -287,7 +287,7 @@ fn tail_verdict(read: &FrameRead, start: usize, donor: Option<&JournalV2>) -> In
         };
     }
     for (index, frame) in read.frames.iter().enumerate() {
-        if (frame.token.clone(), frame.slot) != canonical[index] {
+        if (frame.intent_id.clone(), frame.slot) != canonical[index] {
             return Inspection::Corrupt {
                 at: index,
                 cause: Cause::NotAPrefix,
