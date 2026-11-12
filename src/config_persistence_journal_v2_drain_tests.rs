@@ -181,6 +181,24 @@ fn foreign_receipt_is_not_acknowledged() {
                 "{ROW}: the rebuild adopted the replacing log"
             );
             assert_ne!(bound, live.log.log_id(), "{ROW}: the bound log was left");
+            // Acknowledgement first: only the drain's receipt check stands
+            // between a foreign receipt and a delivered flag.
+            assert!(
+                got.is_err(),
+                "{ROW}: a foreign acknowledgement is never delivered, got {got:?}"
+            );
+            reread(&mut owner);
+            let writer = state_of(&owner).writer.as_ref().expect(ROW);
+            assert!(
+                !writer.intent.delivered,
+                "{ROW}: no delivered flag for a foreign acknowledgement"
+            );
+            assert_eq!(
+                state_of(&owner).binding,
+                Some(bound),
+                "{ROW}: original binding retained"
+            );
+            // Then what the logger did: it stopped before writing anywhere.
             assert!(
                 records_at(&live.log_path)
                     .iter()
@@ -195,17 +213,6 @@ fn foreign_receipt_is_not_acknowledged() {
             assert!(
                 matches!(got, Err(DrainError::Unconfirmed)),
                 "{ROW}: the interrupted append is unconfirmed, got {got:?}"
-            );
-            reread(&mut owner);
-            let writer = state_of(&owner).writer.as_ref().expect(ROW);
-            assert!(
-                !writer.intent.delivered,
-                "{ROW}: no delivered flag for a foreign acknowledgement"
-            );
-            assert_eq!(
-                state_of(&owner).binding,
-                Some(bound),
-                "{ROW}: original binding retained"
             );
             Ok(())
         },
