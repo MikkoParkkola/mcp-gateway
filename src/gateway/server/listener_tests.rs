@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! #2147: after the shutdown signal the listener waits for open requests at
-//! most `server.shutdown_timeout`, and no less.
+//! most the grace it is given (the stop budget's listener share), and no less.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
