@@ -711,6 +711,23 @@ mod plan_tests {
         assert_eq!(eof + term, waits, "the split spends exactly the waits");
     }
 
+    /// The floor takes from the EOF wait, so the EOF wait at the 12 s minimum
+    /// keeps a stated floor: a backend that saves on EOF keeps at least this much.
+    /// Red if the SIGTERM floor or a growing reap constant erodes the EOF wait.
+    #[cfg(unix)]
+    #[test]
+    fn the_eof_wait_at_the_minimum_keeps_its_stated_floor() {
+        const STATED_EOF_FLOOR: Duration = Duration::from_secs(2);
+        let waits = Duration::from_millis(3_650);
+        let Ending::Graceful { eof, .. } = graceful_ending(KILL_RESERVE + waits, true, None) else {
+            panic!("waits above the minimum phase give a graceful ending");
+        };
+        assert!(
+            eof >= STATED_EOF_FLOOR,
+            "the EOF wait at the minimum is {eof:?}, under the stated {STATED_EOF_FLOOR:?}"
+        );
+    }
+
     /// Small waits cannot afford the floor: SIGTERM takes at most half, so the
     /// EOF wait is never starved.
     /// Red if the floor takes more than half of the waits.
