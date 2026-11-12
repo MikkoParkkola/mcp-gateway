@@ -69,10 +69,10 @@ pub(super) trait ProcessTable {
 /// The bounds one sweep runs under.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SweepConfig {
-    /// The share of the stop deadline for freezing and re-walking.
+    /// The share of the stop deadline for freezing and re-walking. The terminal
+    /// kills that follow are non-blocking sends and are never cut: a cut would
+    /// leave stopped processes behind.
     pub(super) freeze_slice: Duration,
-    /// The share for the terminal kills that follow.
-    pub(super) kill_slice: Duration,
     /// The most members one sweep holds.
     pub(super) cap: usize,
 }
@@ -115,13 +115,14 @@ impl PidfdBudget {
     pub(super) fn take(&self) -> Option<Permit<'_>> {
         use std::sync::atomic::Ordering;
         self.used
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |used| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |used| {
                 (used < self.limit).then_some(used + 1)
             })
             .ok()
             .map(|_| Permit(self))
     }
 
+    #[cfg(test)]
     pub(super) fn in_use(&self) -> usize {
         self.used.load(std::sync::atomic::Ordering::SeqCst)
     }
@@ -270,17 +271,16 @@ impl Sweep {
         for who in targets {
             let entry = frozen.iter().find(|f| f.id == who);
             let held = entry.is_some_and(|f| f.held);
-            match table.signal(who, Sig::Kill, held) {
-                Ok(_) => report.killed.push(who),
-                Err(_) => {
-                    if entry.is_some_and(|f| f.ours) {
-                        let _ = table.signal(who, Sig::Cont, held);
-                        report.continued.push(who);
-                    }
-                    if table.state(who) != ProcState::Gone {
-                        report.residual.push(who);
-                    }
-                }
+            if table.signal(who, Sig::Kill, held).is_ok() {
+                report.killed.push(who);
+                continue;
+            }
+            if entry.is_some_and(|f| f.ours) {
+                let _ = table.signal(who, Sig::Cont, held);
+                report.continued.push(who);
+            }
+            if table.state(who) != ProcState::Gone {
+                report.residual.push(who);
             }
         }
         report.residual.extend(self.dropped.iter().copied());
@@ -307,10 +307,9 @@ pub(super) type PlatformTable = LinuxTable;
 pub(super) type PlatformTable = MacTable;
 
 /// The share of a backend's kill reserve the sweep may spend freezing and
-/// re-walking, and then on the terminal kills. Both sit inside the reaper's own
-/// kill reserve, so the gateway's stop deadline holds by construction.
-const FREEZE_SLICE: Duration = Duration::from_millis(150);
-const KILL_SLICE: Duration = Duration::from_millis(100);
+/// re-walking. It sits inside the reaper's own kill reserve, so the gateway's
+/// stop deadline holds by construction.
+const FREEZE_SLICE: Duration = Duration::from_millis(250);
 /// Descriptors the gateway keeps for its own sockets and files.
 const FD_RESERVE: usize = 512;
 
@@ -336,7 +335,6 @@ fn fd_limit() -> usize {
 pub(super) fn config() -> SweepConfig {
     SweepConfig {
         freeze_slice: FREEZE_SLICE,
-        kill_slice: KILL_SLICE,
         cap: fd_limit(),
     }
 }

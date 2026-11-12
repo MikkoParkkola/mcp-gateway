@@ -12,6 +12,7 @@
 //! Command lines are never read: nothing here can put one in a log.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
@@ -95,19 +96,22 @@ impl LinuxTable {
     /// kernel refuses one (no pidfd support, descriptor limit) or the pid is
     /// no longer that process.
     fn held(&mut self, id: Identity) -> Result<Option<&OwnedFd>, SignalError> {
-        if !self.fds.contains_key(&id) {
-            let Some(pid) = pid_of(id) else {
-                return Err(SignalError::Failed);
-            };
-            let Ok(fd) = pidfd_open(pid, PidfdFlags::empty()) else {
-                return Ok(None);
-            };
-            if read_stat(id.pid).map(|s| s.start) != Some(id.start) {
-                return Err(SignalError::Mismatch);
+        let fd = match self.fds.entry(id) {
+            Entry::Occupied(held) => held.into_mut(),
+            Entry::Vacant(slot) => {
+                let Some(pid) = pid_of(id) else {
+                    return Err(SignalError::Failed);
+                };
+                let Ok(fd) = pidfd_open(pid, PidfdFlags::empty()) else {
+                    return Ok(None);
+                };
+                if read_stat(id.pid).map(|s| s.start) != Some(id.start) {
+                    return Err(SignalError::Mismatch);
+                }
+                slot.insert(fd)
             }
-            self.fds.insert(id, fd);
-        }
-        Ok(self.fds.get(&id))
+        };
+        Ok(Some(&*fd))
     }
 }
 
@@ -139,12 +143,10 @@ impl ProcessTable for LinuxTable {
 
     fn signal(&mut self, id: Identity, sig: Sig, held: bool) -> Result<Handle, SignalError> {
         let signal = signal_of(sig);
-        if held {
-            if let Some(fd) = self.held(id)? {
-                return pidfd_send_signal(fd, signal)
-                    .map(|()| Handle::Held)
-                    .map_err(denied);
-            }
+        if held && let Some(fd) = self.held(id)? {
+            return pidfd_send_signal(fd, signal)
+                .map(|()| Handle::Held)
+                .map_err(denied);
         }
         let pid = pid_of(id).ok_or(SignalError::Failed)?;
         if read_stat(id.pid).map(|s| s.start) != Some(id.start) {

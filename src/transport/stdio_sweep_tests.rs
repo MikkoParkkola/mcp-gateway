@@ -19,10 +19,14 @@ fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
+/// What the terminal kills may add to the freeze slice in the fake's clock: they
+/// are non-blocking sends, never cut, since cutting them would leave processes
+/// stopped.
+const TERMINAL: Duration = Duration::from_millis(50);
+
 fn cfg() -> SweepConfig {
     SweepConfig {
         freeze_slice: ms(50),
-        kill_slice: ms(50),
         cap: 4096,
     }
 }
@@ -342,7 +346,7 @@ fn a_forking_leaf_is_frozen_and_every_collected_identity_dies() {
         .collect();
     assert!(survivors.is_empty(), "survivors: {survivors:?}");
     assert!(
-        fake.clock <= cfg().freeze_slice + cfg().kill_slice,
+        fake.clock <= cfg().freeze_slice + TERMINAL,
         "ran {:?}",
         fake.clock
     );
@@ -374,7 +378,7 @@ fn slice_expiry_kills_the_frozen_set_and_leaves_nothing_stopped() {
         assert!(report.killed.contains(&id(pid)), "pid {pid}: {report:?}");
     }
     assert!(
-        fake.clock <= short.freeze_slice + short.kill_slice,
+        fake.clock <= short.freeze_slice + TERMINAL,
         "ran {:?}",
         fake.clock
     );
@@ -493,7 +497,7 @@ fn a_large_frozen_set_is_killed_inside_the_slices() {
     run(&mut fake, 10);
     assert!(fake.procs.iter().all(|p| p.state == ProcState::Gone));
     assert!(
-        fake.clock <= cfg().freeze_slice + cfg().kill_slice,
+        fake.clock <= cfg().freeze_slice + TERMINAL,
         "ran {:?}",
         fake.clock
     );

@@ -35,7 +35,7 @@ fn status_maps_stopped_and_zombie_and_everything_else_runs() {
 #[test]
 fn slots_leave_headroom_and_refuse_a_bad_estimate() {
     assert_eq!(slots_for(400), Some(400 + 100 + 64));
-    assert_eq!(slots_for(1), Some(1 + 0 + 64));
+    assert_eq!(slots_for(1), Some(1 + 64));
     for bad in [0, -1, i32::MIN] {
         assert_eq!(slots_for(bad), None, "{bad}");
     }
