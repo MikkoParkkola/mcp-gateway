@@ -657,7 +657,8 @@ impl Gateway {
         #[cfg(not(test))]
         let shutdown = support::shutdown_signal(shutdown_tx);
         let std_listener = listener.into_std()?;
-        listener::serve(app, std_listener, addr, &self.config, shutdown).await?;
+        let grace = self.config.server.shutdown_timeout;
+        listener::serve(app, std_listener, addr, &self.config, grace, shutdown).await?;
 
         // Saved under one deadline, off the runtime's threads (MIK-8157).
         #[cfg(feature = "cost-governance")]

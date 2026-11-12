@@ -45,11 +45,13 @@ async fn start(
         .expect("bind loopback");
     let addr = listener.local_addr().expect("local addr");
     let listener = listener.into_std().expect("std listener");
+    // The configured timeout is far longer than any row waits: only the explicit
+    // grace passed to `serve` can stop the listener in time.
     let mut config = Config::default();
-    config.server.shutdown_timeout = grace;
+    config.server.shutdown_timeout = Duration::from_secs(600);
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let server = tokio::spawn(async move {
-        serve(app, listener, addr, &config, async move {
+        serve(app, listener, addr, &config, grace, async move {
             let _ = stop_rx.await;
         })
         .await
@@ -195,7 +197,14 @@ async fn an_already_resolved_shutdown_future_stops_the_listener() {
     config.server.shutdown_timeout = Duration::from_secs(10);
     timeout(
         HANG_STOP,
-        serve(Router::new(), listener, addr, &config, async {}),
+        serve(
+            Router::new(),
+            listener,
+            addr,
+            &config,
+            config.server.shutdown_timeout,
+            async {},
+        ),
     )
     .await
     .expect("the listener kept running after its shutdown future resolved")

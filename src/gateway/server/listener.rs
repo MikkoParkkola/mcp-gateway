@@ -22,6 +22,7 @@ pub(super) async fn serve(
     listener: std::net::TcpListener,
     addr: SocketAddr,
     config: &Config,
+    _grace: std::time::Duration,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
     let handle = axum_server::Handle::<SocketAddr>::new();
