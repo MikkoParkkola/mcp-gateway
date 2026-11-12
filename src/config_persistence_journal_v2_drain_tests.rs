@@ -8,6 +8,8 @@ use super::super::fixtures::{bytes, collect_case, decision};
 use super::super::observe::{self, Event};
 use super::super::{IntentId, JournalError, ParkReason, ResultClass};
 use super::fault::{self, At, Fault};
+#[cfg(unix)]
+use super::fixtures::records_at;
 use super::fixtures::{
     Live, OUTCOME, SAVE, WRITER, actor, attributed, decided, payload, reread, retry, runtime,
     staged, state, state_of, terminal_count,
@@ -16,9 +18,13 @@ use crate::config_persistence::crash_fs::{self, Mode};
 use crate::config_persistence::journal;
 use crate::config_persistence::journal::drain::{DrainError, JournalDrain};
 use crate::config_persistence::lock;
+#[cfg(unix)]
+use crate::security::audit_rotation_config::RotationConfig;
 use crate::security::transparency_log::rotation::WriteFault;
 #[cfg(unix)]
 use crate::security::transparency_log::rotation::syncs_of;
+#[cfg(unix)]
+use crate::security::transparency_log::segments::list_segments;
 use crate::security::transparency_log::settle::Reason;
 
 #[test]
@@ -136,7 +142,7 @@ fn audit_sync_failure_not_acknowledged() {
 }
 
 /// A disk-full rebuild can adopt a replaced log after the binding was
-/// checked; the receipt then names another log and must not be accepted.
+/// checked; the append must stop there and no acknowledgement may follow.
 #[cfg(unix)]
 #[test]
 fn foreign_receipt_is_not_acknowledged() {
@@ -146,37 +152,49 @@ fn foreign_receipt_is_not_acknowledged() {
         &mut failures,
         ROW,
         "log_replaced_during_disk_full_rebuild",
-        "OtherLog, no delivered flag, original binding retained",
+        "Unconfirmed, nothing in the replacing log, no delivered flag",
         || {
-            let live = Live::new();
-            let foreign = Live::new();
+            let small = RotationConfig {
+                max_segment_bytes: 1024,
+                ..RotationConfig::default()
+            };
+            let live = Live::with_rotation(small.clone());
+            let foreign = Live::with_rotation(small);
+            for log in [&live, &foreign] {
+                seal_a_segment(log);
+            }
+            let bound = live.log.log_id();
+            let foreign_records = foreign.records().len();
             let mut initial = state(&live.resolved);
             attributed(&mut initial);
             let mut owner = live.seed(initial, ROW);
-            let swap = live.log_path.with_extension("swap");
             let (source, target) = (foreign.log_path.clone(), live.log_path.clone());
             live.log
                 .arm_write_fault(Some(WriteFault::FullUntilReserveFreed));
             live.log.arm_after_partial_write(Some(Box::new(move || {
-                std::fs::copy(&source, &swap).expect("copy the other log");
-                std::fs::rename(&swap, &target).expect("replace the active log");
+                replace_audit_files(&source, &target);
             })));
             let got = runtime(JournalDrain::deliver(&mut owner, &live.log));
             assert_eq!(
-                got,
-                Err(DrainError::OtherLog),
-                "{ROW}: a receipt for another log is refused"
+                live.log.log_id(),
+                foreign.log.log_id(),
+                "{ROW}: the rebuild adopted the replacing log"
             );
+            assert_ne!(bound, live.log.log_id(), "{ROW}: the bound log was left");
             assert!(
-                live.records()
+                records_at(&live.log_path)
                     .iter()
                     .all(|record| record["token"] != WRITER),
                 "{ROW}: nothing was written to the log that took its place"
             );
             assert_eq!(
-                live.records().len(),
-                foreign.records().len(),
+                records_at(&live.log_path).len(),
+                foreign_records,
                 "{ROW}: the replacing log gained no record"
+            );
+            assert!(
+                matches!(got, Err(DrainError::Unconfirmed)),
+                "{ROW}: the interrupted append is unconfirmed, got {got:?}"
             );
             reread(&mut owner);
             let writer = state_of(&owner).writer.as_ref().expect(ROW);
@@ -186,13 +204,50 @@ fn foreign_receipt_is_not_acknowledged() {
             );
             assert_eq!(
                 state_of(&owner).binding,
-                Some(live.log.log_id()),
+                Some(bound),
                 "{ROW}: original binding retained"
             );
             Ok(())
         },
     );
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
+}
+
+/// Append filler records until the log has sealed its first segment.
+#[cfg(unix)]
+fn seal_a_segment(live: &Live) {
+    for i in 0..1_000 {
+        if !list_segments(&live.log_path)
+            .expect("list segments")
+            .is_empty()
+        {
+            return;
+        }
+        live.log
+            .log_invocation(
+                "s",
+                "c",
+                "srv",
+                &format!("tool_{i}"),
+                "sha256:aa",
+                "sha256:bb",
+            )
+            .expect("filler record");
+    }
+    panic!("no segment was sealed");
+}
+
+/// Put every file of `source`'s directory over the same-named file of
+/// `target`'s, as another log taking the place of the active one would.
+#[cfg(unix)]
+fn replace_audit_files(source: &std::path::Path, target: &std::path::Path) {
+    let (from, to) = (source.parent().expect("dir"), target.parent().expect("dir"));
+    for entry in std::fs::read_dir(from).expect("read the other log's directory") {
+        let name = entry.expect("entry").file_name();
+        let swap = to.join("swap.tmp");
+        std::fs::copy(from.join(&name), &swap).expect("copy the other log's file");
+        std::fs::rename(&swap, to.join(&name)).expect("replace the file");
+    }
 }
 
 #[test]

@@ -698,8 +698,9 @@ impl TransparencyLogger {
         let on_active = path_id(path).is_ok_and(|id| id == inner.seg.id);
         if !on_active {
             self.rebuild(inner, path, g)?;
-            // A log put in place of the bound one: refuse before any expiry
-            // or retried write reaches it.
+            // A log put in place of the bound one: refuse before the expiry or
+            // the retried write reaches it. The rebuild above has already run
+            // its own recovery, as `refresh` does for any moved log.
             if bound.is_some_and(|bound| inner.log_id != *bound) {
                 return Err(io::Error::other(LogReplaced));
             }

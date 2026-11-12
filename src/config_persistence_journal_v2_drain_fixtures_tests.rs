@@ -20,6 +20,7 @@ use crate::config_persistence::journal;
 use crate::config_persistence::lock::{self, Locked};
 use crate::config_persistence::{FileMode, Symlink, sync_dir_of, write_atomic};
 use crate::security::audit::AuditWho;
+use crate::security::audit_rotation_config::RotationConfig;
 use crate::security::transparency_log::settle::{Attribution, IntentKind, Reason, Role};
 use crate::security::transparency_log::{
     TransparencyLogConfig, TransparencyLogger, VerifyMode, verify_audit_log,
@@ -149,6 +150,10 @@ pub(super) struct Live {
 
 impl Live {
     pub(super) fn new() -> Self {
+        Self::with_rotation(RotationConfig::default())
+    }
+
+    pub(super) fn with_rotation(rotation: RotationConfig) -> Self {
         let dir = Arc::new(tempfile::tempdir().expect("fixture directory"));
         let root = std::fs::canonicalize(dir.path()).expect("resolved fixture directory");
         // The overlay projects only config files; the logger owns its audit durability.
@@ -163,6 +168,7 @@ impl Live {
             enabled: true,
             path: log_path.to_string_lossy().into_owned(),
             key_id: "s6a2-fixture".into(),
+            rotation,
             ..Default::default()
         });
         let log = Arc::new(TransparencyLogger::open(Arc::clone(&config)).expect("fixture log"));
