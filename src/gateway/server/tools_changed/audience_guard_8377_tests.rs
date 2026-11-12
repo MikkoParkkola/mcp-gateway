@@ -224,11 +224,11 @@ async fn cf_world(
         },
         ..CallerIdentityConfig::default()
     };
-    World::start_with(move |meta| {
+    Box::pin(World::start_with(move |meta| {
         meta.with_caller_identity(identity)
             .with_access_verifier_for_test(verifier)
             .with_identity_grants(grants)
-    })
+    }))
     .await
 }
 
@@ -305,7 +305,7 @@ fn proxied(subject: &'static str) -> impl FnOnce(&mut axum::http::Request<axum::
 #[tokio::test]
 async fn g_proxy_1_one_key_two_proxied_users_differ_only_in_subject() {
     let owner = (PROXY_AUTHORITY, "alice");
-    let w = proxy_world(grant("alice_cal", owner, GrantAgent::Any)).await;
+    let w = Box::pin(proxy_world(grant("alice_cal", owner, GrantAgent::Any))).await;
     w.set_capability_yaml(&personal_cap("alice_cal", owner, "one"));
     w.settle().await;
     let mut ears = [
@@ -492,7 +492,7 @@ async fn g_live_1_eq_a_stream_at_its_certificate_not_after_is_still_told() {
 /// expires once the forced clock passes `K_EXP_UNTIL`.
 #[tokio::test]
 async fn g_proxy_2_bearer_a_proxied_stream_whose_key_expires_is_closed() {
-    let w = proxy_world(LocalIdentityGrantStore::default()).await;
+    let w = Box::pin(proxy_world(LocalIdentityGrantStore::default())).await;
     let mut ear = w.listen_with("k-exp", proxied("alice")).await;
     w.store_shared("alpha", alpha("r2"));
     assert_eq!(ear.told(&w).await, 1, "premise: a live key is told");

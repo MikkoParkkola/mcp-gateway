@@ -4,13 +4,17 @@
 
 #[cfg(test)]
 use std::io::Write as _;
+#[cfg(test)]
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use super::Journal;
-use crate::config_persistence::commit::{Action, CommitToken, FileRevision};
+#[cfg(test)]
+use crate::config_persistence::commit::CommitToken;
+use crate::config_persistence::commit::{Action, FileRevision};
 use crate::config_persistence::lock::Locked;
+#[cfg(test)]
 use crate::config_persistence::{FileMode, Symlink, sync_dir_of, write_atomic};
 use crate::security::transparency_log::identity::LogId;
 use crate::security::transparency_log::settle::{Attribution, Reason, Role};
@@ -39,7 +43,7 @@ pub(crate) enum TerminalRole {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Decision {
+pub(crate) struct JournalDecision {
     pub(super) result: ResultClass,
     pub(super) reason: Reason,
     pub(super) settled_by: Option<IntentId>,
@@ -81,7 +85,7 @@ pub(crate) struct TokenState {
     pub(super) intent_id: IntentId,
     pub(super) intent: FrozenRecord,
     pub(super) intent_counter: Option<u64>,
-    pub(super) decision: Option<Decision>,
+    pub(super) decision: Option<JournalDecision>,
     pub(super) records: Vec<FrozenRecord>,
     pub(super) handed_over: bool,
 }
@@ -134,8 +138,11 @@ pub(crate) enum JournalError {
     Unreadable,
     InvalidState,
     UnsupportedVersion,
+    #[cfg(test)]
     ChangedDecision,
+    #[cfg(test)]
     Persist,
+    #[cfg(test)]
     Finish,
 }
 
@@ -192,19 +199,28 @@ pub(crate) fn create_intended(
     })
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct JournalSession {
     target: PathBuf,
     state: JournalV2,
 }
 
+#[cfg(test)]
 impl JournalSession {
     pub(crate) fn persist(&mut self) -> Result<(), JournalError> {
+        #[cfg(test)]
+        observe::plan_tokens(&self.target, &self.state);
         let bytes = self.state.encode()?;
         let path = super::journal_path(&self.target);
         write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)
-            .and_then(|()| sync_dir_of(&path))
-            .map_err(|_| JournalError::Persist)
+            .map_err(|_| JournalError::Persist)?;
+        #[cfg(test)]
+        drain::fault::before_decision_sync(&self.target, &self.state)?;
+        sync_dir_of(&path).map_err(|_| JournalError::Persist)?;
+        #[cfg(test)]
+        drain::fault::after_decision_sync(&self.target, &self.state)?;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -277,8 +293,10 @@ impl JournalSession {
     pub(crate) fn decide(
         &mut self,
         token: &IntentId,
-        decision: Decision,
+        decision: JournalDecision,
     ) -> Result<(), JournalError> {
+        #[cfg(test)]
+        observe::note(&self.target, observe::Event::DecisionProposed);
         let owner = self
             .state
             .writer
@@ -321,6 +339,14 @@ impl JournalSession {
             .map_err(|_| JournalError::Finish)?;
         #[cfg(test)]
         observe::note(&self.target, observe::Event::OriginalUnlinked);
+        #[cfg(test)]
+        if matches!(
+            super::fault::get(&self.target),
+            Some(super::fault::Fault::FailJournalRemove)
+        ) {
+            super::fault::note_fired(&self.target);
+            return Err(JournalError::Finish);
+        }
         super::remove_if_present(&super::journal_path(&self.target))
             .map_err(|_| JournalError::Finish)?;
         #[cfg(test)]
@@ -337,6 +363,7 @@ impl JournalV2 {
         codec::decode(bytes)
     }
 
+    #[cfg(test)]
     pub(crate) fn encode(&self) -> Result<Vec<u8>, JournalError> {
         self.validate()?;
         codec::encode(self)
@@ -373,7 +400,8 @@ impl JournalV2 {
             return Err(JournalError::InvalidState);
         }
         if let Some(pending) = &self.pending
-            && (&pending.pre_action != self.pre_action(pending.action)?
+            && ((pending.tried && self.phase != Phase::Staged)
+                || &pending.pre_action != self.pre_action(pending.action)?
                 || &pending.expected != self.destination(pending.action)?)
         {
             return Err(JournalError::InvalidState);
@@ -405,7 +433,7 @@ impl JournalV2 {
     }
 }
 
-impl Decision {
+impl JournalDecision {
     fn validate(&self) -> Result<(), JournalError> {
         let valid = match self.terminal {
             TerminalRole::Outcome => match self.result {
@@ -444,6 +472,7 @@ impl Decision {
     }
 }
 
+#[cfg(test)]
 impl TokenState {
     fn finished(&self, attempts: &[TokenState]) -> bool {
         if self.intent.parked.is_some() || self.records.iter().any(|r| r.parked.is_some()) {
@@ -504,3 +533,7 @@ mod observe;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_state_tests.rs"]
 mod state_tests;
+
+#[cfg(test)]
+#[path = "config_persistence_journal_v2_drain.rs"]
+pub(crate) mod drain;

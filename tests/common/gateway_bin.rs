@@ -103,6 +103,11 @@ fn isolated(mut command: Command, home: &Path, inherit: Inherit) -> Command {
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env("MCP_GATEWAY_TEST_HOME_DIR", home)
+        // init and the setup wizard store the admin token through the secret
+        // store: pin the files store so no spawned gateway writes to a runner's
+        // real keychain. A test that wants another setting passes it through
+        // `checked_env`, which is applied after this.
+        .env("MCP_GATEWAY_SECRETS__STORE", "files")
         .env("APPDATA", home.join("AppData").join("Roaming"))
         .env("LOCALAPPDATA", home.join("AppData").join("Local"))
         .env("XDG_CONFIG_HOME", home.join(".config"))
