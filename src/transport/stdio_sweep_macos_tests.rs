@@ -11,6 +11,17 @@ fn the_start_time_keeps_microseconds_and_refuses_overflow() {
     assert_eq!(start_micros(0, 999_999), Some(999_999));
     assert_eq!(start_micros(1, 1_000_000), None, "usec is a fraction");
     assert_eq!(start_micros(u64::MAX, 0), None, "seconds overflow");
+    let top = u64::MAX / 1_000_000;
+    assert_eq!(
+        start_micros(top, 0),
+        Some(top * 1_000_000),
+        "the product fits"
+    );
+    assert_eq!(
+        start_micros(top, 999_999),
+        None,
+        "the product fits but adding the microseconds overflows"
+    );
     let last = u64::MAX / 1_000_000 - 1;
     assert_eq!(
         start_micros(last, 999_999),
