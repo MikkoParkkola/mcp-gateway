@@ -90,8 +90,8 @@ fn early_completion_flows_time_forward_and_late_work_never_resets_it() {
     let early = b.stage_window(t0 + ms(1_000), cap);
     let later = b.stage_window(t0 + ms(6_000), cap);
     assert_eq!(
-        early - later,
-        ms(5_000),
+        early.checked_sub(later),
+        Some(ms(5_000)),
         "the window shrinks by exactly the time spent"
     );
     assert_eq!(
