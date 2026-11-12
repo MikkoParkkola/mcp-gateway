@@ -93,8 +93,20 @@ curl -fsS "$health_url" >/dev/null
 # /health answers 200 only once the startup capability scan has finished
 # (MIK-7268), so the loop above already waits for the catalogue. This check
 # still confirms the bundled sample and the fixture the smoke invokes are in it.
-admin_token="$(sed -n 's/^ *bearer_token: *"\(.*\)"/\1/p' "$work/gateway.yaml" | head -1)"
-[[ -n "$admin_token" ]] || { echo "could not read admin token from gateway.yaml" >&2; exit 1; }
+admin_ref="$(sed -n 's/^ *bearer_token: *"\(.*\)"/\1/p' "$work/gateway.yaml" | head -1)"
+# init stores the token and writes a reference to it; read the value back.
+case "$admin_ref" in
+  file:*) admin_token="$(cat "${admin_ref#file:}")" ;;
+  keychain:*) # init chose the OS keychain: the recipes in docs/QUICKSTART.md
+    name="${admin_ref#keychain:}"
+    if [[ "$(uname -s)" == Darwin ]]; then
+      admin_token="$(security find-generic-password -a mcp-gateway -s "$name" -w)"
+    else
+      admin_token="$(secret-tool lookup service "$name")"
+    fi ;;
+  *) echo "unsupported admin token reference: ${admin_ref%%:*}" >&2; exit 1 ;;
+esac
+[[ -n "$admin_token" ]] || { echo "could not read the admin token init stored" >&2; exit 1; }
 capabilities_ready=""
 for _ in $(seq 1 100); do
   if curl -fsS -H "Authorization: Bearer $admin_token" "$health_url" 2>/dev/null \

@@ -505,6 +505,13 @@ probe = "none"
 reason = "fires only when the audit volume stops answering; a live probe cannot stall the disk of the install it probes"
 
 [[control]]
+id = "audit-issuance-row"
+description = "a key-server mint appends a safe token.issued row (subject, issuer, email_hash; never the email) through the bounded synced path before its token is valid; with a fail-closed log any outcome but a confirmed row answers 503 and issues no token, with best-effort the mint goes on with a fixed-label warning and counter; the key server has no other append path. Covered by the issuance rows (issuance_row_tests, issuance_tests)"
+source = "src/security/transparency_log_issuance.rs"
+probe = "none"
+reason = "fires only when the audit append fails or stalls; a live probe cannot induce that without breaking the install it probes"
+
+[[control]]
 id = "audit-settle-fail-closed"
 description = "settle appends a journaled config-write record only into the log its journal is bound to, synced, under the F20 permit: it never reports Appended without a confirmed sync; a permit it cannot take is Refused with no task, and past the bound a dispatched write is Unconfirmed; it refuses another log (OtherLog) and a payload outside the settle. kind namespace or naming a reserved field (Invalid); plain appends refuse a settle. kind. Covered by the settle rows (settle_tests: bound log, OtherLog, refusals by class), the bound rows (settle_bound_tests: permit, closed and stalled refusal, held task, 2x bound, faults, refresh failure) and the kind rows (settle_kind_tests)"
 source = "src/security/transparency_log_settle.rs"

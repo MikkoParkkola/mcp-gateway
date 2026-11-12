@@ -81,6 +81,7 @@ pub(crate) use secret_ref::{is_keychain_name, is_reference, is_template_syntax};
 // New items (F18): the one mode-checked read for files outside `config`.
 #[cfg(windows)]
 pub(crate) use secret_file::Protects;
+pub(crate) use secret_file::read_recovery_journal_v2;
 pub(crate) use secret_file::{
     CheckedFile, UnreadConfig, read_checked_bytes, read_checked_file, read_config_text,
     read_recovery_text,
@@ -313,6 +314,19 @@ impl Config {
         // Read once, through the handle the mode check ran on; every later
         // stage parses these bytes rather than reopening the path.
         resolved.map(ConfigFile::read).transpose()
+    }
+
+    /// The text of the config at `path`, read through the guarded reader and
+    /// not validated: for a diagnostic that must still describe a config the
+    /// loader refuses for an unrelated reason.
+    ///
+    /// # Errors
+    ///
+    /// As the guarded read: a missing, unreadable or non-regular file.
+    pub(crate) fn guarded_text(path: &Path) -> Result<String> {
+        Ok(config_file::ConfigFile::read(path.to_path_buf())?
+            .text()
+            .to_owned())
     }
 
     /// Load the config, warning on (rather than refusing) a malformed env file.

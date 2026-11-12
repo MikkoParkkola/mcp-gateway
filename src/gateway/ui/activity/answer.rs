@@ -24,6 +24,10 @@ pub(super) const RECEIPT_SCAN: u64 = DELIVERY_WINDOW;
 pub(super) const MAX_PENDING: usize = 256;
 /// Tombstones held per read.
 pub(super) const MAX_EVICTED: usize = 4_096;
+/// Delivery records already joined to a call row, kept per read so a second
+/// call row of the same trace still finds its record. Past this, completed
+/// traces stay in the pending map as before and use its bounds again.
+pub(super) const MAX_JOINED: usize = 16_384;
 
 pub(super) const NOT_SCANNED: &str = "answer not scanned";
 pub(super) const NOT_RECORDED: &str = "findings not recorded for this answer";
@@ -119,6 +123,10 @@ pub(super) enum Why {
     /// The receipt's window broke the chain after a record was found: the
     /// record cannot be vouched for.
     Chain,
+    /// A line failed its integrity check and names no usable trace, so the
+    /// failure cannot be tied to a call: every older call left without a
+    /// delivery is indeterminate, never `no_record`.
+    Unattributed,
 }
 
 impl Why {
@@ -128,6 +136,7 @@ impl Why {
             Self::Invalid => Some("invalid"),
             Self::Unsigned => Some("unsigned"),
             Self::Duplicate => Some("duplicate"),
+            Self::Unattributed => Some("indeterminate"),
             Self::Evicted | Self::Overflow | Self::Chain => None,
         }
     }

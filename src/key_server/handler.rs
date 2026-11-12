@@ -358,6 +358,10 @@ pub(super) async fn issue(
     // The issuance attempt: it names the JTI, never a validity window.
     let ev = AuditEvent::issued(&token, &ks.email_key);
     audit::emit(&ev);
+    if let Some(refusal) = super::issuance::record_issuance(ks, &ev).await {
+        // Dropping the reservation releases the slot: no bearer exists.
+        return refusal;
+    }
 
     let Ok(now) = crate::clock::unix_secs() else {
         return clock_refusal();
@@ -596,7 +600,11 @@ fn format_scope_string(token: &TemporaryToken) -> String {
 }
 
 /// Create a JSON error response.
-fn error_response(status: StatusCode, error: &str, message: &str) -> axum::response::Response {
+pub(super) fn error_response(
+    status: StatusCode,
+    error: &str,
+    message: &str,
+) -> axum::response::Response {
     (status, Json(json!({"error": error, "message": message}))).into_response()
 }
 

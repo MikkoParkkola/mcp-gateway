@@ -13,6 +13,7 @@
 
 use std::io;
 
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -27,6 +28,7 @@ pub(crate) enum IntentKind {
     Adopt,
     Restore,
     Backend,
+    KeyCreate,
 }
 
 /// The role a settled record plays; it names the record's event.
@@ -48,11 +50,12 @@ pub(crate) enum Role {
 
 impl Role {
     /// Every role, so a reader can name a record's role by its event.
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::Intent(IntentKind::Save),
         Self::Intent(IntentKind::Adopt),
         Self::Intent(IntentKind::Restore),
         Self::Intent(IntentKind::Backend),
+        Self::Intent(IntentKind::KeyCreate),
         Self::RecoveryIntent,
         Self::Outcome,
         Self::Abandoned,
@@ -72,6 +75,7 @@ impl Role {
             Self::Intent(IntentKind::Adopt) => "config_adopt_intent",
             Self::Intent(IntentKind::Restore) => "config_restore_intent",
             Self::Intent(IntentKind::Backend) => "config_backend_intent",
+            Self::Intent(IntentKind::KeyCreate) => "config_key_create_intent",
             Self::RecoveryIntent => "config_recovery_intent",
             Self::Outcome => "config_write_outcome",
             Self::Abandoned => "config_write_abandoned",
@@ -82,7 +86,7 @@ impl Role {
 }
 
 /// Why a write ended as it did: a closed set, never error text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Reason {
     Committed,
@@ -95,8 +99,28 @@ pub(crate) enum Reason {
     WriterDied,
     Panicked,
     OperatorAbandoned,
+    Abandoned,
+    Moved,
+    Refused,
     RenamedNotDurable,
     LeftToRecovery,
+}
+
+#[cfg(test)]
+impl Reason {
+    pub(crate) fn from_journal(bytes: &[u8]) -> Result<Self, InvalidReason> {
+        serde_json::from_slice(bytes).map_err(|_| InvalidReason)
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InvalidReason;
+
+/// Actor metadata frozen beside caller payload bytes by journal owners.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct Attribution {
+    pub(crate) actor: crate::security::audit::AuditWho,
 }
 
 /// Which recovery attempt settled a write: its token and the counter its
@@ -188,8 +212,16 @@ pub(crate) fn role_fields(role: Role, fields: &Map<String, Value>) -> Result<(),
         (Role::Outcome, Some(_)) => fault("settled_by", Mistyped)?,
         (_, Some(_)) => fault("settled_by", Forbidden)?,
     }
-    if role == Role::RecoveryIntent {
-        text_field(fields, "settles", "settles")?;
+    match (role, fields.get("root")) {
+        (Role::RecoveryIntent, Some(Value::Bool(true))) => {
+            if fields.contains_key("settles") {
+                fault("settles", Forbidden)?;
+            }
+        }
+        (Role::RecoveryIntent, None) => text_field(fields, "settles", "settles")?,
+        (Role::RecoveryIntent, Some(_)) => fault("root", Mistyped)?,
+        (_, Some(_)) => fault("root", Forbidden)?,
+        (_, None) => {}
     }
     Ok(())
 }
@@ -320,7 +352,7 @@ impl TransparencyLogger {
         }
         // Once the write begins, a failure may have left bytes, or a sync
         // unproven: Unconfirmed, whatever the cut-back did.
-        match self.append_refreshed(&mut inner, fields, true) {
+        match self.append_refreshed(&mut inner, fields, true, Some(binding)) {
             Err(e) if super::rotation::is_oversized(&e) => {
                 return Err(Unsettled::Invalid(InvalidPayload::Oversized));
             }
@@ -344,6 +376,18 @@ impl TransparencyLogger {
 }
 
 impl TransparencyLogger {
+    /// The log's id after a refresh from the file on disk. A log replaced
+    /// behind this handle is adopted by the refresh, which the cached
+    /// [`Self::log_id`] cannot see.
+    pub(crate) fn refreshed_log_id(&self) -> io::Result<LogId> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("transparency log mutex poisoned"))?;
+        self.refresh(&mut inner, true)?;
+        Ok(inner.log_id.clone())
+    }
+
     /// The id settle checks the binding against: the one the refresh left.
     #[cfg(not(test))]
     #[allow(clippy::unused_self)]
@@ -435,5 +479,29 @@ impl TransparencyLogger {
     /// after its refresh (which would otherwise restore the id on disk).
     pub(crate) fn present_log_id_for_test(&self, id: LogId) {
         *self.hooks.presented_id.lock().unwrap() = Some(id);
+    }
+}
+
+#[cfg(test)]
+impl TransparencyLogger {
+    pub(crate) async fn settle_attributed(
+        self: &std::sync::Arc<Self>,
+        binding: &LogId,
+        token: &str,
+        role: Role,
+        payload: Map<String, Value>,
+        actor: crate::security::audit::AuditWho,
+    ) -> Result<Appended, Unsettled> {
+        let mut fields = settle_fields(token, role, payload).map_err(Unsettled::Invalid)?;
+        crate::security::audit::AuditEnvelope::ok(actor).write_into(&mut fields);
+        let binding = binding.clone();
+        match self
+            .dispatch_bounded(None, move |log| log.settle_now(&binding, fields))
+            .await
+        {
+            Dispatch::NotStarted(error) => Err(Unsettled::Refused(error)),
+            Dispatch::Joined(settled) => settled,
+            Dispatch::Unconfirmed(error) => Err(Unsettled::Unconfirmed(error)),
+        }
     }
 }
