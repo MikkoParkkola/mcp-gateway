@@ -26,7 +26,7 @@ const READY_BOUND: Duration = Duration::from_secs(60);
 const STOP_BOUND: Duration = Duration::from_secs(45);
 /// The smallest `server.shutdown_timeout` an HTTP gateway accepts. A start below it
 /// is refused, so a row that starts a gateway with it also proves it is accepted.
-const HTTP_MINIMUM: Duration = Duration::from_millis(12_500);
+const HTTP_MINIMUM: Duration = Duration::from_secs(13);
 /// How long a stdio gateway sent SIGTERM with stdin still open may take to exit. Its worst case is
 /// the 30 s drain, the 10 s teardown bound and the 10 s serve-runtime shutdown bound (the blocked
 /// stdin reader keeps the runtime waiting until that bound), 50 s in all, plus slack for a loaded

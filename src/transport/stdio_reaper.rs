@@ -723,14 +723,14 @@ mod plan_tests {
     /// The SIGTERM floor takes from the EOF wait, so the minimum total carries a
     /// window big enough that the EOF wait is no shorter than it was before the
     /// floor: a third-split of the previous 3.4 s window gave 2.27 s. At the
-    /// minimum's window (3.9 s) EOF is 2.4 s and SIGTERM is the nested need; these
+    /// minimum's window (4.4 s) EOF is 2.9 s and SIGTERM is the nested need; these
     /// are the numbers the upgrade note gives operators, so they are pinned exactly.
     /// Red if the floor or a growing reap constant erodes the EOF wait.
     #[cfg(unix)]
     #[test]
     fn the_eof_wait_at_the_minimum_is_no_shorter_than_before_the_floor() {
         let before = Duration::from_millis(3_400) * 2 / 3;
-        let waits = Duration::from_millis(3_900);
+        let waits = Duration::from_millis(4_400);
         let Ending::Graceful { eof, term } = graceful_ending(KILL_RESERVE + waits, true, None)
         else {
             panic!("waits above the minimum phase give a graceful ending");
@@ -739,7 +739,7 @@ mod plan_tests {
             eof >= before,
             "EOF wait {eof:?} is under the old {before:?}"
         );
-        assert_eq!(eof, Duration::from_millis(2_400), "EOF wait at the minimum");
+        assert_eq!(eof, Duration::from_millis(2_900), "EOF wait at the minimum");
         assert_eq!(term, NESTED_TERM_NEED, "SIGTERM wait is the nested need");
     }
 

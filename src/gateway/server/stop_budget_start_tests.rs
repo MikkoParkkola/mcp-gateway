@@ -21,18 +21,18 @@ fn with_timeout(total: Duration) -> Config {
 #[test]
 fn the_start_check_accepts_the_minimum_and_the_default_and_refuses_less() {
     // timing: fixture
-    assert!(start_checks::http(&with_timeout(Duration::from_millis(12_500))).is_ok());
+    assert!(start_checks::http(&with_timeout(Duration::from_secs(13))).is_ok());
     assert!(
         start_checks::http(&Config::default()).is_ok(),
         "the 30 s default"
     );
     // timing: fixture
-    let err = start_checks::http(&with_timeout(Duration::from_millis(12_499)))
-        .expect_err("12.499 s cannot hold the stop");
+    let err = start_checks::http(&with_timeout(Duration::from_millis(12_999)))
+        .expect_err("12.999 s cannot hold the stop");
     let message = err.to_string();
     assert!(message.contains("server.shutdown_timeout"), "{message}");
     assert!(
-        message.contains("12s 499ms") && message.contains("12s 500ms"),
+        message.contains("12.999") && message.contains("13s"),
         "{message}"
     );
 }
@@ -41,7 +41,7 @@ fn the_start_check_accepts_the_minimum_and_the_default_and_refuses_less() {
 async fn an_http_start_below_the_stop_budget_minimum_is_refused_before_it_binds() {
     let dir = crate::test_dir_keep::kept_tempdir();
     // timing: fixture
-    let mut config = with_timeout(Duration::from_millis(12_499));
+    let mut config = with_timeout(Duration::from_millis(12_999));
     // Port 0 and temp stores: were the refusal missing, the start would bind
     // and serve, and the timeout below would fire.
     config.server.port = 0;
@@ -58,5 +58,5 @@ async fn an_http_start_below_the_stop_budget_minimum_is_refused_before_it_binds(
         .expect_err("started with a total the stop cannot fit in");
     let message = err.to_string();
     assert!(message.contains("server.shutdown_timeout"), "{message}");
-    assert!(message.contains("12s 500ms"), "{message}");
+    assert!(message.contains("13s"), "{message}");
 }
