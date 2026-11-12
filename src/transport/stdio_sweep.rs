@@ -373,9 +373,25 @@ impl Sweep {
                 .filter(|who| !frozen.iter().any(|f| f.id == *who))
                 .collect();
         }
-        // Terminal phase: every member and the root get their kill whatever the
-        // freeze slice did; a process the sweep stopped and could not kill is
-        // continued so it is never left stopped.
+        self.terminate(table, budget, &frozen, &mut permits, root_live, &mut report);
+        report.residual.extend(self.dropped.iter().copied());
+        report.incomplete_reads = self.incomplete_reads;
+        drop(permits);
+        report
+    }
+
+    /// The terminal phase: every member and the root get their kill whatever the
+    /// freeze slice did; a process the sweep stopped and could not kill is
+    /// continued so it is never left stopped.
+    fn terminate<'a>(
+        &self,
+        table: &mut dyn ProcessTable,
+        budget: &'a PidfdBudget,
+        frozen: &[Frozen],
+        permits: &mut Vec<Permit<'a>>,
+        root_live: bool,
+        report: &mut SweepReport,
+    ) {
         let mut targets: Vec<Identity> = self.members.keys().copied().collect();
         if root_live {
             targets.push(self.root);
@@ -401,7 +417,7 @@ impl Sweep {
                 // may have landed on it. Resume it if it is a stopped reuser;
                 // the old identity has nothing left to continue or kill.
                 Err(SignalError::Mismatch) if entry.is_some() && !held => {
-                    rescue_stray(table, who, &mut report);
+                    rescue_stray(table, who, report);
                     continue;
                 }
                 Err(_) => {}
@@ -426,15 +442,11 @@ impl Sweep {
         // re-walk found its pid held by someone else): its stop may have landed
         // on that stranger, and there is nothing left to kill under the old name.
         let targeted: BTreeSet<Identity> = self.members.keys().copied().collect();
-        for entry in &frozen {
+        for entry in frozen {
             if !entry.held && entry.id != self.root && !targeted.contains(&entry.id) {
-                rescue_stray(table, entry.id, &mut report);
+                rescue_stray(table, entry.id, report);
             }
         }
-        report.residual.extend(self.dropped.iter().copied());
-        report.incomplete_reads = self.incomplete_reads;
-        drop(permits);
-        report
     }
 }
 
