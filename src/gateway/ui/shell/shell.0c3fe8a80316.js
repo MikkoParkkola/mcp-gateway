@@ -181,12 +181,24 @@ export function entries() {
     for (const [tab, tabLabel] of visibleTabs(id)) out.push({ label: `${label} › ${tabLabel}`, path: `/ui/${id}/${tab}`, kind: 'go' });
     for (const e of pages.get(id)?.entries ?? []) {
       const kind = e.kind === 'action' || e.kind === 'setting' ? e.kind : 'go';
-      // An entry whose route the key may not open is not offered.
-      if (!routeOpen(parse(String(e.path)))) continue;
+      // An entry whose route the key may not open is not offered. A query or
+      // fragment is not part of the route (`/ui/x/settings#limits` is the settings
+      // tab); an address that cannot be read is not offered either.
+      const route = entryRoute(String(e.path));
+      if (!route || !routeOpen(route)) continue;
       out.push({ label: String(e.label), path: String(e.path), kind });
     }
   }
   return out;
+}
+
+/** The route an entry's address names, or null when it cannot be read. */
+function entryRoute(path) {
+  try {
+    return parse(new URL(path, location.origin).pathname);
+  } catch {
+    return null;
+  }
 }
 
 function visibleTabs(id) {
