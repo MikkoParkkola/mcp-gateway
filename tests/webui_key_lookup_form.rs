@@ -365,3 +365,27 @@ out({ before, held: keyLookupHeld, field: dom['kl-email'].value,
         "losing admin standing must drop the query"
     );
 }
+
+/// Ruling row: the email is in the POST body and in no other part of the
+/// request (URL, query string, headers, options), and the rendered form has
+/// no GET path to the server of its own.
+/// Mutant: put the email in the URL, a header or a query string.
+#[test]
+fn the_email_is_only_in_the_post_body() {
+    let got = run(r"
+replies = [page([row('s1')], { next_cursor: 'c1' }), page([])];
+await submit('ada@corp.test');
+await keyLookupNext();
+const rest = calls.map((c) => JSON.stringify({ url: c.url, opts: { ...c.opts, body: undefined } }));
+out({ rest, bodies: calls.map((c) => c.opts.body), qs: calls.map((c) => c.url.includes('?')) });
+");
+    for part in got["rest"].as_array().unwrap() {
+        assert!(!part.as_str().unwrap().contains("ada@corp.test"), "{part}");
+    }
+    for q in got["qs"].as_array().unwrap() {
+        assert_eq!(q, false, "the URL carries a query string");
+    }
+    for body in got["bodies"].as_array().unwrap() {
+        assert!(body.as_str().unwrap().contains("ada@corp.test"));
+    }
+}
