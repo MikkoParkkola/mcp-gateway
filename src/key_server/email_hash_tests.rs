@@ -573,6 +573,67 @@ fn the_key_server_start_runs_the_self_check_before_any_key() {
     );
 }
 
+/// NORM.4: surrounding ASCII whitespace never changes the hash, so the email an
+/// IdP sends and the address an admin types meet however they are padded;
+/// whitespace inside the address and non-ASCII whitespace (no-break space,
+/// ideographic space) are part of the address and do change it. ASCII only
+/// keeps the rule free of any Unicode table.
+/// Mutant: no trim, a trim of both ends dropped, an inner or non-ASCII trim.
+#[test]
+fn padding_does_not_change_the_hash_and_inner_or_unicode_whitespace_does() {
+    let key = EmailHashKey::for_test();
+    let bare = key.hash("Ada.Lovelace@corp.invalid");
+    for pad in ["", " ", "\t", "\r\n", " \n\t ", "\u{b}\u{c}"] {
+        assert_eq!(
+            key.hash(&format!("{pad}Ada.Lovelace@corp.invalid{pad}")),
+            bare,
+            "{pad:?}"
+        );
+        assert_eq!(
+            key.hash(&format!("{pad}Ada.Lovelace@corp.invalid")),
+            bare,
+            "leading {pad:?}"
+        );
+        assert_eq!(
+            key.hash(&format!("Ada.Lovelace@corp.invalid{pad}")),
+            bare,
+            "trailing {pad:?}"
+        );
+    }
+    assert_ne!(
+        key.hash("Ada. Lovelace@corp.invalid"),
+        bare,
+        "inner whitespace is kept"
+    );
+    for pad in ["\u{a0}", "\u{3000}", "\u{2003}"] {
+        assert_ne!(
+            key.hash(&format!("{pad}Ada.Lovelace@corp.invalid")),
+            bare,
+            "{pad:?} is not ASCII whitespace and must not be trimmed"
+        );
+    }
+}
+
+/// NORM.4: the record builder (token issuance) hashes a padded email claim to
+/// the same value as the clean one, which is what the admin lookup computes.
+/// Mutant: trim at the lookup only, not in `hash`.
+#[test]
+fn issuance_hashes_a_padded_claim_like_a_clean_one() {
+    use crate::key_server::audit::SafeIdentity;
+    use crate::key_server::oidc::VerifiedIdentity;
+    let key = EmailHashKey::for_test();
+    let record = |email: &str| {
+        SafeIdentity::of(
+            &VerifiedIdentity::for_test("sub-1", email, None, Vec::new(), "https://issuer.invalid"),
+            &key,
+        )
+        .email_hash
+    };
+    assert_eq!(record(" Ada@corp.invalid \n"), record("Ada@corp.invalid"));
+    assert!(record("Ada@corp.invalid").is_some());
+    assert_eq!(record("  \t "), None, "a blank claim is no email");
+}
+
 /// Regenerates `email_hash/case_v1.rs` from the standard library. Run it only
 /// on the Unicode 17.0.0 toolchain, by hand:
 /// `cargo test --lib generate_case_v1_table -- --ignored --nocapture`, and
