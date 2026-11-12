@@ -190,7 +190,6 @@ pub struct AuditWho {
 
 impl AuditWho {
     /// Decode stored actor fields through the validated persisted principal.
-    #[cfg(test)]
     pub(crate) fn from_persisted(
         bytes: &[u8],
     ) -> Result<Self, crate::gateway::record_principal::InvalidRecordPrincipal> {

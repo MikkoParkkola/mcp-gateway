@@ -86,6 +86,9 @@ pub mod recovery;
 /// MIK-8747 / MIK-8748: a keyed replay is never served across protocol eras.
 #[cfg(all(test, feature = "firewall"))]
 mod replay_era_tests;
+mod restart_floor;
+#[cfg(test)]
+mod restart_floor_tests;
 #[cfg(test)]
 mod route_check_matrix_tests;
 mod router;

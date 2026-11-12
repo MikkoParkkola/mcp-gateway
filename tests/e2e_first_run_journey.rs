@@ -60,7 +60,7 @@ fn init(ws: &Workspace) {
         "Created gateway.yaml",
         "Profile: local",
         "Created zero-key sample capabilities under ./capabilities/",
-        "An admin credential was generated and written into that file,",
+        "An admin credential was generated in the secret store.",
     ] {
         assert!(
             stdout.contains(line),
@@ -74,7 +74,19 @@ fn init(ws: &Workspace) {
         "with no launcher on PATH, init must say which starters it skipped\n{}",
         show(&init)
     );
+    // init names the store it chose: the harness pins files (an info line), and a
+    // fallback says "secrets go to files" (a warning). A notice may continue on
+    // the next line, so skip it up to the next "Skipped" line.
+    let mut in_store_notice = false;
     for line in stderr.lines().filter(|l| !l.trim().is_empty()) {
+        if line.contains("secrets go to files") || line.contains("secret store chosen") {
+            in_store_notice = true;
+            continue;
+        }
+        if in_store_notice && !line.starts_with("Skipped '") {
+            continue;
+        }
+        in_store_notice = false;
         assert!(
             line.starts_with("Skipped '") && line.contains("is not on PATH"),
             "unexpected init stderr line {line:?}\n{}",
@@ -84,7 +96,11 @@ fn init(ws: &Workspace) {
 
     let config = ws.root.join("gateway.yaml");
     let written = std::fs::read_to_string(&config).expect("init wrote gateway.yaml");
-    assert!(written.contains("bearer_token: \"mcpgw_"), "{written}");
+    assert!(written.contains("bearer_token: \""), "{written}");
+    assert!(
+        !written.contains("mcpgw_"),
+        "init must store the token, not write it into the config\n{written}"
+    );
     let mode = std::os::unix::fs::PermissionsExt::mode(
         &std::fs::metadata(&config)
             .expect("config metadata")
@@ -179,6 +195,14 @@ fn admin_token(ws: &Workspace) -> String {
         .lines()
         .find_map(|l| l.trim().strip_prefix("bearer_token:"))
         .map(|t| t.trim().trim_matches('"').to_string())
+        .map(|reference| match reference.strip_prefix("file:") {
+            // init stored the token and wrote only a reference to it.
+            Some(path) => std::fs::read_to_string(path)
+                .expect("stored admin token")
+                .trim_end_matches('\n')
+                .to_owned(),
+            None => reference,
+        })
         .expect("a bearer_token line")
 }
 

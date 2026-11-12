@@ -83,6 +83,7 @@ include = [
     "docs/DEPLOYMENT.md",
     "docs/identity_grants.md",
     "docs/MULTI_USER.md",
+    "docs/PRIVACY.md",
     "docs/release/4.0.0-beta.2-notes.md",
     "docs/release/4.0.0-beta.3-notes.md",
     "docs/release/v4.0.0-supported-matrix.md",

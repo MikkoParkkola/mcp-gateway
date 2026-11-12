@@ -330,6 +330,49 @@ fn w1_the_walk_finds_the_known_writers() {
     }
 }
 
+/// ADMINTOK.1/.5 / design 5, A6: the existing writer inventory binds init
+/// to its executable custody row and requires stored, rather than literal, custody.
+#[test]
+fn w1_init_is_stored_and_bound_to_its_executable_custody_row() {
+    let case = "admintok_1_init_writes_only_a_reference_and_one_store_entry";
+    let source = std::fs::read_to_string(crate_root().join("tests/init_admin_token.rs"))
+        .expect("init behavioral row");
+    let parsed = syn::parse_file(&source).expect("row parses");
+    assert!(
+        parsed
+            .items
+            .iter()
+            .any(|item| matches!(item, syn::Item::Fn(f)
+        if f.sig.ident == case && f.attrs.iter().any(|a| a.path().get_ident().is_some_and(|name| name == "test"))))
+    );
+    let key = (
+        "src/cli_support/init.rs".to_owned(),
+        "write_init_files_with".to_owned(),
+        "persist:edit_config_text".to_owned(),
+    );
+    assert_eq!(
+        counted().get(&key),
+        Some(&1),
+        "existing walker must find init"
+    );
+    let table = pin_table("secret_writers");
+    let (_, line) = table
+        .rows()
+        .iter()
+        .find(|(_, line)| {
+            line.starts_with(
+                "src/cli_support/init.rs\twrite_init_files_with\tpersist:edit_config_text\t",
+            )
+        })
+        .expect("one reviewed init row");
+    assert!(line.contains(&format!("tests/init_admin_token.rs::{case}")));
+    assert_eq!(
+        line.split('\t').nth(4),
+        Some("stores"),
+        "init must store its bearer"
+    );
+}
+
 /// W1r: a new writer fails, whatever its layout: a call split over lines, a
 /// helper that writes, a backends map reached through a binding, and a
 /// local map named `backends`.

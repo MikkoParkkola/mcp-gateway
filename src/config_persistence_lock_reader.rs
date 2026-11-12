@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The lock a reload takes when it did not start the write.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::{
-    Locked, NotLocked, Recovery, classify_unlockable, journal_pending, lock_config,
-    lock_config_deferred, no_writer_possible, off_runtime,
+    Locked, NotLocked, Recovery, lock_config, lock_config_deferred, lock_path, off_runtime,
 };
 use crate::identity_grants::journal::resolved;
 
@@ -69,4 +69,67 @@ async fn reader_lock_with(config: &Path, deadline: Instant, recovery: Recovery) 
             classify_unlockable(config, message, probe)
         }
     }
+}
+
+/// What a reader does when its lock cannot be taken at all, given the probe
+/// (why no writer can exist, whether a journal is pending, the resolved
+/// config and its journal path); a probe that did not run skips.
+fn classify_unlockable(
+    config: &Path,
+    message: String,
+    probe: Option<(Option<&'static str>, bool, PathBuf, PathBuf)>,
+) -> ReaderLock {
+    let Some((no_writer, pending, target, journal)) = probe else {
+        return ReaderLock::Skip(message);
+    };
+    match no_writer {
+        None => ReaderLock::Skip(message),
+        Some(_) if pending => ReaderLock::Skip(format!(
+            "a pending write's journal {} sits beside a file this gateway cannot lock; resolve the pending write from the writable side",
+            journal.display()
+        )),
+        Some(why) => {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| {
+                    tracing::warn!(path = %config.display(), reason = why, "reading gateway.yaml without the config lock: no writer can exist here");
+                });
+            ReaderLock::Unlocked(target)
+        }
+    }
+}
+
+/// Why no writer can exist beside `config`: creating its lock sidecar fails
+/// on a read-only filesystem, or because this account cannot write the
+/// directory. `None` for any other failure, or when the sidecar exists (the
+/// failure was then the lock itself, not its creation).
+pub(crate) fn no_writer_possible(config: &Path) -> Option<&'static str> {
+    let lock = lock_path(&resolved(config));
+    if std::fs::symlink_metadata(&lock).is_ok() {
+        return None;
+    }
+    match super::super::create_new_private(&lock) {
+        Err(e) => creation_blocked(&e),
+        // Created after all: the earlier failure was something else, and the
+        // sidecar stays, as every sidecar does.
+        Ok(_) => None,
+    }
+}
+
+/// Whether a failed sidecar create means no writer can exist here: a
+/// read-only filesystem, or a directory this account cannot write. Any other
+/// failure (no space, a name in the way) does not.
+pub(super) fn creation_blocked(error: &io::Error) -> Option<&'static str> {
+    match error.kind() {
+        io::ErrorKind::ReadOnlyFilesystem => Some("read-only filesystem"),
+        io::ErrorKind::PermissionDenied => Some("this account cannot write the config directory"),
+        _ => None,
+    }
+}
+
+/// A journal beside `config`, or one whose absence cannot be established.
+pub(crate) fn journal_pending(config: &Path) -> bool {
+    !matches!(
+        std::fs::symlink_metadata(super::super::journal::journal_path(config)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound
+    )
 }

@@ -21,8 +21,8 @@ use super::fixtures::{
     checked, collect_case, config, intended, r2_cases, reopened, session,
 };
 use super::{
-    Action, Decision, Fact, FileRevision, JournalError, JournalV2, Locked, LogId, OpenJournal,
-    ParkReason, Pending, Phase, Reason, ResultClass, Role, TerminalRole, open,
+    Action, Fact, FileRevision, JournalDecision, JournalError, JournalV2, Locked, LogId,
+    OpenJournal, ParkReason, Pending, Phase, Reason, ResultClass, Role, TerminalRole, open,
 };
 use crate::config_persistence::commit;
 use crate::config_persistence::journal::{self, Recovered};
@@ -566,7 +566,7 @@ fn reason_decision_cases() {
         let state = round_trip(fixture, ROW);
         assert_eq!(
             state.writer.expect(ROW).decision,
-            Some(Decision {
+            Some(JournalDecision {
                 result,
                 reason,
                 settled_by,

@@ -45,6 +45,8 @@ mod listener;
 mod persistence;
 mod provenance_signer;
 #[cfg(test)]
+mod real_store_guard_tests;
+#[cfg(test)]
 mod remote_provenance_start_tests;
 #[cfg(test)]
 mod replica_state_tests;
