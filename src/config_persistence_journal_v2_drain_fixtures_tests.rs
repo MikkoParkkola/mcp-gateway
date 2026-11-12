@@ -25,6 +25,7 @@ use crate::security::transparency_log::settle::{Attribution, IntentKind, Reason,
 use crate::security::transparency_log::{
     TransparencyLogConfig, TransparencyLogger, VerifyMode, verify_audit_log,
 };
+use crate::test_dir_keep::kept_tempdir;
 
 pub(super) const WRITER: &str = "writer-1";
 pub(super) const ATTEMPT: &str = "attempt-1";
@@ -154,7 +155,7 @@ impl Live {
     }
 
     pub(super) fn with_rotation(rotation: RotationConfig) -> Self {
-        let dir = Arc::new(tempfile::tempdir().expect("fixture directory"));
+        let dir = kept_tempdir();
         let root = std::fs::canonicalize(dir.path()).expect("resolved fixture directory");
         // The overlay projects only config files; the logger owns its audit durability.
         let resolved = root.join("config");

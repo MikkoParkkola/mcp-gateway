@@ -300,7 +300,11 @@ fn subprocess(row: &str, dir: &Path, recover: bool) -> std::process::ExitStatus 
             "config_persistence::journal::v2::drain::crash_tests::{row}"
         ))
         .arg("--nocapture")
-        .env("S6A2_CHILD_DIR", dir);
+        .env("S6A2_CHILD_DIR", dir)
+        .env(
+            "MCP_GATEWAY_TEST_KEPT_DIRS",
+            std::env::join_paths([dir.parent().expect("fixture root")]).expect("a joinable path"),
+        );
     if recover {
         command.env("S6A2_RECOVER", "1");
     } else {
