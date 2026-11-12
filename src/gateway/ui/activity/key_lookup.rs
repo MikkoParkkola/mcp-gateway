@@ -168,19 +168,16 @@ fn scan(s: &Scan) -> Response {
         },
         |line| matches(line, &s.hash, version, &s.key_id, s.window),
     );
-    let page = match page {
-        Ok(page) => page,
-        Err(_) => {
-            return finish(
-                refuse(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "the retained audit log could not be read",
-                ),
-                "unreadable",
-                0,
-                0,
-            );
-        }
+    let Ok(page) = page else {
+        return finish(
+            refuse(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the retained audit log could not be read",
+            ),
+            "unreadable",
+            0,
+            0,
+        );
     };
     let rows: Vec<Value> = page.lines.iter().map(row_of).collect();
     let next = page.next.as_ref().map(|c| cursor::encode_bound(c, &s.bind));

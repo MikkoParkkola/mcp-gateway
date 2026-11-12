@@ -197,7 +197,7 @@ impl Fx {
         })
     }
 
-    fn lookup(&self, email: &str, extra: Value) -> Value {
+    fn lookup(&self, email: &str, extra: &Value) -> Value {
         let mut body = json!({"email": email});
         if let (Some(b), Some(e)) = (body.as_object_mut(), extra.as_object()) {
             b.extend(e.clone());
@@ -304,13 +304,13 @@ fn matching_rows_come_from_every_segment_and_only_for_the_same_hash() {
         })
         .count();
     assert!(sealed >= 2, "the rows span several segments");
-    let page = fx.lookup(&EMAIL.to_lowercase(), json!({}));
+    let page = fx.lookup(&EMAIL.to_lowercase(), &json!({}));
     let mut got = subjects(&page);
     got.sort();
     assert_eq!(got, vec!["s1", "s2"], "{page}");
     assert_eq!(page["scope"], "retained");
     assert_eq!(page["scan_exhausted"], false);
-    assert_eq!(subjects(&fx.lookup(OTHER, json!({}))), vec!["s3"]);
+    assert_eq!(subjects(&fx.lookup(OTHER, &json!({}))), vec!["s3"]);
 }
 
 /// MIK-9455.LOOKUP.2: pages follow the cursor, which is bound to the safe
@@ -322,16 +322,16 @@ fn pages_follow_a_cursor_that_is_bound_to_its_filter() {
     fx.plant("s1", EMAIL, &fx.ks.email_key);
     fx.plant("s2", EMAIL, &fx.ks.email_key);
     fx.plant("s3", OTHER, &fx.ks.email_key);
-    let first = fx.lookup(EMAIL, json!({"limit": 1}));
+    let first = fx.lookup(EMAIL, &json!({"limit": 1}));
     assert_eq!(subjects(&first), vec!["s2"], "newest first: {first}");
     let token = first["next_cursor"]
         .as_str()
         .expect("a next cursor")
         .to_owned();
-    let second = fx.lookup(EMAIL, json!({"limit": 1, "cursor": token}));
+    let second = fx.lookup(EMAIL, &json!({"limit": 1, "cursor": token}));
     assert_eq!(subjects(&second), vec!["s1"], "{second}");
     assert_eq!(second["cursor_reset"], false);
-    let foreign = fx.lookup(OTHER, json!({"limit": 1, "cursor": token}));
+    let foreign = fx.lookup(OTHER, &json!({"limit": 1, "cursor": token}));
     assert_eq!(foreign["cursor_reset"], true, "{foreign}");
     assert_eq!(subjects(&foreign), vec!["s3"]);
 }
@@ -347,7 +347,7 @@ fn a_malformed_line_is_reported_not_hidden() {
     let mut text = std::fs::read_to_string(&active).unwrap();
     text.push_str("this is not an entry\n");
     std::fs::write(&active, text).unwrap();
-    let page = fx.lookup(EMAIL, json!({}));
+    let page = fx.lookup(EMAIL, &json!({}));
     assert_eq!(page["unreadable"], 1, "{page}");
 }
 
@@ -369,7 +369,7 @@ fn the_email_is_in_no_file_and_no_answer_and_the_request_is_audited_without_it()
         !body.to_string().to_lowercase().contains("planted"),
         "{body}"
     );
-    let _ = fx.lookup(EMAIL, json!({}));
+    let _ = fx.lookup(EMAIL, &json!({}));
     let mut audit_records = 0;
     for (name, text) in fx.all_files() {
         let lower = text.to_lowercase();
@@ -436,5 +436,5 @@ fn the_key_id_and_version_are_part_of_the_match() {
     fx.plant_raw("right", &hash, 1, &key_id);
     fx.plant_raw("other-key", &hash, 1, "0000");
     fx.plant_raw("other-version", &hash, 2, &key_id);
-    assert_eq!(subjects(&fx.lookup(EMAIL, json!({}))), vec!["right"]);
+    assert_eq!(subjects(&fx.lookup(EMAIL, &json!({}))), vec!["right"]);
 }
