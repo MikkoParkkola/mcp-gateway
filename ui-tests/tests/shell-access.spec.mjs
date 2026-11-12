@@ -262,6 +262,19 @@ test.describe('access', () => {
     await expect(note(page)).toBeVisible();
   });
 
+  test('A23 a page entry whose tab the key may not open is not offered', async ({ page }) => {
+    await withFixturePages(page);
+    await serve(page, { admin: false, access: access({ hiddenTabs: { servers: ['settings'] } }) });
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    await page.keyboard.press('Control+KeyK');
+    await expect(page.locator('dialog.palette')).toBeVisible();
+    const paths = await page.locator('dialog.palette [role="option"]').evaluateAll((els) => els.map((e) => e.dataset.path));
+    // Each fixture page declares one settings entry: only the hidden tab's is dropped.
+    expect(paths.filter((p) => p.startsWith('/ui/servers/settings'))).toEqual([]);
+    expect(paths.filter((p) => p.startsWith('/ui/overview/settings')).length).toBeGreaterThan(0);
+  });
+
   test('A22 a page that is open with every tab hidden is hidden', async ({ page }) => {
     await serve(page, { admin: false, access: access({ hiddenTabs: { tools: TABS } }) });
     await page.goto('/ui/overview/status');
