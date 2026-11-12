@@ -286,21 +286,34 @@ fn tail_verdict(read: &FrameRead, start: usize, donor: Option<&JournalV2>) -> In
             cause: Cause::TailBeyondDonor,
         };
     }
-    for (index, frame) in read.frames.iter().enumerate() {
-        if (frame.intent_id.clone(), frame.slot) != canonical[index] {
-            return Inspection::Corrupt {
+    match walk_prefix(&read.frames, donor, &canonical) {
+        Ok(()) => Inspection::RepairableTail { start },
+        Err(corrupt) => corrupt,
+    }
+}
+
+/// Whether the frames are exactly the donor's leading frames, in order, each proven: the one
+/// prefix check, shared by the torn-tail verdict and by `against_donor`.
+fn walk_prefix(
+    frames: &[AbandonedFrame],
+    donor: &JournalV2,
+    canonical: &[(IntentId, Slot)],
+) -> Result<(), Inspection> {
+    for (index, frame) in frames.iter().enumerate() {
+        if canonical.get(index) != Some(&(frame.intent_id.clone(), frame.slot)) {
+            return Err(Inspection::Corrupt {
                 at: index,
                 cause: Cause::NotAPrefix,
-            };
+            });
         }
         if !proves(donor, frame) {
-            return Inspection::Corrupt {
+            return Err(Inspection::Corrupt {
                 at: index,
                 cause: Cause::DonorMismatch,
-            };
+            });
         }
     }
-    Inspection::RepairableTail { start }
+    Ok(())
 }
 
 /// Classify the bytes of an abandoned file without touching it. `Structural` is not donor
@@ -349,12 +362,35 @@ impl TornProof {
 
 /// The donor as it will be once handed over: every token flagged. Nothing is persisted.
 pub(crate) fn marked(donor: &JournalV2) -> JournalV2 {
-    donor.clone()
+    let mut marked = donor.clone();
+    for token in marked.writer.iter_mut().chain(marked.attempts.iter_mut()) {
+        token.handed_over = true;
+    }
+    marked
 }
 
-/// Judge an existing abandoned file against the marked donor.
-pub(crate) fn against_donor(_existing: &[u8], _donor: &JournalV2) -> Placement {
-    Placement::Foreign
+/// Judge an existing abandoned file against the marked donor: its complete frames must be a
+/// proven leading run of the donor's frames, clean or torn, or the file is `Foreign`.
+pub(crate) fn against_donor(existing: &[u8], donor: &JournalV2) -> Placement {
+    let canonical = canonical_frames(donor);
+    let Ok(read) = read(existing) else {
+        return Placement::Foreign;
+    };
+    let complete = read.frames.len();
+    if complete > canonical.len() || walk_prefix(&read.frames, donor, &canonical).is_err() {
+        return Placement::Foreign;
+    }
+    match read.tail {
+        Tail::Clean if complete == canonical.len() => Placement::Whole,
+        Tail::Clean if existing.is_empty() => Placement::Absent,
+        Tail::Clean => Placement::Missing { complete },
+        Tail::Incomplete { start } if complete < canonical.len() => Placement::Torn {
+            complete,
+            start,
+            proof: TornProof { start },
+        },
+        Tail::Incomplete { .. } => Placement::Foreign,
+    }
 }
 
 #[cfg(test)]
