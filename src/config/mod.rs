@@ -886,7 +886,8 @@ pub struct MarketplaceConfig {
 impl Default for MarketplaceConfig {
     fn default() -> Self {
         Self {
-            marketplace_url: "https://plugins.mcpgateway.io".to_string(),
+            // No registry is configured by default: the operator names one.
+            marketplace_url: String::new(),
             plugin_dir: "~/.mcp-gateway/plugins".to_string(),
         }
     }
