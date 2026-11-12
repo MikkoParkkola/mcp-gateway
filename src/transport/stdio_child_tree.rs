@@ -313,11 +313,12 @@ impl ChildTree {
             &mut super::sweep::PlatformTable::new(),
             super::sweep::process_budget(),
         );
-        if !report.residual.is_empty() || report.incomplete_reads > 0 {
+        if !report.residual.is_empty() || report.incomplete_reads > 0 || report.unconfirmed > 0 {
             tracing::warn!(
                 backend = self.wrapper.id(),
                 residual = report.residual.len(),
                 unreadable = report.unknown,
+                unconfirmed_stopped = report.unconfirmed,
                 incomplete_reads = report.incomplete_reads,
                 killed = report.killed.len(),
                 continued = report.continued.len(),

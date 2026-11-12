@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use rustix::process::{Pid, PidfdFlags, Signal, kill_process, pidfd_open, pidfd_send_signal};
 
-use super::{Handle, Identity, Listing, ProcState, ProcessTable, Sig, SignalError};
+use super::{Handle, Identity, Listing, ProcState, ProcessTable, Sig, SignalError, by_pid_gate};
 
 /// What `/proc/<pid>/stat` says about a process.
 #[derive(Debug, PartialEq, Eq)]
@@ -222,9 +222,13 @@ impl ProcessTable for LinuxTable {
                 .map_err(denied);
         }
         let pid = pid_of(id).ok_or(SignalError::Failed)?;
-        match check(id) {
-            Check::Same => {}
-            other => return Err(refusal(&other)),
+        // By pid, no handle: the identity is re-read AND a Kill is refused unless
+        // the process is stopped (or a zombie), so its pid cannot be freed and
+        // reused between this read and the signal.
+        match read_stat(id.pid) {
+            Lookup::Found(stat) if stat.start == id.start => by_pid_gate(sig, stat.state)?,
+            Lookup::Found(_) | Lookup::Gone => return Err(SignalError::Mismatch),
+            Lookup::Unreadable => return Err(SignalError::Failed),
         }
         kill_process(pid, signal)
             .map(|()| Handle::ByPid)

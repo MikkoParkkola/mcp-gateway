@@ -53,6 +53,19 @@ pub(super) enum SignalError {
     Mismatch,
     Denied,
     Failed,
+    /// A by-pid Kill was refused because the process is not known to be stopped.
+    NotStopped,
+}
+
+/// The gate every by-pid path (no pidfd) applies before it signals, after the
+/// identity re-read: a Kill goes only to a process that is stopped or already a
+/// zombie, since a stopped process cannot exit and free its pid on its own. A
+/// signal through a pidfd needs no such gate.
+pub(super) fn by_pid_gate(sig: Sig, state: ProcState) -> Result<(), SignalError> {
+    match (sig, state) {
+        (Sig::Kill, ProcState::Stopped | ProcState::Zombie) | (Sig::Stop | Sig::Cont, _) => Ok(()),
+        (Sig::Kill, _) => Err(SignalError::NotStopped),
+    }
 }
 
 /// One reading of the process table.
@@ -96,6 +109,8 @@ pub(super) struct SweepReport {
     pub(super) residual: Vec<Identity>,
     /// Residual members whose state the table could not read.
     pub(super) unknown: usize,
+    /// Members a by-pid Kill was refused for, as not known to be stopped.
+    pub(super) unconfirmed: usize,
     /// Table readings that were incomplete (a failed listing or entry).
     pub(super) incomplete_reads: u32,
     pub(super) passes: u32,
@@ -294,9 +309,13 @@ impl Sweep {
         for who in targets {
             let entry = frozen.iter().find(|f| f.id == who);
             let held = entry.is_some_and(|f| f.held);
-            if table.signal(who, Sig::Kill, held).is_ok() {
-                report.killed.push(who);
-                continue;
+            match table.signal(who, Sig::Kill, held) {
+                Ok(_) => {
+                    report.killed.push(who);
+                    continue;
+                }
+                Err(SignalError::NotStopped) => report.unconfirmed += 1,
+                Err(_) => {}
             }
             if entry.is_some_and(|f| f.ours) {
                 let _ = table.signal(who, Sig::Cont, held);

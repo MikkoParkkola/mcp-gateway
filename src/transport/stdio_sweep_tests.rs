@@ -55,6 +55,8 @@ struct Fake {
     /// Whether the kernel has handles; a sweep without a slot still goes by pid.
     pidfd: bool,
     next_pid: u32,
+    /// The table applies the by-pid Kill gate, as the real tables do.
+    strict_by_pid: bool,
     /// Every table reading fails: no rows, flagged incomplete.
     blind: bool,
     /// The table cannot read this pid's state (an error, not an exit).
@@ -88,6 +90,7 @@ impl Fake {
             tick: ms(1),
             pidfd: true,
             next_pid: 1000,
+            strict_by_pid: false,
             blind: false,
             unreadable: None,
             fail: None,
@@ -208,6 +211,9 @@ impl ProcessTable for Fake {
         };
         if self.procs[index].id != who || self.procs[index].state == ProcState::Gone {
             return Err(SignalError::Mismatch);
+        }
+        if handle == Handle::ByPid && self.strict_by_pid {
+            by_pid_gate(sig, self.procs[index].state)?;
         }
         // By pid, a running target can exit and its pid be reused between the
         // identity check and the delivery; a stopped one cannot exit.
@@ -646,4 +652,59 @@ fn a_complete_listing_still_prunes_the_dead() {
     let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
     assert!(fake.attempted(12).is_empty(), "{:?}", fake.attempts);
     assert_eq!(report.incomplete_reads, 0);
+}
+
+/// The gate itself: a by-pid Kill goes only to a stopped or zombie process.
+/// Red if a Kill is let through to a running (or unreadable) process.
+#[test]
+fn the_by_pid_gate_lets_a_kill_reach_only_a_stopped_or_zombie_process() {
+    for (state, kill_ok) in [
+        (ProcState::Stopped, true),
+        (ProcState::Zombie, true),
+        (ProcState::Running, false),
+        (ProcState::Gone, false),
+        (ProcState::Unknown, false),
+    ] {
+        assert_eq!(by_pid_gate(Sig::Kill, state).is_ok(), kill_ok, "{state:?}");
+        assert_eq!(
+            by_pid_gate(Sig::Kill, state),
+            if kill_ok {
+                Ok(())
+            } else {
+                Err(SignalError::NotStopped)
+            },
+            "{state:?}"
+        );
+        assert!(by_pid_gate(Sig::Stop, state).is_ok(), "stop never gated");
+        assert!(by_pid_gate(Sig::Cont, state).is_ok(), "cont never gated");
+    }
+}
+
+/// By pid, a member that is still running when its kill comes (its stop did not
+/// land) is refused, never killed blind: it is a residual counted as
+/// unconfirmed, and no signal lands on a reused pid. The rest of the tree dies.
+/// Red if the gate is missing from the table (the kill lands on the reuser).
+#[test]
+fn a_by_pid_kill_of_a_running_member_is_refused_and_reported() {
+    let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 11)]);
+    fake.pidfd = false;
+    fake.strict_by_pid = true;
+    fake.proc(12).ignores_stop = true;
+    fake.reuse_while_running = Some((12, 999));
+    let report = run(&mut fake, 10);
+    assert_eq!(
+        fake.state_of(12),
+        ProcState::Running,
+        "refused, not killed blind"
+    );
+    assert!(
+        fake.wrong.is_empty(),
+        "no signal on a reused pid: {:?}",
+        fake.wrong
+    );
+    assert_eq!(report.unconfirmed, 1, "{report:?}");
+    assert!(report.residual.contains(&id(12)), "{report:?}");
+    for pid in [10, 11] {
+        assert_eq!(fake.state_of(pid), ProcState::Gone, "pid {pid}");
+    }
 }

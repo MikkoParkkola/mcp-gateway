@@ -14,7 +14,7 @@
 #![allow(unsafe_code)]
 
 #[cfg(target_os = "macos")]
-use super::{Handle, ProcessTable, Sig, SignalError};
+use super::{Handle, ProcessTable, Sig, SignalError, by_pid_gate};
 use super::{Identity, Listing, ProcState};
 
 /// `p_stat` values from `<sys/proc.h>`.
@@ -303,7 +303,7 @@ impl ProcessTable for MacTable {
             .and_then(Pid::from_raw)
             .ok_or(SignalError::Failed)?;
         match Libproc.info(id.pid) {
-            Lookup::Found(info) if info.start == id.start => {}
+            Lookup::Found(info) if info.start == id.start => by_pid_gate(sig, info.state)?,
             Lookup::Found(_) | Lookup::Missing(Miss::Gone) => return Err(SignalError::Mismatch),
             Lookup::Missing(Miss::Foreign) => return Err(SignalError::Denied),
             Lookup::Missing(Miss::Failed) => return Err(SignalError::Failed),

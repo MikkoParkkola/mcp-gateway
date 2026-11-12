@@ -279,3 +279,35 @@ fn an_unreadable_identity_is_refused_as_a_failure_not_a_mismatch() {
     assert_eq!(refusal(&Check::Unreadable), SignalError::Failed);
     assert_eq!(refusal(&Check::Different), SignalError::Mismatch);
 }
+
+/// Over a bare pid the table refuses a Kill to a running child and allows it
+/// once the child is stopped. Red if the gate is missing from the by-pid path.
+#[test]
+fn a_bare_pid_kill_of_a_running_child_is_refused_until_it_is_stopped() {
+    let mut child = sleeper();
+    let id = identity(&child);
+    let mut table = LinuxTable::new();
+    assert_eq!(
+        table.signal(id, Sig::Kill, false),
+        Err(SignalError::NotStopped)
+    );
+    assert_eq!(
+        table.state(id),
+        ProcState::Running,
+        "the child is untouched"
+    );
+    assert_eq!(table.signal(id, Sig::Stop, false), Ok(Handle::ByPid));
+    assert!(settle(&mut table, id, ProcState::Stopped), "stopped");
+    assert_eq!(table.signal(id, Sig::Kill, false), Ok(Handle::ByPid));
+    child.wait().expect("reap");
+}
+
+/// Through a held pidfd the process cannot be swapped, so no gate applies.
+#[test]
+fn a_held_kill_needs_no_stop_first() {
+    let mut child = sleeper();
+    let id = identity(&child);
+    let mut table = LinuxTable::new();
+    assert_eq!(table.signal(id, Sig::Kill, true), Ok(Handle::Held));
+    child.wait().expect("reap");
+}
