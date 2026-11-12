@@ -121,9 +121,15 @@ enum Next {
     Fault(FrameFault),
 }
 
-/// The field before the first tab, and what follows it.
+/// The field before the first tab, and what follows it. A newline before the tab ends the
+/// header line without a tab: there is no field, and `torn` then calls it corrupt.
 fn field(rest: &[u8]) -> Option<(&[u8], &[u8])> {
-    let at = rest.iter().position(|byte| *byte == b'\t')?;
+    let at = rest
+        .iter()
+        .position(|byte| matches!(*byte, b'\t' | b'\n'))?;
+    if rest[at] == b'\n' {
+        return None;
+    }
     Some((&rest[..at], &rest[at + 1..]))
 }
 

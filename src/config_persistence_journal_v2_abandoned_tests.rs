@@ -450,6 +450,37 @@ fn early_newline_is_a_length_fault() {
     );
 }
 
+fn newline_in_a_header_field_is_a_length_fault() {
+    // A newline ends the header line: a later tab must not pull the lines together into one
+    // torn header, or a donor could license repair of a corrupt file.
+    let donor = donor();
+    for (what, bytes) in [
+        ("in the checksum", b"100\tbad\n5\t".as_slice()),
+        ("in the length", b"10\n0\tbad\t".as_slice()),
+        ("right after the length", b"100\n5\t".as_slice()),
+    ] {
+        let mut with_prefix = handed_over();
+        with_prefix.extend_from_slice(bytes);
+        for (label, bytes) in [("alone", bytes.to_vec()), ("after a frame", with_prefix)] {
+            assert_eq!(
+                decode_frames(&bytes).map(|read| read.frames.len()),
+                Err(FrameFault::Length),
+                "decode {what} {label}"
+            );
+            assert!(
+                matches!(
+                    inspect(&bytes, Some(&donor)),
+                    Inspection::Corrupt {
+                        cause: Cause::Wire(FrameFault::Length),
+                        ..
+                    }
+                ),
+                "inspect {what} {label}"
+            );
+        }
+    }
+}
+
 fn over_cap_is_refused_before_allocation() {
     let header = format!("99999999\t{HANDED_OVER_SHA}\t{HANDED_OVER_JSON}\n");
     assert_eq!(
@@ -625,7 +656,7 @@ type Case = (&'static str, &'static str, fn());
 fn abandoned_corrupt_without_donor() {
     const ROW: &str = "abandoned_corrupt_without_donor";
     let mut failures = Vec::new();
-    let cases: [Case; 11] = [
+    let cases: [Case; 12] = [
         (
             "tail_without_donor",
             "a torn tail with no donor is Corrupt",
@@ -650,6 +681,11 @@ fn abandoned_corrupt_without_donor() {
             "early_newline",
             "an early newline is a Length fault, never a tail",
             early_newline_is_a_length_fault,
+        ),
+        (
+            "header_newline",
+            "a newline inside a header is a Length fault, never a tail",
+            newline_in_a_header_field_is_a_length_fault,
         ),
         (
             "over_cap",
