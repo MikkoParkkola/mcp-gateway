@@ -247,7 +247,9 @@ impl Fx {
         std::fs::read_dir(self.dir.path())
             .unwrap()
             .filter_map(Result::ok)
-            .filter(|e| e.path().is_file())
+            // The writer's lease sentinel holds no data, and on Windows its
+            // byte-range lock makes any read of it fail.
+            .filter(|e| e.path().is_file() && e.path().extension().is_none_or(|x| x != "lock"))
             .map(|e| {
                 (
                     e.file_name().to_string_lossy().into_owned(),
