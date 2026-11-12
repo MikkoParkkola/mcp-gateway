@@ -146,7 +146,23 @@ fn seal_and_open_round_trip_the_scope_for_one_principal_only() {
     assert_eq!(got.to, scope.to);
     assert_eq!(got.born, scope.born);
     assert!(open(&fingerprint(&admin("b")), &token).is_none());
-    assert!(open("", &token).is_none(), "an empty principal never opens");
+    // Even a token the keyring sealed for the empty principal does not open
+    // for it: the guard is `open`'s own, not a mismatch that happens to refuse.
+    let for_nobody = fx
+        .state
+        .continuation
+        .keyring()
+        .mint(&crate::protocol::continuation::Payload::mint_lookup(
+            String::new(),
+            serde_json::to_string(&scope).expect("scope"),
+            now,
+        ))
+        .expect("a token");
+    assert!(
+        open("", &for_nobody).is_none(),
+        "an empty principal never opens"
+    );
+    assert!(open("", &token).is_none());
 }
 
 /// A caller with no credential principal gets a first page, but when a next
