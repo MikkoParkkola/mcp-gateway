@@ -109,7 +109,7 @@ struct Gateway {
 }
 
 async fn gateway(shape: Shape) -> Gateway {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let env = dir.path().join("adapter.env");
     crate::gateway::test_helpers::write_owner_only(
         &env,

@@ -19,7 +19,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(files: &[(&str, &str)], bodies: &str) -> Self {
-        let root = tempfile::tempdir().expect("create isolated fixture");
+        let root = crate::test_dir_keep::kept_tempdir();
         let dir = root.path().join("ui_access_matrix.d");
         let bodies_path = root.path().join("ui_access_matrix_bodies.tsv");
         fs::create_dir(&dir).expect("create fragment directory");

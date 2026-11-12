@@ -512,7 +512,7 @@ const CAP_CANARY: &str = "CAP-CANARY-91c4";
 /// `fx` with one capability directory holding `kept.yaml`; returns the
 /// directory guard and the file's bytes.
 fn with_capability(fx: &mut Audited) -> (tempfile::TempDir, String) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let text = format!(
         "fulcrum: \"1.0\"\nname: kept\ndescription: {CAP_CANARY}\n\nschema:\n  input:\n    type: object\n  output:\n    type: object\n\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://api.example\n      path: /api\n      method: GET\n"
     );

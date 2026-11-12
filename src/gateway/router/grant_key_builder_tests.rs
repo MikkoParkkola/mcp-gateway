@@ -63,7 +63,7 @@ async fn personal_caps(
     tool: &str,
     base_url: &str,
 ) -> (Arc<CapabilityBackend>, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().expect("a dir for the fixture capability");
+    let dir = crate::test_dir_keep::kept_tempdir();
     std::fs::write(
         dir.path().join(format!("{tool}.yaml")),
         format!(

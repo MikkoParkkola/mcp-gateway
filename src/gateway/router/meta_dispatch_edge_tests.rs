@@ -45,7 +45,7 @@ async fn a_body_that_fails_to_read_is_a_parse_error() {
 #[tokio::test]
 async fn an_out_of_range_search_limit_is_answered_not_refused() {
     let fx = fixture(Answer::Ok, |_| {}).await;
-    let caps = tempfile::tempdir().unwrap();
+    let caps = crate::test_dir_keep::kept_tempdir();
     std::fs::write(
         caps.path().join("read_limit_probe.yaml"),
         "name: read_limit_probe\ndescription: read a limit probe\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://example.invalid\n      path: /probe\n",

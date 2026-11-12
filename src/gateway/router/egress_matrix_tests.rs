@@ -414,7 +414,7 @@ fn egress_every_dispatched_method_is_a_matrix_row_or_gateway_own() {
 /// the dispatch once it knows it, not a transport label.
 #[tokio::test]
 async fn egress_a_notification_verdict_names_the_authenticated_caller() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("firewall.ndjson");
     let backend = Arc::new(Planted::new("tools/call", Part::CustomNote));
     let fx = fixture_audited_on(backend, path.clone()).await;

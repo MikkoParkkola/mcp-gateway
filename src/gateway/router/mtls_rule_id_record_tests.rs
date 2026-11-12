@@ -280,7 +280,7 @@ async fn hidden_backend(fx: &Logged, cn: Option<&str>) {
 /// rule key gives it, so an unkeyed production build is seen.
 #[tokio::test(flavor = "current_thread")]
 async fn a_production_built_mtls_policy_records_its_rule_id() {
-    let dir = tempfile::tempdir().expect("a temp dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut config = crate::config::Config {
         mtls: enabled(deny_write_rules()),
         ..crate::config::Config::default()

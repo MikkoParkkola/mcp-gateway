@@ -243,7 +243,7 @@ pub(super) async fn twin_on(
     spec: Spec,
     arm: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Twin {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let audit = dir.path().join("audit.jsonl");
     let calls = Arc::new(AtomicUsize::new(0));
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));

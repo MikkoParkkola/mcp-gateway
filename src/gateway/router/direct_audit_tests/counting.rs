@@ -439,7 +439,7 @@ async fn t25_a_dispatch_rescan_refusal_counts_as_a_firewall_catch() {
 #[test]
 fn t42_real_calls_and_a_kill_store_no_secret_and_no_caller_chosen_name() {
     const SENTINEL: &str = "sk-live-SENTINEL-8854-e2e";
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("counters.json");
     let mut seen = None;
     let logs = crate::test_log_capture::records(|| {

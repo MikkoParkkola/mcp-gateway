@@ -123,7 +123,7 @@ fn capability_yaml(name: &str, extra: &str) -> String {
 }
 
 async fn capability_backend() -> (Arc<CapabilityBackend>, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().expect("capability dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let files = [
         ("cap_open", "  chains_with: [cap_hidden]\n".to_string()),
         ("cap_hidden", String::new()),
