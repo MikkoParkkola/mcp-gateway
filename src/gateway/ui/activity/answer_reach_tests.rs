@@ -155,3 +155,49 @@ fn r57_the_nearest_untraceable_failure_decides_reach() {
         Joined::NoRecord(Searched::Finished)
     );
 }
+
+/// The look-above hands each folded line the bytes of log above it, counted in
+/// line lengths with terminators across segments, never as a file offset: lines
+/// read from several small segments sum to the same total as one segment would.
+#[tokio::test]
+async fn r58_look_above_counts_bytes_across_segments() {
+    use super::answer_fixture::Fixture;
+    use super::answer_list_tests::get;
+    use super::reader::{Limits, Look, read_page_joined};
+
+    let fx = Fixture::rotating(None, 4096);
+    for i in 0..40 {
+        fx.call(&format!("gw-c{i}"));
+    }
+    let (_, first) = get(&fx, &[("limit", "30")]).await;
+    let token = first["next_cursor"].as_str().expect("a cursor").to_string();
+    let cursor = super::cursor::decode(&token).expect("a cursor");
+    let mut folded: Vec<(u64, u64)> = Vec::new();
+    let mut fold = |line: &Line, above: u64| {
+        folded.push((line.entry.to_string().len() as u64 + 1, above));
+    };
+    let limits = Limits {
+        matches: 1,
+        bytes: 8 << 20,
+    };
+    let page = read_page_joined(
+        &fx.path,
+        None,
+        Some(&cursor),
+        limits,
+        Look::Fold(&mut fold),
+        |_, _| false,
+    )
+    .unwrap();
+    assert!(folded.len() >= 20, "{} lines folded", folded.len());
+    let total: u64 = folded.iter().map(|(len, _)| len).sum();
+    // The oldest folded line has everything else above it, the newest nothing.
+    let mut above_it = total;
+    for (len, above) in &folded {
+        above_it -= len;
+        assert_eq!(*above, above_it, "a folded line's `above`");
+    }
+    assert_eq!(above_it, 0);
+    // The page continues counting from the look-above's total.
+    assert!(page.above_end.above >= total);
+}
