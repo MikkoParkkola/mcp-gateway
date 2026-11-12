@@ -22,15 +22,82 @@ const DOMAIN: &[u8] = b"email-v1\0";
 /// `i` and a combining dot), so one pass alone is not stable under a second.
 /// Canonically equivalent spellings meet; compatibility forms (a ligature,
 /// fullwidth letters) stay distinct, and the domain is not IDNA-converted.
-/// Both tables are Unicode 17.0.0: lowercase from the Rust standard library
-/// under the pinned toolchain, NFC from `icu_normalizer_data` 2.3.0 (built
-/// from ICU 78). A toolchain or ICU data change that alters either table
-/// needs a new version.
+///
+/// The hash must be the same on every build, so no table here is the
+/// compiler's: lowercase is the crate's own frozen Unicode 17.0.0 table
+/// (`case_v1`), per code point and context-free (capital Sigma always becomes
+/// ordinary sigma: std's final-sigma rule needs two more property tables and
+/// cannot occur in a normal address); NFC is `icu_normalizer` and its data
+/// crate `icu_normalizer_data`, both pinned to an exact version in
+/// `Cargo.toml` (`cargo install` ignores Cargo.lock). A change that alters
+/// either table needs a new version, and `self_check` refuses to start a
+/// build that normalizes differently.
 pub(crate) fn normalize(email: &str) -> String {
     let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc();
-    nfc.normalize(&nfc.normalize(email).to_lowercase())
-        .into_owned()
+    nfc.normalize(&lower_v1(&nfc.normalize(email))).into_owned()
 }
+
+/// Version 1's lowercase: each code point through the frozen table, ASCII by
+/// the locale-free ASCII rule. Context-free: a code point's output never
+/// depends on its neighbours.
+pub(crate) fn lower_v1(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_ascii() {
+            out.push(c.to_ascii_lowercase());
+        } else if let Some(mapped) = case_v1::lower(c) {
+            out.extend(mapped);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Known answers every build must reproduce, checked when the key server
+/// starts: a build whose Unicode data differs from the one that wrote the
+/// retained rows would otherwise hash the same address differently and make
+/// lookups miss silently. `cargo install` never runs the tests, so the check
+/// is part of the program.
+const KNOWN_ANSWERS: &[(&str, &str)] = &[
+    ("Ada.Lovelace", "ada.lovelace"),
+    ("\u{130}x", "i\u{307}x"),
+    ("\u{1e9e}", "\u{df}"),
+    ("\u{391}\u{3a3}", "\u{3b1}\u{3c3}"),
+    ("\u{13a0}", "\u{ab70}"),
+    ("\u{1c90}", "\u{10d0}"),
+    ("\u{212b}", "\u{e5}"),
+    ("A\u{30a}", "\u{e5}"),
+    ("\u{1100}\u{1161}\u{11a8}", "\u{ac01}"),
+    ("a\u{307}\u{323}", "\u{1ea1}\u{307}"),
+    ("\u{fb01}", "\u{fb01}"),
+    ("\u{ff21}", "\u{ff41}"),
+];
+
+/// Run [`KNOWN_ANSWERS`] through `normalizer`; the first miss is the error.
+pub(crate) fn self_check_with(normalizer: &dyn Fn(&str) -> String) -> Result<(), String> {
+    for (input, expected) in KNOWN_ANSWERS {
+        let got = normalizer(input);
+        if got != *expected {
+            return Err(format!(
+                "this build's email normalization differs from the one the retained audit rows were \
+                 hashed with (input U+{:04X}... gave {} code points, expected {}): rebuild with the \
+                 pinned dependencies",
+                input.chars().next().map_or(0, u32::from),
+                got.chars().count(),
+                expected.chars().count()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// [`self_check_with`] on the real normalization.
+pub(crate) fn self_check() -> Result<(), String> {
+    self_check_with(&normalize)
+}
+
+mod case_v1;
 
 /// The installation key. `Debug` shows only the length; the bytes are wiped
 /// on drop.
