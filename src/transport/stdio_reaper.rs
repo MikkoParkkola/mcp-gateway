@@ -728,18 +728,34 @@ mod plan_tests {
         );
     }
 
-    /// Small waits cannot afford the floor: SIGTERM takes at most half, so the
-    /// EOF wait is never starved.
-    /// Red if the floor takes more than half of the waits.
+    /// The floor is met whenever the waits can afford it, leaving EOF at least the
+    /// minimum phase: 2 s of waits give SIGTERM the whole need and EOF the rest.
+    /// Red if a cap (such as half the waits) cuts the floor short of what the waits afford.
     #[cfg(unix)]
     #[test]
-    fn a_small_wait_keeps_half_for_eof_even_under_the_floor() {
+    fn the_floor_is_met_whenever_the_waits_can_afford_it() {
+        let waits = Duration::from_secs(2);
+        assert_eq!(
+            graceful_ending(KILL_RESERVE + waits, true, None),
+            Ending::Graceful {
+                eof: waits - NESTED_TERM_NEED,
+                term: NESTED_TERM_NEED,
+            }
+        );
+    }
+
+    /// Small waits cannot afford the floor: SIGTERM takes all but the minimum
+    /// phase, so the EOF wait is never starved to nothing.
+    /// Red if the floor ignores the small budget or eats the last minimum phase.
+    #[cfg(unix)]
+    #[test]
+    fn a_small_wait_keeps_the_minimum_phase_for_eof_even_under_the_floor() {
         let waits = Duration::from_secs(1);
         assert_eq!(
             graceful_ending(KILL_RESERVE + waits, true, None),
             Ending::Graceful {
-                eof: waits / 2,
-                term: waits / 2,
+                eof: MIN_PHASE,
+                term: waits - MIN_PHASE,
             }
         );
     }
