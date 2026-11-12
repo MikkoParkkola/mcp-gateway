@@ -157,7 +157,13 @@ fn a_pending_release_is_reported_once_and_names_no_account() {
         });
     });
     assert_eq!(log.lines().count(), 1, "exactly one report line: {log:?}");
-    for private in ["alice", "identity.example", "google-workspace-personal"] {
+    let seeded = unexpired();
+    for private in [
+        "alice",
+        "identity.example",
+        "google-workspace-personal",
+        seeded.access_token.as_str(),
+    ] {
         assert!(
             !log.contains(private),
             "the report names {private}: {log:?}"
@@ -293,8 +299,31 @@ fn a_failed_release_spawn_leaves_the_store_stuck_and_never_drops_it_inline() {
             !store_is_free(tmp.path()),
             "the locks must stay held when stuck"
         );
-        // An unbounded call on a stuck store returns an error at once.
-        let unbounded = fx.handle.shutdown().await;
+        stall.let_go();
+    });
+}
+
+/// After a failed release spawn, an UNBOUNDED `shutdown()` must not wait for a
+/// done signal that can never come: it returns `ReleaseStuck` at once.
+#[test]
+fn an_unbounded_shutdown_on_a_stuck_store_returns_an_error_at_once() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+
+    multi_thread(async {
+        let fx = start(tmp.path(), 2);
+        let stall = stall_release(&fx);
+        fx.handle.fail_next_release_spawn();
+        let first = refuse_scaffold(
+            fx.handle.shutdown_by(tokio::time::Instant::now()).await,
+            "bounded shutdown",
+        )
+        .expect("outcome");
+        assert_eq!(first, ShutdownEnd::Stuck);
+        let unbounded = tokio::time::timeout(HANG_BOUND, fx.handle.shutdown())
+            .await
+            .expect("the unbounded call returned instead of waiting forever");
         assert!(
             matches!(unbounded, Err(CustodyError::ReleaseStuck)),
             "unbounded shutdown on a stuck store: {unbounded:?}"
