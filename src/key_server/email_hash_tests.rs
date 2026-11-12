@@ -460,24 +460,78 @@ fn the_data_crate_pin_is_anchored_in_code() {
     );
 }
 
-/// NORM.1: the hash's normalization never calls the standard library's
-/// lowercase: no line of the production code of `email_hash.rs` (comments
-/// removed) names `to_lowercase`. The differential rows above are the real
-/// check; this keeps a refactor from putting std back.
-/// Mutant: call `to_lowercase` in `normalize` or `lower_v1`.
-#[test]
-fn the_normalization_does_not_call_std_lowercase() {
-    let source = include_str!("email_hash.rs");
-    let production = source.split("#[cfg(test)]").next().expect("source");
-    for line in production
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
+/// Every non-test `.rs` file under `dir`, with each file's production text
+/// (everything before `#[cfg(test)]`, comment lines removed).
+fn production_sources(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+    for entry in std::fs::read_dir(dir)
+        .expect("a readable source directory")
+        .flatten()
     {
-        assert!(
-            !line.contains("to_lowercase"),
-            "std lowercase in production code: {line}"
-        );
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_owned();
+        if path.is_dir() {
+            if name != "tests" {
+                production_sources(&path, out);
+            }
+        } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") {
+            let source = std::fs::read_to_string(&path).expect("a readable source file");
+            let production = source.split("#[cfg(test)]").next().unwrap_or("");
+            let text: Vec<&str> = production
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect();
+            out.push((path.display().to_string(), text.join("\n")));
+        }
     }
+}
+
+/// NORM.1: nothing under `src/key_server/` calls the standard library's
+/// lowercase: no production line (comments removed) names `to_lowercase`. The
+/// differential rows are the check that the frozen table is right; this keeps a
+/// refactor from putting std back anywhere the email can pass, and on a
+/// Unicode 17 toolchain it is the only row that could notice (std then gives
+/// the same answer).
+/// Mutant: call `to_lowercase` in `normalize`, `lower_v1` or any key-server module.
+#[test]
+fn nothing_in_the_key_server_calls_std_lowercase() {
+    let mut files = Vec::new();
+    production_sources(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/key_server"),
+        &mut files,
+    );
+    assert!(files.len() > 5, "the scan found only {} files", files.len());
+    for (path, text) in &files {
+        for line in text.lines() {
+            assert!(
+                !line.contains("to_lowercase"),
+                "std lowercase in {path}: {line}"
+            );
+        }
+    }
+}
+
+/// NORM.1: the email reaches the hash exactly as the token carried it: the
+/// record builder hashes `identity.email()` and the log field hashes
+/// `identity.subject()`, each unchanged: no trim, case change, NFC or split in
+/// between. The callers of `EmailHashKey::hash` outside tests are these two
+/// (and the admin lookup route, which trims what the admin typed).
+/// Mutant: pass a transformed value at either site.
+#[test]
+fn the_email_reaches_the_hash_untouched() {
+    let audit = include_str!("audit.rs");
+    assert!(
+        audit.contains("let email = identity.email();") && audit.contains("key.hash(email)"),
+        "the record builder must hash identity.email() unchanged"
+    );
+    let server = include_str!("mod.rs");
+    assert!(
+        server.contains("self.email_key.hash(identity.subject())"),
+        "the log field must hash identity.subject() unchanged"
+    );
 }
 
 /// NORM.3: the startup self-check passes on the real normalization, and fails,
