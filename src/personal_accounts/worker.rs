@@ -454,16 +454,16 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         let capacity = u32::try_from(self.capacity).unwrap_or(u32::MAX);
         let draining = Arc::clone(&self.permits).acquire_many_owned(capacity);
         let drained = match deadline {
-            Some(at) => match tokio::time::timeout_at(at, draining).await {
-                Ok(permits) => permits,
-                Err(_) => {
+            Some(at) => {
+                let Ok(permits) = tokio::time::timeout_at(at, draining).await else {
                     report_once(
                         &self.reported,
                         "in-flight work still running at the stop deadline; the store was not released",
                     );
                     return Ok(ShutdownEnd::InFlightPending);
-                }
-            },
+                };
+                permits
+            }
             None => draining.await,
         };
         // Take the reference and publish the new state in one critical section.

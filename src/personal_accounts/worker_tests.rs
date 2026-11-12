@@ -233,9 +233,10 @@ impl Drop for GatedProvider {
             .drop_thread
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(std::thread::current().id());
-        if self.state.panic_on_drop.load(Ordering::SeqCst) {
-            panic!("the provider's drop panics");
-        }
+        assert!(
+            !self.state.panic_on_drop.load(Ordering::SeqCst),
+            "the provider's drop panics"
+        );
         let gate = self
             .state
             .drop_gate
