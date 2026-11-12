@@ -50,15 +50,16 @@ backup covers these.
 
 The chart mounts two writable volumes:
 
-- `state` at `/var/lib/mcp-gateway`. It is an `emptyDir`, so the task store and everything
-  else under HOME survive a container restart but not the pod.
+- `state` at `/var/lib/mcp-gateway`. It is an `emptyDir` unless `persistence.enabled` puts it on
+  a PersistentVolumeClaim, so by default the task store and everything else under HOME survive
+  a container restart but not the pod.
 - `audit` at `/var/lib/mcp-gateway/audit`. It is an `emptyDir` unless `audit.existingClaim`
   names a PersistentVolumeClaim. In `mesh` auth mode the chart renders no audit volume.
 
 The configuration is mounted read-only from its ConfigMap at `/etc/mcp-gateway`; back it up
 where you keep your chart values.
 
-Set `audit.existingClaim` for any deployment whose audit history matters. The chart has no
+Set `audit.existingClaim` for any deployment whose audit history matters. With the key server on, every minted token writes a `token.issued` audit row first; with the audit log fail-closed, a mint that cannot write it answers 503 and issues no token, so the audit volume must be writable and durable. The chart has no
 value that puts `accounts.store_dir`, `accounts.authority_dir` or `control_plane.store_dir` on
 persistent storage, so point those settings at a volume you mount yourself.
 
