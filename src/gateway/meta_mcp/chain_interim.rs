@@ -481,6 +481,8 @@ pub fn seal_chain_stop(
         // an envelope the ledger has already retired.
         jti: uuid::Uuid::new_v4().to_string(),
         rounds_used: previous.rounds_used.saturating_add(1),
+        // A chain envelope never carries a lookup page's keyed hash.
+        lookup_scope: None,
         ..previous.clone()
     }
 }
