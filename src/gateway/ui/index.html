@@ -773,6 +773,9 @@ const KEY_LOOKUP_URL = '/ui/api/key-server/audit/lookup-email';
 const KEY_LOOKUP_MAX_ROWS = 200;
 let keyLookupHeld = null;
 let keyLookupBusy = false;
+// Bumped by every drop: a request that started before a drop must write nothing.
+let keyLookupEpoch = 0;
+let keyLookupAbort = null;
 
 function keyLookupSay(text) {
   document.getElementById('kl-status').textContent = text;
@@ -785,7 +788,12 @@ function keyLookupReset() {
   document.getElementById('kl-next').hidden = true;
 }
 
+// The one drop: invalidates any request in flight, then empties everything.
 function keyLookupClear() {
+  keyLookupEpoch += 1;
+  if (keyLookupAbort !== null) keyLookupAbort.abort();
+  keyLookupAbort = null;
+  keyLookupBusy = false;
   keyLookupHeld = null;
   document.getElementById('kl-email').value = '';
   keyLookupSay('');
@@ -844,13 +852,18 @@ async function keyLookupRun(query) {
   if (authState !== 'admin') { keyLookupHeld = null; keyLookupSay(refusedMessage(403)); return; }
   if (keyLookupBusy) return;
   keyLookupBusy = true;
+  const mine = keyLookupEpoch;
+  keyLookupAbort = new AbortController();
+  const stale = () => mine !== keyLookupEpoch || authState !== 'admin';
   try {
     const res = await uiFetch(KEY_LOOKUP_URL, {
       method: 'POST',
       cache: 'no-store',
+      signal: keyLookupAbort.signal,
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(query),
     });
+    if (stale()) return;
     if (res.status === 429) {
       const wait = keyLookupWait(res);
       keyLookupHeld = query.cursor ? query : null;
@@ -858,20 +871,23 @@ async function keyLookupRun(query) {
       return;
     }
     const body = res.ok ? keyLookupDecode(await res.json().catch(() => null)) : null;
+    if (stale()) return;
     if (body === null) { keyLookupHeld = null; keyLookupReset(); keyLookupSay('The lookup failed.'); return; }
     keyLookupHeld = body.next_cursor === null ? null : { ...query, cursor: body.next_cursor };
     keyLookupShow(body);
   } catch (e) {
+    if (mine !== keyLookupEpoch) return;
     keyLookupHeld = null;
     keyLookupReset();
     keyLookupSay(e instanceof AuthRefused ? e.message : 'The lookup failed.');
   } finally {
-    keyLookupBusy = false;
+    if (mine === keyLookupEpoch) { keyLookupBusy = false; keyLookupAbort = null; }
   }
 }
 
 async function submitKeyLookup(event) {
   event.preventDefault();
+  if (keyLookupBusy) { keyLookupSay('A lookup is still running: wait for it, or press Clear.'); return false; }
   const field = document.getElementById('kl-email');
   const email = field.value.trim();
   field.value = '';
@@ -885,6 +901,8 @@ async function submitKeyLookup(event) {
 async function keyLookupNext() {
   if (keyLookupHeld !== null) await keyLookupRun(keyLookupHeld);
 }
+// A page restored from the back/forward cache must not bring a query back.
+window.addEventListener('pagehide', keyLookupClear);
 // KEY-LOOKUP END
 
 renderAuth('signed_out');

@@ -55,6 +55,8 @@ globalThis.console = trap('console');
 const out = (v) => realConsole.log(JSON.stringify(v));
 const calls = [];
 let replies = [];
+const listeners = {};
+globalThis.window = { addEventListener: (t, f) => { listeners[t] = f; } };
 globalThis.apiKey = 'k';
 globalThis.authState = 'admin';
 globalThis.authHeaders = () => ({ Accept: 'application/json', Authorization: 'Bearer k' });
@@ -63,6 +65,7 @@ globalThis.AuthRefused = class extends Error {};
 globalThis.uiFetch = async (url, opts) => {
   calls.push({ url, opts, emailField: dom['kl-email']?.value });
   const r = replies.shift();
+  if (r.gate) await r.gate;
   return { ok: r.status >= 200 && r.status < 300, status: r.status,
     headers: { get: (h) => (r.headers ?? {})[h.toLowerCase()] ?? null },
     json: async () => { if (r.bad) throw new Error('not json'); return r.body; } };
@@ -395,4 +398,79 @@ out({ rest, bodies: calls.map((c) => c.opts.body), qs: calls.map((c) => c.url.in
     for body in got["bodies"].as_array().unwrap() {
         assert!(body.as_str().unwrap().contains("ada@corp.test"));
     }
+}
+
+/// A request that was in flight when the query was dropped writes nothing:
+/// not the held query, not the rows, not a message. Covers Clear, leaving the
+/// page (the same drop) and losing admin standing before the answer lands.
+/// Mutant: drop the epoch/auth check after the awaits.
+#[test]
+fn an_answer_that_lands_after_a_drop_writes_nothing() {
+    let got = run(r"
+const results = [];
+for (const how of ['clear', 'auth']) {
+  let release;
+  const gate = new Promise((ok) => { release = ok; });
+  authState = 'admin';
+  replies = [{ ...page([row('late')], { next_cursor: 'c9' }), gate }];
+  document.getElementById('kl-email').value = 'ada@corp.test';
+  const pending = submitKeyLookup({ preventDefault() {} });
+  await Promise.resolve();
+  if (how === 'clear') keyLookupClear(); else authState = 'signed_in';
+  release();
+  await pending;
+  results.push([how, keyLookupHeld, dom['kl-rows'].children.length, dom['kl-next'].hidden]);
+  keyLookupClear();
+}
+out(results);
+");
+    for case in got.as_array().unwrap() {
+        assert_eq!(case[1], serde_json::Value::Null, "the query came back: {case}");
+        assert_eq!(case[2], 0, "rows were drawn after the drop: {case}");
+        assert_eq!(case[3], true, "Next page was offered after the drop: {case}");
+    }
+}
+
+/// A second submit while a lookup is running changes nothing: the new email
+/// stays in its field, no second request goes out, and the first answer is
+/// the one shown. Mutant: clear the field or the page before the busy check.
+#[test]
+fn a_second_submit_while_busy_changes_nothing() {
+    let got = run(r"
+let release;
+const gate = new Promise((ok) => { release = ok; });
+replies = [{ ...page([row('first')]), gate }];
+document.getElementById('kl-email').value = 'ada@corp.test';
+const pending = submitKeyLookup({ preventDefault() {} });
+await Promise.resolve();
+document.getElementById('kl-email').value = 'bob@corp.test';
+await submitKeyLookup({ preventDefault() {} });
+const kept = dom['kl-email'].value;
+release();
+await pending;
+out({ kept, n: calls.length, rows: dom['kl-rows'].children.length });
+");
+    assert_eq!(got["kept"], "bob@corp.test");
+    assert_eq!(got["n"], 1);
+    assert_eq!(got["rows"], 1);
+}
+
+/// Leaving through the back/forward cache drops the query: the page registers
+/// `pagehide` with the one drop. The request also carries an abort signal so
+/// a drop cancels it. Mutant: no listener, or no signal.
+#[test]
+fn pagehide_drops_the_query_and_a_drop_aborts_the_request() {
+    let got = run(r"
+replies = [page([row('s1')], { next_cursor: 'c1' })];
+await submit('ada@corp.test');
+const had = keyLookupHeld !== null;
+listeners.pagehide({ persisted: true });
+out({ registered: typeof listeners.pagehide, had, held: keyLookupHeld,
+  rows: dom['kl-rows'].children.length, signal: calls[0].opts.signal instanceof AbortSignal });
+");
+    assert_eq!(got["registered"], "function");
+    assert_eq!(got["had"], true);
+    assert_eq!(got["held"], serde_json::Value::Null);
+    assert_eq!(got["rows"], 0);
+    assert_eq!(got["signal"], true);
 }
