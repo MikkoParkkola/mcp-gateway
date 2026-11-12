@@ -191,10 +191,10 @@ impl TaskStore {
         self.0.test_dir.keep(dir, &self.0.dir);
     }
 
-    /// Test-only: see [`crate::test_dir_keep::TestDirKeep::opened_by_gateway`].
+    /// Test-only: hold the ownership acquired before this store opened.
     #[cfg(test)]
-    pub(crate) fn opened_by_gateway(&self) {
-        self.0.test_dir.opened_by_gateway();
+    pub(crate) fn attach_registered(&self, found: crate::test_dir_keep::Found) {
+        self.0.test_dir.attach_registered(found);
     }
 
     /// Test-only: see [`crate::test_dir_keep::TestDirKeep::assert_kept`].
