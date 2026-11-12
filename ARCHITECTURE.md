@@ -392,7 +392,7 @@ Loaded via Figment (`config.rs`): YAML file + environment variable overrides. Ke
 6. Stop all backends (`BackendRegistry::stop_all_by`), by the budget's backend deadline
 
 `config.server.shutdown_timeout` is the total of steps 3 to 6, counted from the signal; no
-step starts a timeout of its own. An HTTP gateway whose value is below 9 s refuses to start.
+step starts a timeout of its own. An HTTP gateway whose value is below 12 s refuses to start.
 
 Implemented in `gateway/server/mod.rs` (`Gateway::run`) and `gateway/server/listener.rs`.
 

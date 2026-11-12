@@ -35,7 +35,7 @@ pub struct ServerConfig {
     /// Graceful shutdown timeout: the total of an HTTP gateway's stop, counted
     /// from the signal. The listener gives open requests what is left after the
     /// reserves for the saves, the backend stop and the logger flush, and the
-    /// stages after it share the rest; it must be at least 9 s (#2147).
+    /// stages after it share the rest; it must be at least 12 s (#2147).
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
     /// RFC-0060 U1: whether HTTP `serve` records the durable per-transport
