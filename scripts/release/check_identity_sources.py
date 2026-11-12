@@ -238,7 +238,7 @@ READ_BACKS = {
     ("src/identity_grants/journal.rs", "parse_journal"): "rule: persisted grants",
     ("src/identity_grants_matching.rs", "parse_refusal"): "rule: grant-file error report",
     ("src/identity_grants_matching.rs", "remainder_error"): "rule: grant-file error report",
-    ("src/config_persistence_journal_v2_codec.rs", "decode"): "journal: a frozen record's actor is decoded through AuditWho::from_persisted, whose principal passes RecordPrincipal::from_persisted",
+    ("src/config_persistence_journal_v2_codec.rs", "decode"): "namesake: the journal's own `Decision` shares a name with an identity-carrying type; the one actor it decodes goes through AuditWho::from_persisted, whose principal passes RecordPrincipal::from_persisted",
 }
 
 
