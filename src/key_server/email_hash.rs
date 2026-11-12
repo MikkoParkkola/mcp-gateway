@@ -129,6 +129,11 @@ pub(crate) fn self_check_with(normalizer: &dyn Fn(&str) -> String) -> Result<(),
     Ok(())
 }
 
+/// Stub until the rows are proved red: how many times the check ran.
+pub(crate) fn check_runs() -> usize {
+    0
+}
+
 /// [`self_check_with`] on the real normalization.
 pub(crate) fn self_check() -> Result<(), String> {
     self_check_with(&normalize)
@@ -146,6 +151,8 @@ pub(crate) struct EmailHashKey(WipedBytes);
 pub(crate) enum KeyTextError {
     /// Not 64 characters after the one optional trailing newline.
     Length(usize),
+    /// This build's email normalization differs from its known answers.
+    Normalization(String),
     /// A character other than `0-9` or `a-f`.
     NotLowercaseHex,
 }
@@ -157,6 +164,7 @@ impl std::fmt::Display for KeyTextError {
                 f,
                 "it must hold exactly 64 lowercase hex digits, not {n} characters"
             ),
+            Self::Normalization(why) => f.write_str(why),
             Self::NotLowercaseHex => {
                 f.write_str("it must hold only lowercase hex digits (0-9, a-f)")
             }
@@ -181,6 +189,19 @@ impl EmailHashKey {
         // invariant: 64 checked hex digits always decode to 32 bytes.
         let bytes = hex::decode(digits).expect("64 checked hex digits decode");
         Ok(Self(WipedBytes::new(bytes)))
+    }
+
+    /// Stub until the rows are proved red: no check yet.
+    pub(crate) fn from_hex_checked(
+        text: &str,
+        _check: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Self, KeyTextError> {
+        Self::from_hex(text)
+    }
+
+    /// Stub until the rows are proved red: the subject hashed as an email.
+    pub(crate) fn hash_subject(&self, subject: &str) -> String {
+        self.hash(subject)
     }
 
     /// The key id: lowercase hex SHA-256 of the decoded bytes. Names the key
