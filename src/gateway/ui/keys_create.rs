@@ -22,6 +22,7 @@ use serde_json::json;
 use super::config_file::{Gateway, read_gateway};
 use super::errors::{flat_error, stale, structured_error};
 use super::guard::Guard;
+use super::settings::caller_is_cli_key;
 use crate::config::{ApiKeyConfig, AuthConfig, Config, EnvOverlay};
 use crate::config_persistence::keyedit::{
     Change, FieldPath, Scalar, Segment, Template, edit_in_place,
@@ -31,7 +32,7 @@ use crate::config_reload::{
     RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced, refuse_multi_user_flip,
     replace_audited,
 };
-use crate::gateway::auth::{MintingKey, QuotaPrincipal, ResolvedAuthConfig, SessionMintedBy};
+use crate::gateway::auth::SessionMintedBy;
 use crate::gateway::router::AppState;
 
 /// Under test, a request may carry the secret the route hands out, so a row
@@ -498,16 +499,6 @@ fn refused_write(
         ) => fixed(StatusCode::INTERNAL_SERVER_ERROR, "the key was not created"),
         (None, _) => state_uncertain(),
     }
-}
-
-/// Display names can collide or change; the stable key principal carries the restriction.
-fn caller_is_cli_key(
-    auth: &ResolvedAuthConfig,
-    bearer_quota: Option<&QuotaPrincipal>,
-    session: Option<&MintingKey>,
-) -> bool {
-    bearer_quota.is_some_and(|quota| auth.is_cli_key_quota(quota))
-        || session.is_some_and(|minter| auth.is_cli_key_quota(&minter.quota))
 }
 
 /// `POST /ui/api/keys`.

@@ -358,17 +358,18 @@ pub async fn auth_middleware(
         let limits = session_limits(&state);
         // Judged by the request's pinned key table: a session whose minting
         // key a reload removed, demoted or expired ends here (K13).
-        match state.dashboard_bootstrap.check_session_with(
+        let checked_session = state.dashboard_bootstrap.check_session_with_origin(
             &handle,
             Now::read(),
             &limits,
             touch,
             auth_config,
-        ) {
+        );
+        match checked_session.0 {
             SessionCheck::Valid if !has_authorization && !is_bootstrap => {
                 request.extensions_mut().insert(dashboard_client());
                 #[cfg(feature = "webui")]
-                if let Some(key) = state.dashboard_bootstrap.session_minting_key(&handle) {
+                if let Some(key) = checked_session.1 {
                     request.extensions_mut().insert(SessionMintedBy(key));
                 }
                 return next.run(request).await;
@@ -620,6 +621,10 @@ mod limit_state_tests;
 #[cfg(test)]
 #[path = "auth_approval_binding_tests.rs"]
 mod approval_binding_tests;
+
+#[cfg(test)]
+#[path = "auth_session_origin_tests.rs"]
+mod session_origin_tests;
 
 /// SIGNING.5 row 44: which nonce-quota authority a dashboard session carries.
 ///
