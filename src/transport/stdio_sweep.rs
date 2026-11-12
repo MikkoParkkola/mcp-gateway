@@ -300,6 +300,12 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub(super) use macos::MacTable;
 
+/// The table of the host the gateway runs on.
+#[cfg(target_os = "linux")]
+pub(super) type PlatformTable = LinuxTable;
+#[cfg(target_os = "macos")]
+pub(super) type PlatformTable = MacTable;
+
 /// The share of a backend's kill reserve the sweep may spend freezing and
 /// re-walking, and then on the terminal kills. Both sit inside the reaper's own
 /// kill reserve, so the gateway's stop deadline holds by construction.

@@ -39,7 +39,7 @@ pub(super) struct ChildTree {
     /// The descendant sweep: everything still attached to this
     /// backend by parent pid dies with it. Taken by the one run, before the
     /// group kill.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     sweep: Option<super::sweep::Sweep>,
     #[cfg(all(test, unix))]
     pub(super) term_signals_sent: usize,
@@ -175,7 +175,7 @@ impl ChildTree {
             .id()
             .and_then(|id| i32::try_from(id).ok())
             .and_then(rustix::process::Pid::from_raw);
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let wrapper_pid = wrapper.id();
         Self {
             wrapper,
@@ -187,9 +187,9 @@ impl ChildTree {
             ending: Ending::Now,
             grace: None,
             stop_deadline: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             sweep: wrapper_pid
-                .and_then(super::sweep::LinuxTable::identity_of)
+                .and_then(super::sweep::PlatformTable::identity_of)
                 .map(|root| super::sweep::Sweep::new(root, super::sweep::config())),
             #[cfg(all(test, unix))]
             term_signals_sent: 0,
@@ -295,23 +295,30 @@ impl ChildTree {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn sweep_snapshot(&mut self) {
         if let Some(sweep) = self.sweep.as_mut() {
-            sweep.snapshot(&mut super::sweep::LinuxTable::new());
+            sweep.snapshot(&mut super::sweep::PlatformTable::new());
         }
     }
 
     /// Freeze, verify and kill every descendant, once, before the group kill.
     /// Residuals are logged as a count and pids only: never a command line.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn sweep_descendants(&mut self) {
         let Some(mut sweep) = self.sweep.take() else {
             return;
         };
         let report = sweep.run(
-            &mut super::sweep::LinuxTable::new(),
+            &mut super::sweep::PlatformTable::new(),
             super::sweep::process_budget(),
+        );
+        tracing::debug!(
+            backend = self.wrapper.id(),
+            killed = report.killed.len(),
+            continued = report.continued.len(),
+            passes = report.passes,
+            "descendant sweep finished"
         );
         if !report.residual.is_empty() {
             tracing::warn!(
@@ -427,7 +434,7 @@ impl ChildTree {
         }
         // Before the first signal, and on every step while the waits run: the
         // sweep's picture of the tree is taken while the backend still holds it.
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if self.reaping.is_none() {
             self.sweep_snapshot();
         }
@@ -437,7 +444,7 @@ impl ChildTree {
         let (started, phase) = if let Some(state) = self.reaping {
             state
         } else {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             self.sweep_descendants();
             self.start_kill();
             let state = (now, Self::FIRST_REAP_PHASE);
