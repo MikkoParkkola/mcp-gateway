@@ -134,6 +134,26 @@ impl Fx {
         assert_eq!(out.label(), "confirmed", "{out:?}");
     }
 
+    /// Write an issuance row carrying exactly this hash, version and key id.
+    fn plant_raw(&self, subject: &str, hash: &str, version: u64, key_id: &str) {
+        let fields = json!({
+            "event": "token.issued",
+            "token_jti": format!("jti-{subject}"),
+            "identity": {
+                "subject": subject, "issuer": ISS, "email_hash": hash,
+                "email_hash_version": version, "email_hash_key_id": key_id,
+            },
+        });
+        let serde_json::Value::Object(fields) = fields else {
+            panic!("an object");
+        };
+        let log = Arc::clone(&self.log);
+        let out = self
+            .rt
+            .block_on(log.append_issuance_row(fields, AuditEnvelope::gateway()));
+        assert_eq!(out.label(), "confirmed", "{out:?}");
+    }
+
     fn post(&self, who: AuthenticatedClient, body: &str) -> (StatusCode, Option<String>, Value) {
         self.post_via(true, who, body)
     }
@@ -403,4 +423,18 @@ fn attempts_and_throttles_are_counted_on_unlabelled_counters() {
         Some("mcp_key_server_lookup_throttled_total 1"),
         "{rendered}"
     );
+}
+
+/// MIK-9455.LOOKUP.2: the key id and the version are part of the match: a row
+/// with the same hash under another key id or version is not this person's.
+/// Mutant: ignore the key id, or ignore the version.
+#[test]
+fn the_key_id_and_version_are_part_of_the_match() {
+    let fx = Fx::new();
+    let hash = fx.ks.email_key.hash(EMAIL);
+    let key_id = fx.ks.email_key.key_id();
+    fx.plant_raw("right", &hash, 1, &key_id);
+    fx.plant_raw("other-key", &hash, 1, "0000");
+    fx.plant_raw("other-version", &hash, 2, &key_id);
+    assert_eq!(subjects(&fx.lookup(EMAIL, json!({}))), vec!["right"]);
 }

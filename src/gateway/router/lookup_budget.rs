@@ -21,6 +21,11 @@ const PERMITS_PER_MINUTE: NonZeroU32 = NonZeroU32::new(10).expect("10 is nonzero
 /// The burst: two attempts back to back.
 const BURST: NonZeroU32 = NonZeroU32::new(2).expect("2 is nonzero");
 
+/// `wait` in whole seconds, rounded up, and never below one.
+fn whole_seconds(wait: std::time::Duration) -> u64 {
+    (wait.as_secs() + u64::from(wait.subsec_nanos() > 0)).max(1)
+}
+
 /// What one charge came to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Charge {
@@ -73,9 +78,8 @@ impl<C: Clock + Clone + Send + Sync> LookupBudget<C> {
                 if warn {
                     tracing::warn!("the admin email lookup budget is spent; refusing lookups");
                 }
-                let whole = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
                 Charge::Throttled {
-                    retry_after_secs: whole.max(1),
+                    retry_after_secs: whole_seconds(wait),
                 }
             }
         }
@@ -117,6 +121,17 @@ mod tests {
         assert_eq!(budget.charge(), Charge::Admitted);
         assert_eq!(budget.charge(), Charge::Admitted);
         assert_eq!(retry(budget.charge()), 6, "capacity is two, not more");
+    }
+
+    /// Rounded up, never zero: even a wait of nothing says one second.
+    /// Mutant: truncate, or drop the floor.
+    #[test]
+    fn waits_round_up_and_never_say_zero() {
+        use std::time::Duration;
+        assert_eq!(whole_seconds(Duration::ZERO), 1);
+        assert_eq!(whole_seconds(Duration::from_millis(1)), 1);
+        assert_eq!(whole_seconds(Duration::from_secs(6)), 6);
+        assert_eq!(whole_seconds(Duration::from_millis(5_001)), 6);
     }
 
     /// A wait of a fraction of a second still says at least one second.
