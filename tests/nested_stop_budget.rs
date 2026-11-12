@@ -519,6 +519,111 @@ async fn a_three_level_nested_gateway_chain_leaves_no_leaf_after_a_hurry() {
     std::mem::forget(cleanup);
 }
 
+/// A hurried stop (EOF then a second signal) of an outer gateway whose backend is a
+/// gateway with two leaves of its own: the outer's group kill lands before the
+/// inner's own hurried path has killed the leaves, which have their own process
+/// groups, so every pid of the tree must still be dead afterwards.
+/// Red if a gateway-child's leaves outlive the stop (the sweep before the kill is missing).
+#[tokio::test]
+async fn a_two_level_hurried_stop_leaves_no_leaf() {
+    let temp = tempfile::tempdir().expect("temp root");
+    let root = temp.path();
+    let leaves = ["leaf_a", "leaf_b"];
+    let inner = write_inner_config(root, &leaves, Duration::from_secs(30));
+    let outer = write_chain_parent(root, "outer", "inner", &inner);
+    let log = std::fs::File::create(root.join("gateway.log")).expect("log");
+    let mut reaped = gateway_bin::Reaped::new(
+        tokio::process::Command::from(gateway_bin::command(
+            &root.join("home"),
+            gateway_bin::Inherit::Environment,
+        ))
+        .env("RUST_LOG", "mcp_gateway=info")
+        .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
+        .current_dir(root)
+        .arg("--config")
+        .arg(outer)
+        .args(["serve", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(log.try_clone().expect("log handle")))
+        .stderr(Stdio::from(log))
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()
+        .expect("outer gateway"),
+    );
+    let pid = reaped.child_mut().id().expect("outer pid");
+    let cleanup = KillGroup {
+        pid,
+        root: root.into(),
+    };
+    let mut stdin = reaped.child_mut().stdin.take().expect("stdin");
+    let mut messages = vec![
+        initialize(),
+        json!({"jsonrpc":"2.0", "method":"notifications/initialized"}),
+    ];
+    for (id, name) in leaves.iter().enumerate() {
+        let message = invoke(name, id + 1);
+        messages.push(message);
+    }
+    for message in messages {
+        stdin
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .expect("stdio");
+    }
+    let ready_by = Instant::now() + READY_BOUND;
+    while leaves
+        .iter()
+        .any(|name| !root.join(format!("called-{name}")).exists())
+    {
+        assert!(
+            Instant::now() < ready_by,
+            "holds never started\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let mut tree = vec![pid, read_pid(root, "inner.pid")];
+    for name in leaves {
+        tree.push(read_pid(root, &format!("leaf-{name}.pid")));
+        tree.push(read_pid(root, &format!("leaf-{name}.grandchild.pid")));
+    }
+    // EOF installs the hurry listener before logging this message. The busy
+    // calls keep teardown pending until the subsequent SIGTERM cuts it short.
+    drop(stdin);
+    let eof_by = Instant::now() + READY_BOUND;
+    while !logs(root).contains("stdio: EOF reached, shutting down") {
+        assert!(
+            Instant::now() < eof_by,
+            "outer never saw EOF\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let hurried_at = Instant::now();
+    sigterm(pid);
+    // Observation time, not a watchdog: the outer kills at ~300 ms; allow
+    // another 2 s for scheduling and exit, not the 6 s reap reserve.
+    tokio::time::sleep_until(hurried_at + Duration::from_millis(2300)).await;
+    assert!(
+        logs(root).contains("shutdown hurried by a signal"),
+        "outer did not hurry\n{}",
+        logs(root)
+    );
+    let alive = alive_pids(&tree);
+    assert!(
+        alive.is_empty(),
+        "chain processes survived the outer's hurry kill window: {alive:?}; all pids: {tree:?}\n{}",
+        logs(root)
+    );
+    tokio::time::timeout(Duration::from_secs(10), reaped.child_mut().wait())
+        .await
+        .expect("outer exit deadline")
+        .expect("outer exit");
+    reaped.reap().await;
+    std::mem::forget(cleanup);
+}
+
 /// A SIGTERM to a stdio-mode gateway (what systemd or docker stop sends) leaves no
 /// backend running once the gateway has exited, even a backend that ignores EOF
 /// and SIGTERM and has a call in flight. Red if the gateway's teardown stops killing
