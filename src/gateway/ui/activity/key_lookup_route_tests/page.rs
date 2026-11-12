@@ -479,3 +479,47 @@ fn a_dashboard_session_without_a_handle_is_given_no_token() {
     });
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
+
+/// What a token binds to, pinned to literal digests that do not come from the
+/// route's own function: a bearer or key binds to a tagged digest of its one
+/// secret, a dashboard session to a tagged digest of its cookie handle, two
+/// principals differ, and a caller with nothing to bind to gets none.
+/// Mutant: drop a tag, hash the wrong material, or bind a kind to nothing.
+#[test]
+fn what_a_token_binds_to_is_pinned_to_literal_digests() {
+    use super::super::key_lookup::cursor_principal;
+    let none = axum::http::HeaderMap::new();
+    assert_eq!(
+        cursor_principal(Some(&admin("a")), &none).as_deref(),
+        Some("677c3467fe5e899f2c412330f74dfe3bbeb4caca43731f7d5e1fb93eb3e50f4d"),
+        "a static bearer binds to the tagged digest of its principal"
+    );
+    assert_ne!(
+        cursor_principal(Some(&admin("a")), &none),
+        cursor_principal(Some(&admin("b")), &none),
+        "two principals bind differently"
+    );
+    let mut dashboard = client(true, &["*"], CredentialKind::DashboardSession);
+    dashboard.principal =
+        crate::gateway::record_principal::InternalPrincipal::new("dashboard-session".to_owned());
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("cookie", "mcp_gateway_session=handle-one".parse().unwrap());
+    assert_eq!(
+        cursor_principal(Some(&dashboard), &headers).as_deref(),
+        Some("7e87019ce880f23e93201bdf91f6749f3bf44ab6b59b3b669bd13ce0b5b75349"),
+        "a dashboard session binds to the tagged digest of its cookie handle"
+    );
+    assert_eq!(
+        cursor_principal(Some(&dashboard), &none),
+        None,
+        "no cookie, no binding"
+    );
+    let mut local = admin("a");
+    local.credential_kind = CredentialKind::LocalTransport;
+    assert_eq!(
+        cursor_principal(Some(&local), &none),
+        None,
+        "stdio has nothing to bind to"
+    );
+    assert_eq!(cursor_principal(None, &none), None);
+}
