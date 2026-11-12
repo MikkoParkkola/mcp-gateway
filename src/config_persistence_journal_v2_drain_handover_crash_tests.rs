@@ -46,7 +46,7 @@ fn cut_at(at: At, mode: Mode) -> (Rig, bool) {
             session,
             donor: rig.donor,
             path,
-            _dir: rig._dir,
+            dir: rig.dir,
         },
         survived,
     )

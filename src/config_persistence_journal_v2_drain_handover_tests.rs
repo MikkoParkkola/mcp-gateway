@@ -17,7 +17,7 @@ use crate::config_persistence::journal;
 /// A journal ready to hand over: one decided writer whose outcome is not yet delivered, the
 /// change accepted, and the journal on disk. Returns the live donor beside the session.
 pub(super) struct Rig {
-    pub(super) _dir: tempfile::TempDir,
+    pub(super) dir: tempfile::TempDir,
     pub(super) path: PathBuf,
     pub(super) donor: JournalV2,
     pub(super) session: DrainSession,
@@ -33,10 +33,17 @@ pub(super) fn rig(edit: impl FnOnce(&mut JournalV2)) -> Rig {
     super::super::super::fixtures::seed(&path, &donor);
     let session = reopen(locked);
     Rig {
-        _dir: dir,
+        dir,
         path,
         donor,
         session,
+    }
+}
+
+impl Rig {
+    /// The scratch directory the rig's config lives in.
+    pub(super) fn dir(&self) -> &std::path::Path {
+        self.dir.path()
     }
 }
 
@@ -404,7 +411,7 @@ fn handover_fifo_and_symlink_refused() {
         "a symlink at the path is refused and nothing it names is touched",
         || {
             let mut rig = rig(|_| {});
-            let target = rig.path.with_file_name("elsewhere");
+            let target = rig.dir().join("elsewhere");
             std::fs::write(&target, good_file()).expect("symlink target");
             let link = abandoned_path(&rig.path);
             std::os::unix::fs::symlink(&target, &link).expect("symlink");

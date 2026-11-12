@@ -85,7 +85,8 @@ fn private_to_us(meta: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     meta.uid() == rustix::process::getuid().as_raw()
         && meta.nlink() == 1
-        && meta.mode() & 0o077 == 0
+        // No group or other permission bit: the low six bits are all zero.
+        && meta.mode().trailing_zeros() >= 6
 }
 
 #[cfg(not(unix))]
