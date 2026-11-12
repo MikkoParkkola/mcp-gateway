@@ -267,7 +267,7 @@ fn whole_strings_over_an_adversarial_alphabet_match_std() {
         "\u{e0001}",
     ];
     let n = alphabet.len();
-    let mut check = |text: String| {
+    let check = |text: String| {
         assert_eq!(lower_v1(&text), text.to_lowercase(), "{text:?}");
     };
     for a in 0..n {

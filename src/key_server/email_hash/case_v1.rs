@@ -2156,3 +2156,9 @@ pub(super) fn case_ignorable_then_cased(mut chars: impl Iterator<Item = char>) -
         .find(|&c| !in_ranges(&CASE_IGNORABLE, c))
         .is_some_and(|c| in_ranges(&CASED_TERMINAL, c))
 }
+
+/// Whether `c` is Unicode White_Space (version 17.0.0), from the frozen table:
+/// what the trim at the start of normalization removes.
+pub(super) fn is_white_space(c: char) -> bool {
+    in_ranges(&WHITE_SPACE, c)
+}
