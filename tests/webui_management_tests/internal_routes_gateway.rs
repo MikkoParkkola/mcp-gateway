@@ -40,6 +40,15 @@ pub(super) const ROWS: &[Row] = &[
         Payload::Json("{}"),
         [401, 403, 403, 422],
     ),
+    // key_lookup.rs: admin-only; the admin's empty object lacks the required
+    // email, a 400 before anything is hashed or read.
+    row(
+        "/ui/api/key-server/audit/lookup-email",
+        Method::POST,
+        "/ui/api/key-server/audit/lookup-email",
+        Payload::Json("{}"),
+        [401, 403, 403, 400],
+    ),
     // src/gateway/ui/tool_call.rs (call; admin-only, and an empty body is
     // refused before anything runs)
     row(
