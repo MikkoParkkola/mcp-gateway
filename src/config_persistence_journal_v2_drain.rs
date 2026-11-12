@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use super::{
-    Decision, Fact, FrozenRecord, IntentId, JournalError, JournalSession, ParkReason, Phase,
+    Fact, FrozenRecord, IntentId, JournalDecision, JournalError, JournalSession, ParkReason, Phase,
     ResultClass, TerminalRole, TokenState,
 };
 use crate::config_persistence::commit::{self, Action, FileRevision, Found, NotDurable, Refusal};
@@ -441,7 +441,10 @@ fn decide_missing(journal: &mut JournalSession) -> Result<(), DrainError> {
     Ok(())
 }
 
-fn compute_decision(journal: &JournalSession, token: &IntentId) -> Result<Decision, DrainError> {
+fn compute_decision(
+    journal: &JournalSession,
+    token: &IntentId,
+) -> Result<JournalDecision, DrainError> {
     #[cfg(test)]
     super::observe::decision_computing(&journal.target);
     let writer = journal
@@ -475,7 +478,7 @@ fn compute_decision(journal: &JournalSession, token: &IntentId) -> Result<Decisi
             Reason::NothingPending,
             None,
         )),
-        Some(Fact::Untouched) => Ok(Decision {
+        Some(Fact::Untouched) => Ok(JournalDecision {
             terminal: TerminalRole::Abandoned,
             ..decision(ResultClass::NotWritten, Reason::Abandoned, None)
         }),
@@ -483,8 +486,8 @@ fn compute_decision(journal: &JournalSession, token: &IntentId) -> Result<Decisi
     }
 }
 
-fn decision(result: ResultClass, reason: Reason, settled_by: Option<IntentId>) -> Decision {
-    Decision {
+fn decision(result: ResultClass, reason: Reason, settled_by: Option<IntentId>) -> JournalDecision {
+    JournalDecision {
         result,
         reason,
         settled_by,

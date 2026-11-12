@@ -234,32 +234,6 @@ class CodeReviewBypasses(unittest.TestCase):
             self.assertTrue(any("deserializes" in v for v in cis.violations(root)), carrier)
 
 
-class JournalDecodeEntry(unittest.TestCase):
-    """The journal codec's `decode` is listed as a namesake read-back. The
-    entry is one (file, fn) pair: it must not admit any other site."""
-
-    CODEC = "src/config_persistence_journal_v2_codec.rs"
-    W = "#[derive(Deserialize)]\nstruct W { who: VerifiedIdentity }\n"
-
-    def flagged(self, extra: dict[str, str], mods: str) -> list[str]:
-        return [v for v in cis.violations(tree(extra, mods)) if "deserializes" in v]
-
-    def test_the_entry_is_listed(self):
-        self.assertIn((self.CODEC, "decode"), cis.READ_BACKS)
-
-    def test_a_new_unlisted_struct_carrying_an_identity_is_flagged(self):
-        read = "fn load(s: &str) -> W { serde_json::from_str(s).unwrap() }\n"
-        self.assertEqual(len(self.flagged({"src/other.rs": self.W + read}, "mod other;\n")), 1)
-
-    def test_another_fn_in_the_codec_file_is_flagged(self):
-        read = "fn decode_other(s: &str) -> W { serde_json::from_str(s).unwrap() }\n"
-        self.assertEqual(len(self.flagged({self.CODEC: self.W + read}, "mod config_persistence_journal_v2_codec;\n")), 1)
-
-    def test_a_fn_named_decode_in_another_file_is_flagged(self):
-        read = "fn decode(s: &str) -> W { serde_json::from_str(s).unwrap() }\n"
-        self.assertEqual(len(self.flagged({"src/other.rs": self.W + read}, "mod other;\n")), 1)
-
-
 class SameNames(unittest.TestCase):
     """Two types may share a name in different modules; only the one a
     reference resolves to decides whether it carries an identity."""

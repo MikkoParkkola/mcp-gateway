@@ -43,7 +43,7 @@ pub(crate) enum TerminalRole {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Decision {
+pub(crate) struct JournalDecision {
     pub(super) result: ResultClass,
     pub(super) reason: Reason,
     pub(super) settled_by: Option<IntentId>,
@@ -85,7 +85,7 @@ pub(crate) struct TokenState {
     pub(super) intent_id: IntentId,
     pub(super) intent: FrozenRecord,
     pub(super) intent_counter: Option<u64>,
-    pub(super) decision: Option<Decision>,
+    pub(super) decision: Option<JournalDecision>,
     pub(super) records: Vec<FrozenRecord>,
     pub(super) handed_over: bool,
 }
@@ -293,7 +293,7 @@ impl JournalSession {
     pub(crate) fn decide(
         &mut self,
         token: &IntentId,
-        decision: Decision,
+        decision: JournalDecision,
     ) -> Result<(), JournalError> {
         #[cfg(test)]
         observe::note(&self.target, observe::Event::DecisionProposed);
@@ -433,7 +433,7 @@ impl JournalV2 {
     }
 }
 
-impl Decision {
+impl JournalDecision {
     fn validate(&self) -> Result<(), JournalError> {
         let valid = match self.terminal {
             TerminalRole::Outcome => match self.result {

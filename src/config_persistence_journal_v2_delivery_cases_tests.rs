@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use super::super::{Decision, IntentId};
+use super::super::{IntentId, JournalDecision};
 use super::fixtures::{
     Live, OUTCOME, SAVE, WRITER, actor, decided, payload, retry, runtime, state, state_of,
     terminal_count,
@@ -129,7 +129,12 @@ fn direct_actor_control(live: &Live, delivery: &Delivery, previous: u64, row: &s
     live.verify(row);
 }
 
-pub(super) fn retained_retry(owner: &mut DrainSession, live: &Live, choice: &Decision, row: &str) {
+pub(super) fn retained_retry(
+    owner: &mut DrainSession,
+    live: &Live,
+    choice: &JournalDecision,
+    row: &str,
+) {
     retry(owner, live, row);
     assert_eq!(
         state_of(owner)

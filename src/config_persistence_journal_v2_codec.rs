@@ -13,12 +13,12 @@ use super::{
 };
 
 #[cfg(test)]
-use super::{Decision, FrozenRecord, MAX_JOURNAL_BYTES, Reason, ResultClass};
+use super::{FrozenRecord, JournalDecision, MAX_JOURNAL_BYTES, Reason, ResultClass};
 
 #[cfg(test)]
 pub(super) fn terminal_matches(
     record: &FrozenRecord,
-    decision: &Decision,
+    decision: &JournalDecision,
     owner: &TokenState,
     attempts: &[TokenState],
 ) -> bool {
