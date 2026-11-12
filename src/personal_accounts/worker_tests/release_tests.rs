@@ -389,29 +389,32 @@ fn the_release_is_done_only_when_the_last_owner_lets_go() {
 }
 
 /// A release thread that panics still signals done and reports once; the locks
-/// are free afterwards (unwinding dropped what was left).
+/// are free afterwards (unwinding dropped what was left). The report comes from
+/// the release thread, outside this thread's log capture, so the row reads the
+/// shared report flag.
 #[test]
 fn a_panicking_release_still_signals_done_and_frees_the_locks() {
     let _serial = worker_test_lock();
     let tmp = tempfile::TempDir::new().expect("root");
     seed(tmp.path(), &[(&alice(), unexpired())]);
 
-    let log = errors_logged(|| {
-        multi_thread(async {
-            let fx = start(tmp.path(), 2);
-            fx.provider.panic_on_drop.store(true, Ordering::SeqCst);
-            let end = refuse_scaffold(
-                fx.handle
-                    .shutdown_by(tokio::time::Instant::now() + HANG_BOUND)
-                    .await,
-                "bounded shutdown",
-            )
-            .expect("outcome");
-            assert_eq!(end, ShutdownEnd::Released, "the guard signals on unwind");
-            assert!(store_is_free(tmp.path()), "unwinding freed the locks");
-        });
+    multi_thread(async {
+        let fx = start(tmp.path(), 2);
+        fx.provider.panic_on_drop.store(true, Ordering::SeqCst);
+        let end = refuse_scaffold(
+            fx.handle
+                .shutdown_by(tokio::time::Instant::now() + HANG_BOUND)
+                .await,
+            "bounded shutdown",
+        )
+        .expect("outcome");
+        assert_eq!(end, ShutdownEnd::Released, "the guard signals on unwind");
+        assert!(store_is_free(tmp.path()), "unwinding freed the locks");
+        assert!(
+            fx.handle.reported.load(Ordering::SeqCst),
+            "the panic was reported"
+        );
     });
-    assert_eq!(log.lines().count(), 1, "one report line: {log:?}");
 }
 
 /// Cancelling the bounded shutdown (the stop budget's timeout drops the future)
