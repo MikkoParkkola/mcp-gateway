@@ -408,7 +408,8 @@ async fn s16_admin_audit() {
         super::super::api_router(),
         &route.state,
     )
-    .with_state(route.state.clone());
+    .with_state(route.state.clone())
+    .layer(axum::Extension(route.state.live_config.generation()));
     for save in [false, true] {
         let path = if save {
             crate::gateway::routes::UI_SETTINGS
