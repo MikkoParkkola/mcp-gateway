@@ -618,11 +618,13 @@ fn every_offset_classifies_consistently() -> Result<(), String> {
     Ok(())
 }
 
+/// A named case of the row: its name, what it expects, and the check.
+type Case = (&'static str, &'static str, fn());
+
 #[test]
 fn abandoned_corrupt_without_donor() {
     const ROW: &str = "abandoned_corrupt_without_donor";
     let mut failures = Vec::new();
-    type Case = (&'static str, &'static str, fn());
     let cases: [Case; 11] = [
         (
             "tail_without_donor",
