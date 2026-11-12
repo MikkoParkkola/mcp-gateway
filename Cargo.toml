@@ -2,7 +2,7 @@
 name = "mcp-gateway"
 version = "4.0.0-beta.3"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.100"
 authors = ["Mikko Parkkola <mikko.parkkola@iki.fi>"]
 description = "MCP gateway and Model Context Protocol proxy: connect unlimited MCP servers, tools and REST APIs to an AI client at a fixed context cost, with on-demand tool discovery and MCP revision bridging"
 license = "PolyForm-Noncommercial-1.0.0"
