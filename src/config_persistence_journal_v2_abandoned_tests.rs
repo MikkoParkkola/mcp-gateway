@@ -420,7 +420,14 @@ fn unrelated_owner_proves_nothing() -> Result<(), String> {
         handed_over: true,
     };
     state.attempts.push(attempt);
-    let bytes = file(&[&handed_over(), &torn(&record_0(), 10)]);
+    // The intent frame honestly says "not handed over", as the donor's writer is: the owner
+    // facts then agree, and only the writer's own handed-over flag can refuse the tail.
+    let honest = HANDED_OVER_JSON.replace(r#""handed_over":true"#, r#""handed_over":false"#);
+    assert_ne!(
+        honest, HANDED_OVER_JSON,
+        "the control must change the golden"
+    );
+    let bytes = file(&[&reframe(&honest), &torn(&record_0(), 10)]);
     assert_eq!(
         inspect(&bytes, Some(&state)),
         corrupt(0, Cause::DonorMismatch),
@@ -478,6 +485,16 @@ fn surplus_bytes_are_a_length_fault() -> Result<(), String> {
         decode_frames(&bytes).map(|read| read.frames.len()),
         Err(FrameFault::Length),
         "bytes between the declared JSON and the newline"
+    );
+    // The newline replaced by one stray byte at the end of the file: nothing after it can
+    // raise a second fault, so only the frame's own terminator check refuses it.
+    let mut replaced = attribution();
+    replaced.pop();
+    replaced.push(b'x');
+    assert_eq!(
+        decode_frames(&replaced).map(|read| read.frames.len()),
+        Err(FrameFault::Length),
+        "a frame whose terminator is not a newline"
     );
     Ok(())
 }
