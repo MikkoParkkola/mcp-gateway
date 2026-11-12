@@ -149,8 +149,8 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the handover writer: opens the abandoned file (unix: no symlink follow, without waiting) \
          and checks the OPENED handle before any read, on every path (also for a file it created \
          itself): on unix a regular file, owned by this user, one link, no group or other \
-         permission bit; elsewhere a regular file only, until the startup caller adds the \
-         platform checks; reads it only to prove it against the donor journal; it holds frozen \
+         permission bit; elsewhere the handover refuses before it writes or reads anything, until the \
+         owner check through win_acl lands (register row 1366); reads it only to prove it against the donor journal; it holds frozen \
          journal records, not credentials",
     ),
     (

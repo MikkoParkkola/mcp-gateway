@@ -99,12 +99,19 @@ fn private_to_us(meta: &std::fs::Metadata) -> bool {
         && meta.mode().trailing_zeros() >= 6
 }
 
+/// Fails closed off Unix: no owner check exists there yet, so no file counts as private to this
+/// user. The Windows owner check through `win_acl` is a precondition of the startup caller
+/// (register row 1366); until then a handover refuses on those platforms.
 #[cfg(not(unix))]
 fn private_to_us(_meta: &std::fs::Metadata) -> bool {
-    true
+    false
 }
 
 pub(crate) fn hand_over(session: &mut DrainSession) -> Result<(), HandoverError> {
+    // Refuse before anything is written: off Unix the file cannot be proven private to this user.
+    if !cfg!(unix) {
+        return Err(HandoverError::Foreign);
+    }
     let journal = session.journal.as_mut().ok_or(HandoverError::Journal)?;
     let donor = marked(&journal.state);
     donor.binding.as_ref().ok_or(HandoverError::Foreign)?;
@@ -213,9 +220,13 @@ fn seal(file: &mut File, path: &Path, frames: &[Vec<u8>]) -> Result<(), Handover
     }
 }
 
-#[cfg(test)]
+// The success-path rows need a file that passes the owner check, which only exists on Unix.
+#[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_handover_crash_tests.rs"]
 mod crash_tests;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_handover_tests.rs"]
 mod tests;
+#[cfg(all(test, not(unix)))]
+#[path = "config_persistence_journal_v2_drain_handover_windows_tests.rs"]
+mod windows_tests;
