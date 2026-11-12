@@ -341,3 +341,28 @@ fn the_backend_stage_keeps_a_graceful_window_for_a_busy_nested_gateway() {
     );
     assert_eq!(graceful, ms(4_400), "the share kept over the kill reserve");
 }
+
+/// The minimum is at least the sum of its parts, computed from the constants: the
+/// listener's minimum grace, the post-listener share, the reaper's kill reserve,
+/// the EOF wait the backend stop had before the SIGTERM floor (two thirds of the
+/// previous 3.4 s window), the reaper's nested need for the SIGTERM wait, and the
+/// retirement share. A later change to any part then fails this row instead of
+/// silently shrinking the EOF or SIGTERM phase.
+/// Red if the minimum or the backend share falls under the sum of those parts.
+#[cfg(unix)]
+#[test]
+fn the_minimum_is_at_least_the_sum_of_its_parts() {
+    use super::{BACKEND_RESERVE, LISTENER_MIN, POST_RESERVE, TERMINAL_RESERVE};
+    let eof_before_the_floor = ms(3_400) * 2 / 3;
+    let graceful_window = eof_before_the_floor + crate::transport::NESTED_TERM_NEED_FOR_TEST;
+    let backend_share = crate::transport::KILL_RESERVE_FOR_TEST + graceful_window;
+    assert!(
+        BACKEND_RESERVE >= backend_share,
+        "the backend share {BACKEND_RESERVE:?} is under {backend_share:?}: the kill reserve, the old EOF wait and the nested SIGTERM need"
+    );
+    let parts = LISTENER_MIN + POST_RESERVE + backend_share + TERMINAL_RESERVE;
+    assert!(
+        HTTP_MIN_TOTAL >= parts,
+        "the minimum {HTTP_MIN_TOTAL:?} is under the sum of its parts {parts:?}"
+    );
+}
