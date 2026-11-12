@@ -362,6 +362,40 @@ def concurrency_errors(block: dict) -> list[str]:
     return out
 
 
+def ui_tests_apt_errors() -> list[str]:
+    """The UI tests job must not fail because an Ubuntu mirror is down.
+
+    On 2026-11-11 security.ubuntu.com was unreachable and `playwright install --with-deps`, which runs
+    `apt-get update` first, exited 100 on every run, so the job failed at setup on the line and on every
+    train. The browser comes from Playwright's own CDN and is cached; the system libraries come from apt
+    and are mostly on the hosted image already. So: no `--with-deps` anywhere, and the step that installs
+    the libraries retries apt and carries on with a warning when it still fails (the test step then fails
+    loudly if a library is really missing)."""
+    doc = yaml.safe_load((ROOT / ".github/workflows/ui-tests.yml").read_text())
+    runs = [str(step.get("run", "")) for step in doc["jobs"]["playwright"]["steps"]]
+    out = []
+    if any("--with-deps" in run for run in runs):
+        out.append("ui-tests: `playwright install --with-deps` runs apt-get update and exits 100 when the "
+                   "mirror is down; install the browser and the system libraries in separate steps")
+    deps = [run for run in runs if "install-deps" in run]
+    if not deps:
+        out.append("ui-tests: no step installs Chromium's system libraries")
+    for run in deps:
+        if "Acquire::Retries" not in run:
+            out.append("ui-tests: the system-library step does not retry apt (-o Acquire::Retries=5)")
+        if "||" not in run:
+            out.append("ui-tests: the system-library step fails the job when apt is down; it must warn and go on")
+        # Observed on this change's own run during the outage: apt's retries multiplied against a dead DNS
+        # held the step for the job's whole 15 minutes until the timeout cancelled the job. Every apt and
+        # install-deps command in the step must be bounded by `timeout`.
+        for line in run.splitlines():
+            code = line.strip()
+            if ("apt-get " in code or "install-deps" in code) and not code.startswith(("#", "printf")):
+                if "timeout " not in code:
+                    out.append(f"ui-tests: an unbounded command in the system-library step: {code[:60]}")
+    return out
+
+
 def main() -> int:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     errors = []
@@ -415,6 +449,7 @@ def main() -> int:
     errors += release_pr_errors(jobs)
     errors += macos_train_errors(jobs)
     errors += post_merge_errors(jobs)
+    errors += ui_tests_apt_errors()
     # The macOS cases must be able to fail: each mutant is caught by the case
     # named beside it, not merely by some case.
     import copy
