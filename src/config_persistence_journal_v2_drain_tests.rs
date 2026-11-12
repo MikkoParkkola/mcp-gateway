@@ -4,19 +4,19 @@
 
 use std::sync::Arc;
 
-use super::super::fixtures::{bytes, collect_case, decision};
+use super::super::fixtures::{NEW, OLD, bytes, collect_case, decision};
 use super::super::observe::{self, Event};
 use super::super::{IntentId, JournalError, ParkReason, ResultClass};
 use super::fault::{self, At, Fault};
 #[cfg(unix)]
 use super::fixtures::records_at;
 use super::fixtures::{
-    Live, OUTCOME, SAVE, WRITER, actor, attributed, decided, payload, reread, retry, runtime,
-    staged, state, state_of, terminal_count,
+    Live, OUTCOME, SAVE, WRITER, actor, attributed, decided, payload, replace_bytes, reread, retry,
+    runtime, staged, state, state_of, terminal_count,
 };
 use crate::config_persistence::crash_fs::{self, Mode};
 use crate::config_persistence::journal;
-use crate::config_persistence::journal::drain::{DrainError, JournalDrain};
+use crate::config_persistence::journal::drain::{DrainError, DrainSession, JournalDrain};
 use crate::config_persistence::lock;
 #[cfg(unix)]
 use crate::security::audit_rotation_config::RotationConfig;
@@ -26,6 +26,17 @@ use crate::security::transparency_log::rotation::WriteFault;
 #[cfg(unix)]
 use crate::security::transparency_log::segments::list_segments;
 use crate::security::transparency_log::settle::Reason;
+
+/// A repairable owner: the journal is staged and committed, the original is
+/// staged and the config still holds the new bytes, so a repair that ran would
+/// visibly restore the old ones.
+fn repairable(live: &Live, row: &str) -> DrainSession {
+    let mut initial = state(&live.resolved);
+    staged(&mut initial);
+    journal::stage_original(&live.path, OLD).expect(row);
+    replace_bytes(&live.path, NEW);
+    live.seed(initial, row)
+}
 
 #[test]
 fn journal_first_intent() {
@@ -272,10 +283,8 @@ fn log_replaced_behind_the_logger_is_refused_before_repair() {
         || {
             let live = Live::new();
             let foreign = Live::new();
-            let mut initial = state(&live.resolved);
-            staged(&mut initial);
-            let owner = live.seed(initial, ROW);
-            let config = bytes(&live.path);
+            let owner = repairable(&live, ROW);
+            let config = std::fs::read(&live.path).expect(ROW);
             let journal_bytes = std::fs::read(journal::journal_path(&live.path)).expect(ROW);
             replace_audit_files(&foreign.log_path, &live.log_path);
             let result = runtime(JournalDrain::run(owner, Some(Arc::clone(&live.log))));
@@ -284,7 +293,11 @@ fn log_replaced_behind_the_logger_is_refused_before_repair() {
                 "{ROW}: a replaced log is refused, got {:?}",
                 result.as_ref().err().map(|failure| &failure.error)
             );
-            assert_eq!(bytes(&live.path), config, "{ROW}: config bytes unchanged");
+            assert_eq!(
+                std::fs::read(&live.path).expect(ROW),
+                config,
+                "{ROW}: config bytes unchanged"
+            );
             assert_eq!(
                 std::fs::read(journal::journal_path(&live.path)).expect(ROW),
                 journal_bytes,
@@ -309,9 +322,7 @@ fn a_reused_recovery_attempt_is_persisted_before_repair() {
         "the retry persists the attempt before it stops at the repair seam",
         || {
             let live = Live::new();
-            let mut initial = state(&live.resolved);
-            staged(&mut initial);
-            let mut owner = live.seed(initial, ROW);
+            let mut owner = repairable(&live, ROW);
             let journal_path = journal::journal_path(&live.path);
             let before = std::fs::read(&journal_path).expect(ROW);
             let armed = fault::arm(&live.path, Fault::Fail(At::BeforeAttemptPersist));
@@ -325,7 +336,7 @@ fn a_reused_recovery_attempt_is_persisted_before_repair() {
                 before,
                 "{ROW}: the attempt is not durable after the failed persist"
             );
-            let config = bytes(&live.path);
+            let config = std::fs::read(&live.path).expect(ROW);
             let armed = fault::arm(&live.path, Fault::Fail(At::RepairPaused));
             assert!(
                 JournalDrain::repair(&mut owner, false).is_err(),
@@ -337,7 +348,11 @@ fn a_reused_recovery_attempt_is_persisted_before_repair() {
                 before,
                 "{ROW}: the retry persisted the attempt before repairing"
             );
-            assert_eq!(bytes(&live.path), config, "{ROW}: repair had not acted");
+            assert_eq!(
+                std::fs::read(&live.path).expect(ROW),
+                config,
+                "{ROW}: repair had not acted"
+            );
             Ok(())
         },
     );
@@ -566,17 +581,19 @@ fn wrong_log_is_not_rebound() {
         || {
             let live = Live::new();
             let foreign = Live::new();
-            let mut initial = state(&live.resolved);
-            staged(&mut initial);
-            let owner = live.seed(initial, ROW);
-            let before = bytes(&live.path);
+            let owner = repairable(&live, ROW);
+            let config = std::fs::read(&live.path).expect(ROW);
             let journal_before = std::fs::read(journal::journal_path(&live.path)).expect(ROW);
             let result = runtime(JournalDrain::run(owner, Some(Arc::clone(&foreign.log))));
             assert!(
                 matches!(&result, Err(failure) if failure.error == DrainError::OtherLog),
                 "{ROW}: a repairable owner still refuses the other log first"
             );
-            assert_eq!(bytes(&live.path), before, "{ROW}: config bytes unchanged");
+            assert_eq!(
+                std::fs::read(&live.path).expect(ROW),
+                config,
+                "{ROW}: config bytes unchanged"
+            );
             assert_eq!(
                 std::fs::read(journal::journal_path(&live.path)).expect(ROW),
                 journal_before,
