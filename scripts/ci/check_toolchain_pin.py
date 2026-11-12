@@ -68,6 +68,35 @@ def check_workflow(text: str, want: str) -> list[tuple[int, str]]:
     return bad
 
 
+# `rustup toolchain install --profile minimal` (what the action runs) has no clippy, rustfmt or llvm-tools: a job that runs
+# one must list it, or it fails on a fresh runner that does not carry the component (Windows clippy, 2026-11-12).
+COMPONENT_USE = {
+    "clippy": re.compile(r"\bcargo\s+clippy\b"),
+    "rustfmt": re.compile(r"\bcargo\s+fmt\b|\brustfmt\b"),
+    "llvm-tools": re.compile(r"\bcargo\s+llvm-cov\b"),
+}
+
+
+def check_components(text: str) -> list[tuple[int, str]]:
+    """(line, problem) for each job that runs a component's command without installing the component."""
+    lines = text.split("\n")
+    starts = [i for i, l in enumerate(lines) if re.match(r"^  [A-Za-z0-9_-]+:\s*$", l)]
+    if "jobs:" not in lines:
+        return []
+    starts = [i for i in starts if i > lines.index("jobs:")]
+    bad = []
+    for k, i in enumerate(starts):
+        job = lines[i : starts[k + 1] if k + 1 < len(starts) else len(lines)]
+        code = "\n".join(l for l in job if not l.lstrip().startswith("#"))
+        if not re.search(r"dtolnay/rust-toolchain@", code, re.I):
+            continue
+        have = " ".join(re.findall(r"components:\s*(.+)", code))
+        for comp, use in COMPONENT_USE.items():
+            if use.search(code) and comp not in have:
+                bad.append((i + 1, f"job {lines[i].strip().rstrip(':')} runs a {comp} command but its toolchain step does not install {comp} (components: ...)"))
+    return bad
+
+
 OVERRIDE = re.compile(r"RUSTUP_TOOLCHAIN|\brustup\s+(?:default|override\s+set)\b|\bcargo\s+\+([^\s]+)")
 
 
@@ -95,7 +124,7 @@ def main(argv: list[str]) -> int:
         steps += seen
         if text.count("dtolnay/rust-toolchain@") != seen:
             problems.append(f"{wf.relative_to(root)}: a dtolnay/rust-toolchain reference is not a plain `uses:` step line (flow-style or quoted); write it as a block step")
-        problems += [f"{wf.relative_to(root)}:{n}: {why}" for n, why in check_workflow(text, want) + check_overrides(text, want)]
+        problems += [f"{wf.relative_to(root)}:{n}: {why}" for n, why in check_workflow(text, want) + check_overrides(text, want) + check_components(text)]
     if steps == 0:
         problems.append("no dtolnay/rust-toolchain step found in any workflow: the scan checked nothing")
     ignore = root / ".dockerignore"
@@ -149,6 +178,18 @@ def self_test() -> int:
         ("a comment naming them", "      # cargo +stable and RUSTUP_TOOLCHAIN are banned\n", 0),
         ("a trailing comment after a clean command", "      - run: cargo test # not cargo +stable\n", 0),
     ]
+    comp = [
+        ("clippy run without the component", "jobs:\n  a:\n    steps:\n      - uses: dtolnay/rust-toolchain@x\n        with:\n          toolchain: 1.99.1\n      - run: cargo clippy -- -D warnings\n", 1),
+        ("clippy run with the component", "jobs:\n  a:\n    steps:\n      - uses: dtolnay/rust-toolchain@x\n        with:\n          toolchain: 1.99.1\n          components: clippy\n      - run: cargo clippy\n", 0),
+        ("clippy only in a comment", "jobs:\n  a:\n    steps:\n      - uses: dtolnay/rust-toolchain@x\n        with:\n          toolchain: 1.99.1\n      # cargo clippy runs elsewhere\n      - run: cargo test\n", 0),
+        ("fmt needs rustfmt, another job has it", "jobs:\n  a:\n    steps:\n      - uses: dtolnay/rust-toolchain@x\n        with:\n          toolchain: 1.99.1\n          components: rustfmt\n      - run: cargo fmt --check\n  b:\n    steps:\n      - uses: dtolnay/rust-toolchain@x\n        with:\n          toolchain: 1.99.1\n      - run: cargo fmt --check\n", 1),
+        ("llvm-cov with llvm-tools-preview", "jobs:\n  a:\n    steps:\n      - uses: dtolnay/rust-toolchain@x\n        with:\n          toolchain: 1.99.1\n          components: llvm-tools-preview\n      - run: cargo llvm-cov\n", 0),
+    ]
+    for label, text, n in comp:
+        got = len(check_components(text))
+        ok = got == n
+        wrong += not ok
+        print(f"{'ok   ' if ok else 'WRONG'} component scan, {label}: {got} problem(s), want {n}")
     for label, text, n in over:
         got = len(check_overrides(text, want))
         ok = got == n
@@ -159,7 +200,7 @@ def self_test() -> int:
         ok = got == n
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} {label}: {got} problem(s), want {n}")
-    print(f"self-test: {len(cases) + len(over) - wrong} ok, {wrong} wrong")
+    print(f"self-test: {len(cases) + len(over) + len(comp) - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 
