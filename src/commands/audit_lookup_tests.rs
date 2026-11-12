@@ -81,3 +81,113 @@ fn the_body_carries_the_email_and_only_the_flags_given() {
     assert!(parse(&["--email-stdin", "--limit", "0"]).is_err());
     assert!(parse(&["--email-stdin", "--limit", "201"]).is_err());
 }
+
+use super::{LookupAnswer, lookup};
+use crate::commands::dashboard_link::LinkTls;
+
+const TOKEN: &str = "tok-secret";
+
+/// A gateway stand-in answering the lookup route with `status` and `body`
+/// for the credential `TOKEN`; it records the request body it received.
+async fn stand_in(
+    status: u16,
+    body: &'static str,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use axum::http::StatusCode;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = std::sync::Arc::clone(&seen);
+    let app = axum::Router::new().route(
+        "/ui/api/key-server/audit/lookup-email",
+        axum::routing::post(move |headers: axum::http::HeaderMap, text: String| {
+            let record = std::sync::Arc::clone(&record);
+            async move {
+                let bearer = headers
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned);
+                record.lock().unwrap().push(format!(
+                    "{}|{text}",
+                    bearer.unwrap_or_default()
+                ));
+                (
+                    StatusCode::from_u16(status).unwrap(),
+                    [("content-type", "application/json")],
+                    body,
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    (format!("http://{addr}"), seen)
+}
+
+const GOOD: &str = r#"{"rows":[{"timestamp":"2026-11-12T10:00:00+00:00","token_jti":"j1",
+"subject":"s1","issuer":"https://issuer.invalid","backends":["*"],"tools":["*"],"segment":0}],
+"next_cursor":null,"scan_exhausted":false,"cursor_reset":false,"unreadable":0,"scope":"retained"}"#;
+
+async fn ask(base: &str) -> Result<LookupAnswer, String> {
+    let args = parse(&["--email-stdin"]).expect("parses");
+    lookup(base, &LinkTls::default(), TOKEN, EMAIL, &args).await
+}
+
+/// MIK-9456.CLI.2: a good answer decodes into the typed answer, and the
+/// request carried the credential as a bearer and the email in the body only.
+/// Mutant: send the email in the URL, or lose the bearer.
+#[tokio::test]
+async fn a_good_answer_decodes_and_the_request_carries_bearer_and_body() {
+    let (base, seen) = stand_in(200, GOOD).await;
+    let answer = ask(&base).await.expect("a good answer");
+    assert_eq!(answer.rows.len(), 1);
+    assert_eq!(answer.rows[0].subject.as_deref(), Some("s1"));
+    assert_eq!(answer.scope, "retained");
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    let (bearer, text) = seen[0].split_once('|').expect("recorded");
+    assert_eq!(bearer, format!("Bearer {TOKEN}"));
+    assert_eq!(serde_json::from_str::<serde_json::Value>(text).unwrap(), json!({"email": EMAIL}));
+}
+
+/// MIK-9456.CLI.2: any non-2xx is an error that names the status and never
+/// carries the email or the credential, even when the gateway echoes them.
+/// Mutant: swallow the status, or print the gateway's message unredacted.
+#[tokio::test]
+async fn a_refusal_is_an_error_without_the_email_or_the_token() {
+    for status in [401_u16, 403, 429, 503] {
+        let echo: &'static str = Box::leak(
+            format!(r#"{{"error":"bad {EMAIL} with {TOKEN}"}}"#).into_boxed_str(),
+        );
+        let (base, _) = stand_in(status, echo).await;
+        let message = ask(&base).await.expect_err("a refusal");
+        assert!(message.contains(&status.to_string()), "{message}");
+        assert!(!message.contains(TOKEN), "{message}");
+        assert!(!message.to_lowercase().contains("planted"), "{message}");
+    }
+}
+
+/// MIK-9456.CLI.2: a 200 whose body is not the typed answer is an error, not
+/// an empty result.
+/// Mutant: default a missing or mistyped field.
+#[tokio::test]
+async fn an_answer_that_is_not_the_typed_shape_is_an_error() {
+    for body in [
+        "not json",
+        "{}",
+        r#"{"rows":"x","next_cursor":null,"scan_exhausted":false,"cursor_reset":false,"unreadable":0,"scope":"retained"}"#,
+        r#"{"rows":[],"next_cursor":null,"scan_exhausted":"no","cursor_reset":false,"unreadable":0,"scope":"retained"}"#,
+        r#"{"rows":[],"next_cursor":null,"scan_exhausted":false,"cursor_reset":false,"unreadable":0}"#,
+    ] {
+        let (base, _) = stand_in(200, body).await;
+        assert!(ask(&base).await.is_err(), "{body}");
+    }
+}
+
+/// MIK-9456.CLI.2: a gateway that is not there is an error.
+#[tokio::test]
+async fn an_unreachable_gateway_is_an_error() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    assert!(ask(&base).await.is_err());
+}
