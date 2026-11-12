@@ -83,6 +83,8 @@ mod proxy_scope_tests;
 #[cfg(test)]
 mod proxy_session_tests;
 pub mod recovery;
+#[cfg(test)]
+mod stop_budget;
 /// MIK-8747 / MIK-8748: a keyed replay is never served across protocol eras.
 #[cfg(all(test, feature = "firewall"))]
 mod replay_era_tests;
