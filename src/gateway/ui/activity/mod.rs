@@ -372,7 +372,7 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
     let mut fold = |line: &reader::Line, above: u64| {
         joiner.borrow_mut().observe(line, above);
     };
-    let keep = |line: &reader::Line, seen| {
+    let keep = |line: &reader::Line, seen: reader::Seen| {
         let mut j = joiner.borrow_mut();
         if j.observe(line, seen.above) {
             return false;
