@@ -166,6 +166,8 @@ impl Fx {
         if let (Some(b), Some(e)) = (body.as_object_mut(), extra.as_object()) {
             b.extend(e.clone());
         }
+        // A row that looks up several times is not a budget row: start full.
+        self.state.process.lookup_budget().reset_for_test();
         let (status, cache, value) = self.post(admin("a"), &body.to_string());
         assert_eq!(status, StatusCode::OK, "{value}");
         assert_eq!(cache.as_deref(), Some("no-store"));

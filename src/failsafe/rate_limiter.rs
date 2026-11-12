@@ -94,6 +94,13 @@ impl<C: Clock + Clone + Send + Sync> RateLimiter<C> {
         }
     }
 
+    /// Forget the bucket, so the next call starts from a full one: for rows
+    /// that make more calls than one budget allows.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) fn reset_for_test(&self) {
+        *self.inner.lock() = None;
+    }
+
     fn bucket(&self) -> Bucket<C> {
         GovernorLimiter::direct_with_clock(self.quota, self.clock.clone())
     }

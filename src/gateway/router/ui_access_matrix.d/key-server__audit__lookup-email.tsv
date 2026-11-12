@@ -1,0 +1,2 @@
+# path, method, request shape, caller, answer. One route per file; a digest named in ../ui_access_matrix_bodies.tsv is written as status:@name.
+/ui/api/key-server/audit/lookup-email	POST	plain	AdminKey	400

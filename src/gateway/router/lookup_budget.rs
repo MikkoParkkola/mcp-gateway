@@ -59,6 +59,12 @@ impl<C: Clock + Clone + Send + Sync> LookupBudget<C> {
         }
     }
 
+    /// A full bucket again, for rows that make more calls than one budget allows.
+    #[cfg(test)]
+    pub(crate) fn reset_for_test(&self) {
+        self.limiter.reset_for_test();
+    }
+
     /// Take one permit, or say how long until one frees.
     pub(crate) fn charge(&self) -> Charge {
         match self.limiter.acquire() {
