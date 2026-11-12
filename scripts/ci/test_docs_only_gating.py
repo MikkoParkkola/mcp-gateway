@@ -70,6 +70,10 @@ RELEASE_PRS = {"feature-combos-pr"}
 # as before, except the release-line push (POST_MERGE_SKIPPED). Checked by its
 # own cases below, so it is in neither SKIPPED nor KEPT.
 MACOS_TRAIN = {"macos-shards", "macos-check"}
+# Lane pull requests into the release line only (never a train, a throwaway, a fork or another base), and no push:
+# the os-int label's check, and the macOS int shard that label turns on. Checked by lane_label_errors below, so they
+# are in neither SKIPPED nor KEPT. Both skip a release-line push (POST_MERGE_SKIPPED).
+LANE_LABEL = {"os-int-label", "macos-int-lane"}
 # Judged on a merge train by HEAVY_GATE (scripts/ci/test_heavy_train_gating.py).
 # Each also runs on a lane pull request by its SKIPPED or KEPT rule above, so a
 # Windows, feature or release-tooling break fails the pull request that made it.
@@ -264,6 +268,44 @@ def aggregate_cancel_errors(jobs: dict) -> list[str]:
     return errors
 
 
+def lane_label_errors(jobs: dict) -> list[str]:
+    """The os-int check runs on every same-repo lane pull request into the release line, docs-only or not; the macOS
+    int shard runs there only with the os-int label. Neither runs on a train, a throwaway, a fork, another base or a push."""
+    def lane(*labels: str, **kw) -> dict:
+        c = as_train(ctx("pull_request", "success", kw.pop("docs_only", "false")), head=kw.pop("head", "feature/x"),
+                     repo=kw.pop("repo", REPO))
+        c["github"]["event"]["pull_request"]["labels"] = [{"name": x} for x in labels]
+        if "base" in kw:
+            c["github"]["base_ref"] = kw["base"]
+        return c
+
+    push = dict(ctx("push", "success", "false"))
+    push["github"].update(POST_MERGE_PUSH)
+    # (case, context, os-int-label runs, macos-int-lane runs)
+    cases = [
+        ("lane PR without the label", lane(), True, False),
+        ("lane PR with the label", lane("os-int"), True, True),
+        ("docs-only lane PR with the label", lane("os-int", docs_only="true"), True, True),
+        ("the os-sensitive label alone", lane("os-sensitive"), True, False),
+        ("both labels", lane("os-int", "os-sensitive"), True, True),
+        ("a label of similar name", lane("os-int-not"), True, False),
+        ("a train with the label", lane("os-int", head="train/20261027-1"), False, False),
+        ("a branch merely containing train/", lane("os-int", head="x/train/y"), True, True),
+        ("a throwaway with the label", lane("os-int", head="throwaway/x"), False, False),
+        ("a fork with the label", lane("os-int", repo="fork/x"), False, False),
+        ("a PR into main with the label", lane("os-int", base="main"), False, False),
+        ("a release-line push", push, False, False),
+    ]
+    errors = [f"LANE_LABEL names a job ci.yml lacks: {j}" for j in sorted(LANE_LABEL - set(jobs))]
+    if errors:
+        return errors
+    for label, c, check_want, macos_want in cases:
+        for job, want in (("os-int-label", check_want), ("macos-int-lane", macos_want)):
+            if runs(jobs[job], c) != want:
+                errors.append(f"{job}: {label} {'skips' if want else 'runs'}")
+    return errors
+
+
 def post_merge_errors(jobs: dict) -> list[str]:
     """A release-line push runs everything but POST_MERGE_SKIPPED and NOT_ON_PRS."""
     errors = []
@@ -272,7 +314,7 @@ def post_merge_errors(jobs: dict) -> list[str]:
         errors.append(f"POST_MERGE_SKIPPED names jobs ci.yml lacks: {sorted(unknown)}")
     c = ctx("push", "success", "false")
     c["github"].update(POST_MERGE_PUSH)
-    ran = simulate(jobs, c) - NOT_ON_PRS
+    ran = simulate(jobs, c) - NOT_ON_PRS - LANE_LABEL
     want = (SKIPPED | KEPT) - POST_MERGE_SKIPPED
     if ran != want:
         errors.append(f"release-line push: unexpected runs {sorted(ran - want)}, unexpected skips {sorted(want - ran)}")
@@ -423,7 +465,7 @@ def ui_tests_apt_errors() -> list[str]:
 def main() -> int:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     errors = []
-    unclassified = set(jobs) - SKIPPED - KEPT - NOT_ON_PRS - RELEASE_PRS - MACOS_TRAIN - {HEAVY_GATE}
+    unclassified = set(jobs) - SKIPPED - KEPT - NOT_ON_PRS - RELEASE_PRS - MACOS_TRAIN - LANE_LABEL - {HEAVY_GATE}
     if unclassified:
         errors.append(f"jobs not classified for docs-only gating: {sorted(unclassified)}")
     for wf in PUSH_ONLY_WORKFLOWS:
@@ -459,7 +501,7 @@ def main() -> int:
         errors.append("windows-shards needs the Linux suite: it must start in parallel with it")
     for name, c in cases.items():
         # A lane pull request runs every heavy job by the same docs-only rule (none is train-only).
-        left_out = NOT_ON_PRS | RELEASE_PRS | MACOS_TRAIN | {HEAVY_GATE}
+        left_out = NOT_ON_PRS | RELEASE_PRS | MACOS_TRAIN | LANE_LABEL | {HEAVY_GATE}
         ran = {k for k, j in jobs.items() if k not in left_out and runs(j, c)}
         want = (SKIPPED | KEPT) - (SKIPPED if name == "docs-only PR" else set())
         if ran != want:
@@ -472,6 +514,7 @@ def main() -> int:
                 errors.append(f"{name}: capability-pins step '{step}' {'runs' if active else 'skips'}")
     errors += release_pr_errors(jobs)
     errors += macos_train_errors(jobs)
+    errors += lane_label_errors(jobs)
     errors += post_merge_errors(jobs)
     errors += clippy_cache_errors(jobs)
     errors += ui_tests_apt_errors()
