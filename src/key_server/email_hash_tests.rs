@@ -433,7 +433,12 @@ fn dependency_lines(krate: &str) -> Vec<String> {
 /// Mutant: loosen either to a plain or caret version, or drop the data crate.
 #[test]
 fn the_nfc_crates_are_pinned_exactly_in_cargo_toml() {
-    for krate in ["icu_normalizer", "icu_normalizer_data"] {
+    for krate in [
+        "icu_normalizer",
+        "icu_normalizer_data",
+        "icu_properties",
+        "icu_properties_data",
+    ] {
         let lines = dependency_lines(krate);
         assert_eq!(
             lines.len(),
@@ -455,19 +460,32 @@ fn the_nfc_crates_are_pinned_exactly_in_cargo_toml() {
 #[test]
 fn the_data_crate_pin_is_anchored_in_code() {
     let source = include_str!("email_hash.rs");
-    assert!(
-        source.contains("use icu_normalizer_data as _;"),
-        "the data crate is not named in code"
-    );
+    for anchor in [
+        "icu_normalizer_data",
+        "icu_properties",
+        "icu_properties_data",
+    ] {
+        assert!(
+            source.contains(&format!("use {anchor} as _;")),
+            "{anchor} is not named in code"
+        );
+    }
     let lock = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"),
     )
     .expect("Cargo.lock")
     .replace('\r', "");
-    assert!(
-        lock.contains("name = \"icu_normalizer_data\"\nversion = \"2.3.0\"\n"),
-        "icu_normalizer_data moved off 2.3.0"
-    );
+    for krate in [
+        "icu_normalizer",
+        "icu_normalizer_data",
+        "icu_properties",
+        "icu_properties_data",
+    ] {
+        assert!(
+            lock.contains(&format!("name = \"{krate}\"\nversion = \"2.3.0\"\n")),
+            "{krate} moved off 2.3.0"
+        );
+    }
 }
 
 /// Every non-test `.rs` file under `dir`, with each file's production code
@@ -565,6 +583,10 @@ fn the_self_check_passes_the_real_normalization_and_fails_a_different_one() {
     ] {
         let error = super::self_check_with(&wrong).expect_err(name);
         assert!(error.contains("normalization"), "{name}: {error}");
+        assert!(
+            error.contains("known answer #"),
+            "{name} must name the answer: {error}"
+        );
     }
 }
 

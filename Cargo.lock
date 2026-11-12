@@ -1939,6 +1939,8 @@ dependencies = [
  "iana-time-zone",
  "icu_normalizer",
  "icu_normalizer_data",
+ "icu_properties",
+ "icu_properties_data",
  "indexmap",
  "jsonschema",
  "jsonwebtoken",

@@ -10,6 +10,8 @@ use crate::wiped_bytes::WipedBytes;
 // Names the NFC data crate so a dependency cleanup cannot drop its exact pin in
 // Cargo.toml: `cargo install` honours that pin, and ignores Cargo.lock.
 use icu_normalizer_data as _;
+use icu_properties as _;
+use icu_properties_data as _;
 
 /// The key's length in bytes, and so its hex text's length in digits / 2.
 const KEY_BYTES: usize = 32;
@@ -98,17 +100,26 @@ const KNOWN_ANSWERS: &[(&str, &str)] = &[
     ("a\u{307}\u{323}", "\u{1ea1}\u{307}"),
     ("\u{fb01}", "\u{fb01}"),
     ("\u{ff21}", "\u{ff41}"),
+    // Trim: blank-looking characters that are not White_Space stay; inner whitespace stays;
+    // next line and line separator pad like any other white space.
+    ("\u{200b}Ada\u{200b}", "\u{200b}ada\u{200b}"),
+    ("\u{feff}Ada", "\u{feff}ada"),
+    ("Ada\u{a0}Lovelace", "ada\u{a0}lovelace"),
+    ("\u{85}Ada\u{2028}", "ada"),
+    // Final sigma looks back over case-ignorable characters too.
+    ("\u{391}.\u{3a3}", "\u{3b1}.\u{3c2}"),
+    ("\u{391}\u{ad}\u{3a3}", "\u{3b1}\u{ad}\u{3c2}"),
 ];
 
 /// Run [`KNOWN_ANSWERS`] through `normalizer`; the first miss is the error.
 pub(crate) fn self_check_with(normalizer: &dyn Fn(&str) -> String) -> Result<(), String> {
-    for (input, expected) in KNOWN_ANSWERS {
+    for (index, (input, expected)) in KNOWN_ANSWERS.iter().enumerate() {
         let got = normalizer(input);
         if got != *expected {
             return Err(format!(
                 "this build's email normalization differs from the one the retained audit rows were \
-                 hashed with (input U+{:04X}... gave {} code points, expected {}): rebuild with the \
-                 pinned dependencies",
+                 hashed with (known answer #{index}, input U+{:04X}... gave {} code points, \
+                 expected {}): rebuild with the pinned dependencies",
                 input.chars().next().map_or(0, u32::from),
                 got.chars().count(),
                 expected.chars().count()

@@ -184,6 +184,8 @@ url = "2.5"
 # direct dependency only to pin it; email_hash.rs names it so it stays.
 icu_normalizer = { version = "=2.3.0", default-features = false, features = ["compiled_data"] }
 icu_normalizer_data = "=2.3.0"
+icu_properties = { version = "=2.3.0", default-features = false }
+icu_properties_data = "=2.3.0"
 uuid = { version = "1.23", features = ["v4", "fast-rng"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 # IANA zones for `schedule.tick` cron expressions (MIK-7720)
