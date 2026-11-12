@@ -371,7 +371,7 @@ fn overwrite_decision() {
 fn reject_decision_overwrites(
     owner: &mut JournalSession,
     token: &IntentId,
-    original: &Decision,
+    original: &JournalDecision,
     path: &Path,
     before: &[u8],
 ) {
