@@ -1,0 +1,226 @@
+# path, method, request shape, caller, answer. One route per file; a digest named in ../ui_access_matrix_bodies.tsv is written as status:@name.
+/ui/api/gateway/restart	DELETE	plain	AdminKey	405
+/ui/api/gateway/restart	DELETE	plain	AdminKeyUnmapped	405
+/ui/api/gateway/restart	DELETE	plain	AuthOff	405
+/ui/api/gateway/restart	DELETE	plain	Bearer	405
+/ui/api/gateway/restart	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	DELETE	plain	OidcAdmin	405
+/ui/api/gateway/restart	DELETE	plain	OidcAuditor	405
+/ui/api/gateway/restart	DELETE	plain	OidcDeveloper	405
+/ui/api/gateway/restart	DELETE	plain	OidcDeveloperNoIssuer	405
+/ui/api/gateway/restart	DELETE	plain	OidcDeveloperNoSubject	405
+/ui/api/gateway/restart	DELETE	plain	OidcReviewer	405
+/ui/api/gateway/restart	DELETE	plain	OidcUnmapped	405
+/ui/api/gateway/restart	DELETE	plain	Session	405
+/ui/api/gateway/restart	DELETE	plain	StandardKey	405
+/ui/api/gateway/restart	GET	bad-query	AdminKey	200
+/ui/api/gateway/restart	GET	bad-query	AdminKeyUnmapped	200
+/ui/api/gateway/restart	GET	bad-query	AuthOff	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	bad-query	Bearer	200
+/ui/api/gateway/restart	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	GET	bad-query	OidcAdmin	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	bad-query	OidcAuditor	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	bad-query	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	bad-query	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	bad-query	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	bad-query	OidcReviewer	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	bad-query	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	bad-query	Session	200
+/ui/api/gateway/restart	GET	bad-query	StandardKey	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	plain	AdminKey	200
+/ui/api/gateway/restart	GET	plain	AdminKeyUnmapped	200
+/ui/api/gateway/restart	GET	plain	AuthOff	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	plain	Bearer	200
+/ui/api/gateway/restart	GET	plain	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	GET	plain	OidcAdmin	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	plain	OidcAuditor	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	plain	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	plain	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	plain	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	plain	OidcReviewer	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	plain	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/gateway/restart	GET	plain	Session	200
+/ui/api/gateway/restart	GET	plain	StandardKey	403:error="Admin authentication required"
+/ui/api/gateway/restart	HEAD	plain	AdminKey	200
+/ui/api/gateway/restart	HEAD	plain	AdminKeyUnmapped	200
+/ui/api/gateway/restart	HEAD	plain	AuthOff	403
+/ui/api/gateway/restart	HEAD	plain	Bearer	200
+/ui/api/gateway/restart	HEAD	plain	NoKey	401
+/ui/api/gateway/restart	HEAD	plain	NoKeyPublicStatus	401
+/ui/api/gateway/restart	HEAD	plain	OidcAdmin	403
+/ui/api/gateway/restart	HEAD	plain	OidcAuditor	403
+/ui/api/gateway/restart	HEAD	plain	OidcDeveloper	403
+/ui/api/gateway/restart	HEAD	plain	OidcDeveloperNoIssuer	403
+/ui/api/gateway/restart	HEAD	plain	OidcDeveloperNoSubject	403
+/ui/api/gateway/restart	HEAD	plain	OidcReviewer	403
+/ui/api/gateway/restart	HEAD	plain	OidcUnmapped	403
+/ui/api/gateway/restart	HEAD	plain	Session	200
+/ui/api/gateway/restart	HEAD	plain	StandardKey	403
+/ui/api/gateway/restart	OPTIONS	plain	AdminKey	405
+/ui/api/gateway/restart	OPTIONS	plain	AdminKeyUnmapped	405
+/ui/api/gateway/restart	OPTIONS	plain	AuthOff	405
+/ui/api/gateway/restart	OPTIONS	plain	Bearer	405
+/ui/api/gateway/restart	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	OPTIONS	plain	OidcAdmin	405
+/ui/api/gateway/restart	OPTIONS	plain	OidcAuditor	405
+/ui/api/gateway/restart	OPTIONS	plain	OidcDeveloper	405
+/ui/api/gateway/restart	OPTIONS	plain	OidcDeveloperNoIssuer	405
+/ui/api/gateway/restart	OPTIONS	plain	OidcDeveloperNoSubject	405
+/ui/api/gateway/restart	OPTIONS	plain	OidcReviewer	405
+/ui/api/gateway/restart	OPTIONS	plain	OidcUnmapped	405
+/ui/api/gateway/restart	OPTIONS	plain	Session	405
+/ui/api/gateway/restart	OPTIONS	plain	StandardKey	405
+/ui/api/gateway/restart	PATCH	bad-json	AdminKey	405
+/ui/api/gateway/restart	PATCH	bad-json	AdminKeyUnmapped	405
+/ui/api/gateway/restart	PATCH	bad-json	AuthOff	405
+/ui/api/gateway/restart	PATCH	bad-json	Bearer	405
+/ui/api/gateway/restart	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	PATCH	bad-json	OidcAdmin	405
+/ui/api/gateway/restart	PATCH	bad-json	OidcAuditor	405
+/ui/api/gateway/restart	PATCH	bad-json	OidcDeveloper	405
+/ui/api/gateway/restart	PATCH	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/gateway/restart	PATCH	bad-json	OidcDeveloperNoSubject	405
+/ui/api/gateway/restart	PATCH	bad-json	OidcReviewer	405
+/ui/api/gateway/restart	PATCH	bad-json	OidcUnmapped	405
+/ui/api/gateway/restart	PATCH	bad-json	Session	405
+/ui/api/gateway/restart	PATCH	bad-json	StandardKey	405
+/ui/api/gateway/restart	PATCH	bad-type	AdminKey	405
+/ui/api/gateway/restart	PATCH	bad-type	AdminKeyUnmapped	405
+/ui/api/gateway/restart	PATCH	bad-type	AuthOff	405
+/ui/api/gateway/restart	PATCH	bad-type	Bearer	405
+/ui/api/gateway/restart	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	PATCH	bad-type	OidcAdmin	405
+/ui/api/gateway/restart	PATCH	bad-type	OidcAuditor	405
+/ui/api/gateway/restart	PATCH	bad-type	OidcDeveloper	405
+/ui/api/gateway/restart	PATCH	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/gateway/restart	PATCH	bad-type	OidcDeveloperNoSubject	405
+/ui/api/gateway/restart	PATCH	bad-type	OidcReviewer	405
+/ui/api/gateway/restart	PATCH	bad-type	OidcUnmapped	405
+/ui/api/gateway/restart	PATCH	bad-type	Session	405
+/ui/api/gateway/restart	PATCH	bad-type	StandardKey	405
+/ui/api/gateway/restart	PATCH	json	AdminKey	405
+/ui/api/gateway/restart	PATCH	json	AdminKeyUnmapped	405
+/ui/api/gateway/restart	PATCH	json	AuthOff	405
+/ui/api/gateway/restart	PATCH	json	Bearer	405
+/ui/api/gateway/restart	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	PATCH	json	OidcAdmin	405
+/ui/api/gateway/restart	PATCH	json	OidcAuditor	405
+/ui/api/gateway/restart	PATCH	json	OidcDeveloper	405
+/ui/api/gateway/restart	PATCH	json	OidcDeveloperNoIssuer	405
+/ui/api/gateway/restart	PATCH	json	OidcDeveloperNoSubject	405
+/ui/api/gateway/restart	PATCH	json	OidcReviewer	405
+/ui/api/gateway/restart	PATCH	json	OidcUnmapped	405
+/ui/api/gateway/restart	PATCH	json	Session	405
+/ui/api/gateway/restart	PATCH	json	StandardKey	405
+/ui/api/gateway/restart	POST	bad-json	AdminKey	422
+/ui/api/gateway/restart	POST	bad-json	AdminKeyUnmapped	422
+/ui/api/gateway/restart	POST	bad-json	AuthOff	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-json	Bearer	422
+/ui/api/gateway/restart	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	POST	bad-json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-json	Session	422
+/ui/api/gateway/restart	POST	bad-json	StandardKey	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-type	AdminKey	422
+/ui/api/gateway/restart	POST	bad-type	AdminKeyUnmapped	422
+/ui/api/gateway/restart	POST	bad-type	AuthOff	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-type	Bearer	422
+/ui/api/gateway/restart	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	POST	bad-type	OidcAdmin	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-type	OidcAuditor	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-type	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-type	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-type	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-type	OidcReviewer	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-type	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	bad-type	Session	422
+/ui/api/gateway/restart	POST	bad-type	StandardKey	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	json	AdminKey	422
+/ui/api/gateway/restart	POST	json	AdminKeyUnmapped	422
+/ui/api/gateway/restart	POST	json	AuthOff	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	json	Bearer	422
+/ui/api/gateway/restart	POST	json	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	POST	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	POST	json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	json	Session	422
+/ui/api/gateway/restart	POST	json	StandardKey	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	valid	AdminKey	409
+/ui/api/gateway/restart	POST	valid	AdminKeyUnmapped	409
+/ui/api/gateway/restart	POST	valid	AuthOff	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	valid	Bearer	409
+/ui/api/gateway/restart	POST	valid	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	POST	valid	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	POST	valid	OidcAdmin	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	valid	OidcAuditor	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	valid	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	valid	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	valid	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	valid	OidcReviewer	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	valid	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/gateway/restart	POST	valid	Session	409
+/ui/api/gateway/restart	POST	valid	StandardKey	403:error="Admin authentication required"
+/ui/api/gateway/restart	PUT	bad-json	AdminKey	405
+/ui/api/gateway/restart	PUT	bad-json	AdminKeyUnmapped	405
+/ui/api/gateway/restart	PUT	bad-json	AuthOff	405
+/ui/api/gateway/restart	PUT	bad-json	Bearer	405
+/ui/api/gateway/restart	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	PUT	bad-json	OidcAdmin	405
+/ui/api/gateway/restart	PUT	bad-json	OidcAuditor	405
+/ui/api/gateway/restart	PUT	bad-json	OidcDeveloper	405
+/ui/api/gateway/restart	PUT	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/gateway/restart	PUT	bad-json	OidcDeveloperNoSubject	405
+/ui/api/gateway/restart	PUT	bad-json	OidcReviewer	405
+/ui/api/gateway/restart	PUT	bad-json	OidcUnmapped	405
+/ui/api/gateway/restart	PUT	bad-json	Session	405
+/ui/api/gateway/restart	PUT	bad-json	StandardKey	405
+/ui/api/gateway/restart	PUT	bad-type	AdminKey	405
+/ui/api/gateway/restart	PUT	bad-type	AdminKeyUnmapped	405
+/ui/api/gateway/restart	PUT	bad-type	AuthOff	405
+/ui/api/gateway/restart	PUT	bad-type	Bearer	405
+/ui/api/gateway/restart	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	PUT	bad-type	OidcAdmin	405
+/ui/api/gateway/restart	PUT	bad-type	OidcAuditor	405
+/ui/api/gateway/restart	PUT	bad-type	OidcDeveloper	405
+/ui/api/gateway/restart	PUT	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/gateway/restart	PUT	bad-type	OidcDeveloperNoSubject	405
+/ui/api/gateway/restart	PUT	bad-type	OidcReviewer	405
+/ui/api/gateway/restart	PUT	bad-type	OidcUnmapped	405
+/ui/api/gateway/restart	PUT	bad-type	Session	405
+/ui/api/gateway/restart	PUT	bad-type	StandardKey	405
+/ui/api/gateway/restart	PUT	json	AdminKey	405
+/ui/api/gateway/restart	PUT	json	AdminKeyUnmapped	405
+/ui/api/gateway/restart	PUT	json	AuthOff	405
+/ui/api/gateway/restart	PUT	json	Bearer	405
+/ui/api/gateway/restart	PUT	json	NoKey	401:error.code=-32000
+/ui/api/gateway/restart	PUT	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway/restart	PUT	json	OidcAdmin	405
+/ui/api/gateway/restart	PUT	json	OidcAuditor	405
+/ui/api/gateway/restart	PUT	json	OidcDeveloper	405
+/ui/api/gateway/restart	PUT	json	OidcDeveloperNoIssuer	405
+/ui/api/gateway/restart	PUT	json	OidcDeveloperNoSubject	405
+/ui/api/gateway/restart	PUT	json	OidcReviewer	405
+/ui/api/gateway/restart	PUT	json	OidcUnmapped	405
+/ui/api/gateway/restart	PUT	json	Session	405
+/ui/api/gateway/restart	PUT	json	StandardKey	405
