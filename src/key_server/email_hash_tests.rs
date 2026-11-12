@@ -631,7 +631,14 @@ fn issuance_hashes_a_padded_claim_like_a_clean_one() {
     };
     assert_eq!(record(" Ada@corp.invalid \n"), record("Ada@corp.invalid"));
     assert!(record("Ada@corp.invalid").is_some());
-    assert_eq!(record("  \t "), None, "a blank claim is no email");
+    // A whitespace-only claim goes through the same trim and hashes as the empty
+    // string: the record still carries a hash, as it did for any non-empty claim.
+    assert_eq!(record("  \t "), Some(key.hash("")));
+    assert_eq!(
+        record(""),
+        None,
+        "an empty claim carries no email hash, as before"
+    );
 }
 
 /// Regenerates `email_hash/case_v1.rs` from the standard library. Run it only
