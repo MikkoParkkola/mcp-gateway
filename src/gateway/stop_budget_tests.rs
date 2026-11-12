@@ -251,8 +251,14 @@ fn the_budget_after_the_listener_never_refuses_and_never_goes_before_the_trigger
         let t0 = Instant::now();
         let b = StopBudget::fixed_at(t0, total);
         assert!(b.listener_end() >= t0, "Dl for {total:?}");
-        assert!(b.listener_end() <= b.post_listener_end(), "Dl <= Dp for {total:?}");
-        assert!(b.post_listener_end() <= b.backend_end(), "Dp <= Db for {total:?}");
+        assert!(
+            b.listener_end() <= b.post_listener_end(),
+            "Dl <= Dp for {total:?}"
+        );
+        assert!(
+            b.post_listener_end() <= b.backend_end(),
+            "Dp <= Db for {total:?}"
+        );
         assert!(b.backend_end() <= b.end(), "Db <= D for {total:?}");
         assert_eq!(b.end(), t0 + total, "D for {total:?}");
     }
