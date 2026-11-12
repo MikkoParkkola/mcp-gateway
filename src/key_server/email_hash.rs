@@ -207,17 +207,16 @@ impl EmailHashKey {
     /// Parse the stored or configured text: exactly 64 lowercase hex digits,
     /// with one trailing newline allowed (the record key file's rule).
     pub(crate) fn from_hex(text: &str) -> Result<Self, KeyTextError> {
-        let key = Self::parse_hex(text)?;
-        process_check().map_err(KeyTextError::Normalization)?;
-        Ok(key)
+        Self::from_hex_checked(text, &process_check)
     }
 
     /// [`Self::from_hex`] with the normalization check passed in, so a row can
-    /// give it a failing one. Test-only: no production code can build a key
-    /// with a check of its own choosing. The text is judged first; then the
-    /// check runs, and a failure fails the key, with the check's own words.
-    #[cfg(test)]
-    pub(crate) fn from_hex_checked(
+    /// give it a failing one. Private to this module (its test children reach
+    /// it): no other code in the crate can build a key with a check of its own
+    /// choosing, and `from_hex` itself runs through this body, so the rows
+    /// judge the production path. The text is judged first; then the check
+    /// runs, and a failure fails the key, with the check's own words.
+    fn from_hex_checked(
         text: &str,
         check: &dyn Fn() -> Result<(), String>,
     ) -> Result<Self, KeyTextError> {
