@@ -446,6 +446,7 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         "order": "recorded",
         "join_incomplete": counts.join_incomplete,
         "answer_integrity_failed": counts.answer_integrity_failed,
+        "answer_integrity_unattributed": counts.unattributed(),
         "answer_integrity_scope": SCOPE_LABEL,
     }))
     .into_response()
@@ -613,9 +614,6 @@ mod answer_integrity2_tests;
 #[path = "answer_integrity_tests.rs"]
 mod answer_integrity_tests;
 #[cfg(test)]
-#[path = "answer_unattributed_tests.rs"]
-mod answer_unattributed_tests;
-#[cfg(test)]
 #[path = "answer_joiner_tests.rs"]
 mod answer_joiner_tests;
 #[cfg(test)]
@@ -645,6 +643,9 @@ mod answer_segment_tests;
 #[cfg(test)]
 #[path = "answer_stream_tests.rs"]
 mod answer_stream_tests;
+#[cfg(test)]
+#[path = "answer_unattributed_tests.rs"]
+mod answer_unattributed_tests;
 #[cfg(test)]
 #[path = "decision_export_tests.rs"]
 mod decision_export_tests;

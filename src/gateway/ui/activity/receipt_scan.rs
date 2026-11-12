@@ -113,7 +113,15 @@ pub(super) fn scan(
             }
             // Continuity covers every record; the join takes only this call's
             // trace, so other traces cannot evict its record.
-            if trace.is_some() && entry.get("trace_id").and_then(Value::as_str) == trace {
+            // A line with no usable trace is fed too: if it fails its integrity
+            // check, no call can be told apart from the delivery it may have been.
+            let untraced = entry
+                .get("trace_id")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty);
+            if trace.is_some()
+                && (untraced || entry.get("trace_id").and_then(Value::as_str) == trace)
+            {
                 let line = Line {
                     log: Which::Invocation,
                     entry: entry.clone(),
@@ -183,6 +191,7 @@ fn incomplete_line(why: Why) -> String {
         ),
         Why::Duplicate => "more than one delivery record for this trace: the writer writes one; treated as tampering".into(),
         Why::Chain => "the log chain broke inside the delivery window, so the delivery record cannot be vouched for; effect not stated".into(),
+        Why::Unattributed => "a line after this call failed its integrity check and names no trace, so a delivery record for this call cannot be ruled out; effect not stated".into(),
         Why::Evicted | Why::Overflow => "the join was incomplete".into(),
     }
 }

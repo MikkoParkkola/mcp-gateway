@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::answer::{
     DELIVERY_WINDOW, Delivery, Effect, Findings, Joined, MAX_EVICTED, MAX_JOINED, MAX_PENDING,
@@ -26,6 +26,21 @@ use crate::security::transparency_log::signature::SignatureState;
 pub(super) use super::reader::Seen;
 
 /// What is held for one trace.
+/// Where the line that failed integrity and names no trace sits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Position {
+    segment: u64,
+    offset: Option<u64>,
+}
+
+impl Position {
+    /// The manifest and list field: the log, segment and byte offset (null for
+    /// a record the writer just announced).
+    pub(super) fn to_json(self) -> Value {
+        json!({"log": "invocation", "segment": self.segment, "offset": self.offset})
+    }
+}
+
 enum Held {
     One(Delivery),
     Bad(Why),
@@ -42,6 +57,9 @@ pub(super) struct Joiner<'a, 's> {
     joined: HashMap<String, Delivery>,
     evicted: HashMap<String, Why>,
     overflowed: bool,
+    /// The first line seen that failed its integrity check and names no usable
+    /// trace: older calls left without a delivery cannot rule it out.
+    unattributed: Option<Position>,
     /// Admitted calls joined incomplete, or unfinished with no record.
     pub(super) join_incomplete: usize,
     /// Calls whose record failed the trust rule or was duplicated.
@@ -50,6 +68,11 @@ pub(super) struct Joiner<'a, 's> {
 
 fn str_of<'a>(entry: &'a Value, key: &str) -> Option<&'a str> {
     entry.get(key).and_then(Value::as_str)
+}
+
+/// The line's trace id, when it is a non-empty string.
+fn usable_trace(line: &Line) -> Option<&str> {
+    str_of(&line.entry, "trace_id").filter(|t| !t.is_empty())
 }
 
 /// The longest a finding's text field is kept: the writer's kinds and parts
@@ -115,6 +138,7 @@ impl<'a, 's> Joiner<'a, 's> {
             joined: HashMap::new(),
             evicted: HashMap::new(),
             overflowed: false,
+            unattributed: None,
             join_incomplete: 0,
             answer_integrity_failed: 0,
         }
@@ -154,14 +178,18 @@ impl<'a, 's> Joiner<'a, 's> {
         if kind_of(line).is_some() {
             // A delivery record edited to look like a listed row would drop out
             // of the join unseen, so a tampered line still poisons its trace.
-            if let Some(trace) = str_of(&line.entry, "trace_id")
-                && let Some(why) = self.tampered(line)
-            {
-                self.hold_bad(trace, why);
+            match usable_trace(line) {
+                Some(trace) => {
+                    if let Some(why) = self.tampered(line) {
+                        self.hold_bad(trace, why);
+                    }
+                }
+                None => self.note_unattributed(line),
             }
             return false;
         }
-        let Some(trace) = str_of(&line.entry, "trace_id") else {
+        let Some(trace) = usable_trace(line) else {
+            self.note_unattributed(line);
             return false;
         };
         match self.trust(line) {
@@ -179,6 +207,22 @@ impl<'a, 's> Joiner<'a, 's> {
 }
 
 impl Joiner<'_, '_> {
+    /// A line with no usable trace that fails its integrity check cannot be
+    /// tied to a call; the first one seen is kept.
+    fn note_unattributed(&mut self, line: &Line) {
+        if self.unattributed.is_none() && self.tampered(line).is_some() {
+            self.unattributed = Some(Position {
+                segment: line.segment,
+                offset: line.span.map(|(offset, _)| offset),
+            });
+        }
+    }
+
+    /// The position for the list's and export's `answer_integrity_unattributed`.
+    pub(super) fn unattributed(&self) -> Value {
+        self.unattributed.map_or(Value::Null, Position::to_json)
+    }
+
     /// A record that cannot be believed poisons its trace.
     fn hold_bad(&mut self, trace: &str, why: Why) {
         if self.joined.remove(trace).is_some() {
@@ -286,6 +330,7 @@ impl Joiner<'_, '_> {
                 Joined::Found(found)
             }
             Some(Held::Bad(why)) => Joined::Incomplete(*why),
+            None if self.unattributed.is_some() => Joined::Incomplete(Why::Unattributed),
             None if seen.head_covered || seen.above >= DELIVERY_WINDOW => {
                 Joined::NoRecord(Searched::Finished)
             }

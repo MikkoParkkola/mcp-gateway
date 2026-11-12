@@ -502,6 +502,7 @@ fn the_whole_download_stays_within_the_byte_cap() {
         truncated: super::Truncated::Bytes,
         join_incomplete: 0,
         answer_integrity_failed: 0,
+        answer_integrity_unattributed: serde_json::Value::Null,
         signing_anchor: ["no_secret"; 2],
     })
     .len();
