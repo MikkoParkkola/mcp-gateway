@@ -27,14 +27,14 @@ fn in_ranges(table: &[(u32, u32)], c: char) -> bool {
 }
 
 /// Whether the first character that is not case-ignorable is cased: the
-/// Final_Sigma look-around, over the frozen tables.
+/// `Final_Sigma` look-around, over the frozen tables.
 pub(super) fn case_ignorable_then_cased(mut chars: impl Iterator<Item = char>) -> bool {
     chars
         .find(|&c| !in_ranges(&CASE_IGNORABLE, c))
         .is_some_and(|c| in_ranges(&CASED_TERMINAL, c))
 }
 
-/// Whether `c` is Unicode White_Space (version 17.0.0), from the frozen table:
+/// Whether `c` is Unicode `White_Space` (version 17.0.0), from the frozen table:
 /// what the trim at the start of normalization removes.
 pub(super) fn is_white_space(c: char) -> bool {
     in_ranges(&WHITE_SPACE, c)

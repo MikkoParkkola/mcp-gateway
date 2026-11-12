@@ -21,7 +21,7 @@ pub(crate) const VERSION: u32 = 1;
 /// prefix, so its hashes cannot collide with these.
 const DOMAIN: &[u8] = b"email-v1\0";
 
-/// Normalization v1: trim Unicode White_Space, NFC, Unicode lowercase, NFC again. The second NFC is
+/// Normalization v1: trim Unicode `White_Space`, NFC, Unicode lowercase, NFC again. The second NFC is
 /// needed because lowercasing can emit a decomposed sequence (U+0130 becomes
 /// `i` and a combining dot), so one pass alone is not stable under a second.
 /// Canonically equivalent spellings meet; compatibility forms (a ligature,
@@ -44,14 +44,14 @@ pub(crate) fn normalize(email: &str) -> String {
 /// Version 1's lowercase: the standard library's `str::to_lowercase` at
 /// Unicode 17.0.0, over the crate's frozen tables. Each code point goes
 /// through the per-code-point table (ASCII by the locale-free ASCII rule);
-/// capital Sigma (U+03A3) follows Unicode's Final_Sigma rule: it becomes final
+/// capital Sigma (U+03A3) follows Unicode's `Final_Sigma` rule: it becomes final
 /// sigma when a cased letter precedes it and none follows, skipping
 /// case-ignorable characters on both sides. That is the only context-sensitive
 /// rule in the default lowercase mapping (SpecialCasing.txt).
-/// Version 1's trim: Unicode White_Space at both ends, from the crate's frozen
+/// Version 1's trim: Unicode `White_Space` at both ends, from the crate's frozen
 /// Unicode 17.0.0 list (not `str::trim`, which follows the toolchain). Inner
 /// whitespace stays, and so do characters that only look blank (zero-width
-/// space, byte-order mark), which are not White_Space.
+/// space, byte-order mark), which are not `White_Space`.
 pub(crate) fn trim_v1(text: &str) -> &str {
     text.trim_matches(case_v1::is_white_space)
 }

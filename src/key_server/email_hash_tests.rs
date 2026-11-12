@@ -207,7 +207,7 @@ fn lower_v1_is_std_for_every_code_point_at_unicode_17() {
 /// NORM.1: the final-sigma rule, over every character as a neighbour. For each
 /// scalar value `c`, five strings that put `c` before, after or between
 /// capital Sigmas lowercase exactly as `str::to_lowercase` does, with no
-/// expected differences. This is what freezes Cased and Case_Ignorable.
+/// expected differences. This is what freezes Cased and `Case_Ignorable`.
 /// Mutant: drop or add a range in either table.
 #[test]
 fn final_sigma_matches_std_with_every_character_as_a_neighbour() {
@@ -288,7 +288,7 @@ fn whole_strings_over_an_adversarial_alphabet_match_std() {
 }
 
 /// NORM.1: answers computed independently (Python `unicodedata`, per code
-/// point, and the Final_Sigma rule by hand), on any toolchain.
+/// point, and the `Final_Sigma` rule by hand), on any toolchain.
 /// Mutant: any table entry or the Sigma rule.
 #[test]
 fn lower_v1_golden_vectors() {
@@ -583,10 +583,10 @@ fn the_key_server_start_runs_the_self_check_before_any_key() {
     );
 }
 
-/// NORM.4: surrounding Unicode White_Space never changes the hash, so the email
-/// an IdP sends and the address an admin pastes meet however they are padded:
+/// NORM.4: surrounding Unicode `White_Space` never changes the hash, so the email
+/// an `IdP` sends and the address an admin pastes meet however they are padded:
 /// ASCII, no-break space (U+00A0), ideographic space (U+3000), next line
-/// (U+0085) and the rest of the Unicode 17 White_Space set. Whitespace inside
+/// (U+0085) and the rest of the Unicode 17 `White_Space` set. Whitespace inside
 /// the address, and characters that merely look blank (zero-width space,
 /// byte-order mark), are part of the address and do change it.
 /// Mutant: no trim, one end only, an ASCII-only trim, an inner trim.
@@ -649,7 +649,7 @@ fn padding_does_not_change_the_hash_and_inner_or_blank_looking_characters_do() {
 /// NORM.4: the frozen trim is exactly the standard library's trim at Unicode
 /// 17.0.0, for every scalar value as padding on either side; on a later
 /// toolchain the frozen list decides and this stands down.
-/// Mutant: drop or add a code point in the White_Space table.
+/// Mutant: drop or add a code point in the `White_Space` table.
 #[test]
 fn trim_v1_is_std_trim_for_every_code_point_at_unicode_17() {
     if !std_is_unicode_17() {
