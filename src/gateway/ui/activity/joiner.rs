@@ -95,6 +95,17 @@ fn project(entry: &Value, unverifiable: bool) -> Delivery {
     }
 }
 
+/// Why a line was edited: a failed hash or signature, or a missing signature
+/// after signing began. A plain unsigned line, one written before signing, is
+/// not tampering: legacy rows carry trace ids too.
+fn why_edited(state: SignatureState, integrity: Option<&str>) -> Option<Why> {
+    match state {
+        SignatureState::Invalid if integrity == Some("sig_missing") => Some(Why::Unsigned),
+        SignatureState::Invalid => Some(Why::Invalid),
+        _ => None,
+    }
+}
+
 impl<'a, 's> Joiner<'a, 's> {
     pub(super) fn new(check: &'a Check<'s>) -> Self {
         Self {
@@ -115,21 +126,39 @@ impl<'a, 's> Joiner<'a, 's> {
     /// believed, even one written before signing began.
     fn trust(&self, line: &Line) -> Result<bool, Why> {
         let judged = self.check.judge(line);
+        if let Some(why) = why_edited(judged.state, judged.integrity) {
+            return Err(why);
+        }
         match judged.state {
-            SignatureState::Invalid if judged.integrity == Some("sig_missing") => {
-                Err(Why::Unsigned)
-            }
-            SignatureState::Invalid => Err(Why::Invalid),
             SignatureState::Valid => Ok(false),
             SignatureState::Unsigned if self.check.has_secret() => Err(Why::Unsigned),
             SignatureState::Unsigned | SignatureState::SignedUnverifiable => Ok(true),
+            // `why_edited` has returned for this already; failing closed regardless.
+            SignatureState::Invalid => Err(Why::Invalid),
         }
+    }
+
+    /// Why a line was edited, for a line that is not a delivery record's own
+    /// kind: see [`why_edited`].
+    fn tampered(&self, line: &Line) -> Option<Why> {
+        let judged = self.check.judge(line);
+        why_edited(judged.state, judged.integrity)
     }
 
     /// Fold a scanned invocation-log line that is not a listed row. `true`
     /// when the line carried a trace and was routed here: the caller drops it.
     pub(super) fn observe(&mut self, line: &Line) -> bool {
-        if line.log != Which::Invocation || kind_of(line).is_some() {
+        if line.log != Which::Invocation {
+            return false;
+        }
+        if kind_of(line).is_some() {
+            // A delivery record edited to look like a listed row would drop out
+            // of the join unseen, so a tampered line still poisons its trace.
+            if let Some(trace) = str_of(&line.entry, "trace_id")
+                && let Some(why) = self.tampered(line)
+            {
+                self.hold_bad(trace, why);
+            }
             return false;
         }
         let Some(trace) = str_of(&line.entry, "trace_id") else {
