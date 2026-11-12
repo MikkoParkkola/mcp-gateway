@@ -8,6 +8,7 @@
 use chrono::{DateTime, FixedOffset};
 use serde_json::{Map, Value};
 
+use super::answer::{Effect, Joined, Searched};
 use super::reader::{Line, Which};
 use crate::gateway::authz::BackendGrant;
 use crate::security::decision_record::{Decision, read};
@@ -86,6 +87,12 @@ impl<'a> Check<'a> {
             checked: RefCell::default(),
             legacy_faults: RefCell::default(),
         }
+    }
+
+    /// Whether this gateway holds a log secret, so an unsigned record is one
+    /// it could have verified and cannot vouch for.
+    pub(super) fn has_secret(&self) -> bool {
+        self.secret.is_some()
     }
 
     fn log(&self, which: Which) -> Option<(&Path, &Anchor)> {
@@ -246,7 +253,7 @@ fn copy(row: &mut Map<String, Value>, entry: &Value, keys: &[&str]) {
 }
 
 /// The row for `line`, or `None` for a kind Activity does not list.
-pub(super) fn row(line: &Line, check: &Check<'_>) -> Option<Value> {
+pub(super) fn row(line: &Line, check: &Check<'_>, joined: &Joined) -> Option<Value> {
     let kind = kind_of(line)?;
     let e = &line.entry;
     let mut row = Map::new();
@@ -300,6 +307,7 @@ pub(super) fn row(line: &Line, check: &Check<'_>) -> Option<Value> {
             if decision.is_some_and(|d| d.request_findings_truncated) {
                 row.insert("findings_truncated".into(), true.into());
             }
+            joined.write_into(&mut row);
         }
         Kind::Refusal => {
             copy(&mut row, e, &["server", "tool", "trace_id"]);
@@ -358,16 +366,27 @@ pub(super) struct Filter {
     pub(super) rule: Option<String>,
     pub(super) from: Option<DateTime<FixedOffset>>,
     pub(super) to: Option<DateTime<FixedOffset>>,
+    pub(super) effect: Option<Effect>,
+    /// `outcome=cleaned`: a call whose answer was annotated or rewritten.
+    pub(super) cleaned: bool,
 }
 
 impl Filter {
     /// Whether `line` (of `kind`) passes every filter.
-    pub(super) fn matches(&self, line: &Line, kind: Kind) -> bool {
+    pub(super) fn matches(&self, line: &Line, kind: Kind, joined: &Joined) -> bool {
         let e = &line.entry;
         let who_account = || e.get("who").and_then(|w| str_field(w, "account"));
         if let Some(want) = self.outcome
             && (!kind.is_call() || feed_outcome(e) != Some(want))
         {
+            return false;
+        }
+        if let Some(want) = self.effect
+            && (kind != Kind::Call || joined.effect() != want)
+        {
+            return false;
+        }
+        if self.cleaned && (kind != Kind::Call || !joined.effect().is_cleaned()) {
             return false;
         }
         if let Some(server) = &self.server {
@@ -420,6 +439,9 @@ impl Filter {
 /// A Developer's own rows: calls whose verified `(authority, subject)` is the
 /// caller's. Never `who.principal`, which changes on every token refresh; a
 /// row with no verified subject, and every config or admin row, is no one's.
+/// What non-call kinds pass where a join is asked for.
+pub(super) const NOT_A_CALL: Joined = Joined::NoRecord(Searched::NotACall);
+
 pub(super) fn owned_by(line: &Line, kind: Kind, issuer: &str, subject: &str) -> bool {
     kind.is_call()
         && line.entry.get("who").is_some_and(|w| {

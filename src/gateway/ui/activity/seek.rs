@@ -22,6 +22,8 @@ const CHUNK: u64 = 64 * 1024;
 pub(super) struct Found {
     pub(super) entry: Value,
     pub(super) segment: u64,
+    /// The offset after the record's newline.
+    pub(super) end: u64,
     /// The line's start and length (no newline), for the signing anchor.
     pub(super) offset: u64,
     pub(super) len: u64,
@@ -173,12 +175,13 @@ pub(super) fn seek(log: &Path, counter: u64, reads: &mut Reads) -> io::Result<Op
             continue;
         }
         match first_readable(&mut file, start, hi, reads)? {
-            Some((c, bytes, offset, _)) if c == counter => {
+            Some((c, bytes, offset, end)) if c == counter => {
                 let entry = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
                 let len = bytes.len() as u64;
                 return Ok(Some(Found {
                     entry,
                     segment,
+                    end,
                     offset,
                     len,
                 }));

@@ -5,6 +5,8 @@
 //! internet. Every client is built by the production `client`, with only data
 //! (base URL, roots, proxy snapshot) swapped.
 
+use crate::cli::stdout::println;
+
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 

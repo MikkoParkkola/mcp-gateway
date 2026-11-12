@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+use crate::cli::stdout::print;
+
 use std::fmt::Write as _;
 use std::process::ExitCode;
 

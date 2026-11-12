@@ -226,57 +226,35 @@ fn s12_no_definition_outside_the_macro_file() {
 
 const MACRO_FILE: &str = "src/mutant_macro.rs";
 
-/// S14: both crate roots carry the mutant machinery, so a
-/// site in the binary's modules compiles and switches like one in the
-/// library's: each root declares the macro file first, `#[macro_use]`, and the
-/// binary compiles `src/mutant.rs` again as its own private `mutant` module
-/// (as it does `clock.rs`), which is what the macro's `crate::mutant::on`
-/// names there.
+/// S14: the library owns the mutant machinery and all mutation sites.
+/// Its first module supplies the macros; `crate::mutant::on` names the switch.
 #[test]
-fn s14_both_crate_roots_carry_the_macros_and_the_switch() {
+fn s14_library_root_carries_the_macros_and_the_switch() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    for crate_root in ["src/lib.rs", "src/main.rs"] {
-        let text = std::fs::read_to_string(root.join(crate_root)).expect("read the crate root");
-        let file = syn::parse_file(&text).expect("parse the crate root");
-        // macro_rules! is textually scoped: the macro module must be the first
-        // module, `#[macro_use]`, or a site in an earlier module cannot see it.
-        // A module, not include!(): the source walkers follow `mod` items.
-        let first_mod = file.items.iter().find_map(|item| match item {
-            syn::Item::Mod(m) => Some(m),
-            _ => None,
-        });
-        let first_mod = first_mod.unwrap_or_else(|| panic!("{crate_root} declares no module"));
-        assert!(
-            first_mod.ident == "mutant_macro"
-                && first_mod
-                    .attrs
-                    .iter()
-                    .any(|a| a.path().is_ident("macro_use")),
-            "{crate_root}: the first module must be `#[macro_use] mod mutant_macro;`"
-        );
-        let module = file.items.iter().find_map(|item| match item {
-            syn::Item::Mod(m) if m.ident == "mutant" => Some(m),
-            _ => None,
-        });
-        let module = module.unwrap_or_else(|| panic!("{crate_root} declares no `mod mutant`"));
-        if crate_root == "src/main.rs" {
-            let path = module.attrs.iter().find_map(|a| match &a.meta {
-                syn::Meta::NameValue(nv) if nv.path.is_ident("path") => match &nv.value {
-                    syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(s),
-                        ..
-                    }) => Some(s.value()),
-                    _ => None,
-                },
-                _ => None,
-            });
-            assert_eq!(
-                path.as_deref(),
-                Some("mutant.rs"),
-                "src/main.rs must compile src/mutant.rs as its own `mutant` module"
-            );
-        }
-    }
+    let text = std::fs::read_to_string(root.join("src/lib.rs")).expect("read the crate root");
+    let file = syn::parse_file(&text).expect("parse the crate root");
+    // macro_rules! is textually scoped: the macro module must be the first
+    // module, `#[macro_use]`, or a site in an earlier module cannot see it.
+    // A module, not include!(): the source walkers follow `mod` items.
+    let first_mod = file.items.iter().find_map(|item| match item {
+        syn::Item::Mod(m) => Some(m),
+        _ => None,
+    });
+    let first_mod = first_mod.expect("src/lib.rs declares a module");
+    assert!(
+        first_mod.ident == "mutant_macro"
+            && first_mod
+                .attrs
+                .iter()
+                .any(|a| a.path().is_ident("macro_use")),
+        "src/lib.rs: the first module must be `#[macro_use] mod mutant_macro;`"
+    );
+    assert!(
+        file.items
+            .iter()
+            .any(|item| matches!(item, syn::Item::Mod(m) if m.ident == "mutant")),
+        "src/lib.rs declares no `mod mutant`"
+    );
 }
 
 /// S13: a tree with no git metadata (the remote build mirror) is walked on

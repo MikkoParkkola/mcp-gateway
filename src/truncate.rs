@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Cut a string to a budget on a character boundary, with a marker (MIK-8667).
 //!
-//! Compiled into both the library and the binary (`mod truncate;` in each),
-//! like `home_dir.rs`, so neither crate widens its API for it.
+//! Shared by gateway and CLI code within the library, like `home_dir.rs`,
+//! without a public API.
 
 /// What the budget counts.
 #[derive(Clone, Copy, Debug)]
