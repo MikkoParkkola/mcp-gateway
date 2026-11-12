@@ -210,15 +210,12 @@ fn throttled(retry_after_secs: u64) -> Response {
 
 /// How long the body may take to arrive once the caller is admitted and has
 /// paid: a slow body holds a connection, not a permit.
-#[cfg(not(test))]
 const BODY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
-#[cfg(test)]
-const BODY_DEADLINE: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// Read the body, bounded in size and in time. Called only after admission
 /// and the budget, so an unauthorized or over-budget caller's body is never
 /// waited for.
-async fn read_body(request: axum::extract::Request) -> Result<Bytes, Response> {
+pub(super) async fn read_body(request: axum::extract::Request) -> Result<Bytes, Response> {
     let read = axum::body::to_bytes(request.into_body(), MAX_BODY);
     match tokio::time::timeout(BODY_DEADLINE, read).await {
         Ok(Ok(bytes)) => Ok(bytes),

@@ -219,7 +219,7 @@ impl Fx {
             .expect("request");
         self.rt.block_on(async {
             let answer = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(30),
                 crate::gateway::ui::api_router()
                     .with_state(self.state.clone())
                     .oneshot(request),
@@ -485,8 +485,7 @@ fn the_key_id_and_version_are_part_of_the_match() {
 
 /// MIK-9455.LOOKUP.1 and .3: the body is not waited for before admission or
 /// the budget: an anonymous caller and an over-budget admin are answered at
-/// once though their body never arrives; an admitted caller whose body
-/// stalls is cut off with a 408.
+/// once though their body never arrives (the 30 s bound is a hang guard).
 /// Mutant: extract the body before the guard or before the charge.
 #[test]
 fn a_body_that_never_arrives_is_not_waited_for_before_admission_or_payment() {
@@ -496,21 +495,44 @@ fn a_body_that_never_arrives_is_not_waited_for_before_admission_or_payment() {
         refused == StatusCode::UNAUTHORIZED || refused == StatusCode::FORBIDDEN,
         "{refused}"
     );
-    assert_eq!(
-        fx.post_stalled(admin("a")),
-        StatusCode::REQUEST_TIMEOUT,
-        "an admitted stalled body"
-    );
-    assert_eq!(
-        fx.post_stalled(admin("a")),
-        StatusCode::REQUEST_TIMEOUT,
-        "the second permit"
-    );
+    // Spend both permits with two quick malformed attempts.
+    for _ in 0..2 {
+        let (status, _, _) = fx.post(admin("a"), "{ not json");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
     assert_eq!(
         fx.post_stalled(admin("a")),
         StatusCode::TOO_MANY_REQUESTS,
         "no permit left: answered without the body"
     );
+}
+
+/// MIK-9455.LOOKUP.4: an admitted caller whose body stalls is cut off with a
+/// 408 at the deadline, on a paused clock (no real wait).
+/// Mutant: no deadline (the read waits forever).
+#[tokio::test(start_paused = true)]
+async fn a_stalled_body_is_cut_off_at_the_deadline() {
+    let body = Body::from_stream(futures::stream::pending::<
+        Result<axum::body::Bytes, std::io::Error>,
+    >());
+    let request = Request::builder().body(body).expect("request");
+    let refusal = super::key_lookup::read_body(request)
+        .await
+        .expect_err("a body that never arrives is refused");
+    assert_eq!(refusal.status(), StatusCode::REQUEST_TIMEOUT);
+}
+
+/// An oversize body is refused with a 413 before it is all read.
+/// Mutant: no size bound.
+#[tokio::test]
+async fn an_oversize_body_is_refused() {
+    let request = Request::builder()
+        .body(Body::from(vec![b'a'; 9 * 1024]))
+        .expect("request");
+    let refusal = super::key_lookup::read_body(request)
+        .await
+        .expect_err("over the cap");
+    assert_eq!(refusal.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 /// MIK-9455.LOOKUP.2: a window that ends before it starts is refused.
