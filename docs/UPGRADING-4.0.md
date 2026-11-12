@@ -1291,7 +1291,12 @@ ever needs the key's hash, so 4.0 stores the digest instead.
   matching key is refused with 401 and a `warn` naming the key. An expired key does not stop
   the gateway from starting; it logs a `warn` at startup instead. Omitting `expires_at` keeps
   the 3.x behaviour. Removing or renewing a key still needs a config edit and a restart.
-- `auth.bearer_token` and `key_server.admin_token` are unchanged and still plaintext.
+- Existing configs keep working: a literal `auth.bearer_token` still loads, and
+  `key_server.admin_token` is unchanged by this API-key digest migration. New `init`
+  configs contain a reference to an entry in the store selected by `secrets.store`,
+  never the literal admin token. To move an existing literal, supply its value in
+  the gateway process's environment and replace the field with `env:MCP_GATEWAY_TOKEN`,
+  then restart. See [init admin-token storage](../upgrading.d/9430.md).
 - **Library API:** `ApiKeyConfig::key` is now `Option<String>` and is refused at load;
   `ApiKeyConfig::resolve_key()` is replaced by `resolve_digest()`, which returns the 32 digest
   bytes. `ResolvedApiKey::key` is replaced by `digest` and `expires_at`. The new

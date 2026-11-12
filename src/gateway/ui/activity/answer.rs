@@ -123,6 +123,10 @@ pub(super) enum Why {
     /// The receipt's window broke the chain after a record was found: the
     /// record cannot be vouched for.
     Chain,
+    /// A line failed its integrity check and names no usable trace, so the
+    /// failure cannot be tied to a call: every older call left without a
+    /// delivery is indeterminate, never `no_record`.
+    Unattributed,
 }
 
 impl Why {
@@ -132,6 +136,7 @@ impl Why {
             Self::Invalid => Some("invalid"),
             Self::Unsigned => Some("unsigned"),
             Self::Duplicate => Some("duplicate"),
+            Self::Unattributed => Some("indeterminate"),
             Self::Evicted | Self::Overflow | Self::Chain => None,
         }
     }

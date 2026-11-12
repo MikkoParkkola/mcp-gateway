@@ -258,3 +258,54 @@ async fn a_retired_cache_off_switch_still_installs_the_cache() {
         "the response cache is always built"
     );
 }
+
+/// the gateway's events opener must reject an unowned directory
+/// before its opening sweep or any worker can touch the store.
+#[tokio::test]
+#[should_panic(expected = "kept_tempdir")]
+async fn registered_gateway_events_opener_refuses_a_plain_tempdir() {
+    let dir = tempfile::tempdir().expect("an unregistered directory");
+    let path = dir.path().join("events");
+    let data = crate::test_dir_keep::kept_tempdir();
+    let mut config = Config::default();
+    config.events.enabled = true;
+    config.events.store_dir = path.display().to_string();
+    let gateway = Gateway::new(config.clone())
+        .await
+        .expect("gateway constructor")
+        .with_env(pinned_env())
+        .with_data_dir(data.path().to_path_buf());
+    let built = gateway.build_meta_mcp().await.expect("gateway meta layer");
+    let webhooks = Arc::new(parking_lot::RwLock::new(
+        crate::gateway::WebhookRegistry::new(crate::config::WebhookConfig::default()),
+    ));
+    let live = Arc::new(crate::config_reload::LiveConfig::new(config.clone()));
+    let counters = Arc::new(crate::counters::CounterStore::new(0));
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::super::events_wiring::install(
+            &config,
+            &built.meta_mcp,
+            &gateway.backends,
+            &webhooks,
+            &live,
+            crate::events::LiveCredentials::default(),
+            &counters,
+        )
+        .expect("events wiring");
+    }));
+    if let Err(panic) = refused {
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        assert!(
+            message.contains(&path.display().to_string()),
+            "missing store path"
+        );
+        assert!(message.contains("kept_tempdir"), "missing ownership hint");
+        assert!(!path.exists(), "refusal must precede store creation");
+        std::panic::resume_unwind(panic);
+    }
+    // Returning normally makes should_panic fail when the exemption survives.
+}

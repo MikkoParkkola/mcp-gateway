@@ -91,6 +91,11 @@ Stated, not hidden. An operator who wants the daemon sets proxy mode explicitly.
 
 ## Decision B — the token is generated and written to the config, not the keychain
 
+> **Superseded for `init`.** `init` now stores the generated token in the secret
+> store (`secrets.store`, keychain or owner-only files) and writes only a
+> reference into `auth.bearer_token`. The reasoning below records the original
+> decision; see `docs/QUICKSTART.md` ("Read the admin token for a client").
+
 The keychain was the first choice and is wrong. `src/secrets.rs` reads; it does
 not write. `auth.bearer_token` accepts a literal, `env:VAR`, or `auto` — no
 keychain reference exists. And secret-service is absent on Windows and on plenty

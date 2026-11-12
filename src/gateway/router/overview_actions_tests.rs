@@ -22,7 +22,7 @@ fn admin_action(log: &TransparencyLogger, route: &str) {
 async fn o5c_a_rotation_between_windows_reads_the_opened_segment() {
     use crate::security::transparency_log::segments::sealed_path;
     let (mut state, _dir) = fixture(1, false).await;
-    let logs = tempfile::tempdir().expect("log dir");
+    let logs = crate::test_dir_keep::kept_tempdir();
     let log = with_log(&mut state, &logs);
     for i in 0..3 {
         admin_action(&log, &format!("/ui/api/route-{i}"));
@@ -74,7 +74,7 @@ async fn o5_last_actions_are_the_newest_admin_actions() {
     let body = overview(&state).await;
     assert!(body.get("last_actions").is_none(), "no log: {body}");
 
-    let logs = tempfile::tempdir().expect("log dir");
+    let logs = crate::test_dir_keep::kept_tempdir();
     let log = with_log(&mut state, &logs);
     for i in 0..7 {
         admin_action(&log, &format!("/ui/api/route-{i}"));
@@ -121,7 +121,7 @@ async fn o5_last_actions_are_the_newest_admin_actions() {
 async fn o5b_a_skipped_newer_line_makes_the_list_incomplete() {
     use std::io::Write as _;
     let (mut state, _dir) = fixture(1, false).await;
-    let logs = tempfile::tempdir().expect("log dir");
+    let logs = crate::test_dir_keep::kept_tempdir();
     let log = with_log(&mut state, &logs);
     for i in 0..ACTION_ROWS {
         admin_action(&log, &format!("/ui/api/route-{i}"));
@@ -147,7 +147,7 @@ async fn o5b_a_skipped_newer_line_makes_the_list_incomplete() {
 async fn o5c_an_unreadable_newer_record_makes_the_list_incomplete() {
     use std::io::Write as _;
     let (mut state, _dir) = fixture(1, false).await;
-    let logs = tempfile::tempdir().expect("log dir");
+    let logs = crate::test_dir_keep::kept_tempdir();
     let log = with_log(&mut state, &logs);
     for i in 0..ACTION_ROWS {
         admin_action(&log, &format!("/ui/api/route-{i}"));

@@ -108,11 +108,15 @@ only when you run it (`src/registry/mod.rs`, `src/commands/cap.rs`).
   Keychain, Linux Secret Service, Windows Credential Manager) or to a new
   owner-only file, as `secrets.store` chooses: `auto`, the default, prefers the
   keychain (`src/secret_store/mod.rs`, `src/secret_store/files.rs`).
-- **The admin token `mcp-gateway init` generates** is, today, written into the
-  config file as `auth.bearer_token` (`src/commands/mod.rs`). On Unix that
-  file is written readable only by you. Do not commit it. To keep the token out
-  of the file, set `bearer_token: "env:MCP_GATEWAY_TOKEN"` and put the token in
-  that variable (docs/QUICKSTART.md).
+- **The admin token `mcp-gateway init` generates** is stored through
+  `secrets.store`, in the same keychain or owner-only file as your other saved
+  secrets, and the config file holds only a reference in `auth.bearer_token`
+  (`src/cli_support/init.rs`); neither the config nor the sample files it
+  writes contain the token. `mcp-gateway doctor` names where it lives, and
+  docs/QUICKSTART.md says how to read it back for a client. A config written
+  by an earlier `init` still holds the token as a literal and keeps working:
+  do not commit it, and move it by setting
+  `bearer_token: "env:MCP_GATEWAY_TOKEN"` with the token in that variable.
 - **OAuth tokens** for backends are kept as JSON files written owner-only
   (0600 from creation) through a scratch file (`src/oauth/storage.rs`),
   not through `secrets.store`.
