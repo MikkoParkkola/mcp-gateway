@@ -673,14 +673,15 @@ impl Gateway {
         let std_listener = listener.into_std()?;
         let grace = StopBudget::listener_grace_for(total);
         listener::serve(app, std_listener, addr, &self.config, grace, shutdown).await?;
-        let budget = StopBudget::http(
+        // The start check accepted the total; nothing here may refuse it and
+        // skip the stop.
+        let budget = StopBudget::fixed_at(
             fired
                 .get()
                 .copied()
                 .unwrap_or_else(tokio::time::Instant::now),
             total,
-        )
-        .map_err(|below| Error::Config(below.to_string()))?;
+        );
 
         // Saved under one deadline, off the runtime's threads (MIK-8157).
         #[cfg(feature = "cost-governance")]
@@ -752,7 +753,11 @@ impl Gateway {
 
         // Stop all backends, after their warmers can no longer start one.
         info!("Shutting down backends...");
-        budget.stage("warmer cancel", total, warmer.cancel()).await;
+        // It may use the time up to Db: an aborted warm-start must have unwound
+        // before the backends are listed.
+        budget
+            .stage_until_backend_end("warmer cancel", warmer.cancel())
+            .await;
         // One deadline for the whole stage: each stdio backend gets its EOF,
         // then SIGTERM, then the kill, planned to end by then. The stop budget
         // fixes it, however long the stages before took.

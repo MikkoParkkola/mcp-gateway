@@ -66,7 +66,15 @@ impl StopBudget {
                 minimum: HTTP_MIN_TOTAL,
             });
         }
-        Ok(Self { t0, total })
+        Ok(Self::fixed_at(t0, total))
+    }
+
+    /// The budget of a stop whose listener has returned: the total was accepted
+    /// when the gateway started, so this never refuses, and every deadline
+    /// saturates at the trigger instead of failing. A second refusal here would
+    /// skip the whole stop, backends included.
+    pub(crate) fn fixed_at(t0: Instant, total: Duration) -> Self {
+        Self { t0, total }
     }
 
     /// D: the end of the whole stop.
@@ -77,19 +85,25 @@ impl StopBudget {
     /// Db: the end of the backend stage. The backend reserve is time kept for
     /// it, never taken off this deadline.
     pub(crate) fn backend_end(&self) -> Instant {
-        self.end() - TERMINAL_RESERVE
+        self.t0 + self.total.saturating_sub(TERMINAL_RESERVE)
     }
 
     /// Dp: one deadline for everything between the listener and the backends.
     pub(crate) fn post_listener_end(&self) -> Instant {
-        self.backend_end() - BACKEND_RESERVE
+        self.t0
+            + self
+                .total
+                .saturating_sub(BACKEND_RESERVE + TERMINAL_RESERVE)
     }
 
     /// Dl: where the listener grace ends, leaving the post-listener reserve.
     /// Test-only: production asks `listener_grace_for`, before any trigger.
     #[cfg(test)]
     pub(crate) fn listener_end(&self) -> Instant {
-        self.post_listener_end() - POST_RESERVE
+        self.t0
+            + self
+                .total
+                .saturating_sub(POST_RESERVE + BACKEND_RESERVE + TERMINAL_RESERVE)
     }
 
     /// Dr: where the runtime wait ends, before the logger's share. Test-only
@@ -119,26 +133,6 @@ impl StopBudget {
         self.listener_end().saturating_duration_since(self.t0)
     }
 
-    /// The budget of a stop whose listener has returned: the total was accepted
-    /// when the gateway started, so this never refuses, and every deadline
-    /// saturates at the trigger instead of failing. Test-only until `run` uses it.
-    #[cfg(test)]
-    pub(crate) fn fixed_at(_t0: Instant, _total: Duration) -> Self {
-        panic!("fixed_at: not implemented")
-    }
-
-    /// Run a stage that may use every moment left to Db, the end of the backend
-    /// stage: for a step that must finish before the backends are listed.
-    /// Test-only until `run` uses it.
-    #[cfg(test)]
-    pub(crate) async fn stage_until_backend_end<F: std::future::Future>(
-        &self,
-        _what: &'static str,
-        _work: F,
-    ) -> Option<F::Output> {
-        panic!("stage_until_backend_end: not implemented")
-    }
-
     /// What a post-listener stage may wait from `now`: its own `cap`, or what is
     /// left to Dp if that is less. Never renewed: after Dp it is zero.
     pub(crate) fn stage_window(&self, now: Instant, cap: Duration) -> Duration {
@@ -149,24 +143,52 @@ impl StopBudget {
 
     /// Run one post-listener stage under its own `cap` or what is left to Dp,
     /// whichever is less; `None` when it ran out (logged by `what`) so the stop
-    /// goes on to the next stage. Never renewed: a stage that starts after Dp
-    /// gets no time at all.
+    /// goes on to the next stage. Never renewed: a stage that starts at or after
+    /// Dp gets no time at all, and its work is not polled even once.
     pub(crate) async fn stage<F: std::future::Future>(
         &self,
         what: &'static str,
         cap: Duration,
         work: F,
     ) -> Option<F::Output> {
-        let window = self.stage_window(Instant::now(), cap);
-        if let Ok(done) = tokio::time::timeout(window, work).await {
-            Some(done)
-        } else {
-            tracing::warn!(
-                stage = what,
-                "stop stage ran out of its window; the stop goes on"
-            );
-            None
-        }
+        within(what, self.stage_window(Instant::now(), cap), work).await
+    }
+
+    /// Run a step that must finish before the backends are listed, so it may use
+    /// every moment left to Db, the end of the backend stage, even after Dp. The
+    /// same rule otherwise: no time left means the work is not polled.
+    pub(crate) async fn stage_until_backend_end<F: std::future::Future>(
+        &self,
+        what: &'static str,
+        work: F,
+    ) -> Option<F::Output> {
+        let window = self.backend_end().saturating_duration_since(Instant::now());
+        within(what, window, work).await
+    }
+}
+
+/// `work` under `window`; with none left it is not polled, because a first poll
+/// can do synchronous work that no timeout can cut.
+async fn within<F: std::future::Future>(
+    what: &'static str,
+    window: Duration,
+    work: F,
+) -> Option<F::Output> {
+    if window.is_zero() {
+        tracing::warn!(
+            stage = what,
+            "stop stage had no time left; the stop goes on"
+        );
+        return None;
+    }
+    if let Ok(done) = tokio::time::timeout(window, work).await {
+        Some(done)
+    } else {
+        tracing::warn!(
+            stage = what,
+            "stop stage ran out of its window; the stop goes on"
+        );
+        None
     }
 }
 
