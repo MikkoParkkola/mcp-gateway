@@ -138,6 +138,26 @@ async fn r59_an_edited_listed_row_without_a_trace_marks_older_calls() {
     assert!(page["answer_integrity_unattributed"]["offset"].is_u64());
 }
 
+/// The closed set of `answer_integrity` values a client can be shown. No
+/// Activity screen reads them yet; the one built later must render each, so a
+/// new reason cannot reach it as an unlisted value.
+#[test]
+fn r61_the_answer_integrity_values_are_a_closed_set() {
+    use super::answer::Why;
+    let all = [
+        Why::Evicted,
+        Why::Overflow,
+        Why::Invalid,
+        Why::Unsigned,
+        Why::Duplicate,
+        Why::Chain,
+        Why::Unattributed,
+    ];
+    let mut shown: Vec<&str> = all.iter().filter_map(|w| w.integrity()).collect();
+    shown.sort_unstable();
+    assert_eq!(shown, ["duplicate", "indeterminate", "invalid", "unsigned"]);
+}
+
 /// The receipt reads the same answer as the list for a call the failure covers.
 #[tokio::test]
 async fn r60_the_receipt_agrees_with_the_list() {
