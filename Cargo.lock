@@ -1938,6 +1938,7 @@ dependencies = [
  "hmac",
  "iana-time-zone",
  "icu_normalizer",
+ "icu_normalizer_data",
  "indexmap",
  "jsonschema",
  "jsonwebtoken",

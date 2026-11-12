@@ -392,7 +392,7 @@ fn the_tables_are_well_formed_and_not_empty() {
 /// pairs, a tag byte between tables), so a changed entry, a reordering or a
 /// reformatted file that keeps the same data are told apart correctly: only a
 /// data change moves it. Moving it needs a new normalization version.
-const TABLE_DIGEST: &str = "pending: filled in once the real tables are in";
+const TABLE_DIGEST: &str = "59f754112df4660288906f7fa620ed450e41a370381be2b157a55860c1dd6561";
 
 fn table_digest() -> String {
     let mut bytes: Vec<u8> = Vec::new();

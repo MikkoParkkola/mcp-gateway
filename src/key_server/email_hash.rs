@@ -7,6 +7,10 @@
 
 use crate::wiped_bytes::WipedBytes;
 
+// Names the NFC data crate so a dependency cleanup cannot drop its exact pin in
+// Cargo.toml: `cargo install` honours that pin, and ignores Cargo.lock.
+use icu_normalizer_data as _;
+
 /// The key's length in bytes, and so its hex text's length in digits / 2.
 const KEY_BYTES: usize = 32;
 
