@@ -108,10 +108,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   webpki-root-certs 1.0.10 (RUSTSEC-2026-0381, -0383), rustls-webpki 0.103.16
   (RUSTSEC-2026-0382), rustls 0.23.46 (RUSTSEC-2026-0285, -0346, -0348,
   -0349) and quinn-proto 0.11.18 (RUSTSEC-2026-0338 to -0342).
-- **RUSTSEC-2024-0449 stays excepted until 2026-11-05.** It flags
-  `unsafe-libyaml`, reached through `serde_yaml`, as unmaintained; there is no
-  patched release. The OSV exception expires on that date, with no silent
-  renewal.
+- **More dependency advisories.** Lockfile-only bumps: rustix 1.1.6
+  (RUSTSEC-2026-0486), block-buffer 0.12.1 (GHSA-qwgh-2vcv-g2f7) and hyper
+  1.12.0, which drops its dependency on pin-utils (RUSTSEC-2026-0441,
+  unmaintained). ([#4822](https://github.com/MikkoParkkola/mcp-gateway/pull/4822))
+- **RUSTSEC-2024-0449 stays excepted, renewed to 2026-12-31 by operator
+  decision.** It flags `unsafe-libyaml`, reached through `serde_yaml`, as
+  unmaintained (an informational advisory); there is no patched release. The
+  exception covers the 3.x line until 4.0, which has no `serde_yaml`, replaces
+  it, and is removed if the 3.x line is retired earlier.
 - **Supply-chain hardening of the release workflow.** Every action is pinned to
   a commit SHA, including `cosign-installer` v4.1.2 and `download-syft`
   v0.24.3. The MCP Registry publisher binary is pinned to v1.8.1 and its
