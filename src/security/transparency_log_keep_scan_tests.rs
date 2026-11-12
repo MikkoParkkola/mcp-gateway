@@ -144,7 +144,10 @@ fn sources_where(
             .expect("under root")
             .to_string_lossy()
             .replace('\\', "/");
-        if rel.ends_with(".rs") && wanted(&rel) {
+        let is_rust = std::path::Path::new(&rel)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
+        if is_rust && wanted(&rel) {
             out.push((rel, std::fs::read_to_string(&path).expect("read source")));
         }
     }
