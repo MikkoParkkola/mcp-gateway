@@ -547,3 +547,35 @@ fn a_window_that_ends_before_it_starts_is_refused() {
     );
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
+
+/// MIK-9455.LOOKUP.2: the time window keeps rows inside it and drops rows
+/// outside it, and a cursor from one window does not carry into another.
+/// Mutant: ignore the window, or leave it out of the cursor's bind.
+#[test]
+fn the_window_filters_rows_and_is_part_of_the_cursor_bind() {
+    let fx = Fx::new();
+    fx.plant("s1", EMAIL, &fx.ks.email_key);
+    fx.plant("s2", EMAIL, &fx.ks.email_key);
+    let wide = json!({"from": "2000-01-01T00:00:00Z", "to": "2100-01-01T00:00:00Z"});
+    assert_eq!(subjects(&fx.lookup(EMAIL, &wide)).len(), 2);
+    let later = json!({"from": "2100-01-01T00:00:00Z"});
+    assert!(
+        subjects(&fx.lookup(EMAIL, &later)).is_empty(),
+        "rows before from are dropped"
+    );
+    let earlier = json!({"to": "2000-01-01T00:00:00Z"});
+    assert!(
+        subjects(&fx.lookup(EMAIL, &earlier)).is_empty(),
+        "rows after to are dropped"
+    );
+    let first = fx.lookup(EMAIL, &json!({"limit": 1, "from": "2000-01-01T00:00:00Z"}));
+    let token = first["next_cursor"]
+        .as_str()
+        .expect("a next cursor")
+        .to_owned();
+    let moved = fx.lookup(
+        EMAIL,
+        &json!({"limit": 1, "from": "2001-01-01T00:00:00Z", "cursor": token}),
+    );
+    assert_eq!(moved["cursor_reset"], true, "{moved}");
+}
