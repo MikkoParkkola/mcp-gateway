@@ -32,7 +32,7 @@ fn the_start_check_accepts_the_minimum_and_the_default_and_refuses_less() {
     let message = err.to_string();
     assert!(message.contains("server.shutdown_timeout"), "{message}");
     assert!(
-        message.contains("12.499") && message.contains("12.5s"),
+        message.contains("12s 499ms") && message.contains("12s 500ms"),
         "{message}"
     );
 }
@@ -58,5 +58,5 @@ async fn an_http_start_below_the_stop_budget_minimum_is_refused_before_it_binds(
         .expect_err("started with a total the stop cannot fit in");
     let message = err.to_string();
     assert!(message.contains("server.shutdown_timeout"), "{message}");
-    assert!(message.contains("12.5s"), "{message}");
+    assert!(message.contains("12s 500ms"), "{message}");
 }

@@ -35,7 +35,10 @@ fn twelve_point_four_nine_nine_seconds_is_refused_with_an_actionable_message() {
     );
     let text = err.to_string();
     assert!(text.contains("server.shutdown_timeout"), "{text}");
-    assert!(text.contains("12.499") && text.contains("12.5s"), "{text}");
+    assert!(
+        text.contains("12s 499ms") && text.contains("12s 500ms"),
+        "{text}"
+    );
 }
 
 #[test]
