@@ -10,8 +10,15 @@ the final `rmdir`, which fails and is ignored, and the directory is left in TMPD
 (2026-11-12: tests/e2e_code_mode_journey.rs, `.gateway.yaml.lock`).
 
 This scans every `struct Name { .. }` in tests/ and src/ for a TempDir field declared before a Child or ChildGuard
-field and refuses it, naming the file, line, struct and both fields. `--self-test` runs the scanner on fixtures.
-Standard library only.
+field and refuses it, naming the file, line, struct and both fields. A struct that pairs a bare `Child` (which neither
+kills nor waits when dropped) with a TempDir should also carry an `impl Drop for <Struct>` in the same file; a
+`ChildGuard` is trusted to wait. The order is an error; the missing Drop is a warning (four older stdio harnesses
+still lack one), to become an error once they are fixed. Named and tuple structs are scanned; comments, string, raw-string and char literals are
+blanked first; borrowed and `PhantomData` fields own nothing and are skipped. It fails if tests/ or src/ is missing or
+holds no Rust file, so a wrong working directory cannot pass silently. `--self-test` runs the scanner on fixtures.
+
+Known limits (a text scan, not a type checker): a TempDir or Child reached through a `use .. as` rename, a `type` alias or
+a wrapper struct, enum struct-variants, and structs a macro generates from metavariables are not seen. Standard library only.
 """
 from __future__ import annotations
 
@@ -21,11 +28,21 @@ from pathlib import Path
 
 TEMPDIR = re.compile(r"\bTempDir\b")
 CHILD = re.compile(r"\b(?:Child|ChildGuard)\b")
-STRUCT = re.compile(r"\bstruct\s+(\w+)\s*(?:<[^{;]*>)?\s*(?:where[^{;]*)?\{")
+STRUCT = re.compile(r"\bstruct\s+(\w+)\s*(?:<[^{;(]*>)?\s*(?:where[^{;]*)?([{(])")
+BARE_CHILD = re.compile(r"\bChild\b")
+NON_OWNING = re.compile(r"^\s*[&*]|PhantomData|\bfn\s*\(")
+CHAR = re.compile(r"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|.)|[^\\'\n])'")
+RAW = re.compile(r"b?r(#*)\"")
+
+
+def blank(lit: str, start: int, stop: int) -> str:
+    """The literal with its contents (between start and stop) spaced out, newlines kept."""
+    return lit[:start] + "".join(c if c == "\n" else " " for c in lit[start:stop]) + lit[stop:]
 
 
 def strip_comments(text: str) -> str:
-    """Comments blanked (same length, so offsets and line numbers stay), string literals left alone."""
+    """Comments and the contents of string, raw-string and char literals blanked (same length, so offsets and line
+    numbers stay); a quote that opens a lifetime (`'a`) is not a char literal."""
     out = []
     i, n = 0, len(text)
     while i < n:
@@ -41,68 +58,113 @@ def strip_comments(text: str) -> str:
                 elif text[j:j + 2] == "*/": depth -= 1; j += 2
                 else: j += 1
             out.append("".join(c if c == "\n" else " " for c in text[i:j])); i = j
+        elif (m := RAW.match(text, i)) and not (i and (text[i - 1].isalnum() or text[i - 1] == "_")):
+            end = text.find('"' + m.group(1), m.end())
+            j = n if end < 0 else end + 1 + len(m.group(1))
+            out.append(blank(text[i:j], m.end() - i, j - i - len(m.group(1)) - 1)); i = j
         elif text[i] == '"':
             j = i + 1
             while j < n and text[j] != '"':
                 j += 2 if text[j] == "\\" else 1
-            out.append(text[i:j + 1]); i = j + 1
+            out.append(blank(text[i:j + 1], 1, j - i)); i = j + 1
+        elif (m := CHAR.match(text, i)):
+            out.append("'" + " " * (m.end() - i - 2) + "'"); i = m.end()
         else:
             out.append(text[i]); i += 1
     return "".join(out)
 
 
-def fields(body: str, base: int, text: str) -> list[tuple[str, str, int]]:
-    """(name, type, line) of each `name: Type` field of a struct body, split at commas outside <>, (), []."""
+def fields(body: str, base: int, text: str, named: bool = True) -> list[tuple[str, str, int]]:
+    """(name, type, line) of each field of a struct body, split at commas outside <>, (), [] (a tuple struct's fields are
+    named "0", "1", ..)."""
     result, depth, start = [], 0, 0
     for k, ch in enumerate(body + ","):
-        if ch in "<([": depth += 1
-        elif ch in ">)]": depth -= 1 if ch != ">" or body[k - 1:k] != "-" else 0
+        if ch in "<([{": depth += 1
+        elif ch in ">)]}": depth -= 1 if ch != ">" or body[k - 1:k] != "-" else 0
         elif ch == "," and depth == 0:
             piece = body[start:k]
-            m = re.match(r"\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?(\w+)\s*:\s*(.+)", piece, re.S)
+            head = r"\s*(?:#\[(?:[^\[\]]|\[[^\]]*\])*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?"
+            m = re.match(head + r"(?:r#)?(\w+)\s*:\s*(.+)", piece, re.S) if named else re.match(head + r"()(.+)", piece, re.S)
             if m:
-                result.append((m.group(1), m.group(2).strip(), text.count("\n", 0, base + start + m.start(1)) + 1))
+                name = m.group(1) if named else str(len(result))
+                result.append((name, m.group(2).strip(), text.count("\n", 0, base + start + m.start(2)) + 1))
             start = k + 1
     return result
 
 
 def scan(text: str) -> list[tuple[int, str, str, str]]:
-    """(line, struct, tempdir field, child field) for each struct with a TempDir declared above a Child."""
+    """(line, struct, tempdir field, child field) for each struct with a TempDir declared above a Child, or (child field
+    empty) a bare Child beside a TempDir with no `impl Drop for <struct>` in the text."""
     clean = strip_comments(text)
     found = []
     for m in STRUCT.finditer(clean):
+        open_, close = m.group(2), {"{": "}", "(": ")"}[m.group(2)]
         depth, j = 1, m.end()
         while j < len(clean) and depth:
-            depth += {"{": 1, "}": -1}.get(clean[j], 0); j += 1
-        body = clean[m.end():j - 1]
-        flds = fields(body, m.end(), clean)
-        for ti, (tname, ttype, tline) in enumerate(flds):
-            if not TEMPDIR.search(ttype):
+            depth += {open_: 1, close: -1}.get(clean[j], 0); j += 1
+        flds = [f for f in fields(clean[m.end():j - 1], m.end(), clean, open_ == "{") if not NON_OWNING.search(f[1])]
+        tmp = [f for f in flds if TEMPDIR.search(f[1])]
+        if not tmp:
+            continue
+        hit = False
+        for ti, (tname, _, tline) in enumerate(flds):
+            if not TEMPDIR.search(flds[ti][1]):
                 continue
             for cname, ctype, _ in flds[ti + 1:]:
                 if CHILD.search(ctype):
-                    found.append((tline, m.group(1), tname, cname)); break
+                    found.append((tline, m.group(1), tname, cname)); hit = True; break
+            if hit:
+                break
+        has_drop = re.search(r"\bimpl\s+Drop\s+for\s+" + re.escape(m.group(1)) + r"\b", clean)
+        if not hit and not has_drop and any(BARE_CHILD.search(f[1]) for f in flds):
+            found.append((tmp[0][2], m.group(1), tmp[0][0], ""))
     return found
 
 
 def main() -> int:
-    root = Path(".")
-    bad = []
+    root = Path(__file__).resolve().parents[2]
+    bad, warn, scanned = [], [], 0
     for base in ("tests", "src"):
+        if not (root / base).is_dir():
+            print(f"::error::teardown order: {root / base} is missing; nothing scanned")
+            return 1
         for path in sorted((root / base).rglob("*.rs")):
+            scanned += 1
             for line, struct, tname, cname in scan(path.read_text(errors="replace")):
-                bad.append(f"{path}:{line}: struct {struct} declares {tname} (TempDir) before {cname} (a child process): "
-                           f"the directory is removed first; declare the child above the TempDir and make its drop wait")
+                rel = path.relative_to(root)
+                if cname:
+                    bad.append(f"{rel}:{line}: struct {struct} declares {tname} (TempDir) before {cname} (a child process): "
+                               f"the directory is removed first; declare the child above the TempDir and make its drop wait")
+                else:
+                    warn.append(f"{rel}:{line}: struct {struct} pairs {tname} (TempDir) with a bare Child but has no "
+                               f"`impl Drop for {struct}`: a bare Child neither kills nor waits, so add a Drop that does, or use a guard")
+    if scanned == 0:
+        print("::error::teardown order: no Rust file under tests/ or src/; nothing scanned")
+        return 1
+    for w in warn:
+        print(f"::warning::{w}")
     for b in bad:
         print(f"::error::{b}")
-    print(f"teardown order: {len(bad)} struct(s) drop a TempDir before a child process")
+    print(f"teardown order: {scanned} file(s), {len(bad)} struct(s) drop a TempDir before a child, {len(warn)} warned (no waiting Drop)")
     return 1 if bad else 0
 
 
 def self_test() -> int:
     cases = [
         ("a TempDir above a Child", "struct G {\n    _tmp: tempfile::TempDir,\n    child: tokio::process::Child,\n}\n", 1),
-        ("a Child above the TempDir", "struct G {\n    child: tokio::process::Child,\n    _tmp: tempfile::TempDir,\n}\n", 0),
+        ("a Child above the TempDir with a waiting Drop", "struct G {\n    child: tokio::process::Child,\n    _tmp: tempfile::TempDir,\n}\nimpl Drop for G { fn drop(&mut self) {} }\n", 0),
+        ("a bare Child above the TempDir and no Drop", "struct G {\n    child: tokio::process::Child,\n    _tmp: tempfile::TempDir,\n}\n", 1),
+        ("a Drop for another struct does not count", "struct G { c: Child, t: TempDir }\nstruct H { x: u8 }\nimpl Drop for H { fn drop(&mut self) {} }\n", 1),
+        ("a ChildGuard above the TempDir needs no Drop", "struct G { g: ChildGuard, t: TempDir }\n", 0),
+        ("a tuple struct, TempDir first", "struct G(TempDir, Child);\n", 1),
+        ("a tuple struct, ChildGuard first", "pub struct G(pub ChildGuard, pub TempDir);\n", 0),
+        ("braces inside a raw string do not hide the struct", 'const S: &str = r#"echo "x"#;\nstruct G { t: TempDir, c: Child }\nconst T: &str = "end";\n', 1),
+        ("a char literal quote does not open a string", "fn f() { let q = '\"'; }\nstruct G { t: TempDir, c: Child }\n", 1),
+        ("a lifetime tick is not a char literal", "struct G<'a> { t: TempDir, c: Child, r: &'a str }\n", 1),
+        ("a struct named in a string is not a struct", 'const S: &str = "struct G { t: TempDir, c: Child }";\n', 0),
+        ("borrowed fields own nothing", "struct G<'a> { t: &'a TempDir, c: &'a Child }\n", 0),
+        ("PhantomData and fn pointers own nothing", "struct G { t: TempDir, p: PhantomData<Child>, f: fn(Child) }\n", 0),
+        ("a nested-bracket attribute and a raw identifier", "struct G {\n    #[cfg_attr(x, doc = [1, 2])]\n    r#type: TempDir,\n    c: Child,\n}\n", 1),
         ("a ChildGuard below a TempDir", "pub struct G {\n    pub dir: TempDir,\n    guard: ChildGuard,\n}\n", 1),
         ("an optional child below a TempDir", "struct G { tmp: TempDir, c: Option<Child>, port: u16 }\n", 1),
         ("no child at all", "struct G {\n    tmp: TempDir,\n    port: u16,\n}\n", 0),
@@ -111,7 +173,8 @@ def self_test() -> int:
         ("a commented-out TempDir", "struct G {\n    // _tmp: TempDir,\n    child: Child,\n}\n", 0),
         ("generics and attributes", "pub(crate) struct G<T: Send> where T: Sync {\n    #[allow(dead_code)]\n    pub(crate) _t: TempDir,\n    kids: Vec<(String, Child)>,\n    x: T,\n}\n", 1),
         ("a type named Children is not a child", "struct G { t: TempDir, kids: Children }\n", 0),
-        ("two structs, only the second is wrong", "struct A { c: Child, t: TempDir }\nstruct B { t: TempDir, c: Child }\n", 1),
+        ("two structs, both wrong", "struct A { c: Child, t: TempDir }\nstruct B { t: TempDir, c: Child }\n", 2),
+        ("two structs, only the second is wrong", "struct A { c: Child, t: TempDir }\nimpl Drop for A { fn drop(&mut self) {} }\nstruct B { t: TempDir, c: Child }\n", 1),
     ]
     wrong = 0
     for label, source, want in cases:

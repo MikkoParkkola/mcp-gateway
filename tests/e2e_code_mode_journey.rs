@@ -62,7 +62,7 @@ done
 /// writes (its config lock, its state) can land in `_tmp` while the directory is being removed.
 struct Gateway {
     child: tokio::process::Child,
-    _tmp: tempfile::TempDir,
+    _tmp: Option<tempfile::TempDir>,
     log: PathBuf,
     url: String,
 }
@@ -77,6 +77,12 @@ impl Drop for Gateway {
                 return;
             }
             std::thread::sleep(Duration::from_millis(50));
+        }
+        // Not reaped in 5 s: keep the directory rather than remove it under a live writer. The leftover then fails
+        // the shard's temp-directory check loudly, where removing it would fail intermittently.
+        if let Some(tmp) = self._tmp.take() {
+            let kept = tmp.keep();
+            eprintln!("gateway child still running after kill; kept {}", kept.display());
         }
     }
 }
@@ -122,7 +128,7 @@ impl Gateway {
             .spawn()
             .expect("serve spawns");
         let mut gateway = Self {
-            _tmp: tmp,
+            _tmp: Some(tmp),
             child,
             log,
             // Learned from the child's `Listening` line in `wait_ready`.
