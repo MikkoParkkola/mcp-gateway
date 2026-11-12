@@ -349,3 +349,42 @@ fn the_email_is_in_no_file_and_no_answer_and_the_request_is_audited_without_it()
     }
     assert_eq!(audit_records, 2, "each admitted lookup left its own record");
 }
+
+/// MIK-9455.LOOKUP.5: every authorized attempt is counted once and every
+/// throttled one once, on counters with no labels (so no email, hash or
+/// caller can reach a metric); a refusal at admission counts nothing.
+/// Mutant: count before admission, count throttles as attempts, add a label.
+#[cfg(feature = "metrics")]
+#[test]
+fn attempts_and_throttles_are_counted_on_unlabelled_counters() {
+    let fx = Fx::new();
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    telemetry_metrics::with_local_recorder(&recorder, || {
+        let (refused, _, _) = fx.post(anonymous_client(), "{}");
+        assert!(refused == StatusCode::UNAUTHORIZED || refused == StatusCode::FORBIDDEN);
+        for _ in 0..2 {
+            let (s, _, _) = fx.post(admin("a"), &json!({"email": EMAIL}).to_string());
+            assert_eq!(s, StatusCode::OK);
+        }
+        let (third, _, _) = fx.post(admin("a"), &json!({"email": EMAIL}).to_string());
+        assert_eq!(third, StatusCode::TOO_MANY_REQUESTS);
+    });
+    let rendered = handle.render();
+    let value = |name: &str| {
+        rendered
+            .lines()
+            .find(|l| l.starts_with(name))
+            .map(str::to_owned)
+    };
+    assert_eq!(
+        value("mcp_key_server_lookup_attempts_total").as_deref(),
+        Some("mcp_key_server_lookup_attempts_total 3"),
+        "{rendered}"
+    );
+    assert_eq!(
+        value("mcp_key_server_lookup_throttled_total").as_deref(),
+        Some("mcp_key_server_lookup_throttled_total 1"),
+        "{rendered}"
+    );
+}
