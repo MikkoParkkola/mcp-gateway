@@ -9,6 +9,7 @@ use super::answer::{MAX_EVICTED, MAX_JOINED, MAX_PENDING};
 use super::answer_export_tests::{export_for, ndjson};
 use super::answer_fixture::{Dl, Fixture, SECRET, forge};
 use super::answer_list_tests::{get, row_of, traces};
+use super::answer_receipt_tests::rcpt;
 
 #[tokio::test]
 async fn r17_eviction_names_the_call_and_spares_the_rest() {
@@ -295,6 +296,32 @@ async fn r53_a_legacy_call_row_does_not_poison_its_own_trace() {
     let r = row_of(&page, "gw-t");
     assert_eq!(r["effect"], "delivered");
     assert_eq!(page["answer_integrity_failed"], 0);
+}
+
+/// A call whose own signature was stripped, after signing began, poisons its
+/// trace the same way in the list and in the receipt: both read the integrity
+/// failure, neither reads delivered.
+#[tokio::test]
+async fn r54_a_call_with_a_stripped_signature_reads_the_same_in_list_and_receipt() {
+    let fx = Fixture::new(Some(SECRET));
+    fx.call("gw-first");
+    fx.call("gw-t");
+    fx.delivery("gw-t", &Dl::effect("delivered"));
+    let at = fx
+        .lines()
+        .iter()
+        .position(|l| l["trace_id"] == "gw-t" && l.get("request_hash").is_some())
+        .expect("the call line");
+    fx.edit(at, |e| {
+        forge(e, "server", json!("srv"), true);
+    });
+    let (_, page) = get(&fx, &[]).await;
+    let listed = row_of(&page, "gw-t");
+    assert_eq!(listed["effect"], "unknown", "the list");
+    assert_eq!(listed["answer_integrity"], "unsigned", "the list");
+    let receipt = rcpt(&fx, "gw-t");
+    assert_eq!(receipt["effect"], "unknown", "the receipt");
+    assert_eq!(receipt["answer_integrity"], "unsigned", "the receipt");
 }
 
 #[tokio::test]
