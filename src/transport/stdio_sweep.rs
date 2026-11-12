@@ -289,9 +289,16 @@ impl Sweep {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[path = "stdio_sweep_linux.rs"]
 mod linux;
+#[cfg(target_os = "linux")]
 pub(super) use linux::LinuxTable;
+#[cfg(any(target_os = "macos", test))]
+#[path = "stdio_sweep_macos.rs"]
+mod macos;
+#[cfg(target_os = "macos")]
+pub(super) use macos::MacTable;
 
 /// The share of a backend's kill reserve the sweep may spend freezing and
 /// re-walking, and then on the terminal kills. Both sit inside the reaper's own
