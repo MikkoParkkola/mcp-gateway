@@ -11,6 +11,7 @@ src/test_ports.rs	the_reserved_range_is_outside_the_ephemeral_range	inherent	Rea
 tests/cli_broken_pipe.rs	any_other_stdout_error_still_fails	inherent	Writes to /dev/full for ENOSPC; macOS has no /dev/full.
 src/security/dump_guard_tests.rs	lease_t11_child	inherent	The child half of lease_t11_linux_guard_is_observable: asserts prctl(PR_GET_DUMPABLE) reads not-dumpable, a flag only Linux and Android have.
 src/security/dump_guard_tests.rs	lease_t11_linux_guard_is_observable	inherent	Runs lease_t11_child in a fresh process to observe the not-dumpable mark, which only Linux and Android have; on macOS no test observes the guard's zero core limit.
+tests/init_admin_token.rs	*	portable	Linux only: in a temporary HOME with no secret service, `auto` selects the owner-only file store, so the row can read the stored token; macOS would pick the user's real Keychain, which a row must not touch. Portable once the row gets an isolated native-store fixture.
 tests/preview_sandbox_inherited_fd.rs	*	inherent	The Linux preview sandbox (util-linux unshare, mount namespaces); macOS has its own sandbox, tested separately (ADR-027).
 tests/preview_sandbox_linux.rs	*	inherent	The Linux preview sandbox (util-linux unshare, mount namespaces); macOS has its own sandbox, tested separately (ADR-027).
 src/security/firewall/allowed_root_spelling_tests.rs	r33d_nfd_beside_nfc_is_refused_on_linux	inherent	Linux filesystems keep NFC and NFD names distinct; APFS does not, and macOS runs the twin row r33d_nfd_resolving_to_the_one_entry_is_allowed_on_macos instead.

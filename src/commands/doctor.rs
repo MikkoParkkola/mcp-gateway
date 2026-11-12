@@ -202,6 +202,22 @@ pub async fn run_doctor_command(
     let (config_result, config) = check_config(config_path, fix);
     results.push(config_result);
 
+    // The custody line comes from the guarded text, not from a validated load,
+    // so a config that fails validation still says where its token lives.
+    if let Some(written) = resolve_config_path(config_path)
+        .and_then(|path| mcp_gateway::config::Config::guarded_text(&path).ok())
+        .and_then(|text| crate::yaml::from_str::<crate::yaml::Value>(&text).ok())
+    {
+        let shown = mcp_gateway::config::secret_slot(
+            written["auth"]["bearer_token"].as_str().unwrap_or(""),
+        );
+        let detail = if shown == "<set>" {
+            "legacy literal in config"
+        } else {
+            &shown
+        };
+        results.push(CheckResult::pass("admin-token", detail).with_category("secrets"));
+    }
     let Some(config) = config else {
         print_results(&results, format);
         return ExitCode::FAILURE;
