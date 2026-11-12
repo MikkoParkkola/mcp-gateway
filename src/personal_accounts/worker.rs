@@ -96,16 +96,56 @@ pub(crate) enum CustodyStartError {
 /// handle is still alive. A `std::sync::Mutex` guards it: every access is a
 /// clone or a take, no await is ever held under it.
 pub(crate) struct CustodyHandle<P, O> {
-    service: std::sync::Mutex<Option<Arc<AccountService<P, O>>>>,
+    slot: std::sync::Mutex<Slot<P, O>>,
+    /// Becomes true when the service itself is dropped, wherever that happens.
+    done: tokio::sync::watch::Receiver<bool>,
     permits: Arc<Semaphore>,
     shutting_down: AtomicBool,
+    /// Set by the first report, so a release problem is logged once.
+    reported: AtomicBool,
     capacity: usize,
+}
+
+/// What the handle holds, all behind one mutex: one transition at a time.
+enum Slot<P, O> {
+    /// Serving, or refusing but not yet released.
+    Open(Arc<Held<P, O>>),
+    /// A release thread owns the handle's reference.
+    Releasing,
+    /// A thread could not be started and the reference was leaked to process
+    /// exit: never waited on, never reported released.
+    Stuck,
+}
+
+/// The service plus the signal that it is gone. `done` is the LAST field, so it
+/// drops after the service (store, provider, observer): completion means the
+/// store really dropped, on whichever thread held the final reference.
+struct Held<P, O> {
+    service: AccountService<P, O>,
+    _done: DoneGuard,
+}
+
+impl<P, O> std::ops::Deref for Held<P, O> {
+    type Target = AccountService<P, O>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.service
+    }
+}
+
+/// Sends `true` when dropped, also while a panic unwinds.
+struct DoneGuard(tokio::sync::watch::Sender<bool>);
+
+impl Drop for DoneGuard {
+    fn drop(&mut self) {
+        let _ = self.0.send(true);
+    }
 }
 
 /// One admitted call: the service to run it against, and the permit that keeps
 /// it inside the in-flight bound until it finishes.
 struct Admission<P, O> {
-    service: Arc<AccountService<P, O>>,
+    service: Arc<Held<P, O>>,
     permit: OwnedSemaphorePermit,
 }
 
@@ -125,12 +165,17 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         // refusal on first use.
         let store = PersonalAccountStore::open(config)?;
         let capacity = capacity.max(1);
+        let (done_tx, done_rx) = tokio::sync::watch::channel(false);
+        let held = Held {
+            service: AccountService::new(store, provider, observer),
+            _done: DoneGuard(done_tx),
+        };
         Ok(Self {
-            service: std::sync::Mutex::new(Some(Arc::new(AccountService::new(
-                store, provider, observer,
-            )))),
+            slot: std::sync::Mutex::new(Slot::Open(Arc::new(held))),
+            done: done_rx,
             permits: Arc::new(Semaphore::new(capacity)),
             shutting_down: AtomicBool::new(false),
+            reported: AtomicBool::new(false),
             capacity,
         })
     }
@@ -158,13 +203,10 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         let permit = Arc::clone(&self.permits)
             .try_acquire_owned()
             .map_err(|_| CustodyError::Busy)?;
-        let service = self
-            .service
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(Arc::clone)
-            .ok_or(CustodyError::ShuttingDown)?;
+        let service = match &*self.lock_slot() {
+            Slot::Open(held) => Arc::clone(held),
+            Slot::Releasing | Slot::Stuck => return Err(CustodyError::ShuttingDown),
+        };
         Ok(Admission { service, permit })
     }
 
@@ -266,12 +308,18 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
     where
         P: Clone,
     {
-        self.service
+        match &*self.lock_slot() {
+            Slot::Open(held) => Ok(held.provider().clone()),
+            Slot::Releasing | Slot::Stuck => Err(CustodyError::ShuttingDown),
+        }
+    }
+
+    /// The slot, whether or not a panic poisoned its mutex: every access is a
+    /// clone or a take and no await is held under it.
+    fn lock_slot(&self) -> std::sync::MutexGuard<'_, Slot<P, O>> {
+        self.slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(|service| service.provider().clone())
-            .ok_or(CustodyError::ShuttingDown)
     }
 
     /// Test-only, like [`AccountService::commit_grant_if`] it forwards to.
@@ -304,11 +352,7 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         // is awaited, not cancelled: a command admitted before shutdown still
         // completes.
         let drained = Arc::clone(&self.permits).acquire_many_owned(capacity).await;
-        let taken = self
-            .service
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        let taken = std::mem::replace(&mut *self.lock_slot(), Slot::Releasing);
         // The last `Arc` goes here, so the store — and both of its exclusive
         // file locks — is released while this handle is still alive.
         drop(taken);
