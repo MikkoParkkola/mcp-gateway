@@ -282,6 +282,9 @@ impl Gateway {
         {
             warn!(error = %e, "Personal account custody shutdown failed");
         }
+        // A cut custody step leaves the store in the handle: hand it to a
+        // detached thread now, so the gateway's drop never releases it here.
+        self.detach_custody_release();
     }
 
     /// A fresh signal cancels the remaining preparations, then cuts backend

@@ -445,7 +445,7 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
             Slot::Stuck => Some(true),
         };
         match state {
-            Some(true) => return self.stuck_end(deadline),
+            Some(true) => return Self::stuck_end(deadline),
             Some(false) => return Ok(self.release_end(deadline).await),
             None => {}
         }
@@ -477,7 +477,7 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
                         // Standalone shutdown: the gateway may stay alive, so do
                         // not hold the locks to exit; drop on the blocking pool.
                         drop(slot);
-                        tokio::task::spawn_blocking(move || drop(held));
+                        drop(tokio::task::spawn_blocking(move || drop(held)));
                         Some(true)
                     }
                     Err(held) => {
@@ -497,7 +497,7 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
                     &self.reported,
                     "the store release could not start a thread; the store is held until exit",
                 );
-                self.stuck_end(deadline)
+                Self::stuck_end(deadline)
             }
         }
     }
@@ -517,10 +517,7 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
 
     /// How a call ends on a stuck store: bounded callers are told, unbounded
     /// ones get an error at once instead of waiting for a signal that never comes.
-    fn stuck_end(
-        &self,
-        deadline: Option<tokio::time::Instant>,
-    ) -> Result<ShutdownEnd, CustodyError> {
+    fn stuck_end(deadline: Option<tokio::time::Instant>) -> Result<ShutdownEnd, CustodyError> {
         if deadline.is_some() {
             Ok(ShutdownEnd::Stuck)
         } else {

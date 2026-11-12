@@ -745,7 +745,10 @@ impl Gateway {
         // Not covered by gateway_bootstrap_tests — no test drives `run`.
         budget
             .stage("account custody shutdown", total, async {
-                if let Err(e) = self.shutdown_account_custody().await {
+                if let Err(e) = self
+                    .shutdown_account_custody_by(budget.post_listener_end())
+                    .await
+                {
                     warn!(error = %e, "Personal account custody shutdown failed");
                 }
             })
@@ -767,6 +770,10 @@ impl Gateway {
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
         self.backends.stop_all_by(stop_deadline).await;
+
+        // Whatever the custody stage did not release (it was skipped or cut):
+        // never drop the store on this thread when `self` drops.
+        self.detach_custody_release();
 
         Ok(())
     }
