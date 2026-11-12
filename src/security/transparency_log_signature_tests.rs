@@ -119,6 +119,21 @@ fn recompute_entry_hash_equals_the_hash_of_a_cloned_filtered_copy() {
     let want = crate::hashing::sha256_tagged(serde_json::to_string(&cloned).unwrap().as_bytes());
     assert_eq!(recompute_entry_hash(&nested).unwrap(), want);
 
+    // Only top-level keys are excluded; the same names nested stay in the hash.
+    let deep = serde_json::json!({"a": {"sig": 1, "key_id": 2, "entry_hash": 3}, "sig": 4});
+    let kept = serde_json::json!({"a": {"sig": 1, "key_id": 2, "entry_hash": 3}});
+    assert_eq!(
+        recompute_entry_hash(&deep).unwrap(),
+        crate::hashing::sha256_tagged(serde_json::to_string(&kept).unwrap().as_bytes())
+    );
+    // An entry holding only excluded keys hashes the empty object; a non-object is refused.
+    let only = serde_json::json!({"entry_hash": "x", "sig": "y", "key_id": "z"});
+    assert_eq!(
+        recompute_entry_hash(&only).unwrap(),
+        crate::hashing::sha256_tagged(b"{}")
+    );
+    assert!(recompute_entry_hash(&serde_json::json!([1])).is_err());
+
     for signed in [false, true] {
         let real = entry(signed);
         assert_eq!(
