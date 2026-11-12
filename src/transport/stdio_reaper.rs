@@ -753,7 +753,9 @@ mod plan_tests {
         assert_eq!(
             graceful_ending(KILL_RESERVE + waits, true, None),
             Ending::Graceful {
-                eof: waits - NESTED_TERM_NEED,
+                eof: waits
+                    .checked_sub(NESTED_TERM_NEED)
+                    .expect("the waits afford the SIGTERM need"),
                 term: NESTED_TERM_NEED,
             }
         );
@@ -770,7 +772,9 @@ mod plan_tests {
             graceful_ending(KILL_RESERVE + waits, true, None),
             Ending::Graceful {
                 eof: MIN_PHASE,
-                term: waits - MIN_PHASE,
+                term: waits
+                    .checked_sub(MIN_PHASE)
+                    .expect("the waits afford the minimum phase"),
             }
         );
     }
@@ -784,7 +788,9 @@ mod plan_tests {
         assert_eq!(
             graceful_ending(KILL_RESERVE + waits, true, None),
             Ending::Graceful {
-                eof: waits - waits / 3,
+                eof: waits
+                    .checked_sub(waits / 3)
+                    .expect("a third never exceeds the whole"),
                 term: waits / 3,
             }
         );
