@@ -135,6 +135,55 @@ fn audit_sync_failure_not_acknowledged() {
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }
 
+/// A disk-full rebuild can adopt a replaced log after the binding was
+/// checked; the receipt then names another log and must not be accepted.
+#[cfg(unix)]
+#[test]
+fn foreign_receipt_is_not_acknowledged() {
+    const ROW: &str = "foreign_receipt_is_not_acknowledged";
+    let mut failures = Vec::new();
+    collect_case(
+        &mut failures,
+        ROW,
+        "log_replaced_during_disk_full_rebuild",
+        "OtherLog, no delivered flag, original binding retained",
+        || {
+            let live = Live::new();
+            let foreign = Live::new();
+            let mut initial = state(&live.resolved);
+            attributed(&mut initial);
+            let mut owner = live.seed(initial, ROW);
+            let swap = live.log_path.with_extension("swap");
+            let (source, target) = (foreign.log_path.clone(), live.log_path.clone());
+            live.log
+                .arm_write_fault(Some(WriteFault::FullUntilReserveFreed));
+            live.log.arm_after_partial_write(Some(Box::new(move || {
+                std::fs::copy(&source, &swap).expect("copy the other log");
+                std::fs::rename(&swap, &target).expect("replace the active log");
+            })));
+            let got = runtime(JournalDrain::deliver(&mut owner, &live.log));
+            assert_eq!(
+                got,
+                Err(DrainError::OtherLog),
+                "{ROW}: a receipt for another log is refused"
+            );
+            reread(&mut owner);
+            let writer = state_of(&owner).writer.as_ref().expect(ROW);
+            assert!(
+                !writer.intent.delivered,
+                "{ROW}: no delivered flag for a foreign acknowledgement"
+            );
+            assert_eq!(
+                state_of(&owner).binding,
+                Some(live.log.log_id()),
+                "{ROW}: original binding retained"
+            );
+            Ok(())
+        },
+    );
+    assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
+}
+
 #[test]
 fn journal_persist_uncertainty() {
     const ROW: &str = "journal_persist_uncertainty";

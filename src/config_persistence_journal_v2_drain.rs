@@ -641,8 +641,8 @@ async fn send_record(
     super::observe::note(&journal.target, super::observe::Event::BStarted);
     let appended = sink.settle(&delivery).await;
     let receipt = match appended {
-        Ok(receipt) => receipt,
-        Err(Unsettled::OtherLog) => return Err(DrainError::OtherLog),
+        Ok(receipt) if receipt.id == *binding => receipt,
+        Ok(_) | Err(Unsettled::OtherLog) => return Err(DrainError::OtherLog),
         Err(Unsettled::Refused(_)) => return Err(DrainError::Refused),
         Err(Unsettled::Unconfirmed(_)) => return Err(DrainError::Unconfirmed),
         Err(Unsettled::Invalid(_)) => {
