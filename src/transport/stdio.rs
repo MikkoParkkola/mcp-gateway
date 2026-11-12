@@ -497,8 +497,10 @@ impl Transport for StdioTransport {
 mod child_tree;
 #[path = "stdio_reaper.rs"]
 mod reaper;
+/// The reaper's SIGTERM floor for the stop-budget rows (a copy: the original stays
+/// visible to the transport module only).
 #[cfg(all(test, unix))]
-pub(crate) use child_tree::NESTED_TERM_NEED as NESTED_TERM_NEED_FOR_TEST;
+pub(crate) const NESTED_TERM_NEED_FOR_TEST: std::time::Duration = child_tree::NESTED_TERM_NEED;
 #[cfg(all(test, unix))]
 pub(crate) use reaper::HURRY_WINDOW;
 #[cfg(all(test, unix))]
