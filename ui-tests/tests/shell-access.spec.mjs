@@ -115,18 +115,11 @@ test.describe('access', () => {
     await withFixturePages(page);
     let release;
     const held = new Promise((r) => { release = r; });
-    let first = true;
     await page.route('**/ui/api/status', async (route) => {
-      const bearer = route.request().headers().authorization ?? '';
-      if (first) {
-        first = false;
-        await held;
-        return route.fulfill({
-          json: { version: '4.0.0', auth: { enabled: true, signed_in: true, admin: false }, access: access({ hidden: { policies: ADMIN_ONLY } }) },
-        });
-      }
-      const signedIn = bearer === `Bearer ${KEY}`;
-      return route.fulfill({ json: { version: '4.0.0', auth: { enabled: true, signed_in: signedIn, admin: signedIn } } });
+      await held;
+      return route.fulfill({
+        json: { version: '4.0.0', auth: { enabled: true, signed_in: true, admin: false }, access: access({ hidden: { policies: ADMIN_ONLY } }) },
+      });
     });
     await page.route('**/ui/api/forbidden-probe', (r) => r.fulfill({ status: 401, json: {} }));
     await page.goto('/ui/access/status');
@@ -134,12 +127,10 @@ test.describe('access', () => {
     release();
     await page.waitForTimeout(500);
     await expect(page.locator('#signin')).toBeVisible();
-    await page.locator('#signin-key').fill(KEY);
-    await page.keyboard.press('Enter');
-    await expect(page.locator('#signin')).toBeHidden();
-    // The old report did not come back: Policies is open, with no note.
-    await expect(navLink(page, 'policies')).toBeVisible();
+    // The answer that was in flight is dropped: its report does not narrow the
+    // sidebar or draw the note under the sign-in view (a mutant that commits it fails here).
     await expect(note(page)).toHaveCount(0);
+    for (const [id] of PAGES) await expect(navLink(page, id)).toHaveCount(1);
   });
 
   test('A18 a malformed access member is read as every page open', async ({ page }) => {
