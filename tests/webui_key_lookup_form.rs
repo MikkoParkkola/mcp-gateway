@@ -270,17 +270,24 @@ out(seen);
 /// text nodes. Mutant: build a row with `innerHTML`.
 #[test]
 fn a_hostile_subject_is_shown_as_text() {
-    let got = run(r"
+    let got = run(r#"
 replies = [page([row('<img src=x onerror=alert(1)>')])];
-await submit('ada@example.org');
-const flat = JSON.stringify(dom['kl-rows'].children);
-out({ flat, tags: JSON.stringify(dom['kl-rows'].children).match(/\"tag\":\"(\w+)\"/g) });
-");
-    let flat = got["flat"].as_str().unwrap();
-    assert!(flat.contains("<img src=x onerror=alert(1)>"), "the subject must be shown: {flat}");
-    for tag in got["tags"].as_array().unwrap_or(&vec![]) {
-        assert!(!tag.as_str().unwrap().contains("img"), "{tag}");
-    }
+await submit('ada@corp.test');
+const walk = (n) => [n.tag ?? '', n.text ?? '', ...(n.children ?? []).flatMap(walk)];
+const all = dom['kl-rows'].children.flatMap(walk);
+out({ all });
+"#);
+    let all: Vec<&str> = got["all"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(
+        all.iter().any(|t| t.contains("<img src=x onerror=alert(1)>")),
+        "the subject must be shown as text: {all:?}"
+    );
+    assert!(!all.contains(&"img"), "an element was built from the subject: {all:?}");
 }
 
 /// UIFORM.3: the request is a POST of JSON with the page's auth headers and
