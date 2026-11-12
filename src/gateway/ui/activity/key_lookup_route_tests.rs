@@ -825,3 +825,123 @@ fn a_caller_without_a_principal_is_given_no_page_token() {
     let (status, _, body) = fx.post(nobody, &json!({"email": EMAIL, "limit": 10}).to_string());
     assert_eq!(status, StatusCode::OK, "{body}");
 }
+
+/// A page token is single use, and it is spent by the page it serves: a 429
+/// (the budget is spent), leaves it redeemable; once a page has been answered
+/// it is spent and the same token is refused with the fixed answer.
+/// Mutant: never consume (replayable), or consume before the budget charge.
+#[test]
+fn a_token_is_spent_by_the_page_it_serves_and_not_by_a_throttle() {
+    let fx = Fx::new();
+    for subject in ["s1", "s2", "s3"] {
+        fx.plant(subject, EMAIL, &fx.ks.email_key);
+    }
+    let first = fx.lookup(EMAIL, &json!({"limit": 1}));
+    let token = first["next_cursor"].as_str().expect("cursor").to_owned();
+    // Spend the whole budget, then ask with the token: a 429, token intact.
+    let who = admin("a");
+    let body = json!({"cursor": token, "limit": 1}).to_string();
+    fx.state.process.lookup_budget().reset_for_test();
+    loop {
+        let (status, _, _) = fx.post(who.clone(), &json!({"email": "x@corp.invalid"}).to_string());
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            break;
+        }
+    }
+    let (status, _, throttled) = fx.post(who.clone(), &body);
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{throttled}");
+    // Budget back: the same token serves a page once.
+    fx.state.process.lookup_budget().reset_for_test();
+    let (status, _, second) = fx.post(who.clone(), &body);
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(subjects(&second), vec!["s2"], "{second}");
+    // And only once.
+    let replay = refusal_of(&fx, who.clone(), &token);
+    assert_eq!(replay, refusal_of(&fx, who, "garbage"), "{replay:?}");
+}
+
+/// A scan that fails (503) does not spend the token: the retry gets the page.
+/// Unix only: the failure is a log file the process may not read.
+/// Mutant: consume the token at open, before the scan.
+#[cfg(unix)]
+#[test]
+fn a_failed_scan_leaves_the_token_redeemable() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let fx = Fx::new();
+    for subject in ["s1", "s2"] {
+        fx.plant(subject, EMAIL, &fx.ks.email_key);
+    }
+    let first = fx.lookup(EMAIL, &json!({"limit": 1}));
+    let token = first["next_cursor"].as_str().expect("cursor").to_owned();
+    let files: Vec<_> = std::fs::read_dir(fx.dir.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_none_or(|x| x != "lock"))
+        .collect();
+    for f in &files {
+        std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    let (status, _, down) = fx.next_page(admin("a"), &token, &json!({"limit": 1}));
+    for f in &files {
+        std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{down}");
+    let (status, _, again) = fx.next_page(admin("a"), &token, &json!({"limit": 1}));
+    assert_eq!(status, StatusCode::OK, "the token was burned: {again}");
+}
+
+/// The order is pinned so a token cannot be probed through other errors: a
+/// bad limit, or no key server, answers its own refusal BEFORE the token is
+/// opened, whatever the token is.
+/// Mutant: open the token before the limit check or the key-server check.
+#[test]
+fn every_refusal_that_is_not_about_the_token_comes_before_it_is_opened() {
+    let fx = Fx::new();
+    fx.plant("s1", EMAIL, &fx.ks.email_key);
+    fx.plant("s2", EMAIL, &fx.ks.email_key);
+    let first = fx.lookup(EMAIL, &json!({"limit": 1}));
+    let good = first["next_cursor"].as_str().expect("cursor").to_owned();
+    let bad_limit = |token: &str| {
+        fx.state.process.lookup_budget().reset_for_test();
+        fx.post(
+            admin("a"),
+            &json!({"cursor": token, "limit": 0}).to_string(),
+        )
+    };
+    let (s1, _, b1) = bad_limit(&good);
+    let (s2, _, b2) = bad_limit("garbage");
+    assert_eq!((s1, &b1), (s2, &b2), "limit error must not depend on the token");
+    assert_eq!(s1, StatusCode::BAD_REQUEST);
+    assert_ne!(
+        b1,
+        refusal_of(&fx, admin("a"), "garbage").3,
+        "a bad limit and a bad token are different refusals"
+    );
+}
+
+/// A page request is a lookup: it is charged to the shared budget before the
+/// body is read, so a stolen token cannot dodge the throttle.
+/// Mutant: skip the charge on a cursor request.
+#[test]
+fn a_cursor_request_is_charged_to_the_shared_budget() {
+    let fx = Fx::new();
+    fx.plant("s1", EMAIL, &fx.ks.email_key);
+    fx.plant("s2", EMAIL, &fx.ks.email_key);
+    fx.state.process.lookup_budget().reset_for_test();
+    let mut statuses = Vec::new();
+    for _ in 0..4 {
+        let (status, _, _) = fx.post(admin("a"), &json!({"cursor": "garbage"}).to_string());
+        statuses.push(status);
+    }
+    assert_eq!(
+        statuses,
+        vec![
+            StatusCode::BAD_REQUEST,
+            StatusCode::BAD_REQUEST,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::TOO_MANY_REQUESTS
+        ],
+        "burst 2, then throttled, bad tokens included"
+    );
+}
