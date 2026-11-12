@@ -8,7 +8,7 @@
 //! libproc), so the sweep's order of signals, its deadline slices and its
 //! residual accounting are tested against an in-memory table.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 /// A process as the sweep knows it: the pid and the start time that tell it apart
@@ -100,8 +100,8 @@ impl PidfdBudget {
     /// The budget for a process whose soft file-descriptor limit is `nofile` and
     /// which keeps `reserve` descriptors for its own sockets: never above 4096,
     /// never below 64.
-    pub(super) fn limit_for(_nofile: usize, _reserve: usize) -> usize {
-        0
+    pub(super) fn limit_for(nofile: usize, reserve: usize) -> usize {
+        nofile.saturating_sub(reserve).clamp(64, 4096)
     }
 
     pub(super) fn new(limit: usize) -> Self {
@@ -113,8 +113,13 @@ impl PidfdBudget {
 
     /// A slot, or `None` when every slot is in use.
     pub(super) fn take(&self) -> Option<Permit<'_>> {
-        let _ = (self.limit, &self.used);
-        None
+        use std::sync::atomic::Ordering;
+        self.used
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |used| {
+                (used < self.limit).then_some(used + 1)
+            })
+            .ok()
+            .map(|_| Permit(self))
     }
 
     pub(super) fn in_use(&self) -> usize {
@@ -124,7 +129,9 @@ impl PidfdBudget {
 
 impl Drop for Permit<'_> {
     fn drop(&mut self) {
-        let _ = self.0;
+        self.0
+            .used
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -132,7 +139,18 @@ impl Drop for Permit<'_> {
 pub(super) struct Sweep {
     root: Identity,
     cfg: SweepConfig,
+    /// Every descendant seen so far, with its parent pid (pruned when it dies).
     members: BTreeMap<Identity, u32>,
+    /// Descendants past the cap, never touched, reported at the end.
+    dropped: BTreeSet<Identity>,
+}
+
+/// What the sweep stopped, and whether the stop was its own.
+struct Frozen {
+    id: Identity,
+    held: bool,
+    /// The sweep moved it from running to stopped (so it may continue it).
+    ours: bool,
 }
 
 impl Sweep {
@@ -141,20 +159,133 @@ impl Sweep {
             root,
             cfg,
             members: BTreeMap::new(),
+            dropped: BTreeSet::new(),
         }
     }
 
     /// Record the descendants now, before the first signal of the stop.
-    pub(super) fn snapshot(&mut self, _table: &mut dyn ProcessTable) {}
+    pub(super) fn snapshot(&mut self, table: &mut dyn ProcessTable) {
+        let rows = table.read();
+        self.collect(&rows);
+    }
+
+    /// Add every live descendant of the root and of every member, drop the dead,
+    /// and hold the cap (lowest pids kept).
+    fn collect(&mut self, rows: &[(Identity, u32)]) -> usize {
+        let live: BTreeSet<Identity> = rows.iter().map(|(who, _)| *who).collect();
+        self.members.retain(|who, _| live.contains(who));
+        self.dropped.retain(|who| live.contains(who));
+        let mut parents: BTreeSet<u32> = self.members.keys().map(|who| who.pid).collect();
+        parents.insert(self.root.pid);
+        let mut added = 0;
+        loop {
+            let found: Vec<(Identity, u32)> = rows
+                .iter()
+                .filter(|(who, ppid)| {
+                    parents.contains(ppid)
+                        && who.pid != self.root.pid
+                        && !self.members.contains_key(who)
+                        && !self.dropped.contains(who)
+                })
+                .copied()
+                .collect();
+            if found.is_empty() {
+                break;
+            }
+            for (who, ppid) in found {
+                parents.insert(who.pid);
+                if self.members.len() < self.cfg.cap {
+                    self.members.insert(who, ppid);
+                    added += 1;
+                } else {
+                    self.dropped.insert(who);
+                }
+            }
+        }
+        added
+    }
 
     /// Freeze, verify and kill the members and the root; nothing is left stopped.
     pub(super) fn run(
         &mut self,
-        _table: &mut dyn ProcessTable,
-        _budget: &PidfdBudget,
+        table: &mut dyn ProcessTable,
+        budget: &PidfdBudget,
     ) -> SweepReport {
-        let _held = (&self.root, &self.cfg, &self.members);
-        SweepReport::default()
+        let mut report = SweepReport::default();
+        let freeze_end = table.now() + self.cfg.freeze_slice;
+        let rows = table.read();
+        self.collect(&rows);
+        let root_live = rows.iter().any(|(who, _)| *who == self.root);
+        let mut frozen: Vec<Frozen> = Vec::new();
+        let mut permits: Vec<Permit<'_>> = Vec::new();
+        // Freeze: the root first, then the members, re-walking from the frozen
+        // set until a pass adds nothing or the freeze slice ends.
+        let mut pending: Vec<Identity> = Vec::new();
+        if root_live {
+            pending.push(self.root);
+        }
+        pending.extend(self.members.keys().copied());
+        loop {
+            report.passes += 1;
+            for who in std::mem::take(&mut pending) {
+                if table.now() >= freeze_end || frozen.iter().any(|f| f.id == who) {
+                    continue;
+                }
+                let ours = table.state(who) == ProcState::Running;
+                let permit = budget.take();
+                let held = permit.is_some();
+                if table.signal(who, Sig::Stop, held).is_ok() {
+                    frozen.push(Frozen {
+                        id: who,
+                        held,
+                        ours,
+                    });
+                    permits.extend(permit);
+                }
+            }
+            for entry in &frozen {
+                while table.now() < freeze_end && table.state(entry.id) == ProcState::Running {}
+            }
+            if table.now() >= freeze_end {
+                break;
+            }
+            let rows = table.read();
+            if self.collect(&rows) == 0 {
+                break;
+            }
+            pending = self
+                .members
+                .keys()
+                .copied()
+                .filter(|who| !frozen.iter().any(|f| f.id == *who))
+                .collect();
+        }
+        // Terminal phase: every member and the root get their kill whatever the
+        // freeze slice did; a process the sweep stopped and could not kill is
+        // continued so it is never left stopped.
+        let mut targets: Vec<Identity> = self.members.keys().copied().collect();
+        if root_live {
+            targets.push(self.root);
+        }
+        for who in targets {
+            let entry = frozen.iter().find(|f| f.id == who);
+            let held = entry.is_some_and(|f| f.held);
+            match table.signal(who, Sig::Kill, held) {
+                Ok(_) => report.killed.push(who),
+                Err(_) => {
+                    if entry.is_some_and(|f| f.ours) {
+                        let _ = table.signal(who, Sig::Cont, held);
+                        report.continued.push(who);
+                    }
+                    if table.state(who) != ProcState::Gone {
+                        report.residual.push(who);
+                    }
+                }
+            }
+        }
+        report.residual.extend(self.dropped.iter().copied());
+        drop(permits);
+        report
     }
 }
 

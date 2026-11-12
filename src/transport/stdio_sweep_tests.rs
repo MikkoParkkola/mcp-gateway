@@ -189,6 +189,7 @@ impl ProcessTable for Fake {
         // By pid, a running target can exit and its pid be reused between the
         // identity check and the delivery; a stopped one cannot exit.
         if handle == Handle::ByPid
+            && sig == Sig::Kill
             && self.procs[index].state == ProcState::Running
             && let Some((pid, start)) = self.reuse_while_running
             && pid == who.pid
