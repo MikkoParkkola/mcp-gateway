@@ -192,7 +192,7 @@ export function entries() {
   return out;
 }
 
-/** The route an entry's address names, or null when it cannot be read. */
+/** The route an entry address names, or null when it cannot be read. */
 function entryRoute(path) {
   try {
     return parse(new URL(path, location.origin).pathname);
