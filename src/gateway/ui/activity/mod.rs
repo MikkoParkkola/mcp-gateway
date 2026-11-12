@@ -672,3 +672,7 @@ mod security_tests;
 #[cfg(test)]
 #[path = "sigstate_tests.rs"]
 mod sigstate_tests;
+
+#[cfg(test)]
+#[path = "key_lookup_route_tests.rs"]
+mod key_lookup_route_tests;

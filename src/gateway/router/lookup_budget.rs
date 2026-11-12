@@ -75,3 +75,53 @@ impl<C: Clock + Clone + Send + Sync> LookupBudget<C> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use governor::clock::FakeRelativeClock;
+
+    use super::*;
+
+    fn retry(charge: Charge) -> u64 {
+        match charge {
+            Charge::Throttled { retry_after_secs } => retry_after_secs,
+            Charge::Admitted => panic!("expected a refusal, got {charge:?}"),
+        }
+    }
+
+    /// The pinned schedule: two permits at once, the third refused until one
+    /// refills (six seconds), then one every six seconds. It is a refill, not
+    /// ten in any minute: a fresh budget never admits a third at once.
+    /// Mutant: a burst of three, or a refill of one per ten seconds.
+    #[test]
+    fn two_permits_then_one_every_six_seconds() {
+        let clock = FakeRelativeClock::default();
+        let budget = LookupBudget::with_clock(clock.clone());
+        assert_eq!(budget.charge(), Charge::Admitted);
+        assert_eq!(budget.charge(), Charge::Admitted);
+        assert_eq!(retry(budget.charge()), 6, "the third waits one refill");
+        clock.advance(Duration::from_secs(5));
+        assert_eq!(retry(budget.charge()), 1, "one second left rounds up to 1");
+        clock.advance(Duration::from_secs(1));
+        assert_eq!(budget.charge(), Charge::Admitted, "a permit refilled");
+        assert_eq!(retry(budget.charge()), 6, "and only one");
+        clock.advance(Duration::from_secs(12));
+        assert_eq!(budget.charge(), Charge::Admitted);
+        assert_eq!(budget.charge(), Charge::Admitted);
+        assert_eq!(retry(budget.charge()), 6, "capacity is two, not more");
+    }
+
+    /// A wait of a fraction of a second still says at least one second.
+    /// Mutant: report the truncated wait (0).
+    #[test]
+    fn a_fractional_wait_reports_at_least_one_second() {
+        let clock = FakeRelativeClock::default();
+        let budget = LookupBudget::with_clock(clock.clone());
+        budget.charge();
+        budget.charge();
+        clock.advance(Duration::from_millis(5_900));
+        assert_eq!(retry(budget.charge()), 1);
+    }
+}
