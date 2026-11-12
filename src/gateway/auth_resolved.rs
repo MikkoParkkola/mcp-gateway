@@ -278,6 +278,7 @@ impl ResolvedAuthConfig {
     /// table carries an approver binding and has that quota principal. Display
     /// names can collide or change, so a restriction on CLI keys is judged by
     /// this identity, never by a key's name.
+    #[cfg(feature = "webui")]
     pub(crate) fn is_cli_key_quota(&self, quota: &QuotaPrincipal) -> bool {
         self.api_keys()
             .iter()
