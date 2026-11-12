@@ -1509,6 +1509,7 @@ let countSeq = 0;
  */
 export async function refreshCounts() {
   const epoch = authEpoch;
+  const resets = accessResets; // a session that ended since this read began (a 401) owns no count
   const seq = ++countSeq;
   let next = null;
   try {
@@ -1519,7 +1520,7 @@ export async function refreshCounts() {
     // To do queue, so a missing route is now a failure like any other.
     next = 'unavailable';
   }
-  if (epoch !== authEpoch || seq !== countSeq) return; // a newer read, or another identity, owns the badge now
+  if (epoch !== authEpoch || resets !== accessResets || seq !== countSeq) return; // a newer read, or another identity, owns the badge now
   DECISIONS.count = next;
   drawNav(parse(location.pathname).page);
   if (COUNT_SEEN.epoch !== epoch) {
