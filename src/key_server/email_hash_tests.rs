@@ -198,6 +198,349 @@ fn normalization_v1_tables_are_pinned() {
     );
 }
 
+use super::case_v1::{CASE_IGNORABLE, CASED_TERMINAL, LOWER_V1};
+use super::{lower_v1, normalize};
+
+fn all_scalars() -> impl Iterator<Item = char> {
+    (0..=0x10_FFFF_u32).filter_map(char::from_u32)
+}
+
+/// The frozen tables reproduce the standard library only where it is Unicode
+/// 17.0.0, the version they were taken at; on a later toolchain the checked-in
+/// tables, not std, decide, and the rows that compare against std stand down.
+fn std_is_unicode_17() -> bool {
+    char::UNICODE_VERSION == (17, 0, 0)
+}
+
+/// NORM.1: for every scalar value, alone, `lower_v1` is exactly the standard
+/// library's lowercase at Unicode 17.0.0.
+/// Mutant: drop, swap or alter one table entry, or call something else.
+#[test]
+fn lower_v1_is_std_for_every_code_point_at_unicode_17() {
+    if !std_is_unicode_17() {
+        return;
+    }
+    for c in all_scalars() {
+        let one = c.to_string();
+        assert_eq!(lower_v1(&one), one.to_lowercase(), "U+{:04X}", u32::from(c));
+    }
+}
+
+/// NORM.1: the final-sigma rule, over every character as a neighbour. For each
+/// scalar value `c`, five strings that put `c` before, after or between
+/// capital Sigmas lowercase exactly as `str::to_lowercase` does, with no
+/// expected differences. This is what freezes Cased and Case_Ignorable.
+/// Mutant: drop or add a range in either table.
+#[test]
+fn final_sigma_matches_std_with_every_character_as_a_neighbour() {
+    if !std_is_unicode_17() {
+        return;
+    }
+    for c in all_scalars() {
+        for text in [
+            format!("{c}\u{3a3}"),
+            format!("A{c}\u{3a3}"),
+            format!("\u{3a3}{c}"),
+            format!("\u{3a3}{c}A"),
+            format!("A{c}\u{3a3}{c}A"),
+        ] {
+            assert_eq!(
+                lower_v1(&text),
+                text.to_lowercase(),
+                "U+{:04X} in {text:?}",
+                u32::from(c)
+            );
+        }
+    }
+}
+
+/// NORM.1: whole strings over an adversarial alphabet (capital, small and final
+/// sigma, case-ignorable punctuation and marks, a cased modifier letter, the
+/// dotted capital I, titlecase and Cherokee letters) match std, every
+/// combination up to four characters, Sigma in every position.
+/// Mutant: any change to the Sigma rule or to a table.
+#[test]
+fn whole_strings_over_an_adversarial_alphabet_match_std() {
+    if !std_is_unicode_17() {
+        return;
+    }
+    let alphabet = [
+        "A",
+        "a",
+        "\u{3a3}",
+        "\u{3c3}",
+        "\u{3c2}",
+        ".",
+        "'",
+        "-",
+        "_",
+        " ",
+        "1",
+        "\u{ad}",
+        "\u{345}",
+        "\u{301}",
+        "\u{2b0}",
+        "\u{130}",
+        "\u{1c5}",
+        "\u{13a0}",
+        "\u{1c90}",
+        "\u{1e9e}",
+        "\u{ff21}",
+        "\u{e0001}",
+    ];
+    let n = alphabet.len();
+    let mut check = |text: String| {
+        assert_eq!(lower_v1(&text), text.to_lowercase(), "{text:?}");
+    };
+    for a in 0..n {
+        check(alphabet[a].to_owned());
+        for b in 0..n {
+            check(format!("{}{}", alphabet[a], alphabet[b]));
+            for c in 0..n {
+                check(format!("{}{}{}", alphabet[a], alphabet[b], alphabet[c]));
+                for d in 0..n {
+                    check(format!(
+                        "{}{}{}{}",
+                        alphabet[a], alphabet[b], alphabet[c], alphabet[d]
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// NORM.1: answers computed independently (Python `unicodedata`, per code
+/// point, and the Final_Sigma rule by hand), on any toolchain.
+/// Mutant: any table entry or the Sigma rule.
+#[test]
+fn lower_v1_golden_vectors() {
+    for (input, expected) in [
+        ("\u{130}", "i\u{307}"),
+        ("\u{1e9e}", "\u{df}"),
+        ("\u{391}\u{3a3}", "\u{3b1}\u{3c2}"),
+        (
+            "\u{391}\u{3a3}.\u{392}\u{3a3}",
+            "\u{3b1}\u{3c3}.\u{3b2}\u{3c2}",
+        ),
+        ("\u{3a3}", "\u{3c3}"),
+        ("\u{391}\u{3a3}\u{391}", "\u{3b1}\u{3c3}\u{3b1}"),
+        ("\u{13a0}", "\u{ab70}"),
+        ("\u{1c90}", "\u{10d0}"),
+        ("\u{1c5}", "\u{1c6}"),
+        ("I", "i"),
+        ("Ab\u{c7}", "ab\u{e7}"),
+    ] {
+        assert_eq!(lower_v1(input), expected, "{input:?}");
+    }
+}
+
+/// NORM.1: the tables are well formed: sorted, unique, one to three scalars
+/// padded with zeros, no identity entry; ranges sorted, disjoint and merged;
+/// the two sigma tables disjoint; none empty.
+/// Mutant: any malformed entry, or an empty table.
+#[test]
+fn the_tables_are_well_formed_and_not_empty() {
+    assert!(
+        LOWER_V1.len() > 1000,
+        "the lowercase table is empty or truncated"
+    );
+    let mut last = None;
+    for (key, out) in &LOWER_V1 {
+        assert!(
+            last.is_none_or(|l| l < *key),
+            "unsorted or duplicate U+{key:04X}"
+        );
+        last = Some(*key);
+        let c = char::from_u32(*key).expect("a scalar value");
+        let n = out.iter().take_while(|&&v| v != 0).count();
+        assert!((1..=3).contains(&n), "U+{key:04X} maps to {n} scalars");
+        assert!(
+            out[n..].iter().all(|&v| v == 0),
+            "padding before a scalar at U+{key:04X}"
+        );
+        assert!(out[..n].iter().all(|&v| char::from_u32(v).is_some()));
+        assert!(
+            !(n == 1 && out[0] == u32::from(c)),
+            "identity entry U+{key:04X}"
+        );
+    }
+    for (name, table) in [
+        ("CASE_IGNORABLE", &CASE_IGNORABLE[..]),
+        ("CASED_TERMINAL", &CASED_TERMINAL[..]),
+    ] {
+        assert!(table.len() > 50, "{name} is empty or truncated");
+        let mut prev_hi = None;
+        for &(lo, hi) in table {
+            assert!(lo <= hi, "{name} {lo:#x}..{hi:#x}");
+            assert!(
+                prev_hi.is_none_or(|p: u32| p + 1 < lo),
+                "{name} overlaps or abuts at {lo:#x}"
+            );
+            prev_hi = Some(hi);
+        }
+    }
+    for &(lo, hi) in &CASE_IGNORABLE {
+        assert!(
+            !CASED_TERMINAL.iter().any(|&(l, h)| l <= hi && lo <= h),
+            "the sigma tables overlap near {lo:#x}"
+        );
+    }
+}
+
+/// The frozen tables' digest: SHA-256 over every entry as little-endian
+/// `u32`s (the lowercase entries as key and three values, each range table as
+/// pairs, a tag byte between tables), so a changed entry, a reordering or a
+/// reformatted file that keeps the same data are told apart correctly: only a
+/// data change moves it. Moving it needs a new normalization version.
+const TABLE_DIGEST: &str = "pending: filled in once the real tables are in";
+
+fn table_digest() -> String {
+    let mut bytes: Vec<u8> = Vec::new();
+    for (key, out) in &LOWER_V1 {
+        bytes.extend(key.to_le_bytes());
+        for v in out {
+            bytes.extend(v.to_le_bytes());
+        }
+    }
+    for (tag, table) in [(1_u8, &CASE_IGNORABLE[..]), (2, &CASED_TERMINAL[..])] {
+        bytes.push(tag);
+        for (lo, hi) in table {
+            bytes.extend(lo.to_le_bytes());
+            bytes.extend(hi.to_le_bytes());
+        }
+    }
+    crate::hashing::sha256_hex(&bytes)
+}
+
+/// NORM.1: the frozen data is pinned to a literal digest, on any toolchain.
+/// Mutant: change, drop or reorder any entry.
+#[test]
+fn the_frozen_tables_match_their_pinned_digest() {
+    assert_eq!(
+        table_digest(),
+        TABLE_DIGEST,
+        "a case table changed: that needs a new normalization version"
+    );
+}
+
+/// The text of the lines of `Cargo.toml` that name `krate` as a dependency.
+fn dependency_lines(krate: &str) -> Vec<String> {
+    let manifest = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
+    )
+    .expect("Cargo.toml")
+    .replace('\r', "");
+    manifest
+        .lines()
+        .filter(|l| {
+            l.starts_with(&format!("{krate} = ")) || l.starts_with(&format!("{krate}={krate}"))
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// NORM.2: the NFC crate and its data crate are pinned to an exact version in
+/// `Cargo.toml`, where `cargo install` honours it (it ignores Cargo.lock), and
+/// neither may become a caret range again.
+/// Mutant: loosen either to a plain or caret version, or drop the data crate.
+#[test]
+fn the_nfc_crates_are_pinned_exactly_in_cargo_toml() {
+    for krate in ["icu_normalizer", "icu_normalizer_data"] {
+        let lines = dependency_lines(krate);
+        assert_eq!(
+            lines.len(),
+            1,
+            "{krate} must be a direct dependency, once: {lines:?}"
+        );
+        assert!(
+            lines[0].contains("version = \"=") || lines[0].contains(" = \"="),
+            "{krate} must be pinned with an exact `=` version: {}",
+            lines[0]
+        );
+    }
+}
+
+/// NORM.2: the data pin cannot be cleaned away as an unused dependency: the
+/// code names the crate, with a comment saying why. And the Cargo.lock copy of
+/// the same pin (the old guard) still holds.
+/// Mutant: remove the anchor line.
+#[test]
+fn the_data_crate_pin_is_anchored_in_code() {
+    let source = include_str!("email_hash.rs");
+    assert!(
+        source.contains("use icu_normalizer_data as _;"),
+        "the data crate is not named in code"
+    );
+    let lock = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"),
+    )
+    .expect("Cargo.lock")
+    .replace('\r', "");
+    assert!(
+        lock.contains("name = \"icu_normalizer_data\"\nversion = \"2.3.0\"\n"),
+        "icu_normalizer_data moved off 2.3.0"
+    );
+}
+
+/// NORM.1: the hash's normalization never calls the standard library's
+/// lowercase: no line of the production code of `email_hash.rs` (comments
+/// removed) names `to_lowercase`. The differential rows above are the real
+/// check; this keeps a refactor from putting std back.
+/// Mutant: call `to_lowercase` in `normalize` or `lower_v1`.
+#[test]
+fn the_normalization_does_not_call_std_lowercase() {
+    let source = include_str!("email_hash.rs");
+    let production = source.split("#[cfg(test)]").next().expect("source");
+    for line in production
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+    {
+        assert!(
+            !line.contains("to_lowercase"),
+            "std lowercase in production code: {line}"
+        );
+    }
+}
+
+/// NORM.3: the startup self-check passes on the real normalization, and fails,
+/// naming the normalization, for a normalizer that differs: none at all, plain
+/// std lowercase without NFC, and the real one with the final-sigma rule
+/// dropped. A build that fails it must not start the key server.
+/// Mutant: let any of them pass, or drop a known answer.
+#[test]
+fn the_self_check_passes_the_real_normalization_and_fails_a_different_one() {
+    super::self_check().expect("the real normalization passes its own known answers");
+    for (name, wrong) in [
+        ("identity", (|s: &str| s.to_owned()) as fn(&str) -> String),
+        ("std lowercase, no NFC", |s| s.to_lowercase()),
+        ("final sigma dropped", |s| {
+            normalize(s).replace('\u{3c2}', "\u{3c3}")
+        }),
+    ] {
+        let error = super::self_check_with(&wrong).expect_err(name);
+        assert!(error.contains("normalization"), "{name}: {error}");
+    }
+}
+
+/// NORM.3: the server's start runs the self-check before it reads or creates
+/// any key, so a build that normalizes differently never writes a key id or a
+/// row.
+/// Mutant: remove the call or move it after the key is resolved.
+#[test]
+fn the_key_server_start_runs_the_self_check_before_any_key() {
+    let source = include_str!("../gateway/server/run_steps.rs");
+    let check = source
+        .find("email_hash::self_check()")
+        .expect("the start runs the self-check");
+    let resolve = source
+        .find("email_hmac_store::resolve(")
+        .expect("the start resolves the key");
+    assert!(
+        check < resolve,
+        "the self-check must come before the key is resolved"
+    );
+}
+
 /// Regenerates `email_hash/case_v1.rs` from the standard library. Run it only
 /// on the Unicode 17.0.0 toolchain, by hand:
 /// `cargo test --lib generate_case_v1_table -- --ignored --nocapture`, and
