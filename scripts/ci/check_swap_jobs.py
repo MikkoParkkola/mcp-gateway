@@ -158,7 +158,6 @@ def main() -> int:
 
 def action_script() -> str:
     """The run block of the add-swap action's only step."""
-    import yaml
     doc = yaml.safe_load(Path(".github/actions/add-swap/action.yml").read_text())
     return doc["runs"]["steps"][0]["run"]
 
@@ -217,6 +216,7 @@ def self_test() -> int:
         ("swapon did nothing on a runner with 3 GB: 3072 -> 3072", 3072, 3072, 1),
         ("swapon did nothing on a runner with none: 0 -> 0", 0, 0, 1),
         ("only part of the file took: 0 -> 4096", 0, 4096, 1),
+        ("just under the file's size: 0 -> 7999", 0, 7999, 1),
     ):
         rc = run_action(before, after)
         ok = (rc == 0) == (want_rc == 0)
@@ -227,7 +227,7 @@ def self_test() -> int:
         ok = in_scope == want_scope and len(problems) == want_problems
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} {label}: in scope {in_scope}, problems {problems}")
-    print(f"self-test: {len(cases) + 5 - wrong} ok, {wrong} wrong")
+    print(f"self-test: {len(cases) + 6 - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 
