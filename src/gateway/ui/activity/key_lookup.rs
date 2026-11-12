@@ -107,13 +107,27 @@ pub(super) struct Opened {
     expires_at: u64,
 }
 
-/// The digest of the credential principal a token binds to; `None` when the
-/// caller has no credential principal, in which case no token is minted or
-/// opened. One function for both, so they cannot disagree.
-fn cursor_principal(client: Option<&AuthenticatedClient>) -> Option<String> {
-    client
-        .and_then(AuthenticatedClient::credential_principal)
-        .map(|p| crate::hashing::sha256_hex(p.storage_form().as_bytes()))
+/// The digest a token binds to; `None` when the caller has nothing to bind to,
+/// in which case no token is minted or opened. One function for both, so they
+/// cannot disagree.
+///
+/// A bearer or API key binds to its credential principal. Every dashboard
+/// session carries the same constant principal, so a session binds to its own
+/// cookie handle instead (hashed, never sent anywhere): two browser sessions
+/// cannot open each other's tokens.
+fn cursor_principal(
+    client: Option<&AuthenticatedClient>,
+    headers: &axum::http::HeaderMap,
+) -> Option<String> {
+    let client = client?;
+    let principal = client.credential_principal()?;
+    if client.credential_kind == crate::security::audit::CredentialKind::DashboardSession {
+        let handle = crate::gateway::auth::session_cookie_value(headers)?;
+        return Some(crate::hashing::sha256_hex(
+            format!("dashboard-session\0{handle}").as_bytes(),
+        ));
+    }
+    Some(crate::hashing::sha256_hex(principal.storage_form().as_bytes()))
 }
 
 /// Seal `scope` for `principal`, valid from `now`; `None` when it cannot be
@@ -389,7 +403,7 @@ pub(super) async fn lookup(
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    let principal = cursor_principal(guard.client.as_ref());
+    let principal = cursor_principal(guard.client.as_ref(), request.headers());
     telemetry_metrics::counter!("mcp_key_server_lookup_attempts_total").increment(1);
     if let Charge::Throttled { retry_after_secs } = state.process.lookup_budget().charge() {
         telemetry_metrics::counter!("mcp_key_server_lookup_throttled_total").increment(1);

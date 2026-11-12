@@ -985,3 +985,48 @@ fn two_requests_with_one_token_deliver_exactly_one_page() {
         "exactly one request delivers the page"
     );
 }
+
+/// Every dashboard session carries one constant principal, so a token bound to
+/// it would open in any other browser session. A session binds to its own
+/// cookie handle: another session's token is the fixed refusal, the same
+/// session pages on, and a session whose cookie is gone mints nothing.
+/// Mutant: bind a dashboard session to the shared principal.
+#[test]
+fn a_dashboard_session_pages_only_its_own_tokens() {
+    let fx = Fx::new();
+    fx.plant("s1", EMAIL, &fx.ks.email_key);
+    fx.plant("s2", EMAIL, &fx.ks.email_key);
+    let session = |cookie: &str, body: &Value| {
+        let mut c = client(true, &["*"], CredentialKind::DashboardSession);
+        c.principal = crate::gateway::record_principal::InternalPrincipal::new(
+            "dashboard-session".to_owned(),
+        );
+        let request = Request::builder()
+            .method("POST")
+            .uri(routes::UI_KEY_SERVER_LOOKUP_EMAIL)
+            .header("content-type", "application/json")
+            .header("cookie", format!("mcp_gateway_session={cookie}"))
+            .extension(fx.live.generation())
+            .extension(c)
+            .body(Body::from(body.to_string()))
+            .expect("request");
+        fx.state.process.lookup_budget().reset_for_test();
+        fx.rt.block_on(async {
+            let response = crate::gateway::ui::api_router()
+                .with_state(fx.state.clone())
+                .oneshot(request)
+                .await
+                .expect("infallible");
+            let status = response.status();
+            let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
+        })
+    };
+    let (status, first) = session("handle-one", &json!({"email": EMAIL, "limit": 1}));
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let token = first["next_cursor"].as_str().expect("cursor").to_owned();
+    let (status, _) = session("handle-two", &json!({"cursor": token}));
+    assert_eq!(status, StatusCode::BAD_REQUEST, "another session opened it");
+    let (status, second) = session("handle-one", &json!({"cursor": token}));
+    assert_eq!(status, StatusCode::OK, "the same session pages on: {second}");
+}
