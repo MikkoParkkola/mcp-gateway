@@ -120,6 +120,7 @@ mod mutant_scan;
 #[doc(hidden)]
 pub mod oauth;
 mod observer;
+// Unix readers and the install's metadata reader use it; elsewhere it opens plainly.
 pub(crate) mod open_nonblocking;
 pub(crate) mod personal_accounts;
 #[doc(hidden)]
