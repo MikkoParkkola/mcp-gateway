@@ -24,6 +24,14 @@ pub(super) enum At {
     #[cfg(unix)]
     AfterTornWrite,
     RepairPaused,
+    /// Handover: the handed-over flag is durable, nothing is appended yet.
+    HandoverFlagged,
+    /// Handover: every missing frame is written, none is synced.
+    AbandonFileAppended,
+    /// Handover: the file and its directory are synced; the journal still exists.
+    AbandonFileSynced,
+    /// Handover: the journal and staged original are gone and the directory is synced.
+    HandoverFinished,
 }
 
 #[derive(Clone)]
@@ -153,6 +161,10 @@ pub(super) fn event(at: At) -> Event {
         #[cfg(unix)]
         At::AfterTornWrite => Event::AfterTornWrite,
         At::RepairPaused => Event::RepairPaused,
+        At::HandoverFlagged => Event::HandoverFlagged,
+        At::AbandonFileAppended => Event::AbandonFileAppended,
+        At::AbandonFileSynced => Event::AbandonFileSynced,
+        At::HandoverFinished => Event::HandoverFinished,
     }
 }
 

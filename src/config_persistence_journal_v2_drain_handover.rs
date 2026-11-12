@@ -11,6 +11,7 @@ use super::super::JournalSession;
 use super::super::abandoned::{Placement, against_donor, frames_of, marked};
 use super::super::abandoned::{TornProof, encode_frame};
 use super::DrainSession;
+use super::fault::{self, At};
 use crate::config_persistence::sync_dir_of;
 use crate::security::transparency_log::rotation::file_id;
 
@@ -111,6 +112,7 @@ pub(crate) fn hand_over(session: &mut DrainSession) -> Result<(), HandoverError>
     if placement == Placement::Foreign {
         return Err(HandoverError::Foreign);
     }
+    let target = journal.target.clone();
     commit(
         journal,
         donor,
@@ -119,7 +121,13 @@ pub(crate) fn hand_over(session: &mut DrainSession) -> Result<(), HandoverError>
         placement,
         &frames,
     )?;
-    super::finish(session).map_err(|_| HandoverError::Finish)
+    super::finish(session).map_err(|_| HandoverError::Finish)?;
+    seam(&target, At::HandoverFinished)
+}
+
+/// A crash-test boundary: only a fired fault does anything, and only in a test build.
+fn seam(target: &Path, at: At) -> Result<(), HandoverError> {
+    fault::hit(target, at).map_err(|_| HandoverError::Journal)
 }
 
 /// The first writes: flag the donor, write what the file lacks, sync the file and then its
@@ -134,6 +142,7 @@ fn commit(
 ) -> Result<(), HandoverError> {
     journal.state = donor;
     journal.persist().map_err(|_| HandoverError::Journal)?;
+    seam(&journal.target, At::HandoverFlagged)?;
     let mut file = match file {
         Some(file) => file,
         None => open_guarded(path, true).map_err(|_| HandoverError::Write)?,
@@ -154,10 +163,12 @@ fn commit(
     for frame in &frames[from..] {
         file.write_all(frame).map_err(|_| HandoverError::Write)?;
     }
+    seam(&journal.target, At::AbandonFileAppended)?;
     file.sync_all().map_err(|_| HandoverError::Sync)?;
     crate::config_persistence::crash_fs::note_flushed(&journal.target, &mut file)
         .map_err(|_| HandoverError::Sync)?;
     sync_dir_of(path).map_err(|_| HandoverError::Sync)?;
+    seam(&journal.target, At::AbandonFileSynced)?;
     seal(&mut file, path, frames)
 }
 
@@ -186,6 +197,9 @@ fn seal(file: &mut File, path: &Path, frames: &[Vec<u8>]) -> Result<(), Handover
     }
 }
 
+#[cfg(test)]
+#[path = "config_persistence_journal_v2_drain_handover_crash_tests.rs"]
+mod crash_tests;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_drain_handover_tests.rs"]
 mod tests;
