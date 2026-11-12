@@ -311,34 +311,40 @@ pub(super) type PlatformTable = MacTable;
 /// kill reserve, so the gateway's stop deadline holds by construction.
 const FREEZE_SLICE: Duration = Duration::from_millis(150);
 const KILL_SLICE: Duration = Duration::from_millis(100);
-/// The most descendants one sweep holds; the rest are reported as residual.
-const MEMBER_CAP: usize = 256;
 /// Descriptors the gateway keeps for its own sockets and files.
 const FD_RESERVE: usize = 512;
 
-/// The bounds every backend's sweep runs under.
-pub(super) fn config() -> SweepConfig {
-    SweepConfig {
-        freeze_slice: FREEZE_SLICE,
-        kill_slice: KILL_SLICE,
-        cap: MEMBER_CAP,
-    }
-}
-
-/// The one pidfd budget of this process, sized from its descriptor limit.
-pub(super) fn process_budget() -> &'static PidfdBudget {
-    static BUDGET: std::sync::OnceLock<PidfdBudget> = std::sync::OnceLock::new();
-    BUDGET.get_or_init(|| {
+/// The one limit that bounds both the descendants a sweep holds and the
+/// pidfds all sweeps hold together: the descriptor limit less a reserve, never
+/// above 4096 and never below 64 (the reviewed design's formula).
+fn fd_limit() -> usize {
+    static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
         let nofile = rustix::process::getrlimit(rustix::process::Resource::Nofile)
             .current
             .and_then(|limit| usize::try_from(limit).ok())
             .unwrap_or(1024);
         let limit = PidfdBudget::limit_for(nofile, FD_RESERVE);
         if limit < 4096 {
-            tracing::info!(limit, nofile, "descendant sweep: pidfd budget below its cap");
+            tracing::info!(limit, nofile, "descendant sweep: limit below its cap");
         }
-        PidfdBudget::new(limit)
+        limit
     })
+}
+
+/// The bounds every backend's sweep runs under.
+pub(super) fn config() -> SweepConfig {
+    SweepConfig {
+        freeze_slice: FREEZE_SLICE,
+        kill_slice: KILL_SLICE,
+        cap: fd_limit(),
+    }
+}
+
+/// The one pidfd budget of this process.
+pub(super) fn process_budget() -> &'static PidfdBudget {
+    static BUDGET: std::sync::OnceLock<PidfdBudget> = std::sync::OnceLock::new();
+    BUDGET.get_or_init(|| PidfdBudget::new(fd_limit()))
 }
 
 #[cfg(test)]

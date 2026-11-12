@@ -339,3 +339,52 @@ fn a_second_earlier_stop_deadline_takes_effect_and_a_later_one_does_not() {
         "a later stop changes nothing"
     );
 }
+
+/// Start a helper that stays attached to the backend by parent pid but leads
+/// its own session, so the backend's group kill never reaches it. The leaf's
+/// pid lands in `leaf.pid`. The backend ignores EOF and SIGTERM alike.
+async fn started_with_session_leaf() -> (tempfile::TempDir, Arc<StdioTransport>, u32) {
+    let after = "trap '' TERM
+cat > helper.py <<'PY'
+import os, subprocess, time
+null = subprocess.DEVNULL
+leaf = subprocess.Popen(['sleep', '60'], start_new_session=True, stdin=null, stdout=null, stderr=null)
+open('leaf.tmp', 'w').write(str(leaf.pid))
+os.rename('leaf.tmp', 'leaf.pid')
+time.sleep(60)
+PY
+python3 helper.py </dev/null >/dev/null 2>&1 &
+while :; do sleep 0.05; done";
+    let (w, t) = started(after, None).await;
+    let leaf_file = w.path().join("leaf.pid");
+    poll_until("the helper starts its leaf", || leaf_file.exists()).await;
+    let leaf = std::fs::read_to_string(&leaf_file)
+        .expect("leaf pid")
+        .trim()
+        .parse()
+        .expect("a pid");
+    (w, t, leaf)
+}
+
+/// Whether `pid` is a live process: a zombie waiting for its reaper is dead.
+fn alive(pid: u32) -> bool {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps runs");
+    let stat = String::from_utf8_lossy(&out.stdout);
+    let stat = stat.trim();
+    !stat.is_empty() && !stat.starts_with('Z')
+}
+
+/// The descendant sweep runs on the ordinary stop as well as the hurried one:
+/// a helper still attached to the backend, leading its own session, dies with
+/// it. Red if the sweep is skipped on the ordinary path: the group kill alone
+/// never reaches the leaf.
+#[tokio::test]
+async fn an_ordinary_close_kills_a_leaf_in_its_own_session() {
+    let (_w, t, leaf) = started_with_session_leaf().await;
+    assert!(alive(leaf), "the leaf runs before the stop");
+    t.close().await.expect("close");
+    poll_until("the leaf dies with the backend", || !alive(leaf)).await;
+}

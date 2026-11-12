@@ -313,17 +313,13 @@ impl ChildTree {
             &mut super::sweep::PlatformTable::new(),
             super::sweep::process_budget(),
         );
-        tracing::debug!(
-            backend = self.wrapper.id(),
-            killed = report.killed.len(),
-            continued = report.continued.len(),
-            passes = report.passes,
-            "descendant sweep finished"
-        );
         if !report.residual.is_empty() {
             tracing::warn!(
                 backend = self.wrapper.id(),
                 residual = report.residual.len(),
+                killed = report.killed.len(),
+                continued = report.continued.len(),
+                passes = report.passes,
                 pids = ?report.residual.iter().map(|who| who.pid).collect::<Vec<_>>(),
                 "descendant sweep left processes it could not confirm gone"
             );
