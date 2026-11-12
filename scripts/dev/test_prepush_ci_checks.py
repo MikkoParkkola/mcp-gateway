@@ -37,6 +37,7 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/check-reads-token.py", ()): "cargo: builds the library with the read-token probe; Spark only",
     ("scripts/ci/check_docker_hub_pulls.py", ()): "network: queries Docker Hub",
     ("scripts/ci/check_needs.py", ("$ROLLUP_EXPECTS",)): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
+    ("scripts/ci/check_toolchain_pin.py", ("--runtime",)): "cargo: compares the installed rustc with the pinned channel; the runner's compiler",
     ("scripts/ci/check_needs.py", ("${skippable[@]}", "$ROLLUP_EXPECTS")): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
     ("scripts/ci/job_time_watch.py", ("macos-shards",)): "ci-env: reads this run's jobs from the Actions API (GITHUB_RUN_ID, actions: read)",
     ("scripts/ci/shard_tests.py", ("run", "linux", "${{matrix.shard}}")): "cargo: runs cargo test shards",
