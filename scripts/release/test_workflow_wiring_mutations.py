@@ -1570,14 +1570,14 @@ CASES += [
      "          cosign-release: \"v2.6.5\"\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", TOLERATED),
     # Any workflow file counts, not only the ones that install cosign today.
     ("cosign-installed-unpinned-in-another-workflow", "mrtr7b-full-burst.yml",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n"
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n"
      "      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n"
      "      - name: Run the full-burst ledger\n", CAUGHT),
     # A quoted action reference is still the installer and still needs the pin.
     ("cosign-installed-unpinned-with-a-quoted-uses", "mrtr7b-full-burst.yml",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n"
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n"
      "      - uses: \"sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6\" # v4.1.2\n"
      "      - name: Run the full-burst ledger\n", CAUGHT),
     ("cosign-pin-below-the-floor-behind-a-single-quoted-uses", "ci.yml",
@@ -1591,20 +1591,20 @@ CASES += [
      "      - name: Install cosign\n        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))\n", CAUGHT),
     # A quoted key is the same key.
     ("cosign-installed-unpinned-under-a-quoted-uses-key", "mrtr7b-full-burst.yml",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n"
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n"
      "      - \"uses\": sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n"
      "      - name: Run the full-burst ledger\n", CAUGHT),
     # Any run of spaces after the list dash is the same step.
     ("cosign-installed-below-the-floor-after-a-wide-dash", "mrtr7b-full-burst.yml",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n"
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n"
      "      -   uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n          with:\n            cosign-release: v2.6.4\n"
      "      - name: Run the full-burst ledger\n", CAUGHT),
     # A flow-style step still installs cosign; its pin cannot be read.
     ("cosign-installed-below-the-floor-as-a-flow-mapping", "mrtr7b-full-burst.yml",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n"
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n"
      "      - { uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6, with: { cosign-release: v2.6.4 } }\n"
      "      - name: Run the full-burst ledger\n", CAUGHT),
     # An alias installs what its anchor names under a name no check reads.
@@ -1622,8 +1622,8 @@ CASES += [
      "      - uses: *1\n        with:\n          cosign-release: v2.5.2\n", CAUGHT),
     # GitHub matches an action's owner and repository in any case.
     ("cosign-installed-below-the-floor-in-another-case", "mrtr7b-full-burst.yml",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - uses: Sigstore/Cosign-Installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - uses: Sigstore/Cosign-Installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
     ("cosign-installer-in-another-case-and-unguarded", "ci.yml",
      "      - name: Install cosign\n        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))\n",
      "      - uses: Sigstore/Cosign-Installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n"
@@ -1637,27 +1637,27 @@ CASES += [
      "        with:\n          ignored-input: |\n            cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
     # A shell redirection or a comment is not a YAML anchor.
     ("shell-redirection-and-a-comment-are-not-anchors", "mrtr7b-full-burst.yml",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      # see &notes\n      - run: true &>/dev/null\n      - name: Run the full-burst ledger\n", TOLERATED),
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      # see &notes\n      - run: true &>/dev/null\n      - name: Run the full-burst ledger\n", TOLERATED),
     # A double-quoted reference continued after `\\` is one reference to YAML.
     ("cosign-installer-reference-continued-onto-a-second-line", "mrtr7b-full-burst.yml",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - uses: \"sigstore/cosign-\\\n          installer@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - uses: \"sigstore/cosign-\\\n          installer@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
     ("cosign-installer-reference-spelled-with-an-escape", "mrtr7b-full-burst.yml",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - uses: \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - uses: \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
     # The floor reads the parsed workflow: spellings a text scan misses.
     ("cosign-installer-with-escaped-key-and-value-below-the-floor", "mrtr7b-full-burst.yml",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - \"u\\x73es\": \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - \"u\\x73es\": \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
     ("cosign-installer-flow-step-with-a-quoted-hash-below-the-floor", "mrtr7b-full-burst.yml",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - { name: \"Install #1\", uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6, with: { cosign-release: v2.5.2 } }\n      - name: Run the full-burst ledger\n", CAUGHT),
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - { name: \"Install #1\", uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6, with: { cosign-release: v2.5.2 } }\n      - name: Run the full-burst ledger\n", CAUGHT),
     # At the floor, only the recogniser check sees it: the inventory and the
     # rehearsal exemption would read past this installer.
     ("cosign-installer-with-escaped-key-at-the-floor", "mrtr7b-full-burst.yml",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
-     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - \"u\\x73es\": \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.6.5\n      - name: Run the full-burst ledger\n", CAUGHT),
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
+     "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - \"u\\x73es\": \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.6.5\n      - name: Run the full-burst ledger\n", CAUGHT),
     # PyYAML keeps the last of two keys and flattens `<<`; the strict
     # loader refuses both.
     ("cosign-pin-given-twice", "ci.yml",
@@ -1815,7 +1815,7 @@ _HOSTED_PY_STEP = _HOSTED_PY + (
 CASES += [
     ("throwaway-python-suites-dropped", "ci.yml", _HOSTED_PY_STEP, _HOSTED_PY, CAUGHT),
     ("throwaway-python-failure-swallowed", "ci.yml",
-     '          exit "$fail"\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n'
+     '          exit "$fail"\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n'
      "      # Restore only: saving from throwaway runs would evict the entries the\n"
      "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
      "      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n"
@@ -1826,7 +1826,7 @@ CASES += [
      "      #   release.yml `verify` needs it green on the released revision.\n"
      "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
      "  # Same run on the self-hosted arm64 runner.",
-     '          exit 0\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n'
+     '          exit 0\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n'
      "      # Restore only: saving from throwaway runs would evict the entries the\n"
      "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
      "      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n"

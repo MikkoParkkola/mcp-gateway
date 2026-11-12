@@ -37,6 +37,7 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/check-reads-token.py", ()): "cargo: builds the library with the read-token probe; Spark only",
     ("scripts/ci/check_docker_hub_pulls.py", ()): "network: queries Docker Hub",
     ("scripts/ci/check_needs.py", ("$ROLLUP_EXPECTS",)): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
+    ("scripts/ci/check_toolchain_pin.py", ("--runtime",)): "cargo: compares the installed rustc with the pinned channel; the runner's compiler",
     ("scripts/ci/check_needs.py", ("${skippable[@]}", "$ROLLUP_EXPECTS")): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
     ("scripts/ci/job_time_watch.py", ("macos-shards",)): "ci-env: reads this run's jobs from the Actions API (GITHUB_RUN_ID, actions: read)",
     ("scripts/ci/shard_tests.py", ("run", "linux", "${{matrix.shard}}")): "cargo: runs cargo test shards",
@@ -135,7 +136,7 @@ NON_POSIX_SHELLS = ("pwsh", "powershell", "cmd")
 # against this set (R3): a new reader is pinned here, a lost one is a regression.
 RUST_TARGETS = frozenset({
     "capability_pin_policy", "cli_debug_assert", "cli_surface_inventory", "client_matrix_claims",
-    "e2e_quickstart_minimal_config", "kubernetes_manifest_tests", "mik_5226_acs", "mik_6550_roadmap",
+    "e2e_quickstart_minimal_config", "init_admin_token_docs", "kubernetes_manifest_tests", "mik_5226_acs", "mik_6550_roadmap",
     "mik_6556_trust_cbom", "mik_6977_acs", "mik_7272_conformance", "mik_8783_cli_help",
     "mik_8783_docs", "mik_8783_upgrade_retired_settings", "public_claims_validation",
     "registry_doc_counts", "shadow_scan_docs", "team_deployment_guide_claims",

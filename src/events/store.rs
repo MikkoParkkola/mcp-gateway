@@ -258,15 +258,16 @@ pub(crate) struct Store {
     /// in memory.
     #[cfg(test)]
     fail_next_dead_sync: std::sync::atomic::AtomicBool,
-    /// Test-only: the temporary directory this store lives in, held until
-    /// the store's last handle drops, so a write still in flight when its
-    /// test ends lands in a directory that is then removed with it.
-    #[cfg(test)]
-    test_dir: crate::test_dir_keep::TestDirKeep,
     /// Test-only: one settle pauses before it rewrites the subscription's
     /// delivery status line, the last write a delivery makes.
     #[cfg(test)]
     pub(crate) before_touch: crate::test_pause::Slot,
+    /// Test-only: the temporary directory this store lives in, held until
+    /// the store's last handle drops, so a write still in flight when its
+    /// test ends lands in a directory that is then removed with it.
+    /// Declared last, so all other store fields drop before its directories.
+    #[cfg(test)]
+    test_dir: crate::test_dir_keep::TestDirKeep,
 }
 
 impl Store {
@@ -279,10 +280,10 @@ impl Store {
         self.test_dir.keep(dir, &self.subs_dir);
     }
 
-    /// Test-only: see [`crate::test_dir_keep::TestDirKeep::opened_by_gateway`].
+    /// Test-only: hold the ownership acquired before this store opened.
     #[cfg(test)]
-    pub(crate) fn opened_by_gateway(&self) {
-        self.test_dir.opened_by_gateway();
+    pub(crate) fn attach_registered(&self, found: crate::test_dir_keep::Found) {
+        self.test_dir.attach_registered(found);
     }
 
     /// Test-only: see [`crate::test_dir_keep::TestDirKeep::assert_kept`].

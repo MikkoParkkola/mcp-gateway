@@ -312,10 +312,16 @@ impl EventsHub {
         self.store.keep_test_dir(dir);
     }
 
-    /// Test-only: the gateway opened this hub's store, not a test.
+    /// Test-only: hold the ownership acquired before this hub's store opened.
     #[cfg(test)]
-    pub(crate) fn opened_by_gateway(&self) {
-        self.store.opened_by_gateway();
+    pub(crate) fn attach_registered(&self, found: crate::test_dir_keep::Found) {
+        self.store.attach_registered(found);
+    }
+
+    /// Test-only: check the store's ownership before starting the hub.
+    #[cfg(test)]
+    pub(crate) fn assert_test_dir_kept(&self, worker: &str) {
+        self.store.assert_test_dir_kept(worker);
     }
 
     fn open_with(
