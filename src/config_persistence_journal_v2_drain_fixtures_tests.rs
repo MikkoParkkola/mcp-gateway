@@ -159,7 +159,8 @@ impl Live {
         let root = std::fs::canonicalize(dir.path()).expect("resolved fixture directory");
         // The overlay projects only config files; the logger owns its audit durability.
         let resolved = root.join("config");
-        let audit = root.join("audit");
+        // The registered directory's own spelling: a canonical one differs on Windows.
+        let audit = dir.path().join("audit");
         std::fs::create_dir(&resolved).expect("fixture config directory");
         std::fs::create_dir(&audit).expect("fixture audit directory");
         let path = resolved.join("gateway.yaml");
