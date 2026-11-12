@@ -73,6 +73,12 @@ struct Fake {
     foreign: Option<u32>,
     /// Pids the sweep released a handle for.
     released: Vec<u32>,
+    /// A by-pid Stop to this pid lands on a process that took the pid just
+    /// before it arrived (the member exited): (pid, start of the reuser).
+    reuse_after_stop: Option<(u32, u64)>,
+    /// A by-pid Kill to this pid finds a running stranger there instead (the
+    /// member exited and its pid was reused): (pid, start of the stranger).
+    swap_before_kill: Option<(u32, u64)>,
     /// Every table reading fails: no rows, flagged incomplete.
     blind: bool,
     /// The table cannot read this pid's state (an error, not an exit).
@@ -114,6 +120,8 @@ impl Fake {
             cont_fails: None,
             foreign: None,
             released: Vec::new(),
+            reuse_after_stop: None,
+            swap_before_kill: None,
             blind: false,
             unreadable: None,
             fail: None,
@@ -281,6 +289,28 @@ impl ProcessTable for Fake {
         if handle == Handle::ByPid && self.strict_by_pid {
             by_pid_gate(sig, self.procs[index].state)?;
         }
+        if handle == Handle::ByPid
+            && sig == Sig::Stop
+            && let Some((pid, start)) = self.reuse_after_stop
+            && pid == who.pid
+        {
+            // The member exited and a new process took its pid just before the
+            // stop arrived: the stop lands on the stranger.
+            self.procs[index].id = Identity { pid, start };
+            self.procs[index].ppid = 1;
+            self.procs[index].state = ProcState::Stopped;
+            self.wrong.push((pid, sig));
+            return Ok(handle);
+        }
+        if sig == Sig::Kill
+            && let Some((pid, start)) = self.swap_before_kill
+            && pid == who.pid
+        {
+            self.procs[index].id = Identity { pid, start };
+            self.procs[index].ppid = 1;
+            self.procs[index].state = ProcState::Running;
+            return Err(SignalError::Mismatch);
+        }
         // By pid, a running target can exit and its pid be reused between the
         // identity check and the delivery; a stopped one cannot exit.
         if handle == Handle::ByPid
@@ -323,6 +353,21 @@ impl ProcessTable for Fake {
 
     fn release(&mut self, id: Identity) {
         self.released.push(id.pid);
+    }
+
+    fn rescue(&mut self, member: Identity) -> Rescue {
+        let cont_fails = self.cont_fails == Some(member.pid);
+        let Some(found) = self.procs.iter_mut().find(|p| p.id.pid == member.pid) else {
+            return Rescue::NothingToDo;
+        };
+        if !is_stray_stop(member, found.id, found.state) {
+            return Rescue::NothingToDo;
+        }
+        if cont_fails {
+            return Rescue::Failed;
+        }
+        found.state = ProcState::Running;
+        Rescue::Resumed
     }
 }
 

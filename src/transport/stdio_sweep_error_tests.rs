@@ -290,3 +290,89 @@ fn the_cap_keeps_the_lowest_pids_when_the_table_lists_them_high_first() {
         assert_eq!(fake.state_of(pid), ProcState::Running);
     }
 }
+
+fn id_at(pid: u32, start: u64) -> Identity {
+    Identity { pid, start }
+}
+
+/// By pid, the member exits and a stranger takes its pid just before the sweep's
+/// SIGSTOP arrives: the stop lands on the stranger, the later Kill and Cont name
+/// the old identity and mismatch. The sweep resumes the stranger.
+/// Red if a stray stop is left in place (the stranger stays stopped, unreported).
+#[test]
+fn a_stranger_hit_by_a_stray_stop_is_resumed() {
+    let mut fake = Fake::new(&[(10, 1), (11, 10)]);
+    fake.pidfd = false;
+    fake.reuse_after_stop = Some((11, 999_999));
+    let report = run(&mut fake, 10);
+    assert_eq!(
+        fake.wrong,
+        vec![(11, Sig::Stop)],
+        "premise: the stop strayed"
+    );
+    assert_eq!(report.rescued, 1, "{report:?}");
+    assert_eq!(
+        fake.state_of(11),
+        ProcState::Running,
+        "the stranger was resumed"
+    );
+    assert!(fake.stopped().is_empty(), "{:?}", fake.stopped());
+    assert_eq!(report.stop_mismatch, 0, "{report:?}");
+}
+
+/// When the resume fails the stranger may be left stopped: counted as a stop
+/// mismatch and a residual.
+/// Red if a failed rescue is silent.
+#[test]
+fn a_failed_rescue_is_a_stop_mismatch_residual() {
+    let mut fake = Fake::new(&[(10, 1), (11, 10)]);
+    fake.pidfd = false;
+    fake.reuse_after_stop = Some((11, 999_999));
+    fake.cont_fails = Some(11);
+    let report = run(&mut fake, 10);
+    assert_eq!(report.stop_mismatch, 1, "{report:?}");
+    assert_eq!(report.rescued, 0, "{report:?}");
+    assert!(report.residual.contains(&id(11)), "{report:?}");
+    assert_eq!(fake.stopped(), vec![11], "the stranger is still stopped");
+}
+
+/// A member that exited before its kill and whose pid a running stranger now
+/// holds is not a stop mismatch: nothing to rescue, nothing reported, and the
+/// stranger is untouched.
+/// Red if every exit race is counted as a stop mismatch.
+#[test]
+fn a_member_that_exited_by_itself_is_not_a_stop_mismatch() {
+    let mut fake = Fake::new(&[(10, 1), (11, 10)]);
+    fake.pidfd = false;
+    fake.swap_before_kill = Some((11, 888));
+    let report = run(&mut fake, 10);
+    assert_eq!(report.stop_mismatch, 0, "{report:?}");
+    assert_eq!(report.rescued, 0, "{report:?}");
+    assert_eq!(
+        fake.state_of(11),
+        ProcState::Running,
+        "the stranger is untouched"
+    );
+}
+
+/// Only a stopped process born after the member, at the member's pid, is a
+/// stray stop's victim.
+/// Red if a running process, an older one or another pid qualifies.
+#[test]
+fn only_a_stopped_later_process_at_the_pid_is_a_stray_stop() {
+    let member = id_at(11, 500);
+    assert!(is_stray_stop(member, id_at(11, 501), ProcState::Stopped));
+    assert!(!is_stray_stop(member, id_at(11, 501), ProcState::Running));
+    assert!(
+        !is_stray_stop(member, id_at(11, 500), ProcState::Stopped),
+        "the member itself"
+    );
+    assert!(
+        !is_stray_stop(member, id_at(11, 499), ProcState::Stopped),
+        "older than the member"
+    );
+    assert!(
+        !is_stray_stop(member, id_at(12, 501), ProcState::Stopped),
+        "another pid"
+    );
+}

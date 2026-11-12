@@ -14,7 +14,7 @@
 #![allow(unsafe_code)]
 
 #[cfg(target_os = "macos")]
-use super::{Handle, ProcessTable, Sig, SignalError, by_pid_gate};
+use super::{Handle, ProcessTable, Rescue, Sig, SignalError, by_pid_gate, is_stray_stop};
 use super::{Identity, Listing, ProcState};
 
 /// `p_stat` values from `<sys/proc.h>`.
@@ -336,6 +336,33 @@ impl ProcessTable for MacTable {
 
     fn idle(&mut self) {
         std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    fn rescue(&mut self, member: Identity) -> Rescue {
+        use rustix::process::{Pid, Signal, kill_process};
+        match Libproc.info(member.pid) {
+            Lookup::Found(info)
+                if is_stray_stop(
+                    member,
+                    Identity {
+                        pid: member.pid,
+                        start: info.start,
+                    },
+                    info.state,
+                ) =>
+            {
+                match i32::try_from(member.pid)
+                    .ok()
+                    .and_then(Pid::from_raw)
+                    .map(|pid| kill_process(pid, Signal::CONT))
+                {
+                    Some(Ok(())) => Rescue::Resumed,
+                    _ => Rescue::Failed,
+                }
+            }
+            Lookup::Missing(Miss::Failed | Miss::Foreign) => Rescue::Failed,
+            Lookup::Found(_) | Lookup::Missing(Miss::Gone) => Rescue::NothingToDo,
+        }
     }
 }
 

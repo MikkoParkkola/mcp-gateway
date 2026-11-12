@@ -18,7 +18,10 @@ use std::time::{Duration, Instant};
 
 use rustix::process::{Pid, PidfdFlags, Signal, kill_process, pidfd_open, pidfd_send_signal};
 
-use super::{Handle, Identity, Listing, ProcState, ProcessTable, Sig, SignalError, by_pid_gate};
+use super::{
+    Handle, Identity, Listing, ProcState, ProcessTable, Rescue, Sig, SignalError, by_pid_gate,
+    is_stray_stop,
+};
 
 /// What `/proc/<pid>/stat` says about a process.
 #[derive(Debug, PartialEq, Eq)]
@@ -246,6 +249,28 @@ impl ProcessTable for LinuxTable {
 
     fn release(&mut self, id: Identity) {
         self.fds.remove(&id);
+    }
+
+    fn rescue(&mut self, member: Identity) -> Rescue {
+        match read_stat(member.pid) {
+            Lookup::Found(stat)
+                if is_stray_stop(
+                    member,
+                    Identity {
+                        pid: member.pid,
+                        start: stat.start,
+                    },
+                    stat.state,
+                ) =>
+            {
+                match pid_of(member).map(|pid| kill_process(pid, Signal::CONT)) {
+                    Some(Ok(())) => Rescue::Resumed,
+                    _ => Rescue::Failed,
+                }
+            }
+            Lookup::Unreadable => Rescue::Failed,
+            Lookup::Found(_) | Lookup::Gone => Rescue::NothingToDo,
+        }
     }
 
     fn idle(&mut self) {

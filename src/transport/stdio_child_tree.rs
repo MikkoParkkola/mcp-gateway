@@ -343,6 +343,8 @@ impl ChildTree {
             || report.incomplete_reads > 0
             || report.unconfirmed > 0
             || report.stuck_stopped > 0
+            || report.rescued > 0
+            || report.stop_mismatch > 0
         {
             tracing::warn!(
                 backend = self.wrapper.id(),
@@ -350,6 +352,8 @@ impl ChildTree {
                 unreadable = report.unknown,
                 unconfirmed_stopped = report.unconfirmed,
                 stuck_stopped = report.stuck_stopped,
+                rescued = report.rescued,
+                stop_mismatch = report.stop_mismatch,
                 incomplete_reads = report.incomplete_reads,
                 killed = report.killed.len(),
                 continued = report.continued.len(),

@@ -311,3 +311,37 @@ fn a_held_kill_needs_no_stop_first() {
     assert_eq!(table.signal(id, Sig::Kill, true), Ok(Handle::Held));
     child.wait().expect("reap");
 }
+
+/// The rescue resumes a stopped process that took a member's pid after it: here
+/// the "member" is the child under an earlier start time, the same pid.
+/// Red if the rescue does not signal, or signals a running process.
+#[test]
+fn a_rescue_resumes_a_stopped_reuser_and_leaves_a_running_one() {
+    let mut child = sleeper();
+    let real = identity(&child);
+    let member = Identity {
+        start: real.start - 1,
+        ..real
+    };
+    let mut table = LinuxTable::new();
+    assert_eq!(
+        table.rescue(member),
+        Rescue::NothingToDo,
+        "running: left alone"
+    );
+    assert_eq!(table.signal(real, Sig::Stop, false), Ok(Handle::ByPid));
+    assert!(settle(&mut table, real, ProcState::Stopped), "stopped");
+    assert_eq!(table.rescue(member), Rescue::Resumed);
+    assert!(settle(&mut table, real, ProcState::Running), "resumed");
+    let later = Identity {
+        start: real.start + 1,
+        ..real
+    };
+    assert_eq!(
+        table.rescue(later),
+        Rescue::NothingToDo,
+        "older than the member"
+    );
+    child.kill().expect("kill");
+    child.wait().expect("reap");
+}

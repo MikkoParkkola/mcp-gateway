@@ -80,6 +80,26 @@ pub(super) struct Listing {
     pub(super) unreadable: Vec<u32>,
 }
 
+/// What a rescue did for a member whose pid no longer names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Rescue {
+    /// A stopped process, born after the member, was resumed.
+    Resumed,
+    /// Nothing at that pid needed resuming (it is gone, or running).
+    NothingToDo,
+    /// A stopped reuser was found and could not be resumed, or the pid could
+    /// not be read: it may be left stopped.
+    Failed,
+}
+
+/// Whether `found`, the process now at a member's pid, is a stopped reuser the
+/// sweep's stray SIGSTOP may have hit: the member was alive when the sweep read
+/// it, so any other process at its pid was created after that read; one that is
+/// stopped within the sweep's window can only have been stopped by us.
+pub(super) fn is_stray_stop(member: Identity, found: Identity, state: ProcState) -> bool {
+    found.pid == member.pid && found.start > member.start && state == ProcState::Stopped
+}
+
 /// The process table the sweep reads and signals through.
 pub(super) trait ProcessTable {
     fn read(&mut self) -> Listing;
@@ -96,6 +116,12 @@ pub(super) trait ProcessTable {
     /// Yield between two polls of a state, so waiting for a freeze to land does
     /// not spin a core.
     fn idle(&mut self) {}
+    /// A by-pid signal to `member` found its pid taken by another process: if
+    /// that one is stopped (the sweep's SIGSTOP landed on it), resume it. Only a
+    /// process created after the member qualifies (see [`is_stray_stop`]).
+    fn rescue(&mut self, _member: Identity) -> Rescue {
+        Rescue::NothingToDo
+    }
 }
 
 /// The bounds one sweep runs under.
@@ -122,6 +148,10 @@ pub(super) struct SweepReport {
     pub(super) unconfirmed: usize,
     /// Members the sweep stopped, could not kill, and could not continue.
     pub(super) stuck_stopped: usize,
+    /// Reusers a stray by-pid SIGSTOP landed on, resumed.
+    pub(super) rescued: usize,
+    /// Reusers a stray by-pid SIGSTOP may have left stopped (rescue failed).
+    pub(super) stop_mismatch: usize,
     /// Table readings that were incomplete (a failed listing or entry).
     pub(super) incomplete_reads: u32,
     pub(super) passes: u32,
@@ -354,6 +384,20 @@ impl Sweep {
                     continue;
                 }
                 Err(SignalError::NotStopped) => report.unconfirmed += 1,
+                // By pid, the member's pid names another process now: the stop
+                // may have landed on it. Resume it if it is a stopped reuser;
+                // the old identity has nothing left to continue or kill.
+                Err(SignalError::Mismatch) if entry.is_some() && !held => {
+                    match table.rescue(who) {
+                        Rescue::Resumed => report.rescued += 1,
+                        Rescue::NothingToDo => {}
+                        Rescue::Failed => {
+                            report.stop_mismatch += 1;
+                            report.residual.push(who);
+                        }
+                    }
+                    continue;
+                }
                 Err(_) => {}
             }
             if entry.is_some_and(|f| f.ours) {
