@@ -38,6 +38,19 @@ fn the_email_is_never_an_argument() {
     assert!(parse(&["--email-stdin", "--email", EMAIL]).is_err());
 }
 
+/// A reader of `.1` bytes that counts what was taken from it.
+struct Counting<'a>(&'a std::cell::Cell<usize>, usize);
+
+impl std::io::Read for Counting<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = buf.len().min(self.1);
+        buf[..n].fill(b'a');
+        self.1 -= n;
+        self.0.set(self.0.get() + n);
+        Ok(n)
+    }
+}
+
 /// MIK-9456.CLI.1: the read is bounded and takes one email-sized line.
 /// Mutant: read without a bound, or accept an empty or multi-line input.
 #[test]
@@ -66,16 +79,6 @@ fn stdin_is_read_bounded_and_trimmed_to_one_line() {
     let long = "a".repeat(MAX_EMAIL_INPUT + 1);
     assert!(read_email(long.as_bytes()).is_err(), "over the bound");
     // A long input is cut off at the bound, not read to the end.
-    struct Counting<'a>(&'a std::cell::Cell<usize>, usize);
-    impl std::io::Read for Counting<'_> {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            let n = buf.len().min(self.1);
-            buf[..n].fill(b'a');
-            self.1 -= n;
-            self.0.set(self.0.get() + n);
-            Ok(n)
-        }
-    }
     let read = std::cell::Cell::new(0);
     assert!(read_email(Counting(&read, 1 << 20)).is_err());
     assert!(
@@ -448,8 +451,8 @@ async fn a_bad_window_is_refused_before_a_request_is_sent() {
     ] {
         let mut argv = vec!["--email-stdin"];
         argv.extend(flags);
-        let args = parse(&argv).expect("parses");
-        let message = lookup(&base, &LinkTls::default(), TOKEN, EMAIL, &args)
+        let parsed = parse(&argv).expect("parses");
+        let message = lookup(&base, &LinkTls::default(), TOKEN, EMAIL, &parsed)
             .await
             .expect_err("a bad window");
         assert!(
