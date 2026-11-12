@@ -30,7 +30,10 @@ fn parse(extra: &[&str]) -> Result<LookupEmailArgs, clap::Error> {
 fn the_email_is_never_an_argument() {
     assert!(parse(&["--email-stdin"]).is_ok());
     assert!(parse(&[]).is_err(), "stdin must be asked for");
-    assert!(parse(&["--email-stdin", EMAIL]).is_err(), "no positional email");
+    assert!(
+        parse(&["--email-stdin", EMAIL]).is_err(),
+        "no positional email"
+    );
     assert!(parse(&["--email", EMAIL]).is_err(), "no --email VALUE");
     assert!(parse(&["--email-stdin", "--email", EMAIL]).is_err());
 }
@@ -39,12 +42,25 @@ fn the_email_is_never_an_argument() {
 /// Mutant: read without a bound, or accept an empty or multi-line input.
 #[test]
 fn stdin_is_read_bounded_and_trimmed_to_one_line() {
-    assert_eq!(read_email(format!("{EMAIL}\n").as_bytes()).as_deref(), Ok(EMAIL));
-    assert_eq!(read_email(format!("{EMAIL}\r\n").as_bytes()).as_deref(), Ok(EMAIL));
-    assert_eq!(read_email(EMAIL.as_bytes()).as_deref(), Ok(EMAIL), "no newline needed");
+    assert_eq!(
+        read_email(format!("{EMAIL}\n").as_bytes()).as_deref(),
+        Ok(EMAIL)
+    );
+    assert_eq!(
+        read_email(format!("{EMAIL}\r\n").as_bytes()).as_deref(),
+        Ok(EMAIL)
+    );
+    assert_eq!(
+        read_email(EMAIL.as_bytes()).as_deref(),
+        Ok(EMAIL),
+        "no newline needed"
+    );
     assert!(read_email(&b""[..]).is_err(), "empty");
     assert!(read_email(&b"\n"[..]).is_err(), "blank");
-    assert!(read_email(&b"a@b.invalid\nsecond\n"[..]).is_err(), "two lines");
+    assert!(
+        read_email(&b"a@b.invalid\nsecond\n"[..]).is_err(),
+        "two lines"
+    );
     assert!(read_email(&b"a\0b@c.invalid"[..]).is_err(), "control byte");
     assert!(read_email(&[0xff, 0xfe][..]).is_err(), "not UTF-8");
     let long = "a".repeat(MAX_EMAIL_INPUT + 1);
@@ -105,10 +121,10 @@ async fn stand_in(
                     .get("authorization")
                     .and_then(|v| v.to_str().ok())
                     .map(str::to_owned);
-                record.lock().unwrap().push(format!(
-                    "{}|{text}",
-                    bearer.unwrap_or_default()
-                ));
+                record
+                    .lock()
+                    .unwrap()
+                    .push(format!("{}|{text}", bearer.unwrap_or_default()));
                 (
                     StatusCode::from_u16(status).unwrap(),
                     [("content-type", "application/json")],
@@ -117,7 +133,9 @@ async fn stand_in(
             }
         }),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move { axum::serve(listener, app).await });
     (format!("http://{addr}"), seen)
@@ -146,7 +164,10 @@ async fn a_good_answer_decodes_and_the_request_carries_bearer_and_body() {
     assert_eq!(seen.len(), 1);
     let (bearer, text) = seen[0].split_once('|').expect("recorded");
     assert_eq!(bearer, format!("Bearer {TOKEN}"));
-    assert_eq!(serde_json::from_str::<serde_json::Value>(text).unwrap(), json!({"email": EMAIL}));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(text).unwrap(),
+        json!({"email": EMAIL})
+    );
 }
 
 /// MIK-9456.CLI.2: any non-2xx is an error that names the status and never
@@ -155,9 +176,8 @@ async fn a_good_answer_decodes_and_the_request_carries_bearer_and_body() {
 #[tokio::test]
 async fn a_refusal_is_an_error_without_the_email_or_the_token() {
     for status in [401_u16, 403, 429, 503] {
-        let echo: &'static str = Box::leak(
-            format!(r#"{{"error":"bad {EMAIL} with {TOKEN}"}}"#).into_boxed_str(),
-        );
+        let echo: &'static str =
+            Box::leak(format!(r#"{{"error":"bad {EMAIL} with {TOKEN}"}}"#).into_boxed_str());
         let (base, _) = stand_in(status, echo).await;
         let message = ask(&base).await.expect_err("a refusal");
         assert!(message.contains(&status.to_string()), "{message}");

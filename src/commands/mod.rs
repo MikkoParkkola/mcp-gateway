@@ -14,6 +14,8 @@ mod add_remove;
 mod api;
 mod api_key_rewrite;
 mod audit;
+#[cfg(feature = "webui")]
+mod audit_lookup;
 mod backend_url_keys;
 mod cap;
 mod capability_dirs;
@@ -21,8 +23,6 @@ pub(crate) mod color;
 #[cfg(feature = "config-export")]
 mod config_export;
 pub mod config_write;
-#[cfg(feature = "webui")]
-mod audit_lookup;
 #[cfg(feature = "webui")]
 mod dashboard_link;
 #[cfg(feature = "discovery")]
@@ -55,11 +55,11 @@ pub use add_remove::{
 #[cfg(feature = "webui")]
 pub use api::run_api_command;
 pub use audit::run_audit_command;
+#[cfg(feature = "webui")]
+pub use audit_lookup::run_audit_lookup_command;
 pub use cap::run_cap_command;
 #[cfg(feature = "config-export")]
 pub use config_export::run_config_export;
-#[cfg(feature = "webui")]
-pub use audit_lookup::run_audit_lookup_command;
 #[cfg(feature = "webui")]
 pub use dashboard_link::{run_dashboard_link_args, run_events_command};
 pub use doctor::{StdioProbe, run_doctor_command, run_doctor_shadow_command};
