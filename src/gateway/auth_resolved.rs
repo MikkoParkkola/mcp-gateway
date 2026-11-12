@@ -274,6 +274,16 @@ impl ResolvedAuthConfig {
         })
     }
 
+    /// Whether `quota` is the stable identity of a CLI key: some key in this
+    /// table carries an approver binding and has that quota principal. Display
+    /// names can collide or change, so a restriction on CLI keys is judged by
+    /// this identity, never by a key's name.
+    pub(crate) fn is_cli_key_quota(&self, quota: &QuotaPrincipal) -> bool {
+        self.api_keys()
+            .iter()
+            .any(|key| key.approved_by.is_some() && key.quota_principal.same_key_principal(quota))
+    }
+
     /// Whether `key`'s approver still stands at `at`. A key with no binding
     /// is not a CLI key and passes, so every other key keeps today's path.
     /// A CLI key needs exactly one key carrying its approver's stable

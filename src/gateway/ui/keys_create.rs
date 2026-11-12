@@ -506,12 +506,8 @@ fn caller_is_cli_key(
     bearer_quota: Option<&QuotaPrincipal>,
     session: Option<&MintingKey>,
 ) -> bool {
-    auth.api_keys().iter().any(|key| {
-        key.approved_by.is_some()
-            && (bearer_quota.is_some_and(|quota| key.quota_principal.same_key_principal(quota))
-                || session
-                    .is_some_and(|minter| key.quota_principal.same_key_principal(&minter.quota)))
-    })
+    bearer_quota.is_some_and(|quota| auth.is_cli_key_quota(quota))
+        || session.is_some_and(|minter| auth.is_cli_key_quota(&minter.quota))
 }
 
 /// `POST /ui/api/keys`.
