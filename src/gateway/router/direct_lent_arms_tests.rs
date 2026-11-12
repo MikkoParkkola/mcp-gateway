@@ -87,7 +87,10 @@ enum Guarded {
 async fn gateway(
     url: String,
     guarded: Guarded,
-) -> (axum::Router, (tempfile::TempDir, super::tests::FixtureDir)) {
+) -> (
+    axum::Router,
+    (Arc<tempfile::TempDir>, super::tests::FixtureDir),
+) {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("a key"));
     let backend = Arc::new(crate::backend::Backend::new(
         BACKEND,
@@ -115,7 +118,7 @@ async fn gateway(
     assert!(registry.register(backend), "the backend registers");
     let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&registry));
     meta.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
-    let log_dir = tempfile::tempdir().expect("a log directory");
+    let log_dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::transparency_log::TransparencyLogConfig {

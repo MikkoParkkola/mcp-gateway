@@ -18,7 +18,7 @@ use crate::security::transparency_log::TransparencyLogConfig;
 #[tokio::test]
 async fn a_task_frame_record_names_the_listener_subject() {
     let (state, _store) = crate::gateway::router::tests::test_router_app_state().await;
-    let dir = tempfile::tempdir().expect("a log directory");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -105,7 +105,7 @@ async fn a_task_frame_record_names_the_listener_subject() {
 #[tokio::test]
 async fn a_task_frame_delivery_names_the_api_key_credential() {
     let (state, _store) = crate::gateway::router::tests::test_router_app_state().await;
-    let dir = tempfile::tempdir().expect("a log directory");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {

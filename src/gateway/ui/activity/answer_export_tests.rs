@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::answer_fixture::{Dl, Fixture};
 use super::answer_list_tests::{get, row_of};
-use super::{ExportQuery, ListQuery, export_response};
+use super::{ExportQuery, export_response};
 use crate::trust::provenance_public::ProvenancePublicSigner;
 
 pub(super) fn signer() -> ProvenancePublicSigner {
@@ -15,8 +15,13 @@ pub(super) fn signer() -> ProvenancePublicSigner {
 }
 
 pub(super) async fn export(fx: &Fixture, format: &str) -> String {
+    export_for(fx, format, &[]).await
+}
+
+/// An export of the rows the query pairs select.
+pub(super) async fn export_for(fx: &Fixture, format: &str, pairs: &[(&str, &str)]) -> String {
     let query = ExportQuery {
-        list: ListQuery::default(),
+        list: super::answer_list_tests::q(pairs),
         format: Some(format.into()),
     };
     let response = export_response(&fx.logs(), &fx.access(), &query, Some(&signer()));
@@ -107,5 +112,24 @@ async fn r22_an_export_joins_across_passes() {
         row_of(&json!({"rows": rows}), "gw-old")["effect"],
         "delivered"
     );
+    assert_eq!(manifest["join_incomplete"], 0);
+}
+
+/// A long export of ordinary call/delivery pairs reads every call's effect:
+/// completed traces do not use up the joiner's bounds, which are for the
+/// traces that are still unresolved.
+#[tokio::test]
+async fn r45_a_long_export_of_sequential_pairs_reads_every_effect() {
+    let fx = Fixture::new(None);
+    for i in 0..5000 {
+        let trace = format!("gw-p{i}");
+        fx.call(&trace);
+        fx.delivery(&trace, &Dl::effect("delivered"));
+    }
+    let (rows, manifest) = ndjson(&export(&fx, "ndjson").await);
+    let calls: Vec<&Value> = rows.iter().filter(|r| r["kind"] == "call").collect();
+    assert_eq!(calls.len(), 5000, "every call is exported");
+    let not_delivered = calls.iter().filter(|r| r["effect"] != "delivered").count();
+    assert_eq!(not_delivered, 0, "calls that do not read delivered");
     assert_eq!(manifest["join_incomplete"], 0);
 }
