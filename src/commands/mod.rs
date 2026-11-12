@@ -150,8 +150,8 @@ pub fn run_init_command(
     let config_content = build_init_config(with_examples, profile, &starter);
 
     match mcp_gateway::cli_support::write_init_files(output, &config_content, &sample_files) {
-        Ok(_) => {
-            print_init_success(output, profile, !sample_files.is_empty());
+        Ok(reference) => {
+            print_init_success(output, profile, !sample_files.is_empty(), &reference);
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -298,7 +298,12 @@ fn preflight_init_targets(
     Ok(())
 }
 
-fn print_init_success(output: &std::path::Path, profile: InitProfile, wrote_samples: bool) {
+fn print_init_success(
+    output: &std::path::Path,
+    profile: InitProfile,
+    wrote_samples: bool,
+    reference: &str,
+) {
     println!("Created {}", output.display());
     println!("Profile: {profile}");
     if wrote_samples {
@@ -313,6 +318,21 @@ fn print_init_success(output: &std::path::Path, profile: InitProfile, wrote_samp
     println!("Doctor shows its reference on the admin-token line. Tool calls do not need it;");
     println!("managing the gateway and opening the dashboard do. `serve` prints");
     println!("a single-use dashboard link on startup.");
+    if reference.starts_with("keychain:") {
+        println!("Stored in: the OS keychain");
+    } else if let Some(dir) = reference
+        .strip_prefix("file:")
+        .and_then(|path| std::path::Path::new(path).parent())
+    {
+        println!("Stored in: owner-only files under {}", dir.display());
+    }
+    if let Ok(value) = std::env::var("MCP_GATEWAY_SECRETS__STORE")
+        && !value.is_empty()
+    {
+        println!(
+            "MCP_GATEWAY_SECRETS__STORE={value} applied to this run only; gateway.yaml keeps its own setting"
+        );
+    }
     println!();
     println!("Next steps:");
     println!("  1. Run diagnostics:");

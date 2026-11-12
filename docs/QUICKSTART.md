@@ -47,8 +47,11 @@ It also generates an **admin credential** for this install. `init` stores it in
 the store selected by `secrets.store` and writes only a reference into
 `auth.bearer_token`; neither the config nor its samples contain the literal token.
 The default `auto` prefers the OS keychain and falls back to owner-only files
-under `<config-dir>/secrets` if the keychain probe fails. A write failure in the
-chosen store fails init; it never falls back to a literal in the config.
+under `<config-dir>/secrets` if the keychain probe fails. If the keychain write
+fails after a passing probe, `auto` falls back to those files with a new token and a
+warning naming the reason; an explicit `secrets.store: keychain` refuses instead. It never
+falls back to a literal in the config. `init` also reads `MCP_GATEWAY_SECRETS__STORE`
+(`auto`, `keychain` or `files`) for that run, and prints where the token went.
 Tool calls do not need it —
 `init` lists `/health` and `/mcp` under `auth.public_paths` so the client you
 configure keeps working. Managing the gateway does: the four tools that change
