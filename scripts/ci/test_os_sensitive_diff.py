@@ -96,51 +96,62 @@ def main() -> int:
     many = osd.scan(diff("src/a.rs", *[f"+secret_store::x{i}();" for i in range(30)]))
     row("a long list is cut with a count", "20 more" in (osd.verdict(many, labels=[], pr=7) or ""), True)
 
-    # The command line, against a real repository.
-    with tempfile.TemporaryDirectory() as tmp:
+    # The command line, against real repositories shaped like GitHub's pull request merge ref: the base moves on, the
+    # pull request's commits are merged into it with --no-ff, HEAD is that merge and HEAD^1 the base it was cut from.
+    def make_pr(pr_files: dict[str, bytes], base_moves: dict[str, bytes] | None = None) -> tuple[str, str]:
+        """(repo dir, the pull request's head sha) with HEAD checked out at the merge commit."""
+        tmp = tempfile.mkdtemp()
         def git(*a: str) -> str:
             return subprocess.run(["git", "-C", tmp, "-c", "user.email=t@t", "-c", "user.name=t", *a],
-                                  check=True, capture_output=True, text=True).stdout
+                                  check=True, capture_output=True, text=True).stdout.strip()
         git("init", "-q", "-b", "base")
-        (Path(tmp) / "a.rs").write_text("fn a() {}\n")
-        git("add", "."); git("commit", "-q", "-m", "base")
-        (Path(tmp) / "a.rs").write_text("fn a() { secret_store::open(); }\n")
-        git("commit", "-q", "-am", "head")
-        run = lambda labels: subprocess.run(  # noqa: E731
-            [sys.executable, str(Path(osd.__file__)), "--repo", tmp, "--base", "HEAD~1", "--head", "HEAD",
-             "--pr", "12", "--labels", labels], capture_output=True, text=True)
-        r = run("[]")
-        row("the command exits 1 on an unlabelled hit", r.returncode, 1)
-        row("and prints the add-label command", "gh pr edit 12 --add-label os-int" in r.stdout + r.stderr, True)
-        row("the command exits 0 when labelled", run('["os-int"]').returncode, 0)
-        # The pull request's merge commit: its first parent is the base the merge was cut from. The base moves on with
-        # an OS-sensitive line of its own; the check must see only what the pull request brought.
-        git("checkout", "-q", "-b", "pr", "base~1"); (Path(tmp) / "b.rs").write_text("fn b() { keychain::open(); }\n")
+        (Path(tmp) / "a.rs").write_text("fn a() {}\n"); git("add", "."); git("commit", "-q", "-m", "base")
+        git("checkout", "-q", "-b", "pr")
+        for name, data in pr_files.items():
+            (Path(tmp) / name).write_bytes(data)
         git("add", "."); git("commit", "-q", "-m", "pr")
-        git("checkout", "-q", "base"); (Path(tmp) / "c.rs").write_text("fn c() { flock(1); }\n")
+        head = git("rev-parse", "HEAD")
+        git("checkout", "-q", "base")
+        for name, data in (base_moves or {"moved.txt": b"x\n"}).items():
+            (Path(tmp) / name).write_bytes(data)
         git("add", "."); git("commit", "-q", "-m", "base moves")
         git("merge", "-q", "--no-ff", "-m", "merge", "pr")
-        moved = subprocess.run([sys.executable, str(Path(osd.__file__)), "--repo", tmp, "--base", "HEAD^1", "--head", "HEAD",
-                                "--pr", "12", "--labels", "[]"], capture_output=True, text=True)
-        # A checkout that is not the pull request's merge commit must fail loudly, never diff just the tip commit.
-        second = git("rev-parse", "HEAD^2").strip()
-        base_run = lambda head, expect: subprocess.run(  # noqa: E731
-            [sys.executable, str(Path(osd.__file__)), "--repo", tmp, "--base", f"{head}^1", "--head", head, "--pr", "12",
-             "--labels", "[]", "--expect-second-parent", expect], capture_output=True, text=True)
-        row("a single-parent head is refused (exit 2)", base_run("HEAD^1", second).returncode, 2)
-        row("a merge whose second parent is not the PR head is refused (exit 2)", base_run("HEAD", "0" * 40).returncode, 2)
-        row("the PR's own merge commit is read (exit 1: its hit is unlabelled)", base_run("HEAD", second).returncode, 1)
-        # Odd bytes in a source file, and a source file git takes for binary, still give a verdict.
-        git("checkout", "-q", "-b", "odd", "base")
-        (Path(tmp) / "d.rs").write_bytes(b"fn d() { /* caf\xe9 */ secret_store::x(); }\n")
-        (Path(tmp) / "e.toml").write_bytes(b"keychain\x00 = 1\n")
-        git("add", "."); git("commit", "-q", "-m", "odd bytes")
-        odd = subprocess.run([sys.executable, str(Path(osd.__file__)), "--repo", tmp, "--base", "HEAD~1", "--head", "HEAD", "--pr", "12",
-                              "--labels", "[]"], capture_output=True, text=True)
-        row("non-UTF-8 and binary-looking sources still give a verdict (exit 1, both files named)",
-            (odd.returncode, "d.rs" in odd.stdout, "e.toml" in odd.stdout), (1, True, True))
-        row("against the first parent only the pull request's own hit counts", ("b.rs" in moved.stdout, "c.rs" in moved.stdout),
-            (True, False))
+        return tmp, head
+
+    def run_cli(repo: str, second: str, labels: str = "[]", base: str = "HEAD^1", head: str = "HEAD"):
+        return subprocess.run([sys.executable, str(Path(osd.__file__)), "--repo", repo, "--base", base, "--head", head,
+                               "--pr", "12", "--labels", labels, "--expect-second-parent", second],
+                              capture_output=True, text=True)
+
+    repo, pr_head = make_pr({"b.rs": b"fn b() { secret_store::open(); }\n"})
+    r = run_cli(repo, pr_head)
+    row("the command exits 1 on an unlabelled hit", r.returncode, 1)
+    row("and prints the add-label command", "gh pr edit 12 --add-label os-int" in r.stdout + r.stderr, True)
+    row("the command exits 0 when labelled", run_cli(repo, pr_head, '["os-int"]').returncode, 0)
+
+    # The base moves on with an OS-sensitive line of its own: only what the pull request brought counts.
+    repo, pr_head = make_pr({"b.rs": b"fn b() { keychain::open(); }\n"}, {"c.rs": b"fn c() { flock(1); }\n"})
+    moved = run_cli(repo, pr_head)
+    row("against the first parent only the pull request's own hit counts", ("b.rs" in moved.stdout, "c.rs" in moved.stdout),
+        (True, False))
+
+    # A checkout that is not the pull request's merge commit fails loudly (exit 2), never diffs part of the pull request.
+    row("a single-parent head is refused", run_cli(repo, pr_head, base="HEAD~1", head="HEAD^1").returncode, 2)
+    row("a merge whose second parent is not the PR head is refused", run_cli(repo, "0" * 40).returncode, 2)
+    row("an empty expected head is refused", run_cli(repo, "").returncode, 2)
+    row("a short expected head is refused", run_cli(repo, pr_head[:12]).returncode, 2)
+    row("a base that is not the first parent is refused", run_cli(repo, pr_head, base="HEAD").returncode, 2)
+    row("without --expect-second-parent the command does not run",
+        subprocess.run([sys.executable, str(Path(osd.__file__)), "--repo", repo, "--base", "HEAD^1", "--head", "HEAD", "--pr", "12"],
+                       capture_output=True, text=True).returncode, 2)
+
+    # Odd bytes in a source file, and a source file git takes for binary, still give a verdict.
+    repo, pr_head = make_pr({"d.rs": b"fn d() { /* caf\xe9 */ secret_store::x(); }\n", "e.toml": b"keychain\x00 = 1\n"})
+    odd = run_cli(repo, pr_head)
+    row("non-UTF-8 and binary-looking sources still give a verdict (exit 1, both files named)",
+        (odd.returncode, "d.rs" in odd.stdout, "e.toml" in odd.stdout), (1, True, True))
+    # The receiver form of a file unlock counts too.
+    row("a receiver-form unlock triggers", len(osd.scan(diff("src/a.rs", "+    guard.unlock()?;"))), 1)
 
     for e in errors:
         print(f"os-sensitive-diff: {e}")

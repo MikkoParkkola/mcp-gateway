@@ -29,7 +29,7 @@ LABEL = "os-int"
 # matched, since it is as often a Mutex).
 PATTERN = re.compile(
     r"secret[_-]?store|keychain|security[_-]?framework|fs[_-]?lock|fd[_-]?lock|file[_-]?lock|\bfs2\b|FileExt\b"
-    r"|flock|fcntl|O_EXLOCK|keyring|File::(?:try_)?(?:un)?lock\b|(?:try_)?lock_(?:shared|exclusive)\b",
+    r"|flock|fcntl|O_EXLOCK|keyring|File::(?:try_)?(?:un)?lock\b|\.unlock\s*\(|(?:try_)?lock_(?:shared|exclusive)\b",
     re.IGNORECASE,
 )
 SUFFIXES = (".rs", ".toml")
@@ -116,16 +116,24 @@ def verdict(hits: list[tuple[str, int, str]], labels: list[str], pr: int) -> str
     )
 
 
-def merge_problem(repo: str, head: str, expect_second: str) -> str | None:
-    """None when `head` is the pull request's test-merge commit: two parents, the second being the PR's head. Diffing
-    against HEAD^1 on anything else would silently cover only the tip commit, so the check fails loudly instead."""
-    out = subprocess.run(["git", "-C", repo, "rev-list", "--parents", "-n", "1", head],
-                         check=True, capture_output=True, text=True).stdout.split()
-    parents = out[1:]
+def merge_problem(repo: str, base: str, head: str, expect_second: str) -> str | None:
+    """None when `head` is the pull request's test-merge commit and `base` is its first parent: two parents, the second
+    being the PR's head. Diffing against anything else would silently cover only part of the pull request, or changes
+    that are not its own, so the check fails loudly instead."""
+    def rev(ref: str) -> str:
+        return subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
+                              capture_output=True, text=True).stdout.strip()
+    expect = expect_second.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", expect):
+        return f"the expected pull request head {expect_second!r} is not a full commit sha"
+    parents = subprocess.run(["git", "-C", repo, "rev-list", "--parents", "-n", "1", head],
+                             check=True, capture_output=True, text=True).stdout.split()[1:]
     if len(parents) != 2:
         return f"{head} has {len(parents)} parent(s), not the two of a pull request's merge commit; cannot tell which diff is the pull request's"
-    if not parents[1].startswith(expect_second.lower()) and not expect_second.lower().startswith(parents[1]):
-        return f"the merge commit's second parent is {parents[1][:12]}, not the pull request head {expect_second[:12]}; the checkout is not this run's merge"
+    if parents[1] != expect:
+        return f"the merge commit's second parent is {parents[1][:12]}, not the pull request head {expect[:12]}; the checkout is not this run's merge"
+    if rev(base) != parents[0]:
+        return f"--base {base} is {rev(base)[:12] or 'not a commit'}, not the merge commit's first parent {parents[0][:12]}"
     return None
 
 
@@ -136,13 +144,13 @@ def main() -> int:
     ap.add_argument("--pr", required=True, type=int)
     ap.add_argument("--labels", default="[]")
     ap.add_argument("--repo", default=".")
-    ap.add_argument("--expect-second-parent", default="", help="the pull request's head sha; --head must be its merge commit")
+    ap.add_argument("--expect-second-parent", required=True,
+                    help="the pull request's full head sha; --head must be its merge commit and --base its first parent")
     args = ap.parse_args()
-    if args.expect_second_parent:
-        problem = merge_problem(args.repo, args.head, args.expect_second_parent)
-        if problem:
-            print(f"os-int check cannot run: {problem}")
-            return 2
+    problem = merge_problem(args.repo, args.base, args.head, args.expect_second_parent)
+    if problem:
+        print(f"os-int check cannot run: {problem}")
+        return 2
     # Bytes, decoded leniently: an unrelated non-UTF-8 file must not turn the check into a traceback. --text reads a
     # .rs or .toml that git guesses is binary; the pathspecs keep the dump to the files that can count.
     raw = subprocess.run(["git", "-C", args.repo, "diff", "--unified=0", "--no-color", "--text", "--no-ext-diff",
