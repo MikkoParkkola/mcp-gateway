@@ -445,7 +445,8 @@ impl TransparencyLogger {
     #[cfg(test)]
     fn durable(file: &std::fs::File) -> io::Result<()> {
         file.sync_all()?;
-        super::rotation::note_synced(file)
+        super::rotation::note_synced(file);
+        Ok(())
     }
 
     /// The seam: a fault writes a partial prefix and returns ENOSPC.

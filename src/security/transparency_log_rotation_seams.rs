@@ -106,18 +106,17 @@ impl Drop for StallRelease {
 static SYNCED: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
 
 /// Record one successful real sync of `file`.
-#[cfg(test)]
-pub(crate) fn note_synced(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let meta = file.metadata()?;
+#[cfg(all(test, unix))]
+pub(crate) fn note_synced(file: &std::fs::File) {
+    use std::os::unix::fs::MetadataExt;
+    if let Ok(meta) = file.metadata() {
         SYNCED.lock().unwrap().push((meta.dev(), meta.ino()));
     }
-    #[cfg(not(unix))]
-    let _ = file;
-    Ok(())
 }
+
+/// Off Unix the row does not observe syncs, so there is nothing to record.
+#[cfg(all(test, not(unix)))]
+pub(crate) fn note_synced(_file: &std::fs::File) {}
 
 /// How many real syncs the file at `path` has had so far.
 #[cfg(all(test, unix))]
