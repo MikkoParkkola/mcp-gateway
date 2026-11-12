@@ -313,6 +313,7 @@ fn the_help_names_stdin_and_the_credential() {
         .expect("lookup-email");
     let help = lookup.render_long_help().to_string();
     assert!(help.contains("--email-stdin"), "{help}");
+    assert!(help.contains("MCP_GATEWAY_TOKEN"), "{help}");
     assert!(!help.contains("--email <"), "{help}");
     assert!(!help.contains("--email "), "no bare --email option: {help}");
 }
@@ -405,4 +406,74 @@ async fn the_composed_command_exits_nonzero_on_every_failure_class() {
         fail,
         "unreachable"
     );
+}
+
+/// A refusal that carries Retry-After says how long to wait.
+/// Mutant: drop the header from the message.
+#[tokio::test]
+async fn a_throttled_answer_names_how_long_to_wait() {
+    let app = axum::Router::new().fallback(|| async {
+        (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            [("retry-after", "6")],
+            axum::Json(json!({"error": "slow down"})),
+        )
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("addr"));
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let message = ask(&base).await.expect_err("throttled");
+    assert!(
+        message.contains("429") && message.contains("retry after 6 s"),
+        "{message}"
+    );
+}
+
+/// A typo in --from or --to is refused before any request is sent.
+/// Mutant: send it and let the gateway charge for it.
+#[tokio::test]
+async fn a_bad_window_is_refused_before_a_request_is_sent() {
+    let (base, seen) = stand_in(200, GOOD).await;
+    for flags in [
+        vec!["--from", "yesterday"],
+        vec!["--to", "2026-13-45T00:00:00Z"],
+        vec![
+            "--from",
+            "2026-11-02T00:00:00Z",
+            "--to",
+            "2026-11-01T00:00:00Z",
+        ],
+    ] {
+        let mut argv = vec!["--email-stdin"];
+        argv.extend(flags);
+        let args = parse(&argv).expect("parses");
+        let message = lookup(&base, &LinkTls::default(), TOKEN, EMAIL, &args)
+            .await
+            .expect_err("a bad window");
+        assert!(
+            message.contains("--from") || message.contains("--to"),
+            "{message}"
+        );
+    }
+    assert!(seen.lock().unwrap().is_empty(), "no request was sent");
+}
+
+/// A field the gateway adds (even an email) is not echoed: the printed form
+/// is the typed answer.
+/// Mutant: print the raw body.
+#[test]
+fn the_printed_answer_drops_fields_it_does_not_know() {
+    let body = GOOD.replace(
+        r#""scope":"retained""#,
+        r#""scope":"retained","email":"leak@x.invalid""#,
+    );
+    let answer: LookupAnswer = serde_json::from_str(&body).expect("decodes");
+    let printed = super::render(&answer).expect("prints");
+    assert!(
+        !printed.contains("leak@x.invalid") && !printed.contains("email"),
+        "{printed}"
+    );
+    assert!(printed.contains("retained"));
 }

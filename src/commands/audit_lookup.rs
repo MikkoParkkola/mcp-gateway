@@ -98,6 +98,37 @@ pub(crate) fn request_body(email: &str, args: &LookupEmailArgs) -> serde_json::V
     serde_json::Value::Object(body)
 }
 
+/// `--from` and `--to` must be RFC 3339 times, in order: refused here, since
+/// the gateway charges a lookup before it rejects a typo.
+///
+/// # Errors
+///
+/// A fixed message naming the flags.
+pub(crate) fn check_window(args: &LookupEmailArgs) -> Result<(), String> {
+    let parse = |t: &Option<String>| match t {
+        None => Ok(None),
+        Some(t) => chrono::DateTime::parse_from_rfc3339(t)
+            .map(Some)
+            .map_err(|_| "--from and --to must be RFC 3339 times".to_string()),
+    };
+    if let (Some(from), Some(to)) = (parse(&args.from)?, parse(&args.to)?)
+        && from > to
+    {
+        return Err("--from must not be after --to".to_string());
+    }
+    Ok(())
+}
+
+/// The answer as printed: the typed answer, so a field the gateway adds is
+/// never echoed.
+///
+/// # Errors
+///
+/// A fixed message when the answer cannot be serialised.
+pub(crate) fn render(answer: &LookupAnswer) -> Result<String, String> {
+    serde_json::to_string_pretty(answer).map_err(|_| "could not print the answer".to_string())
+}
+
 /// Ask the gateway at `base` and decode its answer strictly. The shared
 /// admin client refuses a cleartext non-loopback target before it connects.
 ///
@@ -116,6 +147,7 @@ pub(crate) async fn lookup(
         |text: &str| mcp_gateway::cli::redact::text(text, &[token.to_string(), email.to_string()]);
     let endpoint = reqwest::Url::parse(&format!("{}{PATH}", base.trim_end_matches('/')))
         .map_err(|_| "the gateway URL is not valid".to_string())?;
+    check_window(args)?;
     let body = request_body(email, args);
     let response = super::dashboard_link::admin_call_url(
         reqwest::Method::POST,
@@ -130,8 +162,15 @@ pub(crate) async fn lookup(
     if !response.status.is_success() {
         let parsed: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
         let reason = super::dashboard_link::gateway_reason(&parsed).unwrap_or("no reason given");
+        let wait = response
+            .headers
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(|secs| format!(" (retry after {secs} s)"))
+            .unwrap_or_default();
         return Err(format!(
-            "the gateway answered {}: {}",
+            "the gateway answered {}: {}{wait}",
             response.status,
             hide(reason)
         ));
@@ -172,12 +211,12 @@ pub(crate) async fn run_with(
         Err(message) => return fail(message),
     };
     match lookup(&base, &tls, &token, &email, &args).await {
-        Ok(answer) => match serde_json::to_string_pretty(&answer) {
+        Ok(answer) => match render(&answer) {
             Ok(text) => {
                 println!("{text}");
                 ExitCode::SUCCESS
             }
-            Err(_) => fail("could not print the answer".to_string()),
+            Err(message) => fail(message),
         },
         Err(message) => fail(message),
     }
