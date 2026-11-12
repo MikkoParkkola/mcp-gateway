@@ -212,14 +212,16 @@ fn throttled(retry_after_secs: u64) -> Response {
 /// paid: a slow body holds a connection, not a permit.
 const BODY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Read the body, bounded in size and in time. Called only after admission
-/// and the budget, so an unauthorized or over-budget caller's body is never
-/// waited for.
+/// Read the body: the listener's configured size cap applies (the extractor
+/// reads through it), the lookup's own 8 KiB limit is judged on what arrived,
+/// and the whole read has a deadline. Called only after admission and the
+/// budget, so an unauthorized or over-budget caller's body is never waited
+/// for.
 pub(super) async fn read_body(request: axum::extract::Request) -> Result<Bytes, Box<Response>> {
-    let read = axum::body::to_bytes(request.into_body(), MAX_BODY);
-    match tokio::time::timeout(BODY_DEADLINE, read).await {
-        Ok(Ok(bytes)) => Ok(bytes),
-        Ok(Err(_)) => Err(Box::new(finish(
+    use axum::extract::FromRequest as _;
+    let read = Bytes::from_request(request, &());
+    let too_large = || {
+        Box::new(finish(
             refuse(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "the request body is too large",
@@ -227,7 +229,11 @@ pub(super) async fn read_body(request: axum::extract::Request) -> Result<Bytes, 
             "bad_request",
             0,
             0,
-        ))),
+        ))
+    };
+    match tokio::time::timeout(BODY_DEADLINE, read).await {
+        Ok(Ok(bytes)) if bytes.len() <= MAX_BODY => Ok(bytes),
+        Ok(Ok(_) | Err(_)) => Err(too_large()),
         Err(_) => Err(Box::new(finish(
             refuse(
                 StatusCode::REQUEST_TIMEOUT,
