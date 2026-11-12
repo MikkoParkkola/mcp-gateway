@@ -174,7 +174,9 @@ fn admintok_2_doctor_names_custody_when_the_config_fails_validation() {
             .args(["--format", "json", "--no-registry-check"])
             .output()
             .expect("doctor");
+        assert!(!out.status.success(), "an invalid config must still fail");
         assert!(!String::from_utf8_lossy(&out.stdout).contains(&token));
+        assert!(!String::from_utf8_lossy(&out.stderr).contains(&token));
         let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("doctor JSON");
         let row = report["checks"]
             .as_array()
@@ -189,6 +191,37 @@ fn admintok_2_doctor_names_custody_when_the_config_fails_validation() {
                 .contains(&secret_slot(&written))
         );
     }
+}
+
+/// ADMINTOK.2 / review: doctor reads the config only through the guarded
+/// reader, so a config other users can read, which that reader refuses, gets
+/// no custody line from a second, unguarded read of the same path.
+#[test]
+fn admintok_2_doctor_does_not_read_a_config_the_mode_check_refuses() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, path, _, token) = initialized();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("loosen mode");
+    let out = command(root.path())
+        .args(["doctor", "--config"])
+        .arg(&path)
+        .args(["--format", "json", "--no-registry-check"])
+        .output()
+        .expect("doctor");
+    assert!(
+        !out.status.success(),
+        "a readable-by-others config is refused"
+    );
+    assert!(!String::from_utf8_lossy(&out.stdout).contains(&token));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains(&token));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("doctor JSON");
+    assert!(
+        report["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .all(|row| row["label"] != "admin-token"),
+        "no custody line from an unguarded read of a refused config"
+    );
 }
 
 fn failure_root() -> tempfile::TempDir {
