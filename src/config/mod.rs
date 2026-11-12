@@ -316,6 +316,19 @@ impl Config {
         resolved.map(ConfigFile::read).transpose()
     }
 
+    /// The text of the config at `path`, read through the guarded reader and
+    /// not validated: for a diagnostic that must still describe a config the
+    /// loader refuses for an unrelated reason.
+    ///
+    /// # Errors
+    ///
+    /// As the guarded read: a missing, unreadable or non-regular file.
+    pub(crate) fn guarded_text(path: &Path) -> Result<String> {
+        Ok(config_file::ConfigFile::read(path.to_path_buf())?
+            .text()
+            .to_owned())
+    }
+
     /// Load the config, warning on (rather than refusing) a malformed env file.
     ///
     /// # Errors
