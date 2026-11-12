@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Linker driver for aarch64 Linux: cc, with the lld that rustup ships when the
 # toolchain has one. The lib test binary's code has outgrown the 128 MB reach of
 # a single aarch64 branch, and GNU ld then fails with "relocation truncated to
