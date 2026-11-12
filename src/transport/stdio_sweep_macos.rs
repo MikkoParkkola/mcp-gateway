@@ -127,13 +127,13 @@ fn miss_of(errno: Option<i32>) -> Miss {
 /// Decode the fields of a `proc_bsdinfo` record the kernel returned for
 /// `asked`. A record that names another pid, or whose start time does not fit,
 /// is a failure, never a process.
-fn decode(asked: u32, pid: u32, ppid: u32, status: u32, sec: u64, usec: u64) -> Lookup {
-    if pid != asked {
+fn decode(asked: u32, named: u32, parent: u32, status: u32, sec: u64, usec: u64) -> Lookup {
+    if named != asked {
         return Lookup::Missing(Miss::Failed);
     }
     match start_micros(sec, usec) {
         Some(start) => Lookup::Found(Info {
-            ppid,
+            ppid: parent,
             start,
             state: status_of(status),
         }),
