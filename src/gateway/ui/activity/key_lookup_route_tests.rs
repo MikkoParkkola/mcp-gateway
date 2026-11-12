@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
-use base64::Engine as _;
 use axum::http::{Request, StatusCode};
+use base64::Engine as _;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -441,7 +441,10 @@ fn pages_follow_a_sealed_cursor_sent_without_the_email() {
     for part in token.split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_') {
         if let Ok(raw) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(part) {
             let raw = String::from_utf8_lossy(&raw).into_owned();
-            assert!(!raw.contains(hash.as_str()), "a token part decodes to the hash");
+            assert!(
+                !raw.contains(hash.as_str()),
+                "a token part decodes to the hash"
+            );
             assert!(!raw.to_lowercase().contains(&EMAIL.to_lowercase()));
         }
     }
@@ -684,7 +687,11 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
-fn refusal_of(fx: &Fx, who: AuthenticatedClient, token: &str) -> (StatusCode, Option<String>, Option<String>, Value) {
+fn refusal_of(
+    fx: &Fx,
+    who: AuthenticatedClient,
+    token: &str,
+) -> (StatusCode, Option<String>, Option<String>, Value) {
     let (status, cache, value) = fx.next_page(who, token, &json!({}));
     let retry = fx.retry_after.borrow().clone();
     (status, cache, retry, value)
@@ -913,7 +920,11 @@ fn every_refusal_that_is_not_about_the_token_comes_before_it_is_opened() {
     };
     let (s1, _, b1) = bad_limit(&good);
     let (s2, _, b2) = bad_limit("garbage");
-    assert_eq!((s1, &b1), (s2, &b2), "limit error must not depend on the token");
+    assert_eq!(
+        (s1, &b1),
+        (s2, &b2),
+        "limit error must not depend on the token"
+    );
     assert_eq!(s1, StatusCode::BAD_REQUEST);
     assert_ne!(
         b1,
@@ -1019,7 +1030,10 @@ fn a_dashboard_session_pages_only_its_own_tokens() {
                 .expect("infallible");
             let status = response.status();
             let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
-            (status, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
+            (
+                status,
+                serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null),
+            )
         })
     };
     let (status, first) = session("handle-one", &json!({"email": EMAIL, "limit": 1}));
@@ -1028,5 +1042,9 @@ fn a_dashboard_session_pages_only_its_own_tokens() {
     let (status, _) = session("handle-two", &json!({"cursor": token}));
     assert_eq!(status, StatusCode::BAD_REQUEST, "another session opened it");
     let (status, second) = session("handle-one", &json!({"cursor": token}));
-    assert_eq!(status, StatusCode::OK, "the same session pages on: {second}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the same session pages on: {second}"
+    );
 }

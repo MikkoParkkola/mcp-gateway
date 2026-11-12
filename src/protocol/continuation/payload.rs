@@ -143,7 +143,10 @@ impl std::fmt::Debug for Payload {
             .field("next_step", &self.next_step)
             .field("rounds_used", &self.rounds_used)
             // The keyed hash of a person's email: never in a log.
-            .field("lookup_scope", &self.lookup_scope.as_ref().map(|_| "<redacted>"))
+            .field(
+                "lookup_scope",
+                &self.lookup_scope.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }

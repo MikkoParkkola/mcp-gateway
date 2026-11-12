@@ -127,7 +127,9 @@ fn cursor_principal(
             format!("dashboard-session\0{handle}").as_bytes(),
         ));
     }
-    Some(crate::hashing::sha256_hex(principal.storage_form().as_bytes()))
+    Some(crate::hashing::sha256_hex(
+        principal.storage_form().as_bytes(),
+    ))
 }
 
 /// Seal `scope` for `principal`, valid from `now`; `None` when it cannot be
@@ -161,10 +163,9 @@ pub(super) fn open(
         return None;
     }
     let payload = state.continuation.keyring().open(token, now).ok()?;
-    let scope: PageScope =
-        serde_json::from_str(payload.lookup_scope_for(principal).ok()?).ok()?;
-    let shaped = scope.hash.len() == key.hash("").len()
-        && scope.hash.bytes().all(|b| b.is_ascii_hexdigit());
+    let scope: PageScope = serde_json::from_str(payload.lookup_scope_for(principal).ok()?).ok()?;
+    let shaped =
+        scope.hash.len() == key.hash("").len() && scope.hash.bytes().all(|b| b.is_ascii_hexdigit());
     let from = scope.from.as_deref().map(parse_time);
     let to = scope.to.as_deref().map(parse_time);
     let window_ok = match (from, to) {
