@@ -752,6 +752,8 @@ mod backend_url_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod keychain_linux_tests;
 #[cfg(test)]
+mod keychain_confirm_tests;
+#[cfg(test)]
 mod keychain_load_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod keychain_macos_tests;

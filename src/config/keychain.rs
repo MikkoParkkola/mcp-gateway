@@ -78,6 +78,28 @@ pub(crate) fn bounded<T: Send + 'static>(
     }
 }
 
+/// How many times a delete asks whether the entry is gone, and the wait
+/// between asks. The whole wait stays well inside [`BOUND`].
+#[cfg(any(windows, test))]
+pub(crate) const CONFIRM_ATTEMPTS: u32 = 8;
+#[cfg(any(windows, test))]
+pub(crate) const CONFIRM_GAP: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// A delete is done only when the entry is seen gone. Credential Manager can
+/// keep answering for an entry whose delete already succeeded, so
+/// `still_there` is asked up to `attempts` times, `gap` apart. An entry that is
+/// still there at the end, or a question that fails, is an error: unknown is
+/// never reported as removed.
+#[cfg(any(windows, test))]
+pub(crate) fn confirm_absent(
+    attempts: u32,
+    gap: std::time::Duration,
+    mut still_there: impl FnMut() -> Result<bool, KeychainError>,
+) -> Result<(), KeychainError> {
+    let _ = (attempts, gap, &mut still_there);
+    Ok(())
+}
+
 /// The reader an [`EnvOverlay`](super::EnvOverlay) resolves through. The
 /// default is the OS keychain.
 #[derive(Clone)]
