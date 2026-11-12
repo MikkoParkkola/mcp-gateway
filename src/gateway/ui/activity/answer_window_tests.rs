@@ -64,10 +64,10 @@ async fn effects_at(fx: &Fixture, limit: &str) -> BTreeMap<String, String> {
         }
         let (_, page) = get(fx, &query).await;
         for row in page["rows"].as_array().unwrap() {
-            if let (Some(t), Some(e)) = (row["trace_id"].as_str(), row["effect"].as_str()) {
-                if t == "gw-c1" || t == "gw-c2" {
-                    seen.insert(t.to_string(), e.to_string());
-                }
+            if let (Some(t), Some(e)) = (row["trace_id"].as_str(), row["effect"].as_str())
+                && (t == "gw-c1" || t == "gw-c2")
+            {
+                seen.insert(t.to_string(), e.to_string());
             }
         }
         match page["next_cursor"].as_str() {
