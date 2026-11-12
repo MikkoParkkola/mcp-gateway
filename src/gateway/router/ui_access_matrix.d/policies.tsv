@@ -3,8 +3,8 @@
 /ui/api/policies	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/policies	DELETE	plain	AuthOff	405
 /ui/api/policies	DELETE	plain	Bearer	405
-/ui/api/policies	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/policies	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/policies	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/policies	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/policies	DELETE	plain	OidcAdmin	405
 /ui/api/policies	DELETE	plain	OidcAuditor	405
 /ui/api/policies	DELETE	plain	OidcDeveloper	405
@@ -16,34 +16,34 @@
 /ui/api/policies	DELETE	plain	StandardKey	405
 /ui/api/policies	GET	bad-query	AdminKey	200
 /ui/api/policies	GET	bad-query	AdminKeyUnmapped	200
-/ui/api/policies	GET	bad-query	AuthOff	403:@b_078e5133
+/ui/api/policies	GET	bad-query	AuthOff	403:error="Admin authentication required"
 /ui/api/policies	GET	bad-query	Bearer	200
-/ui/api/policies	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/policies	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/policies	GET	bad-query	OidcAdmin	403:@b_078e5133
-/ui/api/policies	GET	bad-query	OidcAuditor	403:@b_078e5133
-/ui/api/policies	GET	bad-query	OidcDeveloper	403:@b_078e5133
-/ui/api/policies	GET	bad-query	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/policies	GET	bad-query	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/policies	GET	bad-query	OidcReviewer	403:@b_078e5133
-/ui/api/policies	GET	bad-query	OidcUnmapped	403:@b_078e5133
+/ui/api/policies	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/policies	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/policies	GET	bad-query	OidcAdmin	403:error="Admin authentication required"
+/ui/api/policies	GET	bad-query	OidcAuditor	403:error="Admin authentication required"
+/ui/api/policies	GET	bad-query	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/policies	GET	bad-query	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/policies	GET	bad-query	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/policies	GET	bad-query	OidcReviewer	403:error="Admin authentication required"
+/ui/api/policies	GET	bad-query	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/policies	GET	bad-query	Session	200
-/ui/api/policies	GET	bad-query	StandardKey	403:@b_078e5133
+/ui/api/policies	GET	bad-query	StandardKey	403:error="Admin authentication required"
 /ui/api/policies	GET	plain	AdminKey	200
 /ui/api/policies	GET	plain	AdminKeyUnmapped	200
-/ui/api/policies	GET	plain	AuthOff	403:@b_078e5133
+/ui/api/policies	GET	plain	AuthOff	403:error="Admin authentication required"
 /ui/api/policies	GET	plain	Bearer	200
-/ui/api/policies	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/policies	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/policies	GET	plain	OidcAdmin	403:@b_078e5133
-/ui/api/policies	GET	plain	OidcAuditor	403:@b_078e5133
-/ui/api/policies	GET	plain	OidcDeveloper	403:@b_078e5133
-/ui/api/policies	GET	plain	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/policies	GET	plain	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/policies	GET	plain	OidcReviewer	403:@b_078e5133
-/ui/api/policies	GET	plain	OidcUnmapped	403:@b_078e5133
+/ui/api/policies	GET	plain	NoKey	401:error.code=-32000
+/ui/api/policies	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/policies	GET	plain	OidcAdmin	403:error="Admin authentication required"
+/ui/api/policies	GET	plain	OidcAuditor	403:error="Admin authentication required"
+/ui/api/policies	GET	plain	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/policies	GET	plain	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/policies	GET	plain	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/policies	GET	plain	OidcReviewer	403:error="Admin authentication required"
+/ui/api/policies	GET	plain	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/policies	GET	plain	Session	200
-/ui/api/policies	GET	plain	StandardKey	403:@b_078e5133
+/ui/api/policies	GET	plain	StandardKey	403:error="Admin authentication required"
 /ui/api/policies	HEAD	plain	AdminKey	200
 /ui/api/policies	HEAD	plain	AdminKeyUnmapped	200
 /ui/api/policies	HEAD	plain	AuthOff	403
@@ -63,8 +63,8 @@
 /ui/api/policies	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/policies	OPTIONS	plain	AuthOff	405
 /ui/api/policies	OPTIONS	plain	Bearer	405
-/ui/api/policies	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/policies	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/policies	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/policies	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/policies	OPTIONS	plain	OidcAdmin	405
 /ui/api/policies	OPTIONS	plain	OidcAuditor	405
 /ui/api/policies	OPTIONS	plain	OidcDeveloper	405
@@ -78,8 +78,8 @@
 /ui/api/policies	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/policies	PATCH	bad-json	AuthOff	405
 /ui/api/policies	PATCH	bad-json	Bearer	405
-/ui/api/policies	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/policies	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/policies	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/policies	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/policies	PATCH	bad-json	OidcAdmin	405
 /ui/api/policies	PATCH	bad-json	OidcAuditor	405
 /ui/api/policies	PATCH	bad-json	OidcDeveloper	405
@@ -93,8 +93,8 @@
 /ui/api/policies	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/policies	PATCH	bad-type	AuthOff	405
 /ui/api/policies	PATCH	bad-type	Bearer	405
-/ui/api/policies	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/policies	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/policies	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/policies	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/policies	PATCH	bad-type	OidcAdmin	405
 /ui/api/policies	PATCH	bad-type	OidcAuditor	405
 /ui/api/policies	PATCH	bad-type	OidcDeveloper	405
@@ -108,8 +108,8 @@
 /ui/api/policies	PATCH	json	AdminKeyUnmapped	405
 /ui/api/policies	PATCH	json	AuthOff	405
 /ui/api/policies	PATCH	json	Bearer	405
-/ui/api/policies	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/policies	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/policies	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/policies	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/policies	PATCH	json	OidcAdmin	405
 /ui/api/policies	PATCH	json	OidcAuditor	405
 /ui/api/policies	PATCH	json	OidcDeveloper	405
@@ -123,8 +123,8 @@
 /ui/api/policies	POST	bad-json	AdminKeyUnmapped	405
 /ui/api/policies	POST	bad-json	AuthOff	405
 /ui/api/policies	POST	bad-json	Bearer	405
-/ui/api/policies	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/policies	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/policies	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/policies	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/policies	POST	bad-json	OidcAdmin	405
 /ui/api/policies	POST	bad-json	OidcAuditor	405
 /ui/api/policies	POST	bad-json	OidcDeveloper	405
@@ -138,8 +138,8 @@
 /ui/api/policies	POST	bad-type	AdminKeyUnmapped	405
 /ui/api/policies	POST	bad-type	AuthOff	405
 /ui/api/policies	POST	bad-type	Bearer	405
-/ui/api/policies	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/policies	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/policies	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/policies	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/policies	POST	bad-type	OidcAdmin	405
 /ui/api/policies	POST	bad-type	OidcAuditor	405
 /ui/api/policies	POST	bad-type	OidcDeveloper	405
@@ -153,8 +153,8 @@
 /ui/api/policies	POST	json	AdminKeyUnmapped	405
 /ui/api/policies	POST	json	AuthOff	405
 /ui/api/policies	POST	json	Bearer	405
-/ui/api/policies	POST	json	NoKey	401:@b_de6b5592
-/ui/api/policies	POST	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/policies	POST	json	NoKey	401:error.code=-32000
+/ui/api/policies	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/policies	POST	json	OidcAdmin	405
 /ui/api/policies	POST	json	OidcAuditor	405
 /ui/api/policies	POST	json	OidcDeveloper	405
@@ -168,8 +168,8 @@
 /ui/api/policies	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/policies	PUT	bad-json	AuthOff	405
 /ui/api/policies	PUT	bad-json	Bearer	405
-/ui/api/policies	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/policies	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/policies	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/policies	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/policies	PUT	bad-json	OidcAdmin	405
 /ui/api/policies	PUT	bad-json	OidcAuditor	405
 /ui/api/policies	PUT	bad-json	OidcDeveloper	405
@@ -183,8 +183,8 @@
 /ui/api/policies	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/policies	PUT	bad-type	AuthOff	405
 /ui/api/policies	PUT	bad-type	Bearer	405
-/ui/api/policies	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/policies	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/policies	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/policies	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/policies	PUT	bad-type	OidcAdmin	405
 /ui/api/policies	PUT	bad-type	OidcAuditor	405
 /ui/api/policies	PUT	bad-type	OidcDeveloper	405
@@ -198,8 +198,8 @@
 /ui/api/policies	PUT	json	AdminKeyUnmapped	405
 /ui/api/policies	PUT	json	AuthOff	405
 /ui/api/policies	PUT	json	Bearer	405
-/ui/api/policies	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/policies	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/policies	PUT	json	NoKey	401:error.code=-32000
+/ui/api/policies	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/policies	PUT	json	OidcAdmin	405
 /ui/api/policies	PUT	json	OidcAuditor	405
 /ui/api/policies	PUT	json	OidcDeveloper	405

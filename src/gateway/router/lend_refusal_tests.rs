@@ -82,7 +82,10 @@ async fn peer() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
 async fn gateway(
     url: String,
     mint: FixedMint,
-) -> (axum::Router, (tempfile::TempDir, super::tests::FixtureDir)) {
+) -> (
+    axum::Router,
+    (Arc<tempfile::TempDir>, super::tests::FixtureDir),
+) {
     let (router, dirs, _meta) =
         gateway_in(url, mint, crate::config::InputSchemaEnforcement::Off).await;
     (router, dirs)
@@ -97,7 +100,7 @@ async fn gateway_in(
     mode: crate::config::InputSchemaEnforcement,
 ) -> (
     axum::Router,
-    (tempfile::TempDir, super::tests::FixtureDir),
+    (Arc<tempfile::TempDir>, super::tests::FixtureDir),
     (
         Arc<crate::gateway::meta_mcp::MetaMcp>,
         Arc<crate::backend::Backend>,
@@ -115,7 +118,7 @@ async fn gateway_named(
     mode: crate::config::InputSchemaEnforcement,
 ) -> (
     axum::Router,
-    (tempfile::TempDir, super::tests::FixtureDir),
+    (Arc<tempfile::TempDir>, super::tests::FixtureDir),
     (
         Arc<crate::gateway::meta_mcp::MetaMcp>,
         Arc<crate::backend::Backend>,
@@ -150,7 +153,7 @@ async fn gateway_named(
     );
     let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&registry));
     meta.set_identity_propagation(Arc::new(mint));
-    let log_dir = tempfile::tempdir().expect("a log directory");
+    let log_dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::transparency_log::TransparencyLogConfig {

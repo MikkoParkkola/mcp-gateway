@@ -128,12 +128,11 @@ fn an_audit_row_is_kept_undated_on_an_unreadable_clock() {
     assert_eq!(undated["clock_invalid"], true);
 }
 
-/// MIK-8202 P4a r4.2, the twin-copy invariant: clock.rs compiles into the
-/// library and the binary, so any state in it exists twice and an override
-/// set through one copy never reaches the other. A lexical check of its own
-/// source: the only `static` items sit inside the `test_clock` `thread_local!`
-/// block, and no lock, atomic or once-cell appears in code. Comment lines are
-/// skipped (the module doc names the forbidden types).
+/// the shared clock stays free of mutable shared state.
+/// A lexical check of its own source: the only `static` items sit inside
+/// the `test_clock` `thread_local!` block, and no lock, atomic or once-cell
+/// appears in code. Comment lines are skipped (the module doc names the
+/// forbidden types).
 #[test]
 fn clock_rs_holds_no_shared_mutable_state() {
     let code: Vec<&str> = include_str!("clock.rs")

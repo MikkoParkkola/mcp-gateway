@@ -60,7 +60,7 @@ async fn a_judged_out_direct_read_records_no_receipt() {
 #[tokio::test]
 async fn an_audit_withheld_direct_read_records_no_receipt() {
     let mut fx = fixture(Setup::default()).await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -100,7 +100,7 @@ async fn a_read_record_failure_leaves_no_direct_receipt() {
         ..Setup::default()
     })
     .await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -141,7 +141,7 @@ async fn a_judged_direct_read_is_one_record() {
         ..Setup::default()
     })
     .await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -189,7 +189,7 @@ async fn a_judged_direct_read_is_one_record() {
 #[tokio::test]
 async fn a_direct_relay_refusal_records_no_rule() {
     let mut fx = fixture(Setup::default()).await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {

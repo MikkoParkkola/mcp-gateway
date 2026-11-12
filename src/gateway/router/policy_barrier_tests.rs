@@ -596,3 +596,6 @@ mod mtls_rule_ids;
 mod rule_ids;
 #[path = "stored_refusal_record_tests.rs"]
 mod stored_refusals;
+/// API2.10 R0: one `transport_finalized` record per `tasks/get` read.
+#[path = "task_one_record_tests.rs"]
+mod task_one_record;

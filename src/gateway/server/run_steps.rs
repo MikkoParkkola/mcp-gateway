@@ -244,7 +244,10 @@ impl Gateway {
             let email_key = email_key.map_err(crate::Error::ConfigValidation)?;
 
             let cleanup_interval = std::time::Duration::from_secs(ks_config.cleanup_interval_secs);
-            let ks = Arc::new(KeyServer::new(ks_config, Arc::new(email_key)));
+            let ks = Arc::new(
+                KeyServer::new(ks_config, Arc::new(email_key))
+                    .with_issuance_log(Arc::clone(audit_log)),
+            );
 
             spawn_reaper(
                 Arc::clone(&ks.store),

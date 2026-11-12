@@ -3,8 +3,8 @@
 /ui/api/config	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/config	DELETE	plain	AuthOff	405
 /ui/api/config	DELETE	plain	Bearer	405
-/ui/api/config	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/config	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/config	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/config	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/config	DELETE	plain	OidcAdmin	405
 /ui/api/config	DELETE	plain	OidcAuditor	405
 /ui/api/config	DELETE	plain	OidcDeveloper	405
@@ -16,34 +16,34 @@
 /ui/api/config	DELETE	plain	StandardKey	405
 /ui/api/config	GET	bad-query	AdminKey	200
 /ui/api/config	GET	bad-query	AdminKeyUnmapped	200
-/ui/api/config	GET	bad-query	AuthOff	403:@b_ca730ec7
+/ui/api/config	GET	bad-query	AuthOff	403:error="Authentication required"
 /ui/api/config	GET	bad-query	Bearer	200
-/ui/api/config	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/config	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/config	GET	bad-query	OidcAdmin	403:@b_ca730ec7
-/ui/api/config	GET	bad-query	OidcAuditor	403:@b_ca730ec7
-/ui/api/config	GET	bad-query	OidcDeveloper	403:@b_ca730ec7
-/ui/api/config	GET	bad-query	OidcDeveloperNoIssuer	403:@b_ca730ec7
-/ui/api/config	GET	bad-query	OidcDeveloperNoSubject	403:@b_ca730ec7
-/ui/api/config	GET	bad-query	OidcReviewer	403:@b_ca730ec7
-/ui/api/config	GET	bad-query	OidcUnmapped	403:@b_ca730ec7
+/ui/api/config	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/config	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config	GET	bad-query	OidcAdmin	403:error="Authentication required"
+/ui/api/config	GET	bad-query	OidcAuditor	403:error="Authentication required"
+/ui/api/config	GET	bad-query	OidcDeveloper	403:error="Authentication required"
+/ui/api/config	GET	bad-query	OidcDeveloperNoIssuer	403:error="Authentication required"
+/ui/api/config	GET	bad-query	OidcDeveloperNoSubject	403:error="Authentication required"
+/ui/api/config	GET	bad-query	OidcReviewer	403:error="Authentication required"
+/ui/api/config	GET	bad-query	OidcUnmapped	403:error="Authentication required"
 /ui/api/config	GET	bad-query	Session	200
-/ui/api/config	GET	bad-query	StandardKey	403:@b_ca730ec7
+/ui/api/config	GET	bad-query	StandardKey	403:error="Authentication required"
 /ui/api/config	GET	plain	AdminKey	200
 /ui/api/config	GET	plain	AdminKeyUnmapped	200
-/ui/api/config	GET	plain	AuthOff	403:@b_ca730ec7
+/ui/api/config	GET	plain	AuthOff	403:error="Authentication required"
 /ui/api/config	GET	plain	Bearer	200
-/ui/api/config	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/config	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/config	GET	plain	OidcAdmin	403:@b_ca730ec7
-/ui/api/config	GET	plain	OidcAuditor	403:@b_ca730ec7
-/ui/api/config	GET	plain	OidcDeveloper	403:@b_ca730ec7
-/ui/api/config	GET	plain	OidcDeveloperNoIssuer	403:@b_ca730ec7
-/ui/api/config	GET	plain	OidcDeveloperNoSubject	403:@b_ca730ec7
-/ui/api/config	GET	plain	OidcReviewer	403:@b_ca730ec7
-/ui/api/config	GET	plain	OidcUnmapped	403:@b_ca730ec7
+/ui/api/config	GET	plain	NoKey	401:error.code=-32000
+/ui/api/config	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config	GET	plain	OidcAdmin	403:error="Authentication required"
+/ui/api/config	GET	plain	OidcAuditor	403:error="Authentication required"
+/ui/api/config	GET	plain	OidcDeveloper	403:error="Authentication required"
+/ui/api/config	GET	plain	OidcDeveloperNoIssuer	403:error="Authentication required"
+/ui/api/config	GET	plain	OidcDeveloperNoSubject	403:error="Authentication required"
+/ui/api/config	GET	plain	OidcReviewer	403:error="Authentication required"
+/ui/api/config	GET	plain	OidcUnmapped	403:error="Authentication required"
 /ui/api/config	GET	plain	Session	200
-/ui/api/config	GET	plain	StandardKey	403:@b_ca730ec7
+/ui/api/config	GET	plain	StandardKey	403:error="Authentication required"
 /ui/api/config	HEAD	plain	AdminKey	200
 /ui/api/config	HEAD	plain	AdminKeyUnmapped	200
 /ui/api/config	HEAD	plain	AuthOff	403
@@ -63,8 +63,8 @@
 /ui/api/config	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/config	OPTIONS	plain	AuthOff	405
 /ui/api/config	OPTIONS	plain	Bearer	405
-/ui/api/config	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/config	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/config	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/config	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/config	OPTIONS	plain	OidcAdmin	405
 /ui/api/config	OPTIONS	plain	OidcAuditor	405
 /ui/api/config	OPTIONS	plain	OidcDeveloper	405
@@ -78,8 +78,8 @@
 /ui/api/config	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/config	PATCH	bad-json	AuthOff	405
 /ui/api/config	PATCH	bad-json	Bearer	405
-/ui/api/config	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/config	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/config	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/config	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/config	PATCH	bad-json	OidcAdmin	405
 /ui/api/config	PATCH	bad-json	OidcAuditor	405
 /ui/api/config	PATCH	bad-json	OidcDeveloper	405
@@ -93,8 +93,8 @@
 /ui/api/config	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/config	PATCH	bad-type	AuthOff	405
 /ui/api/config	PATCH	bad-type	Bearer	405
-/ui/api/config	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/config	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/config	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/config	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/config	PATCH	bad-type	OidcAdmin	405
 /ui/api/config	PATCH	bad-type	OidcAuditor	405
 /ui/api/config	PATCH	bad-type	OidcDeveloper	405
@@ -108,8 +108,8 @@
 /ui/api/config	PATCH	json	AdminKeyUnmapped	405
 /ui/api/config	PATCH	json	AuthOff	405
 /ui/api/config	PATCH	json	Bearer	405
-/ui/api/config	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/config	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/config	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/config	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/config	PATCH	json	OidcAdmin	405
 /ui/api/config	PATCH	json	OidcAuditor	405
 /ui/api/config	PATCH	json	OidcDeveloper	405
@@ -123,8 +123,8 @@
 /ui/api/config	POST	bad-json	AdminKeyUnmapped	405
 /ui/api/config	POST	bad-json	AuthOff	405
 /ui/api/config	POST	bad-json	Bearer	405
-/ui/api/config	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/config	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/config	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/config	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/config	POST	bad-json	OidcAdmin	405
 /ui/api/config	POST	bad-json	OidcAuditor	405
 /ui/api/config	POST	bad-json	OidcDeveloper	405
@@ -138,8 +138,8 @@
 /ui/api/config	POST	bad-type	AdminKeyUnmapped	405
 /ui/api/config	POST	bad-type	AuthOff	405
 /ui/api/config	POST	bad-type	Bearer	405
-/ui/api/config	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/config	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/config	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/config	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/config	POST	bad-type	OidcAdmin	405
 /ui/api/config	POST	bad-type	OidcAuditor	405
 /ui/api/config	POST	bad-type	OidcDeveloper	405
@@ -153,8 +153,8 @@
 /ui/api/config	POST	json	AdminKeyUnmapped	405
 /ui/api/config	POST	json	AuthOff	405
 /ui/api/config	POST	json	Bearer	405
-/ui/api/config	POST	json	NoKey	401:@b_de6b5592
-/ui/api/config	POST	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/config	POST	json	NoKey	401:error.code=-32000
+/ui/api/config	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/config	POST	json	OidcAdmin	405
 /ui/api/config	POST	json	OidcAuditor	405
 /ui/api/config	POST	json	OidcDeveloper	405
@@ -168,8 +168,8 @@
 /ui/api/config	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/config	PUT	bad-json	AuthOff	405
 /ui/api/config	PUT	bad-json	Bearer	405
-/ui/api/config	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/config	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/config	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/config	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/config	PUT	bad-json	OidcAdmin	405
 /ui/api/config	PUT	bad-json	OidcAuditor	405
 /ui/api/config	PUT	bad-json	OidcDeveloper	405
@@ -183,8 +183,8 @@
 /ui/api/config	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/config	PUT	bad-type	AuthOff	405
 /ui/api/config	PUT	bad-type	Bearer	405
-/ui/api/config	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/config	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/config	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/config	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/config	PUT	bad-type	OidcAdmin	405
 /ui/api/config	PUT	bad-type	OidcAuditor	405
 /ui/api/config	PUT	bad-type	OidcDeveloper	405
@@ -198,8 +198,8 @@
 /ui/api/config	PUT	json	AdminKeyUnmapped	405
 /ui/api/config	PUT	json	AuthOff	405
 /ui/api/config	PUT	json	Bearer	405
-/ui/api/config	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/config	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/config	PUT	json	NoKey	401:error.code=-32000
+/ui/api/config	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/config	PUT	json	OidcAdmin	405
 /ui/api/config	PUT	json	OidcAuditor	405
 /ui/api/config	PUT	json	OidcDeveloper	405

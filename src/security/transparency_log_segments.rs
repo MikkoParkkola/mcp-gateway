@@ -175,18 +175,34 @@ fn read_first_line_raw(path: &Path) -> io::Result<Option<String>> {
     first_line_in(&File::open(path)?)
 }
 
-/// The first non-empty line of an open `file`, read from its start through
-/// the same 4 MiB window as [`read_first_line`].
+/// The first non-empty line of an open `file`, read from its start within the
+/// same 4 MiB window as [`read_first_line`], but a line at a time: reading
+/// stops at the first line that is not blank, so a segment whose first line
+/// is 200 bytes costs about that, not the window. Within the window the result
+/// is the one a read of the whole window gave: a line without its `\n` and the
+/// `\r` before that `\n`, decoded lossily; a window with no newline is one line.
 fn first_line_in(mut file: &File) -> io::Result<Option<String>> {
-    use std::io::{Seek, SeekFrom};
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
     file.seek(SeekFrom::Start(0))?;
-    let mut buf = Vec::new();
-    file.take(MAX_TAIL_SCAN_BYTES).read_to_end(&mut buf)?;
-    let text = String::from_utf8_lossy(&buf);
-    Ok(text
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .map(str::to_string))
+    let mut reader = BufReader::with_capacity(4096, file.take(MAX_TAIL_SCAN_BYTES));
+    let mut raw = Vec::new();
+    loop {
+        raw.clear();
+        if reader.read_until(b'\n', &mut raw)? == 0 {
+            return Ok(None);
+        }
+        let text = String::from_utf8_lossy(&raw);
+        // A `\r` goes only with the `\n` it precedes: a bare one at the end of
+        // the file or at the window cap is part of the line, as `str::lines`
+        // kept it.
+        let line = match text.strip_suffix('\n') {
+            Some(line) => line.strip_suffix('\r').unwrap_or(line),
+            None => &text,
+        };
+        if !line.trim().is_empty() {
+            return Ok(Some(line.to_string()));
+        }
+    }
 }
 
 /// The segment number the active file at `path` holds: the one its open
@@ -494,3 +510,7 @@ mod hwm_mac_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "transparency_log_first_line_tests.rs"]
+mod first_line_tests;

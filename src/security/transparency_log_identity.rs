@@ -44,6 +44,20 @@ pub(crate) const RESERVED_EVENTS: [&str; 2] = [EV_IDENTIFIED, EV_PREDECESSOR_RET
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LogId(String);
 
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InvalidLogId;
+
+impl LogId {
+    #[cfg(test)]
+    pub(crate) fn from_journal(text: String) -> Result<Self, InvalidLogId> {
+        if text.is_empty() || text.len() > 1024 {
+            return Err(InvalidLogId);
+        }
+        Ok(Self(text))
+    }
+}
+
 impl LogId {
     /// A fresh random id.
     pub(super) fn mint() -> Self {

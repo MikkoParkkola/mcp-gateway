@@ -46,6 +46,7 @@ python3 scripts/dev/check_cfg_reader_copies.py --base <BASE_TIP> --compare merge
 python3 scripts/dev/check-registry-packages.py --offline	1	closed
 "$GATE_PY" scripts/dev/check-timing-asserts.py --base <BASE_TIP> --compare merge-base	1	closed
 python3 scripts/dev/cwe532-leak-lint.py src crates	5	closed
+python3 scripts/dev/test_bless_ui_matrix.py	1	closed
 python3 scripts/dev/test_check_control_drift.py	7	closed
 python3 scripts/dev/test_check_doc_backticks.py	1	closed
 python3 scripts/dev/test_check_event_source_scope.py	3	closed
@@ -112,6 +113,8 @@ python3 scripts/release/upgrading_fragments.py assemble --dry-run > <TMP>/UPGRAD
 python3 scripts/release/upgrading_fragments.py check	1	closed
 python3 scripts/release/upgrading_fragments.py check --base <BASE_TIP> --head <HEAD>	1	closed
 "$GATE_PY" scripts/dev/test_cfg_items.py	1	closed
+"$GATE_PY" scripts/dev/check-outbound-clients.py	20	closed
+"$GATE_PY" scripts/dev/test_check_outbound_clients.py	1	closed
 python3 scripts/dev/test_gate_env_python.py	1	closed
 scripts/ci/changed-scope.sh --self-test	0	closed
 scripts/ci/check-capability-pin-counts.sh	1	closed

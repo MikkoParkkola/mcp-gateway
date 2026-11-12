@@ -11,6 +11,9 @@ use std::path::Path;
 
 use crate::{Error, Result};
 
+#[cfg(test)]
+use crate::config_persistence::journal::v2::MAX_JOURNAL_BYTES;
+
 /// The UPGRADING-4.0 item that documents this rule. One place to renumber.
 #[cfg(unix)]
 const UPGRADE_ITEM: u32 = 35;
@@ -48,6 +51,9 @@ pub(crate) enum SecretFile {
     /// either file may be another account's plant, and fixing it would make
     /// the next recovery restore it ([`RECOVERY_FILE_FIX`]).
     RecoveryFile,
+    /// A v2 recovery journal, with the recovery rule and a 1 MiB read limit.
+    #[cfg(test)]
+    RecoveryJournalV2,
 }
 
 /// The Windows DACL refusal: the guard's `head`, then `detail` (the found
@@ -111,6 +117,8 @@ impl SecretFile {
     const fn max_bytes(self) -> Option<u64> {
         match self {
             Self::Reference => Some(64 * 1024),
+            #[cfg(test)]
+            Self::RecoveryJournalV2 => Some(MAX_JOURNAL_BYTES as u64),
             _ => None,
         }
     }
@@ -128,7 +136,10 @@ impl SecretFile {
             Self::TlsCrl => "certificate revocation list",
             Self::IdentityGrants => "identity grants file",
             Self::ControlPlaneCollection => "control-plane file",
+            #[cfg(not(test))]
             Self::RecoveryFile => "replace journal or staged original",
+            #[cfg(test)]
+            Self::RecoveryFile | Self::RecoveryJournalV2 => "replace journal or staged original",
         }
     }
 
@@ -137,7 +148,10 @@ impl SecretFile {
     /// whatever the refusal.
     const fn recovery_guidance(self) -> Option<&'static str> {
         match self {
+            #[cfg(not(test))]
             Self::RecoveryFile => Some(RECOVERY_FILE_FIX),
+            #[cfg(test)]
+            Self::RecoveryFile | Self::RecoveryJournalV2 => Some(RECOVERY_FILE_FIX),
             _ => None,
         }
     }
@@ -670,6 +684,18 @@ fn file_identity(path: &Path) -> std::io::Result<(u64, u128)> {
 /// As [`read_config_text`].
 pub(crate) fn read_recovery_text(path: &Path) -> std::result::Result<Option<String>, UnreadConfig> {
     read_text_of(path, SecretFile::RecoveryFile)
+}
+
+/// [`read_recovery_text`] with a 1 MiB limit for the v2 recovery journal.
+///
+/// # Errors
+///
+/// As [`read_recovery_text`], also refusing an oversized journal.
+#[cfg(test)]
+pub(crate) fn read_recovery_journal_v2(
+    path: &Path,
+) -> std::result::Result<Option<String>, UnreadConfig> {
+    read_text_of(path, SecretFile::RecoveryJournalV2)
 }
 
 fn read_text_of(

@@ -3,8 +3,8 @@
 /ui/api/events/held	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/events/held	DELETE	plain	AuthOff	405
 /ui/api/events/held	DELETE	plain	Bearer	405
-/ui/api/events/held	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/events/held	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/held	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/events/held	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/held	DELETE	plain	OidcAdmin	405
 /ui/api/events/held	DELETE	plain	OidcAuditor	405
 /ui/api/events/held	DELETE	plain	OidcDeveloper	405
@@ -16,34 +16,34 @@
 /ui/api/events/held	DELETE	plain	StandardKey	405
 /ui/api/events/held	GET	bad-query	AdminKey	404
 /ui/api/events/held	GET	bad-query	AdminKeyUnmapped	404
-/ui/api/events/held	GET	bad-query	AuthOff	403:@b_078e5133
+/ui/api/events/held	GET	bad-query	AuthOff	403:error="Admin authentication required"
 /ui/api/events/held	GET	bad-query	Bearer	404
-/ui/api/events/held	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/events/held	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/events/held	GET	bad-query	OidcAdmin	403:@b_078e5133
-/ui/api/events/held	GET	bad-query	OidcAuditor	403:@b_078e5133
-/ui/api/events/held	GET	bad-query	OidcDeveloper	403:@b_078e5133
-/ui/api/events/held	GET	bad-query	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/events/held	GET	bad-query	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/events/held	GET	bad-query	OidcReviewer	403:@b_078e5133
-/ui/api/events/held	GET	bad-query	OidcUnmapped	403:@b_078e5133
+/ui/api/events/held	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/events/held	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/held	GET	bad-query	OidcAdmin	403:error="Admin authentication required"
+/ui/api/events/held	GET	bad-query	OidcAuditor	403:error="Admin authentication required"
+/ui/api/events/held	GET	bad-query	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/events/held	GET	bad-query	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/events/held	GET	bad-query	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/events/held	GET	bad-query	OidcReviewer	403:error="Admin authentication required"
+/ui/api/events/held	GET	bad-query	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/events/held	GET	bad-query	Session	404
-/ui/api/events/held	GET	bad-query	StandardKey	403:@b_078e5133
+/ui/api/events/held	GET	bad-query	StandardKey	403:error="Admin authentication required"
 /ui/api/events/held	GET	plain	AdminKey	404
 /ui/api/events/held	GET	plain	AdminKeyUnmapped	404
-/ui/api/events/held	GET	plain	AuthOff	403:@b_078e5133
+/ui/api/events/held	GET	plain	AuthOff	403:error="Admin authentication required"
 /ui/api/events/held	GET	plain	Bearer	404
-/ui/api/events/held	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/events/held	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/events/held	GET	plain	OidcAdmin	403:@b_078e5133
-/ui/api/events/held	GET	plain	OidcAuditor	403:@b_078e5133
-/ui/api/events/held	GET	plain	OidcDeveloper	403:@b_078e5133
-/ui/api/events/held	GET	plain	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/events/held	GET	plain	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/events/held	GET	plain	OidcReviewer	403:@b_078e5133
-/ui/api/events/held	GET	plain	OidcUnmapped	403:@b_078e5133
+/ui/api/events/held	GET	plain	NoKey	401:error.code=-32000
+/ui/api/events/held	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/held	GET	plain	OidcAdmin	403:error="Admin authentication required"
+/ui/api/events/held	GET	plain	OidcAuditor	403:error="Admin authentication required"
+/ui/api/events/held	GET	plain	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/events/held	GET	plain	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/events/held	GET	plain	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/events/held	GET	plain	OidcReviewer	403:error="Admin authentication required"
+/ui/api/events/held	GET	plain	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/events/held	GET	plain	Session	404
-/ui/api/events/held	GET	plain	StandardKey	403:@b_078e5133
+/ui/api/events/held	GET	plain	StandardKey	403:error="Admin authentication required"
 /ui/api/events/held	HEAD	plain	AdminKey	404
 /ui/api/events/held	HEAD	plain	AdminKeyUnmapped	404
 /ui/api/events/held	HEAD	plain	AuthOff	403
@@ -63,8 +63,8 @@
 /ui/api/events/held	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/events/held	OPTIONS	plain	AuthOff	405
 /ui/api/events/held	OPTIONS	plain	Bearer	405
-/ui/api/events/held	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/events/held	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/held	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/events/held	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/held	OPTIONS	plain	OidcAdmin	405
 /ui/api/events/held	OPTIONS	plain	OidcAuditor	405
 /ui/api/events/held	OPTIONS	plain	OidcDeveloper	405
@@ -78,8 +78,8 @@
 /ui/api/events/held	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/events/held	PATCH	bad-json	AuthOff	405
 /ui/api/events/held	PATCH	bad-json	Bearer	405
-/ui/api/events/held	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/events/held	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/held	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/events/held	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/held	PATCH	bad-json	OidcAdmin	405
 /ui/api/events/held	PATCH	bad-json	OidcAuditor	405
 /ui/api/events/held	PATCH	bad-json	OidcDeveloper	405
@@ -93,8 +93,8 @@
 /ui/api/events/held	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/events/held	PATCH	bad-type	AuthOff	405
 /ui/api/events/held	PATCH	bad-type	Bearer	405
-/ui/api/events/held	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/events/held	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/held	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/events/held	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/held	PATCH	bad-type	OidcAdmin	405
 /ui/api/events/held	PATCH	bad-type	OidcAuditor	405
 /ui/api/events/held	PATCH	bad-type	OidcDeveloper	405
@@ -108,8 +108,8 @@
 /ui/api/events/held	PATCH	json	AdminKeyUnmapped	405
 /ui/api/events/held	PATCH	json	AuthOff	405
 /ui/api/events/held	PATCH	json	Bearer	405
-/ui/api/events/held	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/events/held	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/held	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/events/held	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/held	PATCH	json	OidcAdmin	405
 /ui/api/events/held	PATCH	json	OidcAuditor	405
 /ui/api/events/held	PATCH	json	OidcDeveloper	405
@@ -123,8 +123,8 @@
 /ui/api/events/held	POST	bad-json	AdminKeyUnmapped	405
 /ui/api/events/held	POST	bad-json	AuthOff	405
 /ui/api/events/held	POST	bad-json	Bearer	405
-/ui/api/events/held	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/events/held	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/held	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/events/held	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/held	POST	bad-json	OidcAdmin	405
 /ui/api/events/held	POST	bad-json	OidcAuditor	405
 /ui/api/events/held	POST	bad-json	OidcDeveloper	405
@@ -138,8 +138,8 @@
 /ui/api/events/held	POST	bad-type	AdminKeyUnmapped	405
 /ui/api/events/held	POST	bad-type	AuthOff	405
 /ui/api/events/held	POST	bad-type	Bearer	405
-/ui/api/events/held	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/events/held	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/held	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/events/held	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/held	POST	bad-type	OidcAdmin	405
 /ui/api/events/held	POST	bad-type	OidcAuditor	405
 /ui/api/events/held	POST	bad-type	OidcDeveloper	405
@@ -153,8 +153,8 @@
 /ui/api/events/held	POST	json	AdminKeyUnmapped	405
 /ui/api/events/held	POST	json	AuthOff	405
 /ui/api/events/held	POST	json	Bearer	405
-/ui/api/events/held	POST	json	NoKey	401:@b_de6b5592
-/ui/api/events/held	POST	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/held	POST	json	NoKey	401:error.code=-32000
+/ui/api/events/held	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/held	POST	json	OidcAdmin	405
 /ui/api/events/held	POST	json	OidcAuditor	405
 /ui/api/events/held	POST	json	OidcDeveloper	405
@@ -168,8 +168,8 @@
 /ui/api/events/held	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/events/held	PUT	bad-json	AuthOff	405
 /ui/api/events/held	PUT	bad-json	Bearer	405
-/ui/api/events/held	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/events/held	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/held	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/events/held	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/held	PUT	bad-json	OidcAdmin	405
 /ui/api/events/held	PUT	bad-json	OidcAuditor	405
 /ui/api/events/held	PUT	bad-json	OidcDeveloper	405
@@ -183,8 +183,8 @@
 /ui/api/events/held	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/events/held	PUT	bad-type	AuthOff	405
 /ui/api/events/held	PUT	bad-type	Bearer	405
-/ui/api/events/held	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/events/held	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/held	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/events/held	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/held	PUT	bad-type	OidcAdmin	405
 /ui/api/events/held	PUT	bad-type	OidcAuditor	405
 /ui/api/events/held	PUT	bad-type	OidcDeveloper	405
@@ -198,8 +198,8 @@
 /ui/api/events/held	PUT	json	AdminKeyUnmapped	405
 /ui/api/events/held	PUT	json	AuthOff	405
 /ui/api/events/held	PUT	json	Bearer	405
-/ui/api/events/held	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/events/held	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/held	PUT	json	NoKey	401:error.code=-32000
+/ui/api/events/held	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/held	PUT	json	OidcAdmin	405
 /ui/api/events/held	PUT	json	OidcAuditor	405
 /ui/api/events/held	PUT	json	OidcDeveloper	405

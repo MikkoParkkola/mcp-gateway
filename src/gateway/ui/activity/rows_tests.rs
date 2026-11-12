@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
-use super::{FeedOutcome, Filter, Kind, kind_of, owned_by, row};
+use super::{FeedOutcome, Filter, Kind, NOT_A_CALL, kind_of, owned_by, row};
 use crate::gateway::ui::activity::reader::{Line, Which};
 use crate::security::decision_record::read::{
     NO_FINDINGS, NOT_RECORDED_BY_VERSION, NOT_RECORDED_FOR_CALL,
@@ -63,7 +63,12 @@ const COMMON: [&str; 8] = [
 
 #[test]
 fn r1_each_kind_holds_exactly_its_allowlist() {
-    let r = row(&line(Which::Invocation, call("ok")), &Check::bare(None)).unwrap();
+    let r = row(
+        &line(Which::Invocation, call("ok")),
+        &Check::bare(None),
+        &NOT_A_CALL,
+    )
+    .unwrap();
     let mut want = set(&COMMON);
     want.extend(set(&[
         "outcome",
@@ -76,6 +81,10 @@ fn r1_each_kind_holds_exactly_its_allowlist() {
         "response_hash",
         "who",
         "findings",
+        // API2.10: the delivery record joined to the call.
+        "effect",
+        "answer_findings",
+        "answer_integrity_scope",
     ]));
     assert_eq!(keys(&r), want);
     assert_eq!(
@@ -93,7 +102,12 @@ fn r1_each_kind_holds_exactly_its_allowlist() {
         "reason": "pasted secret", "rollback_summary": "r", "rollback_step": "s",
         "grant_change": {"x": 1}, "extra_field_never_named": "leak"
     });
-    let r = row(&line(Which::Governance, config), &Check::bare(None)).unwrap();
+    let r = row(
+        &line(Which::Governance, config),
+        &Check::bare(None),
+        &NOT_A_CALL,
+    )
+    .unwrap();
     let mut want = set(&COMMON);
     want.extend(set(&["action", "actor_id", "target_id", "outcome"]));
     assert_eq!(keys(&r), want);
@@ -105,7 +119,12 @@ fn r1_each_kind_holds_exactly_its_allowlist() {
         "surface": "ui", "route": "/ui/api/reload", "method": "POST", "http_status": 200,
         "tool": "t", "who": {"account": "a"}, "extra_field_never_named": "leak"
     });
-    let r = row(&line(Which::Invocation, admin), &Check::bare(None)).unwrap();
+    let r = row(
+        &line(Which::Invocation, admin),
+        &Check::bare(None),
+        &NOT_A_CALL,
+    )
+    .unwrap();
     let mut want = set(&COMMON);
     want.extend(set(&[
         "surface",
@@ -127,7 +146,12 @@ fn r2_outcomes_group_into_ok_failed_and_blocked() {
         ("denied", "blocked"),
         ("invalid", "blocked"),
     ] {
-        let r = row(&line(Which::Invocation, call(recorded)), &Check::bare(None)).unwrap();
+        let r = row(
+            &line(Which::Invocation, call(recorded)),
+            &Check::bare(None),
+            &NOT_A_CALL,
+        )
+        .unwrap();
         assert_eq!(r["outcome"], feed, "{recorded}");
     }
     let only = |o| Filter {
@@ -135,11 +159,11 @@ fn r2_outcomes_group_into_ok_failed_and_blocked() {
         ..Filter::default()
     };
     let blocked = line(Which::Invocation, call("denied"));
-    assert!(only(FeedOutcome::Blocked).matches(&blocked, Kind::Call));
-    assert!(!only(FeedOutcome::Ok).matches(&blocked, Kind::Call));
+    assert!(only(FeedOutcome::Blocked).matches(&blocked, Kind::Call, &NOT_A_CALL));
+    assert!(!only(FeedOutcome::Ok).matches(&blocked, Kind::Call, &NOT_A_CALL));
     let config = line(Which::Governance, json!({"kind": "control_plane_audit"}));
-    assert!(!only(FeedOutcome::Ok).matches(&config, Kind::Config));
-    assert!(Filter::default().matches(&config, Kind::Config));
+    assert!(!only(FeedOutcome::Ok).matches(&config, Kind::Config, &NOT_A_CALL));
+    assert!(Filter::default().matches(&config, Kind::Config, &NOT_A_CALL));
 }
 
 #[test]
@@ -149,7 +173,12 @@ fn r4_each_filter_and_their_and() {
     other["server"] = "other".into();
     other["who"]["account"] = "someone".into();
     let b = line(Which::Invocation, other);
-    let f = |f: Filter| (f.matches(&a, Kind::Call), f.matches(&b, Kind::Call));
+    let f = |f: Filter| {
+        (
+            f.matches(&a, Kind::Call, &NOT_A_CALL),
+            f.matches(&b, Kind::Call, &NOT_A_CALL),
+        )
+    };
     let base = Filter::default;
     assert_eq!(
         f(Filter {
@@ -199,25 +228,25 @@ fn r4_each_filter_and_their_and() {
             to: t("2026-10-26T11:00:00Z"),
             ..base()
         }
-        .matches(&a, Kind::Call)
+        .matches(&a, Kind::Call, &NOT_A_CALL)
     );
     assert!(
         !Filter {
             from: t("2026-10-26T10:00:01Z"),
             ..base()
         }
-        .matches(&a, Kind::Call)
+        .matches(&a, Kind::Call, &NOT_A_CALL)
     );
     let mut untimed = call("ok");
     untimed["timestamp"] = Value::Null;
     let untimed = line(Which::Invocation, untimed);
-    assert!(Filter::default().matches(&untimed, Kind::Call));
+    assert!(Filter::default().matches(&untimed, Kind::Call, &NOT_A_CALL));
     assert!(
         !Filter {
             to: t("2030-01-01T00:00:00Z"),
             ..base()
         }
-        .matches(&untimed, Kind::Call),
+        .matches(&untimed, Kind::Call, &NOT_A_CALL),
         "an untimed row is outside every time range"
     );
 }
@@ -272,7 +301,7 @@ fn findings_of(decision: Option<Value>) -> Value {
     if let Some(d) = decision {
         e["decision"] = d;
     }
-    row(&line(Which::Invocation, e), &Check::bare(None)).unwrap()["findings"].clone()
+    row(&line(Which::Invocation, e), &Check::bare(None), &NOT_A_CALL).unwrap()["findings"].clone()
 }
 
 #[test]

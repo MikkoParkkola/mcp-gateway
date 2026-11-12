@@ -64,11 +64,14 @@ struct Fx {
     router: axum::Router,
     gateway: DirectAccountGateway,
     log_path: std::path::PathBuf,
-    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
+    _dirs: (
+        Arc<tempfile::TempDir>,
+        crate::gateway::router::tests::FixtureDir,
+    ),
 }
 
 async fn fixture(auth: AuthConfig, binding: &Binding) -> Fx {
-    let audit = tempfile::tempdir().unwrap();
+    let audit = crate::test_dir_keep::kept_tempdir();
     let log_path = audit.path().join("audit.jsonl");
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {

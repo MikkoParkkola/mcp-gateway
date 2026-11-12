@@ -11,6 +11,8 @@
 
 #[path = "../src/test_support/error_capture.rs"]
 mod error_capture;
+#[path = "../src/test_support/interest.rs"]
+mod interest;
 
 fn the_probe_line() {
     tracing::error!("mik-8254 probe line");

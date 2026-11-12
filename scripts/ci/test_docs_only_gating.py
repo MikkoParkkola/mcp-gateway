@@ -92,7 +92,11 @@ POST_MERGE_SKIPPED = {
     # (package-tests, a build of that crate, keeps running: #1812 pins it to every ref.)
     "test",
     # Per-item properties two clean PRs cannot break together; the tag reruns them.
-    "check", "kani",
+    # (`check`, the pedantic clippy job, is NOT skipped on a release-line push: a pull request can
+    # only restore a cache saved on the release line, so its push run is what keeps the Linux
+    # clippy build cache warm for every lane PR and train; without it each PR rebuilds ~350
+    # dependencies for each of the job's eight cargo steps.)
+    "kani",
     # Platform builds: scarce hosted runners; the tag workflow runs both.
     "windows-check", "macos-check",
     # The shards behind test, windows-check and macos-check (MIK-8482).
@@ -362,6 +366,60 @@ def concurrency_errors(block: dict) -> list[str]:
     return out
 
 
+def clippy_cache_errors(jobs: dict) -> list[str]:
+    """The pedantic clippy job restores its cache on every run but saves it only on a push.
+
+    A pull request restores only caches saved on its base branch or its own ref, so the release-line
+    push is the one run whose save helps anyone; a save on every PR ref wrote a 310 MB cache per run
+    that nothing else could read, which held the repository at its 10 GB cache limit and let eviction
+    push the line's own cache out."""
+    out = []
+    steps = [s for s in jobs["check"]["steps"] if str(s.get("uses", "")).startswith("Swatinem/rust-cache@")]
+    if len(steps) != 1:
+        return [f"clippy cache: the check job has {len(steps)} rust-cache steps, want exactly one"]
+    save_if = str((steps[0].get("with") or {}).get("save-if", ""))
+    for label, event, want in (("a pull request", "pull_request", False), ("a push", "push", True)):
+        got = evaluate(save_if, ctx(event, "success", "false")) if save_if else True
+        if bool(got) is not want:
+            out.append(f"clippy cache: {label} {'does not save' if want else 'saves'} the cache "
+                       f"(save-if: {save_if or 'default true'})")
+    return out
+
+
+def ui_tests_apt_errors() -> list[str]:
+    """The UI tests job must not fail because an Ubuntu mirror is down.
+
+    On 2026-11-11 security.ubuntu.com was unreachable and `playwright install --with-deps`, which runs
+    `apt-get update` first, exited 100 on every run, so the job failed at setup on the line and on every
+    train. The browser comes from Playwright's own CDN and is cached; the system libraries come from apt
+    and are mostly on the hosted image already. So: no `--with-deps` anywhere, and the step that installs
+    the libraries retries apt and carries on with a warning when it still fails (the test step then fails
+    loudly if a library is really missing)."""
+    doc = yaml.safe_load((ROOT / ".github/workflows/ui-tests.yml").read_text())
+    runs = [str(step.get("run", "")) for step in doc["jobs"]["playwright"]["steps"]]
+    out = []
+    if any("--with-deps" in run for run in runs):
+        out.append("ui-tests: `playwright install --with-deps` runs apt-get update and exits 100 when the "
+                   "mirror is down; install the browser and the system libraries in separate steps")
+    deps = [run for run in runs if "install-deps" in run]
+    if not deps:
+        out.append("ui-tests: no step installs Chromium's system libraries")
+    for run in deps:
+        if "Acquire::Retries" not in run:
+            out.append("ui-tests: the system-library step does not retry apt (-o Acquire::Retries=5)")
+        if "||" not in run:
+            out.append("ui-tests: the system-library step fails the job when apt is down; it must warn and go on")
+        # Observed on this change's own run during the outage: apt's retries multiplied against a dead DNS
+        # held the step for the job's whole 15 minutes until the timeout cancelled the job. Every apt and
+        # install-deps command in the step must be bounded by `timeout`.
+        for line in run.splitlines():
+            code = line.strip()
+            if ("apt-get " in code or "install-deps" in code) and not code.startswith(("#", "printf")):
+                if "timeout " not in code:
+                    out.append(f"ui-tests: an unbounded command in the system-library step: {code[:60]}")
+    return out
+
+
 def main() -> int:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     errors = []
@@ -415,6 +473,8 @@ def main() -> int:
     errors += release_pr_errors(jobs)
     errors += macos_train_errors(jobs)
     errors += post_merge_errors(jobs)
+    errors += clippy_cache_errors(jobs)
+    errors += ui_tests_apt_errors()
     # The macOS cases must be able to fail: each mutant is caught by the case
     # named beside it, not merely by some case.
     import copy

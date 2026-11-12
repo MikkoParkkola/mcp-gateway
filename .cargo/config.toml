@@ -1,0 +1,6 @@
+# aarch64 Linux only (the arm64 build machines and images): link through scripts/ci/aarch64-lld-cc.sh, which
+# uses the lld that rustup ships. The lib test binary is past the reach of one aarch64 branch, so GNU ld
+# fails with "relocation truncated to fit". The path is relative to the directory above .cargo.
+# Other targets read nothing from this file.
+[target.aarch64-unknown-linux-gnu]
+linker = "scripts/ci/aarch64-lld-cc.sh"

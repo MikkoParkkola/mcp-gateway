@@ -3,8 +3,8 @@
 /ui/api/tools/call	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/tools/call	DELETE	plain	AuthOff	405
 /ui/api/tools/call	DELETE	plain	Bearer	405
-/ui/api/tools/call	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/tools/call	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools/call	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/tools/call	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools/call	DELETE	plain	OidcAdmin	405
 /ui/api/tools/call	DELETE	plain	OidcAuditor	405
 /ui/api/tools/call	DELETE	plain	OidcDeveloper	405
@@ -18,8 +18,8 @@
 /ui/api/tools/call	GET	bad-query	AdminKeyUnmapped	405
 /ui/api/tools/call	GET	bad-query	AuthOff	405
 /ui/api/tools/call	GET	bad-query	Bearer	405
-/ui/api/tools/call	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/tools/call	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools/call	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/tools/call	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools/call	GET	bad-query	OidcAdmin	405
 /ui/api/tools/call	GET	bad-query	OidcAuditor	405
 /ui/api/tools/call	GET	bad-query	OidcDeveloper	405
@@ -33,8 +33,8 @@
 /ui/api/tools/call	GET	plain	AdminKeyUnmapped	405
 /ui/api/tools/call	GET	plain	AuthOff	405
 /ui/api/tools/call	GET	plain	Bearer	405
-/ui/api/tools/call	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/tools/call	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools/call	GET	plain	NoKey	401:error.code=-32000
+/ui/api/tools/call	GET	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools/call	GET	plain	OidcAdmin	405
 /ui/api/tools/call	GET	plain	OidcAuditor	405
 /ui/api/tools/call	GET	plain	OidcDeveloper	405
@@ -63,8 +63,8 @@
 /ui/api/tools/call	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/tools/call	OPTIONS	plain	AuthOff	405
 /ui/api/tools/call	OPTIONS	plain	Bearer	405
-/ui/api/tools/call	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/tools/call	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools/call	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/tools/call	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools/call	OPTIONS	plain	OidcAdmin	405
 /ui/api/tools/call	OPTIONS	plain	OidcAuditor	405
 /ui/api/tools/call	OPTIONS	plain	OidcDeveloper	405
@@ -78,8 +78,8 @@
 /ui/api/tools/call	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/tools/call	PATCH	bad-json	AuthOff	405
 /ui/api/tools/call	PATCH	bad-json	Bearer	405
-/ui/api/tools/call	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/tools/call	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools/call	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/tools/call	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools/call	PATCH	bad-json	OidcAdmin	405
 /ui/api/tools/call	PATCH	bad-json	OidcAuditor	405
 /ui/api/tools/call	PATCH	bad-json	OidcDeveloper	405
@@ -93,8 +93,8 @@
 /ui/api/tools/call	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/tools/call	PATCH	bad-type	AuthOff	405
 /ui/api/tools/call	PATCH	bad-type	Bearer	405
-/ui/api/tools/call	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/tools/call	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools/call	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/tools/call	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools/call	PATCH	bad-type	OidcAdmin	405
 /ui/api/tools/call	PATCH	bad-type	OidcAuditor	405
 /ui/api/tools/call	PATCH	bad-type	OidcDeveloper	405
@@ -108,8 +108,8 @@
 /ui/api/tools/call	PATCH	json	AdminKeyUnmapped	405
 /ui/api/tools/call	PATCH	json	AuthOff	405
 /ui/api/tools/call	PATCH	json	Bearer	405
-/ui/api/tools/call	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/tools/call	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools/call	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/tools/call	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools/call	PATCH	json	OidcAdmin	405
 /ui/api/tools/call	PATCH	json	OidcAuditor	405
 /ui/api/tools/call	PATCH	json	OidcDeveloper	405
@@ -121,55 +121,55 @@
 /ui/api/tools/call	PATCH	json	StandardKey	405
 /ui/api/tools/call	POST	bad-json	AdminKey	400
 /ui/api/tools/call	POST	bad-json	AdminKeyUnmapped	400
-/ui/api/tools/call	POST	bad-json	AuthOff	403:@b_078e5133
+/ui/api/tools/call	POST	bad-json	AuthOff	403:error="Admin authentication required"
 /ui/api/tools/call	POST	bad-json	Bearer	400
-/ui/api/tools/call	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/tools/call	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/tools/call	POST	bad-json	OidcAdmin	403:@b_078e5133
-/ui/api/tools/call	POST	bad-json	OidcAuditor	403:@b_078e5133
-/ui/api/tools/call	POST	bad-json	OidcDeveloper	403:@b_078e5133
-/ui/api/tools/call	POST	bad-json	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/tools/call	POST	bad-json	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/tools/call	POST	bad-json	OidcReviewer	403:@b_078e5133
-/ui/api/tools/call	POST	bad-json	OidcUnmapped	403:@b_078e5133
+/ui/api/tools/call	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/tools/call	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/tools/call	POST	bad-json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/tools/call	POST	bad-json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/tools/call	POST	bad-json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/tools/call	POST	bad-json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/tools/call	POST	bad-json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/tools/call	POST	bad-json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/tools/call	POST	bad-json	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/tools/call	POST	bad-json	Session	400
-/ui/api/tools/call	POST	bad-json	StandardKey	403:@b_078e5133
+/ui/api/tools/call	POST	bad-json	StandardKey	403:error="Admin authentication required"
 /ui/api/tools/call	POST	bad-type	AdminKey	400
 /ui/api/tools/call	POST	bad-type	AdminKeyUnmapped	400
-/ui/api/tools/call	POST	bad-type	AuthOff	403:@b_078e5133
+/ui/api/tools/call	POST	bad-type	AuthOff	403:error="Admin authentication required"
 /ui/api/tools/call	POST	bad-type	Bearer	400
-/ui/api/tools/call	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/tools/call	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/tools/call	POST	bad-type	OidcAdmin	403:@b_078e5133
-/ui/api/tools/call	POST	bad-type	OidcAuditor	403:@b_078e5133
-/ui/api/tools/call	POST	bad-type	OidcDeveloper	403:@b_078e5133
-/ui/api/tools/call	POST	bad-type	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/tools/call	POST	bad-type	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/tools/call	POST	bad-type	OidcReviewer	403:@b_078e5133
-/ui/api/tools/call	POST	bad-type	OidcUnmapped	403:@b_078e5133
+/ui/api/tools/call	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/tools/call	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/tools/call	POST	bad-type	OidcAdmin	403:error="Admin authentication required"
+/ui/api/tools/call	POST	bad-type	OidcAuditor	403:error="Admin authentication required"
+/ui/api/tools/call	POST	bad-type	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/tools/call	POST	bad-type	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/tools/call	POST	bad-type	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/tools/call	POST	bad-type	OidcReviewer	403:error="Admin authentication required"
+/ui/api/tools/call	POST	bad-type	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/tools/call	POST	bad-type	Session	400
-/ui/api/tools/call	POST	bad-type	StandardKey	403:@b_078e5133
+/ui/api/tools/call	POST	bad-type	StandardKey	403:error="Admin authentication required"
 /ui/api/tools/call	POST	json	AdminKey	422
 /ui/api/tools/call	POST	json	AdminKeyUnmapped	422
-/ui/api/tools/call	POST	json	AuthOff	403:@b_078e5133
+/ui/api/tools/call	POST	json	AuthOff	403:error="Admin authentication required"
 /ui/api/tools/call	POST	json	Bearer	422
-/ui/api/tools/call	POST	json	NoKey	401:@b_de6b5592
-/ui/api/tools/call	POST	json	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/tools/call	POST	json	OidcAdmin	403:@b_078e5133
-/ui/api/tools/call	POST	json	OidcAuditor	403:@b_078e5133
-/ui/api/tools/call	POST	json	OidcDeveloper	403:@b_078e5133
-/ui/api/tools/call	POST	json	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/tools/call	POST	json	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/tools/call	POST	json	OidcReviewer	403:@b_078e5133
-/ui/api/tools/call	POST	json	OidcUnmapped	403:@b_078e5133
+/ui/api/tools/call	POST	json	NoKey	401:error.code=-32000
+/ui/api/tools/call	POST	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/tools/call	POST	json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/tools/call	POST	json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/tools/call	POST	json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/tools/call	POST	json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/tools/call	POST	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/tools/call	POST	json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/tools/call	POST	json	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/tools/call	POST	json	Session	422
-/ui/api/tools/call	POST	json	StandardKey	403:@b_078e5133
+/ui/api/tools/call	POST	json	StandardKey	403:error="Admin authentication required"
 /ui/api/tools/call	PUT	bad-json	AdminKey	405
 /ui/api/tools/call	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/tools/call	PUT	bad-json	AuthOff	405
 /ui/api/tools/call	PUT	bad-json	Bearer	405
-/ui/api/tools/call	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/tools/call	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools/call	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/tools/call	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools/call	PUT	bad-json	OidcAdmin	405
 /ui/api/tools/call	PUT	bad-json	OidcAuditor	405
 /ui/api/tools/call	PUT	bad-json	OidcDeveloper	405
@@ -183,8 +183,8 @@
 /ui/api/tools/call	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/tools/call	PUT	bad-type	AuthOff	405
 /ui/api/tools/call	PUT	bad-type	Bearer	405
-/ui/api/tools/call	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/tools/call	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools/call	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/tools/call	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools/call	PUT	bad-type	OidcAdmin	405
 /ui/api/tools/call	PUT	bad-type	OidcAuditor	405
 /ui/api/tools/call	PUT	bad-type	OidcDeveloper	405
@@ -198,8 +198,8 @@
 /ui/api/tools/call	PUT	json	AdminKeyUnmapped	405
 /ui/api/tools/call	PUT	json	AuthOff	405
 /ui/api/tools/call	PUT	json	Bearer	405
-/ui/api/tools/call	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/tools/call	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/tools/call	PUT	json	NoKey	401:error.code=-32000
+/ui/api/tools/call	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/tools/call	PUT	json	OidcAdmin	405
 /ui/api/tools/call	PUT	json	OidcAuditor	405
 /ui/api/tools/call	PUT	json	OidcDeveloper	405

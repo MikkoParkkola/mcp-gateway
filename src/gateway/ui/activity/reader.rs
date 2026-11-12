@@ -13,8 +13,12 @@ use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::answer::LOOK_ABOVE;
+use super::seek::segments;
+use super::strict_scan::{Forward, Next};
 use crate::security::transparency_log::pager::{
     self, ASSEMBLY_WINDOW, Tail, lines_newest_first, older_segment, tail_window_assembled,
+    tail_window_in,
 };
 
 /// The window each read takes.
@@ -75,6 +79,9 @@ pub(super) struct Page {
     pub(super) bytes_examined: u64,
     /// The cursor named a segment no longer kept; reading restarted newest.
     pub(super) cursor_reset: bool,
+    /// Where the invocation log's bytes above stood when the page ended, for
+    /// the next pass of an export.
+    pub(super) above_end: Seen,
 }
 
 /// What bounds one page.
@@ -85,7 +92,8 @@ pub(in crate::gateway::ui) struct Limits {
 }
 
 enum Item {
-    Entry(Line),
+    /// A line and its bytes, newline included.
+    Entry(Line, u64),
     Unreadable(Unreadable),
 }
 
@@ -104,6 +112,8 @@ struct LogTail {
     /// partial append at the end of the active file: drop it silently.
     skip_head: bool,
     done: bool,
+    /// This page has taken an item from this log: the strict budget applies.
+    advanced: bool,
 }
 
 impl LogTail {
@@ -125,6 +135,7 @@ impl LogTail {
             pending: Vec::new(),
             skip_head: pos.is_none(),
             done: false,
+            advanced: false,
         };
         tail.file = tail.open_segment(at.lost_if_unopened())?;
         if let Some(f) = &tail.file {
@@ -158,12 +169,37 @@ impl LogTail {
         })
     }
 
+    /// One complete line at `offset` (`above` is the end it was read below):
+    /// a JSON object is an entry, anything else is unreadable.
+    fn item_of(&self, bytes: &[u8], offset: u64, above: u64) -> Item {
+        match serde_json::from_slice::<Value>(bytes) {
+            Ok(entry) if entry.is_object() => Item::Entry(
+                Line {
+                    log: self.which,
+                    entry,
+                    segment: self.segment,
+                    span: Some((offset, bytes.len() as u64)),
+                },
+                above - offset,
+            ),
+            _ => Item::Unreadable(Unreadable {
+                log: self.which,
+                segment: self.segment,
+                offset,
+            }),
+        }
+    }
+
     /// The next line, newest first. `Ok(None)` is the log's oldest kept line
     /// passed (`done`) or the budget spent (not `done`).
     fn next(&mut self, spent: &mut u64, budget: u64) -> io::Result<Option<(Item, u64)>> {
         loop {
             if let Some((offset, bytes, above)) = self.pending.pop() {
                 self.end = offset;
+                // Consuming any bytes is progress, a skipped partial head
+                // included: from here the log keeps the strict budget, so it
+                // never assembles twice in one page.
+                self.advanced = true;
                 if bytes.is_empty() {
                     // A window ending on a newline: the head is empty.
                     self.skip_head = false;
@@ -172,19 +208,7 @@ impl LogTail {
                 if std::mem::take(&mut self.skip_head) {
                     continue;
                 }
-                let item = match serde_json::from_slice::<Value>(&bytes) {
-                    Ok(entry) if entry.is_object() => Item::Entry(Line {
-                        log: self.which,
-                        entry,
-                        segment: self.segment,
-                        span: Some((offset, bytes.len() as u64)),
-                    }),
-                    _ => Item::Unreadable(Unreadable {
-                        log: self.which,
-                        segment: self.segment,
-                        offset,
-                    }),
-                };
+                let item = self.item_of(&bytes, offset, above);
                 return Ok(Some((item, above)));
             }
             if self.done {
@@ -215,15 +239,37 @@ impl LogTail {
                 }
                 continue;
             }
-            if *spent >= budget {
+            if *spent >= budget && self.advanced {
                 return Ok(None);
             }
             let Some(file) = &self.file else {
                 self.end = 0;
                 continue;
             };
-            let (tail, read) = tail_window_assembled(file, self.end, WINDOW)?;
+            // One page budget. The window and the pager's re-read for a line
+            // longer than the window are charged together, so assembly runs
+            // up front only when both fit what is left. A log this page has
+            // taken nothing from reads the window within what is left and,
+            // when that holds no line start, assembles the one record anyway:
+            // paging always advances. The peak is the window within the
+            // budget left plus one ASSEMBLY_WINDOW (the record cap plus a
+            // newline): at most that past the budget, per log. A log that has
+            // advanced keeps the strict budget and the page ends resumable.
+            let remaining = budget.saturating_sub(*spent);
+            let assemble = remaining >= WINDOW + ASSEMBLY_WINDOW;
+            let (mut tail, mut read) = match (assemble, remaining) {
+                (true, _) => tail_window_assembled(file, self.end, WINDOW)?,
+                (false, 0) => (Tail::LineTooLong, 0),
+                (false, left) => tail_window_in(file, self.end, WINDOW.min(left))?,
+            };
+            if !assemble && !self.advanced && matches!(tail, Tail::LineTooLong) {
+                let (whole, more) = tail_window_assembled(file, self.end, ASSEMBLY_WINDOW)?;
+                (tail, read) = (whole, read + more);
+            }
             *spent += read;
+            if self.advanced && !assemble && matches!(tail, Tail::LineTooLong) {
+                return Ok(None);
+            }
             match tail {
                 Tail::LineTooLong => {
                     // Over the record cap: report it once, step below the
@@ -236,6 +282,7 @@ impl LogTail {
                         segment: self.segment,
                         offset: self.end,
                     });
+                    self.advanced = true;
                     return Ok(Some((item, above)));
                 }
                 Tail::Lines { start, .. } => {
@@ -306,6 +353,41 @@ pub(super) fn read_page(
     limits: Limits,
     mut keep: impl FnMut(&Line) -> bool,
 ) -> io::Result<Page> {
+    let carried = Look::Carried(Seen {
+        above: 0,
+        head_covered: true,
+    });
+    read_page_joined(inv, gov, cursor, limits, carried, |line, _| keep(line))
+}
+
+/// Where the invocation log's bytes above a line stand, handed to `keep`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Seen {
+    /// Bytes read above the line in this read: look-above plus every line
+    /// consumed since the page top (and, in an export, earlier passes).
+    pub(super) above: u64,
+    /// Everything above the line, up to the log head, has been read.
+    pub(super) head_covered: bool,
+}
+
+/// How a page learns what lies above its cursor.
+pub(super) enum Look<'a> {
+    /// Read forward from the cursor and give each line to the callback.
+    Fold(&'a mut dyn FnMut(&Line)),
+    /// Nothing is read: this is where an earlier pass of the same read stopped.
+    Carried(Seen),
+}
+
+/// [`read_page`] with the invocation log's look-above, and `keep` told how
+/// many bytes lie above each line.
+pub(super) fn read_page_joined(
+    inv: &Path,
+    gov: Option<&Path>,
+    cursor: Option<&Cursor>,
+    limits: Limits,
+    look: Look<'_>,
+    mut keep: impl FnMut(&Line, Seen) -> bool,
+) -> io::Result<Page> {
     let mut cursor_reset = false;
     let mut gov_bound = cursor
         .and_then(|c| c.gov_bound.as_deref())
@@ -319,6 +401,16 @@ pub(super) fn read_page(
     };
 
     let mut spent = 0_u64;
+    let Seen {
+        above: mut inv_above,
+        head_covered,
+    } = match look {
+        Look::Carried(seen) => seen,
+        Look::Fold(fold) => {
+            let valid = cursor.filter(|_| !cursor_reset);
+            look_above(inv, valid, fold, &mut spent, LOOK_ABOVE.min(limits.bytes))?
+        }
+    };
     let mut lines = Vec::new();
     let mut unreadable = Vec::new();
     // The head of each log, read but not yet taken: `(item, boundary above)`.
@@ -357,8 +449,15 @@ pub(super) fn read_page(
             gov_bound = Some(t);
         }
         match item {
-            Item::Entry(line) => {
-                if keep(&line) {
+            Item::Entry(line, len) => {
+                let seen = Seen {
+                    above: inv_above,
+                    head_covered,
+                };
+                if line.log == Which::Invocation {
+                    inv_above += len;
+                }
+                if keep(&line, seen) {
                     lines.push(line);
                 }
             }
@@ -366,19 +465,8 @@ pub(super) fn read_page(
         }
     }
 
-    // A head read but not taken is unread: resume above it.
-    let resume = |tail: &Option<LogTail>, head: &Option<(Item, u64)>| -> Option<LogPos> {
-        let t = tail.as_ref()?;
-        match head {
-            Some((item, above)) => Some(LogPos {
-                segment: item_segment(item),
-                offset: *above,
-            }),
-            None => t.pos(),
-        }
-    };
-    let inv_pos = resume(&inv_tail, &heads[0]);
-    let gov_pos = resume(&gov_tail, &heads[1]);
+    let inv_pos = resume_pos(inv_tail.as_ref(), heads[0].as_ref());
+    let gov_pos = resume_pos(gov_tail.as_ref(), heads[1].as_ref());
     let next = (inv_pos.is_some() || gov_pos.is_some()).then(|| Cursor {
         inv: inv_pos,
         gov: gov_pos,
@@ -391,19 +479,114 @@ pub(super) fn read_page(
         scan_exhausted: stalled,
         bytes_examined: spent,
         cursor_reset,
+        above_end: Seen {
+            above: inv_above,
+            head_covered,
+        },
     })
+}
+
+/// Read forward from the invocation cursor over at most `budget` bytes,
+/// crossing newer retained segments, giving each line to `fold`. Charged to
+/// `spent`. A gap in the segment numbers, a vanished file or the byte limit
+/// leaves `head_covered` false; only reaching the active file's end sets it.
+fn look_above(
+    inv: &Path,
+    cursor: Option<&Cursor>,
+    fold: &mut dyn FnMut(&Line),
+    spent: &mut u64,
+    budget: u64,
+) -> io::Result<Seen> {
+    let Some(pos) = cursor.and_then(|c| c.inv) else {
+        // No cursor, or this log already read to its oldest line: nothing
+        // lies above that a page has not seen.
+        return Ok(Seen {
+            above: 0,
+            head_covered: true,
+        });
+    };
+    let mut above = 0_u64;
+    let mut previous: Option<u64> = None;
+    for seq in segments(inv)? {
+        if seq < pos.segment {
+            continue;
+        }
+        let contiguous = previous.is_none_or(|p| seq == p + 1);
+        let file = pager::open_segment(inv, seq, || {})?;
+        let (true, Some(file)) = (contiguous, file) else {
+            break;
+        };
+        previous = Some(seq);
+        let offset = if seq == pos.segment { pos.offset } else { 0 };
+        let mut forward = Forward::open(file, offset, budget - above)?;
+        let mut at = offset;
+        let ended = loop {
+            match forward.next_line()? {
+                Next::Line(bytes) => {
+                    fold_line(&bytes, seq, at, fold);
+                    at += bytes.len() as u64 + 1;
+                }
+                other => break other,
+            }
+        };
+        above += forward.pulled();
+        if ended == Next::Budget {
+            break;
+        }
+        if previous == seg_last(inv)? {
+            *spent += above;
+            return Ok(Seen {
+                above,
+                head_covered: true,
+            });
+        }
+    }
+    *spent += above;
+    Ok(Seen {
+        above,
+        head_covered: false,
+    })
+}
+
+/// The newest segment's number, the active file's included.
+fn seg_last(inv: &Path) -> io::Result<Option<u64>> {
+    Ok(segments(inv)?.last().copied())
+}
+
+fn fold_line(bytes: &[u8], segment: u64, offset: u64, fold: &mut dyn FnMut(&Line)) {
+    if let Ok(entry @ Value::Object(_)) = serde_json::from_slice::<Value>(bytes) {
+        fold(&Line {
+            log: Which::Invocation,
+            entry,
+            segment,
+            span: Some((offset, bytes.len() as u64)),
+        });
+    }
+}
+
+/// Where a later page resumes in `tail`: a head read but not taken is unread,
+/// so resume above it.
+fn resume_pos(tail: Option<&LogTail>, head: Option<&(Item, u64)>) -> Option<LogPos> {
+    let t = tail?;
+    match head {
+        Some((item, above)) => Some(LogPos {
+            segment: item_segment(item),
+            offset: *above,
+        }),
+        None => t.pos(),
+    }
 }
 
 fn item_time(item: &Item) -> Option<DateTime<FixedOffset>> {
     match item {
-        Item::Entry(line) => timestamp(&line.entry),
+        Item::Entry(line, _) => timestamp(&line.entry),
         Item::Unreadable(_) => None,
     }
 }
 
 fn item_segment(item: &Item) -> u64 {
     match item {
-        Item::Entry(line) => line.segment,
+        Item::Entry(line, _) => line.segment,
         Item::Unreadable(u) => u.segment,
     }
 }

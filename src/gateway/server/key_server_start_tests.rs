@@ -144,3 +144,50 @@ async fn a_crash_between_record_and_flag_appends_no_second_record() {
         .count();
     assert_eq!(created, 1, "one creation record after the crash window");
 }
+
+/// The key server the gateway builds at start writes its mint's row to the
+/// audit log it was handed, and that log's failure policy applies to it.
+/// Mutant: drop `with_issuance_log` from `start_key_server`.
+#[tokio::test]
+async fn the_key_server_built_at_start_writes_its_mints_row_under_the_policy() {
+    use crate::key_server::issuance_row_tests::{bearer_of, mint};
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let log_path = dir.path().join("audit.jsonl");
+    let log_config = crate::security::transparency_log::TransparencyLogConfig {
+        enabled: true,
+        path: log_path.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let logger = Arc::new(
+        crate::security::transparency_log::TransparencyLogger::open(Arc::new(log_config))
+            .expect("the log opens")
+            .with_failure_policy(crate::security::audit::AuditFailurePolicy::FailClosed),
+    );
+    logger.keep_test_dir(Arc::clone(&dir));
+    let gateway = Gateway::new(config(&dir))
+        .await
+        .expect("the config is valid");
+    let (tx, _rx) = tokio::sync::broadcast::channel(1);
+    let ks = gateway
+        .start_key_server(&tx, dir.path(), Some(&logger))
+        .expect("starts")
+        .expect("enabled");
+
+    let response = mint(&ks).await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bearer = bearer_of(response).await;
+    let jti = ks.store.get(&bearer).await.expect("valid bearer").jti;
+    let text = std::fs::read_to_string(&log_path).expect("log");
+    assert!(
+        text.lines()
+            .any(|l| l.contains("\"token.issued\"") && l.contains(&jti)),
+        "the mint's row is in the log the key server was started with"
+    );
+
+    logger.fail_next_append_for_test();
+    let refused = mint(&ks).await;
+    assert_eq!(
+        refused.status(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+}

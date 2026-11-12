@@ -27,14 +27,14 @@ struct Audited {
     gw: Gateway,
     log: Arc<TransparencyLogger>,
     alpha: Arc<Backend>,
-    _dir: tempfile::TempDir,
+    _dir: Arc<tempfile::TempDir>,
 }
 
 /// The E1 gateway with an audit log under `policy`, backend `alpha`, a
 /// control-plane store, and `exposed` as the meta-tool allow-list.
 async fn audited(policy: AuditFailurePolicy, exposed: &[String]) -> Audited {
     let mut gw = gateway(&[ADMIN_GROUP_RULE]).await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,

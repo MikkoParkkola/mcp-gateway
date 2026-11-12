@@ -426,7 +426,7 @@ async fn meta_read_record_failure_leaves_no_receipt() {
         None,
     )
     .await;
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -505,7 +505,7 @@ async fn meta_grant_decision_failure_leaves_no_receipt() {
         None,
     )
     .await;
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = logger(&dir, AuditFailurePolicy::FailClosed);
     let state = Arc::get_mut(&mut fx.state).expect("state is unique");
     let meta = Arc::get_mut(&mut state.meta_mcp).expect("meta is unique");

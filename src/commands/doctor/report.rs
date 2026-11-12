@@ -3,6 +3,8 @@
 //! The doctor report: the human table and the JSON document, and the
 //! stable ids and badges they print.
 
+use crate::cli::stdout::{print, println};
+
 use super::{CheckResult, CheckStatus, OutputFormat, Value, json};
 
 // ── Output formatting ─────────────────────────────────────────────────────────

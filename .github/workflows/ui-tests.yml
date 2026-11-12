@@ -66,12 +66,24 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ steps.pw.outputs.version }}
-      - name: Install Chromium and its system libraries
+      # The browser alone: it comes from Playwright's own CDN, never from an apt mirror.
+      - name: Install Chromium
         if: steps.browsers.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
-      - name: Install Chromium's system libraries (browser from cache)
-        if: steps.browsers.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
+        run: npx playwright install chromium
+      # The system libraries come from apt. Not `install --with-deps`: that runs `apt-get update` first and
+      # exits 100 when a Ubuntu mirror is down (security.ubuntu.com was unreachable on 2026-11-11, which
+      # failed this job at setup on the release line and on every merge train). Retry apt, and if it still
+      # fails go on with a warning: the hosted image already carries most of Chromium's libraries, and the
+      # test step below fails loudly if one is really missing.
+      - name: Install Chromium's system libraries (best effort when a mirror is down)
+        run: |
+          # Playwright's own `apt-get update` takes this setting too, not only the one below.
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
+          # `timeout`: dead DNS multiplied by apt's retries once held this step for the whole job limit.
+          sudo timeout 120 apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update \
+            || echo "::warning::the package index update failed or timed out; trying the library install anyway"
+          timeout 300 npx playwright install-deps chromium \
+            || echo "::warning::the system libraries were not installed (apt mirror unreachable); relying on the hosted image's"
       - name: Run the browser tests
         env:
           CI: 'true'

@@ -7,6 +7,8 @@
 //! the selection into the gateway config, and optionally writes the gateway
 //! URL back into each client config.
 
+use crate::cli::stdout::{print, println};
+
 use std::collections::HashMap;
 use std::io::{self, IsTerminal};
 use std::path::Path;
