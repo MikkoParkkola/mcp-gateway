@@ -63,7 +63,7 @@ pub(super) fn terminal_matches(
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Wire {
+struct JournalWire {
     version: u32,
     binding: Option<String>,
     phase: Phase,
@@ -99,7 +99,7 @@ enum FactWire {
 }
 
 pub(super) fn decode(bytes: &[u8]) -> Result<JournalV2, JournalError> {
-    let wire: Wire = serde_json::from_slice(bytes).map_err(|_| JournalError::Unreadable)?;
+    let wire: JournalWire = serde_json::from_slice(bytes).map_err(|_| JournalError::Unreadable)?;
     let mut state = JournalV2 {
         version: wire.version,
         binding: wire
@@ -150,7 +150,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<JournalV2, JournalError> {
 
 #[cfg(test)]
 pub(super) fn encode(state: &JournalV2) -> Result<Vec<u8>, JournalError> {
-    let wire = Wire {
+    let wire = JournalWire {
         version: state.version,
         binding: state.binding.as_ref().map(|id| id.as_str().to_owned()),
         phase: state.phase,
