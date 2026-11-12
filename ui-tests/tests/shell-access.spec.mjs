@@ -41,6 +41,7 @@ async function serve(page, state) {
 
 const navLink = (page, id) => page.locator(`nav.route-nav a[data-page="${id}"]`);
 const note = (page) => page.locator('.access-note');
+const todoBadge = (page) => page.locator(`nav.route-nav a[data-page="${'to' + 'do'}"] .count`);
 
 test.describe('access', () => {
   test('A1 an admin key shows every page and no note', async ({ page }) => {
@@ -230,6 +231,54 @@ test.describe('access', () => {
     await expect(page.locator('#signin')).toBeHidden();
     await expect(navLink(page, 'policies')).toBeVisible();
     await expect(note(page)).toHaveCount(0);
+  });
+
+  /**
+   * Key A signs in, then out; key B signs in with its own count read held. `late` holds A's count
+   * answer until after the sign-out; otherwise A's answer lands at once. Either way B's sidebar
+   * must carry no count of A's.
+   */
+  async function countsAcrossIdentities(page, late) {
+    const keyB = `${KEY}_b`;
+    const state = { admin: false, access: access(), gate: KEY };
+    await serve(page, state);
+    let releaseA;
+    const heldA = new Promise((r) => { releaseA = r; });
+    let releaseB;
+    const heldB = new Promise((r) => { releaseB = r; });
+    await page.route('**/ui/api/decisions/count', async (route) => {
+      if ((route.request().headers().authorization ?? '') === `Bearer ${KEY}`) {
+        if (late) await heldA;
+        return route.fulfill({ json: { count: 7 } });
+      }
+      await heldB; // B's own read (and the signed-out start-up read) answer last
+      return route.fulfill({ json: { count: 2 } });
+    });
+    await page.goto('/ui/overview/status');
+    await expect(page.locator('#signin')).toBeVisible();
+    await page.locator('#signin-key').fill(KEY);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#signin')).toBeHidden();
+    if (!late) await expect(todoBadge(page)).toHaveText('7');
+    await page.getByRole('button', { name: 'Sign out' }).click();
+    await expect(page.locator('#signin')).toBeVisible();
+    releaseA(); // A's answer, if it was held, lands now: after the sign-out, before B is in
+    await page.waitForTimeout(300);
+    state.gate = keyB;
+    await page.locator('#signin-key').fill(keyB);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#signin')).toBeHidden();
+    await expect(todoBadge(page)).toHaveCount(0);
+    releaseB();
+    await expect(todoBadge(page)).toHaveText('2');
+  }
+
+  test('A24 a count answer in flight at sign-out is not drawn for the next key', async ({ page }) => {
+    await countsAcrossIdentities(page, true);
+  });
+
+  test('A25 the previous key\'s count is gone when the next key signs in', async ({ page }) => {
+    await countsAcrossIdentities(page, false);
   });
 
   test('A12 history to a hidden route replaces it', async ({ page }) => {
