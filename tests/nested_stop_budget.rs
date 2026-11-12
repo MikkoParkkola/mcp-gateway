@@ -369,11 +369,11 @@ async fn run(seconds: u64, inner_stop: Duration, leaves: &[&str]) {
     drop(stdin);
 }
 
-/// A busy inner stops its leaf within the 9 s parent budget plus slack.
+/// A busy inner stops its leaf within the 12 s parent budget plus slack.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
-    run(9, Duration::from_secs(8), &["leaf"]).await;
+    run(12, Duration::from_secs(8), &["leaf"]).await;
 }
 /// The same ownership claim holds with a 30 s parent budget.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
@@ -381,18 +381,18 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it_30s() {
     run(30, Duration::from_secs(8), &["leaf"]).await;
 }
-/// Both busy leaves stop within one 9 s parent budget plus 15 s slack.
+/// Both busy leaves stop within one 12 s parent budget plus 15 s slack.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_two_leaves_within_one_deadline() {
-    run(9, Duration::from_secs(8), &["leaf_a", "leaf_b"]).await;
+    run(12, Duration::from_secs(8), &["leaf_a", "leaf_b"]).await;
 }
 
 /// A nested gateway whose own stop outlasts its parent's plan leaves no leaf or grandchild alive.
 /// Red if a stopping stdio gateway ignores its parent's SIGTERM and lets its leaves' waits run past its own kill.
 #[tokio::test]
 async fn a_nested_gateway_whose_own_stop_outlasts_its_parents_plan_leaves_no_leaf() {
-    run(9, Duration::from_secs(30), &["leaf_a", "leaf_b"]).await;
+    run(12, Duration::from_secs(30), &["leaf_a", "leaf_b"]).await;
 }
 
 /// Each nested hurry must fit its parent's remaining kill window, rather than

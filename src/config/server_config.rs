@@ -32,9 +32,10 @@ pub struct ServerConfig {
     pub host: String,
     /// Port to listen on.
     pub port: u16,
-    /// Graceful shutdown timeout: how long the HTTP listener gives open
-    /// requests after the signal before it cuts them, and then how long the
-    /// in-flight drain may wait (#2147).
+    /// Graceful shutdown timeout: the total of an HTTP gateway's stop, counted
+    /// from the signal. The listener gives open requests what is left after the
+    /// reserves for the saves, the backend stop and the logger flush, and the
+    /// stages after it share the rest; it must be at least 12 s (#2147).
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
     /// RFC-0060 U1: whether HTTP `serve` records the durable per-transport
