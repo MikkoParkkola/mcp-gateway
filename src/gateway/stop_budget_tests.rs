@@ -312,6 +312,7 @@ async fn a_step_before_the_backends_does_not_poll_after_db() {
 /// What a stopping nested gateway needs, before the reaper's kill reserve, to
 /// take its own leaf down when its parent's stdin closes and SIGTERM follows: a
 /// hurried nested gateway took 2.3 s in the nested stop rows, plus a margin.
+#[cfg(unix)]
 const NESTED_GATEWAY_NEED: Duration = Duration::from_millis(2_400);
 
 /// The nested busy-gateway case, at the minimum and with the listener having
@@ -319,6 +320,7 @@ const NESTED_GATEWAY_NEED: Duration = Duration::from_millis(2_400);
 /// gateway a graceful window of at least what it needs, before the reaper's
 /// kill reserve. With less, the outer group-kills the inner first and the
 /// leaf, which has its own group, is orphaned.
+#[cfg(unix)]
 #[test]
 fn the_backend_stage_keeps_a_graceful_window_for_a_busy_nested_gateway() {
     let (_, b) = at(HTTP_MIN_TOTAL);
