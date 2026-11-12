@@ -254,8 +254,13 @@ impl Drop for StdioSession {
             return; // already reaped by an orderly end
         }
         let _ = self.child.start_kill();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while matches!(self.child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
+        // A killed process is reaped within milliseconds; the long bound is only for a stuck host, and it says so.
+        let started = std::time::Instant::now();
+        while matches!(self.child.try_wait(), Ok(None)) {
+            if started.elapsed() > Duration::from_secs(30) {
+                eprintln!("stdio_session: the gateway child was still running 30 s after the kill");
+                return;
+            }
             std::thread::sleep(Duration::from_millis(10));
         }
     }

@@ -225,9 +225,10 @@ async fn http_tools_list_at(gateway: &HttpGateway, session: &str, path: &str, id
 }
 
 struct StdioGateway {
-    _process: Reaped,
     input: ChildStdin,
     output: Lines<BufReader<ChildStdout>>,
+    /// Declared last, so it drops last: the pipes close first (EOF reaches the gateway), then `Reaped` waits for it.
+    _process: Reaped,
 }
 
 impl StdioGateway {

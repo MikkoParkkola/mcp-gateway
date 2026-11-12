@@ -34,12 +34,13 @@ const SENTINEL: &str = "stdio-signing-backend-echo";
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct StdioGateway {
-    process: Reaped,
     input: Option<ChildStdin>,
     output: Lines<BufReader<ChildStdout>>,
     child_pid: u32,
     profile_dir: Option<PathBuf>,
     prior_profiles: ProfileStamps,
+    /// Declared last, so it drops last: the pipes close first (EOF reaches the gateway), then `Reaped` waits for it.
+    process: Reaped,
 }
 
 impl StdioGateway {

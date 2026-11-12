@@ -331,9 +331,10 @@ async fn e8d_direct_live_linked_and_replay_not() {
 
 /// A bare `serve --stdio` child: one JSON-RPC frame per line each way.
 struct StdioChild {
-    _process: signing_gateway::gateway_bin::Reaped,
     input: tokio::process::ChildStdin,
     output: tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    /// Declared last, so it drops last: the pipes close first (EOF reaches the gateway), then `Reaped` waits for it.
+    _process: signing_gateway::gateway_bin::Reaped,
 }
 
 impl StdioChild {

@@ -15,8 +15,8 @@ kills nor waits when dropped) with a TempDir must also carry an `impl Drop for <
 `ChildGuard` or `gateway_bin::Reaped` is trusted to wait. Both are errors.
 
 A function under tests/ that makes a temp dir and spawns a process (`.spawn()`) must also own or wait for the child:
-`Reaped`, `StdioSession` (whose Drop waits), `ChildGuard`, `.stop(`/`.reap(`/`.wait(`/`.try_wait(`/`.kill().await`/`wait_with_output`
-or an explicit `shutdown(`. Otherwise the temp dir can be removed while the live child still writes into it. Named and tuple structs are scanned; comments, string, raw-string and char literals are
+`Reaped`, `StdioSession` (whose Drop waits), `ChildGuard`, `.stop(`/`.reap(`/`.wait(`/`.kill().await`/`wait_with_output`.
+A lone `try_wait` poll does not count: it never waits. Otherwise the temp dir can be removed while the live child still writes into it. Named and tuple structs are scanned; comments, string, raw-string and char literals are
 blanked first; borrowed and `PhantomData` fields own nothing and are skipped. It fails if tests/ or src/ is missing or
 holds no Rust file, so a wrong working directory cannot pass silently. `--self-test` runs the scanner on fixtures.
 
@@ -126,13 +126,17 @@ def scan(text: str) -> list[tuple[int, str, str, str]]:
 
 FN = re.compile(r"\bfn\s+(\w+)[^{;]*\{")
 LOCAL_TMP = re.compile(r"\b(?:tempfile::)?tempdir(?:_in)?\s*\(|\bTempDir::new(?:_in)?\b|\.tempdir(?:_in)?\s*\(")
-SPAWNS = re.compile(r"\.spawn\s*\(")
-OWNS_CHILD = re.compile(r"\bReaped\b|\bStdioSession\b|\bChildGuard\b|\.stop\s*\(|\.reap(?:_within)?\s*\(|\.wait\s*\(|wait_with_output|\.try_wait\s*\(|\.kill\s*\(\s*\)\s*\.await|\bshutdown\s*\(")
+SPAWNS = re.compile(r"\.spawn\s*\(\s*\)")  # a process spawn takes no argument; thread/task spawns take one
+OWNS_CHILD = re.compile(r"\bReaped\b|\bStdioSession\b|\bChildGuard\b|\.stop\s*\(|\.reap(?:_within)?\s*\(|\.wait\s*\(|wait_with_output|\.kill\s*\(\s*\)\s*\.await")
 
 
 def scan_locals(text: str) -> list[tuple[int, str]]:
     """(line, function) for each function that makes a temp dir and spawns a process but never owns or waits for it."""
     clean = strip_comments(text)
+    # A type of this file with an `impl Drop` is trusted to wait (the struct rule above checks a TempDir+Child pair for
+    # one): a function that builds it owns the child.
+    droppers = re.findall(r"\bimpl\s+Drop\s+for\s+(\w+)", clean)
+    builds_dropper = re.compile(r"\b(?:" + "|".join(map(re.escape, droppers)) + r")\s*\{") if droppers else None
     found = []
     for m in FN.finditer(clean):
         depth, j = 1, m.end()
@@ -140,7 +144,7 @@ def scan_locals(text: str) -> list[tuple[int, str]]:
             depth += {"{": 1, "}": -1}.get(clean[j], 0); j += 1
         body = clean[m.end():j - 1]
         tmp = LOCAL_TMP.search(body)
-        if tmp and SPAWNS.search(body) and not OWNS_CHILD.search(body):
+        if tmp and SPAWNS.search(body) and not OWNS_CHILD.search(body) and not (builds_dropper and builds_dropper.search(body)):
             found.append((clean.count("\n", 0, m.end() + tmp.start()) + 1, m.group(1)))
     return found
 
@@ -213,6 +217,10 @@ def self_test() -> int:
         ("a temp dir, a spawn and Reaped", "fn t() {\n    let d = tempdir().unwrap();\n    let c = Reaped::new(cmd.spawn().unwrap());\n}\n", 0),
         ("a temp dir, a spawn and a wait", "fn t() {\n    let d = tempdir().unwrap();\n    let mut c = cmd.spawn().unwrap();\n    c.wait().await;\n}\n", 0),
         ("a temp dir, a StdioSession", "fn t() {\n    let d = tempdir().unwrap();\n    let s = StdioSession::start(cmd).spawn();\n}\n", 0),
+        ("a lone try_wait poll is not a wait", "fn t() {\n    let d = tempdir().unwrap();\n    let mut c = cmd.spawn().unwrap();\n    let _ = c.try_wait();\n}\n", 1),
+        ("a thread spawn is not a process spawn", "fn t() {\n    let d = tempdir().unwrap();\n    std::thread::spawn(|| ());\n    tokio::spawn(async {});\n}\n", 0),
+        ("a fn that builds a type with a waiting Drop", "struct G { c: Child }\nimpl Drop for G { fn drop(&mut self) { self.c.wait(); } }\nfn t() {\n    let d = tempdir().unwrap();\n    let c = cmd.spawn().unwrap();\n    let g = G { c };\n}\n", 0),
+        ("a fn that builds a type without a Drop", "struct G { c: Child }\nfn t() {\n    let d = tempdir().unwrap();\n    let c = cmd.spawn().unwrap();\n    let g = G { c };\n}\n", 1),
         ("a spawn but no temp dir", "fn t() {\n    let c = cmd.spawn().unwrap();\n}\n", 0),
         ("a temp dir but no spawn", "fn t() {\n    let d = tempdir().unwrap();\n    cmd.output();\n}\n", 0),
         ("a spawn named only in a comment", "fn t() {\n    let d = tempdir().unwrap();\n    // cmd.spawn() is elsewhere\n}\n", 0),

@@ -38,10 +38,11 @@ const NOT_ENABLED: &str = "Config reload is not enabled on this gateway";
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct StdioGateway {
-    _process: Reaped,
     config_path: PathBuf,
     input: ChildStdin,
     output: Lines<BufReader<ChildStdout>>,
+    /// Declared last, so it drops last: the pipes close first (EOF reaches the gateway), then `Reaped` waits for it.
+    _process: Reaped,
 }
 
 impl StdioGateway {
