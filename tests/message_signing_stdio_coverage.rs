@@ -24,8 +24,8 @@ use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
-use signing_gateway::{BACKEND, BackendFixture, KEY, TOOL, child_command, fixture_config, invoke};
 use signing_gateway::gateway_bin::{Reaped, Teardown};
+use signing_gateway::{BACKEND, BackendFixture, KEY, TOOL, child_command, fixture_config, invoke};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{ChildStdin, ChildStdout};
 

@@ -106,8 +106,8 @@ impl Gateway {
             .kill_on_drop(true)
             .spawn()
             .expect("serve spawns");
-        let mut process = gateway_bin::Reaped::new(child)
-            .with_teardown(gateway_bin::Teardown::DrainThenRemove);
+        let mut process =
+            gateway_bin::Reaped::new(child).with_teardown(gateway_bin::Teardown::DrainThenRemove);
         process.owning(tmp);
         let mut gateway = Self {
             process,

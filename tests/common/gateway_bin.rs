@@ -375,10 +375,8 @@ impl Drop for Reaped {
             let coverage = std::env::var_os("LLVM_PROFILE_FILE").is_some();
             if (draining || coverage) && self.terminate() {
                 wait_blocking(&mut self.child, std::time::Duration::from_secs(10));
-                if draining {
-                    if let Ok(Some(status)) = self.child.try_wait() {
-                        self.drained = exited_by_itself(status);
-                    }
+                if draining && let Ok(Some(status)) = self.child.try_wait() {
+                    self.drained = exited_by_itself(status);
                 }
             }
             let _ = self.child.start_kill();
