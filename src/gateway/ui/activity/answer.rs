@@ -32,7 +32,11 @@ pub(super) const MAX_JOINED: usize = 16_384;
 pub(super) const NOT_SCANNED: &str = "answer not scanned";
 pub(super) const NOT_RECORDED: &str = "findings not recorded for this answer";
 pub(super) const INCOMPLETE: &str = "not stated: the join was incomplete";
+/// A finished search of the delivery window found nothing.
 pub(super) const NO_RECORD: &str = "no delivery record within 256 KiB after the call";
+/// A `no_record` that is not a finished search of the window: a live frame,
+/// a search still open, a call with no trace.
+pub(super) const NO_RECORD_NOT_SEARCHED: &str = "no delivery record found";
 
 /// The effect a row states; also the `effect=` filter's values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,7 +194,8 @@ impl Joined {
                 Findings::NotScanned => NOT_SCANNED.into(),
                 Findings::NotRecorded => NOT_RECORDED.into(),
             },
-            Self::NoRecord(_) => NO_RECORD.into(),
+            Self::NoRecord(Searched::Finished) => NO_RECORD.into(),
+            Self::NoRecord(_) => NO_RECORD_NOT_SEARCHED.into(),
             Self::Incomplete(_) => INCOMPLETE.into(),
         };
         row.insert("answer_findings".into(), findings);

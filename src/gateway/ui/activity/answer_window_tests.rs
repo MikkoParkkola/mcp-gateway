@@ -181,6 +181,44 @@ async fn w8_the_no_record_wording_names_the_window() {
 }
 
 #[test]
+fn w8b_the_wording_is_scoped_to_a_finished_search_and_matches_the_constant() {
+    use super::answer::{NO_RECORD, NO_RECORD_NOT_SEARCHED};
+    // The sentence spells the window in KiB; a changed constant fails here.
+    assert!(NO_RECORD.contains(&format!("{} KiB", DELIVERY_WINDOW >> 10)));
+    assert!(!NO_RECORD_NOT_SEARCHED.contains("KiB"));
+}
+
+#[tokio::test]
+async fn w8c_a_finished_search_states_the_window() {
+    let fx = Fixture::new(None);
+    fx.call("gw-c1");
+    let (_, page) = get(&fx, &[("limit", "200")]).await;
+    // Head covered, trace present, nothing found: a finished search.
+    assert_eq!(
+        row_of(&page, "gw-c1")["answer_findings"],
+        "no delivery record within 256 KiB after the call"
+    );
+}
+
+#[tokio::test]
+async fn w8d_a_call_without_a_trace_does_not_claim_a_window_search() {
+    use super::answer_fixture::forge;
+    let fx = Fixture::new(None);
+    fx.call("gw-x");
+    let x = fx
+        .lines()
+        .iter()
+        .position(|l| l["trace_id"] == "gw-x")
+        .unwrap();
+    fx.edit(x, |e| forge(e, "trace_id", serde_json::json!(""), false));
+    let (_, page) = get(&fx, &[("limit", "200")]).await;
+    assert_eq!(
+        row_of(&page, "")["answer_findings"],
+        "no delivery record found"
+    );
+}
+
+#[test]
 fn w9_the_three_window_constants_are_one_value() {
     assert_eq!(LOOK_ABOVE, DELIVERY_WINDOW);
     assert_eq!(RECEIPT_SCAN, DELIVERY_WINDOW);
