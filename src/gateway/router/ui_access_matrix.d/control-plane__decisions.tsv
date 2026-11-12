@@ -2,10 +2,10 @@
 #@ store_writes
 /ui/api/control-plane/decisions	DELETE	plain	AdminKey	405
 /ui/api/control-plane/decisions	DELETE	plain	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	DELETE	plain	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	DELETE	plain	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	DELETE	plain	Bearer	405
-/ui/api/control-plane/decisions	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	DELETE	plain	OidcAdmin	405
 /ui/api/control-plane/decisions	DELETE	plain	OidcAuditor	405
 /ui/api/control-plane/decisions	DELETE	plain	OidcDeveloper	405
@@ -17,10 +17,10 @@
 /ui/api/control-plane/decisions	DELETE	plain	StandardKey	405
 /ui/api/control-plane/decisions	DELETE	plain+store	AdminKey	405
 /ui/api/control-plane/decisions	DELETE	plain+store	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	DELETE	plain+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	DELETE	plain+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	DELETE	plain+store	Bearer	405
-/ui/api/control-plane/decisions	DELETE	plain+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	DELETE	plain+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	DELETE	plain+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	DELETE	plain+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	DELETE	plain+store	OidcAdmin	405
 /ui/api/control-plane/decisions	DELETE	plain+store	OidcAuditor	405
 /ui/api/control-plane/decisions	DELETE	plain+store	OidcDeveloper	405
@@ -32,10 +32,10 @@
 /ui/api/control-plane/decisions	DELETE	plain+store	StandardKey	405
 /ui/api/control-plane/decisions	GET	bad-query	AdminKey	405
 /ui/api/control-plane/decisions	GET	bad-query	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	GET	bad-query	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	GET	bad-query	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	GET	bad-query	Bearer	405
-/ui/api/control-plane/decisions	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	GET	bad-query	OidcAdmin	405
 /ui/api/control-plane/decisions	GET	bad-query	OidcAuditor	405
 /ui/api/control-plane/decisions	GET	bad-query	OidcDeveloper	405
@@ -47,10 +47,10 @@
 /ui/api/control-plane/decisions	GET	bad-query	StandardKey	405
 /ui/api/control-plane/decisions	GET	bad-query+store	AdminKey	405
 /ui/api/control-plane/decisions	GET	bad-query+store	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	GET	bad-query+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	GET	bad-query+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	GET	bad-query+store	Bearer	405
-/ui/api/control-plane/decisions	GET	bad-query+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	GET	bad-query+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	GET	bad-query+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	GET	bad-query+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	GET	bad-query+store	OidcAdmin	405
 /ui/api/control-plane/decisions	GET	bad-query+store	OidcAuditor	405
 /ui/api/control-plane/decisions	GET	bad-query+store	OidcDeveloper	405
@@ -62,10 +62,10 @@
 /ui/api/control-plane/decisions	GET	bad-query+store	StandardKey	405
 /ui/api/control-plane/decisions	GET	plain	AdminKey	405
 /ui/api/control-plane/decisions	GET	plain	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	GET	plain	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	GET	plain	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	GET	plain	Bearer	405
-/ui/api/control-plane/decisions	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	GET	plain	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	GET	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	GET	plain	OidcAdmin	405
 /ui/api/control-plane/decisions	GET	plain	OidcAuditor	405
 /ui/api/control-plane/decisions	GET	plain	OidcDeveloper	405
@@ -77,10 +77,10 @@
 /ui/api/control-plane/decisions	GET	plain	StandardKey	405
 /ui/api/control-plane/decisions	GET	plain+store	AdminKey	405
 /ui/api/control-plane/decisions	GET	plain+store	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	GET	plain+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	GET	plain+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	GET	plain+store	Bearer	405
-/ui/api/control-plane/decisions	GET	plain+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	GET	plain+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	GET	plain+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	GET	plain+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	GET	plain+store	OidcAdmin	405
 /ui/api/control-plane/decisions	GET	plain+store	OidcAuditor	405
 /ui/api/control-plane/decisions	GET	plain+store	OidcDeveloper	405
@@ -122,10 +122,10 @@
 /ui/api/control-plane/decisions	HEAD	plain+store	StandardKey	405
 /ui/api/control-plane/decisions	OPTIONS	plain	AdminKey	405
 /ui/api/control-plane/decisions	OPTIONS	plain	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	OPTIONS	plain	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	OPTIONS	plain	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	OPTIONS	plain	Bearer	405
-/ui/api/control-plane/decisions	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	OPTIONS	plain	OidcAdmin	405
 /ui/api/control-plane/decisions	OPTIONS	plain	OidcAuditor	405
 /ui/api/control-plane/decisions	OPTIONS	plain	OidcDeveloper	405
@@ -137,10 +137,10 @@
 /ui/api/control-plane/decisions	OPTIONS	plain	StandardKey	405
 /ui/api/control-plane/decisions	OPTIONS	plain+store	AdminKey	405
 /ui/api/control-plane/decisions	OPTIONS	plain+store	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	OPTIONS	plain+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	OPTIONS	plain+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	OPTIONS	plain+store	Bearer	405
-/ui/api/control-plane/decisions	OPTIONS	plain+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	OPTIONS	plain+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	OPTIONS	plain+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	OPTIONS	plain+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	OPTIONS	plain+store	OidcAdmin	405
 /ui/api/control-plane/decisions	OPTIONS	plain+store	OidcAuditor	405
 /ui/api/control-plane/decisions	OPTIONS	plain+store	OidcDeveloper	405
@@ -152,10 +152,10 @@
 /ui/api/control-plane/decisions	OPTIONS	plain+store	StandardKey	405
 /ui/api/control-plane/decisions	PATCH	bad-json	AdminKey	405
 /ui/api/control-plane/decisions	PATCH	bad-json	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	PATCH	bad-json	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	PATCH	bad-json	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	PATCH	bad-json	Bearer	405
-/ui/api/control-plane/decisions	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	PATCH	bad-json	OidcAdmin	405
 /ui/api/control-plane/decisions	PATCH	bad-json	OidcAuditor	405
 /ui/api/control-plane/decisions	PATCH	bad-json	OidcDeveloper	405
@@ -167,10 +167,10 @@
 /ui/api/control-plane/decisions	PATCH	bad-json	StandardKey	405
 /ui/api/control-plane/decisions	PATCH	bad-json+store	AdminKey	405
 /ui/api/control-plane/decisions	PATCH	bad-json+store	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	PATCH	bad-json+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	PATCH	bad-json+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	PATCH	bad-json+store	Bearer	405
-/ui/api/control-plane/decisions	PATCH	bad-json+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	PATCH	bad-json+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	PATCH	bad-json+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	PATCH	bad-json+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	PATCH	bad-json+store	OidcAdmin	405
 /ui/api/control-plane/decisions	PATCH	bad-json+store	OidcAuditor	405
 /ui/api/control-plane/decisions	PATCH	bad-json+store	OidcDeveloper	405
@@ -182,10 +182,10 @@
 /ui/api/control-plane/decisions	PATCH	bad-json+store	StandardKey	405
 /ui/api/control-plane/decisions	PATCH	bad-type	AdminKey	405
 /ui/api/control-plane/decisions	PATCH	bad-type	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	PATCH	bad-type	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	PATCH	bad-type	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	PATCH	bad-type	Bearer	405
-/ui/api/control-plane/decisions	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	PATCH	bad-type	OidcAdmin	405
 /ui/api/control-plane/decisions	PATCH	bad-type	OidcAuditor	405
 /ui/api/control-plane/decisions	PATCH	bad-type	OidcDeveloper	405
@@ -197,10 +197,10 @@
 /ui/api/control-plane/decisions	PATCH	bad-type	StandardKey	405
 /ui/api/control-plane/decisions	PATCH	bad-type+store	AdminKey	405
 /ui/api/control-plane/decisions	PATCH	bad-type+store	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	PATCH	bad-type+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	PATCH	bad-type+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	PATCH	bad-type+store	Bearer	405
-/ui/api/control-plane/decisions	PATCH	bad-type+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	PATCH	bad-type+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	PATCH	bad-type+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	PATCH	bad-type+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	PATCH	bad-type+store	OidcAdmin	405
 /ui/api/control-plane/decisions	PATCH	bad-type+store	OidcAuditor	405
 /ui/api/control-plane/decisions	PATCH	bad-type+store	OidcDeveloper	405
@@ -212,10 +212,10 @@
 /ui/api/control-plane/decisions	PATCH	bad-type+store	StandardKey	405
 /ui/api/control-plane/decisions	PATCH	json	AdminKey	405
 /ui/api/control-plane/decisions	PATCH	json	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	PATCH	json	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	PATCH	json	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	PATCH	json	Bearer	405
-/ui/api/control-plane/decisions	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	PATCH	json	OidcAdmin	405
 /ui/api/control-plane/decisions	PATCH	json	OidcAuditor	405
 /ui/api/control-plane/decisions	PATCH	json	OidcDeveloper	405
@@ -227,10 +227,10 @@
 /ui/api/control-plane/decisions	PATCH	json	StandardKey	405
 /ui/api/control-plane/decisions	PATCH	json+store	AdminKey	405
 /ui/api/control-plane/decisions	PATCH	json+store	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	PATCH	json+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	PATCH	json+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	PATCH	json+store	Bearer	405
-/ui/api/control-plane/decisions	PATCH	json+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	PATCH	json+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	PATCH	json+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	PATCH	json+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	PATCH	json+store	OidcAdmin	405
 /ui/api/control-plane/decisions	PATCH	json+store	OidcAuditor	405
 /ui/api/control-plane/decisions	PATCH	json+store	OidcDeveloper	405
@@ -242,10 +242,10 @@
 /ui/api/control-plane/decisions	PATCH	json+store	StandardKey	405
 /ui/api/control-plane/decisions	POST	bad-json	AdminKey	400
 /ui/api/control-plane/decisions	POST	bad-json	AdminKeyUnmapped	400
-/ui/api/control-plane/decisions	POST	bad-json	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	POST	bad-json	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	POST	bad-json	Bearer	400
-/ui/api/control-plane/decisions	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	POST	bad-json	OidcAdmin	400
 /ui/api/control-plane/decisions	POST	bad-json	OidcAuditor	400
 /ui/api/control-plane/decisions	POST	bad-json	OidcDeveloper	400
@@ -257,10 +257,10 @@
 /ui/api/control-plane/decisions	POST	bad-json	StandardKey	400
 /ui/api/control-plane/decisions	POST	bad-json+store	AdminKey	400
 /ui/api/control-plane/decisions	POST	bad-json+store	AdminKeyUnmapped	400
-/ui/api/control-plane/decisions	POST	bad-json+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	POST	bad-json+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	POST	bad-json+store	Bearer	400
-/ui/api/control-plane/decisions	POST	bad-json+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	POST	bad-json+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	POST	bad-json+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	POST	bad-json+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	POST	bad-json+store	OidcAdmin	400
 /ui/api/control-plane/decisions	POST	bad-json+store	OidcAuditor	400
 /ui/api/control-plane/decisions	POST	bad-json+store	OidcDeveloper	400
@@ -272,10 +272,10 @@
 /ui/api/control-plane/decisions	POST	bad-json+store	StandardKey	400
 /ui/api/control-plane/decisions	POST	bad-type	AdminKey	415
 /ui/api/control-plane/decisions	POST	bad-type	AdminKeyUnmapped	415
-/ui/api/control-plane/decisions	POST	bad-type	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	POST	bad-type	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	POST	bad-type	Bearer	415
-/ui/api/control-plane/decisions	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	POST	bad-type	OidcAdmin	415
 /ui/api/control-plane/decisions	POST	bad-type	OidcAuditor	415
 /ui/api/control-plane/decisions	POST	bad-type	OidcDeveloper	415
@@ -287,10 +287,10 @@
 /ui/api/control-plane/decisions	POST	bad-type	StandardKey	415
 /ui/api/control-plane/decisions	POST	bad-type+store	AdminKey	415
 /ui/api/control-plane/decisions	POST	bad-type+store	AdminKeyUnmapped	415
-/ui/api/control-plane/decisions	POST	bad-type+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	POST	bad-type+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	POST	bad-type+store	Bearer	415
-/ui/api/control-plane/decisions	POST	bad-type+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	POST	bad-type+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	POST	bad-type+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	POST	bad-type+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	POST	bad-type+store	OidcAdmin	415
 /ui/api/control-plane/decisions	POST	bad-type+store	OidcAuditor	415
 /ui/api/control-plane/decisions	POST	bad-type+store	OidcDeveloper	415
@@ -302,10 +302,10 @@
 /ui/api/control-plane/decisions	POST	bad-type+store	StandardKey	415
 /ui/api/control-plane/decisions	POST	json	AdminKey	422
 /ui/api/control-plane/decisions	POST	json	AdminKeyUnmapped	422
-/ui/api/control-plane/decisions	POST	json	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	POST	json	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	POST	json	Bearer	422
-/ui/api/control-plane/decisions	POST	json	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	POST	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	POST	json	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	POST	json	OidcAdmin	422
 /ui/api/control-plane/decisions	POST	json	OidcAuditor	422
 /ui/api/control-plane/decisions	POST	json	OidcDeveloper	422
@@ -317,10 +317,10 @@
 /ui/api/control-plane/decisions	POST	json	StandardKey	422
 /ui/api/control-plane/decisions	POST	json+store	AdminKey	422
 /ui/api/control-plane/decisions	POST	json+store	AdminKeyUnmapped	422
-/ui/api/control-plane/decisions	POST	json+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	POST	json+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	POST	json+store	Bearer	422
-/ui/api/control-plane/decisions	POST	json+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	POST	json+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	POST	json+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	POST	json+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	POST	json+store	OidcAdmin	422
 /ui/api/control-plane/decisions	POST	json+store	OidcAuditor	422
 /ui/api/control-plane/decisions	POST	json+store	OidcDeveloper	422
@@ -332,10 +332,10 @@
 /ui/api/control-plane/decisions	POST	json+store	StandardKey	422
 /ui/api/control-plane/decisions	POST	valid	AdminKey	503
 /ui/api/control-plane/decisions	POST	valid	AdminKeyUnmapped	503
-/ui/api/control-plane/decisions	POST	valid	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	POST	valid	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	POST	valid	Bearer	503
-/ui/api/control-plane/decisions	POST	valid	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	POST	valid	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	POST	valid	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	POST	valid	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	POST	valid	OidcAdmin	503
 /ui/api/control-plane/decisions	POST	valid	OidcAuditor	503
 /ui/api/control-plane/decisions	POST	valid	OidcDeveloper	503
@@ -346,26 +346,26 @@
 /ui/api/control-plane/decisions	POST	valid	Session	503
 /ui/api/control-plane/decisions	POST	valid	StandardKey	503
 /ui/api/control-plane/decisions	POST	valid+store	AdminKey	409
-/ui/api/control-plane/decisions	POST	valid+store	AdminKeyUnmapped	403:@b_a8264f90
-/ui/api/control-plane/decisions	POST	valid+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	POST	valid+store	AdminKeyUnmapped	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
+/ui/api/control-plane/decisions	POST	valid+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	POST	valid+store	Bearer	409
-/ui/api/control-plane/decisions	POST	valid+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	POST	valid+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	POST	valid+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	POST	valid+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	POST	valid+store	OidcAdmin	409
-/ui/api/control-plane/decisions	POST	valid+store	OidcAuditor	403:@b_a8264f90
-/ui/api/control-plane/decisions	POST	valid+store	OidcDeveloper	403:@b_a8264f90
-/ui/api/control-plane/decisions	POST	valid+store	OidcDeveloperNoIssuer	403:@b_a8264f90
-/ui/api/control-plane/decisions	POST	valid+store	OidcDeveloperNoSubject	403:@b_a8264f90
-/ui/api/control-plane/decisions	POST	valid+store	OidcReviewer	403:@b_a8264f90
-/ui/api/control-plane/decisions	POST	valid+store	OidcUnmapped	403:@b_a8264f90
+/ui/api/control-plane/decisions	POST	valid+store	OidcAuditor	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
+/ui/api/control-plane/decisions	POST	valid+store	OidcDeveloper	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
+/ui/api/control-plane/decisions	POST	valid+store	OidcDeveloperNoIssuer	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
+/ui/api/control-plane/decisions	POST	valid+store	OidcDeveloperNoSubject	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
+/ui/api/control-plane/decisions	POST	valid+store	OidcReviewer	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
+/ui/api/control-plane/decisions	POST	valid+store	OidcUnmapped	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
 /ui/api/control-plane/decisions	POST	valid+store	Session	409
-/ui/api/control-plane/decisions	POST	valid+store	StandardKey	403:@b_a8264f90
+/ui/api/control-plane/decisions	POST	valid+store	StandardKey	403:ok=false,reason_code="CONTROL_RBAC_MUTATION_DENIED"
 /ui/api/control-plane/decisions	PUT	bad-json	AdminKey	405
 /ui/api/control-plane/decisions	PUT	bad-json	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	PUT	bad-json	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	PUT	bad-json	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	PUT	bad-json	Bearer	405
-/ui/api/control-plane/decisions	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	PUT	bad-json	OidcAdmin	405
 /ui/api/control-plane/decisions	PUT	bad-json	OidcAuditor	405
 /ui/api/control-plane/decisions	PUT	bad-json	OidcDeveloper	405
@@ -377,10 +377,10 @@
 /ui/api/control-plane/decisions	PUT	bad-json	StandardKey	405
 /ui/api/control-plane/decisions	PUT	bad-json+store	AdminKey	405
 /ui/api/control-plane/decisions	PUT	bad-json+store	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	PUT	bad-json+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	PUT	bad-json+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	PUT	bad-json+store	Bearer	405
-/ui/api/control-plane/decisions	PUT	bad-json+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	PUT	bad-json+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	PUT	bad-json+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	PUT	bad-json+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	PUT	bad-json+store	OidcAdmin	405
 /ui/api/control-plane/decisions	PUT	bad-json+store	OidcAuditor	405
 /ui/api/control-plane/decisions	PUT	bad-json+store	OidcDeveloper	405
@@ -392,10 +392,10 @@
 /ui/api/control-plane/decisions	PUT	bad-json+store	StandardKey	405
 /ui/api/control-plane/decisions	PUT	bad-type	AdminKey	405
 /ui/api/control-plane/decisions	PUT	bad-type	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	PUT	bad-type	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	PUT	bad-type	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	PUT	bad-type	Bearer	405
-/ui/api/control-plane/decisions	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	PUT	bad-type	OidcAdmin	405
 /ui/api/control-plane/decisions	PUT	bad-type	OidcAuditor	405
 /ui/api/control-plane/decisions	PUT	bad-type	OidcDeveloper	405
@@ -407,10 +407,10 @@
 /ui/api/control-plane/decisions	PUT	bad-type	StandardKey	405
 /ui/api/control-plane/decisions	PUT	bad-type+store	AdminKey	405
 /ui/api/control-plane/decisions	PUT	bad-type+store	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	PUT	bad-type+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	PUT	bad-type+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	PUT	bad-type+store	Bearer	405
-/ui/api/control-plane/decisions	PUT	bad-type+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	PUT	bad-type+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	PUT	bad-type+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	PUT	bad-type+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	PUT	bad-type+store	OidcAdmin	405
 /ui/api/control-plane/decisions	PUT	bad-type+store	OidcAuditor	405
 /ui/api/control-plane/decisions	PUT	bad-type+store	OidcDeveloper	405
@@ -422,10 +422,10 @@
 /ui/api/control-plane/decisions	PUT	bad-type+store	StandardKey	405
 /ui/api/control-plane/decisions	PUT	json	AdminKey	405
 /ui/api/control-plane/decisions	PUT	json	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	PUT	json	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	PUT	json	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	PUT	json	Bearer	405
-/ui/api/control-plane/decisions	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	PUT	json	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	PUT	json	OidcAdmin	405
 /ui/api/control-plane/decisions	PUT	json	OidcAuditor	405
 /ui/api/control-plane/decisions	PUT	json	OidcDeveloper	405
@@ -437,10 +437,10 @@
 /ui/api/control-plane/decisions	PUT	json	StandardKey	405
 /ui/api/control-plane/decisions	PUT	json+store	AdminKey	405
 /ui/api/control-plane/decisions	PUT	json+store	AdminKeyUnmapped	405
-/ui/api/control-plane/decisions	PUT	json+store	AuthOff	403:@b_ca730ec7
+/ui/api/control-plane/decisions	PUT	json+store	AuthOff	403:error="Authentication required"
 /ui/api/control-plane/decisions	PUT	json+store	Bearer	405
-/ui/api/control-plane/decisions	PUT	json+store	NoKey	401:@b_de6b5592
-/ui/api/control-plane/decisions	PUT	json+store	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/control-plane/decisions	PUT	json+store	NoKey	401:error.code=-32000
+/ui/api/control-plane/decisions	PUT	json+store	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/control-plane/decisions	PUT	json+store	OidcAdmin	405
 /ui/api/control-plane/decisions	PUT	json+store	OidcAuditor	405
 /ui/api/control-plane/decisions	PUT	json+store	OidcDeveloper	405

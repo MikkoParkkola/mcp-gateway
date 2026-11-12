@@ -4,8 +4,8 @@
 /ui/api/activity	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/activity	DELETE	plain	AuthOff	405
 /ui/api/activity	DELETE	plain	Bearer	405
-/ui/api/activity	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/activity	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/activity	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	DELETE	plain	OidcAdmin	405
 /ui/api/activity	DELETE	plain	OidcAuditor	405
 /ui/api/activity	DELETE	plain	OidcDeveloper	405
@@ -19,8 +19,8 @@
 /ui/api/activity	GET	bad-query	AdminKeyUnmapped	400
 /ui/api/activity	GET	bad-query	AuthOff	400
 /ui/api/activity	GET	bad-query	Bearer	400
-/ui/api/activity	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/activity	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/activity	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	GET	bad-query	OidcAdmin	400
 /ui/api/activity	GET	bad-query	OidcAuditor	400
 /ui/api/activity	GET	bad-query	OidcDeveloper	400
@@ -32,19 +32,19 @@
 /ui/api/activity	GET	bad-query	StandardKey	400
 /ui/api/activity	GET	plain	AdminKey	200:tool_0,tool_1,tool_2
 /ui/api/activity	GET	plain	AdminKeyUnmapped	200:tool_0,tool_1,tool_2
-/ui/api/activity	GET	plain	AuthOff	401:@b_ca730ec7
+/ui/api/activity	GET	plain	AuthOff	401:error="Authentication required"
 /ui/api/activity	GET	plain	Bearer	200:tool_0,tool_1,tool_2
-/ui/api/activity	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/activity	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	GET	plain	NoKey	401:error.code=-32000
+/ui/api/activity	GET	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	GET	plain	OidcAdmin	200:tool_0,tool_1,tool_2
 /ui/api/activity	GET	plain	OidcAuditor	200:tool_0,tool_1,tool_2
 /ui/api/activity	GET	plain	OidcDeveloper	200:tool_0
-/ui/api/activity	GET	plain	OidcDeveloperNoIssuer	403:@b_4e89aa84
-/ui/api/activity	GET	plain	OidcDeveloperNoSubject	403:@b_4e89aa84
-/ui/api/activity	GET	plain	OidcReviewer	403:@b_4e89aa84
-/ui/api/activity	GET	plain	OidcUnmapped	403:@b_4e89aa84
+/ui/api/activity	GET	plain	OidcDeveloperNoIssuer	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity	GET	plain	OidcDeveloperNoSubject	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity	GET	plain	OidcReviewer	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
+/ui/api/activity	GET	plain	OidcUnmapped	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
 /ui/api/activity	GET	plain	Session	200:tool_0,tool_1,tool_2
-/ui/api/activity	GET	plain	StandardKey	403:@b_4e89aa84
+/ui/api/activity	GET	plain	StandardKey	403:error="Activity needs an admin credential or an OIDC identity mapped to a role"
 /ui/api/activity	HEAD	plain	AdminKey	200:
 /ui/api/activity	HEAD	plain	AdminKeyUnmapped	200:
 /ui/api/activity	HEAD	plain	AuthOff	401
@@ -64,8 +64,8 @@
 /ui/api/activity	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/activity	OPTIONS	plain	AuthOff	405
 /ui/api/activity	OPTIONS	plain	Bearer	405
-/ui/api/activity	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/activity	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/activity	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	OPTIONS	plain	OidcAdmin	405
 /ui/api/activity	OPTIONS	plain	OidcAuditor	405
 /ui/api/activity	OPTIONS	plain	OidcDeveloper	405
@@ -79,8 +79,8 @@
 /ui/api/activity	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/activity	PATCH	bad-json	AuthOff	405
 /ui/api/activity	PATCH	bad-json	Bearer	405
-/ui/api/activity	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/activity	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/activity	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	PATCH	bad-json	OidcAdmin	405
 /ui/api/activity	PATCH	bad-json	OidcAuditor	405
 /ui/api/activity	PATCH	bad-json	OidcDeveloper	405
@@ -94,8 +94,8 @@
 /ui/api/activity	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/activity	PATCH	bad-type	AuthOff	405
 /ui/api/activity	PATCH	bad-type	Bearer	405
-/ui/api/activity	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/activity	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/activity	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	PATCH	bad-type	OidcAdmin	405
 /ui/api/activity	PATCH	bad-type	OidcAuditor	405
 /ui/api/activity	PATCH	bad-type	OidcDeveloper	405
@@ -109,8 +109,8 @@
 /ui/api/activity	PATCH	json	AdminKeyUnmapped	405
 /ui/api/activity	PATCH	json	AuthOff	405
 /ui/api/activity	PATCH	json	Bearer	405
-/ui/api/activity	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/activity	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/activity	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	PATCH	json	OidcAdmin	405
 /ui/api/activity	PATCH	json	OidcAuditor	405
 /ui/api/activity	PATCH	json	OidcDeveloper	405
@@ -124,8 +124,8 @@
 /ui/api/activity	POST	bad-json	AdminKeyUnmapped	405
 /ui/api/activity	POST	bad-json	AuthOff	405
 /ui/api/activity	POST	bad-json	Bearer	405
-/ui/api/activity	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/activity	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/activity	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	POST	bad-json	OidcAdmin	405
 /ui/api/activity	POST	bad-json	OidcAuditor	405
 /ui/api/activity	POST	bad-json	OidcDeveloper	405
@@ -139,8 +139,8 @@
 /ui/api/activity	POST	bad-type	AdminKeyUnmapped	405
 /ui/api/activity	POST	bad-type	AuthOff	405
 /ui/api/activity	POST	bad-type	Bearer	405
-/ui/api/activity	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/activity	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/activity	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	POST	bad-type	OidcAdmin	405
 /ui/api/activity	POST	bad-type	OidcAuditor	405
 /ui/api/activity	POST	bad-type	OidcDeveloper	405
@@ -154,8 +154,8 @@
 /ui/api/activity	POST	json	AdminKeyUnmapped	405
 /ui/api/activity	POST	json	AuthOff	405
 /ui/api/activity	POST	json	Bearer	405
-/ui/api/activity	POST	json	NoKey	401:@b_de6b5592
-/ui/api/activity	POST	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	POST	json	NoKey	401:error.code=-32000
+/ui/api/activity	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	POST	json	OidcAdmin	405
 /ui/api/activity	POST	json	OidcAuditor	405
 /ui/api/activity	POST	json	OidcDeveloper	405
@@ -169,8 +169,8 @@
 /ui/api/activity	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/activity	PUT	bad-json	AuthOff	405
 /ui/api/activity	PUT	bad-json	Bearer	405
-/ui/api/activity	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/activity	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/activity	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	PUT	bad-json	OidcAdmin	405
 /ui/api/activity	PUT	bad-json	OidcAuditor	405
 /ui/api/activity	PUT	bad-json	OidcDeveloper	405
@@ -184,8 +184,8 @@
 /ui/api/activity	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/activity	PUT	bad-type	AuthOff	405
 /ui/api/activity	PUT	bad-type	Bearer	405
-/ui/api/activity	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/activity	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/activity	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	PUT	bad-type	OidcAdmin	405
 /ui/api/activity	PUT	bad-type	OidcAuditor	405
 /ui/api/activity	PUT	bad-type	OidcDeveloper	405
@@ -199,8 +199,8 @@
 /ui/api/activity	PUT	json	AdminKeyUnmapped	405
 /ui/api/activity	PUT	json	AuthOff	405
 /ui/api/activity	PUT	json	Bearer	405
-/ui/api/activity	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/activity	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/activity	PUT	json	NoKey	401:error.code=-32000
+/ui/api/activity	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/activity	PUT	json	OidcAdmin	405
 /ui/api/activity	PUT	json	OidcAuditor	405
 /ui/api/activity	PUT	json	OidcDeveloper	405

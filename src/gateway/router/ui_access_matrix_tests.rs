@@ -503,64 +503,6 @@ fn hash12(bytes: &[u8]) -> String {
     })
 }
 
-/// What a cell records for one answer.
-fn cell(path: &str, status: StatusCode, body: &[u8]) -> String {
-    let code = status.as_u16();
-    let refused = matches!(code, 401 | 403);
-    if refused && !body.is_empty() {
-        return format!("{code}:{}", hash12(body));
-    }
-    if status.is_success() && path == routes::UI_ACTIVITY {
-        // The list's scope is which seeded calls it shows. The audit layer
-        // appends this run's own records too, with clocks and hashes of their
-        // own, so only the seeded rows are pinned.
-        let list: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-        let mut seen: Vec<&str> = list["rows"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|row| row["tool"].as_str())
-            .filter(|tool| tool.starts_with("tool_"))
-            .collect();
-        seen.sort_unstable();
-        return format!("{code}:{}", seen.join(","));
-    }
-    if status.is_success() && path == routes::UI_ACTIVITY_EXPORT {
-        // The export's scope is which seeded calls it carries; like the list,
-        // only those are pinned.
-        let text = String::from_utf8_lossy(body);
-        let mut seen: Vec<&str> = text
-            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .filter(|token| token.starts_with("tool_"))
-            .collect();
-        seen.sort_unstable();
-        seen.dedup();
-        return format!("{code}:{}", seen.join(","));
-    }
-    if status.is_success() && attributes(path).scoped && !body.is_empty() {
-        let canonical = if let Ok(mut v) = serde_json::from_slice::<Value>(body) {
-            strip(&mut v);
-            if path == routes::UI_STATUS
-                && let Some(answer) = v.as_object_mut()
-            {
-                // The `access` report is new in this change and has its own
-                // test against the matrix; every other member is pinned.
-                answer.remove("access");
-            }
-            v.to_string()
-        } else {
-            let mut lines: Vec<&str> = std::str::from_utf8(body)
-                .unwrap_or_default()
-                .lines()
-                .collect();
-            lines.sort_unstable();
-            lines.join("\n")
-        };
-        return format!("{code}:{}", hash12(canonical.as_bytes()));
-    }
-    code.to_string()
-}
-
 async fn send(router: &axum::Router, request: Request<Body>) -> (StatusCode, Vec<u8>) {
     let response = tokio::time::timeout(Duration::from_secs(30), router.clone().oneshot(request))
         .await
@@ -575,9 +517,11 @@ async fn send(router: &axum::Router, request: Request<Body>) -> (StatusCode, Vec
 
 type Matrix = BTreeMap<String, String>;
 
-/// Every cell, computed against today's code.
-async fn compute() -> Matrix {
+/// Every cell, computed against today's code, and beside it each cell's
+/// whole-body pin ([`cell_hash`]) for the strength check.
+async fn compute() -> (Matrix, Vec<Pins>) {
     let mut matrix = Matrix::new();
+    let mut pins = Vec::new();
     for path in paths() {
         let stores: &[bool] = if attributes(path).store_writes || attributes(path).store_reads {
             &[false, true]
@@ -610,6 +554,7 @@ async fn compute() -> Matrix {
                                 );
                             }
                             let value = cell(path, status, &body);
+                            let old = cell_hash(path, status, &body);
                             if attributes(path).scoped && status.is_success() {
                                 let (again, body2) =
                                     send(&router, request(caller, req, &fx, Some(&cookie))).await;
@@ -628,15 +573,20 @@ async fn compute() -> Matrix {
                             } else {
                                 shape.to_string()
                             };
-                            matrix
-                                .insert(format!("{path}\t{method}\t{variant}\t{caller:?}"), value);
+                            let key = format!("{path}\t{method}\t{variant}\t{caller:?}");
+                            pins.push(Pins {
+                                path,
+                                old,
+                                new: value.clone(),
+                            });
+                            matrix.insert(key, value);
                         }
                     }
                 }
             }
         }
     }
-    matrix
+    (matrix, pins)
 }
 
 /// The checked-in expectation, without the cost rows when that feature is off.
@@ -657,7 +607,8 @@ fn expected() -> Matrix {
 /// Every UI API answer, pinned before the guards move into one table.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ui_api_access_matrix_is_preserved() {
-    let computed = compute().await;
+    let (computed, pins) = compute().await;
+    no_two_distinct_answers_share_a_label(&pins);
     output::check_coverage(loaded(), &computed).expect("every stored fragment has computed rows");
     let expected = expected();
     if computed == expected {
@@ -677,7 +628,7 @@ async fn ui_api_access_matrix_is_preserved() {
     let (table, divergent) = output::render(loaded(), &computed);
     panic!(
         "{} cells moved; first 40:\n{}\nNamed-body divergences (same status):\n{}\n\
-         ---- BEGIN MATRIX ----\n{table}---- END MATRIX ----",
+         ---- BEGIN MATRIX ----\n{table}---- END MATRIX ----\ncells={}",
         moved.len(),
         moved
             .iter()
@@ -686,6 +637,7 @@ async fn ui_api_access_matrix_is_preserved() {
             .collect::<Vec<_>>()
             .join("\n"),
         divergent.join("\n"),
+        computed.len(),
     );
 }
 
@@ -716,6 +668,15 @@ fn every_ui_api_path_is_in_the_matrix() {
 /// The hand-written facts about the expectation.
 #[path = "ui_access_matrix_known_tests.rs"]
 mod known;
+
+/// A cell's label: what identifies an answer's class and scope.
+#[path = "ui_access_matrix_label.rs"]
+mod label;
+use label::{Pins, cell, cell_hash, no_two_distinct_answers_share_a_label};
+
+/// What a cell must and must not notice in a body.
+#[path = "ui_access_matrix_pin_tests.rs"]
+mod pin;
 
 /// Who reads which identity grants in the control-plane snapshot.
 #[path = "ui_control_plane_scope_tests.rs"]

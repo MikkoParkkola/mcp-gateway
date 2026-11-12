@@ -3,8 +3,8 @@
 /ui/api/gateway	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/gateway	DELETE	plain	AuthOff	405
 /ui/api/gateway	DELETE	plain	Bearer	405
-/ui/api/gateway	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/gateway	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/gateway	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/gateway	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/gateway	DELETE	plain	OidcAdmin	405
 /ui/api/gateway	DELETE	plain	OidcAuditor	405
 /ui/api/gateway	DELETE	plain	OidcDeveloper	405
@@ -16,34 +16,34 @@
 /ui/api/gateway	DELETE	plain	StandardKey	405
 /ui/api/gateway	GET	bad-query	AdminKey	200
 /ui/api/gateway	GET	bad-query	AdminKeyUnmapped	200
-/ui/api/gateway	GET	bad-query	AuthOff	403:@b_ca730ec7
+/ui/api/gateway	GET	bad-query	AuthOff	403:error="Authentication required"
 /ui/api/gateway	GET	bad-query	Bearer	200
-/ui/api/gateway	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/gateway	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/gateway	GET	bad-query	OidcAdmin	403:@b_ca730ec7
-/ui/api/gateway	GET	bad-query	OidcAuditor	403:@b_ca730ec7
-/ui/api/gateway	GET	bad-query	OidcDeveloper	403:@b_ca730ec7
-/ui/api/gateway	GET	bad-query	OidcDeveloperNoIssuer	403:@b_ca730ec7
-/ui/api/gateway	GET	bad-query	OidcDeveloperNoSubject	403:@b_ca730ec7
-/ui/api/gateway	GET	bad-query	OidcReviewer	403:@b_ca730ec7
-/ui/api/gateway	GET	bad-query	OidcUnmapped	403:@b_ca730ec7
+/ui/api/gateway	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/gateway	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway	GET	bad-query	OidcAdmin	403:error="Authentication required"
+/ui/api/gateway	GET	bad-query	OidcAuditor	403:error="Authentication required"
+/ui/api/gateway	GET	bad-query	OidcDeveloper	403:error="Authentication required"
+/ui/api/gateway	GET	bad-query	OidcDeveloperNoIssuer	403:error="Authentication required"
+/ui/api/gateway	GET	bad-query	OidcDeveloperNoSubject	403:error="Authentication required"
+/ui/api/gateway	GET	bad-query	OidcReviewer	403:error="Authentication required"
+/ui/api/gateway	GET	bad-query	OidcUnmapped	403:error="Authentication required"
 /ui/api/gateway	GET	bad-query	Session	200
-/ui/api/gateway	GET	bad-query	StandardKey	403:@b_ca730ec7
+/ui/api/gateway	GET	bad-query	StandardKey	403:error="Authentication required"
 /ui/api/gateway	GET	plain	AdminKey	200
 /ui/api/gateway	GET	plain	AdminKeyUnmapped	200
-/ui/api/gateway	GET	plain	AuthOff	403:@b_ca730ec7
+/ui/api/gateway	GET	plain	AuthOff	403:error="Authentication required"
 /ui/api/gateway	GET	plain	Bearer	200
-/ui/api/gateway	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/gateway	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/gateway	GET	plain	OidcAdmin	403:@b_ca730ec7
-/ui/api/gateway	GET	plain	OidcAuditor	403:@b_ca730ec7
-/ui/api/gateway	GET	plain	OidcDeveloper	403:@b_ca730ec7
-/ui/api/gateway	GET	plain	OidcDeveloperNoIssuer	403:@b_ca730ec7
-/ui/api/gateway	GET	plain	OidcDeveloperNoSubject	403:@b_ca730ec7
-/ui/api/gateway	GET	plain	OidcReviewer	403:@b_ca730ec7
-/ui/api/gateway	GET	plain	OidcUnmapped	403:@b_ca730ec7
+/ui/api/gateway	GET	plain	NoKey	401:error.code=-32000
+/ui/api/gateway	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/gateway	GET	plain	OidcAdmin	403:error="Authentication required"
+/ui/api/gateway	GET	plain	OidcAuditor	403:error="Authentication required"
+/ui/api/gateway	GET	plain	OidcDeveloper	403:error="Authentication required"
+/ui/api/gateway	GET	plain	OidcDeveloperNoIssuer	403:error="Authentication required"
+/ui/api/gateway	GET	plain	OidcDeveloperNoSubject	403:error="Authentication required"
+/ui/api/gateway	GET	plain	OidcReviewer	403:error="Authentication required"
+/ui/api/gateway	GET	plain	OidcUnmapped	403:error="Authentication required"
 /ui/api/gateway	GET	plain	Session	200
-/ui/api/gateway	GET	plain	StandardKey	403:@b_ca730ec7
+/ui/api/gateway	GET	plain	StandardKey	403:error="Authentication required"
 /ui/api/gateway	HEAD	plain	AdminKey	200
 /ui/api/gateway	HEAD	plain	AdminKeyUnmapped	200
 /ui/api/gateway	HEAD	plain	AuthOff	403
@@ -63,8 +63,8 @@
 /ui/api/gateway	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/gateway	OPTIONS	plain	AuthOff	405
 /ui/api/gateway	OPTIONS	plain	Bearer	405
-/ui/api/gateway	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/gateway	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/gateway	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/gateway	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/gateway	OPTIONS	plain	OidcAdmin	405
 /ui/api/gateway	OPTIONS	plain	OidcAuditor	405
 /ui/api/gateway	OPTIONS	plain	OidcDeveloper	405
@@ -78,8 +78,8 @@
 /ui/api/gateway	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/gateway	PATCH	bad-json	AuthOff	405
 /ui/api/gateway	PATCH	bad-json	Bearer	405
-/ui/api/gateway	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/gateway	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/gateway	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/gateway	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/gateway	PATCH	bad-json	OidcAdmin	405
 /ui/api/gateway	PATCH	bad-json	OidcAuditor	405
 /ui/api/gateway	PATCH	bad-json	OidcDeveloper	405
@@ -93,8 +93,8 @@
 /ui/api/gateway	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/gateway	PATCH	bad-type	AuthOff	405
 /ui/api/gateway	PATCH	bad-type	Bearer	405
-/ui/api/gateway	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/gateway	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/gateway	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/gateway	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/gateway	PATCH	bad-type	OidcAdmin	405
 /ui/api/gateway	PATCH	bad-type	OidcAuditor	405
 /ui/api/gateway	PATCH	bad-type	OidcDeveloper	405
@@ -108,8 +108,8 @@
 /ui/api/gateway	PATCH	json	AdminKeyUnmapped	405
 /ui/api/gateway	PATCH	json	AuthOff	405
 /ui/api/gateway	PATCH	json	Bearer	405
-/ui/api/gateway	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/gateway	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/gateway	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/gateway	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/gateway	PATCH	json	OidcAdmin	405
 /ui/api/gateway	PATCH	json	OidcAuditor	405
 /ui/api/gateway	PATCH	json	OidcDeveloper	405
@@ -123,8 +123,8 @@
 /ui/api/gateway	POST	bad-json	AdminKeyUnmapped	405
 /ui/api/gateway	POST	bad-json	AuthOff	405
 /ui/api/gateway	POST	bad-json	Bearer	405
-/ui/api/gateway	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/gateway	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/gateway	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/gateway	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/gateway	POST	bad-json	OidcAdmin	405
 /ui/api/gateway	POST	bad-json	OidcAuditor	405
 /ui/api/gateway	POST	bad-json	OidcDeveloper	405
@@ -138,8 +138,8 @@
 /ui/api/gateway	POST	bad-type	AdminKeyUnmapped	405
 /ui/api/gateway	POST	bad-type	AuthOff	405
 /ui/api/gateway	POST	bad-type	Bearer	405
-/ui/api/gateway	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/gateway	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/gateway	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/gateway	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/gateway	POST	bad-type	OidcAdmin	405
 /ui/api/gateway	POST	bad-type	OidcAuditor	405
 /ui/api/gateway	POST	bad-type	OidcDeveloper	405
@@ -153,8 +153,8 @@
 /ui/api/gateway	POST	json	AdminKeyUnmapped	405
 /ui/api/gateway	POST	json	AuthOff	405
 /ui/api/gateway	POST	json	Bearer	405
-/ui/api/gateway	POST	json	NoKey	401:@b_de6b5592
-/ui/api/gateway	POST	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/gateway	POST	json	NoKey	401:error.code=-32000
+/ui/api/gateway	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/gateway	POST	json	OidcAdmin	405
 /ui/api/gateway	POST	json	OidcAuditor	405
 /ui/api/gateway	POST	json	OidcDeveloper	405
@@ -168,8 +168,8 @@
 /ui/api/gateway	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/gateway	PUT	bad-json	AuthOff	405
 /ui/api/gateway	PUT	bad-json	Bearer	405
-/ui/api/gateway	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/gateway	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/gateway	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/gateway	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/gateway	PUT	bad-json	OidcAdmin	405
 /ui/api/gateway	PUT	bad-json	OidcAuditor	405
 /ui/api/gateway	PUT	bad-json	OidcDeveloper	405
@@ -183,8 +183,8 @@
 /ui/api/gateway	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/gateway	PUT	bad-type	AuthOff	405
 /ui/api/gateway	PUT	bad-type	Bearer	405
-/ui/api/gateway	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/gateway	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/gateway	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/gateway	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/gateway	PUT	bad-type	OidcAdmin	405
 /ui/api/gateway	PUT	bad-type	OidcAuditor	405
 /ui/api/gateway	PUT	bad-type	OidcDeveloper	405
@@ -198,8 +198,8 @@
 /ui/api/gateway	PUT	json	AdminKeyUnmapped	405
 /ui/api/gateway	PUT	json	AuthOff	405
 /ui/api/gateway	PUT	json	Bearer	405
-/ui/api/gateway	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/gateway	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/gateway	PUT	json	NoKey	401:error.code=-32000
+/ui/api/gateway	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/gateway	PUT	json	OidcAdmin	405
 /ui/api/gateway	PUT	json	OidcAuditor	405
 /ui/api/gateway	PUT	json	OidcDeveloper	405
