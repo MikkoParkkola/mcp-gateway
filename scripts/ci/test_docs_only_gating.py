@@ -214,17 +214,22 @@ def macos_train_errors(jobs: dict) -> list[str]:
     if errors:
         return errors
     shards, check = jobs["macos-shards"], jobs["macos-check"]
+    # On a same-repo train into the release line the aggregate skips: merge-train judges its shards itself
+    # from the base rules (rollups_ok). Its shards still run there.
+    judged_by_merge_train = {"code train", "docs-only train", "scope failed on a train"}
     for label, (c, want) in cases.items():
         shards_ran = runs(shards, c)
         after = dict(c, needs=dict(c["needs"], **{"macos-shards": {
             "result": "success" if shards_ran else "skipped", "outputs": {}}}))
-        for job, ran in (("macos-shards", shards_ran), ("macos-check", runs(check, after))):
-            if ran != want:
-                errors.append(f"{job}: {label} {'skips' if want else 'runs'}")
-    # On a train, the aggregate runs whatever its shards did, so a failed or
-    # cancelled shard turns it red rather than leaving it skipped.
+        check_want = want and label not in judged_by_merge_train
+        for job, ran, w in (("macos-shards", shards_ran, want), ("macos-check", runs(check, after), check_want)):
+            if ran != w:
+                errors.append(f"{job}: {label} {'skips' if w else 'runs'}")
+    # Where the aggregate runs (a train into main stands in for every non-release-line train), it runs
+    # whatever its shards did, so a failed or cancelled shard turns it red rather than leaving it skipped.
     for result in ("failure", "cancelled"):
         c = as_train(ctx("pull_request", "success", "false"))
+        c["github"]["base_ref"] = "main"
         c = dict(c, needs=dict(c["needs"], **{"macos-shards": {"result": result, "outputs": {}}}))
         if not runs(check, c):
             errors.append(f"macos-check: a train with a {result} shard skips")
@@ -235,8 +240,8 @@ AGGREGATES = ("test", "windows-check", "macos-check", HEAVY_GATE)
 
 
 def aggregate_cancel_errors(jobs: dict) -> list[str]:
-    """On a train PR (where all four run) each aggregate runs after a
-    failed, skipped or green shard, but a cancelled run creates no aggregate:
+    """On an os-sensitive lane PR (where all four run; on a train merge-train judges them instead) each
+    aggregate runs after a failed, skipped or green shard, but a cancelled run creates no aggregate:
     always() created them after the cancel and left the run queued for a runner,
     holding the newer run in the concurrency group behind it."""
     errors = []
@@ -245,7 +250,8 @@ def aggregate_cancel_errors(jobs: dict) -> list[str]:
         needs = [needs] if isinstance(needs, str) else needs
         for result in ("success", "failure", "skipped"):
             for cancelled in (False, True):
-                c = as_train(ctx("pull_request", "success", "false"))
+                c = ctx("pull_request", "success", "false")
+                c["github"]["event"]["pull_request"]["labels"] = [{"name": "os-sensitive"}]
                 c["needs"] = {n: {"result": result, "outputs": {}} for n in needs}
                 c["_status"] = dict(c["_status"], cancelled=cancelled)
                 if runs(jobs[job], c) == cancelled:
@@ -356,6 +362,40 @@ def concurrency_errors(block: dict) -> list[str]:
     return out
 
 
+def ui_tests_apt_errors() -> list[str]:
+    """The UI tests job must not fail because an Ubuntu mirror is down.
+
+    On 2026-11-11 security.ubuntu.com was unreachable and `playwright install --with-deps`, which runs
+    `apt-get update` first, exited 100 on every run, so the job failed at setup on the line and on every
+    train. The browser comes from Playwright's own CDN and is cached; the system libraries come from apt
+    and are mostly on the hosted image already. So: no `--with-deps` anywhere, and the step that installs
+    the libraries retries apt and carries on with a warning when it still fails (the test step then fails
+    loudly if a library is really missing)."""
+    doc = yaml.safe_load((ROOT / ".github/workflows/ui-tests.yml").read_text())
+    runs = [str(step.get("run", "")) for step in doc["jobs"]["playwright"]["steps"]]
+    out = []
+    if any("--with-deps" in run for run in runs):
+        out.append("ui-tests: `playwright install --with-deps` runs apt-get update and exits 100 when the "
+                   "mirror is down; install the browser and the system libraries in separate steps")
+    deps = [run for run in runs if "install-deps" in run]
+    if not deps:
+        out.append("ui-tests: no step installs Chromium's system libraries")
+    for run in deps:
+        if "Acquire::Retries" not in run:
+            out.append("ui-tests: the system-library step does not retry apt (-o Acquire::Retries=5)")
+        if "||" not in run:
+            out.append("ui-tests: the system-library step fails the job when apt is down; it must warn and go on")
+        # Observed on this change's own run during the outage: apt's retries multiplied against a dead DNS
+        # held the step for the job's whole 15 minutes until the timeout cancelled the job. Every apt and
+        # install-deps command in the step must be bounded by `timeout`.
+        for line in run.splitlines():
+            code = line.strip()
+            if ("apt-get " in code or "install-deps" in code) and not code.startswith(("#", "printf")):
+                if "timeout " not in code:
+                    out.append(f"ui-tests: an unbounded command in the system-library step: {code[:60]}")
+    return out
+
+
 def main() -> int:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     errors = []
@@ -409,6 +449,7 @@ def main() -> int:
     errors += release_pr_errors(jobs)
     errors += macos_train_errors(jobs)
     errors += post_merge_errors(jobs)
+    errors += ui_tests_apt_errors()
     # The macOS cases must be able to fail: each mutant is caught by the case
     # named beside it, not merely by some case.
     import copy

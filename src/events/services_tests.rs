@@ -264,7 +264,10 @@ fn key_server_with(
         }]
     }))
     .expect("key server config");
-    Arc::new(crate::key_server::KeyServer::new(config))
+    Arc::new(crate::key_server::KeyServer::new(
+        config,
+        crate::key_server::email_hash::EmailHashKey::for_test(),
+    ))
 }
 
 /// Design F9 (MIK-7769): the running static bearer must be the one the
@@ -374,8 +377,10 @@ async fn one_clock_reading_judges_a_key_server_token() {
     use crate::security::audit::CredentialKind as Kind;
     let ks = key_server(false);
     let now = crate::clock::unix_secs().expect("a readable clock");
-    ks.store
-        .insert(crate::key_server::TemporaryToken {
+    crate::key_server::store::activate_for_test(
+        ks.store.as_ref(),
+        ks.config.token_ttl_secs,
+        crate::key_server::TemporaryToken {
             jti: "j1".into(),
             token: "mcpgw_t".into(),
             identity: crate::key_server::oidc::VerifiedIdentity::for_test(
@@ -393,8 +398,8 @@ async fn one_clock_reading_judges_a_key_server_token() {
             iat: now,
             exp: now + 600,
             client_ip: None,
-        })
-        .await;
+        },
+    );
     let live = with(LiveCredentials {
         key_server: Some(Arc::clone(&ks)),
         ..LiveCredentials::default()
@@ -439,8 +444,10 @@ async fn key_server_credentials_are_rechecked_where_they_were_issued() {
         "https://idp",
     );
     let now = u64::try_from(chrono::Utc::now().timestamp()).expect("now");
-    ks.store
-        .insert(crate::key_server::TemporaryToken {
+    crate::key_server::store::activate_for_test(
+        ks.store.as_ref(),
+        ks.config.token_ttl_secs,
+        crate::key_server::TemporaryToken {
             jti: "j1".into(),
             token: "mcpgw_t".into(),
             identity: identity.clone(),
@@ -452,8 +459,8 @@ async fn key_server_credentials_are_rechecked_where_they_were_issued() {
             iat: now,
             exp: now + 600,
             client_ip: None,
-        })
-        .await;
+        },
+    );
     let live = with(LiveCredentials {
         key_server: Some(Arc::clone(&ks)),
         ..LiveCredentials::default()

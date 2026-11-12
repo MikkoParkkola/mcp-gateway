@@ -88,6 +88,7 @@ src/gateway/ui/discovery.rs	list_discovery	spawn-blocking	1	no-refusal-inside	re
 src/gateway/ui/discovery_adopt.rs	adopt_discovery	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before an adopt; a read failure returns as a 503
 src/gateway/ui/keys.rs	keys	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers for the key list; a read failure lists the live keys as file unloadable
 src/gateway/ui/keys_create.rs	preconditions	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before a key create; a read failure returns as a 503
+src/gateway/ui/keys_revoke.rs	revoke_key	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before a key revoke; a read failure returns as a 503
 src/gateway/ui/mod.rs	config	spawn-blocking	1	no-refusal-inside	web UI config page reads the literal config file for secret references
 src/gateway/ui/preview.rs	preview_backend	spawn	1	outside-calls	web UI backend preview: starts and describes a backend in its own task; not a tool call
 src/gateway/ui/secret_slots.rs	open_store	spawn-blocking	1	no-refusal-inside	opens the secret store choice and the vault off the async workers for adopt and the backend routes; a keychain that does not answer in time is a 503

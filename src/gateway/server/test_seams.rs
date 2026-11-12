@@ -17,6 +17,12 @@ pub(super) struct TestSeams {
     /// A mutex because `run_stdio_on` takes it through `&self` (MIK-8364).
     #[cfg(test)]
     shutdown: std::sync::Mutex<Option<oneshot::Receiver<()>>>,
+    /// A separate signal after the stdio read loop ends.
+    #[cfg(test)]
+    hurry: std::sync::Mutex<Option<oneshot::Receiver<()>>>,
+    /// Parent identity injected into this gateway's orphan watch only.
+    #[cfg(test)]
+    pub(super) parent_pid: Option<std::sync::Arc<dyn Fn() -> i32 + Send + Sync>>,
     /// Receives `run`'s in-flight request gate, so a test can hold a request
     /// open across the drain (MIK-8156).
     #[cfg(test)]
@@ -46,6 +52,9 @@ pub(super) struct TestSeams {
     /// other session in the test binary stops on it.
     #[cfg(test)]
     pub(super) stdio_dispatch_hold: std::sync::Arc<crate::test_pause::Slot>,
+    /// Holds post-drain cleanup after the reply drain has completed.
+    #[cfg(test)]
+    pub(super) stdio_before_backends_hold: crate::test_pause::Slot,
     /// Notified when this gateway's stdio read loop has stopped and the
     /// drain begins (MIK-8364 drain-window row).
     #[cfg(test)]
@@ -106,6 +115,14 @@ impl TestSeams {
     #[cfg(test)]
     pub(super) fn take_shutdown_trigger(&self) -> Option<oneshot::Receiver<()>> {
         self.shutdown
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    #[cfg(test)]
+    pub(super) fn take_hurry_trigger(&self) -> Option<oneshot::Receiver<()>> {
+        self.hurry
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
@@ -264,6 +281,18 @@ impl super::Gateway {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(receiver);
         sender
     }
+
+    /// A second signal, consumed only after the stdio read loop has ended.
+    #[cfg(all(test, unix))]
+    pub(super) fn hurry_trigger_for_test(&mut self) -> oneshot::Sender<()> {
+        let (sender, receiver) = oneshot::channel();
+        *self
+            .test_seams
+            .hurry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(receiver);
+        sender
+    }
 }
 
 #[cfg(test)]
@@ -277,3 +306,7 @@ mod counter_restart_tests;
 #[cfg(all(test, feature = "webui"))]
 #[path = "gateway_status_start_tests.rs"]
 mod gateway_status_start_tests;
+
+#[cfg(all(test, feature = "webui"))]
+#[path = "health_start_tests.rs"]
+mod health_start_tests;

@@ -11,7 +11,7 @@
 use super::{ObsRefusal, binding, observe_row};
 use crate::events::records::Subscription;
 use crate::events::stored_identity_fixture::{config, identity, per_user_row};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// A per-user row on `signed` whose stored identity is `identity`, as the
 /// events store reads it back from disk.
@@ -99,16 +99,11 @@ fn a_stored_identity_written_by_an_older_gateway_loads() {
     for (literal, name, groups) in old {
         let row = stored_row(&serde_json::from_str(literal).expect("literal parses"));
         let observed = row.observed_as().expect("names someone");
-        let as_json = serde_json::to_value(&observed).expect("serializes");
-        assert_eq!(as_json["subject"], "p", "{literal}");
-        assert_eq!(as_json["email"], "p@example.com", "{literal}");
-        assert_eq!(as_json["issuer"], "https://idp", "{literal}");
-        assert_eq!(
-            as_json.get("name").and_then(Value::as_str),
-            name,
-            "{literal}"
-        );
-        assert_eq!(as_json["groups"], json!(groups), "{literal}");
+        assert_eq!(observed.subject(), "p", "{literal}");
+        assert_eq!(observed.email(), "p@example.com", "{literal}");
+        assert_eq!(observed.issuer(), "https://idp", "{literal}");
+        assert_eq!(observed.name(), name, "{literal}");
+        assert_eq!(observed.groups(), groups.as_slice(), "{literal}");
     }
 }
 

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Identity and local grant administration command handlers.
 
+use crate::cli::stdout::println;
+
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,

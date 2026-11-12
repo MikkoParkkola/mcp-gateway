@@ -16,6 +16,13 @@ impl BackendRegistry {
         Arc::clone(&self.stop_deadline)
     }
 
+    /// Hand every live tree to the reaper without waiting for lifecycle locks.
+    pub(crate) fn hand_over_now(&self, budget: std::time::Duration) {
+        for backend in self.latch_and_snapshot() {
+            backend.hand_over_now(budget);
+        }
+    }
+
     /// [`Self::stop_all`], planned to end by `deadline`: the deadline is set
     /// first, so a stdio tree already in its exit waits is cut to it too, and
     /// each close plans its own waits to fit.
@@ -26,6 +33,9 @@ impl BackendRegistry {
     /// handed over is in the reaper's hands, cut to `deadline`.
     pub(crate) async fn stop_all_by(&self, deadline: tokio::time::Instant) {
         self.stop_deadline.move_earlier(deadline.into_std());
+        if self.stop_deadline.is_hurried() {
+            self.hand_over_now(deadline.saturating_duration_since(tokio::time::Instant::now()));
+        }
         // The backends to retire are the ones the stop latched and took, in
         // one hold: a reload registering after this is refused, never stopped
         // without being retired.

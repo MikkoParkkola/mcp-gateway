@@ -19,6 +19,7 @@ const EDITOR: &str = "tests/webui_management_tests/capability_editor.rs";
 const CAPABILITIES: &str = "tests/webui_management_tests/capabilities.rs";
 const UI_TOOL_CALL: &str = "src/gateway/router/ui_tool_call_tests.rs";
 const ADOPT_ROUTE: &str = "tests/discovery_adopt_route.rs";
+const SETTINGS_ROUTES: &str = "src/gateway/ui/settings_route_tests.rs";
 const KEY_CREATE: &str = "src/gateway/ui/keys_create_tests.rs";
 const DECISIONS_ROUTE: &str = "src/gateway/ui/decisions_tests.rs";
 const SIGN_IN: &str = "src/gateway/ui/backends/signin_tests.rs";
@@ -113,12 +114,32 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         )],
     ),
     (
+        "/ui/api/keys/{name}",
+        Method::DELETE,
+        &[(
+            "src/gateway/ui/keys_revoke_outcome_tests.rs",
+            "success_is_a_no_store_200_with_exactly_name_revoked_revision",
+        )],
+    ),
+    (
         "/ui/api/reload",
         Method::POST,
         &[(
             MUTATION,
             "test_reload_endpoint_returns_structured_outcome_for_profile_change",
         )],
+    ),
+    // The table's body lacks required fields, so its admin answer is 422;
+    // these tests send valid bodies and pin the served save and diff.
+    (
+        "/ui/api/settings",
+        Method::POST,
+        &[(SETTINGS_ROUTES, "s4_budget_save")],
+    ),
+    (
+        "/ui/api/settings/diff",
+        Method::POST,
+        &[(SETTINGS_ROUTES, "s1_budget_diff")],
     ),
     // The table sends no body, so its admin answer is 400; this test sends a
     // call and pins the served 200 with the tool's result and its receipt.

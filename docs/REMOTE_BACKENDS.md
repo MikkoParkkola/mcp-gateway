@@ -282,5 +282,10 @@ meta_mcp:
     - my_oauth_backend
 ```
 
+Listing names in `warm_start` narrows warm start to those backends: every other
+backend's tools are not listed at boot. Until such a backend has been listed, a
+`tools/call` to it can go out without its `Mcp-Param-*` headers, and a backend
+that validates those headers rejects the call.
+
 See [OAUTH_CONFIG.md § First-time interactive authorization](OAUTH_CONFIG.md#first-time-interactive-authorization-mik-4486)
 for details and tracked under MIK-4486.

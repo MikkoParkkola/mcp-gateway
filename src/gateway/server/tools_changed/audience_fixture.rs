@@ -320,7 +320,10 @@ impl World {
 
     /// As [`Self::start`], with `configure` applied to the Meta-MCP last.
     pub(super) async fn start_with(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
-        let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
+        let key_server = Arc::new(KeyServer::new(
+            crate::config::KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
+        ));
         Self::start_on(
             key_server,
             None,
@@ -364,7 +367,10 @@ impl World {
             env.display().to_string().replace('\'', "''")
         ))
         .expect("adapter config parses");
-        let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
+        let key_server = Arc::new(KeyServer::new(
+            crate::config::KeyServerConfig::default(),
+            crate::key_server::email_hash::EmailHashKey::for_test(),
+        ));
         Self::start_on(key_server, Some((config, dir)), configure, access).await
     }
 
@@ -588,10 +594,14 @@ impl World {
     }
 
     /// A principal's bearer: a live temporary token for `subject`.
-    pub(super) async fn principal(&self, subject: &str) -> String {
+    pub(super) fn principal(&self, subject: &str) -> String {
         let token = principal_token(subject);
         let bearer = token.token.clone();
-        self.key_server.store.insert(token).await;
+        crate::key_server::store::activate_for_test(
+            self.key_server.store.as_ref(),
+            self.key_server.config.token_ttl_secs,
+            token,
+        );
         bearer
     }
 }

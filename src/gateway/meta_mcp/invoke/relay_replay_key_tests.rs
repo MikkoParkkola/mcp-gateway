@@ -1,13 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8739 rows for the key-taking replay surface (the sync lookup's
-//! Sync-only filter, and the empty commit's removal with relay detection
-//! off), split from `relay_replay_tests` for the file-size ceiling.
+//! Sync-only filter), split from `relay_replay_tests` for the file-size ceiling.
 
-use super::super::super::{REPLAY_LOOKUP, RelayKey, collecting, commit_with};
-use super::super::{note_task_capture, stage_plan_replay};
+use super::super::super::{REPLAY_LOOKUP, RelayKey, collecting};
+use super::super::stage_plan_replay;
 use super::{PROSE, completed, digest_for, relay_meta, staged_summaries, store_entry};
-use crate::security::firewall::{Firewall, FirewallConfig, StoredKey};
+use crate::security::firewall::StoredKey;
 
 /// T3 (MIK-8739): a task key in the sync lookup slot stages nothing and
 /// looks nothing up, whether that task's entry is stored or absent. Both
@@ -66,50 +65,6 @@ async fn t3_a_task_key_in_the_sync_lookup_slot_stages_and_looks_up_nothing() {
     }
 }
 
-/// T4 (MIK-8739): a commit with no candidates removes the prior entry
-/// even through a firewall with relay detection off, which shares the
-/// store with one that has it on. `store_replay` returns early with
-/// detection off, so sending this commit through it would keep the
-/// stale entry (F1).
-/// Mutant killed: send the empty commit through `store_replay`.
-#[tokio::test]
-async fn t4_an_empty_commit_removes_the_entry_with_relay_detection_off() {
-    let (_meta, fw) = relay_meta();
-    let stored = completed(&[("alpha", "read"), ("beta", "read")]);
-    let digest = digest_for(&fw, "alpha", "read", PROSE);
-    store_entry(
-        &fw,
-        &stored,
-        &[(&digest, Some(0), "alpha", "read")],
-        vec![(Some(0), "alpha".to_owned(), "read".to_owned())],
-    );
-    let key = StoredKey::Task {
-        id: stored.task.id().to_owned(),
-        revision: stored.revision,
-    };
-    assert!(
-        fw.replay_digests(&key).is_some(),
-        "premise: the entry is stored"
-    );
-    let off = Firewall::from_config(
-        FirewallConfig {
-            enabled: false,
-            ..FirewallConfig::default()
-        },
-        None,
-    )
-    .sharing_relay_with(Some(&fw));
-    assert!(
-        !off.relay_active(),
-        "premise: relay detection is off on the peer"
-    );
-    collecting(async {
-        note_task_capture(stored.task.id().to_owned(), stored.revision, None);
-        commit_with(&off, true, &off.paired_generation_for_test());
-    })
-    .await;
-    assert!(
-        fw.replay_digests(&key).is_none(),
-        "an empty commit with relay detection off kept the prior entry"
-    );
-}
+// T4 (an empty task commit removes the entry with detection off) is gone
+// with the commit-time task capture it pinned (a task's entry
+// is persisted in its row and rebuilt by a read, never captured at commit).

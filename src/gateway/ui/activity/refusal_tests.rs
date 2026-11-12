@@ -4,6 +4,7 @@
 //! is one blocked row, read from its decision record: listed only when the
 //! record is a denial that says no invocation record was written for the call.
 
+use crate::gateway::ui::activity::rows::Check;
 use std::path::Path;
 
 use axum::http::StatusCode;
@@ -73,14 +74,20 @@ fn logs(dir: &tempfile::TempDir, entries: Vec<Value>) -> Logs {
     }
 }
 
-async fn rows(logs: &Logs, access: &Access, q: ListQuery) -> Vec<Value> {
+async fn page(logs: &Logs, access: &Access, q: ListQuery) -> Value {
     let response: Response = list_page(logs, access, &q);
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    let v: Value = serde_json::from_slice(&bytes).unwrap();
-    v["rows"].as_array().unwrap().clone()
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn rows(logs: &Logs, access: &Access, q: ListQuery) -> Vec<Value> {
+    page(logs, access, q).await["rows"]
+        .as_array()
+        .unwrap()
+        .clone()
 }
 
 fn tools(rows: &[Value]) -> Vec<&str> {
@@ -225,7 +232,7 @@ async fn a_refusal_appears_in_both_exports_and_its_receipt_shows_the_decision() 
     let listed = rows(&logs, &Access::All, ListQuery::default()).await;
     let refused = listed.iter().find(|r| r["tool"] == "refused").unwrap();
     let id = super::receipt::parse_id(refused["id"].as_str().unwrap()).unwrap();
-    let receipt = super::receipt::receipt(&logs.invocation, &id, &Access::All, None)
+    let receipt = super::receipt::receipt(&logs.invocation, &id, &Access::All, &Check::bare(None))
         .unwrap()
         .expect("the refusal has a receipt");
     assert_eq!(receipt["decision"]["reason"], "missing_grant", "{receipt}");
@@ -238,7 +245,7 @@ async fn a_refusal_appears_in_both_exports_and_its_receipt_shows_the_decision() 
         None,
         &super::rows::Filter::default(),
         &Access::All,
-        None,
+        &Check::bare(None),
         super::export::CAPS,
         super::export::csv_size,
     )
@@ -257,4 +264,52 @@ async fn a_refusal_appears_in_both_exports_and_its_receipt_shows_the_decision() 
     );
     let csv = super::export::csv(&collected);
     assert!(csv.contains("refused"), "{csv}");
+}
+
+/// A delivery record for `trace`, as the writer shapes it.
+fn delivery(trace: &str) -> Value {
+    json!({
+        "event": "response_delivery_attempt", "response_stage": "transport_finalized",
+        "trace_id": trace,
+    })
+}
+
+#[tokio::test]
+async fn an_effect_filter_never_lists_a_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let query = ListQuery {
+        effect: Some("no_record".into()),
+        ..ListQuery::default()
+    };
+    let rows = rows(&mixed(&dir), &Access::All, query).await;
+    assert_eq!(tools(&rows), ["called"], "{rows:?}");
+}
+
+#[tokio::test]
+async fn a_refusal_is_never_counted_in_the_answer_join() {
+    let dir = tempfile::tempdir().unwrap();
+    // Two delivery records under the refusal's trace read as a duplicate for a
+    // call; a refusal is no call, so nothing is joined or counted for it.
+    let entries = vec![
+        decision("refused", false, Some("srv"), Some(false)),
+        delivery("trace-refused"),
+        delivery("trace-refused"),
+    ];
+    let page = page(&logs(&dir, entries), &Access::All, ListQuery::default()).await;
+    assert_eq!(page["rows"].as_array().unwrap().len(), 1, "premise: {page}");
+    assert_eq!(page["join_incomplete"], 0, "{page}");
+    assert_eq!(page["answer_integrity_failed"], 0, "{page}");
+}
+
+#[tokio::test]
+async fn a_refusal_receipt_has_no_answer_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = mixed(&dir);
+    let listed = rows(&logs, &Access::All, ListQuery::default()).await;
+    let refused = listed.iter().find(|r| r["tool"] == "refused").unwrap();
+    let id = super::receipt::parse_id(refused["id"].as_str().unwrap()).unwrap();
+    let receipt = super::receipt::receipt(&logs.invocation, &id, &Access::All, &Check::bare(None))
+        .unwrap()
+        .expect("the refusal has a receipt");
+    assert!(receipt.get("answer").is_none(), "{receipt}");
 }

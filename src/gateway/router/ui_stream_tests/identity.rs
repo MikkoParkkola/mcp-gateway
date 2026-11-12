@@ -48,8 +48,13 @@ async fn gateway(
 ) -> (Arc<AppState>, Arc<crate::key_server::KeyServer>, impl Sized) {
     let key_server = Arc::new(crate::key_server::KeyServer::new(
         crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
-    key_server.store.insert(token).await;
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        token,
+    );
     let auth = AuthConfig {
         enabled: true,
         bearer_token: Some(BEARER.to_owned()),

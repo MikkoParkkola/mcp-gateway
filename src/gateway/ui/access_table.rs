@@ -255,6 +255,7 @@ pub(super) static ROWS: &[Row] = &[
         true,
     ),
     row(routes::UI_KEYS, Post, Admin(Forbidden), &[], false),
+    row(routes::UI_KEYS_NAME, Delete, Admin(Forbidden), &[], false),
     row(
         routes::UI_DEAD_LETTERS,
         Get,
@@ -386,6 +387,20 @@ pub(super) static ROWS: &[Row] = &[
         Get,
         Admin(AdminRequired),
         &[(Page::Servers, Tab::Actions)],
+        false,
+    ),
+    row(
+        routes::UI_SETTINGS_DIFF,
+        Post,
+        Admin(AdminRequired),
+        &[(Page::Gateway, Tab::Settings)],
+        false,
+    ),
+    row(
+        routes::UI_SETTINGS,
+        Post,
+        Admin(AdminRequired),
+        &[(Page::Gateway, Tab::Settings)],
         false,
     ),
     row(

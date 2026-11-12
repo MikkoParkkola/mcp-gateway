@@ -293,8 +293,17 @@ pub(crate) use reload_context::replace::order as write_order;
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::{
     AuditPosture, BackendOp, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG,
-    Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
+    RefusalClass, Replace, ReplaceError, ReplaceOutcome, Replaced, RevokeCheck, SecretStep,
+    replace_audited, replace_audited_revoke,
 };
+// The settings routes' reach into the save core: these named items only, each
+// already pub(crate) in its module; the rest of the two modules stays private.
+#[cfg(feature = "webui")]
+pub(crate) use reload_context::replace::ui_diff::{
+    Patch, PatchStep, PreviewRefused, Shown, UiPreview, UiRefused, path_text, ui_diff,
+};
+#[cfg(feature = "webui")]
+pub(crate) use reload_context::replace::ui_save::{SaveEdit, SaveValue, SecretTarget, ui_save};
 #[cfg(test)]
 use reload_context::{
     EvaluatedReload, changed_startup_env_keys, load_config_patch, with_pending_restart,
@@ -393,3 +402,7 @@ mod runtime_name_clash_tests;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "refusal_class_tests.rs"]
+mod refusal_class_tests;

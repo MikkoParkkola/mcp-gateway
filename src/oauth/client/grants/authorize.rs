@@ -64,8 +64,15 @@ impl OAuthClient {
     /// Returns an error if any step of the OAuth authorization flow fails
     /// (callback server, client registration, browser auth, or code exchange).
     pub async fn authorize(&self) -> Result<String> {
-        self.authorize_until(&tokio_util::sync::CancellationToken::new(), None)
-            .await
+        let token = self
+            .authorize_until(&tokio_util::sync::CancellationToken::new(), None)
+            .await?;
+        // A sign-in confirmed under another issuer while this login ran: the
+        // token is the old issuer's, refused as the entry check would have.
+        if self.issuer_differs() {
+            return Err(self.issuer_wait());
+        }
+        Ok(token)
     }
 
     /// This client sharing `gate` with every other client of its backend.

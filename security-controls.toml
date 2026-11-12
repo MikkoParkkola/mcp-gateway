@@ -81,6 +81,14 @@ module = "src/security/transparency_log_signature.rs"
 reason = "names an audit entry's signature state for display (valid, invalid, signed_unverifiable, unsigned) through the existing hash and HMAC checks; it reads, it refuses no request"
 
 [[coverage.not_a_control]]
+module = "src/security/transparency_log_sigstart.rs"
+reason = "the signing anchor of the transparency-log control: where signing began and a digest of the bytes before it, written at open and read by every Activity reader to judge an unsigned entry; it reads and records, it refuses no request; the control row names transparency_log.rs"
+
+[[coverage.not_a_control]]
+module = "src/security/transparency_log_sigstart_fixture.rs"
+reason = "compiled only under cfg(test): writes signed and v3-shaped logs and the file edits the signing-anchor rows attack them with; it never ships and refuses no request"
+
+[[coverage.not_a_control]]
 module = "src/security/transparency_log_temp.rs"
 reason = "compiled only under cfg(test): keeps a test's audit log and its sidecar files inside one temp dir; it never ships and refuses no request"
 
@@ -406,6 +414,13 @@ probe = "none"
 reason = "needs a backend that echoes a value the gateway injected into its call; the caller leg cannot make a backend do that. Exercised by the echo rows over real transports (secret_echo_tests, the stdio and WebSocket scrub rows, the A2A needles rows) and their red proofs"
 
 [[control]]
+id = "deferred-task-secret-fingerprint"
+description = "a deferred upstream task is polled, settled and served only while the secrets its dispatch injected are what the backend injects now in this process: a keyed per-process fingerprint stored with the task is checked before the poll and on its answer, and a row with none is never served"
+source = "src/security/dispatched.rs"
+probe = "none"
+reason = "needs a backend that runs a call as an upstream task and echoes the injected value later; the caller leg cannot make a backend do that. Exercised by tests/task_upstream_echo_rotation.rs over real gateway processes (restart, rotation, absent fingerprint, control) and dispatched_tests"
+
+[[control]]
 id = "configured-credential-echo-redaction"
 description = "a backend's configured headers: and env: credentials (references, header templates, and long enough whole-value env templates) join its redaction set, and every stored answer (a response-cache hit, an idempotent replay, a stored or repeated task result) is scrubbed against every set the registry retains when it is sent; a stored answer a set cannot scrub is withheld"
 source = "src/security/needles_configured.rs"
@@ -554,3 +569,10 @@ description = "no passthrough event lease is held unless the process has a zero 
 source = "src/security/dump_guard.rs"
 probe = "none"
 reason = "on a host where the guard applies, a lease answers the same with or without it; its absence shows only as a core file written after a crash, which a live probe of a running install cannot cause"
+
+[[control]]
+id = "ui-key-revoke"
+description = "DELETE /ui/api/keys/{name} requires gateway admin credentials, a matching revision and an unambiguous key identity; success requires a durable audit record and a lock-held receipt proving the selected identities are absent from live authorization"
+source = "src/gateway/ui/keys_revoke.rs"
+probe = "none"
+reason = "a positive live probe would revoke an operator credential; request, identity, writer-order and receipt behavior are pinned by the keys_revoke_*_tests.rs suites"

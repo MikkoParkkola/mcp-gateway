@@ -89,11 +89,8 @@ fn refuse_collisions(bearer: Option<&str>, api_keys: &[ResolvedApiKey]) -> Resul
     super::refuse_shared_digests(
         bearer,
         api_keys.iter().map(|k| {
-            (
-                k.name.as_str(),
-                k.digest,
-                k.previous.as_ref().map(|p| p.digest),
-            )
+            let (current, previous) = k.accepted_digests();
+            (k.name.as_str(), *current, previous.copied())
         }),
     )
 }
@@ -323,7 +320,7 @@ impl ResolvedAuthConfig {
     /// only on the reject path, to tell an expired key from a wrong one (D4).
     pub(super) fn is_expired_key(&self, token: &str) -> bool {
         use subtle::ConstantTimeEq;
-        let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
+        let presented = super::presented_digest(token);
         self.api_keys().iter().any(|k| {
             bool::from(presented.as_slice().ct_eq(k.digest.as_slice()))
                 && crate::config::api_key_expired_now(k.expires_at)
@@ -412,7 +409,7 @@ impl ResolvedAuthConfig {
         // position nor which digest matched is visible in the timing. A key with
         // no previous digest is compared against a dummy whose result is masked
         // off, and nothing is turned into a bool until after the loop.
-        let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
+        let presented = super::presented_digest(token);
         let presented = presented.as_slice();
         let keys = self.api_keys();
         let dummy = dummy_previous_digest();
@@ -420,11 +417,11 @@ impl ResolvedAuthConfig {
         let mut index = 0u32;
         let mut via_previous = Choice::from(0);
         for (position, k) in keys.iter().enumerate() {
-            let current = presented.ct_eq(k.digest.as_slice());
-            let has_previous = Choice::from(u8::from(k.previous.is_some()));
-            let previous = presented
-                .ct_eq(k.previous.as_ref().map_or(&dummy, |p| &p.digest).as_slice())
-                & has_previous;
+            let (current_digest, previous_digest) = k.accepted_digests();
+            let current = presented.ct_eq(current_digest.as_slice());
+            let has_previous = Choice::from(u8::from(previous_digest.is_some()));
+            let previous =
+                presented.ct_eq(previous_digest.unwrap_or(&dummy).as_slice()) & has_previous;
             let hit = (current | previous) & !found;
             let position = u32::try_from(position).unwrap_or(u32::MAX);
             index = u32::conditional_select(&index, &position, hit);
@@ -457,17 +454,14 @@ impl ResolvedAuthConfig {
             self.runtime
                 .note_used(key.principal().storage_form(), now.timestamp());
         }
+        let (current, previous) = key.accepted_digests();
         Some((
             Self::client_of(key),
             Some(NamedApiKey {
                 name: key.name.clone(),
                 personal: key.personal,
                 matched_previous_digest: via_previous,
-                digest_tag: super::digest_tag_of(if via_previous {
-                    &key.previous.as_ref()?.digest
-                } else {
-                    &key.digest
-                }),
+                digest_tag: super::digest_tag_of(if via_previous { previous? } else { current }),
             }),
         ))
     }
@@ -678,10 +672,11 @@ fn secret_still_valid(
     tag: &str,
     in_grace: impl Fn(chrono::DateTime<chrono::Utc>) -> bool,
 ) -> bool {
+    let (current, previous) = key.accepted_digests();
     super::tag_still_valid(
         tag,
-        Some(&key.digest),
-        key.previous.as_ref().map(|p| (&p.digest, p.expires_at)),
+        Some(current),
+        previous.zip(key.previous.as_ref().map(|p| p.expires_at)),
         in_grace,
     )
 }

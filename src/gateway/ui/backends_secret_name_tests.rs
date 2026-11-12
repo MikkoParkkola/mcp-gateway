@@ -150,7 +150,7 @@ async fn t18_a_json_number_in_a_tool_result_survives() {
 /// a part must equal a listed word, never contain it) are not credentials.
 #[test]
 fn t19_the_credential_name_rule_name_by_name() {
-    use crate::gateway::ui::secret_slots::names_a_credential;
+    use crate::config::secret_values::names_a_credential;
     let stored = [
         "API_KEY",
         "OPENAI_API_KEY",
@@ -255,7 +255,7 @@ async fn t20_a_credential_named_value_too_short_to_redact_stays_text() {
 /// stays text, at it the value is stored.
 #[test]
 fn t21_the_store_bound_is_the_redactors_short_value_bound() {
-    use crate::gateway::ui::secret_slots::stores_env_value;
+    use crate::config::secret_values::stores_env_value;
     let bound = crate::security::needles::SHORT_VALUE_BYTES;
     let under: String = "0123456789abcdef".chars().take(bound - 1).collect();
     let at: String = "0123456789abcdef".chars().take(bound).collect();

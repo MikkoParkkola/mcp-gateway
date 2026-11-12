@@ -171,7 +171,8 @@ mcp-gateway add tavily                                       # known server, wri
 mcp-gateway add notion                                       # hosted server, logs in with OAuth
 mcp-gateway add my-server -- npx -y @some/mcp-server --flag  # arbitrary stdio command
 mcp-gateway add --url https://mcp.example.com/mcp my-server  # HTTP server
-mcp-gateway add -e API_KEY=xxx my-server -- npx my-mcp-server
+export MY_TOKEN=...   # values never go on the command line
+mcp-gateway add -e MY_TOKEN my-server -- npx my-mcp-server
 ```
 
 The registry is a library. `mcp-gateway init` turns on the servers that need no account (memory,
@@ -385,6 +386,7 @@ mcp-gateway puts every backend tool description behind one audit surface and def
 Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gateway.md](docs/blog/security-aware-mcp-gateway.md).
 
 - **OWASP Agentic AI Top 10 (self-assessed).** Controls are mapped across all 10 ASI risks at the gateway boundary in-tree. That is not a certification. Hardening follow-ups are tracked separately for SBOMs, release signing, live remote attestation discovery, multi-gateway signing, SQL-sink defaults, and collusion detection. See [docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md).
+- **Privacy.** No telemetry, analytics, crash reports or update checks. Every place the gateway can connect to, and where it keeps secrets, is listed in [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ### Recent additions
 

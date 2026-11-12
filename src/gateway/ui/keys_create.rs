@@ -440,7 +440,7 @@ fn variant_of(error: &ReplaceError) -> &'static str {
         ReplaceError::Unsupported(_) => "unsupported",
         ReplaceError::Stage(_) => "stage",
         ReplaceError::Write(_) => "write",
-        ReplaceError::ReloadRefused(_) => "reload_refused",
+        ReplaceError::ReloadRefused { .. } => "reload_refused",
         ReplaceError::RollbackFailed { .. } => "rollback_failed",
         ReplaceError::Unconfirmed { .. } => "unconfirmed",
         ReplaceError::Failed(_) => "failed",
@@ -473,7 +473,7 @@ fn refused_write(
             StatusCode::SERVICE_UNAVAILABLE,
             "the config is being written; retry",
         ),
-        (None, Err(ReplaceError::ReloadRefused(_))) => {
+        (None, Err(ReplaceError::ReloadRefused { .. })) => {
             fixed(StatusCode::CONFLICT, "reload_refused")
         }
         (None, Err(ReplaceError::AuditRefused(_) | ReplaceError::NoAuditLog)) => {

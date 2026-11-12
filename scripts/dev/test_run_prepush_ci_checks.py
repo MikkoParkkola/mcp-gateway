@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -951,6 +952,55 @@ class Step(unittest.TestCase):
             )
         finally:
             f.close()
+
+
+class Scratch(unittest.TestCase):
+    """The scratch directory keeps only `logs/`: every clone is a full checkout,
+    and a failing push otherwise leaves gigabytes behind per run."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmpdir = pathlib.Path(self._tmp.name)
+        self._patch = mock.patch.object(tempfile, "tempdir", str(self.tmpdir))
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        self._tmp.cleanup()
+
+    def scratch_dirs(self):
+        return list(self.tmpdir.glob("prepush-ci-*"))
+
+    def test_s1_a_failure_with_a_base_rerun_keeps_only_the_logs(self):
+        f = Fixture(base={"chk.py": "raise SystemExit(1)"}, head={"chk.py": "raise SystemExit(1)"})
+        try:
+            report = f.run([line(f"{PY} chk.py"), line(py("pass"))])
+        finally:
+            f.close()
+        self.assertIn("PRE-EXISTING ON MERGE-BASE", report.text, "the base rerun cloned base and head")
+        [scratch] = self.scratch_dirs()
+        self.assertEqual([p.name for p in scratch.iterdir()], ["logs"])
+        self.assertTrue(report.failures[0].log.exists(), "the failing line's log is kept")
+        self.assertIn(str(scratch), report.text)
+
+    def test_s2_a_pass_leaves_no_scratch(self):
+        f = Fixture()
+        try:
+            self.assertEqual(f.run([line(py("pass"))]).rc, 0)
+        finally:
+            f.close()
+        self.assertEqual(self.scratch_dirs(), [])
+
+    def test_s3_a_raising_base_rerun_still_drops_the_clones(self):
+        f = Fixture(head={"chk.py": "raise SystemExit(1)"})
+        try:
+            with mock.patch.object(runner, "_base_rerun", side_effect=RuntimeError("boom")):
+                with self.assertRaises(RuntimeError):
+                    f.run([line(f"{PY} chk.py")])
+        finally:
+            f.close()
+        [scratch] = self.scratch_dirs()
+        self.assertEqual([p.name for p in scratch.iterdir()], ["logs"])
 
 
 def alive(pid):

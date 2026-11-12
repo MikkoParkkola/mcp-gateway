@@ -7,6 +7,8 @@
 //! the selection into the gateway config, and optionally writes the gateway
 //! URL back into each client config.
 
+use crate::cli::stdout::{print, println};
+
 use std::collections::HashMap;
 use std::io::{self, IsTerminal};
 use std::path::Path;
@@ -15,7 +17,7 @@ use std::process::ExitCode;
 use super::config_write::CommentLoss;
 #[cfg(feature = "config-export")]
 use mcp_gateway::cli::{ConnectionMode, ExportTarget};
-use mcp_gateway::cli_support::shown;
+use mcp_gateway::cli_support::{shown, store_backend_literals};
 #[cfg(test)]
 use mcp_gateway::gateway::test_helpers::write_config_fixture;
 use mcp_gateway::security::sanitize::redact_url_for_diagnostics;
@@ -310,11 +312,27 @@ fn import_servers(
         }
     }
     let mut added = 0;
-    super::config_write::write(output, mode, |config| {
+    let mut store_step = None;
+    let written = super::config_write::write(output, mode, |config| {
+        let before: std::collections::HashSet<String> = config.backends.keys().cloned().collect();
         added = merge_servers_into_config(config, selected)?;
+        // The imported servers' literals the shared rule stores go to the
+        // secret store in one save, inside this hold; a value shaped like a
+        // reference stays a reference (ADR-028 B3, checked by the merge).
+        let names: Vec<String> = config
+            .backends
+            .keys()
+            .filter(|name| !before.contains(*name))
+            .cloned()
+            .collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        store_step = Some(store_backend_literals(output, config, &names, &[])?);
         Ok(())
-    })
-    .map_err(|e| {
+    });
+    if let Some((adoption, _)) = store_step {
+        adoption.settle(&written);
+    }
+    written.map_err(|e| {
         // The message can name a client's server and keys: escaped once,
         // here, where it is printed.
         eprintln!("Error: {}", shown(&e));
@@ -496,6 +514,58 @@ mod tests {
         let mut names: Vec<_> = config.backends.keys().map(String::as_str).collect();
         names.sort_unstable();
         assert_eq!(names, ["a", "tavily", "x"]);
+    }
+
+    /// CLIADD.5 (S1, S2): the import stores a credential-named literal in
+    /// the secret store and writes its reference; an ordinary setting
+    /// (`DEBUG=1`) is written as given. The files store is pinned.
+    #[test]
+    fn s1_setup_import_stores_a_credential_literal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, "secrets:\n  store: files\n")
+            .expect("write");
+        let mut server = make_stdio_server("tool", DiscoverySource::ClaudeDesktop);
+        server.env = [
+            ("API_KEY".to_string(), "sk-live-0123456789".to_string()),
+            ("DEBUG".to_string(), "1".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let added = import_servers(&path, CommentLoss::Refuse, &[&server]).expect("imported");
+
+        assert_eq!(added, 1);
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(!text.contains("sk-live-0123456789"), "{text}");
+        let config = Config::load_literal(Some(&path)).expect("loads");
+        let env = &config.backends["tool"].env;
+        assert_eq!(env["DEBUG"], "1");
+        let written = &env["API_KEY"];
+        assert!(written.starts_with("file:"), "{written}");
+        let stored = std::fs::read_to_string(written.trim_start_matches("file:")).expect("entry");
+        assert_eq!(stored.trim_end(), "sk-live-0123456789");
+    }
+
+    /// CLIADD.5 (S3, code review r1): an imported value the shared rule
+    /// refuses (a literal default) fails the import; the file is unchanged.
+    #[test]
+    fn s3_setup_refuses_a_literal_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        let before = "secrets:\n  store: files\n";
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, before).expect("write");
+        let mut server = make_stdio_server("tool", DiscoverySource::ClaudeDesktop);
+        server.env = [(
+            "API_KEY".to_string(),
+            "${MISSING:-sk-live-0123456789}".to_string(),
+        )]
+        .into_iter()
+        .collect();
+
+        assert!(import_servers(&path, CommentLoss::Refuse, &[&server]).is_err());
+
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), before);
     }
 
     #[test]

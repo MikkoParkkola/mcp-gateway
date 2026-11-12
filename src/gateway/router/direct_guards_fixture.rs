@@ -366,6 +366,8 @@ thread_local! {
     /// Calls per window the call budget allows; 0 leaves the budget off (MIK-8362).
     static BUDGET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static RELAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Relay detection keeps every k-gram in the next fixture built here.
+    static EVERY_KGRAM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static META_FIREWALL: std::cell::RefCell<Option<Arc<crate::security::firewall::Firewall>>> =
         const { std::cell::RefCell::new(None) };
     static AUDIT_LOG: std::cell::RefCell<Option<std::path::PathBuf>> =
@@ -461,6 +463,10 @@ async fn fixture_inner(
     #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
     build: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fx {
+    // Taken before the first await, so no other fixture on this thread can
+    // take a flag set for this one (`keep_every_kgram_next`).
+    #[cfg(feature = "firewall")]
+    let every = EVERY_KGRAM.with(|e| e.replace(false));
     let (mut state, store) = fixture_state().await;
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
@@ -534,15 +540,18 @@ async fn fixture_inner(
             },
             ..FirewallConfig::default()
         };
-        let firewall = Arc::new(
+        // A row whose verdict must not depend on the per-process hash key keeps
+        // every k-gram instead of the keyed sample (`keep_every_kgram_next`).
+        let keyed = |fw: Firewall| if every { fw.keeping_every_kgram() } else { fw };
+        let firewall = Arc::new(keyed(
             Firewall::from_config(config.clone(), tracker.clone())
                 .with_continuations(meta.continuation()),
-        );
+        ));
         super::firewall_publish_fixture::publish_firewall(state_mut, &firewall);
         state_mut.firewall = Some(firewall);
-        let meta_firewall = Arc::new(
+        let meta_firewall = Arc::new(keyed(
             Firewall::from_config(config, tracker).with_continuations(meta.continuation()),
-        );
+        ));
         META_FIREWALL.with(|f| *f.borrow_mut() = Some(Arc::clone(&meta_firewall)));
         meta.set_firewall(Some(meta_firewall));
     }
@@ -585,4 +594,14 @@ pub(crate) fn reload_for_test(
         state.backends.remove(name);
         assert!(state.backends.register(backend), "reload registration");
     }
+}
+
+/// The next fixture built on this thread (a thread-local flag, like `RELAY`,
+/// taken at the fixture's first line) keeps every k-gram for relay
+/// detection, so a relay row's verdict does not depend on the per-process hash
+/// key: with the keyed 1-in-4 sample, a short text is missed for a small,
+/// documented share of keys.
+#[cfg(feature = "firewall")]
+pub(crate) fn keep_every_kgram_next() {
+    EVERY_KGRAM.with(|e| e.set(true));
 }

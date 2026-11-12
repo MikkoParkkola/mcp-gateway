@@ -587,6 +587,8 @@ async fn a_queued_task_is_not_judged_by_the_startup_rules() {
     );
 }
 
+#[path = "allow_attribution_tests.rs"]
+mod allow_attribution;
 #[path = "mtls_rule_id_record_tests.rs"]
 mod mtls_rule_ids;
 /// The rule each recording site names (keyed rule ids).
@@ -594,3 +596,6 @@ mod mtls_rule_ids;
 mod rule_ids;
 #[path = "stored_refusal_record_tests.rs"]
 mod stored_refusals;
+/// API2.10 R0: one `transport_finalized` record per `tasks/get` read.
+#[path = "task_one_record_tests.rs"]
+mod task_one_record;

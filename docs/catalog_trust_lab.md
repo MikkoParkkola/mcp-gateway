@@ -222,6 +222,6 @@ Focused validation:
 
 ```bash
 cargo test trust::lab::tests -- --nocapture
-cargo test lab_execute_active_fixtures --bin mcp-gateway -- --nocapture
-cargo test commands::trust::tests --bin mcp-gateway -- --nocapture
+cargo test lab_execute_active_fixtures --lib -- --nocapture
+cargo test commands::trust::tests --lib -- --nocapture
 ```

@@ -88,12 +88,17 @@ fn token(group: &str) -> crate::key_server::TemporaryToken {
 async fn gateway() -> (Arc<AppState>, Vec<(&'static str, String)>, impl Sized) {
     let key_server = Arc::new(crate::key_server::KeyServer::new(
         crate::config::KeyServerConfig::default(),
+        crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
     let mut bearers = Vec::new();
     for group in ["g-admin", "g-auditor", "g-developer"] {
         let t = token(group);
         bearers.push((group, t.token.clone()));
-        key_server.store.insert(t).await;
+        crate::key_server::store::activate_for_test(
+            key_server.store.as_ref(),
+            key_server.config.token_ttl_secs,
+            t,
+        );
     }
     let auth = auth(&SCOPE, &SCOPE);
     let (state, dir) =

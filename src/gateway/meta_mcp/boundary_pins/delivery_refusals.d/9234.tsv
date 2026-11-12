@@ -1,0 +1,8 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/config_reload/reload_context.rs	reload_transaction	before_apply_refusal	1	feeds	the reload refusals gateway_reload_config answers, as the rows inside it say
+src/config_reload/reload_context_refusals.rs	before_apply_refusal	refuse_capability_name_clash	1	no-record	config reload
+src/config_reload/reload_context_refusals.rs	before_apply_refusal	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
+src/config_reload/reload_context_refusals.rs	before_apply_refusal	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
+src/config_reload/replace_validate.rs	refuse_candidate	before_apply_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
+src/config_reload/ui_diff.rs	validate	validate_refusal	1	no-record	config write: candidate validation refuses before applying changes; no call delivery
+src/gateway/ui/settings.rs	answer	config_refusal	1	no-record	admin UI settings: the config writer guarded read refused gateway.yaml, fixed text, no call delivery

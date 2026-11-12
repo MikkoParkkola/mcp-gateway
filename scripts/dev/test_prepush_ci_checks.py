@@ -36,11 +36,9 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/check-codeql-ignore.py", ()): "cargo: runs cargo metadata/build; Spark only",
     ("scripts/ci/check-reads-token.py", ()): "cargo: builds the library with the read-token probe; Spark only",
     ("scripts/ci/check_docker_hub_pulls.py", ()): "network: queries Docker Hub",
-    ("scripts/ci/check_needs.py", ("macos-shards",)): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
+    ("scripts/ci/check_needs.py", ("$ROLLUP_EXPECTS",)): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
+    ("scripts/ci/check_needs.py", ("${skippable[@]}", "$ROLLUP_EXPECTS")): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
     ("scripts/ci/job_time_watch.py", ("macos-shards",)): "ci-env: reads this run's jobs from the Actions API (GITHUB_RUN_ID, actions: read)",
-    ("scripts/ci/check_needs.py", ("test-shards",)): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
-    ("scripts/ci/check_needs.py", ("windows-shards", "windows-clippy")): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
-    ("scripts/ci/check_needs.py", ("${skippable[@]}", "scope", "windows-shards", "windows-clippy", "windows-check", "release-script-tests", "task-sdk-recovery", "gws-dry-run", "linux-keychain", "kani", "upgrade-rehearsal", "feature-combos-pr")): "ci-env: reads NEEDS from ${{ toJSON(needs) }} (heavy-gate)",
     ("scripts/ci/shard_tests.py", ("run", "linux", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/ci/shard_tests.py", ("run", "macos", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/ci/shard_tests.py", ("export-lib", "<TMP>/lib-bin")): "cargo: builds the macOS lib test binary",
@@ -136,7 +134,7 @@ RUST_TARGETS = frozenset({
     "e2e_quickstart_minimal_config", "kubernetes_manifest_tests", "mik_5226_acs", "mik_6550_roadmap",
     "mik_6556_trust_cbom", "mik_6977_acs", "mik_7272_conformance", "mik_8783_cli_help",
     "mik_8783_docs", "mik_8783_upgrade_retired_settings", "public_claims_validation",
-    "registry_doc_counts", "shadow_scan_docs", "stdio_tests", "team_deployment_guide_claims",
+    "registry_doc_counts", "shadow_scan_docs", "team_deployment_guide_claims",
     "upgrading_summary_rows", "webui_management_tests",
 })
 UNTRANSLATED = re.compile(r"\$\{\{|\$\{?RUNNER_")

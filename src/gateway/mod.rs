@@ -400,6 +400,29 @@ fn count_plan_replay_skipped<F: std::future::Future>(
     reason: &str,
     measured: F,
 ) -> (F::Output, u64) {
+    count_samples(
+        "mcp_gateway_collusion_plan_replay_skipped_total",
+        reason,
+        measured,
+    )
+}
+
+/// [`count_plan_replay_skipped`] for the relay counter
+/// (`mcp_gateway_collusion_relay_total`), by `reason` (an
+/// untrackable stored read is counted `untrackable`).
+#[cfg(all(test, feature = "metrics", feature = "firewall"))]
+fn count_relay_reason<F: std::future::Future>(reason: &str, measured: F) -> (F::Output, u64) {
+    count_samples("mcp_gateway_collusion_relay_total", reason, measured)
+}
+
+/// The samples of `metric` with `reason` that `measured` emitted, under a
+/// per-test recorder.
+#[cfg(all(test, feature = "metrics", feature = "firewall"))]
+fn count_samples<F: std::future::Future>(
+    metric: &str,
+    reason: &str,
+    measured: F,
+) -> (F::Output, u64) {
     let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
     let handle = recorder.handle();
     let out = telemetry_metrics::with_local_recorder(&recorder, || {
@@ -408,10 +431,7 @@ fn count_plan_replay_skipped<F: std::future::Future>(
     let count = handle
         .render()
         .lines()
-        .find(|line| {
-            line.starts_with("mcp_gateway_collusion_plan_replay_skipped_total")
-                && line.contains(&format!("reason=\"{reason}\""))
-        })
+        .find(|line| line.starts_with(metric) && line.contains(&format!("reason=\"{reason}\"")))
         .and_then(|line| line.rsplit(' ').next())
         .and_then(|n| n.split('.').next())
         .and_then(|n| n.parse::<u64>().ok())

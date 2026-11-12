@@ -158,7 +158,7 @@ async fn gateway_with_public(rules: &[&str], public: &[&str]) -> Gateway {
         ..KeyServerConfig::default()
     };
     let key_server = crate::key_server::KeyServer {
-        store: Arc::new(crate::key_server::InMemoryTokenStore::new()),
+        store: Arc::new(crate::key_server::InMemoryTokenStore::for_config(&config)),
         oidc: Arc::new(OidcVerifier::with_http_client(
             config.oidc.clone(),
             reqwest::Client::new(),
@@ -167,6 +167,8 @@ async fn gateway_with_public(rules: &[&str], public: &[&str]) -> Gateway {
             config.policies.clone(),
         )),
         config,
+        email_key: crate::key_server::email_hash::EmailHashKey::for_test(),
+        revocation_signals: std::sync::atomic::AtomicU64::new(0),
     };
     let auth = AuthConfig {
         enabled: true,

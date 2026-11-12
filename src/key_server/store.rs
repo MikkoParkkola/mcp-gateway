@@ -27,8 +27,9 @@ use super::oidc::VerifiedIdentity;
 
 /// A temporary gateway token issued after OIDC verification.
 ///
-/// Output only, like the identity it carries: a token is never read back
-/// from bytes.
+/// Never read back from bytes, and never written out: the bearer it holds is
+/// a live credential, and the identity it carries is written to audit
+/// records only in its keyed hash form.
 ///
 /// ```compile_fail,E0277
 /// fn read(bytes: &str) -> mcp_gateway::key_server::TemporaryToken {
@@ -36,14 +37,22 @@ use super::oidc::VerifiedIdentity;
 /// }
 /// ```
 ///
-/// Writing one out compiles:
+/// nor written out:
 ///
-/// ```
+/// ```compile_fail,E0277
 /// fn write(token: &mcp_gateway::key_server::TemporaryToken) -> String {
 ///     serde_json::to_string(token).expect("a token")
 /// }
 /// ```
-#[derive(Clone, Serialize)]
+///
+/// Reading its fields compiles:
+///
+/// ```
+/// fn jti(token: &mcp_gateway::key_server::TemporaryToken) -> &str {
+///     &token.jti
+/// }
+/// ```
+#[derive(Clone)]
 pub struct TemporaryToken {
     /// Unique token identifier (used for revocation).
     pub jti: String,
@@ -58,7 +67,6 @@ pub struct TemporaryToken {
     /// Expires-at (Unix epoch seconds).
     pub exp: u64,
     /// Client IP at issuance (for audit).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub client_ip: Option<IpAddr>,
 }
 
@@ -107,14 +115,136 @@ pub struct TokenScopes {
     pub rate_limit: u32,
 }
 
+/// What a mint asks to reserve: one slot under the identity's cap, for the
+/// token with this JTI. The store sets the pending deadline itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReservationRequest {
+    /// The identity's issuer.
+    pub issuer: String,
+    /// The identity's subject.
+    pub subject: String,
+    /// The JTI the token will carry.
+    pub jti: String,
+}
+
+/// An opaque, unique claim on one pending slot. Not `Clone`: exactly one
+/// owner can activate or abort it.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct ReservationId(u64);
+
+impl ReservationId {
+    /// A fresh id, unique across every store in the process: no two
+    /// reservations, in this store or another, ever share one, and an id
+    /// cannot be rebuilt from a number.
+    #[must_use]
+    pub fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// The id's number, for a store implementation to key its pending map.
+    #[must_use]
+    pub fn raw(&self) -> u64 {
+        self.0
+    }
+}
+
+impl Default for ReservationId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Why a reservation was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReserveError {
+    /// Active plus pending tokens already fill the identity's cap.
+    CapReached,
+    /// A token or reservation already holds this JTI.
+    DuplicateJti,
+    /// The pending deadline overflowed.
+    Clock,
+}
+
+/// Why an activation was refused. The pending slot is released either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivateError {
+    /// No pending reservation holds this id: never issued, already
+    /// activated, or aborted.
+    Missing,
+    /// The reservation was revoked (by JTI or by identity) before activation.
+    Revoked,
+    /// The reservation's deadline passed before activation.
+    Expired,
+    /// The token's issuer, subject or JTI differs from the reservation's.
+    Mismatch,
+    /// The token's `iat` is not `now` or its `exp` is not `now` + the store's
+    /// frozen TTL.
+    Timestamps,
+}
+
 /// Trait abstracting the token storage backend.
 ///
 /// Implementations must be `Send + Sync` because the token store is shared
-/// across async tasks.
+/// across async tasks. A token becomes active only through
+/// [`reserve`](Self::reserve) then [`activate`](Self::activate): there is no
+/// way to insert one past the identity's cap.
+///
+/// There is no `insert`:
+///
+/// ```compile_fail,E0599
+/// fn seed(
+///     store: &dyn mcp_gateway::key_server::TokenStore,
+///     token: mcp_gateway::key_server::TemporaryToken,
+///     request: mcp_gateway::key_server::store::ReservationRequest,
+/// ) {
+///     let _ = (request, store.insert(token));
+/// }
+/// ```
+///
+/// The same function with `reserve` in place of `insert` compiles, so the
+/// block above fails only for the missing method (stable rustdoc does not
+/// check the error code):
+///
+/// ```
+/// fn seed(
+///     store: &dyn mcp_gateway::key_server::TokenStore,
+///     token: mcp_gateway::key_server::TemporaryToken,
+///     request: mcp_gateway::key_server::store::ReservationRequest,
+/// ) {
+///     let _ = (token, store.reserve(request, 0));
+/// }
+/// ```
 #[async_trait::async_trait]
 pub trait TokenStore: Send + Sync + 'static {
-    /// Insert a newly-issued token.
-    async fn insert(&self, token: TemporaryToken);
+    /// Reserve one slot for `request` at `now` (seconds since the epoch) if
+    /// the identity's live active plus pending tokens are under the store's
+    /// frozen cap. Expired pending slots are reaped first. A pending slot is
+    /// invisible to bearer lookup and JTI liveness.
+    ///
+    /// # Errors
+    ///
+    /// [`ReserveError`] naming why no slot was reserved.
+    fn reserve(&self, request: ReservationRequest, now: u64)
+    -> Result<ReservationId, ReserveError>;
+
+    /// Turn the reservation `id` into the active `token`, at `now`: the
+    /// identity and JTI must match the reservation, its deadline must not
+    /// have passed, and the token must run from `now` for the store's frozen
+    /// TTL. On any refusal the pending slot is released.
+    ///
+    /// # Errors
+    ///
+    /// [`ActivateError`] naming why the token was not activated.
+    fn activate(
+        &self,
+        id: &ReservationId,
+        token: TemporaryToken,
+        now: u64,
+    ) -> Result<(), ActivateError>;
+
+    /// Release the pending slot `id`, if it is still pending. Idempotent.
+    fn abort(&self, id: &ReservationId);
 
     /// Look up a token by its opaque bearer value.
     ///
@@ -152,15 +282,96 @@ pub trait TokenStore: Send + Sync + 'static {
 pub struct InMemoryTokenStore {
     by_bearer: DashMap<String, TemporaryToken>,
     by_jti: DashMap<String, String>,
+    /// Pending reservations. Every change to the pending slots or to either
+    /// active index (reserve, activate, abort, revoke, reap, lazy eviction)
+    /// takes this lock first, so active plus pending never passes the cap
+    /// and a revoke cannot miss a token activated while it runs. Nothing
+    /// awaits while it is held.
+    pending: std::sync::Mutex<Pending>,
+    /// The per-identity cap, frozen at construction.
+    cap: usize,
+    /// The token lifetime, frozen at construction.
+    ttl: u64,
+}
+
+/// How long a reservation may stay pending: the mint's audit append must
+/// finish inside it. Separate from the token's lifetime.
+pub const PENDING_WINDOW_SECS: u64 = 30;
+
+#[derive(Default)]
+struct Pending {
+    slots: std::collections::HashMap<u64, Slot>,
+    /// Why a slot left before its owner claimed it (revoked, or reaped past
+    /// its deadline), so `activate` answers the reason. The owner's
+    /// `activate` or `abort` clears the entry.
+    gone: std::collections::HashMap<u64, ActivateError>,
+}
+
+impl Pending {
+    /// Remove the slots `matches` selects, remembering `why`; how many went.
+    fn remove_where(&mut self, why: ActivateError, matches: impl Fn(&Slot) -> bool) -> usize {
+        let ids: Vec<u64> = self
+            .slots
+            .iter()
+            .filter(|(_, slot)| matches(slot))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &ids {
+            self.slots.remove(id);
+            self.gone.insert(*id, why);
+        }
+        ids.len()
+    }
+}
+
+struct Slot {
+    issuer: String,
+    subject: String,
+    jti: String,
+    deadline: u64,
 }
 
 impl InMemoryTokenStore {
-    /// Create an empty token store.
+    /// An empty store whose per-identity cap and token lifetime are frozen:
+    /// no caller can reserve past `cap` or activate a token for longer than
+    /// `ttl_secs`. A cap of 0 refuses every reservation.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(cap: usize, ttl_secs: u64) -> Self {
         Self {
             by_bearer: DashMap::new(),
             by_jti: DashMap::new(),
+            pending: std::sync::Mutex::default(),
+            cap,
+            ttl: ttl_secs,
+        }
+    }
+
+    /// An empty store frozen at `config`'s per-identity cap and token
+    /// lifetime.
+    #[must_use]
+    pub(crate) fn for_config(config: &crate::config::KeyServerConfig) -> Self {
+        Self::new(
+            config.max_tokens_per_identity as usize,
+            config.token_ttl_secs,
+        )
+    }
+
+    fn pending(&self) -> std::sync::MutexGuard<'_, Pending> {
+        // A panic while holding the lock leaves plain data behind: keep going.
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Remove the active token `jti` from both indices. The caller holds
+    /// the pending lock.
+    fn remove_active(&self, jti: &str) -> bool {
+        match self.by_jti.remove(jti) {
+            Some((_, bearer)) => {
+                self.by_bearer.remove(&bearer);
+                true
+            }
+            None => false,
         }
     }
 
@@ -181,19 +392,89 @@ impl InMemoryTokenStore {
     }
 }
 
-impl Default for InMemoryTokenStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[async_trait::async_trait]
 impl TokenStore for InMemoryTokenStore {
-    async fn insert(&self, token: TemporaryToken) {
+    fn reserve(
+        &self,
+        request: ReservationRequest,
+        now: u64,
+    ) -> Result<ReservationId, ReserveError> {
+        let mut pending = self.pending();
+        pending.remove_where(ActivateError::Expired, |slot| slot.deadline <= now);
+        let same =
+            |issuer: &str, subject: &str| issuer == request.issuer && subject == request.subject;
+        let active = self
+            .by_bearer
+            .iter()
+            .filter(|e| {
+                let id = &e.value().identity;
+                same(id.issuer(), id.subject()) && !e.value().is_expired(now)
+            })
+            .count();
+        let reserved = pending
+            .slots
+            .values()
+            .filter(|s| same(&s.issuer, &s.subject))
+            .count();
+        if active + reserved >= self.cap {
+            return Err(ReserveError::CapReached);
+        }
+        if self.by_jti.contains_key(&request.jti)
+            || pending.slots.values().any(|s| s.jti == request.jti)
+        {
+            return Err(ReserveError::DuplicateJti);
+        }
+        let deadline = now
+            .checked_add(PENDING_WINDOW_SECS)
+            .ok_or(ReserveError::Clock)?;
+        let id = ReservationId::new();
+        pending.slots.insert(
+            id.raw(),
+            Slot {
+                issuer: request.issuer,
+                subject: request.subject,
+                jti: request.jti,
+                deadline,
+            },
+        );
+        Ok(id)
+    }
+
+    fn activate(
+        &self,
+        id: &ReservationId,
+        token: TemporaryToken,
+        now: u64,
+    ) -> Result<(), ActivateError> {
+        let mut pending = self.pending();
+        let Some(slot) = pending.slots.remove(&id.0) else {
+            return Err(pending.gone.remove(&id.0).unwrap_or(ActivateError::Missing));
+        };
+        if now >= slot.deadline {
+            return Err(ActivateError::Expired);
+        }
+        if token.identity.issuer() != slot.issuer
+            || token.identity.subject() != slot.subject
+            || token.jti != slot.jti
+        {
+            return Err(ActivateError::Mismatch);
+        }
+        if token.iat != now || Some(token.exp) != now.checked_add(self.ttl) {
+            return Err(ActivateError::Timestamps);
+        }
         let bearer = token.token.clone();
         let jti = token.jti.clone();
         self.by_bearer.insert(bearer.clone(), token);
         self.by_jti.insert(jti, bearer);
+        // The lock is held until the token is in both indices.
+        drop(pending);
+        Ok(())
+    }
+
+    fn abort(&self, id: &ReservationId) {
+        let mut pending = self.pending();
+        pending.slots.remove(&id.0);
+        pending.gone.remove(&id.0);
     }
 
     async fn get(&self, bearer: &str) -> Option<TemporaryToken> {
@@ -205,8 +486,11 @@ impl TokenStore for InMemoryTokenStore {
         if !crate::clock::unix_secs().is_ok_and(|now| !token.is_expired(now)) {
             // Lazy eviction: remove on access, once really past its expiry.
             if token.aged_out() {
-                self.by_bearer.remove(bearer);
-                self.by_jti.remove(&token.jti);
+                {
+                    let _pending = self.pending();
+                    self.by_bearer.remove(bearer);
+                    self.by_jti.remove(&token.jti);
+                }
                 debug!(jti = %token.jti, "Lazy-evicted expired token");
             }
             return None;
@@ -225,29 +509,29 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn revoke_by_jti(&self, jti: &str) -> bool {
-        if let Some((_, bearer)) = self.by_jti.remove(jti) {
-            self.by_bearer.remove(&bearer);
-            true
-        } else {
-            false
-        }
+        // A pending reservation for this JTI is revoked too: it can no
+        // longer become a token.
+        let mut pending = self.pending();
+        let was_pending = pending.remove_where(ActivateError::Revoked, |slot| slot.jti == jti) > 0;
+        self.remove_active(jti) || was_pending
     }
 
     async fn revoke_by_subject(&self, issuer: &str, subject: &str) -> usize {
-        let mut jtis_to_revoke = Vec::new();
-
-        for entry in &self.by_bearer {
-            let identity = &entry.value().identity;
-            if identity.issuer() == issuer && identity.subject() == subject {
-                jtis_to_revoke.push(entry.value().jti.clone());
-            }
-        }
-
-        let count = jtis_to_revoke.len();
-        for jti in jtis_to_revoke {
-            self.revoke_by_jti(&jti).await;
-        }
-        count
+        let mut pending = self.pending();
+        let removed_pending = pending.remove_where(ActivateError::Revoked, |slot| {
+            slot.issuer == issuer && slot.subject == subject
+        });
+        let jtis: Vec<String> = self
+            .by_bearer
+            .iter()
+            .filter(|e| {
+                let identity = &e.value().identity;
+                identity.issuer() == issuer && identity.subject() == subject
+            })
+            .map(|e| e.value().jti.clone())
+            .collect();
+        let removed_active = jtis.iter().filter(|jti| self.remove_active(jti)).count();
+        removed_active + removed_pending
     }
 
     async fn count_for_subject(&self, issuer: &str, subject: &str) -> usize {
@@ -263,22 +547,57 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn reap_expired(&self) -> usize {
+        let pending = self.pending();
         let expired_bearers: Vec<String> = self
             .by_bearer
             .iter()
             .filter(|e| e.value().aged_out())
             .map(|e| e.key().clone())
             .collect();
-
         let count = expired_bearers.len();
-        for bearer in expired_bearers {
-            if let Some((_, token)) = self.by_bearer.remove(&bearer) {
+        let reaped: Vec<String> = expired_bearers
+            .iter()
+            .filter_map(|bearer| self.by_bearer.remove(bearer))
+            .map(|(_, token)| {
                 self.by_jti.remove(&token.jti);
-                debug!(jti = %token.jti, "Reaped expired token");
-            }
+                token.jti
+            })
+            .collect();
+        drop(pending);
+        for jti in reaped {
+            debug!(jti = %jti, "Reaped expired token");
         }
         count
     }
+}
+
+/// Store `token` through the reservation protocol, dated now for `ttl`
+/// seconds (the store's frozen lifetime): the one way test fixtures put a
+/// token in a store.
+#[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test fixtures read the host clock"
+)]
+pub(crate) fn activate_for_test(store: &dyn TokenStore, ttl: u64, mut token: TemporaryToken) {
+    let now = crate::clock::unix_secs().expect("a readable clock");
+    // The fixture's own window is replaced: refuse one that was meant to be
+    // expired rather than silently make it live.
+    assert!(
+        token.exp > now,
+        "an expired fixture token cannot be activated"
+    );
+    let request = ReservationRequest {
+        issuer: token.identity.issuer().to_string(),
+        subject: token.identity.subject().to_string(),
+        jti: token.jti.clone(),
+    };
+    let id = store.reserve(request, now).expect("a slot under the cap");
+    token.iat = now;
+    token.exp = now + ttl;
+    store
+        .activate(&id, token, now)
+        .expect("the reservation activates");
 }
 
 /// Spawn a background task that reaps expired tokens every `interval`.
@@ -309,314 +628,5 @@ pub fn spawn_reaper(
 }
 
 #[cfg(test)]
-mod tests {
-    #![allow(
-        clippy::disallowed_methods,
-        reason = "test code reads the host clock (MIK-8202 AC.14)"
-    )]
-    use super::*;
-    use crate::key_server::oidc::VerifiedIdentity;
-
-    fn make_identity(subject: &str, email: &str) -> VerifiedIdentity {
-        VerifiedIdentity::for_test(
-            subject.to_string(),
-            email.to_string(),
-            None,
-            Vec::new(),
-            "https://accounts.google.com".to_string(),
-        )
-    }
-
-    fn make_token(subject: &str, email: &str, exp_offset_secs: i64) -> TemporaryToken {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        #[allow(clippy::cast_sign_loss)]
-        let exp = if exp_offset_secs >= 0 {
-            now + exp_offset_secs as u64
-        } else {
-            now.saturating_sub((-exp_offset_secs) as u64)
-        };
-
-        TemporaryToken {
-            jti: InMemoryTokenStore::generate_jti(),
-            token: InMemoryTokenStore::generate_bearer(),
-            identity: make_identity(subject, email),
-            scopes: TokenScopes {
-                backends: vec!["tavily".to_string()],
-                tools: Vec::new(),
-                rate_limit: 100,
-            },
-            iat: now,
-            exp,
-            client_ip: None,
-        }
-    }
-
-    #[test]
-    fn debug_output_redacts_bearer_value() {
-        // CWE-532 / MIK-6733 sibling: {:?} must never leak the live bearer.
-        let token = make_token("user-1", "u1@test.local", 3600);
-        let raw = token.token.clone();
-        let dbg = format!("{token:?}");
-        assert!(!dbg.contains(&raw), "Debug leaked the bearer value: {dbg}");
-        assert!(
-            dbg.contains("<redacted>"),
-            "expected redaction marker: {dbg}"
-        );
-        assert!(dbg.contains(&token.jti), "jti stays visible for revocation");
-    }
-
-    #[tokio::test]
-    async fn insert_and_get_valid_token() {
-        // GIVEN: a token store with one valid token
-        let store = InMemoryTokenStore::new();
-        let token = make_token("sub123", "alice@company.com", 3600);
-        let bearer = token.token.clone();
-
-        // WHEN: we insert then look it up by bearer
-        store.insert(token).await;
-        let found = store.get(&bearer).await;
-
-        // THEN: the token is returned
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().identity.email(), "alice@company.com");
-    }
-
-    #[tokio::test]
-    async fn get_returns_none_for_unknown_token() {
-        // GIVEN: an empty token store
-        let store = InMemoryTokenStore::new();
-
-        // WHEN: we look up a non-existent bearer
-        let found = store.get("mcpgw_nonexistent").await;
-
-        // THEN: None is returned
-        assert!(found.is_none());
-    }
-
-    #[tokio::test]
-    async fn get_lazy_evicts_expired_token() {
-        // GIVEN: a store with an already-expired token (exp = 1 second ago)
-        let store = InMemoryTokenStore::new();
-        let token = make_token("sub123", "alice@company.com", -1);
-        let bearer = token.token.clone();
-
-        store.insert(token).await;
-
-        // WHEN: we try to retrieve it
-        let found = store.get(&bearer).await;
-
-        // THEN: it is evicted and None is returned
-        assert!(found.is_none());
-        // Both indices cleaned up
-        assert_eq!(store.by_bearer.len(), 0);
-        assert_eq!(store.by_jti.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn revoke_by_jti_removes_token() {
-        // GIVEN: a store with one valid token
-        let store = InMemoryTokenStore::new();
-        let token = make_token("sub123", "alice@company.com", 3600);
-        let jti = token.jti.clone();
-        let bearer = token.token.clone();
-        store.insert(token).await;
-
-        // WHEN: we revoke by JTI
-        let removed = store.revoke_by_jti(&jti).await;
-
-        // THEN: returns true and token is gone
-        assert!(removed);
-        assert!(store.get(&bearer).await.is_none());
-        assert_eq!(store.by_jti.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn revoke_by_jti_returns_false_for_unknown() {
-        // GIVEN: empty store
-        let store = InMemoryTokenStore::new();
-
-        // WHEN: revoke non-existent JTI
-        let removed = store.revoke_by_jti("nonexistent-jti").await;
-
-        // THEN: returns false
-        assert!(!removed);
-    }
-
-    #[tokio::test]
-    async fn revoke_by_subject_removes_all_tokens() {
-        // GIVEN: two tokens for alice, one for bob
-        let store = InMemoryTokenStore::new();
-        let t1 = make_token("alice-sub", "alice@company.com", 3600);
-        let t2 = make_token("alice-sub", "alice@company.com", 3600);
-        let t3 = make_token("bob-sub", "bob@company.com", 3600);
-
-        store.insert(t1).await;
-        store.insert(t2).await;
-        store.insert(t3).await;
-
-        // WHEN: revoke all for alice
-        let count = store
-            .revoke_by_subject("https://accounts.google.com", "alice-sub")
-            .await;
-
-        // THEN: 2 removed, bob's token untouched
-        assert_eq!(count, 2);
-        assert_eq!(store.by_bearer.len(), 1); // bob's token remains
-    }
-
-    #[tokio::test]
-    async fn count_for_subject_counts_active_tokens() {
-        // GIVEN: two valid + one expired token for the same subject
-        let store = InMemoryTokenStore::new();
-        let t1 = make_token("alice-sub", "alice@company.com", 3600);
-        let t2 = make_token("alice-sub", "alice@company.com", 3600);
-        let t_expired = make_token("alice-sub", "alice@company.com", -1);
-
-        store.insert(t1).await;
-        store.insert(t2).await;
-        store.insert(t_expired).await;
-
-        // WHEN: count active tokens for alice
-        let count = store
-            .count_for_subject("https://accounts.google.com", "alice-sub")
-            .await;
-
-        // THEN: only 2 active tokens (expired one not counted)
-        assert_eq!(count, 2);
-    }
-
-    #[tokio::test]
-    async fn revoke_and_count_are_scoped_to_issuer() {
-        // GIVEN: sub "123" at two issuers
-        let store = InMemoryTokenStore::new();
-        let at_a = make_token("123", "", 3600);
-        let mut at_b = make_token("123", "", 3600);
-        at_b.identity = at_b.identity.clone().with_issuer("https://idp-b.example");
-        let bearer_b = at_b.token.clone();
-        store.insert(at_a).await;
-        store.insert(at_b).await;
-
-        // THEN: each issuer counts and revokes only its own identity
-        assert_eq!(
-            store
-                .count_for_subject("https://idp-b.example", "123")
-                .await,
-            1
-        );
-        assert_eq!(
-            store
-                .revoke_by_subject("https://accounts.google.com", "123")
-                .await,
-            1
-        );
-        assert!(store.get(&bearer_b).await.is_some());
-    }
-
-    #[tokio::test]
-    async fn reap_expired_removes_only_expired() {
-        // GIVEN: one valid + two expired tokens
-        let store = InMemoryTokenStore::new();
-        let valid = make_token("sub1", "alice@company.com", 3600);
-        let expired1 = make_token("sub2", "bob@company.com", -1);
-        let expired2 = make_token("sub3", "carol@company.com", -10);
-
-        store.insert(valid).await;
-        store.insert(expired1).await;
-        store.insert(expired2).await;
-
-        // WHEN: reap expired
-        let reaped = store.reap_expired().await;
-
-        // THEN: 2 removed, 1 remains
-        assert_eq!(reaped, 2);
-        assert_eq!(store.by_bearer.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn generate_bearer_has_correct_prefix() {
-        // GIVEN/WHEN: generate a bearer token
-        let bearer = InMemoryTokenStore::generate_bearer();
-
-        // THEN: it starts with the required prefix
-        assert!(bearer.starts_with("mcpgw_"));
-        // And has 256 bits of entropy (32 bytes = 43 base64url chars)
-        assert!(bearer.len() > 40);
-    }
-
-    #[test]
-    fn is_expired_returns_true_for_past_exp() {
-        // GIVEN: token with exp in the past
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let token = TemporaryToken {
-            jti: "test".to_string(),
-            token: "mcpgw_test".to_string(),
-            identity: make_identity("sub", "test@example.com"),
-            scopes: TokenScopes::default(),
-            iat: now - 7200,
-            exp: now - 1,
-            client_ip: None,
-        };
-
-        // THEN: is_expired returns true
-        assert!(token.is_expired(now));
-    }
-
-    #[test]
-    fn is_expired_returns_false_for_future_exp() {
-        // GIVEN: token with exp in the future
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let token = TemporaryToken {
-            jti: "test".to_string(),
-            token: "mcpgw_test".to_string(),
-            identity: make_identity("sub", "test@example.com"),
-            scopes: TokenScopes::default(),
-            iat: now,
-            exp: now + 3600,
-            client_ip: None,
-        };
-
-        // THEN: is_expired returns false
-        assert!(!token.is_expired(now));
-    }
-
-    /// MIK-8202: a clock that reads before 1970 refuses a bearer token the
-    /// real clock still admits; it never reads an expiry as still ahead.
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_clock_before_the_epoch_refuses_a_live_bearer_token() {
-        let store = InMemoryTokenStore::new();
-        let token = make_token("sub", "alice@company.com", 3600);
-        let bearer = token.token.clone();
-        store.insert(token).await;
-        assert!(
-            store.get(&bearer).await.is_some(),
-            "control: live on the real clock"
-        );
-
-        {
-            let _clock = crate::clock::test_clock::before_epoch();
-            assert!(
-                store.get(&bearer).await.is_none(),
-                "an unreadable clock admitted a bearer token"
-            );
-            assert_eq!(
-                store.reap_expired().await,
-                0,
-                "an unreadable clock reaped a token"
-            );
-        }
-        assert!(
-            store.get(&bearer).await.is_some(),
-            "a refusal on an unreadable clock deleted the token for good"
-        );
-    }
-}
+#[path = "store_tests.rs"]
+mod tests;

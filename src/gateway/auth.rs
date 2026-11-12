@@ -34,7 +34,9 @@ mod api_key;
 pub use api_key::ResolvedApiKey;
 #[cfg(test)]
 pub(crate) use api_key::secret_tag;
-pub(crate) use api_key::{PreviousDigest, digest_tag_of, refuse_shared_digests, tag_still_valid};
+pub(crate) use api_key::{
+    PreviousDigest, digest_tag_of, presented_digest, refuse_shared_digests, tag_still_valid,
+};
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;

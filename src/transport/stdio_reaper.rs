@@ -33,6 +33,10 @@ pub(super) enum StopKind {
 /// waits: the reap deadline, plus the margin the close waits beyond it.
 pub(crate) const KILL_RESERVE: Duration = Duration::from_secs(REAP_DEADLINE.as_secs() + 1);
 
+/// After a hurry, backends get SIGTERM about 100 ms before their kill, so a
+/// nested gateway still sees SIGTERM and can hurry its own backends.
+pub(crate) const HURRY_WINDOW: Duration = Duration::from_millis(300);
+
 /// A close with no stop deadline from its caller gets this budget.
 const DEFAULT_STOP_BUDGET: Duration = Duration::from_secs(10);
 
@@ -47,11 +51,13 @@ tokio::task_local! {
 /// Run `stop` (a transport's close) under the caller's stop deadline: a
 /// graceful stop splits what is left of it into its waits and the kill, so
 /// it ends by then.
-pub(crate) async fn within_stop_deadline<F: std::future::Future>(
+/// A plain function, not an `async fn`: an `async fn` would hold `stop` twice
+/// (the argument beside the task-local future that owns it).
+pub(crate) fn within_stop_deadline<F: std::future::Future>(
     deadline: tokio::time::Instant,
     stop: F,
-) -> F::Output {
-    STOP_DEADLINE.scope(deadline, stop).await
+) -> impl std::future::Future<Output = F::Output> {
+    STOP_DEADLINE.scope(deadline, stop)
 }
 
 /// A gateway's stop deadline, shared with every tree its backends hand over,
@@ -59,6 +65,8 @@ pub(crate) async fn within_stop_deadline<F: std::future::Future>(
 /// end by then too. Unset until the stop; after that it only moves earlier.
 #[derive(Debug)]
 pub(crate) struct StopDeadline {
+    /// Keep a useful SIGTERM phase even after hurry setup consumes a few ms.
+    hurried: std::sync::atomic::AtomicBool,
     /// Nanoseconds after [`STOP_EPOCH`]; `u64::MAX` while unset.
     at: std::sync::atomic::AtomicU64,
     /// Every graceful handover under this deadline, so the stop can wait for
@@ -72,6 +80,7 @@ static STOP_EPOCH: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Insta
 impl Default for StopDeadline {
     fn default() -> Self {
         Self {
+            hurried: std::sync::atomic::AtomicBool::new(false),
             at: std::sync::atomic::AtomicU64::new(u64::MAX),
             handed: parking_lot::Mutex::default(),
         }
@@ -79,6 +88,30 @@ impl Default for StopDeadline {
 }
 
 impl StopDeadline {
+    /// Whether a signal has shortened this stop's graceful waits.
+    pub(crate) fn is_hurried(&self) -> bool {
+        self.hurried.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Shorten the stop while reserving a minimum SIGTERM phase when it fits.
+    pub(crate) fn hurry(&self, now: Instant) -> Instant {
+        self.hurried
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let target = now + KILL_RESERVE + HURRY_WINDOW;
+        self.move_earlier(target);
+        self.get().unwrap_or(target)
+    }
+
+    /// Ordinary stops keep their last third; a hurry keeps at least the
+    /// minimum phase if it fits, without moving the kill later.
+    pub(super) fn term_phase(&self, waits: Duration) -> Duration {
+        if self.hurried.load(std::sync::atomic::Ordering::SeqCst) && waits >= MIN_PHASE {
+            (waits / 3).max(MIN_PHASE)
+        } else {
+            waits / 3
+        }
+    }
+
     /// Set the deadline, or move it earlier; a later one changes nothing, so
     /// a second stop can shorten a first one's waits, never extend them.
     pub(crate) fn move_earlier(&self, deadline: Instant) {
@@ -146,11 +179,16 @@ pub(crate) fn stop_deadline() -> Option<tokio::time::Instant> {
 /// kill, a third of the rest goes to the wait after SIGTERM and the remainder
 /// to the wait after EOF. Stdin that could not be closed (a writer holds it)
 /// gets no EOF wait, since the child never saw EOF. Windows has no SIGTERM.
-pub(super) fn graceful_ending(budget: Duration, stdin_closed: bool) -> Ending {
+/// A hurried deadline keeps at least `MIN_PHASE` for SIGTERM when it fits.
+pub(super) fn graceful_ending(
+    budget: Duration,
+    stdin_closed: bool,
+    deadline: Option<&StopDeadline>,
+) -> Ending {
     let waits = budget.saturating_sub(KILL_RESERVE);
     let (eof, term) = match (cfg!(unix), stdin_closed) {
         (true, true) => {
-            let term = waits / 3;
+            let term = deadline.map_or(waits / 3, |deadline| deadline.term_phase(waits));
             (waits.saturating_sub(term), term)
         }
         (true, false) => (Duration::ZERO, waits),
@@ -403,7 +441,11 @@ impl super::StdioTransport {
     fn hand_over_gracefully_now(&self, budget: Duration) {
         self.connected
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        let ending = graceful_ending(budget, self.close_stdin_now());
+        let ending = graceful_ending(
+            budget,
+            self.close_stdin_now(),
+            self.stop_deadline.get().map(AsRef::as_ref),
+        );
         {
             let mut slot = self.child.lock();
             slot.retired = true;
@@ -530,7 +572,11 @@ impl super::StdioTransport {
         // the tree unended.
         self.shutdown.lock().cancel();
         let ending = match kind {
-            StopKind::Graceful => graceful_ending(stop_budget(), stdin_closed),
+            StopKind::Graceful => graceful_ending(
+                stop_budget(),
+                stdin_closed,
+                self.stop_deadline.get().map(AsRef::as_ref),
+            ),
             StopKind::Dead => Ending::Now,
         };
         self.end_tree_with(ending).await;
@@ -634,7 +680,7 @@ mod plan_tests {
         ];
         for (caller, budget) in callers {
             for stdin_closed in [true, false] {
-                let ending = graceful_ending(budget, stdin_closed);
+                let ending = graceful_ending(budget, stdin_closed, None);
                 assert!(
                     ending == Ending::Now || total(ending) <= budget,
                     "{caller}: plan {ending:?} exceeds its budget {budget:?}"
@@ -650,7 +696,7 @@ mod plan_tests {
         // margin) leaves 24 s: a third of it after SIGTERM.
         let waits = Duration::from_secs(24);
         assert_eq!(
-            graceful_ending(Duration::from_secs(30), true),
+            graceful_ending(Duration::from_secs(30), true, None),
             Ending::Graceful {
                 eof: waits
                     .checked_sub(waits / 3)
@@ -660,7 +706,7 @@ mod plan_tests {
         );
         // Stdin a writer still holds: no EOF wait, SIGTERM at once.
         assert_eq!(
-            graceful_ending(Duration::from_secs(10), false),
+            graceful_ending(Duration::from_secs(10), false, None),
             Ending::Graceful {
                 eof: Duration::ZERO,
                 term: Duration::from_secs(4),
@@ -670,12 +716,34 @@ mod plan_tests {
 
     #[test]
     fn a_budget_at_or_under_the_reserve_kills_at_once() {
-        assert_eq!(graceful_ending(KILL_RESERVE, true), Ending::Now);
-        assert_eq!(graceful_ending(Duration::ZERO, true), Ending::Now);
+        assert_eq!(graceful_ending(KILL_RESERVE, true, None), Ending::Now);
+        assert_eq!(graceful_ending(Duration::ZERO, true, None), Ending::Now);
         assert_eq!(
-            graceful_ending(KILL_RESERVE + MIN_PHASE / 2, true),
+            graceful_ending(KILL_RESERVE + MIN_PHASE / 2, true, None),
             Ending::Now,
             "waits under the minimum phase are skipped"
         );
+    }
+
+    /// A close begun after the hurry preserves a useful term phase.
+    /// Red if setup latency drops SIGTERM, extends the budget, or extends an earlier stop.
+    #[cfg(unix)]
+    #[test]
+    fn a_hurried_close_keeps_term_after_setup_latency() {
+        let deadline = super::StopDeadline::default();
+        let now = std::time::Instant::now();
+        let cut = deadline.hurry(now);
+        let budget = cut.duration_since(now + Duration::from_millis(10));
+        let ending = graceful_ending(budget, true, Some(&deadline));
+        assert_eq!(
+            ending,
+            Ending::Graceful {
+                eof: Duration::from_millis(190),
+                term: MIN_PHASE,
+            }
+        );
+        assert!(total(ending) <= budget);
+        deadline.move_earlier(now + KILL_RESERVE);
+        assert_eq!(deadline.hurry(now), now + KILL_RESERVE);
     }
 }

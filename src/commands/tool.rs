@@ -6,6 +6,8 @@
 //! `capabilities.directories`, unless `-C` or `MCP_GATEWAY_CAPABILITIES`
 //! names a directory (MIK-8044, `super::capability_dirs`).
 
+use crate::cli::stdout::print;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 

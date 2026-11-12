@@ -10,8 +10,10 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use super::access::Access;
+use super::answer::{CHAIN_CHECKED, CHAIN_UNFINISHED, Joined, Searched};
 use super::reader::{Line, Which};
-use super::rows::{Kind, findings_value, kind_of, row};
+use super::receipt_scan::{answer_block, scan};
+use super::rows::{Check, Kind, findings_value, kind_of, row};
 use super::seek::{Reads, oldest_counter, seek};
 use crate::security::decision_record::{Decision, read};
 use crate::security::transparency_log::recompute_entry_hash;
@@ -161,7 +163,7 @@ pub(super) fn receipt(
     log: &Path,
     id: &RowId,
     access: &Access,
-    secret: Option<&[u8]>,
+    check: &Check<'_>,
 ) -> std::io::Result<Option<Value>> {
     let mut reads = Reads::default();
     let Some(found) = seek(log, id.counter, &mut reads)? else {
@@ -175,8 +177,9 @@ pub(super) fn receipt(
     }
     let line = Line {
         log: id.log,
-        entry: found.entry,
+        entry: found.entry.clone(),
         segment: found.segment,
+        span: Some((found.offset, found.len)),
     };
     let Some(kind) = kind_of(&line) else {
         return Ok(None);
@@ -185,9 +188,20 @@ pub(super) fn receipt(
     if !access.admits(&line, kind) {
         return Ok(None);
     }
-    let Some(Value::Object(mut body)) = row(&line, secret) else {
+    // A call looks forward for its delivery record; no other kind has one,
+    // a refusal included.
+    let scanned = if kind == Kind::Call && id.log == Which::Invocation {
+        Some(scan(log, &found, &line, check)?)
+    } else {
+        None
+    };
+    let joined = scanned
+        .as_ref()
+        .map_or(Joined::NoRecord(Searched::NotACall), |s| s.joined.clone());
+    let Some(Value::Object(mut body)) = row(&line, check, &joined) else {
         return Ok(None);
     };
+    body.insert("signing_anchor".into(), check.report(id.log).into());
     let e = &line.entry;
     body.insert(
         "chain".into(),
@@ -199,6 +213,19 @@ pub(super) fn receipt(
         }),
     );
     add_evidence(&mut body, kind, e);
+    if let Some(s) = &scanned {
+        if let Some(Value::Object(chain)) = body.get_mut("chain") {
+            let window = if s.chain_broken { "broken" } else { "intact" };
+            let scope = if s.finished {
+                CHAIN_CHECKED
+            } else {
+                CHAIN_UNFINISHED
+            };
+            chain.insert("window".into(), window.into());
+            chain.insert("window_scope".into(), scope.into());
+        }
+        body.insert("answer".into(), answer_block(&line, s));
+    }
     Ok(Some(body.into()))
 }
 

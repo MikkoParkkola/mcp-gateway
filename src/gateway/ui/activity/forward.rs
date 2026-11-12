@@ -41,9 +41,10 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::access::Access;
+use super::answer::{Joined, Searched};
 pub(in crate::gateway::ui) use super::reader::Limits;
 use super::reader::{Line, WINDOW, Which, read_page};
-use super::rows::{Kind, kind_of, row};
+use super::rows::{Check, Kind, kind_of, row};
 
 /// After this many restarts in one catch-up, the page ends in `reset`, so a
 /// log replaced on every call cannot hold a stream in catch-up.
@@ -165,6 +166,7 @@ pub(in crate::gateway::ui) fn rows_after(
     let Some((file, mut at)) = begin(log, cursor, search, &mut page)? else {
         return Ok(page);
     };
+    let check = Check::one(log.secret, log.kind.log(), log.path);
     let mut scan = scan::Scan::new(file, at.offset, at.mode, budget.bytes)?;
     // Where the scan itself starts, not where the place says it should.
     page.diag.first_read = Some(scan.offset);
@@ -219,8 +221,10 @@ pub(in crate::gateway::ui) fn rows_after(
                     log: log.kind.log(),
                     entry,
                     segment: at.seq,
+                    // The anchor's length includes the newline.
+                    span: at.anchor.map(|a| (a.start, a.len.saturating_sub(1))),
                 };
-                if let Some(row) = served(log, access, &line) {
+                if let Some(row) = served(log, access, &line, &check) {
                     page.rows.push(row);
                 }
                 at.last = Some(mark.clone());
@@ -376,19 +380,28 @@ pub(in crate::gateway::ui) fn frame(
         log: log.kind.log(),
         entry: entry.clone(),
         segment: 0,
+        span: None,
     };
-    served(log, access, &line)
+    // A signed record that verifies never loads the anchor (`Check::one` is
+    // lazy); only an unsigned one, which with signing on is an edit, reads
+    // the sidecar.
+    served(
+        log,
+        access,
+        &line,
+        &Check::one(log.secret, log.kind.log(), log.path),
+    )
 }
 
 /// The row for `line` when this stream kind keeps it and `access` may see it.
-fn served(log: &Log<'_>, access: &Access, line: &Line) -> Option<Served> {
+fn served(log: &Log<'_>, access: &Access, line: &Line, check: &Check<'_>) -> Option<Served> {
     let kind = kind_of(line).filter(|k| log.kind.keeps(*k))?;
     if !access.admits(line, kind) {
         return None;
     }
     Some(Served {
         mark: mark_of(&line.entry)?,
-        row: row(line, log.secret)?,
+        row: row(line, check, &Joined::NoRecord(Searched::AppendTime))?,
     })
 }
 

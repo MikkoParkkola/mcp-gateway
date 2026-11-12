@@ -59,6 +59,20 @@ impl std::fmt::Debug for PreviousDigest {
 }
 
 impl ResolvedApiKey {
+    /// The complete set of slots `validate_token` may match: current, then
+    /// previous. Key expiry and previous-slot grace are judged after matching.
+    pub(crate) fn accepted_digests(&self) -> (&[u8; 32], Option<&[u8; 32]>) {
+        (
+            &self.digest,
+            self.previous.as_ref().map(|slot| &slot.digest),
+        )
+    }
+
+    pub(crate) fn accepted_tags(&self) -> impl Iterator<Item = String> + '_ {
+        let (current, previous) = self.accepted_digests();
+        std::iter::once(current).chain(previous).map(digest_tag_of)
+    }
+
     /// The key's principal, by the one derivation: the recorded one when the
     /// key was rotated, otherwise derived from its current digest. Computed,
     /// never stored, so it cannot fall out of step with the digest.
@@ -103,10 +117,7 @@ pub(crate) fn refuse_shared_digests<'a>(
     bearer: Option<&str>,
     keys: impl IntoIterator<Item = (&'a str, [u8; 32], Option<[u8; 32]>)>,
 ) -> crate::Result<()> {
-    let bearer = bearer.map(|token| {
-        let digest: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes()).into();
-        ("auth.bearer_token".to_owned(), digest)
-    });
+    let bearer = bearer.map(|token| ("auth.bearer_token".to_owned(), presented_digest(token)));
     let keys = keys.into_iter().flat_map(|(name, current, previous)| {
         let current = (format!("auth.api_keys['{name}'].key_sha256"), current);
         let previous = previous.map(|digest| {
@@ -138,10 +149,15 @@ pub(crate) fn digest_tag_of(digest: &[u8; 32]) -> String {
     crate::hashing::sha256_hex(digest)
 }
 
+/// The SHA-256 digest `validate_token` compares with a key's accepted slots.
+pub(crate) fn presented_digest(token: &str) -> [u8; 32] {
+    <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes()).into()
+}
+
 /// The tag of the digest of `secret`, as a request presenting it records.
 #[cfg(test)]
 pub(crate) fn secret_tag(secret: &str) -> String {
-    digest_tag_of(&<sha2::Sha256 as sha2::Digest>::digest(secret.as_bytes()).into())
+    digest_tag_of(&presented_digest(secret))
 }
 
 /// Whether the secret fingerprinted `tag` still authenticates: it is the

@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 use serde_json::Value;
 
 use crate::security::secret_redaction::holds_no_needle;
+use crate::trust::seal_strip::{Strip, strip_seals};
 
 use super::{
     ECHO_REFUSAL, JsonRpcResponse, Lifetime, MAX_NEEDLES, NeedleSet, REFUSAL_CODE,
@@ -133,10 +134,60 @@ impl NeedleSet {
 /// current when it was stored. A refusal from any set replaces the answer
 /// with the fixed refusal, its id kept. Run on the delivering call's task,
 /// so that call's record says what was done.
+///
+/// While any set holds a value, a stored answer goes out with no provenance
+/// seal, whether or not the scrub removes anything. Each seal was made over
+/// the stored bytes and its readable payload carries their unsalted digest:
+/// next to a redacted body it would let a client test guesses of the removed
+/// value, and it would no longer cover what is served. The seals come off
+/// before the scrub, which can rename the keys that hold them, in objects
+/// and in JSON text alike. A redacted answer holding text that names a seal
+/// but will not parse, so a seal may remain in it, is refused. Receipts
+/// stay: they hold no digest of the result. Keeping seals on answers the
+/// scrub leaves alone was tried and dropped: every way of proving the answer
+/// unchanged had a hole (numbers, renamed keys, rewritten text).
+///
+/// Threat model: the leak is a digest the gateway itself computed over the
+/// unredacted result. Only the gateway writes such a seal, as a
+/// `_meta.provenance.public_signature` member of a result, or inside the
+/// chain and playbook step JSON text `serde_json` writes (which never escapes
+/// a key). A seal a backend wrote, escaped or not, or anything in an error
+/// body, carries no digest the gateway made over this result, and a backend
+/// that wants to leak its own output can do so directly; neither is in
+/// scope here.
 pub(crate) fn scrub_stored(
     sets: &[std::sync::Arc<NeedleSet>],
     response: &mut JsonRpcResponse,
 ) -> Scrubbed {
+    let armed = sets.iter().any(|set| !set.snapshot().is_empty());
+    let strip = match response.result.as_mut() {
+        Some(result) if armed => strip_seals(result),
+        // A value added after the check above can still redact this answer:
+        // nothing was stripped, so a redaction is refused below.
+        Some(_) => Strip {
+            complete: false,
+            removed: false,
+        },
+        None => Strip {
+            complete: true,
+            removed: false,
+        },
+    };
+    let outcome = scrub_unsealed(sets, response);
+    if outcome == Scrubbed::Redacted && !strip.complete {
+        use crate::gateway::delivery_facts::echo_refusal_built;
+        let message = sets
+            .first()
+            .map_or(ECHO_REFUSAL, |set| refusal_message(set));
+        *response = JsonRpcResponse::error(response.id.clone(), REFUSAL_CODE, message);
+        echo_refusal_built();
+        return Scrubbed::Refuse;
+    }
+    outcome
+}
+
+/// [`scrub_stored`] once its seals are off.
+fn scrub_unsealed(sets: &[std::sync::Arc<NeedleSet>], response: &mut JsonRpcResponse) -> Scrubbed {
     use crate::gateway::delivery_facts::{echo_redacted, echo_refusal_built};
     let mut outcome = Scrubbed::Clean;
     for set in sets {

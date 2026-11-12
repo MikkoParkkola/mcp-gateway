@@ -368,10 +368,12 @@ fn stored_task(
         targets_recorded: true,
         output_free: false,
         error_author: None,
-        owner_digest: String::new(),
+        owner_digest: Box::default(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        vouching: crate::gateway::task_service::Vouching::Vouched,
+        replay_snapshot: None,
     }
 }
 
@@ -759,6 +761,45 @@ mod redaction;
 
 #[path = "relay_replay_receipt_tests.rs"]
 mod replay_receipt;
+
+/// A read of an unvouched upstream row (its outcome withheld from the
+/// caller) renews no receipt: the caller received the withheld answer, not
+/// the stored result or error, so nothing of them was delivered to relay.
+/// The same row vouched is the control, completed and failed alike.
+#[tokio::test]
+async fn reading_an_unvouched_row_stages_no_receipt() {
+    use crate::gateway::task_service::{ErrorAuthor, Vouching};
+    for vouching in [Vouching::Vouched, Vouching::Unvouched] {
+        for failed in [false, true] {
+            let (meta, firewall) = relay_meta();
+            let mut stored = stored_task(|task| {
+                if failed {
+                    task.fail(&crate::protocol::JsonRpcError {
+                        code: -32042,
+                        message: PROSE.to_owned(),
+                        data: None,
+                    })
+                } else {
+                    task.complete(&text_result(PROSE))
+                }
+                .expect("a live task takes its outcome");
+            });
+            stored.error_author = failed.then_some(ErrorAuthor::Peer);
+            stored.vouching = vouching;
+            let ((), staged) = meta
+                .collecting_staged(async {
+                    meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
+                })
+                .await;
+            staged.commit(true, &firewall.paired_generation_for_test());
+            assert_eq!(
+                relayed_by_bob(&firewall, PROSE),
+                vouching == Vouching::Vouched,
+                "{vouching:?}, failed: {failed}"
+            );
+        }
+    }
+}
 
 #[path = "relay_live_tests.rs"]
 mod live;

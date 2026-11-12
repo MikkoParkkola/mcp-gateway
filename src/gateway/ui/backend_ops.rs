@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::secret_values::{Syntax, credential_name};
 #[allow(deprecated)] // the deprecated writer stays reachable by name until 5.0
 pub use crate::config_persistence::write_config;
 use crate::{
@@ -193,59 +194,102 @@ pub(crate) const UNRESOLVED_SECRETS: &str = "has secret references that do not r
 /// can tell it from a duplicate (a 422, never a 409).
 pub(crate) const LITERAL_IN_VALUE: &str = "holds literal text a template would write as text";
 
-/// How one `env` or `headers` value of a backend is written to gateway.yaml.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ValueClass {
-    /// Written as given: empty, a whole-value secret reference (`env:`,
-    /// `file:`, `keychain:`), or a template the load expands.
-    Kept,
-    /// A literal: on the web UI it goes to the secret store and gateway.yaml
-    /// holds the store's reference (the CLI writes it as given today).
-    Stored,
-}
+/// The phrase every credential-in-a-command-or-URL refusal carries, so the
+/// CLI can answer it as a usage error (exit 2).
+pub(crate) const CREDENTIAL_IN_ARGV: &str = "would write a credential into gateway.yaml as text";
 
-/// The one rule for a value an operator gives a backend, shared by the web UI
-/// add, update and preview and the CLI `add`. `Err` is the refusal's stable
-/// code: `literal_default` for `${NAME:-text}` with a non-empty default, and
-/// `literal_in_template` for literal text beside a template other than one
-/// scheme word (`Bearer ${TOKEN}` is a template; `sk-${SUFFIX}` is not), the
-/// same codes discovery adopt refuses with. Either would put text that may be
-/// a secret into gateway.yaml as text.
-pub(crate) fn classify(value: &str) -> Result<ValueClass, &'static str> {
-    use crate::config::secret_ref::{has_literal_default, only_scheme_beside_templates};
-    if value.is_empty() || crate::config::is_reference(value) {
-        return Ok(ValueClass::Kept);
-    }
-    if !value.contains("${") {
-        return Ok(ValueClass::Stored);
-    }
-    if has_literal_default(value) {
-        Err("literal_default")
-    } else if !only_scheme_beside_templates(value) {
-        Err("literal_in_template")
-    } else {
-        Ok(ValueClass::Kept)
-    }
-}
-
-/// Each refused `env`/`headers` value of `backend` as `(code, field)`, sorted
-/// by field; the value itself is never part of it.
-pub(crate) fn literal_refusals(
-    backend: &crate::config::BackendConfig,
+/// Each credential the saved field would carry as text, as `(code, field)`,
+/// never a value: `command` when given (it takes precedence), else `url`.
+pub(crate) fn credential_refusals(
+    command: Option<&str>,
+    url: Option<&str>,
 ) -> Vec<(&'static str, String)> {
-    let env = backend.env.iter().map(|(k, v)| ("env", k, v));
-    let headers = backend.headers.iter().map(|(k, v)| ("headers", k, v));
-    let mut refused: Vec<_> = env
-        .chain(headers)
-        .filter_map(|(map, key, value)| {
-            classify(value)
-                .err()
-                .map(|code| (code, format!("{map}.{key}")))
-        })
-        .collect();
-    refused.sort_by(|a, b| a.1.cmp(&b.1));
-    refused
+    if let Some(command) = command {
+        return if command_carries_credential(command) {
+            vec![("secret_in_command", "command".to_string())]
+        } else {
+            Vec::new()
+        };
+    }
+    match url {
+        Some(url) if url_carries_credential(url) => vec![("secret_in_url", "url".to_string())],
+        _ => Vec::new(),
+    }
 }
+
+/// Whether `value` would be written as text holding a secret: any value but
+/// an empty one, a whole `${VAR}` template or a whole secret reference (a
+/// literal default or literal text beside a template counts as text).
+fn literal_value(value: &str) -> bool {
+    !value.is_empty() && classify(value, &Syntax::Dollar) != Ok(ValueClass::Kept)
+}
+
+/// A URL holding userinfo, or a credential-named query parameter with a
+/// literal value. One that does not parse holds no checkable credential and
+/// is left to the transport's own validation.
+fn url_carries_credential(raw: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw) else {
+        return false;
+    };
+    // The userinfo as the parser reads it (the reading the gateway connects
+    // with): the password, or the username when the password is absent or
+    // empty. Only a whole `${NAME}` placeholder may stay.
+    let secret = match url.password() {
+        Some(password) if !password.is_empty() => password,
+        _ => url.username(),
+    };
+    if !secret.is_empty() && !is_placeholder(&secret.replace("%7B", "{").replace("%7D", "}")) {
+        return true;
+    }
+    url.query_pairs()
+        .any(|(name, value)| credential_name(&name) && literal_value(&value))
+}
+
+/// Whether `value` is exactly one `${NAME}` placeholder. Fed the parser's
+/// userinfo with only its brace escapes decoded: any other escape leaves the
+/// value refused.
+fn is_placeholder(value: &str) -> bool {
+    value
+        .strip_prefix("${")
+        .and_then(|rest| rest.strip_suffix('}'))
+        .is_some_and(|name| {
+            !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        })
+}
+
+/// A command (split as the stdio start splits it) with a credential-named
+/// `--flag=value`, `--flag value`, `NAME=value` or `Name: value` argument, or
+/// an argument value that is a URL carrying a credential.
+fn command_carries_credential(command: &str) -> bool {
+    let words = crate::transport::split_command(command)
+        .unwrap_or_else(|| command.split_whitespace().map(str::to_string).collect());
+    words.iter().enumerate().any(|(i, word)| {
+        // A whole URL first: its query holds `=` signs of its own.
+        if url_carries_credential(word) {
+            return true;
+        }
+        // A header argument, with or without a space after the colon.
+        if let Some((name, value)) = word.split_once(':')
+            && credential_name(name.trim())
+            && literal_value(value.trim_start())
+        {
+            return true;
+        }
+        if let Some((name, value)) = word.split_once('=') {
+            return (credential_name(name) && literal_value(value))
+                || url_carries_credential(value);
+        }
+        if word.starts_with("--") && credential_name(word) {
+            return words
+                .get(i + 1)
+                // A token may start with one dash; the next long flag is no value.
+                .is_some_and(|next| !next.starts_with("--") && literal_value(next));
+        }
+        false
+    })
+}
+
+pub(crate) use crate::config::secret_values::{ValueClass, classify, literal_refusals};
 
 /// The add's refusal for a refused value: names each field and code, never
 /// a value, and carries [`LITERAL_IN_VALUE`].
@@ -412,6 +456,19 @@ pub fn resolve_backend<S: std::hash::BuildHasher>(
     desc: Option<&str>,
     env: HashMap<String, String, S>,
 ) -> Result<ResolvedBackend, String> {
+    // A credential in the field that is saved would land in gateway.yaml as
+    // text: refused before anything is resolved.
+    let refused = credential_refusals(cmd, url);
+    if !refused.is_empty() {
+        let fields: Vec<String> = refused
+            .iter()
+            .map(|(code, field)| format!("{field} ({code})"))
+            .collect();
+        return Err(format!(
+            "'{name}' {CREDENTIAL_IN_ARGV}: {}. Give the credential as an env value (-e NAME or --env-file), which goes to the secret store",
+            fields.join(", ")
+        ));
+    }
     // Collect into a standard HashMap so it matches BackendConfig.env's field type.
     let env: HashMap<String, String> = env.into_iter().collect();
     let plain = |transport, description: &str| ResolvedBackend {
@@ -684,3 +741,7 @@ mod tests;
 #[cfg(test)]
 #[path = "backend_add_tests.rs"]
 mod backend_add_tests;
+
+#[cfg(test)]
+#[path = "backend_ops_credential_tests.rs"]
+mod credential_tests;
