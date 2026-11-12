@@ -42,6 +42,7 @@ pub(super) fn rig(edit: impl FnOnce(&mut JournalV2)) -> Rig {
 
 impl Rig {
     /// The scratch directory the rig's config lives in.
+    #[cfg(unix)]
     pub(super) fn dir(&self) -> &std::path::Path {
         self.dir.path()
     }
