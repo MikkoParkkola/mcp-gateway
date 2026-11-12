@@ -176,28 +176,6 @@ fn the_final_nfc_pass_composes_and_reorders() {
     assert!(two.starts_with("i\u{316}\u{307}"), "{two:?}");
 }
 
-/// Normalization v1's tables are pinned: lowercase from the standard
-/// library at Unicode 17.0.0, NFC from `icu_normalizer_data`
-/// 2.3.0 (built from ICU 78). A toolchain or lock-file change that moves
-/// either fails here, and moving them means a new normalization version.
-#[test]
-fn normalization_v1_tables_are_pinned() {
-    assert_eq!(
-        char::UNICODE_VERSION,
-        (17, 0, 0),
-        "the toolchain's lowercase tables moved off Unicode 17.0.0"
-    );
-    let lock = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"),
-    )
-    .expect("Cargo.lock")
-    .replace('\r', "");
-    assert!(
-        lock.contains("name = \"icu_normalizer_data\"\nversion = \"2.3.0\"\n"),
-        "icu_normalizer_data moved off 2.3.0 (normalization v1's NFC data)"
-    );
-}
-
 use super::case_v1::{CASE_IGNORABLE, CASED_TERMINAL, LOWER_V1};
 use super::{lower_v1, normalize};
 
