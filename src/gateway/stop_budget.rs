@@ -105,6 +105,21 @@ impl StopBudget {
     }
 }
 
+impl StopBudget {
+    /// Run one post-listener stage under its own `cap` or what is left to Dp,
+    /// whichever is less; `None` when it ran out (logged by `what`) so the stop
+    /// goes on to the next stage. Never renewed: a stage that starts after Dp
+    /// gets no time at all.
+    pub(crate) async fn stage<F: std::future::Future>(
+        &self,
+        _what: &'static str,
+        _cap: Duration,
+        _work: F,
+    ) -> Option<F::Output> {
+        None
+    }
+}
+
 #[cfg(test)]
 #[path = "stop_budget_tests.rs"]
 mod tests;

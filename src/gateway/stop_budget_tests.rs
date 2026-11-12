@@ -105,3 +105,76 @@ fn early_completion_flows_time_forward_and_late_work_never_resets_it() {
         "after Dp: zero, not renewed"
     );
 }
+
+/// A stage that never ends, to be cut by its window.
+async fn stuck() {
+    std::future::pending::<()>().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stuck_stage_with_a_huge_cap_still_ends_at_dp() {
+    let (t0, b) = at(Duration::from_secs(30));
+    let out = b.stage("stuck", Duration::from_secs(600), stuck()).await;
+    assert!(out.is_none(), "a stuck stage is cut");
+    assert_eq!(
+        Instant::now(),
+        b.post_listener_end(),
+        "at Dp, not at the cap"
+    );
+    assert_eq!(Instant::now() - t0, ms(21_350));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stage_far_from_dp_is_cut_by_its_own_cap() {
+    let (t0, b) = at(Duration::from_secs(30));
+    let out = b.stage("stuck", Duration::from_secs(10), stuck()).await;
+    assert!(out.is_none());
+    assert_eq!(Instant::now() - t0, Duration::from_secs(10));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_second_stage_after_dp_gets_no_time_and_dp_is_not_renewed() {
+    let (t0, b) = at(Duration::from_secs(30));
+    assert!(
+        b.stage("first", Duration::from_secs(600), stuck())
+            .await
+            .is_none()
+    );
+    let at_dp = Instant::now();
+    assert!(
+        b.stage("second", Duration::from_secs(600), stuck())
+            .await
+            .is_none()
+    );
+    assert_eq!(Instant::now(), at_dp, "the second stage waited for nothing");
+    assert_eq!(Instant::now() - t0, ms(21_350));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stage_that_finishes_early_hands_its_time_to_the_next() {
+    let (t0, b) = at(Duration::from_secs(30));
+    let quick = b
+        .stage("quick", Duration::from_secs(10), async {
+            tokio::time::sleep(ms(1_000)).await;
+            7
+        })
+        .await;
+    assert_eq!(
+        quick,
+        Some(7),
+        "a stage that finishes inside its window returns its value"
+    );
+    assert_eq!(Instant::now() - t0, ms(1_000));
+    // The next stage's cap is far larger than the 10 s the first had: it may use
+    // everything the first left, up to Dp.
+    assert!(
+        b.stage("slow", Duration::from_secs(600), stuck())
+            .await
+            .is_none()
+    );
+    assert_eq!(
+        Instant::now() - t0,
+        ms(21_350),
+        "the freed time was available"
+    );
+}
