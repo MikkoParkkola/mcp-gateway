@@ -409,4 +409,38 @@ mod shutdown_deadline_tests {
         drop(release);
         assert!(returned.is_ok(), "a stuck save held the shutdown");
     }
+
+    /// `MIK-8867.BUDGET.1`: the HTTP stop's state saves end at the deadline
+    /// the stop budget hands them, not at a timeout of their own. The clock is
+    /// paused, so the elapsed time is the deadline itself and no wall-clock
+    /// window decides the row.
+    #[tokio::test(start_paused = true)]
+    async fn the_state_saves_end_at_the_deadline_they_are_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let (release, stuck) = std::sync::mpsc::channel::<()>();
+        let stuck_save: ShutdownSave = (
+            "stuck save",
+            Box::new(move || {
+                let _ = stuck.recv();
+            }),
+        );
+        let start = tokio::time::Instant::now();
+        let given = std::time::Duration::from_secs(2);
+        save_state_on_shutdown(
+            Arc::new(crate::ranking::SearchRanker::new()),
+            dir.path().join("ranker.json"),
+            Arc::new(crate::transition::TransitionTracker::new()),
+            dir.path().join("transitions.json"),
+            None,
+            vec![stuck_save],
+            start + given,
+        )
+        .await;
+        let elapsed = start.elapsed();
+        drop(release);
+        assert!(
+            elapsed < SHUTDOWN_SAVES_TIMEOUT,
+            "the saves ran to their own {SHUTDOWN_SAVES_TIMEOUT:?}, not the given deadline: {elapsed:?}"
+        );
+    }
 }
