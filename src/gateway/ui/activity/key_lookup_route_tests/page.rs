@@ -71,7 +71,6 @@ fn every_token_that_does_not_open_gets_the_same_answer() {
         .keyring()
         .mint(&Payload::mint_preview(fingerprint(&who), "d".into(), now))
         .expect("a preview token");
-    let _ = ContinuationPurpose::PreviewConfirm;
     let other_ring = Keyring::new(&[(1, [9u8; 32])])
         .expect("a ring")
         .mint(&Payload::mint_lookup(
@@ -80,7 +79,23 @@ fn every_token_that_does_not_open_gets_the_same_answer() {
             now,
         ))
         .expect("a token");
+    // A lookup scope sealed under another purpose: the purpose is checked on
+    // its own, not left to the missing scope of other purposes' tokens.
+    let wrong_purpose = fx
+        .state
+        .continuation
+        .keyring()
+        .mint(
+            &Payload::mint_lookup(
+                fingerprint(&who),
+                serde_json::to_string(&fx.scope(now)).expect("scope"),
+                now,
+            )
+            .with_purpose(ContinuationPurpose::BackendInput),
+        )
+        .expect("a token");
     let tokens = [
+        wrong_purpose,
         tampered,
         "garbage".to_owned(),
         String::new(),
