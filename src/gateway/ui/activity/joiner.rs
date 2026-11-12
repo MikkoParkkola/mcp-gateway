@@ -7,14 +7,17 @@
 //! and holds it in a bounded map until the call arrives. Nothing the map
 //! forgets is ever restored: an evicted trace keeps a tombstone with the
 //! reason, and a read that outgrows the tombstones says so for every call
-//! after it.
+//! after it. A record that has been joined to a call row moves to a separate
+//! set, so completed traces do not use up the bounds meant for the unresolved
+//! ones; a second record for a joined trace reopens it as a duplicate.
 
 use std::collections::{HashMap, VecDeque};
 
 use serde_json::{Map, Value};
 
 use super::answer::{
-    DELIVERY_WINDOW, Delivery, Effect, Findings, Joined, MAX_EVICTED, MAX_PENDING, Searched, Why,
+    DELIVERY_WINDOW, Delivery, Effect, Findings, Joined, MAX_EVICTED, MAX_JOINED, MAX_PENDING,
+    Searched, Why,
 };
 use super::reader::{Line, Which};
 use super::rows::{Check, kind_of};
@@ -32,8 +35,11 @@ enum Held {
 pub(super) struct Joiner<'a, 's> {
     check: &'a Check<'s>,
     pending: HashMap<String, Held>,
-    /// Insertion order of `pending`, oldest first.
+    /// Insertion order of `pending`, oldest first. An entry that left `pending`
+    /// (joined) stays until it reaches the front or the queue is compacted.
     order: VecDeque<String>,
+    /// Records already joined to a call row, by trace.
+    joined: HashMap<String, Delivery>,
     evicted: HashMap<String, Why>,
     overflowed: bool,
     /// Admitted calls joined incomplete, or unfinished with no record.
@@ -89,12 +95,24 @@ fn project(entry: &Value, unverifiable: bool) -> Delivery {
     }
 }
 
+/// Why a line was edited: a failed hash or signature, or a missing signature
+/// after signing began. A plain unsigned line, one written before signing, is
+/// not tampering: legacy rows carry trace ids too.
+fn why_edited(state: SignatureState, integrity: Option<&str>) -> Option<Why> {
+    match state {
+        SignatureState::Invalid if integrity == Some("sig_missing") => Some(Why::Unsigned),
+        SignatureState::Invalid => Some(Why::Invalid),
+        _ => None,
+    }
+}
+
 impl<'a, 's> Joiner<'a, 's> {
     pub(super) fn new(check: &'a Check<'s>) -> Self {
         Self {
             check,
             pending: HashMap::new(),
             order: VecDeque::new(),
+            joined: HashMap::new(),
             evicted: HashMap::new(),
             overflowed: false,
             join_incomplete: 0,
@@ -108,21 +126,39 @@ impl<'a, 's> Joiner<'a, 's> {
     /// believed, even one written before signing began.
     fn trust(&self, line: &Line) -> Result<bool, Why> {
         let judged = self.check.judge(line);
+        if let Some(why) = why_edited(judged.state, judged.integrity) {
+            return Err(why);
+        }
         match judged.state {
-            SignatureState::Invalid if judged.integrity == Some("sig_missing") => {
-                Err(Why::Unsigned)
-            }
-            SignatureState::Invalid => Err(Why::Invalid),
             SignatureState::Valid => Ok(false),
             SignatureState::Unsigned if self.check.has_secret() => Err(Why::Unsigned),
             SignatureState::Unsigned | SignatureState::SignedUnverifiable => Ok(true),
+            // `why_edited` has returned for this already; failing closed regardless.
+            SignatureState::Invalid => Err(Why::Invalid),
         }
+    }
+
+    /// Why a line was edited, for a line that is not a delivery record's own
+    /// kind: see [`why_edited`].
+    fn tampered(&self, line: &Line) -> Option<Why> {
+        let judged = self.check.judge(line);
+        why_edited(judged.state, judged.integrity)
     }
 
     /// Fold a scanned invocation-log line that is not a listed row. `true`
     /// when the line carried a trace and was routed here: the caller drops it.
     pub(super) fn observe(&mut self, line: &Line) -> bool {
-        if line.log != Which::Invocation || kind_of(line).is_some() {
+        if line.log != Which::Invocation {
+            return false;
+        }
+        if kind_of(line).is_some() {
+            // A delivery record edited to look like a listed row would drop out
+            // of the join unseen, so a tampered line still poisons its trace.
+            if let Some(trace) = str_of(&line.entry, "trace_id")
+                && let Some(why) = self.tampered(line)
+            {
+                self.hold_bad(trace, why);
+            }
             return false;
         }
         let Some(trace) = str_of(&line.entry, "trace_id") else {
@@ -145,6 +181,10 @@ impl<'a, 's> Joiner<'a, 's> {
 impl Joiner<'_, '_> {
     /// A record that cannot be believed poisons its trace.
     fn hold_bad(&mut self, trace: &str, why: Why) {
+        if self.joined.remove(trace).is_some() {
+            self.insert(trace, Held::Bad(why));
+            return;
+        }
         if let Some(reason) = self.evicted.get_mut(trace) {
             // The first integrity reason stays; an evicted record is upgraded.
             if reason.integrity().is_none() {
@@ -162,6 +202,10 @@ impl Joiner<'_, '_> {
     /// A believed `transport_finalized` record: a second one for a trace is
     /// tamper, whether the first is held or was evicted.
     fn hold_record(&mut self, trace: &str, delivery: Delivery) {
+        if self.joined.remove(trace).is_some() {
+            self.insert(trace, Held::Bad(Why::Duplicate));
+            return;
+        }
         if let Some(reason) = self.evicted.get_mut(trace) {
             if *reason == Why::Evicted {
                 *reason = Why::Duplicate;
@@ -179,23 +223,45 @@ impl Joiner<'_, '_> {
         if self.pending.len() >= MAX_PENDING {
             self.evict_oldest();
         }
+        if self.order.len() >= 2 * MAX_PENDING {
+            let pending = &self.pending;
+            self.order.retain(|t| pending.contains_key(t));
+        }
         self.order.push_back(trace.to_string());
         self.pending.insert(trace.to_string(), held);
     }
 
     /// The oldest-inserted entry leaves; its tombstone keeps the reason.
     fn evict_oldest(&mut self) {
-        let Some(oldest) = self.order.pop_front() else {
-            return;
+        // Skip entries that already left `pending` (joined).
+        let (oldest, held) = loop {
+            let Some(oldest) = self.order.pop_front() else {
+                return;
+            };
+            if let Some(held) = self.pending.remove(&oldest) {
+                break (oldest, held);
+            }
         };
-        let reason = match self.pending.remove(&oldest) {
-            Some(Held::Bad(why)) => why,
-            _ => Why::Evicted,
+        let reason = match held {
+            Held::Bad(why) => why,
+            Held::One(_) => Why::Evicted,
         };
         if self.evicted.len() < MAX_EVICTED {
             self.evicted.insert(oldest, reason);
         } else {
             self.overflowed = true;
+        }
+    }
+
+    /// A joined record leaves `pending`, so completed traces stop using the
+    /// bounds meant for unresolved ones. When `joined` is full it stays in
+    /// `pending`, as before.
+    fn retire(&mut self, trace: &str) {
+        if self.joined.len() >= MAX_JOINED {
+            return;
+        }
+        if let Some(Held::One(d)) = self.pending.remove(trace) {
+            self.joined.insert(trace.to_string(), d);
         }
     }
 
@@ -210,8 +276,15 @@ impl Joiner<'_, '_> {
         if let Some(why) = self.evicted.get(trace) {
             return Joined::Incomplete(*why);
         }
+        if let Some(d) = self.joined.get(trace) {
+            return Joined::Found(d.clone());
+        }
         match self.pending.get(trace) {
-            Some(Held::One(d)) => Joined::Found(d.clone()),
+            Some(Held::One(d)) => {
+                let found = d.clone();
+                self.retire(trace);
+                Joined::Found(found)
+            }
             Some(Held::Bad(why)) => Joined::Incomplete(*why),
             None if seen.head_covered || seen.above >= DELIVERY_WINDOW => {
                 Joined::NoRecord(Searched::Finished)

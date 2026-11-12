@@ -68,6 +68,9 @@ pub(super) fn scan(
 ) -> io::Result<Scanned> {
     let trace = call.entry.get("trace_id").and_then(Value::as_str);
     let mut joiner = Joiner::new(check);
+    // The call is judged first, as the list judges it: a call whose own line was
+    // tampered with poisons its trace here too.
+    joiner.observe(call);
     let mut out = Scanned {
         joined: Joined::NoRecord(Searched::Finished),
         records: Vec::new(),
