@@ -9,6 +9,8 @@
 //! emptiness rule is decided here, and nothing in this module opens a socket,
 //! starts the custody worker or touches an account record.
 
+use crate::cli::stdout::println;
+
 use std::path::Path;
 use std::process::ExitCode;
 

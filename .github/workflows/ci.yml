@@ -880,20 +880,6 @@ jobs:
       # Build the lib test binary once and hand it to int before running this
       # half, so int's lib-a half starts as soon as its own suite is done. The
       # shard suite below reuses this build.
-      # PILOT (abandon rule below): the slow builds ran on the 3-core 7 GB
-      # runner and swapped 3.6 of 4 GB at two jobs (40.9 and 56.9 min); the
-      # same build took 9 min on the 5-core 14 GB runner with no swap. On a
-      # small runner, build with one job. Abandon and revert when the median
-      # lib build on small runners stays above 35 min over 3 trains.
-      - name: One build job on a small runner
-        if: matrix.shard == 'lib-b'
-        run: |
-          mem=$(sysctl -n hw.memsize)
-          echo "runner memory $((mem / 1073741824)) GB"
-          if [ "$mem" -lt 10737418240 ]; then
-            echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
-            echo "small runner: CARGO_BUILD_JOBS=1"
-          fi
       - name: Build the lib test binary once
         if: matrix.shard == 'lib-b'
         timeout-minutes: 120
@@ -1032,7 +1018,7 @@ jobs:
           set -euo pipefail
           python3 scripts/release/upgrading_fragments.py assemble --dry-run > "$RUNNER_TEMP/UPGRADING-4.0.md"
           export UPGRADING_DOC="$RUNNER_TEMP/UPGRADING-4.0.md"
-          for target in "--test upgrading_summary_rows" "--bin mcp-gateway upgrade_notice_tests"; do
+          for target in "--test upgrading_summary_rows" "--lib upgrade_notice_tests"; do
             # shellcheck disable=SC2086 # $target is two words on purpose
             cargo test --all-features $target 2>&1 | tee "$RUNNER_TEMP/assembled.log"
             if ! grep -Eq '^running [1-9][0-9]* tests?$' "$RUNNER_TEMP/assembled.log"; then
@@ -1900,6 +1886,13 @@ jobs:
         run: uv sync --locked --project scripts/gate-env
       - name: Check the cfg item finder marks what it claims to
         run: scripts/gate-env/.venv/bin/python scripts/dev/test_cfg_items.py
+      # docs/PRIVACY.md lists every place product code can open an outbound
+      # connection; a new one, or one kind replacing another, fails here until
+      # scripts/dev/outbound-sites.tsv and docs/PRIVACY.md list it.
+      - name: Check docs/PRIVACY.md lists every outbound client site
+        run: scripts/gate-env/.venv/bin/python scripts/dev/check-outbound-clients.py
+      - name: Check the outbound client guard catches what it claims to
+        run: scripts/gate-env/.venv/bin/python scripts/dev/test_check_outbound_clients.py
       - name: Check the gate environment check refuses without installing
         run: python3 scripts/dev/test_gate_env_python.py
       - name: MCP events OAuth shim rows

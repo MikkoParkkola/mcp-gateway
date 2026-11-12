@@ -209,6 +209,21 @@ impl MetaMcp {
             // untouched is not a rewrite.
             let published = self.current_generation();
             let policies = firewall.answer_policies(at.generation, published.as_deref());
+            // A seal made before this scan covers the bytes before any
+            // rewrite, and its payload carries their digest: while the scan
+            // can redact, every seal comes off first, chain and playbook steps
+            // and a stored task's own seal included. The top-level seal is
+            // applied after the scan, over what it delivers. An interim
+            // answer's question and state stay whole: the firewall refuses on
+            // a finding there and never rewrites it, so a seal inside cannot
+            // be left over redacted bytes, and stripping it would change what
+            // the backend asked without the immutability check seeing it.
+            let strip = (firewall.scans_responses() && policies.redacts()).then(|| {
+                crate::trust::seal_strip::strip_seals_keeping(
+                    result,
+                    &crate::security::response_policy::INTERIM_MEMBERS,
+                )
+            });
             let before = policies.redacts().then(|| result.clone());
             let verdict = firewall.check_response_artifact(
                 policies,
@@ -220,9 +235,14 @@ impl MetaMcp {
             );
             note_verdict(firewall, &verdict, Part::Result);
             let outcome = firewall_outcome(verdict);
-            if outcome == EgressOutcome::Rewritten && before.is_some_and(|before| before != *result)
-            {
+            let rewritten = before.is_some_and(|before| before != *result);
+            if outcome == EgressOutcome::Rewritten && rewritten {
                 crate::gateway::delivery_facts::raise(ResponseEffect::Rewritten);
+            }
+            // Seal-naming text that would not parse may still hold a seal:
+            // an answer the scan changed is refused rather than sent with it.
+            if rewritten && strip.is_some_and(|strip| !strip.complete) {
+                return EgressOutcome::Refused;
             }
             return outcome;
         }

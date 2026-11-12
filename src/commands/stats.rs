@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Stats command handler for `mcp-gateway stats`.
 
+use crate::cli::stdout::print;
+
 use std::fmt::Write as _;
 use std::process::ExitCode;
 

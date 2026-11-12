@@ -63,12 +63,18 @@ _LIB_B = ("suite", ["--lib"], ["--skip", LIB_SPLIT])
 LIB_C_MODULES = ["security::", "capability::", "events::", "backend::", "transport::", "oauth::"]
 _WIN_LIB_B = ("suite", ["--lib"], ["--skip", LIB_SPLIT, *(x for m in LIB_C_MODULES for x in ("--skip", m))])
 _WIN_LIB_C = ("suite", ["--lib"], [*LIB_C_MODULES, "--skip", LIB_SPLIT])
+# The binary's own unit tests (599 of them) moved into the library behind `cli::run`: the
+# `--bins` selection of every int shard dropped by 597 (the binary keeps 2), and the library
+# shards gained them. Linux int-a measured 1063 before (run 42963873558), so 466 after, at the
+# same ~78% floor ratio: 365. Windows int-a measured 970 before (so at least 373 after): 295.
+# macOS int (floor 2205 under ~2250) loses the same 597 or fewer: 1600. The lib floors only
+# rise in practice (the moved tests land in lib-b, or lib-c for transport::/events:: paths).
 SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
     # Floors: the selections measured by the MIK-8482 probe (run 39135535466).
     "linux": {
         "lib-a": [(*_LIB_A, 5353)],
         "lib-b": [(*_LIB_B, 6941)],
-        "int-a": [("suite", ["--bins", "--test", GLOB_A], [], 835)],
+        "int-a": [("suite", ["--bins", "--test", GLOB_A], [], 365)],
         "int-b": [("suite", ["--test", GLOB_B], [], 1371), ("doc", ["--doc"], [], 55)],
     },
     "windows": {
@@ -76,7 +82,7 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
         # The former lib-b floor (6747), divided in the measured proportion.
         "lib-b": [(*_WIN_LIB_B, 3299)],
         "lib-c": [(*_WIN_LIB_C, 3448)],
-        "int-a": [("suite", ["--bins", "--test", GLOB_A], [], 763)],
+        "int-a": [("suite", ["--bins", "--test", GLOB_A], [], 295)],
         "int-b": [("suite", ["--test", GLOB_B], [], 1238)],
     },
     # macOS builds the `--lib` test binary once (about two macOS runners; a
@@ -89,7 +95,7 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
     "macos": {
         "lib-b": [(*_LIB_B, 9350)],
         "lib-a": [(*_LIB_A, 8000)],
-        "int": [("suite", ["--bins", "--test", GLOB_ALL], [], 2205), ("doc", ["--doc"], [], 55)],
+        "int": [("suite", ["--bins", "--test", GLOB_ALL], [], 1600), ("doc", ["--doc"], [], 55)],
     },
 }
 # Shards that are no matrix leg of their own: each runs from the lib test

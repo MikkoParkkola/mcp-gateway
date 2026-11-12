@@ -11,9 +11,11 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use super::access::Access;
+use super::answer::{Joined, SCOPE_LABEL};
 use super::csv::{Cell, CsvWriter, Truncated};
-use super::reader::{Cursor, Limits, Line, Which, read_page};
-use super::rows::{Check, Filter, Kind, kind_of, row};
+use super::joiner::Joiner;
+use super::reader::{Cursor, Limits, Line, Look, Seen, Which, read_page_joined};
+use super::rows::{Check, Filter, Kind, NOT_A_CALL, kind_of, row};
 use crate::trust::provenance_public::{ACTIVITY_EXPORT_DOMAIN, ProvenancePublicSigner};
 
 /// The caps, whichever comes first.
@@ -45,9 +47,9 @@ const PASS: usize = 100;
 
 /// One exported row: the list row plus the entry's own chain and HMAC fields,
 /// and why its integrity failed, when it did.
-fn export_row(line: &Line, kind: Kind, check: &Check<'_>) -> Option<Value> {
+fn export_row(line: &Line, kind: Kind, check: &Check<'_>, joined: &Joined) -> Option<Value> {
     // The list row already names why integrity failed, when it did.
-    let Value::Object(mut r) = row(line, check)? else {
+    let Value::Object(mut r) = row(line, check, joined)? else {
         return None;
     };
     let e = &line.entry;
@@ -69,6 +71,10 @@ pub(super) struct Collected {
     /// not be projected: named in the signed manifest, never dropped silently.
     pub(super) unreadable: usize,
     pub(super) truncated: Truncated,
+    /// Admitted calls whose join was incomplete, summed across passes.
+    pub(super) join_incomplete: usize,
+    /// Calls whose delivery record failed the trust rule or was duplicated.
+    pub(super) answer_integrity_failed: usize,
     /// Each log's anchor state (invocation, governance), reported even when
     /// no row fails, so a broken anchor is never a clean-looking export.
     pub(super) signing_anchor: [&'static str; 2],
@@ -85,14 +91,45 @@ pub(super) fn collect(
     caps: Caps,
     size: impl Fn(&Value) -> usize,
 ) -> std::io::Result<Collected> {
-    let keep = |line: &Line| {
-        kind_of(line).is_some_and(|kind| filter.matches(line, kind) && access.admits(line, kind))
+    let joiner = std::cell::RefCell::new(Joiner::new(check));
+    let answers = std::cell::RefCell::new(Vec::<Joined>::new());
+    let mut keep = |line: &Line, seen: Seen| {
+        let mut j = joiner.borrow_mut();
+        if j.observe(line) {
+            return false;
+        }
+        let Some(kind) = kind_of(line) else {
+            return false;
+        };
+        // Only a call has an answer to join; a refusal has none.
+        let this = if kind == Kind::Call {
+            j.join(line, seen)
+        } else {
+            NOT_A_CALL
+        };
+        if !access.admits(line, kind) {
+            return false;
+        }
+        if kind == Kind::Call {
+            j.count(&this);
+        }
+        let hit = filter.matches(line, kind, &this);
+        if hit {
+            answers.borrow_mut().push(this);
+        }
+        hit
+    };
+    let mut carried = Seen {
+        above: 0,
+        head_covered: true,
     };
     let mut c = Collected {
         rows: Vec::new(),
         sources: Vec::new(),
         unreadable: 0,
         truncated: Truncated::None,
+        join_incomplete: 0,
+        answer_integrity_failed: 0,
         signing_anchor: [Which::Invocation, Which::Governance].map(|w| check.report(w)),
     };
     // The report is taken when the export ends, after every row was judged,
@@ -110,7 +147,17 @@ pub(super) fn collect(
             matches: PASS,
             bytes: caps.scan.saturating_sub(scanned),
         };
-        let page = read_page(inv, gov, cursor.as_ref(), limits, keep)?;
+        // One request reads every pass, so what lies above a pass's top was
+        // read by an earlier pass: nothing is looked up, the position carries.
+        let look = Look::Carried(carried);
+        let page = read_page_joined(inv, gov, cursor.as_ref(), limits, look, &mut keep)?;
+        carried = page.above_end;
+        let pass_answers = answers.take();
+        {
+            let j = joiner.borrow();
+            c.join_incomplete = j.join_incomplete;
+            c.answer_integrity_failed = j.answer_integrity_failed;
+        }
         // A pass after the first that restarted (retention removed the
         // segment the export was in) would append newer rows to older ones.
         if cursor.is_some() && page.cursor_reset {
@@ -121,11 +168,11 @@ pub(super) fn collect(
         }
         scanned += page.bytes_examined;
         c.unreadable += page.unreadable.len();
-        for line in &page.lines {
+        for (line, answer) in page.lines.iter().zip(&pass_answers) {
             let Some(kind) = kind_of(line) else { continue };
             // A matched record that cannot be projected (no counter or hash)
             // is counted, never dropped silently.
-            let Some(r) = export_row(line, kind, check) else {
+            let Some(r) = export_row(line, kind, check, answer) else {
                 c.unreadable += 1;
                 continue;
             };
@@ -169,7 +216,11 @@ pub(super) fn ndjson(
     let mut bytes = Vec::new();
     let mut integrity_failed = 0_usize;
     for r in &collected.rows {
-        if r.get("integrity").is_some() {
+        let answer_failed = matches!(
+            r.get("answer_integrity").and_then(Value::as_str),
+            Some("invalid" | "unsigned")
+        );
+        if r.get("integrity").is_some() || answer_failed {
             integrity_failed += 1;
         }
         bytes.extend_from_slice(r.to_string().as_bytes());
@@ -209,6 +260,12 @@ pub(super) fn ndjson(
         .count();
     manifest.insert("anchor_faults".into(), faults.into());
     manifest.insert("unreadable".into(), collected.unreadable.into());
+    manifest.insert("join_incomplete".into(), collected.join_incomplete.into());
+    manifest.insert(
+        "answer_integrity_failed".into(),
+        collected.answer_integrity_failed.into(),
+    );
+    manifest.insert("answer_integrity_scope".into(), SCOPE_LABEL.into());
     manifest.insert("truncated".into(), collected.truncated.as_str().into());
     manifest.insert("sha256".into(), hex::encode(Sha256::digest(&bytes)).into());
     manifest.insert("kid".into(), signer.kid().into());
@@ -225,7 +282,7 @@ pub(super) fn ndjson(
 }
 
 /// The CSV columns, in order.
-const COLUMNS: [&str; 33] = [
+const COLUMNS: [&str; 37] = [
     "id",
     "kind",
     "counter",
@@ -260,6 +317,11 @@ const COLUMNS: [&str; 33] = [
     "reach",
     "findings",
     "findings_truncated",
+    // API2.10: the delivery record joined to the call.
+    "effect",
+    "answer_findings",
+    "answer_findings_total",
+    "answer_integrity_scope",
 ];
 
 fn cell_value<'a>(row: &'a Value, column: &str) -> Option<&'a Value> {
