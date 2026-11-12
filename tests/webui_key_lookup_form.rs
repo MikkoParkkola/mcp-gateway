@@ -59,6 +59,7 @@ globalThis.apiKey = 'k';
 globalThis.authState = 'admin';
 globalThis.authHeaders = () => ({ Accept: 'application/json', Authorization: 'Bearer k' });
 globalThis.refusedMessage = () => 'refused';
+globalThis.AuthRefused = class extends Error {};
 globalThis.uiFetch = async (url, opts) => {
   calls.push({ url, opts, emailField: dom['kl-email']?.value });
   const r = replies.shift();
@@ -334,5 +335,33 @@ fn the_page_is_hidden_from_everyone_but_an_admin() {
     assert!(
         INDEX.contains("navKeyAudit.style.display = state === 'admin' ? '' : 'none'"),
         "renderAuth must show the link for an admin state only"
+    );
+}
+
+/// UIFORM.1: Clear, leaving the page and losing admin standing all drop the
+/// held query, the field and the rows. Mutant: skip the clear in `onHash` or
+/// in `renderAuth`, or leave the held query set.
+#[test]
+fn clear_leaving_and_losing_admin_drop_everything() {
+    let got = run(r"
+replies = [page([row('s1')], { next_cursor: 'c1' })];
+await submit('ada@corp.test');
+const before = keyLookupHeld !== null;
+keyLookupClear();
+out({ before, held: keyLookupHeld, field: dom['kl-email'].value,
+  rows: dom['kl-rows'].children.length, next: dom['kl-next'].hidden });
+");
+    assert_eq!(got["before"], true);
+    assert_eq!(got["held"], serde_json::Value::Null);
+    assert_eq!(got["field"], "");
+    assert_eq!(got["rows"], 0);
+    assert_eq!(got["next"], true);
+    assert!(
+        INDEX.contains("if (hash !== 'key-audit') keyLookupClear();"),
+        "leaving the page must drop the query"
+    );
+    assert!(
+        INDEX.contains("if (state !== 'admin') keyLookupClear();"),
+        "losing admin standing must drop the query"
     );
 }

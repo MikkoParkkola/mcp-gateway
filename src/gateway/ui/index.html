@@ -309,6 +309,7 @@ tr:hover td { background: var(--bg3); }
     <a href="#capabilities" class="nav-link" data-page="capabilities">Capabilities</a>
     <a href="#config" class="nav-link" data-page="config">Config</a>
     <a href="#costs" class="nav-link" data-page="costs">Costs</a>
+    <a href="#key-audit" class="nav-link" data-page="key-audit" id="nav-key-audit" style="display:none">Key audit</a>
   </nav>
 
   <main>
@@ -552,6 +553,25 @@ tr:hover td { background: var(--bg3); }
       <div class="config-block" id="config-content" tabindex="0" role="region" aria-label="Current configuration">Loading...</div>
     </div>
 
+    <!-- Key audit: the admin email lookup. The email is typed, sent once and cleared. -->
+    <div id="page-key-audit" class="page">
+      <h1>Key audit</h1>
+      <p style="color:var(--fg2);font-size:0.9rem;margin-bottom:1rem">Find the key server's retained token issuances for one email. The email is hashed on the server for this request and is not stored, logged or shown again.</p>
+      <form id="kl-form" class="form-panel" onsubmit="return submitKeyLookup(event)">
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label for="kl-email">Email</label>
+          <input type="text" id="kl-email" autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="320" placeholder="person@company.com">
+        </div>
+        <button class="btn" type="submit" id="kl-submit">Look up</button>
+        <button class="btn btn-secondary" type="button" id="kl-clear" onclick="keyLookupClear()">Clear</button>
+      </form>
+      <p id="kl-status" role="status" aria-live="polite" style="margin-top:0.75rem"></p>
+      <p id="kl-scope" style="color:var(--fg2);font-size:0.85rem"></p>
+      <p id="kl-notes" style="color:var(--fg2);font-size:0.85rem"></p>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Retained issuances"><div id="kl-rows"></div></div>
+      <button class="btn btn-secondary" type="button" id="kl-next" onclick="keyLookupNext()" hidden>Next page</button>
+    </div>
+
     <!-- Costs -->
     <div id="page-costs" class="page">
       <h1>Costs</h1>
@@ -612,6 +632,7 @@ const authDot = document.getElementById('auth-dot');
 const authLabel = document.getElementById('auth-label');
 const authBtn = document.getElementById('auth-btn');
 const authBanner = document.getElementById('auth-banner');
+const navKeyAudit = document.getElementById('nav-key-audit');
 
 // MIK-8786: the page's auth state comes from the facts /ui/api/status
 // states, never from a 200 alone. "off" needs an explicit enabled === false;
@@ -646,6 +667,8 @@ function renderAuth(state) {
   if (view[2]) { authBtn.textContent = view[2]; authBtn.style.display = ''; } else { authBtn.style.display = 'none'; }
   authBanner.textContent = view[3];
   authBanner.style.display = view[3] ? '' : 'none';
+  navKeyAudit.style.display = state === 'admin' ? '' : 'none';
+  if (state !== 'admin') keyLookupClear();
 }
 
 // The plain line a refused call shows, chosen from the current state.
@@ -739,6 +762,131 @@ async function apiFetch(url, opts = {}, poll = false) {
   return r.json();
 }
 
+// KEY-LOOKUP BEGIN
+// Key audit: the admin email lookup. The email is typed, sent once and
+// cleared from the field before the request leaves. While a next page exists
+// the query is held in this variable only (never in storage, the URL or a
+// log) because the server's cursor is bound to the email; it is dropped on the
+// last page, on any failure but a throttle, on Clear, on leaving the page and
+// when the caller stops being an admin.
+const KEY_LOOKUP_URL = '/ui/api/key-server/audit/lookup-email';
+const KEY_LOOKUP_MAX_ROWS = 200;
+let keyLookupHeld = null;
+let keyLookupBusy = false;
+
+function keyLookupSay(text) {
+  document.getElementById('kl-status').textContent = text;
+}
+
+function keyLookupReset() {
+  document.getElementById('kl-rows').replaceChildren();
+  document.getElementById('kl-scope').textContent = '';
+  document.getElementById('kl-notes').textContent = '';
+  document.getElementById('kl-next').hidden = true;
+}
+
+function keyLookupClear() {
+  keyLookupHeld = null;
+  document.getElementById('kl-email').value = '';
+  keyLookupSay('');
+  keyLookupReset();
+}
+
+// A row is accepted only whole: text fields are text, lists are lists of text.
+function keyLookupRowOk(r) {
+  const text = (v) => typeof v === 'string';
+  const list = (v) => Array.isArray(v) && v.every(text);
+  return r !== null && typeof r === 'object' && text(r.timestamp) && text(r.subject)
+    && text(r.issuer) && text(r.token_jti) && list(r.backends) && list(r.tools);
+}
+
+function keyLookupDecode(body) {
+  const ok = body !== null && typeof body === 'object' && Array.isArray(body.rows)
+    && body.rows.length <= KEY_LOOKUP_MAX_ROWS && body.rows.every(keyLookupRowOk)
+    && (body.next_cursor === null || typeof body.next_cursor === 'string')
+    && typeof body.scan_exhausted === 'boolean' && typeof body.cursor_reset === 'boolean'
+    && Number.isInteger(body.unreadable) && body.unreadable >= 0;
+  return ok ? body : null;
+}
+
+function keyLookupCell(tag, text) {
+  const cell = document.createElement(tag);
+  cell.append(document.createTextNode(text));
+  return cell;
+}
+
+function keyLookupShow(body) {
+  const rows = document.getElementById('kl-rows');
+  rows.replaceChildren();
+  for (const r of body.rows) {
+    const line = document.createElement('div');
+    line.append(keyLookupCell('span', r.timestamp + '  '), keyLookupCell('strong', r.subject),
+      keyLookupCell('span', '  ' + r.issuer + '  [' + r.backends.join(', ') + ']'));
+    rows.append(line);
+  }
+  keyLookupSay(body.rows.length === 0 ? 'No retained issuance matches.' : body.rows.length + ' retained issuance(s) on this page.');
+  document.getElementById('kl-scope').textContent = 'Covers retained audit rows only: older rows that were rotated away are not searched.';
+  const notes = [];
+  if (body.scan_exhausted) notes.push('The scan stopped at its read budget before the end: more rows may exist, use Next page to continue.');
+  if (body.cursor_reset) notes.push('The page position was no longer kept, so the search restarted from the newest rows.');
+  if (body.unreadable > 0) notes.push(body.unreadable + ' unreadable line(s) were skipped.');
+  document.getElementById('kl-notes').textContent = notes.join(' ');
+  document.getElementById('kl-next').hidden = body.next_cursor === null;
+}
+
+// The server's wait in whole seconds, or null when it is missing or absurd.
+function keyLookupWait(res) {
+  const n = Number(res.headers.get('retry-after'));
+  return Number.isInteger(n) && n >= 1 && n <= 3600 ? n : null;
+}
+
+async function keyLookupRun(query) {
+  if (authState !== 'admin') { keyLookupHeld = null; keyLookupSay(refusedMessage(403)); return; }
+  if (keyLookupBusy) return;
+  keyLookupBusy = true;
+  try {
+    const res = await uiFetch(KEY_LOOKUP_URL, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(query),
+    });
+    if (res.status === 429) {
+      const wait = keyLookupWait(res);
+      keyLookupHeld = query.cursor ? query : null;
+      keyLookupSay(wait === null ? 'Too many lookups. Try again in a little while.' : 'Too many lookups. Try again in ' + wait + ' seconds.');
+      return;
+    }
+    const body = res.ok ? keyLookupDecode(await res.json().catch(() => null)) : null;
+    if (body === null) { keyLookupHeld = null; keyLookupReset(); keyLookupSay('The lookup failed.'); return; }
+    keyLookupHeld = body.next_cursor === null ? null : { ...query, cursor: body.next_cursor };
+    keyLookupShow(body);
+  } catch (e) {
+    keyLookupHeld = null;
+    keyLookupReset();
+    keyLookupSay(e instanceof AuthRefused ? e.message : 'The lookup failed.');
+  } finally {
+    keyLookupBusy = false;
+  }
+}
+
+async function submitKeyLookup(event) {
+  event.preventDefault();
+  const field = document.getElementById('kl-email');
+  const email = field.value.trim();
+  field.value = '';
+  keyLookupHeld = null;
+  keyLookupReset();
+  if (email === '') { keyLookupSay('Type an email first.'); return false; }
+  await keyLookupRun({ email });
+  return false;
+}
+
+async function keyLookupNext() {
+  if (keyLookupHeld !== null) await keyLookupRun(keyLookupHeld);
+}
+// KEY-LOOKUP END
+
 renderAuth('signed_out');
 refreshDashboard();
 
@@ -755,6 +903,7 @@ function showPage(name) {
 function onHash() {
   const hash = location.hash.replace('#', '') || 'dashboard';
   showPage(hash);
+  if (hash !== 'key-audit') keyLookupClear();
   if (hash === 'tools') refreshTools();
   if (hash === 'control-plane') refreshControlPlane();
   if (hash === 'capabilities') refreshCapabilities();
