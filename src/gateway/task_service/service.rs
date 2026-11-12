@@ -93,10 +93,10 @@ impl TaskService {
         self.store.keep_test_dir(dir);
     }
 
-    /// Test-only: the gateway opened this service's store, not a test.
+    /// Test-only: hold the ownership acquired before this service's store opened.
     #[cfg(test)]
-    pub(crate) fn opened_by_gateway(&self) {
-        self.store.opened_by_gateway();
+    pub(crate) fn attach_registered(&self, found: crate::test_dir_keep::Found) {
+        self.store.attach_registered(found);
     }
 
     /// Open the durable store and hand its committed ownership bindings to

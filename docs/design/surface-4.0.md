@@ -166,7 +166,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
-| `env` | 19 | `MCP_GATEWAY_CAPABILITIES` | `MCP_GATEWAY_PROTOCOL_REVISION_WINDOW` | `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_MUTANT`; `MCP_GATEWAY_MUTANT_CHILD`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_CLOCK`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`; `MCP_GATEWAY_TEST_TRUST_CA` |  |
+| `env` | 20 | `MCP_GATEWAY_CAPABILITIES` | `MCP_GATEWAY_PROTOCOL_REVISION_WINDOW` | `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_MUTANT`; `MCP_GATEWAY_MUTANT_CHILD`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_CLOCK`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`; `MCP_GATEWAY_TEST_TRUST_CA` |  |
 
 ### routes
 
@@ -1411,6 +1411,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | docs/runtime/provider_planner.md:193 |
 | `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | docs/runtime/provider_planner.md:194 |
 | `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | docs/runtime/provider_planner.md:185 |
+| `MCP_GATEWAY_SECRETS__STORE` | KEEP | overlay spelling of the KEEP `secrets.store` key; `init` also reads it, so CI and headless installs can say `files` for one run without a config that does not exist yet | - | src/cli_support/init.rs:22 |
 | `MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND` | KEEP | documented overlay spelling of a KEEP `server` key | - | README.md:102 |
 | `MCP_GATEWAY_SERVER__CLEARTEXT_HTTP` | KEEP | documented overlay spelling of a KEEP `server` key | - | README.md:102 |
 | `MCP_GATEWAY_SERVER__PORT` | KEEP | documented overlay spelling of a KEEP `server` key | - | docs/DEPLOYMENT.md:335 |

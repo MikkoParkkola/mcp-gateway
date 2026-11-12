@@ -56,10 +56,16 @@ mcp-gateway init --profile local
 docker build --target runtime -t mcp-gateway:latest .
 # Linux bind mounts: prepare a dedicated owner-only copy for container UID 1001.
 install -m 600 gateway.yaml gateway.container.yaml
+# init stored the admin token on this host and wrote a reference to it; the
+# container cannot read that path. Point the copy at an environment variable
+# and read the token out as docs/QUICKSTART.md ("Read the admin token for a client") shows.
+sed -i 's|^\( *bearer_token: *\).*|\1"env:MCP_GATEWAY_TOKEN"|' gateway.container.yaml
+export MCP_GATEWAY_TOKEN="$(cat '/absolute/config-dir/secrets/NAME')"
 sudo chown 1001:1001 gateway.container.yaml
 
 docker run -d --name mcp-gateway \
   -p 127.0.0.1:39400:39400 \
+  -e MCP_GATEWAY_TOKEN \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
   -v ./gateway.container.yaml:/config.yaml:ro \
@@ -1376,15 +1382,18 @@ that is not in a working tree:
 ```json
 { "mcpServers": { "gateway": {
     "url": "http://127.0.0.1:39400/mcp",
-    "headers": { "Authorization": "Bearer <the token in gateway.yaml>" }
+    "headers": { "Authorization": "Bearer <the admin token value>" }
 } } }
 ```
 
+`gateway.yaml` holds only a reference to the token, never the token. Retrieve the
+value as described in [Read the admin token for a client](QUICKSTART.md#read-the-admin-token-for-a-client).
+
 ### Opening the dashboard
 
-`mcp-gateway init` generates an admin credential for the install and writes it
-into `gateway.yaml`, which is created readable only by you on Unix (Windows
-takes the directory's inherited permissions). Tools work without
+`mcp-gateway init` generates an admin credential for the install, stores it in the
+secret store and writes only a reference into `gateway.yaml`, which is created
+readable only by you on Unix (Windows takes the directory's inherited permissions). Tools work without
 it; managing the gateway and reading the dashboard need it.
 
 A browser cannot attach an `Authorization` header to a navigation, so `serve`
