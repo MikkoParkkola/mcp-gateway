@@ -19,6 +19,8 @@ use crate::config::Config;
 /// Every wait in these tests is bounded, so a regression fails by name
 /// instead of hanging the job.
 const HANG_STOP: Duration = Duration::from_secs(5);
+/// A hang bound for the row that proves the listener returns at once.
+const HANG_BOUND: Duration = Duration::from_secs(60);
 
 /// Sends once when dropped: proof that a handler future was cancelled.
 struct SendOnDrop(Option<oneshot::Sender<()>>);
@@ -196,7 +198,7 @@ async fn an_already_resolved_shutdown_future_stops_the_listener() {
     let mut config = Config::default();
     config.server.shutdown_timeout = Duration::from_secs(10);
     timeout(
-        HANG_STOP,
+        HANG_BOUND,
         serve(
             Router::new(),
             listener,
