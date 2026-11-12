@@ -3,8 +3,8 @@
 /ui/api/events/leases	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/events/leases	DELETE	plain	AuthOff	405
 /ui/api/events/leases	DELETE	plain	Bearer	405
-/ui/api/events/leases	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/events/leases	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/leases	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/events/leases	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/leases	DELETE	plain	OidcAdmin	405
 /ui/api/events/leases	DELETE	plain	OidcAuditor	405
 /ui/api/events/leases	DELETE	plain	OidcDeveloper	405
@@ -16,34 +16,34 @@
 /ui/api/events/leases	DELETE	plain	StandardKey	405
 /ui/api/events/leases	GET	bad-query	AdminKey	404
 /ui/api/events/leases	GET	bad-query	AdminKeyUnmapped	404
-/ui/api/events/leases	GET	bad-query	AuthOff	403:@b_078e5133
+/ui/api/events/leases	GET	bad-query	AuthOff	403:error="Admin authentication required"
 /ui/api/events/leases	GET	bad-query	Bearer	404
-/ui/api/events/leases	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/events/leases	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/events/leases	GET	bad-query	OidcAdmin	403:@b_078e5133
-/ui/api/events/leases	GET	bad-query	OidcAuditor	403:@b_078e5133
-/ui/api/events/leases	GET	bad-query	OidcDeveloper	403:@b_078e5133
-/ui/api/events/leases	GET	bad-query	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/events/leases	GET	bad-query	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/events/leases	GET	bad-query	OidcReviewer	403:@b_078e5133
-/ui/api/events/leases	GET	bad-query	OidcUnmapped	403:@b_078e5133
+/ui/api/events/leases	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/events/leases	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/leases	GET	bad-query	OidcAdmin	403:error="Admin authentication required"
+/ui/api/events/leases	GET	bad-query	OidcAuditor	403:error="Admin authentication required"
+/ui/api/events/leases	GET	bad-query	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/events/leases	GET	bad-query	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/events/leases	GET	bad-query	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/events/leases	GET	bad-query	OidcReviewer	403:error="Admin authentication required"
+/ui/api/events/leases	GET	bad-query	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/events/leases	GET	bad-query	Session	404
-/ui/api/events/leases	GET	bad-query	StandardKey	403:@b_078e5133
+/ui/api/events/leases	GET	bad-query	StandardKey	403:error="Admin authentication required"
 /ui/api/events/leases	GET	plain	AdminKey	404
 /ui/api/events/leases	GET	plain	AdminKeyUnmapped	404
-/ui/api/events/leases	GET	plain	AuthOff	403:@b_078e5133
+/ui/api/events/leases	GET	plain	AuthOff	403:error="Admin authentication required"
 /ui/api/events/leases	GET	plain	Bearer	404
-/ui/api/events/leases	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/events/leases	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/events/leases	GET	plain	OidcAdmin	403:@b_078e5133
-/ui/api/events/leases	GET	plain	OidcAuditor	403:@b_078e5133
-/ui/api/events/leases	GET	plain	OidcDeveloper	403:@b_078e5133
-/ui/api/events/leases	GET	plain	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/events/leases	GET	plain	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/events/leases	GET	plain	OidcReviewer	403:@b_078e5133
-/ui/api/events/leases	GET	plain	OidcUnmapped	403:@b_078e5133
+/ui/api/events/leases	GET	plain	NoKey	401:error.code=-32000
+/ui/api/events/leases	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/events/leases	GET	plain	OidcAdmin	403:error="Admin authentication required"
+/ui/api/events/leases	GET	plain	OidcAuditor	403:error="Admin authentication required"
+/ui/api/events/leases	GET	plain	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/events/leases	GET	plain	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/events/leases	GET	plain	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/events/leases	GET	plain	OidcReviewer	403:error="Admin authentication required"
+/ui/api/events/leases	GET	plain	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/events/leases	GET	plain	Session	404
-/ui/api/events/leases	GET	plain	StandardKey	403:@b_078e5133
+/ui/api/events/leases	GET	plain	StandardKey	403:error="Admin authentication required"
 /ui/api/events/leases	HEAD	plain	AdminKey	404
 /ui/api/events/leases	HEAD	plain	AdminKeyUnmapped	404
 /ui/api/events/leases	HEAD	plain	AuthOff	403
@@ -63,8 +63,8 @@
 /ui/api/events/leases	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/events/leases	OPTIONS	plain	AuthOff	405
 /ui/api/events/leases	OPTIONS	plain	Bearer	405
-/ui/api/events/leases	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/events/leases	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/leases	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/events/leases	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/leases	OPTIONS	plain	OidcAdmin	405
 /ui/api/events/leases	OPTIONS	plain	OidcAuditor	405
 /ui/api/events/leases	OPTIONS	plain	OidcDeveloper	405
@@ -78,8 +78,8 @@
 /ui/api/events/leases	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/events/leases	PATCH	bad-json	AuthOff	405
 /ui/api/events/leases	PATCH	bad-json	Bearer	405
-/ui/api/events/leases	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/events/leases	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/leases	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/events/leases	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/leases	PATCH	bad-json	OidcAdmin	405
 /ui/api/events/leases	PATCH	bad-json	OidcAuditor	405
 /ui/api/events/leases	PATCH	bad-json	OidcDeveloper	405
@@ -93,8 +93,8 @@
 /ui/api/events/leases	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/events/leases	PATCH	bad-type	AuthOff	405
 /ui/api/events/leases	PATCH	bad-type	Bearer	405
-/ui/api/events/leases	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/events/leases	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/leases	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/events/leases	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/leases	PATCH	bad-type	OidcAdmin	405
 /ui/api/events/leases	PATCH	bad-type	OidcAuditor	405
 /ui/api/events/leases	PATCH	bad-type	OidcDeveloper	405
@@ -108,8 +108,8 @@
 /ui/api/events/leases	PATCH	json	AdminKeyUnmapped	405
 /ui/api/events/leases	PATCH	json	AuthOff	405
 /ui/api/events/leases	PATCH	json	Bearer	405
-/ui/api/events/leases	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/events/leases	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/leases	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/events/leases	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/leases	PATCH	json	OidcAdmin	405
 /ui/api/events/leases	PATCH	json	OidcAuditor	405
 /ui/api/events/leases	PATCH	json	OidcDeveloper	405
@@ -123,8 +123,8 @@
 /ui/api/events/leases	POST	bad-json	AdminKeyUnmapped	405
 /ui/api/events/leases	POST	bad-json	AuthOff	405
 /ui/api/events/leases	POST	bad-json	Bearer	405
-/ui/api/events/leases	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/events/leases	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/leases	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/events/leases	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/leases	POST	bad-json	OidcAdmin	405
 /ui/api/events/leases	POST	bad-json	OidcAuditor	405
 /ui/api/events/leases	POST	bad-json	OidcDeveloper	405
@@ -138,8 +138,8 @@
 /ui/api/events/leases	POST	bad-type	AdminKeyUnmapped	405
 /ui/api/events/leases	POST	bad-type	AuthOff	405
 /ui/api/events/leases	POST	bad-type	Bearer	405
-/ui/api/events/leases	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/events/leases	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/leases	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/events/leases	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/leases	POST	bad-type	OidcAdmin	405
 /ui/api/events/leases	POST	bad-type	OidcAuditor	405
 /ui/api/events/leases	POST	bad-type	OidcDeveloper	405
@@ -153,8 +153,8 @@
 /ui/api/events/leases	POST	json	AdminKeyUnmapped	405
 /ui/api/events/leases	POST	json	AuthOff	405
 /ui/api/events/leases	POST	json	Bearer	405
-/ui/api/events/leases	POST	json	NoKey	401:@b_de6b5592
-/ui/api/events/leases	POST	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/leases	POST	json	NoKey	401:error.code=-32000
+/ui/api/events/leases	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/leases	POST	json	OidcAdmin	405
 /ui/api/events/leases	POST	json	OidcAuditor	405
 /ui/api/events/leases	POST	json	OidcDeveloper	405
@@ -168,8 +168,8 @@
 /ui/api/events/leases	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/events/leases	PUT	bad-json	AuthOff	405
 /ui/api/events/leases	PUT	bad-json	Bearer	405
-/ui/api/events/leases	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/events/leases	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/leases	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/events/leases	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/leases	PUT	bad-json	OidcAdmin	405
 /ui/api/events/leases	PUT	bad-json	OidcAuditor	405
 /ui/api/events/leases	PUT	bad-json	OidcDeveloper	405
@@ -183,8 +183,8 @@
 /ui/api/events/leases	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/events/leases	PUT	bad-type	AuthOff	405
 /ui/api/events/leases	PUT	bad-type	Bearer	405
-/ui/api/events/leases	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/events/leases	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/leases	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/events/leases	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/leases	PUT	bad-type	OidcAdmin	405
 /ui/api/events/leases	PUT	bad-type	OidcAuditor	405
 /ui/api/events/leases	PUT	bad-type	OidcDeveloper	405
@@ -198,8 +198,8 @@
 /ui/api/events/leases	PUT	json	AdminKeyUnmapped	405
 /ui/api/events/leases	PUT	json	AuthOff	405
 /ui/api/events/leases	PUT	json	Bearer	405
-/ui/api/events/leases	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/events/leases	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/events/leases	PUT	json	NoKey	401:error.code=-32000
+/ui/api/events/leases	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/events/leases	PUT	json	OidcAdmin	405
 /ui/api/events/leases	PUT	json	OidcAuditor	405
 /ui/api/events/leases	PUT	json	OidcDeveloper	405

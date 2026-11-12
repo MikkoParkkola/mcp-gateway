@@ -90,6 +90,10 @@ impl Gate {
         }
         drop(g);
     }
+    /// Whether a write has reached the gate yet; never waits.
+    pub(crate) fn has_entered(&self) -> bool {
+        self.0.0.lock().expect("gate").entered
+    }
     /// Whether a write waited past the watchdog.
     pub(crate) fn fired(&self) -> bool {
         self.0.0.lock().expect("gate").fired

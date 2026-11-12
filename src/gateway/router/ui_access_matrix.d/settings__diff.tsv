@@ -3,8 +3,8 @@
 /ui/api/settings/diff	DELETE	plain	AdminKeyUnmapped	405
 /ui/api/settings/diff	DELETE	plain	AuthOff	405
 /ui/api/settings/diff	DELETE	plain	Bearer	405
-/ui/api/settings/diff	DELETE	plain	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	DELETE	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/settings/diff	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/settings/diff	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/settings/diff	DELETE	plain	OidcAdmin	405
 /ui/api/settings/diff	DELETE	plain	OidcAuditor	405
 /ui/api/settings/diff	DELETE	plain	OidcDeveloper	405
@@ -18,8 +18,8 @@
 /ui/api/settings/diff	GET	bad-query	AdminKeyUnmapped	405
 /ui/api/settings/diff	GET	bad-query	AuthOff	405
 /ui/api/settings/diff	GET	bad-query	Bearer	405
-/ui/api/settings/diff	GET	bad-query	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	GET	bad-query	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/settings/diff	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/settings/diff	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/settings/diff	GET	bad-query	OidcAdmin	405
 /ui/api/settings/diff	GET	bad-query	OidcAuditor	405
 /ui/api/settings/diff	GET	bad-query	OidcDeveloper	405
@@ -33,8 +33,8 @@
 /ui/api/settings/diff	GET	plain	AdminKeyUnmapped	405
 /ui/api/settings/diff	GET	plain	AuthOff	405
 /ui/api/settings/diff	GET	plain	Bearer	405
-/ui/api/settings/diff	GET	plain	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	GET	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/settings/diff	GET	plain	NoKey	401:error.code=-32000
+/ui/api/settings/diff	GET	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/settings/diff	GET	plain	OidcAdmin	405
 /ui/api/settings/diff	GET	plain	OidcAuditor	405
 /ui/api/settings/diff	GET	plain	OidcDeveloper	405
@@ -63,8 +63,8 @@
 /ui/api/settings/diff	OPTIONS	plain	AdminKeyUnmapped	405
 /ui/api/settings/diff	OPTIONS	plain	AuthOff	405
 /ui/api/settings/diff	OPTIONS	plain	Bearer	405
-/ui/api/settings/diff	OPTIONS	plain	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	OPTIONS	plain	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/settings/diff	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/settings/diff	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/settings/diff	OPTIONS	plain	OidcAdmin	405
 /ui/api/settings/diff	OPTIONS	plain	OidcAuditor	405
 /ui/api/settings/diff	OPTIONS	plain	OidcDeveloper	405
@@ -78,8 +78,8 @@
 /ui/api/settings/diff	PATCH	bad-json	AdminKeyUnmapped	405
 /ui/api/settings/diff	PATCH	bad-json	AuthOff	405
 /ui/api/settings/diff	PATCH	bad-json	Bearer	405
-/ui/api/settings/diff	PATCH	bad-json	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	PATCH	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/settings/diff	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/settings/diff	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/settings/diff	PATCH	bad-json	OidcAdmin	405
 /ui/api/settings/diff	PATCH	bad-json	OidcAuditor	405
 /ui/api/settings/diff	PATCH	bad-json	OidcDeveloper	405
@@ -93,8 +93,8 @@
 /ui/api/settings/diff	PATCH	bad-type	AdminKeyUnmapped	405
 /ui/api/settings/diff	PATCH	bad-type	AuthOff	405
 /ui/api/settings/diff	PATCH	bad-type	Bearer	405
-/ui/api/settings/diff	PATCH	bad-type	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	PATCH	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/settings/diff	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/settings/diff	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/settings/diff	PATCH	bad-type	OidcAdmin	405
 /ui/api/settings/diff	PATCH	bad-type	OidcAuditor	405
 /ui/api/settings/diff	PATCH	bad-type	OidcDeveloper	405
@@ -108,8 +108,8 @@
 /ui/api/settings/diff	PATCH	json	AdminKeyUnmapped	405
 /ui/api/settings/diff	PATCH	json	AuthOff	405
 /ui/api/settings/diff	PATCH	json	Bearer	405
-/ui/api/settings/diff	PATCH	json	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	PATCH	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/settings/diff	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/settings/diff	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/settings/diff	PATCH	json	OidcAdmin	405
 /ui/api/settings/diff	PATCH	json	OidcAuditor	405
 /ui/api/settings/diff	PATCH	json	OidcDeveloper	405
@@ -121,70 +121,70 @@
 /ui/api/settings/diff	PATCH	json	StandardKey	405
 /ui/api/settings/diff	POST	bad-json	AdminKey	422
 /ui/api/settings/diff	POST	bad-json	AdminKeyUnmapped	422
-/ui/api/settings/diff	POST	bad-json	AuthOff	403:@b_078e5133
+/ui/api/settings/diff	POST	bad-json	AuthOff	403:error="Admin authentication required"
 /ui/api/settings/diff	POST	bad-json	Bearer	422
-/ui/api/settings/diff	POST	bad-json	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	POST	bad-json	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/settings/diff	POST	bad-json	OidcAdmin	403:@b_078e5133
-/ui/api/settings/diff	POST	bad-json	OidcAuditor	403:@b_078e5133
-/ui/api/settings/diff	POST	bad-json	OidcDeveloper	403:@b_078e5133
-/ui/api/settings/diff	POST	bad-json	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/settings/diff	POST	bad-json	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/settings/diff	POST	bad-json	OidcReviewer	403:@b_078e5133
-/ui/api/settings/diff	POST	bad-json	OidcUnmapped	403:@b_078e5133
+/ui/api/settings/diff	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/settings/diff	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/settings/diff	POST	bad-json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	bad-json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	bad-json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	bad-json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	bad-json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	bad-json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	bad-json	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/settings/diff	POST	bad-json	Session	422
-/ui/api/settings/diff	POST	bad-json	StandardKey	403:@b_078e5133
+/ui/api/settings/diff	POST	bad-json	StandardKey	403:error="Admin authentication required"
 /ui/api/settings/diff	POST	bad-type	AdminKey	422
 /ui/api/settings/diff	POST	bad-type	AdminKeyUnmapped	422
-/ui/api/settings/diff	POST	bad-type	AuthOff	403:@b_078e5133
+/ui/api/settings/diff	POST	bad-type	AuthOff	403:error="Admin authentication required"
 /ui/api/settings/diff	POST	bad-type	Bearer	422
-/ui/api/settings/diff	POST	bad-type	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	POST	bad-type	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/settings/diff	POST	bad-type	OidcAdmin	403:@b_078e5133
-/ui/api/settings/diff	POST	bad-type	OidcAuditor	403:@b_078e5133
-/ui/api/settings/diff	POST	bad-type	OidcDeveloper	403:@b_078e5133
-/ui/api/settings/diff	POST	bad-type	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/settings/diff	POST	bad-type	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/settings/diff	POST	bad-type	OidcReviewer	403:@b_078e5133
-/ui/api/settings/diff	POST	bad-type	OidcUnmapped	403:@b_078e5133
+/ui/api/settings/diff	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/settings/diff	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/settings/diff	POST	bad-type	OidcAdmin	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	bad-type	OidcAuditor	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	bad-type	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	bad-type	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	bad-type	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	bad-type	OidcReviewer	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	bad-type	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/settings/diff	POST	bad-type	Session	422
-/ui/api/settings/diff	POST	bad-type	StandardKey	403:@b_078e5133
+/ui/api/settings/diff	POST	bad-type	StandardKey	403:error="Admin authentication required"
 /ui/api/settings/diff	POST	json	AdminKey	422
 /ui/api/settings/diff	POST	json	AdminKeyUnmapped	422
-/ui/api/settings/diff	POST	json	AuthOff	403:@b_078e5133
+/ui/api/settings/diff	POST	json	AuthOff	403:error="Admin authentication required"
 /ui/api/settings/diff	POST	json	Bearer	422
-/ui/api/settings/diff	POST	json	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	POST	json	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/settings/diff	POST	json	OidcAdmin	403:@b_078e5133
-/ui/api/settings/diff	POST	json	OidcAuditor	403:@b_078e5133
-/ui/api/settings/diff	POST	json	OidcDeveloper	403:@b_078e5133
-/ui/api/settings/diff	POST	json	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/settings/diff	POST	json	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/settings/diff	POST	json	OidcReviewer	403:@b_078e5133
-/ui/api/settings/diff	POST	json	OidcUnmapped	403:@b_078e5133
+/ui/api/settings/diff	POST	json	NoKey	401:error.code=-32000
+/ui/api/settings/diff	POST	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/settings/diff	POST	json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	json	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/settings/diff	POST	json	Session	422
-/ui/api/settings/diff	POST	json	StandardKey	403:@b_078e5133
+/ui/api/settings/diff	POST	json	StandardKey	403:error="Admin authentication required"
 /ui/api/settings/diff	POST	valid	AdminKey	503
 /ui/api/settings/diff	POST	valid	AdminKeyUnmapped	503
-/ui/api/settings/diff	POST	valid	AuthOff	403:@b_078e5133
+/ui/api/settings/diff	POST	valid	AuthOff	403:error="Admin authentication required"
 /ui/api/settings/diff	POST	valid	Bearer	503
-/ui/api/settings/diff	POST	valid	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	POST	valid	NoKeyPublicStatus	401:@b_de6b5592
-/ui/api/settings/diff	POST	valid	OidcAdmin	403:@b_078e5133
-/ui/api/settings/diff	POST	valid	OidcAuditor	403:@b_078e5133
-/ui/api/settings/diff	POST	valid	OidcDeveloper	403:@b_078e5133
-/ui/api/settings/diff	POST	valid	OidcDeveloperNoIssuer	403:@b_078e5133
-/ui/api/settings/diff	POST	valid	OidcDeveloperNoSubject	403:@b_078e5133
-/ui/api/settings/diff	POST	valid	OidcReviewer	403:@b_078e5133
-/ui/api/settings/diff	POST	valid	OidcUnmapped	403:@b_078e5133
+/ui/api/settings/diff	POST	valid	NoKey	401:error.code=-32000
+/ui/api/settings/diff	POST	valid	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/settings/diff	POST	valid	OidcAdmin	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	valid	OidcAuditor	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	valid	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	valid	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	valid	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	valid	OidcReviewer	403:error="Admin authentication required"
+/ui/api/settings/diff	POST	valid	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/settings/diff	POST	valid	Session	503
-/ui/api/settings/diff	POST	valid	StandardKey	403:@b_078e5133
+/ui/api/settings/diff	POST	valid	StandardKey	403:error="Admin authentication required"
 /ui/api/settings/diff	PUT	bad-json	AdminKey	405
 /ui/api/settings/diff	PUT	bad-json	AdminKeyUnmapped	405
 /ui/api/settings/diff	PUT	bad-json	AuthOff	405
 /ui/api/settings/diff	PUT	bad-json	Bearer	405
-/ui/api/settings/diff	PUT	bad-json	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	PUT	bad-json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/settings/diff	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/settings/diff	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/settings/diff	PUT	bad-json	OidcAdmin	405
 /ui/api/settings/diff	PUT	bad-json	OidcAuditor	405
 /ui/api/settings/diff	PUT	bad-json	OidcDeveloper	405
@@ -198,8 +198,8 @@
 /ui/api/settings/diff	PUT	bad-type	AdminKeyUnmapped	405
 /ui/api/settings/diff	PUT	bad-type	AuthOff	405
 /ui/api/settings/diff	PUT	bad-type	Bearer	405
-/ui/api/settings/diff	PUT	bad-type	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	PUT	bad-type	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/settings/diff	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/settings/diff	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/settings/diff	PUT	bad-type	OidcAdmin	405
 /ui/api/settings/diff	PUT	bad-type	OidcAuditor	405
 /ui/api/settings/diff	PUT	bad-type	OidcDeveloper	405
@@ -213,8 +213,8 @@
 /ui/api/settings/diff	PUT	json	AdminKeyUnmapped	405
 /ui/api/settings/diff	PUT	json	AuthOff	405
 /ui/api/settings/diff	PUT	json	Bearer	405
-/ui/api/settings/diff	PUT	json	NoKey	401:@b_de6b5592
-/ui/api/settings/diff	PUT	json	NoKeyPublicStatus	401:@b_de6b5592
+/ui/api/settings/diff	PUT	json	NoKey	401:error.code=-32000
+/ui/api/settings/diff	PUT	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/settings/diff	PUT	json	OidcAdmin	405
 /ui/api/settings/diff	PUT	json	OidcAuditor	405
 /ui/api/settings/diff	PUT	json	OidcDeveloper	405

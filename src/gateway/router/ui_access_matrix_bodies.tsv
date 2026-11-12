@@ -1,6 +1,1 @@
 # name, digest, meaning. A body shared by 3 or more routes at the split; names are frozen, not recomputed.
-b_078e5133	078e513332cc	the 403 refusal for a caller that is not an admin: standard key, unmapped or non-admin OIDC identities, and the auth-off anonymous caller on some routes
-b_4e89aa84	4e89aa845ceb	the 403 refusal on the activity, activity export and receipt routes
-b_a8264f90	a8264f90e9e6	the 403 refusal on the control-plane grants, policies and decisions routes
-b_ca730ec7	ca730ec7fc2b	a refusal body served to the auth-off anonymous caller and to non-admin callers on some routes; 24 rows carry it under 401
-b_de6b5592	de6b55925ef7	the 401 refusal for a caller that sent no credential (NoKey, NoKeyPublicStatus)
