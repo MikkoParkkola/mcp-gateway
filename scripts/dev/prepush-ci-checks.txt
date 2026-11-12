@@ -22,6 +22,8 @@ python3 scripts/ci/check_swap_jobs.py	0	closed
 python3 scripts/ci/check_swap_jobs.py --self-test	0	closed
 python3 scripts/ci/check_teardown_order.py	0	closed
 python3 scripts/ci/check_teardown_order.py --self-test	0	closed
+python3 scripts/ci/check_toolchain_pin.py	0	closed
+python3 scripts/ci/check_toolchain_pin.py --self-test	0	closed
 python3 scripts/ci/compare_coverage.py --self-test	0	closed
 python3 scripts/ci/coverage_shards.py --self-test	0	closed
 python3 scripts/ci/job_time_watch.py --self-test	0	closed
