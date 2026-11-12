@@ -381,7 +381,7 @@ fn altered_frames_match_no_donor() {
         (
             "role",
             r#""role":"config_save_intent""#,
-            r#""role":"config_save""#,
+            r#""role":"config_recovery_intent""#,
         ),
         (
             "owner facts",
