@@ -146,8 +146,7 @@ fn named_keys(row: &CheckResult) -> Vec<String> {
     row.detail
         .split_once(" sets ")
         .and_then(|(_, rest)| rest.split_once(". "))
-        .map(|(keys, _)| keys.split(", ").map(str::to_string).collect())
-        .unwrap_or_default()
+        .map_or_default(|(keys, _)| keys.split(", ").map(str::to_string).collect())
 }
 
 #[test]

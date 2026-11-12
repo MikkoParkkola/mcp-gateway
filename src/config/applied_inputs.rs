@@ -49,7 +49,7 @@ impl Config {
         consumed.extend(files.iter().map(|(file, &digest)| ConsumedInput {
             source: ConsumedSource::SecretFile,
             name: file.to_string_lossy().into_owned(),
-            value: digest.map(Vec::from).unwrap_or_default(),
+            value: digest.map_or_default(Vec::from),
         }));
         RawInputs {
             gateway_yaml: text.as_bytes().to_vec(),

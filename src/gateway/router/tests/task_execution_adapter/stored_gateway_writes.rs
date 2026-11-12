@@ -62,7 +62,7 @@ fn row(store: &tempfile::TempDir, id: &str) -> Value {
 fn written(row: &Value, kind: &[&str]) -> Vec<Value> {
     row.get("gatewayWrites")
         .and_then(Value::as_array)
-        .map(|entries| {
+        .map_or_default(|entries| {
             entries
                 .iter()
                 .filter(|entry| {
@@ -75,7 +75,6 @@ fn written(row: &Value, kind: &[&str]) -> Vec<Value> {
                 .cloned()
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// STORE.1: the `trace_id` the gateway writes into every invoke result is

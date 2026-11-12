@@ -326,7 +326,7 @@ const RUNTIME_TREES: [&[&str]; 3] = [
 fn program_bind(real: &Path, system: &[String]) -> ProgramBind {
     const USR_LOCAL: &str = "/usr/local";
     if real.starts_with(USR_LOCAL) {
-        let dir = real.parent().map(Path::to_path_buf).unwrap_or_default();
+        let dir = real.parent().map_or_default(Path::to_path_buf);
         let lib = fs::canonicalize(dir.join("../lib")).ok();
         let dirs = std::iter::once(dir)
             .chain(lib)

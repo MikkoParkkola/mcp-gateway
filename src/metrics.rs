@@ -60,10 +60,7 @@ pub fn install() {
 /// Returns an empty string when the recorder was not installed.
 #[cfg(feature = "metrics")]
 pub fn render() -> String {
-    HANDLE
-        .get()
-        .map(PrometheusHandle::render)
-        .unwrap_or_default()
+    HANDLE.get().map_or_default(PrometheusHandle::render)
 }
 
 /// The value of the first series of `metric` in a [`render`] snapshot whose

@@ -53,7 +53,7 @@ impl Settling<'_> {
         // A plan's calls must be durable before it parks; a single call's one
         // target was recorded at creation.
         let plan = targets.is_some();
-        let targets = targets.map(<[_]>::into_vec).unwrap_or_default();
+        let targets = targets.map_or_default(<[_]>::into_vec);
         let owner = self.executor.service.owner(self.principal).ok()?;
         let stored = self
             .executor

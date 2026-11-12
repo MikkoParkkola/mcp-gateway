@@ -304,23 +304,18 @@ pub(crate) fn mapping_paths(value: &Value, path: &str) -> Vec<Vec<String>> {
             JsonPathSegment::Key(key) => value
                 .as_object()
                 .and_then(|map| map.get(key))
-                .map(|child| vec![(key.clone(), child)])
-                .unwrap_or_default(),
+                .map_or_default(|child| vec![(key.clone(), child)]),
             JsonPathSegment::ArrayIndex(index) => value
                 .as_array()
                 .and_then(|items| items.get(*index))
-                .map(|child| vec![(index.to_string(), child)])
-                .unwrap_or_default(),
-            JsonPathSegment::ArrayWildcard => value
-                .as_array()
-                .map(|items| {
-                    items
-                        .iter()
-                        .enumerate()
-                        .map(|(index, child)| (index.to_string(), child))
-                        .collect()
-                })
-                .unwrap_or_default(),
+                .map_or_default(|child| vec![(index.to_string(), child)]),
+            JsonPathSegment::ArrayWildcard => value.as_array().map_or_default(|items| {
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, child)| (index.to_string(), child))
+                    .collect()
+            }),
         };
         for (segment, child) in children {
             at.push(segment);

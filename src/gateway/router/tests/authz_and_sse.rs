@@ -277,7 +277,7 @@ async fn authorize_tool_target_allows_public_host_when_ssrf_protection_enabled()
     assert!(
         result.is_ok(),
         "public hostname must pass SSRF gate, got: {}",
-        result.err().map(|e| e.message).unwrap_or_default()
+        result.err().map_or_default(|e| e.message)
     );
 }
 
@@ -305,7 +305,7 @@ async fn authorize_tool_target_skips_ssrf_when_trust_configured_backends_enabled
     assert!(
         result.is_ok(),
         "trust_configured_backends must bypass SSRF re-check at proxy time, got: {}",
-        result.err().map(|e| e.message).unwrap_or_default()
+        result.err().map_or_default(|e| e.message)
     );
 }
 

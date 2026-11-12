@@ -269,9 +269,7 @@ async fn ask_as(
         verified_identity: who,
         ..crate::gateway::meta_mcp::anonymous_caller()
     };
-    let owner = who
-        .map(VerifiedIdentity::stable_actor_id)
-        .unwrap_or_default();
+    let owner = who.map_or_default(VerifiedIdentity::stable_actor_id);
     ask_caller(fx, retry, declared, &caller, &owner).await
 }
 

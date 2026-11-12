@@ -127,8 +127,7 @@ impl TaskStore {
         state
             .entries
             .get(id)
-            .map(|entry| entry.record.targets.clone())
-            .unwrap_or_default()
+            .map_or_default(|entry| entry.record.targets.clone())
     }
 
     /// Test-only: turn `id` into a row written before targets existed, with no

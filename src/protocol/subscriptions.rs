@@ -180,13 +180,12 @@ impl ListenRequest {
         let resource_uris = filter
             .get(NotificationKind::ResourceSubscriptions.opt_in_field())
             .and_then(Value::as_array)
-            .map(|uris| {
+            .map_or_default(|uris| {
                 uris.iter()
                     .filter_map(Value::as_str)
                     .map(str::to_string)
                     .collect()
-            })
-            .unwrap_or_default();
+            });
 
         Some(Self {
             wanted,

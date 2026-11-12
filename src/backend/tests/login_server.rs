@@ -135,8 +135,7 @@ pub(crate) async fn issuing_server_with(
 async fn token_answer(token: TokenEndpoint, expires_in: u64, body: String) -> axum::Json<Value> {
     let grant = url::form_urlencoded::parse(body.as_bytes())
         .find(|(key, _)| key == "grant_type")
-        .map(|(_, value)| value.into_owned())
-        .unwrap_or_default();
+        .map_or_default(|(_, value)| value.into_owned());
     match (token, grant.as_str()) {
         (TokenEndpoint::RefreshStalls, "refresh_token") => {
             std::future::pending::<()>().await;

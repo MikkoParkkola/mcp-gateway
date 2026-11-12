@@ -217,8 +217,7 @@ async fn a_legacy_partial_list_is_the_listing_alone() {
         assert_eq!(listed(&body), ["read"], "{hint:?}: answered: {body}");
         let keys: Vec<&String> = body["result"]
             .as_object()
-            .map(|result| result.keys().collect())
-            .unwrap_or_default();
+            .map_or_default(|result| result.keys().collect());
         assert_eq!(keys, ["tools"], "{hint:?}: {body}");
     }
 }

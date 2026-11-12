@@ -328,8 +328,7 @@ impl MetaMcp {
     pub(crate) fn idempotency_completed_for_test(&self) -> Vec<Value> {
         self.idempotency_cache
             .as_ref()
-            .map(|cache| cache.completed_values_for_test())
-            .unwrap_or_default()
+            .map_or_default(|cache| cache.completed_values_for_test())
     }
 
     /// Test-only entry to `invoke_tool` for router cells that must drive a

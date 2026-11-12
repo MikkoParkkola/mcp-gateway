@@ -197,7 +197,7 @@ fn presented_credential(
         .get::<crate::gateway::auth::AuthenticatedClient>();
     (
         crate::security::audit::CredentialKind::of(client),
-        client.map(|c| c.principal.clone()).unwrap_or_default(),
+        client.map_or_default(|c| c.principal.clone()),
     )
 }
 

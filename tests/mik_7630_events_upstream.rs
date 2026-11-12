@@ -84,12 +84,11 @@ async fn eventually(what: &str, check: impl FnMut() -> bool) {
 fn listen_uris(filter: &Value) -> Vec<String> {
     let mut uris: Vec<String> = filter["notifications"]["resourceSubscriptions"]
         .as_array()
-        .map(|a| {
+        .map_or_default(|a| {
             a.iter()
                 .filter_map(|u| u.as_str().map(str::to_owned))
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     uris.sort();
     uris
 }

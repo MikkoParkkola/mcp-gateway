@@ -215,8 +215,7 @@ async fn global_meta_tool_is_refused_at_the_dispatcher() {
     let message = response
         .error
         .as_ref()
-        .map(|e| e.message.clone())
-        .unwrap_or_default();
+        .map_or_default(|e| e.message.clone());
     assert!(
         response.error.is_some(),
         "a non-admin caller must not reload config through the dispatcher: {response:?}"
@@ -250,8 +249,7 @@ async fn global_meta_tool_reaches_an_admin_caller() {
     let message = response
         .error
         .as_ref()
-        .map(|e| e.message.clone())
-        .unwrap_or_default();
+        .map_or_default(|e| e.message.clone());
     assert!(
         !message.contains("admin access"),
         "an admin caller must get past the gate; what happens next is the \

@@ -267,9 +267,7 @@ impl Backend {
         let plan = self.runtime_plan.as_ref();
         super::server_state::StateInputs {
             denied: plan.is_some_and(crate::runtime::RuntimePlan::is_denied),
-            denial_reasons: plan
-                .map(|p| p.denied.iter().map(|d| d.reason).collect())
-                .unwrap_or_default(),
+            denial_reasons: plan.map_or_default(|p| p.denied.iter().map(|d| d.reason).collect()),
             auth_wait: self.needs_sign_in(),
             breaker: breaker.state,
             retry_after: std::time::Duration::from_millis(breaker.retry_after_ms),

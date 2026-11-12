@@ -131,9 +131,7 @@ async fn post_frames(state: &Arc<AppState>, body: Value) -> Vec<Value> {
         .filter_map(|data| serde_json::from_str(data.trim()).ok())
         .collect();
     if data_lines.is_empty() {
-        serde_json::from_str(&text)
-            .map(|v| vec![v])
-            .unwrap_or_default()
+        serde_json::from_str(&text).map_or_default(|v| vec![v])
     } else {
         data_lines
     }

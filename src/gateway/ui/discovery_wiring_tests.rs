@@ -190,14 +190,11 @@ async fn the_production_router_reads_the_cache_from_meta_mcp() {
 }
 
 fn names_of(servers: &Value, field: &str) -> Vec<String> {
-    servers
-        .as_array()
-        .map(|list| {
-            list.iter()
-                .filter_map(|server| server[field].as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
+    servers.as_array().map_or_default(|list| {
+        list.iter()
+            .filter_map(|server| server[field].as_str().map(str::to_string))
+            .collect()
+    })
 }
 
 /// R1b: the radar and the discovery route share one client-file scan, and

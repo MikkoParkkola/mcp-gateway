@@ -194,8 +194,7 @@ impl WatchHost for GatewayWatchHost {
     fn catalogue(&self) -> Catalogue {
         self.state
             .upgrade()
-            .map(|state| state.meta_mcp.watch_catalogue())
-            .unwrap_or_default()
+            .map_or_default(|state| state.meta_mcp.watch_catalogue())
     }
 
     fn catalogue_generation(&self) -> u64 {

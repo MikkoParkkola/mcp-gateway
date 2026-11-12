@@ -164,7 +164,7 @@ impl Subscribers {
     /// The checks that raised the generation so far.
     #[cfg(test)]
     pub(super) fn raised(&self) -> Vec<&'static str> {
-        self.raised.lock().map(|r| r.clone()).unwrap_or_default()
+        self.raised.lock().map_or_default(|r| r.clone())
     }
 
     /// Take the active file's current end as this writer's baseline: when a

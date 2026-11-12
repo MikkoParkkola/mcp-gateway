@@ -399,15 +399,13 @@ impl Gateway {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             let answer = self.rpc(api_key, "events/list", json!({})).await;
-            let names: Vec<String> = answer["result"]["events"]
-                .as_array()
-                .map(|events| {
-                    events
-                        .iter()
-                        .filter_map(|e| e["name"].as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let listed = answer["result"]["events"].as_array();
+            let names: Vec<String> = listed.map_or_default(|events| {
+                events
+                    .iter()
+                    .filter_map(|e| e["name"].as_str().map(str::to_owned))
+                    .collect()
+            });
             let done = want.is_none_or(|w| names.iter().any(|n| n == w));
             if done || tokio::time::Instant::now() >= deadline {
                 return names;

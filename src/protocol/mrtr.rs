@@ -358,8 +358,7 @@ impl RetryFields {
         let responses = self
             .input_responses
             .as_ref()
-            .map(crate::hashing::canonical_json)
-            .unwrap_or_default();
+            .map_or_default(crate::hashing::canonical_json);
         let state = self.request_state.as_deref().unwrap_or_default();
         let digest =
             crate::hashing::sha256_hex_chunks([responses.as_bytes(), &b"\0"[..], state.as_bytes()]);

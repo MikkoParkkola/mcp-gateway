@@ -82,7 +82,7 @@ pub(super) fn parse_refusal(
     yaml_error: &crate::yaml::Error,
 ) -> String {
     let tree = Tree::parse(content);
-    let bare = tree.as_ref().map(Tree::bare_rows).unwrap_or_default();
+    let bare = tree.as_ref().map_or_default(Tree::bare_rows);
     if bare.is_empty() {
         let error = match tree {
             Some(Tree::Json(_)) => serde_json::from_str::<super::IdentityGrantFile>(content)
@@ -102,8 +102,7 @@ pub(super) fn parse_refusal(
         .collect();
     let remainder = tree
         .and_then(Tree::remainder_error)
-        .map(|e| format!(" Apart from those rows the file also fails to parse: {e}"))
-        .unwrap_or_default();
+        .map_or_default(|e| format!(" Apart from those rows the file also fails to parse: {e}"));
     format!(
         "identity grants file {} keys {} agent binding(s) by a bare id, which does not say \
          which proof source it came from: {}. Rewrite each as `agent: !exact {{source: mtls, \

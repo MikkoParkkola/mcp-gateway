@@ -536,21 +536,19 @@ async fn a_test_source_event_reaches_a_receiver() {
     }
     let posts = rx.got.lock().clone();
     let state = |sub: &str| -> String {
-        std::fs::read_dir(dir.path().join(sub))
-            .map(|d| {
-                d.filter_map(Result::ok)
-                    .filter_map(|e| std::fs::read_to_string(e.path()).ok())
-                    .map(|t| {
-                        let v: Value = serde_json::from_str(&t).unwrap_or_default();
-                        format!(
-                            "state={} attempt={} last_status={} dead_as={}",
-                            v["state"], v["attempt"], v["last_status"], v["dead_as"]
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            })
-            .unwrap_or_default()
+        std::fs::read_dir(dir.path().join(sub)).map_or_default(|d| {
+            d.filter_map(Result::ok)
+                .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+                .map(|t| {
+                    let v: Value = serde_json::from_str(&t).unwrap_or_default();
+                    format!(
+                        "state={} attempt={} last_status={} dead_as={}",
+                        v["state"], v["attempt"], v["last_status"], v["dead_as"]
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
     };
     assert_eq!(
         posts.len(),

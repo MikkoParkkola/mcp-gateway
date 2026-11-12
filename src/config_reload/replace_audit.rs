@@ -299,7 +299,7 @@ pub(crate) fn recovery_intent(
     // disk before recovery. The read every loader uses: a file the guard
     // refuses is refused before any intent, and nothing is recovered.
     let on_disk = match crate::config::read_config_text(&locked.target) {
-        Ok(text) => text.map(String::into_bytes).unwrap_or_default(),
+        Ok(text) => text.map_or_default(String::into_bytes),
         Err(crate::config::UnreadConfig::Refused(why)) => {
             return Err(ReplaceError::ConfigRefused(why));
         }

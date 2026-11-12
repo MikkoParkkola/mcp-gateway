@@ -335,8 +335,7 @@ fn envelope_tokens(
             }
             serde_json::from_str::<Value>(text)
                 .ok()
-                .map(|nested| envelope_tokens(&nested, state, now))
-                .unwrap_or_default()
+                .map_or_default(|nested| envelope_tokens(&nested, state, now))
         }
         _ => Vec::new(),
     }

@@ -357,8 +357,7 @@ impl Sites {
             .path
             .segments
             .last()
-            .map(|s| s.ident.unraw().to_string())
-            .unwrap_or_default();
+            .map_or_default(|s| s.ident.unraw().to_string());
         let name = self
             .names(&at.file)
             .and_then(|n| n.aliases.get(&written).cloned())

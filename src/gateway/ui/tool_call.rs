@@ -136,8 +136,7 @@ pub(super) async fn call(
     };
     let principal = client
         .as_ref()
-        .map(|c| c.principal.storage_form().to_owned())
-        .unwrap_or_default();
+        .map_or_default(|c| c.principal.storage_form().to_owned());
     let confirm = if ask.confirm_write {
         Confirm::Confirmed
     } else {

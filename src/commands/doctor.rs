@@ -344,9 +344,7 @@ fn shadow_finding_check_result(
 ) -> CheckResult {
     let severity = shadow_doctor_status_label(&finding.status);
     let action = shadow_remediation_label(&finding.remediation_action);
-    let note = ids_note
-        .map(|note| format!(" Note: {note}."))
-        .unwrap_or_default();
+    let note = ids_note.map_or_default(|note| format!(" Note: {note}."));
     CheckResult::warn(
         format!("ShadowRadar {}", finding.asset_id),
         format!(

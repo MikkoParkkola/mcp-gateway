@@ -236,7 +236,7 @@ async fn rpc_as(
 /// The raw token string must not appear in any forwarded payload, under any key.
 fn assert_raw_token_never_forwarded(transport: &RecordingTransport, token: &str) {
     for (method, params) in transport.all.lock().unwrap().iter() {
-        let text = params.as_ref().map(Value::to_string).unwrap_or_default();
+        let text = params.as_ref().map_or_default(Value::to_string);
         assert!(
             !text.contains(token),
             "{method} forwarded the token: {text}"
@@ -251,7 +251,7 @@ fn assert_raw_token_never_forwarded(transport: &RecordingTransport, token: &str)
 /// No forwarded request may carry the attestation key anywhere.
 fn assert_token_never_forwarded(transport: &RecordingTransport) {
     for params in transport.seen.lock().unwrap().iter() {
-        let text = params.as_ref().map(Value::to_string).unwrap_or_default();
+        let text = params.as_ref().map_or_default(Value::to_string);
         assert!(!text.contains(ATTESTATION_META), "forwarded: {text}");
     }
 }

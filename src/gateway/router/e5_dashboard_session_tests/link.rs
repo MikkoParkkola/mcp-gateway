@@ -76,8 +76,7 @@ async fn mint(state: &Arc<AppState>, credential: Option<&str>, cookie: Option<&s
 
 fn bootstrap_value(link: &str) -> String {
     link.split_once("/dashboard?bootstrap=")
-        .map(|(_, v)| v.to_string())
-        .unwrap_or_default()
+        .map_or_default(|(_, v)| v.to_string())
 }
 
 /// E5-T7: an admin credential re-arms a fresh single-use link without a

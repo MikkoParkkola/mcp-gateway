@@ -114,8 +114,7 @@ impl JsonRpcExecutor<'_> {
                 .unwrap_or("Unknown JSON-RPC error");
             let data_suffix = error
                 .get("data")
-                .map(|d| format!(" (data: {d})"))
-                .unwrap_or_default();
+                .map_or_default(|d| format!(" (data: {d})"));
 
             return Err(Error::Protocol(format!(
                 "JSON-RPC error {code}: {message}{data_suffix}"

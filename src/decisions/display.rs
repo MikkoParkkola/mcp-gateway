@@ -71,14 +71,12 @@ pub(super) fn summary(content: &str) -> Value {
     let properties = input
         .and_then(|input| input.get("properties"))
         .and_then(Value::as_object);
-    let mut types: Vec<&str> = properties
-        .map(|props| {
-            props
-                .values()
-                .map(|prop| mapped_type(prop.get("type")))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut types: Vec<&str> = properties.map_or_default(|props| {
+        props
+            .values()
+            .map(|prop| mapped_type(prop.get("type")))
+            .collect()
+    });
     types.sort_unstable();
     let required = input
         .and_then(|input| input.get("required"))

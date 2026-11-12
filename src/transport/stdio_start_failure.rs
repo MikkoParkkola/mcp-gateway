@@ -144,8 +144,7 @@ impl StdioTransport {
             .tail
             .lock()
             .as_ref()
-            .map(|tail| joined(&tail.lock()))
-            .unwrap_or_default()
+            .map_or_default(|tail| joined(&tail.lock()))
     }
 
     /// Waits, briefly, for a child that is on its way out, and records how it

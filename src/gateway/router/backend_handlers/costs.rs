@@ -41,8 +41,7 @@ pub(in crate::gateway::router) async fn costs_handler(
     // selector keeps its last value. Decoding into a map of strings is lossy
     // and never rejects, so there is no malformed-query branch.
     let query: HashMap<String, String> = axum::extract::Query::try_from_uri(request.uri())
-        .map(|axum::extract::Query(query)| query)
-        .unwrap_or_default();
+        .map_or_default(|axum::extract::Query(query)| query);
 
     // A session id is a bearer handle, so it travels in a header, never the
     // URI (#1529): a query value lands in access and trace logs.

@@ -452,8 +452,7 @@ impl CacheRouter {
         self.partitions
             .iter()
             .find(|p| p.id == partition_id)
-            .map(|p| p.sessions.iter().map(String::as_str).collect())
-            .unwrap_or_default()
+            .map_or_default(|p| p.sessions.iter().map(String::as_str).collect())
     }
 
     /// Return a snapshot of all partition statistics.

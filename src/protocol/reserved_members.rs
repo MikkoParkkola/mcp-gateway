@@ -214,8 +214,7 @@ pub(crate) fn strip_ingress(
         let mut withheld = response
             .ingress_withheld
             .take()
-            .map(|kept| kept.0)
-            .unwrap_or_default();
+            .map_or_default(|kept| kept.0);
         for member in MEMBERS.iter().filter(|m| m.origin == Origin::GatewayOnly) {
             let key = member.path[0];
             if digest_covers(key)

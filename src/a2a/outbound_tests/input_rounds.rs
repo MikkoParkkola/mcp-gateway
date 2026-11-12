@@ -237,11 +237,7 @@ async fn a2a_9_a_hanging_first_send_reports_an_unknown_outcome() {
         "bounded by the deadline"
     );
     let text = match response {
-        Ok(response) => response
-            .result
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_default(),
+        Ok(response) => response.result.as_ref().map_or_default(ToString::to_string),
         Err(error) => error.to_string(),
     };
     assert!(text.contains("not known"), "{text}");

@@ -175,10 +175,7 @@ fn signatures(items: &[syn::Item]) -> Vec<&syn::Signature> {
 }
 
 fn last_segment(path: &syn::Path) -> String {
-    path.segments
-        .last()
-        .map(|s| s.ident.to_string())
-        .unwrap_or_default()
+    path.segments.last().map_or_default(|s| s.ident.to_string())
 }
 
 /// The name a receiver ends in: `self.cache` and `cache` are both `cache`.

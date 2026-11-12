@@ -250,7 +250,7 @@ pub enum Error {
     /// JSON-RPC code for this variant.
     #[error(
         "Circuit breaker open for backend '{backend}'{}",
-        last_failure.as_ref().map(|r| format!("; last failure: {r}")).unwrap_or_default()
+        last_failure.as_ref().map_or_default(|r| format!("; last failure: {r}"))
     )]
     CircuitOpen {
         /// Backend whose breaker refused the call.

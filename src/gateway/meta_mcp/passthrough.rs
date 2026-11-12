@@ -59,6 +59,5 @@ impl MetaMcp {
 /// into a keyed run's operation.
 pub(crate) fn playbook_digest(definition: &crate::playbook::PlaybookDefinition) -> String {
     serde_json::to_value(definition)
-        .map(|value| crate::hashing::canonical_json_sha256(&value))
-        .unwrap_or_default()
+        .map_or_default(|value| crate::hashing::canonical_json_sha256(&value))
 }

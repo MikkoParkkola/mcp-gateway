@@ -161,7 +161,7 @@ impl<'v> Delivered<'v> {
             if values.len() > 1 {
                 forms.push(values.concat());
             }
-            forms.extend(self.answer.map(super::key_path_joins).unwrap_or_default());
+            forms.extend(self.answer.map_or_default(super::key_path_joins));
             self.all
                 .iter()
                 .copied()

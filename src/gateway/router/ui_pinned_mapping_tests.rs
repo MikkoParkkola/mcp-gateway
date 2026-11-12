@@ -38,8 +38,7 @@ const GROUP: &str = "pinned-row";
 /// The fixture's config with `GROUP` mapped to `role`, or to nothing.
 fn mapping(fx: &Fixture, role: Option<ControlPlaneRole>) -> Config {
     let mut config = (*fx.state.live_config.get()).clone();
-    config.control_plane.role_mapping.rules =
-        role.map(|r| vec![rule(GROUP, r)]).unwrap_or_default();
+    config.control_plane.role_mapping.rules = role.map_or_default(|r| vec![rule(GROUP, r)]);
     config
 }
 

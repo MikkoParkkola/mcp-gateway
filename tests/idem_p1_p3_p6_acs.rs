@@ -71,7 +71,7 @@ fn enforce_fails_closed_at_the_entry_bound_without_evicting() {
         refused.is_err(),
         "a new protected side effect must be refused at the bound"
     );
-    let message = refused.err().map(|e| e.to_string()).unwrap_or_default();
+    let message = refused.err().map_or_default(|e| e.to_string());
     assert!(
         message.to_lowercase().contains("capacity"),
         "refusal must name capacity, got: {message}"

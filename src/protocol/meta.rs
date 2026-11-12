@@ -230,9 +230,7 @@ pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) ->
     // Read before the narrowing: `from_capabilities` takes the whole
     // capability object and does its own `get("extensions")`, and
     // `Option<&Value>` is `Copy`, so this costs nothing the narrowing needs.
-    let extensions = capabilities
-        .map(ExtensionSet::from_capabilities)
-        .unwrap_or_default();
+    let extensions = capabilities.map_or_default(ExtensionSet::from_capabilities);
 
     let Some(capabilities) = capabilities.and_then(Value::as_object) else {
         return RequestShape::Malformed {

@@ -49,8 +49,7 @@ fn fixture(root: &Path, enabled: bool, descriptors: Option<&Value>) -> Fixture {
     let store_dir = root.join("store");
     let authority_dir = root.join("authority");
     let descriptors_line = descriptors
-        .map(|d| format!("  descriptors: {}\n", serde_json::to_string(d).unwrap()))
-        .unwrap_or_default();
+        .map_or_default(|d| format!("  descriptors: {}\n", serde_json::to_string(d).unwrap()));
     let config = root.join("config.yaml");
     crate::gateway::test_helpers::write_owner_only(
         &config,

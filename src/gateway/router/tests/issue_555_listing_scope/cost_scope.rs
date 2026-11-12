@@ -196,15 +196,12 @@ async fn a_session_less_direct_call_is_charged_to_its_caller() {
 
     // THEN: the call reached the gateway total, u1's key totals and u1's breakdown
     assert_eq!(tracker.aggregate().total_calls, before + 1);
-    let key_tools: Vec<(String, u64)> = tracker
-        .key_snapshot("u1")
-        .map(|k| {
-            k.by_tool
-                .into_iter()
-                .map(|t| (t.tool_key, t.call_count))
-                .collect()
-        })
-        .unwrap_or_default();
+    let key_tools: Vec<(String, u64)> = tracker.key_snapshot("u1").map_or_default(|k| {
+        k.by_tool
+            .into_iter()
+            .map(|t| (t.tool_key, t.call_count))
+            .collect()
+    });
     assert_eq!(key_tools, vec![("alpha:alpha_read".to_string(), 1)]);
     assert_eq!(
         caller_rows(&report, "by_tool", "tool_key"),

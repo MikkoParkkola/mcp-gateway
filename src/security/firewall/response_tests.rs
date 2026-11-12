@@ -147,9 +147,7 @@ fn firewall_response_warn_allow_and_benign_block_rule_controls() {
         Some(FirewallAction::Allow),
     ] {
         let (firewall, _dir, path) = response_fixture(FirewallConfig {
-            rules: action
-                .map(|a| vec![response_rule("inspect_me", a)])
-                .unwrap_or_default(),
+            rules: action.map_or_default(|a| vec![response_rule("inspect_me", a)]),
             ..FirewallConfig::default()
         });
         let mut response = json!({"text": INJECTION});
@@ -190,9 +188,7 @@ fn firewall_response_credential_controls_redact_with_real_engine() {
         Some(FirewallAction::Allow),
     ] {
         let (firewall, _dir, path) = response_fixture(FirewallConfig {
-            rules: action
-                .map(|a| vec![response_rule("inspect_me", a)])
-                .unwrap_or_default(),
+            rules: action.map_or_default(|a| vec![response_rule("inspect_me", a)]),
             ..FirewallConfig::default()
         });
         let mut response = json!({

@@ -104,8 +104,7 @@ async fn r4_3a_a2_the_funnel_does_not_re_read_after_the_capture() {
     let pairs: Vec<(String, bool)> = lm
         .firewall()
         .collusion_detector()
-        .map(|detector| detector.overflow_pairs_of(&text, "alice"))
-        .unwrap_or_default()
+        .map_or_default(|detector| detector.overflow_pairs_of(&text, "alice"))
         .into_iter()
         .map(|(source, inferred)| (source.to_string(), inferred))
         .collect();

@@ -235,8 +235,7 @@ fn validate_mcp_operations(capability: &CapabilityDefinition) -> Result<()> {
         .input
         .get("properties")
         .and_then(serde_json::Value::as_object)
-        .map(|p| p.keys().map(String::as_str).collect())
-        .unwrap_or_default();
+        .map_or_default(|p| p.keys().map(String::as_str).collect());
     for (name, process) in &capability.providers.process {
         let ProcessConfig::Mcp(config) = process else {
             continue;

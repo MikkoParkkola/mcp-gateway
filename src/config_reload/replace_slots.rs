@@ -18,9 +18,8 @@ pub(super) fn same_fields(
     step: Option<&SecretStep>,
 ) -> Result<(), ReplaceError> {
     let mut slots: Vec<String> = template.slot_ids().map(SlotId::display).collect();
-    let mut fields: Vec<String> = step
-        .map(|s| s.values.iter().map(|v| v.field.clone()).collect())
-        .unwrap_or_default();
+    let mut fields: Vec<String> =
+        step.map_or_default(|s| s.values.iter().map(|v| v.field.clone()).collect());
     slots.sort();
     fields.sort();
     if slots == fields {

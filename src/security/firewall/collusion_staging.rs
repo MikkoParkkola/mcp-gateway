@@ -127,8 +127,7 @@ impl super::Firewall {
         let joins = super::key_path_joins(result);
         let fps = self
             .fps_of_leaves(&leaves, values, &joins)
-            .map(|fps| fps.to_vec())
-            .unwrap_or_default();
+            .map_or_default(|fps| fps.to_vec());
         let (receipt, _) = super::DeliveryDigest::of_parts(&leaves, values, false);
         let receipt = if total_before < super::DELIVERED_SET_CAP {
             receipt

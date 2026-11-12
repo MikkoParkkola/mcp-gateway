@@ -277,15 +277,12 @@ pub(super) async fn listed_for(
         .list_tools(&json!({}), None, caller)
         .await
         .expect("gateway_list_tools must answer");
-    response["tools"]
-        .as_array()
-        .map(|tools| {
-            tools
-                .iter()
-                .filter_map(|t| t["name"].as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
+    response["tools"].as_array().map_or_default(|tools| {
+        tools
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_string))
+            .collect()
+    })
 }
 
 /// GIVEN a multi-user gateway whose `required` per-user backend serves a

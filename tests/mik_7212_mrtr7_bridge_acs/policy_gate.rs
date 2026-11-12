@@ -79,7 +79,7 @@ async fn ac_mrtr_7a_opaque_state_is_neither_scanned_nor_delivered() {
         );
     }
     for frame in client.frames() {
-        let rendered = frame.params.map(|p| p.to_string()).unwrap_or_default();
+        let rendered = frame.params.map_or_default(|p| p.to_string());
         assert!(
             !rendered.contains(STATE_CANARY),
             "the opaque state reached the client: {rendered}"
@@ -161,7 +161,7 @@ async fn ac_mrtr_7a_the_backend_request_key_is_neither_scanned_nor_delivered() {
         );
     }
     for frame in client.frames() {
-        let rendered = frame.params.map(|p| p.to_string()).unwrap_or_default();
+        let rendered = frame.params.map_or_default(|p| p.to_string());
         assert!(
             !rendered.contains(BLOCKED),
             "the backend's request key reached the client: {rendered}"

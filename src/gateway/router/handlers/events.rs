@@ -142,9 +142,7 @@ impl Presented {
         }
         Ok(crate::events::Credential {
             kind,
-            principal: client
-                .map(|c| c.principal.storage_form().to_owned())
-                .unwrap_or_default(),
+            principal: client.map_or_default(|c| c.principal.storage_form().to_owned()),
             api_key,
             expires_at,
             binding,

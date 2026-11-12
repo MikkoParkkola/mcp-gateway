@@ -108,13 +108,7 @@ async fn run_step_as(
 /// asserts what the response WAS, not merely that it failed.
 fn response_text(response: &JsonRpcResponse) -> String {
     response.error.as_ref().map_or_else(
-        || {
-            response
-                .result
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default()
-        },
+        || response.result.as_ref().map_or_default(ToString::to_string),
         |e| e.message.clone(),
     )
 }

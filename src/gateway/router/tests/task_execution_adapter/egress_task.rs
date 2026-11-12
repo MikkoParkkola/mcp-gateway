@@ -298,8 +298,7 @@ fn dump(entries: &[Value]) -> String {
         .map(|entry| {
             let keys: Vec<&str> = entry
                 .as_object()
-                .map(|o| o.keys().map(String::as_str).collect())
-                .unwrap_or_default();
+                .map_or_default(|o| o.keys().map(String::as_str).collect());
             format!(
                 "event={} route={} outcome={} trace_id={} task_id={} keys={keys:?}",
                 entry["event"],

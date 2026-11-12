@@ -412,8 +412,7 @@ fn not_written(state: &AppState) -> Response {
     let path = state
         .config_path
         .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
+        .map_or_default(|p| p.display().to_string());
     (
         StatusCode::CONFLICT,
         Json(json!({

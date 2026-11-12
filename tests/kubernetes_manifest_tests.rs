@@ -586,7 +586,7 @@ fn enterprise_alpha_args_parse() {
     assert!(
         parsed.is_ok(),
         "the enterprise-alpha args {argv:?} must parse: {}",
-        parsed.err().map(|e| e.to_string()).unwrap_or_default()
+        parsed.err().map_or_default(|e| e.to_string())
     );
 }
 

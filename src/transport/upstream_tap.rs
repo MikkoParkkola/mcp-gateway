@@ -208,8 +208,7 @@ impl Requested {
         let listed: Vec<&str> = acked
             .and_then(|n| n.get("resourceSubscriptions"))
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
+            .map_or_default(|a| a.iter().filter_map(Value::as_str).collect());
         UpstreamNote::Ack {
             kinds: KindSet {
                 resources_changed: self.kinds.resources_changed && flag("resourcesListChanged"),

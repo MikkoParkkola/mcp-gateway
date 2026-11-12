@@ -70,8 +70,7 @@ impl UnreadableClientFile {
     pub(crate) fn file_name(&self) -> String {
         self.path
             .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default()
+            .map_or_default(|name| name.to_string_lossy().into_owned())
     }
 
     /// A digest of the full path under `key`: tells two files with one name

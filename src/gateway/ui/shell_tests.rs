@@ -197,8 +197,7 @@ async fn t7_the_tooltip_copy_is_a_hashed_json_asset() {
     let bytes = ASSETS
         .iter()
         .find(|(n, _)| *n == name)
-        .map(|(_, b)| *b)
-        .unwrap_or_default();
+        .map_or_default(|(_, b)| *b);
     let digest = crate::hashing::sha256_hex(bytes);
     assert_eq!(name, format!("tips.{}.json", &digest[..12]));
     let response = asset(Path(name.to_owned())).await;

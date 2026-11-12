@@ -59,8 +59,7 @@ pub(crate) struct Restored {
 pub(crate) fn quarantine(path: &Path, now: u64) -> std::io::Result<PathBuf> {
     let name = path
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     for n in 0..1_000u32 {
         let candidate = if n == 0 {
             path.with_file_name(format!("{name}.unreadable-{now}"))

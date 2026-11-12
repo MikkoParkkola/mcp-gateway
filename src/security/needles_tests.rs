@@ -52,10 +52,7 @@ pub(super) fn scrubbed(needles: &NeedleSet, text: &str) -> (Scrubbed, String) {
     let JsonRpcMessage::Response(response) = message else {
         unreachable!("a response stays a response")
     };
-    let result = response
-        .result
-        .map(|r| r["text"].to_string())
-        .unwrap_or_default();
+    let result = response.result.map_or_default(|r| r["text"].to_string());
     (outcome, result)
 }
 

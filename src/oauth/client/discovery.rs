@@ -32,7 +32,7 @@ pub(crate) fn resource_metadata_url(resource: &str) -> Result<String> {
         "/" => "",
         path => path,
     };
-    let query = parsed.query().map(|q| format!("?{q}")).unwrap_or_default();
+    let query = parsed.query().map_or_default(|q| format!("?{q}"));
     Ok(format!(
         "{authority}/.well-known/oauth-protected-resource{path}{query}"
     ))

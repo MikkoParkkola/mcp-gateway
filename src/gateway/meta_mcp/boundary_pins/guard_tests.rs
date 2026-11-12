@@ -28,8 +28,7 @@ fn lints_in(meta: &syn::Meta) -> Vec<String> {
     };
     let args = list
         .parse_args_with(Metas::parse_terminated)
-        .map(|args| args.into_iter().collect::<Vec<_>>())
-        .unwrap_or_default();
+        .map_or_default(|args| args.into_iter().collect::<Vec<_>>());
     if list.path.is_ident("allow") || list.path.is_ident("expect") {
         args.iter()
             .filter(|m| matches!(m, syn::Meta::Path(_)))
@@ -189,13 +188,8 @@ impl Sink for Surface {
                 self.derives.extend(derives_in(&s.attrs));
                 for field in &s.fields {
                     if !matches!(field.vis, syn::Visibility::Inherited) {
-                        self.public_fields.push(
-                            field
-                                .ident
-                                .as_ref()
-                                .map(ToString::to_string)
-                                .unwrap_or_default(),
-                        );
+                        self.public_fields
+                            .push(field.ident.as_ref().map_or_default(ToString::to_string));
                     }
                 }
             }

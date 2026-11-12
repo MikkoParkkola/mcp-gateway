@@ -73,8 +73,7 @@ pub(crate) fn binding_token(
 ) -> String {
     let fingerprint = registry
         .declared(descriptor_id)
-        .map(|declared| declared.fingerprint)
-        .unwrap_or_default();
+        .map_or_default(|declared| declared.fingerprint);
     format!("{descriptor_id}#{fingerprint}")
 }
 

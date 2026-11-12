@@ -88,16 +88,13 @@ async fn call(backend: &Backend, message: &str) -> Result<Value, String> {
 }
 
 fn texts(result: &Value) -> Vec<String> {
-    result["content"]
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter(|item| item["type"] == "text")
-                .filter_map(|item| item["text"].as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default()
+    result["content"].as_array().map_or_default(|items| {
+        items
+            .iter()
+            .filter(|item| item["type"] == "text")
+            .filter_map(|item| item["text"].as_str().map(str::to_owned))
+            .collect()
+    })
 }
 
 fn card_fetches(log: &stub::Log) -> usize {

@@ -245,8 +245,7 @@ impl HttpTransport {
     pub(crate) fn start_call(&self) -> Vec<(String, String)> {
         self.lender
             .get()
-            .map(|lender| lender.start_call())
-            .unwrap_or_default()
+            .map_or_default(|lender| lender.start_call())
     }
 
     /// Get OAuth access token if OAuth is configured

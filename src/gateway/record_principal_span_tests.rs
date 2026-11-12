@@ -51,8 +51,7 @@ fn span_problems(rel: &str, text: &str) -> Vec<String> {
         let skipped: Vec<&str> = attr
             .split_once("skip(")
             .and_then(|(_, rest)| rest.split_once(')'))
-            .map(|(list, _)| list.split(',').map(str::trim).collect())
-            .unwrap_or_default();
+            .map_or_default(|(list, _)| list.split(',').map(str::trim).collect());
         if let Some((_, fields)) = attr.split_once("fields(") {
             let fields = fields.to_ascii_lowercase();
             for name in SENSITIVE_FIELDS {
@@ -61,24 +60,21 @@ fn span_problems(rel: &str, text: &str) -> Vec<String> {
                 }
             }
         }
-        let params = signature
-            .split_once('(')
-            .map(|(_, rest)| {
-                let mut depth = 0i32;
-                let end = rest
-                    .char_indices()
-                    .find(|&(_, c)| {
-                        match c {
-                            '(' | '<' | '[' => depth += 1,
-                            ')' | '>' | ']' => depth -= 1,
-                            _ => {}
-                        }
-                        depth < 0
-                    })
-                    .map_or(rest.len(), |(i, _)| i);
-                rest[..end].to_owned()
-            })
-            .unwrap_or_default();
+        let params = signature.split_once('(').map_or_default(|(_, rest)| {
+            let mut depth = 0i32;
+            let end = rest
+                .char_indices()
+                .find(|&(_, c)| {
+                    match c {
+                        '(' | '<' | '[' => depth += 1,
+                        ')' | '>' | ']' => depth -= 1,
+                        _ => {}
+                    }
+                    depth < 0
+                })
+                .map_or(rest.len(), |(i, _)| i);
+            rest[..end].to_owned()
+        });
         let mut depth = 0i32;
         let mut param = String::new();
         let mut all = Vec::new();

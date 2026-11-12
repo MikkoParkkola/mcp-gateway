@@ -195,9 +195,7 @@ impl Backend {
     #[must_use]
     pub fn get_cached_tool_names_for(&self, binding: Option<&str>) -> Vec<String> {
         let names: Vec<String> = self.tools_slot(binding).tools_cache.with_cached(|tools| {
-            tools
-                .map(|tools| tools.iter().map(|t| t.name.clone()).collect())
-                .unwrap_or_default()
+            tools.map_or_default(|tools| tools.iter().map(|t| t.name.clone()).collect())
         });
         names
             .into_iter()
