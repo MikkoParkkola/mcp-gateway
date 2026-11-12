@@ -1888,7 +1888,10 @@ async function signOut() {
  */
 function showSignIn() {
   accessResets++;
-  if (access.kind !== 'unknown') {
+  // The count belongs to the identity that is leaving: the next one starts with none.
+  const hadCount = DECISIONS.count !== null;
+  DECISIONS.count = null;
+  if (access.kind !== 'unknown' || hadCount) {
     access = { kind: 'unknown', pages: new Map() };
     drawNav(parse(location.pathname).page);
   }
@@ -1985,6 +1988,7 @@ async function signIn(ev) {
   notice.hidden = true;
   notice.textContent = '';
   authEpoch++;
+  DECISIONS.count = null; // a count read for another identity is never this one's; its own read fills it
   access = accessFrom(body?.access); // this identity's own answer, committed before render() below
   input.value = '';
   document.getElementById('signin').hidden = true;
