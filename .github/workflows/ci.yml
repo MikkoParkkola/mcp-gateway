@@ -821,7 +821,7 @@ jobs:
   macos-shards:
     name: macOS shard ${{ matrix.shard }}
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
-    runs-on: macos-latest
+    runs-on: macos-15-intel
     # The lib shard compiles the `--lib` test binary from cold (every macOS
     # shard missed the cache on the last three trains, and a hit would save
     # only the 2-4 min dependency build): 19 to 86 min, then about 32 min of
