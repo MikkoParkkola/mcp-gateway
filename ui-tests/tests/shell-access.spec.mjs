@@ -258,4 +258,14 @@ test.describe('access', () => {
     await expect(note(page)).toBeVisible();
     expect(errors).toEqual([]);
   });
+
+  test('A20 a status read that never answers is aborted at the key-check deadline and the screen then loads', async ({ page }) => {
+    await page.clock.install();
+    await page.route('**/ui/api/status', () => new Promise(() => {}));
+    await page.goto('/ui/tools/status');
+    await page.clock.runFor(5_000);
+    await expect(page.locator('#content [data-rendered]')).toHaveCount(0);
+    await page.clock.runFor(6_000);
+    await expect(page.locator('#content [data-rendered]')).toHaveCount(1);
+  });
 });
