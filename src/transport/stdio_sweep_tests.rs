@@ -40,6 +40,13 @@ struct Proc {
     churns: bool,
     /// Ignores SIGSTOP (stays running).
     ignores_stop: bool,
+    /// SIGSTOP lands only after this many more table operations (the process
+    /// keeps running meanwhile): the stop is asynchronous.
+    stop_lag: u32,
+    /// Operations left before a delivered SIGSTOP takes effect.
+    stop_in: Option<u32>,
+    /// Forks one child at the start of this table operation, if still running.
+    fork_at: Option<u32>,
 }
 
 struct Fake {
@@ -55,6 +62,8 @@ struct Fake {
     /// Whether the kernel has handles; a sweep without a slot still goes by pid.
     pidfd: bool,
     next_pid: u32,
+    /// Table operations so far.
+    ops: u32,
     /// The table applies the by-pid Kill gate, as the real tables do.
     strict_by_pid: bool,
     /// Every table reading fails: no rows, flagged incomplete.
@@ -79,6 +88,9 @@ impl Fake {
                 state: ProcState::Running,
                 churns: false,
                 ignores_stop: false,
+                stop_lag: 0,
+                stop_in: None,
+                fork_at: None,
             })
             .collect();
         Self {
@@ -90,6 +102,7 @@ impl Fake {
             tick: ms(1),
             pidfd: true,
             next_pid: 1000,
+            ops: 0,
             strict_by_pid: false,
             blind: false,
             unreadable: None,
@@ -140,6 +153,41 @@ impl Fake {
     /// Every operation costs time, and a running churner forks during it.
     fn operate(&mut self) {
         self.clock += self.tick;
+        self.ops += 1;
+        let ops = self.ops;
+        let forking: Vec<u32> = self
+            .procs
+            .iter()
+            .filter(|p| p.fork_at == Some(ops) && p.state == ProcState::Running)
+            .map(|p| p.id.pid)
+            .collect();
+        for parent in forking {
+            self.next_pid += 1;
+            let pgid = self.next_pid;
+            self.procs.push(Proc {
+                id: id(self.next_pid),
+                ppid: parent,
+                pgid,
+                state: ProcState::Running,
+                churns: false,
+                ignores_stop: false,
+                stop_lag: 0,
+                stop_in: None,
+                fork_at: None,
+            });
+        }
+        for p in &mut self.procs {
+            if let Some(left) = p.stop_in {
+                if left <= 1 {
+                    p.stop_in = None;
+                    if p.state == ProcState::Running {
+                        p.state = ProcState::Stopped;
+                    }
+                } else {
+                    p.stop_in = Some(left - 1);
+                }
+            }
+        }
         let spawning: Vec<u32> = self
             .procs
             .iter()
@@ -156,6 +204,9 @@ impl Fake {
                 state: ProcState::Running,
                 churns: false,
                 ignores_stop: false,
+                stop_lag: 0,
+                stop_in: None,
+                fork_at: None,
             });
         }
     }
@@ -232,7 +283,11 @@ impl ProcessTable for Fake {
         let target = &mut self.procs[index];
         match sig {
             Sig::Stop if !target.ignores_stop && target.state == ProcState::Running => {
-                target.state = ProcState::Stopped;
+                if target.stop_lag == 0 {
+                    target.state = ProcState::Stopped;
+                } else {
+                    target.stop_in = Some(target.stop_lag);
+                }
             }
             Sig::Cont if target.state == ProcState::Stopped => target.state = ProcState::Running,
             Sig::Kill => {
@@ -729,4 +784,26 @@ fn the_slices_are_sized_from_the_measured_cap() {
         "{FREEZE_SLICE:?} + {TERMINAL_ROOM:?}"
     );
     assert_eq!(config().freeze_slice, FREEZE_SLICE);
+}
+
+/// A stop is asynchronous: a member that is still running while its SIGSTOP is in
+/// flight can fork. The sweep confirms every frozen identity stopped before it
+/// re-walks, so a child forked in that gap is collected and killed too.
+/// Red if the sweep re-walks before the freeze is confirmed: the walk finds
+/// nothing new, the kills begin, and the late child is never in the set.
+#[test]
+fn a_member_that_forks_while_its_stop_is_in_flight_is_still_swept() {
+    let mut fake = Fake::new(&[(10, 1), (11, 10)]);
+    fake.proc(11).stop_lag = 20;
+    fake.proc(11).fork_at = Some(8);
+    let report = run(&mut fake, 10);
+    assert_eq!(fake.procs.len(), 3, "premise: the member forked mid-stop");
+    let survivors: Vec<u32> = fake
+        .procs
+        .iter()
+        .filter(|p| p.state != ProcState::Gone)
+        .map(|p| p.id.pid)
+        .collect();
+    assert!(survivors.is_empty(), "survivors: {survivors:?} {report:?}");
+    assert!(fake.stopped().is_empty());
 }
