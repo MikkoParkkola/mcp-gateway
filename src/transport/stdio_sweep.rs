@@ -364,7 +364,7 @@ const FREEZE_SLICE: Duration = Duration::from_millis(700);
 /// phase measured at the cap (141 ms), as the margin for macOS, whose cost per
 /// member (a libproc read, then stop, verify and kill) is not measured. The
 /// kills themselves are never cut, since a cut would leave stopped processes.
-pub(super) const TERMINAL_ROOM: Duration = Duration::from_millis(700);
+pub(super) const TERMINAL_ROOM: Duration = Duration::from_millis(750);
 const _: () = assert!(
     FREEZE_SLICE.as_millis() + TERMINAL_ROOM.as_millis()
         <= super::reaper::KILL_RESERVE.as_millis() / 2,
