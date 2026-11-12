@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
 
 use super::records::{ApiKeyRef, LiveBinding, Subscription};
-use crate::config_reload::LiveConfig;
+use crate::config_reload::{Generation, LiveConfig};
 use crate::security::TransparencyLogger;
 
 /// What the hub borrows from the rest of the gateway.
@@ -181,6 +181,17 @@ impl Services {
         backend: Option<&str>,
         now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
     ) -> bool {
+        let generation = self.live.generation();
+        Self::admits_grant_in_generation(&generation, key, backend, now)
+    }
+
+    /// The file key and its approval binding must belong to one generation.
+    fn admits_grant_in_generation(
+        generation: &Generation,
+        key: Option<KeyCheck<'_>>,
+        backend: Option<&str>,
+        now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
+    ) -> bool {
         let Some(key) = key else {
             return true;
         };
@@ -188,8 +199,8 @@ impl Services {
             KeyCheck::Holder(r) => (r.name.as_str(), r.principal.as_str()),
             KeyCheck::ThisRequest { name, principal } => (name, principal),
         };
-        self.live
-            .get()
+        generation
+            .config()
             .auth
             .api_keys
             .iter()
@@ -208,24 +219,19 @@ impl Services {
                     .is_some_and(|tag| secret_still_valid(k, tag, now)),
                 KeyCheck::ThisRequest { .. } => true,
             })
-            // A CLI key also needs its approver, judged on the resolved
-            // table at the same reading; no reading refuses it.
-            .filter(|k| k.approved_by.is_none() || self.cli_key_stands(&k.name, now.ok()))
+            // Match the resolved identity as well as the name so another
+            // key's approval binding cannot authorize this holder.
+            .filter(|k| {
+                k.approved_by.is_none()
+                    || generation.auth().api_keys().iter().any(|resolved| {
+                        resolved.name == k.name
+                            && resolved.principal().storage_form() == principal
+                            && generation.auth().binding_live(resolved, now.ok())
+                    })
+            })
             .is_some_and(|k| {
                 backend.is_none_or(|backend| k.backends.iter().any(|b| b == "*" || b == backend))
             })
-    }
-
-    /// Whether CLI login key `name` still stands at `now`: its resolved entry
-    /// in the published generation passes the approval binding. A CLI key the
-    /// resolved table does not hold is refused.
-    fn cli_key_stands(&self, name: &str, now: Option<DateTime<Utc>>) -> bool {
-        let generation = self.live.generation();
-        let auth = generation.auth();
-        auth.api_keys()
-            .iter()
-            .find(|resolved| resolved.name == name)
-            .is_some_and(|resolved| auth.binding_live(resolved, now))
     }
 
     /// Whether stored subscription `sub` may still receive an event of
@@ -777,3 +783,7 @@ mod tests;
 #[cfg(test)]
 #[path = "services_audit_tests.rs"]
 mod audit_tests;
+
+#[cfg(test)]
+#[path = "one_generation_tests.rs"]
+mod one_generation_tests;

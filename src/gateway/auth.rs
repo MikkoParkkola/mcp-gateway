@@ -43,6 +43,12 @@ pub use dashboard::DashboardBootstrap;
 pub(crate) use dashboard::{
     Bound, MintingKey, Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch,
 };
+
+/// Retains the minting key's identity when a cookie authenticates a dashboard request.
+#[cfg(feature = "webui")]
+#[derive(Debug, Clone)]
+pub(crate) struct SessionMintedBy(pub(crate) MintingKey);
+
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
 #[path = "auth_handoff.rs"]
@@ -361,6 +367,10 @@ pub async fn auth_middleware(
         ) {
             SessionCheck::Valid if !has_authorization && !is_bootstrap => {
                 request.extensions_mut().insert(dashboard_client());
+                #[cfg(feature = "webui")]
+                if let Some(key) = state.dashboard_bootstrap.session_minting_key(&handle) {
+                    request.extensions_mut().insert(SessionMintedBy(key));
+                }
                 return next.run(request).await;
             }
             SessionCheck::Valid => {}

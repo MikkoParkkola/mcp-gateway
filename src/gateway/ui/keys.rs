@@ -51,8 +51,14 @@ fn joined(auth: &ResolvedAuthConfig, live: Option<&ResolvedApiKey>) -> (Option<S
         .map(rfc3339);
     // Effective liveness: a CLI key whose approver is gone is listed, not live.
     let is_live = live.is_some_and(|key| {
-        !crate::config::api_key_expired_now(key.expires_at)
-            && auth.binding_live(key, crate::clock::utc_now().ok())
+        if key.approved_by.is_none() {
+            return !crate::config::api_key_expired_now(key.expires_at);
+        }
+        // The key and its approver must be live at the same instant.
+        crate::clock::utc_now().is_ok_and(|now| {
+            !crate::config::api_key_expired(key.expires_at, now)
+                && auth.binding_live(key, Some(now))
+        })
     });
     (last_used, is_live)
 }

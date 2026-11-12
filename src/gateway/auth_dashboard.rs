@@ -218,6 +218,12 @@ impl DashboardBootstrap {
             == SessionCheck::Valid
     }
 
+    /// Read the session's minting key without counting as activity or extending it.
+    #[cfg(feature = "webui")]
+    pub(crate) fn session_minting_key(&self, handle: &str) -> Option<MintingKey> {
+        self.sessions.lock().ok()?.get(handle)?.bound.key.clone()
+    }
+
     /// Mint a fresh single-use value.
     #[must_use]
     pub fn new() -> Self {

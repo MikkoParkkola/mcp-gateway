@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use super::fanout::SourceEvent;
 use super::types::{EventDescriptor, RpcError, SourceKind, Visibility};
 use super::{EventSource, EventsHub, Services};
+use crate::config_reload::Generation;
 
 pub(crate) const BUDGET_THRESHOLD: &str = "gateway.budget.threshold";
 pub(crate) const BUDGET_EXHAUSTED: &str = "gateway.budget.exhausted";
@@ -28,7 +29,7 @@ pub(crate) const KILL_SWITCH_CHANGED: &str = "gateway.kill_switch.changed";
 const BUDGET_PREFIX: &str = "gateway.budget.";
 
 /// Who a principal is now, by the live config.
-struct Standing {
+pub(super) struct Standing {
     admin: bool,
     /// The name of the API key it presents, whose budget is its own.
     key: Option<String>,
@@ -46,8 +47,19 @@ fn standing(
     principal: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<Standing> {
-    let bearer = services.credentials.bearer_principal.as_deref() == Some(principal);
-    let config = services.live.get();
+    let generation = services.live.generation();
+    standing_in_generation(&services.credentials, &generation, principal, now)
+}
+
+/// Identity and approval are judged together, even if a reload has published.
+pub(super) fn standing_in_generation(
+    credentials: &super::services::LiveCredentials,
+    generation: &Generation,
+    principal: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Standing> {
+    let bearer = credentials.bearer_principal.as_deref() == Some(principal);
+    let config = generation.config();
     let mut keys = config.auth.api_keys.iter().filter(|k| {
         !k.is_expired_at(now)
             && k.key_sha256
@@ -65,7 +77,12 @@ fn standing(
         // A CLI key also needs its approver: it stands only while the key that
         // approved it does, judged on the resolved table at the same reading.
         (false, Some(key), None)
-            if key.approved_by.is_some() && !cli_key_stands(services, key, now) =>
+            if key.approved_by.is_some()
+                && !generation.auth().api_keys().iter().any(|resolved| {
+                    resolved.name == key.name
+                        && resolved.principal().storage_form() == principal
+                        && generation.auth().binding_live(resolved, Some(now))
+                }) =>
         {
             None
         }
@@ -75,22 +92,6 @@ fn standing(
         }),
         _ => None,
     }
-}
-
-/// Whether CLI login key `key` still stands at `now`: its resolved entry in
-/// the published generation passes the approval binding. A CLI key the
-/// resolved table does not hold has no standing.
-fn cli_key_stands(
-    services: &Services,
-    key: &crate::config::ApiKeyConfig,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    let generation = services.live.generation();
-    let auth = generation.auth();
-    auth.api_keys()
-        .iter()
-        .find(|resolved| resolved.name == key.name)
-        .is_some_and(|resolved| auth.binding_live(resolved, Some(now)))
 }
 
 /// The gateway operational events source.

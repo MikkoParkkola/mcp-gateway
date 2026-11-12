@@ -504,10 +504,14 @@ impl ResolvedAuthConfig {
         let key = keys
             .iter()
             .find(|k| k.name == name && k.principal().storage_form() == principal)?;
-        (!crate::config::api_key_expired_now(key.expires_at)
-            && binding.holds(key, |end| !crate::config::api_key_expired_now(Some(end)))
-            && self.binding_live(key, crate::clock::utc_now().ok()))
-        .then(|| Self::client_of(key))
+        if key.approved_by.is_none() {
+            return (!crate::config::api_key_expired_now(key.expires_at)
+                && binding.holds(key, |end| !crate::config::api_key_expired_now(Some(end))))
+            .then(|| Self::client_of(key));
+        }
+        // Expiry, grace and approval must agree on one clock reading.
+        let now = crate::clock::utc_now().ok()?;
+        self.client_for_key_at(name, principal, binding, now)
     }
 
     /// [`Self::client_for_key`] judged at `now`, the caller's reading of the
@@ -739,3 +743,7 @@ pub(super) fn with_dummy_digest<R>(digest: [u8; 32], f: impl FnOnce() -> R) -> R
     let _restore = Restore(DUMMY_DIGEST_OVERRIDE.with(|cell| cell.replace(Some(digest))));
     f()
 }
+
+#[cfg(test)]
+#[path = "auth_one_reading_tests.rs"]
+mod one_reading_tests;

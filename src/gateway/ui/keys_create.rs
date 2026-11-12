@@ -31,7 +31,7 @@ use crate::config_reload::{
     RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced, refuse_multi_user_flip,
     replace_audited,
 };
-use crate::gateway::auth::NamedApiKey;
+use crate::gateway::auth::{MintingKey, QuotaPrincipal, ResolvedAuthConfig, SessionMintedBy};
 use crate::gateway::router::AppState;
 
 /// Under test, a request may carry the secret the route hands out, so a row
@@ -500,13 +500,27 @@ fn refused_write(
     }
 }
 
+/// Display names can collide or change; the stable key principal carries the restriction.
+fn caller_is_cli_key(
+    auth: &ResolvedAuthConfig,
+    bearer_quota: Option<&QuotaPrincipal>,
+    session: Option<&MintingKey>,
+) -> bool {
+    auth.api_keys().iter().any(|key| {
+        key.approved_by.is_some()
+            && (bearer_quota.is_some_and(|quota| key.quota_principal.same_key_principal(quota))
+                || session
+                    .is_some_and(|minter| key.quota_principal.same_key_principal(&minter.quota)))
+    })
+}
+
 /// `POST /ui/api/keys`.
 /// A CLI key must not mint an unbound successor that outlives its approver.
 pub(super) async fn create_key(
     State(state): State<std::sync::Arc<AppState>>,
     guard: Guard,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
-    named: Option<Extension<NamedApiKey>>,
+    session: Option<Extension<SessionMintedBy>>,
     #[cfg(test)] known: Option<axum::Extension<KnownSecret>>,
     #[cfg(test)] (before_lock, inject): (
         Option<axum::Extension<BeforeLock>>,
@@ -517,13 +531,14 @@ pub(super) async fn create_key(
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    if named.is_some_and(|Extension(named)| {
-        generation
-            .auth()
-            .api_keys()
-            .iter()
-            .any(|key| key.name == named.name() && key.approved_by.is_some())
-    }) {
+    if caller_is_cli_key(
+        generation.auth(),
+        guard
+            .client
+            .as_ref()
+            .and_then(|client| client.quota_principal.as_ref()),
+        session.as_ref().map(|Extension(SessionMintedBy(key))| key),
+    ) {
         return super::guard::Refused::Forbidden.into_response();
     }
     let Ok(Json(mut body)) = body else {

@@ -237,7 +237,8 @@ async fn a_cli_keys_dashboard_session_cannot_create_a_key() {
         ("sec-fetch-site", "same-origin".into()),
         ("content-type", "application/json".into()),
     ] {
-        req.headers_mut().insert(name, value.parse().expect("header"));
+        req.headers_mut()
+            .insert(name, value.parse().expect("header"));
     }
     *req.body_mut() = axum::body::Body::from(body.to_string());
     let out = send(&state, req).await;
@@ -245,7 +246,10 @@ async fn a_cli_keys_dashboard_session_cannot_create_a_key() {
     assert_eq!(out.status, StatusCode::FORBIDDEN, "{}", out.body);
     assert_eq!(std::fs::read(&path).expect("config bytes"), before);
     assert!(Arc::ptr_eq(&auth, state.live_config.generation().auth()));
-    assert_eq!(state.live_config.generation().auth().api_keys().len(), keys.len());
+    assert_eq!(
+        state.live_config.generation().auth().api_keys().len(),
+        keys.len()
+    );
 }
 
 #[cfg(feature = "webui")]
@@ -296,7 +300,10 @@ async fn a_handoff_minted_by_the_child_is_refused_after_root_removal() {
     let minted = mint(&state, Some(CHILD), None).await;
     assert_eq!(minted.status, StatusCode::OK, "{}", minted.body);
     let (out, code) = code_from_link(&state).await;
-    assert!(out.set_cookie().is_empty(), "handoff has not issued a session");
+    assert!(
+        out.set_cookie().is_empty(),
+        "handoff has not issued a session"
+    );
     remove_root(&state, dir.path(), &keys).await;
     // Keep the proxy origin valid after the file reload, isolating credential revocation.
     let mut config = (*state.live_config.get()).clone();
