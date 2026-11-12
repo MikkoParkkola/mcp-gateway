@@ -54,8 +54,6 @@ mod run;
 mod run_steps;
 mod run_wiring;
 #[cfg(test)]
-mod stop_budget_start_tests;
-#[cfg(test)]
 #[path = "tests/mod.rs"]
 pub(crate) mod signing_allocation_tests;
 mod start_checks;
@@ -79,6 +77,8 @@ mod stdio_single;
 mod stdio_startup;
 mod stdio_tasks;
 mod stdio_writer;
+#[cfg(test)]
+mod stop_budget_start_tests;
 mod task_runtime;
 #[cfg(test)]
 mod test_seams;
