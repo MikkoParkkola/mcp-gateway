@@ -60,7 +60,10 @@ struct Fx {
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     /// The router's state (its task store, MIK-8439 R7).
     state: Arc<super::AppState>,
-    dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
+    dirs: (
+        Arc<tempfile::TempDir>,
+        crate::gateway::router::tests::FixtureDir,
+    ),
     /// Last: it owns the Meta-MCP's audit log, which must outlive every
     /// field above that holds the logger.
     gateway: DirectAccountGateway,
@@ -103,7 +106,7 @@ async fn fixture_on(
     surfaced: &[(&str, &str)],
     arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
 ) -> Fx {
-    let audit = tempfile::tempdir().unwrap();
+    let audit = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,

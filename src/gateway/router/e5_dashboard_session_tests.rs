@@ -212,9 +212,12 @@ fn with_running(mut state: Arc<AppState>, running: crate::config::Config) -> Arc
 /// A real audit log on `state`, as the server wires it.
 fn with_audit(
     state: &mut Arc<AppState>,
-) -> (Arc<crate::security::TransparencyLogger>, tempfile::TempDir) {
+) -> (
+    Arc<crate::security::TransparencyLogger>,
+    Arc<tempfile::TempDir>,
+) {
     use crate::security::transparency_log::TransparencyLogConfig;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
