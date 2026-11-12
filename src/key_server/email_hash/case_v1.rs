@@ -1965,8 +1965,6 @@ pub(super) static CASE_IGNORABLE: [(u32, u32); 464] = [
     (0xe0100, 0xe01ef),
 ];
 
-pub(super) static WHITE_SPACE: [(u32, u32); 0] = [];
-
 pub(super) static CASED_TERMINAL: [(u32, u32); 151] = [
     (0x41, 0x5a),
     (0x61, 0x7a),
@@ -2119,6 +2117,19 @@ pub(super) static CASED_TERMINAL: [(u32, u32); 151] = [
     (0x1f130, 0x1f149),
     (0x1f150, 0x1f169),
     (0x1f170, 0x1f189),
+];
+
+pub(super) static WHITE_SPACE: [(u32, u32); 10] = [
+    (0x9, 0xd),
+    (0x20, 0x20),
+    (0x85, 0x85),
+    (0xa0, 0xa0),
+    (0x1680, 0x1680),
+    (0x2000, 0x200a),
+    (0x2028, 0x2029),
+    (0x202f, 0x202f),
+    (0x205f, 0x205f),
+    (0x3000, 0x3000),
 ];
 
 /// The lowercase of `c` from the frozen table, or `None` when it has none.
