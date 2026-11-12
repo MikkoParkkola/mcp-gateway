@@ -100,8 +100,8 @@ fn private_to_us(meta: &std::fs::Metadata) -> bool {
 }
 
 /// Fails closed off Unix: no owner check exists there yet, so no file counts as private to this
-/// user. The Windows owner check through `win_acl` is a precondition of the startup caller
-/// (register row 1366); until then a handover refuses on those platforms.
+/// user. The Windows owner check through `win_acl` is a tracked precondition of the startup
+/// caller; until then a handover refuses on those platforms.
 #[cfg(not(unix))]
 fn private_to_us(_meta: &std::fs::Metadata) -> bool {
     false

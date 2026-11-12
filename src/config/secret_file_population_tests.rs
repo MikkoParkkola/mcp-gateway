@@ -150,7 +150,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
          and checks the OPENED handle before any read, on every path (also for a file it created \
          itself): on unix a regular file, owned by this user, one link, no group or other \
          permission bit; elsewhere the handover refuses before it writes or reads anything, until the \
-         owner check through win_acl lands (register row 1366); reads it only to prove it against the donor journal; it holds frozen \
+         owner check through win_acl lands (a tracked precondition of the startup caller); reads it only to prove it against the donor journal; it holds frozen \
          journal records, not credentials",
     ),
     (
