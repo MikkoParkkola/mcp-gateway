@@ -4,7 +4,9 @@
 //! against real child processes (a held descriptor and a bare pid).
 
 use std::process::{Child, Command, Stdio};
+use std::time::Instant;
 
+use super::super::{PidfdBudget, Sweep, SweepConfig};
 use super::*;
 
 fn sleeper() -> Child {
@@ -134,4 +136,99 @@ fn a_reaped_child_is_gone_and_a_signal_to_it_is_a_mismatch() {
     for held in [true, false] {
         assert!(table.signal(id, Sig::Kill, held).is_err(), "held={held}");
     }
+}
+
+/// Delegates to the Linux table and records when the terminal kills begin and
+/// when the last signal went out.
+struct Timed {
+    inner: LinuxTable,
+    start: Instant,
+    first_kill: Option<Duration>,
+    last_signal: Duration,
+}
+
+impl ProcessTable for Timed {
+    fn read(&mut self) -> Vec<(Identity, u32)> {
+        self.inner.read()
+    }
+    fn state(&mut self, id: Identity) -> ProcState {
+        self.inner.state(id)
+    }
+    fn signal(&mut self, id: Identity, sig: Sig, held: bool) -> Result<Handle, SignalError> {
+        if sig == Sig::Kill && self.first_kill.is_none() {
+            self.first_kill = Some(self.start.elapsed());
+        }
+        let result = self.inner.signal(id, sig, held);
+        self.last_signal = self.start.elapsed();
+        result
+    }
+    fn now(&mut self) -> Duration {
+        self.inner.now()
+    }
+}
+
+/// Measurement, not a gate: a root shell with `MEASURE_N` (default 1000)
+/// sleeping children, swept with real pidfds. Prints how long the freeze phase
+/// and the terminal kill phase take, for the design record. Run by hand:
+/// `cargo test --lib measure_the_kill_phase -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, run by hand with --nocapture"]
+fn measure_the_kill_phase_at_the_cap() {
+    let n: usize = std::env::var("MEASURE_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1000);
+    let script = format!("i=0; while [ $i -lt {n} ]; do sleep 120 & i=$((i+1)); done; wait");
+    let mut root = Command::new("sh")
+        .args(["-c", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("root starts");
+    let root_id = identity(&root);
+    let mut table = Timed {
+        inner: LinuxTable::new(),
+        start: Instant::now(),
+        first_kill: None,
+        last_signal: Duration::ZERO,
+    };
+    let kids = |table: &mut Timed| {
+        table
+            .read()
+            .iter()
+            .filter(|(_, ppid)| *ppid == root_id.pid)
+            .count()
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while kids(&mut table) < n {
+        assert!(
+            Instant::now() < deadline,
+            "the root never reached {n} children"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let cfg = SweepConfig {
+        freeze_slice: Duration::from_secs(10),
+        cap: n + 16,
+    };
+    let budget = PidfdBudget::new(n + 16);
+    let mut sweep = Sweep::new(root_id, cfg);
+    sweep.snapshot(&mut table);
+    table.start = Instant::now();
+    let report = sweep.run(&mut table, &budget);
+    let total = table.start.elapsed();
+    let first_kill = table.first_kill.expect("kills were sent");
+    eprintln!(
+        "MEASURE n={n} killed={} residual={} passes={} total={total:?} freeze_phase={first_kill:?} kill_phase={:?}",
+        report.killed.len(),
+        report.residual.len(),
+        report.passes,
+        table.last_signal.saturating_sub(first_kill),
+    );
+    assert!(
+        report.killed.len() > n,
+        "every child and the root are killed"
+    );
+    root.wait().expect("reap");
 }
