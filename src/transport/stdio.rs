@@ -497,6 +497,10 @@ impl Transport for StdioTransport {
 mod child_tree;
 #[path = "stdio_reaper.rs"]
 mod reaper;
+// Wired into the reaper by the change that follows its rows.
+#[cfg(test)]
+#[path = "stdio_sweep.rs"]
+mod sweep;
 /// The reaper's SIGTERM floor for the stop-budget rows: an alias that reads the
 /// production constant, which itself stays visible to the transport module only.
 #[cfg(all(test, unix))]
