@@ -613,6 +613,9 @@ mod answer_integrity2_tests;
 #[path = "answer_integrity_tests.rs"]
 mod answer_integrity_tests;
 #[cfg(test)]
+#[path = "answer_unattributed_tests.rs"]
+mod answer_unattributed_tests;
+#[cfg(test)]
 #[path = "answer_joiner_tests.rs"]
 mod answer_joiner_tests;
 #[cfg(test)]
