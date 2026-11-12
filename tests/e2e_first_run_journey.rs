@@ -74,11 +74,12 @@ fn init(ws: &Workspace) {
         "with no launcher on PATH, init must say which starters it skipped\n{}",
         show(&init)
     );
-    // Without a keychain init says its token goes to files; that notice may
-    // continue on the next line, so skip it up to the next "Skipped" line.
+    // init names the store it chose: the harness pins files (an info line), and a
+    // fallback says "secrets go to files" (a warning). A notice may continue on
+    // the next line, so skip it up to the next "Skipped" line.
     let mut in_store_notice = false;
     for line in stderr.lines().filter(|l| !l.trim().is_empty()) {
-        if line.contains("secrets go to files") {
+        if line.contains("secrets go to files") || line.contains("secret store chosen") {
             in_store_notice = true;
             continue;
         }
