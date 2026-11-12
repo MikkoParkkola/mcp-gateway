@@ -74,6 +74,15 @@ def main() -> int:
         [True] * 4)
     row("a bare Mutex lock does not trigger", osd.scan(diff("src/a.rs", "+    let g = state.lock();")), [])
 
+    # Round 2 (kimi, muse): case, unlock, renames.
+    row("constants and type names count in any case",
+        [bool(osd.scan(diff("src/a.rs", f"+{c}"))) for c in ('const KEYCHAIN_SERVICE: &str = "x";', "struct FileLock;", "use crate::KeyRing;")],
+        [True] * 3)
+    row("an unlock-only change triggers", len(osd.scan(diff("src/a.rs", "+    File::unlock(&f)?;"))), 1)
+    renamed = ("diff --git a/src/a.rs b/docs/b.md\nsimilarity index 50%\nrename from src/a.rs\nrename to docs/b.md\n"
+               "--- a/src/a.rs\n+++ b/docs/b.md\n@@ -3,1 +3,1 @@\n-    flock(fd);\n+prose\n")
+    row("a removed line of a renamed file is read by its old path", [(p, n) for p, n, _ in osd.scan(renamed)], [("src/a.rs", 3)])
+
     # The check: exit status, message and label.
     msg = osd.verdict(osd.scan(init), labels=[], pr=4839)
     row("unlabelled hit fails", msg is not None, True)
@@ -113,6 +122,23 @@ def main() -> int:
         git("merge", "-q", "--no-ff", "-m", "merge", "pr")
         moved = subprocess.run([sys.executable, str(Path(osd.__file__)), "--repo", tmp, "--base", "HEAD^1", "--head", "HEAD",
                                 "--pr", "12", "--labels", "[]"], capture_output=True, text=True)
+        # A checkout that is not the pull request's merge commit must fail loudly, never diff just the tip commit.
+        second = git("rev-parse", "HEAD^2").strip()
+        base_run = lambda head, expect: subprocess.run(  # noqa: E731
+            [sys.executable, str(Path(osd.__file__)), "--repo", tmp, "--base", f"{head}^1", "--head", head, "--pr", "12",
+             "--labels", "[]", "--expect-second-parent", expect], capture_output=True, text=True)
+        row("a single-parent head is refused (exit 2)", base_run("HEAD^1", second).returncode, 2)
+        row("a merge whose second parent is not the PR head is refused (exit 2)", base_run("HEAD", "0" * 40).returncode, 2)
+        row("the PR's own merge commit is read (exit 1: its hit is unlabelled)", base_run("HEAD", second).returncode, 1)
+        # Odd bytes in a source file, and a source file git takes for binary, still give a verdict.
+        git("checkout", "-q", "-b", "odd", "base")
+        (Path(tmp) / "d.rs").write_bytes(b"fn d() { /* caf\xe9 */ secret_store::x(); }\n")
+        (Path(tmp) / "e.toml").write_bytes(b"keychain\x00 = 1\n")
+        git("add", "."); git("commit", "-q", "-m", "odd bytes")
+        odd = subprocess.run([sys.executable, str(Path(osd.__file__)), "--repo", tmp, "--base", "HEAD~1", "--head", "HEAD", "--pr", "12",
+                              "--labels", "[]"], capture_output=True, text=True)
+        row("non-UTF-8 and binary-looking sources still give a verdict (exit 1, both files named)",
+            (odd.returncode, "d.rs" in odd.stdout, "e.toml" in odd.stdout), (1, True, True))
         row("against the first parent only the pull request's own hit counts", ("b.rs" in moved.stdout, "c.rs" in moved.stdout),
             (True, False))
 

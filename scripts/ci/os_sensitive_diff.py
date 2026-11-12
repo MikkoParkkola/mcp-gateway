@@ -23,12 +23,14 @@ import subprocess
 import sys
 
 LABEL = "os-int"
-# Words that put a Rust or TOML line in the OS-sensitive set: the secret store and keychain (Cargo.toml spells the crates
-# with hyphens), file locks (flock and fcntl, the fs2 and fd-lock crates, std's File lock methods by their qualified or
-# shared/exclusive names; a bare `x.lock()` is not matched, since it is as often a Mutex).
+# Words that put a Rust or TOML line in the OS-sensitive set, in any case (KEYCHAIN_SERVICE, FileLock): the secret
+# store and keychain (Cargo.toml spells the crates with hyphens), file locks (flock and fcntl, the fs2 and fd-lock
+# crates, std's File lock and unlock methods by their qualified or shared/exclusive names; a bare `x.lock()` is not
+# matched, since it is as often a Mutex).
 PATTERN = re.compile(
-    r"secret[_-]store|SecretStore|keychain|Keychain|security[_-]framework|fs[_-]lock|fd[_-]lock|\bfs2\b|FileExt\b"
-    r"|flock|fcntl|O_EXLOCK|keyring|File::(?:try_)?lock\b|(?:try_)?lock_(?:shared|exclusive)\b"
+    r"secret[_-]?store|keychain|security[_-]?framework|fs[_-]?lock|fd[_-]?lock|file[_-]?lock|\bfs2\b|FileExt\b"
+    r"|flock|fcntl|O_EXLOCK|keyring|File::(?:try_)?(?:un)?lock\b|(?:try_)?lock_(?:shared|exclusive)\b",
+    re.IGNORECASE,
 )
 SUFFIXES = (".rs", ".toml")
 SHOWN = 10
@@ -68,14 +70,15 @@ def scan(diff_text: str) -> list[tuple[str, int, str]]:
         if left_old > 0 or left_new > 0:
             if line.startswith("\\"):  # "\ No newline at end of file"
                 continue
-            path = new_path if new_path else old_path
             if line.startswith("+") and left_new > 0:
+                path = new_path or old_path
                 if path and path.endswith(SUFFIXES) and PATTERN.search(line[1:]):
                     out.append((path, new, line[1:].strip()))
                 new += 1
                 left_new -= 1
                 continue
             if line.startswith("-") and left_old > 0:
+                path = old_path or new_path  # a removed line belongs to the old file, which a rename changes
                 if path and path.endswith(SUFFIXES) and PATTERN.search(line[1:]):
                     out.append((path, old, line[1:].strip()))
                 old += 1
@@ -113,6 +116,19 @@ def verdict(hits: list[tuple[str, int, str]], labels: list[str], pr: int) -> str
     )
 
 
+def merge_problem(repo: str, head: str, expect_second: str) -> str | None:
+    """None when `head` is the pull request's test-merge commit: two parents, the second being the PR's head. Diffing
+    against HEAD^1 on anything else would silently cover only the tip commit, so the check fails loudly instead."""
+    out = subprocess.run(["git", "-C", repo, "rev-list", "--parents", "-n", "1", head],
+                         check=True, capture_output=True, text=True).stdout.split()
+    parents = out[1:]
+    if len(parents) != 2:
+        return f"{head} has {len(parents)} parent(s), not the two of a pull request's merge commit; cannot tell which diff is the pull request's"
+    if not parents[1].startswith(expect_second.lower()) and not expect_second.lower().startswith(parents[1]):
+        return f"the merge commit's second parent is {parents[1][:12]}, not the pull request head {expect_second[:12]}; the checkout is not this run's merge"
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True)
@@ -120,10 +136,19 @@ def main() -> int:
     ap.add_argument("--pr", required=True, type=int)
     ap.add_argument("--labels", default="[]")
     ap.add_argument("--repo", default=".")
+    ap.add_argument("--expect-second-parent", default="", help="the pull request's head sha; --head must be its merge commit")
     args = ap.parse_args()
-    diff_text = subprocess.run(["git", "-C", args.repo, "diff", "--unified=0", "--no-color", args.base, args.head],
-                               check=True, capture_output=True, text=True).stdout
-    hits = scan(diff_text)
+    if args.expect_second_parent:
+        problem = merge_problem(args.repo, args.head, args.expect_second_parent)
+        if problem:
+            print(f"os-int check cannot run: {problem}")
+            return 2
+    # Bytes, decoded leniently: an unrelated non-UTF-8 file must not turn the check into a traceback. --text reads a
+    # .rs or .toml that git guesses is binary; the pathspecs keep the dump to the files that can count.
+    raw = subprocess.run(["git", "-C", args.repo, "diff", "--unified=0", "--no-color", "--text", "--no-ext-diff",
+                          "--no-textconv", args.base, args.head, "--", "*.rs", "*.toml"],
+                         check=True, capture_output=True).stdout
+    hits = scan(raw.decode("utf-8", "replace"))
     message = verdict(hits, json.loads(args.labels), args.pr)
     if message:
         print(message)
