@@ -345,12 +345,28 @@ fn detach_release_returns_at_once_and_the_drop_runs_elsewhere() {
     multi_thread(async {
         let fx = start(tmp.path(), 2);
         let stall = stall_release(&fx);
+        let caller = std::thread::current().id();
+        let began = std::time::Instant::now();
         fx.handle.detach_release();
+        // A detach that dropped inline would sit in the stalled drop for its whole
+        // hang guard; a real one returns at once with the release still stalled.
+        assert!(
+            began.elapsed() < RELEASE_HANG_GUARD / 4,
+            "detach_release waited on the stalled release"
+        );
         stall.wait_entered();
         // The service drops its store (the locks) before the provider, so the
         // locks are already free here: this row proves the call returned and the
         // drop is running elsewhere, not that the locks stay held.
         stall.let_go();
+        refuse_scaffold(fx.handle.shutdown().await, "shutdown after the detach").expect("released");
+        let dropped_on = fx
+            .provider
+            .drop_thread
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the store was dropped by now");
+        assert_ne!(dropped_on, caller, "the drop ran on the calling thread");
     });
 }
 
