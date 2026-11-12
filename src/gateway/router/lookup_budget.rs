@@ -17,9 +17,9 @@ use governor::clock::{Clock, MonotonicClock};
 use crate::failsafe::{Acquire, RateLimiter};
 
 /// The sustained rate: ten a minute, one every six seconds.
-const PERMITS_PER_MINUTE: NonZeroU32 = NonZeroU32::new(10).expect("10 is nonzero");
+const PERMITS_PER_MINUTE: NonZeroU32 = NonZeroU32::MIN.saturating_add(9);
 /// The burst: two attempts back to back.
-const BURST: NonZeroU32 = NonZeroU32::new(2).expect("2 is nonzero");
+const BURST: NonZeroU32 = NonZeroU32::MIN.saturating_add(1);
 
 /// `wait` in whole seconds, rounded up, and never below one.
 fn whole_seconds(wait: std::time::Duration) -> u64 {
