@@ -89,7 +89,7 @@ The file store uses `<config-dir>/secrets/NAME`. On Windows, read the exact
 path after `file:` with PowerShell:
 
 ```powershell
-$env:MCP_GATEWAY_TOKEN = [IO.File]::ReadAllText('C:\config-dir\secrets\NAME').TrimEnd("`n")
+$env:MCP_GATEWAY_TOKEN = [IO.File]::ReadAllText('C:\config-dir\secrets\NAME').TrimEnd("`r", "`n")
 ```
 
 For Windows Credential Manager, read the **generic credential** whose target
