@@ -764,11 +764,12 @@ async function apiFetch(url, opts = {}, poll = false) {
 
 // KEY-LOOKUP BEGIN
 // Key audit: the admin email lookup. The email is typed, sent once and
-// cleared from the field before the request leaves. While a next page exists
-// the query is held in this variable only (never in storage, the URL or a
-// log) because the server's cursor is bound to the email; it is dropped on the
-// last page, on any failure but a throttle, on Clear, on leaving the page and
-// when the caller stops being an admin.
+// cleared from the field before the request leaves; the page never holds it
+// again. The next page is asked for with the server's sealed token alone, which
+// is held in this variable only (never in storage, the URL or a log) while a
+// next page exists. It is dropped on the last page, on any failure but a
+// throttle, on Clear, on leaving the page and when the caller stops being an
+// admin.
 const KEY_LOOKUP_URL = '/ui/api/key-server/audit/lookup-email';
 const KEY_LOOKUP_MAX_ROWS = 200;
 let keyLookupHeld = null;
@@ -872,8 +873,14 @@ async function keyLookupRun(query) {
     }
     const body = res.ok ? keyLookupDecode(await res.json().catch(() => null)) : null;
     if (stale()) return;
+    if (res.status === 400 && query.cursor) {
+      keyLookupHeld = null;
+      keyLookupReset();
+      keyLookupSay('That page is no longer available: run the lookup again.');
+      return;
+    }
     if (body === null) { keyLookupHeld = null; keyLookupReset(); keyLookupSay('The lookup failed.'); return; }
-    keyLookupHeld = body.next_cursor === null ? null : { ...query, cursor: body.next_cursor };
+    keyLookupHeld = body.next_cursor === null ? null : { cursor: body.next_cursor };
     keyLookupShow(body);
   } catch (e) {
     if (mine !== keyLookupEpoch) return;

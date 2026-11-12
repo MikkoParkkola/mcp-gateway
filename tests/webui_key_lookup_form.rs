@@ -107,7 +107,10 @@ replies = [page([row('s1')])];
 await submit('ada@example.org');
 out({ atCall: calls[0].emailField, after: dom['kl-email'].value, body: calls[0].opts.body });
 ");
-    assert_eq!(got["atCall"], "", "the field still held the email when the request went out");
+    assert_eq!(
+        got["atCall"], "",
+        "the field still held the email when the request went out"
+    );
     assert_eq!(got["after"], "");
     assert!(
         got["body"].as_str().unwrap().contains("ada@example.org"),
@@ -168,8 +171,12 @@ fn the_lookup_code_names_no_storage_or_analytics() {
 /// Mutant: add a `name`, drop autocomplete off, or give the form an action.
 #[test]
 fn the_form_markup_gives_a_browser_nothing_to_remember() {
-    let start = INDEX.find(r#"id="kl-form""#).expect("the page has the lookup form");
-    let open = INDEX[..start].rfind("<form").expect("a form element opens it");
+    let start = INDEX
+        .find(r#"id="kl-form""#)
+        .expect("the page has the lookup form");
+    let open = INDEX[..start]
+        .rfind("<form")
+        .expect("a form element opens it");
     let form_end = INDEX[start..].find("</form>").expect("the form closes") + start;
     let form = &INDEX[open..form_end];
     let field_at = form.find(r#"id="kl-email""#).expect("the email field");
@@ -180,7 +187,10 @@ fn the_form_markup_gives_a_browser_nothing_to_remember() {
     let tag = &form[..form.find('>').unwrap()];
     assert!(!tag.contains("action="), "{tag}");
     assert!(!tag.contains("method="), "{tag}");
-    assert!(tag.contains("onsubmit="), "the script must own the submit: {tag}");
+    assert!(
+        tag.contains("onsubmit="),
+        "the script must own the submit: {tag}"
+    );
 }
 
 /// UIFORM.2: a page with a `next_cursor` offers the next page, which asks
@@ -199,9 +209,17 @@ out({ offered, second, endedHidden: dom['kl-next'].hidden, held: keyLookupHeld }
 ");
     assert_eq!(got["offered"], true);
     assert_eq!(got["second"]["cursor"], "c1");
-    assert_eq!(got["second"]["email"], "ada@example.org");
+    assert!(
+        got["second"].get("email").is_none(),
+        "the next page must not carry the email again: {}",
+        got["second"]
+    );
     assert_eq!(got["endedHidden"], true);
-    assert_eq!(got["held"], serde_json::Value::Null, "the query outlived the last page");
+    assert_eq!(
+        got["held"],
+        serde_json::Value::Null,
+        "the query outlived the last page"
+    );
 }
 
 /// UIFORM.2: the answer says what it covers: retained rows only, and when the
@@ -237,7 +255,11 @@ const kept = keyLookupHeld !== null;
 await keyLookupNext();
 out({ first, kept, silly: dom['kl-status'].textContent });
 ");
-    assert!(got["first"].as_str().unwrap().contains("7 seconds"), "{}", got["first"]);
+    assert!(
+        got["first"].as_str().unwrap().contains("7 seconds"),
+        "{}",
+        got["first"]
+    );
     assert_eq!(got["kept"], true);
     let silly = got["silly"].as_str().unwrap();
     assert!(!silly.contains("99999999"), "{silly}");
@@ -266,7 +288,11 @@ out(seen);
     for case in got.as_array().unwrap() {
         assert!(!case[0].as_str().unwrap().is_empty(), "no message: {case}");
         assert_eq!(case[1], 0, "rows were rendered: {case}");
-        assert_eq!(case[2], serde_json::Value::Null, "the query was kept: {case}");
+        assert_eq!(
+            case[2],
+            serde_json::Value::Null,
+            "the query was kept: {case}"
+        );
     }
 }
 
@@ -288,10 +314,14 @@ out({ all });
         .map(|v| v.as_str().unwrap())
         .collect();
     assert!(
-        all.iter().any(|t| t.contains("<img src=x onerror=alert(1)>")),
+        all.iter()
+            .any(|t| t.contains("<img src=x onerror=alert(1)>")),
         "the subject must be shown as text: {all:?}"
     );
-    assert!(!all.contains(&"img"), "an element was built from the subject: {all:?}");
+    assert!(
+        !all.contains(&"img"),
+        "an element was built from the subject: {all:?}"
+    );
 }
 
 /// UIFORM.3: the request is a POST of JSON with the page's auth headers and
@@ -338,10 +368,15 @@ out({ n1, said, n2: calls.length });
 /// Mutant: a link that is visible by default, or shown for signed-in users.
 #[test]
 fn the_page_is_hidden_from_everyone_but_an_admin() {
-    let link = INDEX.find(r#"data-page="key-audit""#).expect("a nav link for the page");
+    let link = INDEX
+        .find(r#"data-page="key-audit""#)
+        .expect("a nav link for the page");
     let tag_open = INDEX[..link].rfind("<a ").unwrap();
     let tag = &INDEX[tag_open..link + INDEX[link..].find('>').unwrap()];
-    assert!(tag.contains("display:none"), "the link must start hidden: {tag}");
+    assert!(
+        tag.contains("display:none"),
+        "the link must start hidden: {tag}"
+    );
     assert!(INDEX.contains(r#"id="page-key-audit""#), "the page exists");
     assert!(
         INDEX.contains("navKeyAudit.style.display = state === 'admin' ? '' : 'none'"),
@@ -396,9 +431,45 @@ out({ rest, bodies: calls.map((c) => c.opts.body), qs: calls.map((c) => c.url.in
     for q in got["qs"].as_array().unwrap() {
         assert_eq!(q, false, "the URL carries a query string");
     }
-    for body in got["bodies"].as_array().unwrap() {
-        assert!(body.as_str().unwrap().contains("ada@corp.test"));
-    }
+    let bodies = got["bodies"].as_array().unwrap();
+    assert!(
+        bodies[0].as_str().unwrap().contains("ada@corp.test"),
+        "the first page carries the email"
+    );
+    assert!(
+        !bodies[1].as_str().unwrap().contains("ada@corp.test"),
+        "the next page must send the sealed token alone: {}",
+        bodies[1]
+    );
+    assert!(bodies[1].as_str().unwrap().contains("c1"));
+}
+
+/// A next page the server no longer honours (its token expired, was spent or
+/// belongs to another session) is a 400: the page says to run the lookup again,
+/// draws nothing and drops what it held. A first-page 400 stays the generic
+/// failure. Mutant: show the generic line for a refused token, or keep the token.
+#[test]
+fn a_refused_token_says_to_run_the_lookup_again_and_is_dropped() {
+    let got = run(r"
+replies = [page([row('s1')], { next_cursor: 'c1' }), { status: 400 }, { status: 400 }];
+await submit('ada@corp.test');
+await keyLookupNext();
+const afterToken = [dom['kl-status'].textContent, keyLookupHeld, dom['kl-rows'].children.length];
+await submit('bob@corp.test');
+out({ afterToken, afterFirst: dom['kl-status'].textContent });
+");
+    let after = got["afterToken"].as_array().unwrap();
+    assert!(
+        after[0].as_str().unwrap().contains("run the lookup again"),
+        "{after:?}"
+    );
+    assert_eq!(after[1], serde_json::Value::Null);
+    assert_eq!(after[2], 0);
+    let first = got["afterFirst"].as_str().unwrap();
+    assert!(
+        !first.contains("run the lookup again"),
+        "a first-page 400 is the generic failure: {first}"
+    );
 }
 
 /// A request that was in flight when the query was dropped writes nothing:
@@ -426,9 +497,16 @@ for (const how of ['clear', 'auth']) {
 out(results);
 ");
     for case in got.as_array().unwrap() {
-        assert_eq!(case[1], serde_json::Value::Null, "the query came back: {case}");
+        assert_eq!(
+            case[1],
+            serde_json::Value::Null,
+            "the query came back: {case}"
+        );
         assert_eq!(case[2], 0, "rows were drawn after the drop: {case}");
-        assert_eq!(case[3], true, "Next page was offered after the drop: {case}");
+        assert_eq!(
+            case[3], true,
+            "Next page was offered after the drop: {case}"
+        );
     }
 }
 
