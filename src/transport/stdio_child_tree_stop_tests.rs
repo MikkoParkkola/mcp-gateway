@@ -339,3 +339,148 @@ fn a_second_earlier_stop_deadline_takes_effect_and_a_later_one_does_not() {
         "a later stop changes nothing"
     );
 }
+
+/// The helper and its leaf sleep 600 s, far beyond `HANG_BOUND`: a leaf that merely
+/// expired inside the wait would make a row pass without any sweep.
+/// Start a helper that stays attached to the backend by parent pid but leads
+/// its own session, so the backend's group kill never reaches it. The leaf's
+/// pid lands in `leaf.pid`. The backend ignores EOF and SIGTERM alike.
+async fn started_with_session_leaf(tail: &str) -> (tempfile::TempDir, Arc<StdioTransport>, u32) {
+    let after = format!("trap '' TERM
+cat > helper.py <<'PY'
+import os, subprocess, time
+null = subprocess.DEVNULL
+leaf = subprocess.Popen(['sleep', '600'], start_new_session=True, stdin=null, stdout=null, stderr=null)
+open('leaf.tmp', 'w').write(str(leaf.pid))
+os.rename('leaf.tmp', 'leaf.pid')
+time.sleep(600)
+PY
+python3 helper.py </dev/null >/dev/null 2>&1 &
+{tail}");
+    let (w, t) = started(&after, None).await;
+    let leaf_file = w.path().join("leaf.pid");
+    poll_until("the helper starts its leaf", || leaf_file.exists()).await;
+    let leaf = std::fs::read_to_string(&leaf_file)
+        .expect("leaf pid")
+        .trim()
+        .parse()
+        .expect("a pid");
+    (w, t, leaf)
+}
+
+/// Whether `pid` is a live process: a zombie waiting for its reaper is dead.
+fn alive(pid: u32) -> bool {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps runs");
+    let stat = String::from_utf8_lossy(&out.stdout);
+    let stat = stat.trim();
+    !stat.is_empty() && !stat.starts_with('Z')
+}
+
+/// The descendant sweep runs on the ordinary stop as well as the hurried one:
+/// a helper still attached to the backend, leading its own session, dies with
+/// it. Red if the sweep is skipped on the ordinary path: the group kill alone
+/// never reaches the leaf.
+#[tokio::test]
+async fn an_ordinary_close_kills_a_leaf_in_its_own_session() {
+    let (_w, t, leaf) = started_with_session_leaf("while :; do sleep 0.05; done").await;
+    assert!(alive(leaf), "the leaf runs before the stop");
+    t.close().await.expect("close");
+    poll_until("the leaf dies with the backend", || !alive(leaf)).await;
+}
+
+/// A backend that exits the moment its stdin closes reparents its helper before
+/// the reaper's first step; the sweep's snapshot, taken before the stdin close,
+/// still has the helper and its leaf. Red if the snapshot is taken only after
+/// the close: the helper is no longer a descendant and the leaf survives.
+#[tokio::test]
+async fn a_leaf_of_a_backend_that_exits_on_eof_is_killed() {
+    let (_w, t, leaf) = started_with_session_leaf("cat >/dev/null").await;
+    assert!(alive(leaf), "the leaf runs before the stop");
+    t.close().await.expect("close");
+    poll_until("the leaf dies although its backend exited on EOF", || {
+        !alive(leaf)
+    })
+    .await;
+}
+
+/// The parent pid of `pid`, or `None` once it is gone.
+fn ppid_of(pid: u32) -> Option<u32> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps runs");
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+/// Start a backend (ignoring EOF and SIGTERM) whose helper detaches BEFORE any
+/// stop begins. `helper` is the Python the backend runs: it writes the
+/// survivor's pid to `leaf.pid` and leaves it running, outside the backend's
+/// descendants by parent pid.
+async fn started_with_detached(helper: &str) -> (tempfile::TempDir, Arc<StdioTransport>, u32) {
+    let after = format!(
+        "trap '' TERM
+cat > helper.py <<'PY'
+{helper}
+PY
+python3 helper.py </dev/null >/dev/null 2>&1 &
+while :; do sleep 0.05; done"
+    );
+    let (w, t) = started(&after, None).await;
+    let leaf_file = w.path().join("leaf.pid");
+    poll_until("the helper leaves its survivor", || leaf_file.exists()).await;
+    let leaf = std::fs::read_to_string(&leaf_file)
+        .expect("leaf pid")
+        .trim()
+        .parse()
+        .expect("a pid");
+    (w, t, leaf)
+}
+
+/// A process that left the backend's tree before the stop is outside the
+/// sweep's reach: the stated limit, pinned. The row stops it afterwards.
+async fn a_detached_survivor_outlives_the_stop(helper: &str, what: &str) {
+    let (_w, t, leaf) = started_with_detached(helper).await;
+    let backend = u32::try_from(leader(&t).await.as_raw_nonzero().get()).expect("pid fits");
+    poll_until("the survivor is no longer the backend's child", || {
+        ppid_of(leaf).is_some_and(|parent| parent != backend)
+    })
+    .await;
+    t.close().await.expect("close");
+    // timing: absence
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let survived = alive(leaf);
+    assert!(
+        survived,
+        "{what} detached before the stop, so the sweep must leave it running"
+    );
+}
+
+/// A helper that started a process and exited before the stop (the process is
+/// orphaned and in its own session) is detached, so it survives the stop.
+#[tokio::test]
+async fn a_helper_detached_before_the_stop_survives_it() {
+    let helper = "import os, subprocess
+null = subprocess.DEVNULL
+leaf = subprocess.Popen(['sleep', '30'], start_new_session=True, stdin=null, stdout=null, stderr=null)
+open('leaf.tmp', 'w').write(str(leaf.pid))
+os.rename('leaf.tmp', 'leaf.pid')";
+    a_detached_survivor_outlives_the_stop(helper, "an orphaned helper process").await;
+}
+
+/// A double-forked daemon survives the stop, as it always did.
+#[tokio::test]
+async fn a_double_forked_daemon_survives_the_stop() {
+    let helper = "import os, time
+if os.fork() == 0:
+    os.setsid()
+    if os.fork() == 0:
+        open('leaf.tmp', 'w').write(str(os.getpid()))
+        os.rename('leaf.tmp', 'leaf.pid')
+        time.sleep(30)
+    os._exit(0)
+os.wait()";
+    a_detached_survivor_outlives_the_stop(helper, "a double-forked daemon").await;
+}

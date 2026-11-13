@@ -245,6 +245,27 @@ impl StdioSession {
     }
 }
 
+impl Drop for StdioSession {
+    /// A row that ends without `shutdown` or `finish_capturing` (a panicking assertion) still kills the child here, and
+    /// waits for it for a bounded time: `kill_on_drop` alone only sends the kill, and a caller's temp directory is
+    /// removed right after, while the child can still be writing into it.
+    fn drop(&mut self) {
+        if self.child.id().is_none() {
+            return; // already reaped by an orderly end
+        }
+        let _ = self.child.start_kill();
+        // A killed process is reaped within milliseconds; the long bound is only for a stuck host, and it says so.
+        let started = std::time::Instant::now();
+        while matches!(self.child.try_wait(), Ok(None)) {
+            if started.elapsed() > Duration::from_secs(30) {
+                eprintln!("stdio_session: the gateway child was still running 30 s after the kill");
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
 /// The child's own log line on reaching EOF (`gateway/server/mod.rs`): a fixed
 /// string whose absence from a capture names a broken capture, not a quiet child.
 pub const EOF_LINE: &str = "stdio: EOF reached, shutting down";
