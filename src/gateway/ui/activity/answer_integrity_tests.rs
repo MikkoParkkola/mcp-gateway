@@ -235,8 +235,37 @@ async fn r50_a_reopened_trace_keeps_its_reason_through_eviction() {
     let (_, page) = get(&fx, &[]).await;
     let rows = rows_of(&page, "gw-t");
     assert_eq!(rows.len(), 2);
+    // JOIN.4 (expectation changed: before, the older call row read effect
+    // `unknown` with `answer_integrity: unsigned`): the 512 orphan records put the
+    // tampered delivery more than the delivery window above the older call row,
+    // so it does not reach that row. The row reads `no_record` and the evidence
+    // is counted, never silent.
+    assert_eq!(rows[1]["effect"], "no_record", "the older call row");
+    assert_eq!(page["delivery_beyond_window"], 1, "{page}");
+}
+
+/// The eviction half of the row above, inside the window: 300 orphans (about
+/// 170 KiB) evict the reopened trace's entry, and its reason survives.
+#[tokio::test]
+async fn r50b_a_reopened_trace_keeps_its_reason_through_eviction_inside_the_window() {
+    let fx = Fixture::new(Some(SECRET));
+    fx.call("gw-t");
+    for i in 0..(MAX_PENDING + 44) {
+        fx.delivery(&format!("gw-orphan{i}"), &Dl::effect("refused"));
+    }
+    fx.delivery("gw-t", &Dl::effect("refused"));
+    let at = fx.delivery_index("gw-t");
+    fx.call("gw-t");
+    fx.delivery("gw-t", &Dl::effect("refused"));
+    fx.edit(at, |e| {
+        forge(e, "response_effect", json!("delivered"), true);
+    });
+    let (_, page) = get(&fx, &[]).await;
+    let rows = rows_of(&page, "gw-t");
+    assert_eq!(rows.len(), 2);
     assert_eq!(rows[1]["effect"], "unknown", "the older call row");
     assert_eq!(rows[1]["answer_integrity"], "unsigned");
+    assert_eq!(page["delivery_beyond_window"], 0, "{page}");
 }
 
 /// At the joined set's exact bound nothing is dropped: the call that joins as

@@ -749,6 +749,8 @@ mod backend_owner_tests;
 mod backend_refs_tests;
 #[cfg(test)]
 mod backend_url_tests;
+#[cfg(test)]
+mod keychain_confirm_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod keychain_linux_tests;
 #[cfg(test)]

@@ -321,20 +321,7 @@ impl JournalSession {
     }
 
     pub(crate) fn finish(&mut self) -> Result<(), JournalError> {
-        self.state.validate()?;
-        if self.state.pending.is_some()
-            || self.state.fact.is_none()
-            || (matches!(self.state.fact, Some(Fact::Committed(_)))
-                && self.state.phase != Phase::Accepted)
-            || !self
-                .state
-                .writer
-                .iter()
-                .chain(&self.state.attempts)
-                .all(|owner| owner.finished(&self.state.attempts))
-        {
-            return Err(JournalError::Finish);
-        }
+        self.state.finish_ready()?;
         super::remove_if_present(&super::original_path(&self.target))
             .map_err(|_| JournalError::Finish)?;
         #[cfg(test)]
@@ -367,6 +354,25 @@ impl JournalV2 {
     pub(crate) fn encode(&self) -> Result<Vec<u8>, JournalError> {
         self.validate()?;
         codec::encode(self)
+    }
+
+    /// Whether `finish` would accept this journal: the one check, so a caller that must know
+    /// beforehand cannot drift from it.
+    #[cfg(test)]
+    pub(crate) fn finish_ready(&self) -> Result<(), JournalError> {
+        self.validate()?;
+        if self.pending.is_some()
+            || self.fact.is_none()
+            || (matches!(self.fact, Some(Fact::Committed(_))) && self.phase != Phase::Accepted)
+            || !self
+                .writer
+                .iter()
+                .chain(&self.attempts)
+                .all(|owner| owner.finished(&self.attempts))
+        {
+            return Err(JournalError::Finish);
+        }
+        Ok(())
     }
 
     fn pre_action(&self, action: Action) -> Result<&FileRevision, JournalError> {
