@@ -1,0 +1,7 @@
+head_sha	8ffa46b54c9a117483d8076b0b52e98e8cc4e4f8
+#mutant no-trim
+mcp_gateway	key_server::email_hash::tests::padding_does_not_change_the_hash_and_inner_or_blank_looking_characters_do	src/key_server/email_hash.rs:351
+#mutant trim-start-only
+mcp_gateway	key_server::email_hash::tests::padding_does_not_change_the_hash_and_inner_or_blank_looking_characters_do	src/key_server/email_hash.rs:351
+#mutant trim-ascii-only
+mcp_gateway	key_server::email_hash::tests::padding_does_not_change_the_hash_and_inner_or_blank_looking_characters_do	src/key_server/email_hash.rs:351
