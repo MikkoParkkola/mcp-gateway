@@ -58,11 +58,36 @@ while IFS= read -r line; do
 done
 "#;
 
+/// Field order is the teardown order: the child comes first and `Drop` waits for it to exit, so nothing the gateway
+/// writes (its config lock, its state) can land in `tmp_dir` while the directory is being removed.
 struct Gateway {
-    _tmp: tempfile::TempDir,
     child: tokio::process::Child,
+    tmp_dir: Option<tempfile::TempDir>,
     log: PathBuf,
     url: String,
+}
+
+impl Drop for Gateway {
+    fn drop(&mut self) {
+        // Kill, then wait (bounded): `kill_on_drop` alone only sends the kill and returns, and the temp directory
+        // used to be removed before the child was gone, leaving `.gateway.yaml.lock` behind.
+        let _ = self.child.start_kill();
+        for _ in 0..100 {
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // Not reaped in 5 s: keep the directory rather than remove it under a live writer. The leftover then fails
+        // the shard's temp-directory check loudly, where removing it would fail intermittently.
+        if let Some(tmp) = self.tmp_dir.take() {
+            let kept = tmp.keep();
+            eprintln!(
+                "gateway child still running after kill; kept {}",
+                kept.display()
+            );
+        }
+    }
 }
 
 impl Gateway {
@@ -106,7 +131,7 @@ impl Gateway {
             .spawn()
             .expect("serve spawns");
         let mut gateway = Self {
-            _tmp: tmp,
+            tmp_dir: Some(tmp),
             child,
             log,
             // Learned from the child's `Listening` line in `wait_ready`.
