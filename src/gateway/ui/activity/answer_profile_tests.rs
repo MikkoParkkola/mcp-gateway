@@ -44,7 +44,7 @@ pub(super) fn scan(fx: &Fixture, fold: bool) {
     let keep = |line: &super::reader::Line, seen: Seen| {
         if fold {
             let mut j = joiner.borrow_mut();
-            if !j.observe(line) && kind_of(line).is_some() {
+            if !j.observe(line, 0) && kind_of(line).is_some() {
                 let answer = j.join(line, seen);
                 j.count(&answer);
             }
@@ -116,7 +116,7 @@ fn m2_profile_passes_and_row_build() {
         };
         let keep = |line: &super::reader::Line, seen: Seen| {
             let mut j = joiner.borrow_mut();
-            if j.observe(line) || kind_of(line).is_none() {
+            if j.observe(line, 0) || kind_of(line).is_none() {
                 return false;
             }
             let this = j.join(line, seen);
