@@ -405,3 +405,84 @@ async fn a_leaf_of_a_backend_that_exits_on_eof_is_killed() {
     })
     .await;
 }
+
+/// The parent pid of `pid`, or `None` once it is gone.
+fn ppid_of(pid: u32) -> Option<u32> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps runs");
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+/// Start a backend (ignoring EOF and SIGTERM) whose helper detaches BEFORE any
+/// stop begins. `helper` is the Python the backend runs: it writes the
+/// survivor's pid to `leaf.pid` and leaves it running, outside the backend's
+/// descendants by parent pid.
+async fn started_with_detached(helper: &str) -> (tempfile::TempDir, Arc<StdioTransport>, u32) {
+    let after = format!(
+        "trap '' TERM
+cat > helper.py <<'PY'
+{helper}
+PY
+python3 helper.py </dev/null >/dev/null 2>&1 &
+while :; do sleep 0.05; done"
+    );
+    let (w, t) = started(&after, None).await;
+    let leaf_file = w.path().join("leaf.pid");
+    poll_until("the helper leaves its survivor", || leaf_file.exists()).await;
+    let leaf = std::fs::read_to_string(&leaf_file)
+        .expect("leaf pid")
+        .trim()
+        .parse()
+        .expect("a pid");
+    (w, t, leaf)
+}
+
+/// A process that left the backend's tree before the stop is outside the
+/// sweep's reach: the stated limit, pinned. The row stops it afterwards.
+async fn a_detached_survivor_outlives_the_stop(helper: &str, what: &str) {
+    let (_w, t, leaf) = started_with_detached(helper).await;
+    let backend = u32::try_from(leader(&t).await.as_raw_nonzero().get()).expect("pid fits");
+    poll_until("the survivor is no longer the backend's child", || {
+        ppid_of(leaf).is_some_and(|parent| parent != backend)
+    })
+    .await;
+    t.close().await.expect("close");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let survived = alive(leaf);
+    let _ = std::process::Command::new("kill")
+        .arg(leaf.to_string())
+        .status();
+    assert!(
+        survived,
+        "{what} detached before the stop, so the sweep must leave it running"
+    );
+}
+
+/// A helper that started a process and exited before the stop (the process is
+/// orphaned and in its own session) is detached, so it survives the stop.
+#[tokio::test]
+async fn a_helper_detached_before_the_stop_survives_it() {
+    let helper = "import os, subprocess
+null = subprocess.DEVNULL
+leaf = subprocess.Popen(['sleep', '600'], start_new_session=True, stdin=null, stdout=null, stderr=null)
+open('leaf.tmp', 'w').write(str(leaf.pid))
+os.rename('leaf.tmp', 'leaf.pid')";
+    a_detached_survivor_outlives_the_stop(helper, "an orphaned helper process").await;
+}
+
+/// A double-forked daemon survives the stop, as it always did.
+#[tokio::test]
+async fn a_double_forked_daemon_survives_the_stop() {
+    let helper = "import os, time
+if os.fork() == 0:
+    os.setsid()
+    if os.fork() == 0:
+        open('leaf.tmp', 'w').write(str(os.getpid()))
+        os.rename('leaf.tmp', 'leaf.pid')
+        time.sleep(600)
+    os._exit(0)
+os.wait()";
+    a_detached_survivor_outlives_the_stop(helper, "a double-forked daemon").await;
+}
