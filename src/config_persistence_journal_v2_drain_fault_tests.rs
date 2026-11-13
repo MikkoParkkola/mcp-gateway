@@ -226,6 +226,11 @@ impl Pause {
 }
 
 /// Inject only after the atomic replacement and before the real directory sync.
+/// The file drain's rewrite boundary: renamed into place, its directory not yet synced.
+pub(crate) fn file_rewritten(path: &Path) -> Result<(), JournalError> {
+    hit(path, At::FileRewritten)
+}
+
 pub(crate) fn before_decision_sync(path: &Path, state: &JournalV2) -> Result<(), JournalError> {
     decision_boundary(path, state, At::BeforeDecisionSync)
 }
