@@ -229,6 +229,40 @@ impl Opened {
     async fn closed(&mut self) -> bool {
         !self.echoes().await
     }
+
+    /// The same connection as a plain non-blocking socket, which answers a
+    /// read at once, with no event loop between the caller and the kernel.
+    fn into_plain(self) -> Plain {
+        match self {
+            Self::Tcp(s) => Plain::Tcp(s.into_std().expect("std tcp stream")),
+            Self::Unix(s) => Plain::Unix(s.into_std().expect("std unix stream")),
+        }
+    }
+}
+
+/// A connection read without an event loop (see [`Opened::into_plain`]).
+enum Plain {
+    Tcp(std::net::TcpStream),
+    Unix(std::os::unix::net::UnixStream),
+}
+
+impl Plain {
+    /// True when the peer has already shut the connection down: the read
+    /// answers end-of-file or a reset. A read that would block, or data, is
+    /// false. Never awaits, so no proxy task runs between two calls.
+    fn peer_has_shut_down(&mut self) -> bool {
+        use std::io::{ErrorKind, Read as _};
+        let mut byte = [0u8; 1];
+        let read = match self {
+            Self::Tcp(s) => s.read(&mut byte),
+            Self::Unix(s) => s.read(&mut byte),
+        };
+        match read {
+            Ok(0) => true,
+            Ok(_) => false,
+            Err(e) => e.kind() != ErrorKind::WouldBlock,
+        }
+    }
 }
 
 /// Connect through `entry` and write `bytes`; `None` when the connection
