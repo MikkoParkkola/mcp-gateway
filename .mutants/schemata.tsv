@@ -1,0 +1,11 @@
+head_sha	bc12021ef1244f6463a7b84fa748e428b38e96ac
+#mutant E5
+cli_secret_redaction	audit_lookup_email_never_repeats_a_value_typed_as_an_argument	tests/cli_secret_redaction.rs:160
+#mutant E6
+cli_secret_redaction	other_parse_errors_and_help_keep_the_parsers_own_output	tests/cli_secret_redaction.rs:229
+#mutant E7
+cli_secret_redaction	hash_key_never_repeats_a_key_typed_as_an_argument	tests/cli_secret_redaction.rs:193
+#mutant E8
+cli_secret_redaction	other_parse_errors_and_help_keep_the_parsers_own_output	tests/cli_secret_redaction.rs:229
+#mutant E9
+cli_secret_redaction	other_parse_errors_and_help_keep_the_parsers_own_output	tests/cli_secret_redaction.rs:229
