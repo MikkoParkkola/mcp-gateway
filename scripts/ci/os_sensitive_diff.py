@@ -12,7 +12,9 @@ Docs, a file's name alone and platform cfg lines do not count (docs/ and markdow
 7-day window had 16 of 167 lane pull requests hit, against 23 for a cfg trigger of which 21 were noise).
 
   os_sensitive_diff.py --base REF --head REF --pr N --labels '["a","b"]' [--repo DIR]
-exits 1 with the matched lines and the exact `gh pr edit` command when the label is missing, else 0.
+exits 1 with the matched lines and the exact `gh pr edit` command when the label is missing, else 0. The CI job also
+checks that the label exists in the repository at all (a rename or delete would otherwise make `gh pr edit` fail for
+every OS-sensitive pull request) and says how to recreate it.
 """
 from __future__ import annotations
 
@@ -112,7 +114,9 @@ def verdict(hits: list[tuple[str, int, str]], labels: list[str], pr: int) -> str
         "runs macOS, so a macOS break would cost a train. Matched lines:\n" + "\n".join(lines) + "\n"
         f"Run the macOS int shard on this pull request at READY (not on every push):\n"
         f"  gh pr edit {pr} --add-label {LABEL}\n"
-        "then push or reopen once, since a label counts from the next run (CONTRIBUTING.md)."
+        "then push or reopen once, since a label counts from the next run (CONTRIBUTING.md).\n"
+        f"If that command says the label does not exist (it was renamed or deleted), create it first:\n"
+        f"  gh label create {LABEL} --description 'run the macOS int shard on this pull request'"
     )
 
 

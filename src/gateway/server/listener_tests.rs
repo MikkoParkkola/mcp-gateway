@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! #2147: after the shutdown signal the listener waits for open requests at
-//! most `server.shutdown_timeout`, and no less.
+//! most the grace it is given (the stop budget's listener share), and no less.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -19,6 +19,8 @@ use crate::config::Config;
 /// Every wait in these tests is bounded, so a regression fails by name
 /// instead of hanging the job.
 const HANG_STOP: Duration = Duration::from_secs(5);
+/// A hang bound for the row that proves the listener returns at once.
+const HANG_BOUND: Duration = Duration::from_secs(60);
 
 /// Sends once when dropped: proof that a handler future was cancelled.
 struct SendOnDrop(Option<oneshot::Sender<()>>);
@@ -45,11 +47,13 @@ async fn start(
         .expect("bind loopback");
     let addr = listener.local_addr().expect("local addr");
     let listener = listener.into_std().expect("std listener");
+    // The configured timeout is far longer than any row waits: only the explicit
+    // grace passed to `serve` can stop the listener in time.
     let mut config = Config::default();
-    config.server.shutdown_timeout = grace;
+    config.server.shutdown_timeout = Duration::from_secs(600);
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let server = tokio::spawn(async move {
-        serve(app, listener, addr, &config, async move {
+        serve(app, listener, addr, &config, grace, async move {
             let _ = stop_rx.await;
         })
         .await
@@ -194,8 +198,15 @@ async fn an_already_resolved_shutdown_future_stops_the_listener() {
     let mut config = Config::default();
     config.server.shutdown_timeout = Duration::from_secs(10);
     timeout(
-        HANG_STOP,
-        serve(Router::new(), listener, addr, &config, async {}),
+        HANG_BOUND,
+        serve(
+            Router::new(),
+            listener,
+            addr,
+            &config,
+            config.server.shutdown_timeout,
+            async {},
+        ),
     )
     .await
     .expect("the listener kept running after its shutdown future resolved")
