@@ -683,7 +683,7 @@ async fn a_bad_window_is_refused_before_a_request_is_sent() {
         let mut argv = vec!["--email-stdin"];
         argv.extend(flags);
         let parsed = parse(&argv).expect("parses");
-        let message = lookup(&base, &LinkTls::default(), TOKEN, EMAIL, &parsed)
+        let message = lookup(&base, &LinkTls::default(), TOKEN, &by_email(), &parsed)
             .await
             .expect_err("a bad window");
         assert!(
