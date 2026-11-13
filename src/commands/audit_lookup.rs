@@ -6,7 +6,8 @@
 //! The email (first page) or the page token (every later page, from
 //! `--cursor-stdin`) comes from stdin, bounded, and goes only into the request
 //! body built in memory: never an argument, never a file, never an error
-//! message.
+//! message of this command. (A value typed as an argument anyway is refused by
+//! the argument parser, whose error names it.)
 //! The answer is decoded strictly and printed as the typed answer; any HTTP,
 //! authentication, read or decode failure is a nonzero exit.
 
@@ -22,35 +23,48 @@ use super::dashboard_link::LinkTls;
 /// The most bytes read from stdin: an email is at most 320 bytes.
 pub(crate) const MAX_EMAIL_INPUT: usize = 1024;
 
-/// The most bytes read from stdin for a page token: the gateway's own limit
-/// on one (2048 characters of URL-safe base64).
+/// The longest page token accepted, in bytes, its line end not counted: the
+/// gateway's own limit on one (2048 characters of URL-safe base64).
 pub(crate) const MAX_CURSOR_INPUT: usize = 2048;
 
 /// What the lookup asks with: the email (first page) or a page token (every
 /// later page). Never both, so a token never travels beside an email.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum LookupInput {
     Email(String),
     Cursor(String),
+}
+
+/// Names the kind only: neither the email nor the token is for a log line.
+impl std::fmt::Debug for LookupInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Email(_) => "Email(<hidden>)",
+            Self::Cursor(_) => "Cursor(<hidden>)",
+        })
+    }
 }
 
 /// The one line of stdin that is a page token, trimmed at its ends.
 ///
 /// # Errors
 ///
-/// A fixed message (never the input) when stdin is empty, too long,
-/// unreadable, not UTF-8, holds more than one line, or the line holds a space
-/// or control character: a token is URL-safe base64.
+/// A fixed message (never the input) when stdin is empty, unreadable, not
+/// UTF-8, holds more than one line, the token is too long, or the line holds a
+/// space or control character: a token is URL-safe base64.
 pub(crate) fn read_cursor(input: impl std::io::Read) -> Result<String, String> {
     use std::io::Read as _;
+    const TOO_LONG: &str = "the page token on stdin is too long";
+    // The bound is on the token: room for a `\r\n` after it, and one byte
+    // more proves "too long" without reading the rest.
+    let line_bound = MAX_CURSOR_INPUT + 2;
     let mut raw = Vec::new();
-    // One byte over the bound proves "too long" without reading the rest.
     input
-        .take(MAX_CURSOR_INPUT as u64 + 1)
+        .take(line_bound as u64 + 1)
         .read_to_end(&mut raw)
         .map_err(|_| "could not read the page token from stdin".to_string())?;
-    if raw.len() > MAX_CURSOR_INPUT {
-        return Err("the page token on stdin is too long".to_string());
+    if raw.len() > line_bound {
+        return Err(TOO_LONG.to_string());
     }
     let text =
         String::from_utf8(raw).map_err(|_| "the page token on stdin is not UTF-8".to_string())?;
@@ -62,6 +76,9 @@ pub(crate) fn read_cursor(input: impl std::io::Read) -> Result<String, String> {
     let token = line.trim();
     if token.is_empty() {
         return Err("stdin held no page token".to_string());
+    }
+    if token.len() > MAX_CURSOR_INPUT {
+        return Err(TOO_LONG.to_string());
     }
     if token.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err("the page token on stdin is not valid".to_string());

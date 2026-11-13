@@ -10,12 +10,7 @@ use super::dashboard_link::DashboardLinkTls;
 /// Arguments of `mcp-gateway audit lookup-email`.
 ///
 /// Exactly one of `--email-stdin` (the first page) and `--cursor-stdin` (every
-/// later page) is given. Page through a long answer by feeding each printed
-/// `next_cursor` back in, for example
-/// `jq -r .next_cursor < page1.json | mcp-gateway audit lookup-email --cursor-stdin`.
-/// A page token is single use and lives five minutes: a throttled request
-/// leaves it redeemable, a lost successful answer has already spent it. Treat
-/// saved output as sensitive until its token is spent or has expired.
+/// later page) is given; `--cursor-stdin` documents the paging recipe.
 #[derive(clap::Args, Debug, Clone)]
 #[command(group(
     clap::ArgGroup::new("source")
@@ -29,8 +24,17 @@ pub struct LookupEmailArgs {
     #[arg(long, conflicts_with = "cursor_stdin")]
     pub email_stdin: bool,
     /// Read the previous page's `next_cursor` from standard input (one line):
-    /// every later page. The token is never an argument either. It carries its
-    /// own time window, so `--from` and `--to` are refused beside it.
+    /// every later page.
+    ///
+    /// The token is never an argument either. It carries its own time window,
+    /// so `--from` and `--to` are refused beside it. Page through a long
+    /// answer by feeding each printed `next_cursor` back in, for example
+    /// `jq -r '.next_cursor // empty' < page1.json | mcp-gateway audit
+    /// lookup-email --cursor-stdin` (after the last page jq prints nothing, and
+    /// an empty stdin is refused before any request). A page token is single
+    /// use and lives five minutes: a throttled request leaves it redeemable, a
+    /// lost successful answer has already spent it. Treat saved output as
+    /// sensitive until its token is spent or has expired.
     #[arg(long, conflicts_with_all = ["email_stdin", "from", "to"])]
     pub cursor_stdin: bool,
     /// Gateway base URL (default as for `dashboard-link`).
