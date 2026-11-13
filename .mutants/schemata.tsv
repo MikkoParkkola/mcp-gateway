@@ -1,0 +1,47 @@
+head_sha	5bf5058cf4fd51b3bef50ee5aac6994099501e81
+#mutant noauthority
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:71
+#mutant nosubject
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:72
+#mutant noagent
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:73
+#mutant nodigest
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:81
+#mutant nopositions
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:74
+#mutant nottl
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:86
+#mutant unsorted
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:64
+#mutant nolenprefix
+mcp_gateway	decisions::tests::accept::the_accept_key_keeps_its_field_boundaries	src/decisions/tests/accept.rs:107
+#mutant eventnon
+mcp_gateway	decisions::tests::accept::generations_move_only_the_ids_they_belong_to	src/decisions/tests/accept.rs:119
+#mutant rownog
+mcp_gateway	decisions::tests::accept::generations_move_only_the_ids_they_belong_to	src/decisions/tests/accept.rs:124
+#mutant rownocap
+mcp_gateway	decisions::tests::accept::generations_move_only_the_ids_they_belong_to	src/decisions/tests/accept.rs:125
+#mutant rowfromevent
+mcp_gateway	decisions::tests::accept::the_accept_ids_match_their_fixed_vectors	src/decisions/tests/accept.rs:51
+#mutant foldsaccepts
+mcp_gateway	decisions::tests::accept::only_a_decline_record_closes_refusals	src/decisions/tests/accept.rs:152
+#mutant defaultflip
+mcp_gateway	decisions::tests::accept::only_a_decline_record_closes_refusals	src/decisions/tests/accept.rs:144
+#mutant norows
+mcp_gateway	decisions::tests::accept::only_a_decline_record_closes_refusals	src/decisions/tests/accept.rs:156
+#mutant noexpiry
+mcp_gateway	decisions::tests::accept::only_a_decline_record_closes_refusals	src/decisions/tests/accept.rs:162
+#mutant idonly
+mcp_gateway	config_reload::grant_audit_plan_tests::a_claim_must_match_both_the_row_id_and_its_digest	src/config_reload/grant_audit_plan_tests.rs:72
+#mutant digestonly
+mcp_gateway	config_reload::grant_audit_plan_tests::a_claim_must_match_both_the_row_id_and_its_digest	src/config_reload/grant_audit_plan_tests.rs:77
+#mutant firstwins
+mcp_gateway	config_reload::grant_audit_plan_tests::disagreeing_claims_explain_nothing	src/config_reload/grant_audit_plan_tests.rs:125
+#mutant nojournal
+mcp_gateway	config_reload::grant_audit_plan_tests::the_journal_decides_a_row_it_touched	src/config_reload/grant_audit_plan_tests.rs:190
+#mutant nogap
+mcp_gateway	config_reload::grant_audit_plan_tests::a_claim_does_not_apply_under_a_gap	src/config_reload/grant_audit_plan_tests.rs:159
+#mutant noaccount
+mcp_gateway	config_reload::grant_audit_plan_tests::a_matching_claim_accounts_for_its_row	src/config_reload/grant_audit_plan_tests.rs:100
+#mutant unserved
+mcp_gateway	config_reload::grant_audit_plan_tests::a_claim_for_a_row_not_served_adds_nothing	src/config_reload/grant_audit_plan_tests.rs:141
