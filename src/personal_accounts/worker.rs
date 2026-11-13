@@ -371,6 +371,8 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
     /// Takes `&self`, not `self`: "a command after shutdown is refused" and
     /// "the locks are free while the handle is still alive" are both contracts
     /// that a consuming signature makes unexpressible. Idempotent.
+    /// Test-only: every stop path uses the bounded `shutdown_by`.
+    #[cfg(test)]
     pub(crate) async fn shutdown(&self) -> Result<(), CustodyError> {
         // No deadline: in-flight work completes and Ok means the store is
         // dropped and both file locks are free. A store a thread could not be

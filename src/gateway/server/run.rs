@@ -55,7 +55,9 @@ impl Gateway {
         let started = ProcessStart::now();
         // Any exit, an early error or a cancelled call included, hands the
         // custody store to a release thread before `self` drops here.
-        let _custody_release = self.account_custody().map(|c| c.detach_on_drop());
+        let _custody_release = self
+            .account_custody()
+            .map(crate::personal_accounts::worker::CustodyHandle::detach_on_drop);
         start_checks::http(&self.config)?;
         let addr = SocketAddr::new(
             self.config
