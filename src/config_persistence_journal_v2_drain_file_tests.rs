@@ -84,7 +84,7 @@ pub(super) fn reference_file(donor: &JournalV2) -> Vec<u8> {
         .concat()
 }
 
-/// The distinct terminal contents the log holds for `token`: result, reason, settled_by and the
+/// The distinct terminal contents the log holds for `token`: result, reason, `settled_by` and the
 /// intent counter. Equal repeats collapse; a second entry is a terminal frozen twice.
 pub(super) fn terminal_contents(live: &Live, token: &str) -> std::collections::BTreeSet<String> {
     live.records()
