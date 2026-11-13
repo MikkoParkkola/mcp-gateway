@@ -120,6 +120,9 @@ owned_routes! {
     UI_KEYS = "/ui/api/keys",
     /// Revoke the API key named by one decoded path segment.
     UI_KEYS_NAME = "/ui/api/keys/{name}",
+    /// The admin forward lookup of a key server's retained issuance rows by
+    /// email: POST only, the email in the body, never the path or query.
+    UI_KEY_SERVER_LOOKUP_EMAIL = "/ui/api/key-server/audit/lookup-email",
     /// The UI's live event feed (server-sent events).
     UI_STREAM = "/ui/api/stream",
 }

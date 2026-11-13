@@ -24,8 +24,11 @@ as the other workflow checks.
 """
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -153,6 +156,33 @@ def main() -> int:
     return 1 if problems else 0
 
 
+def action_script() -> str:
+    """The run block of the add-swap action's only step."""
+    doc = yaml.safe_load(Path(".github/actions/add-swap/action.yml").read_text())
+    return doc["runs"]["steps"][0]["run"]
+
+
+def run_action(before_mb: int, after_mb: int) -> int:
+    """Exit status of the action's script on a runner whose total swap is before_mb until swapon, then after_mb.
+    sudo, fallocate, chmod, mkswap and swapon are stubs; `free` answers from a counter: its first call (before the
+    swap file is made) reports before_mb, later calls after_mb."""
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = Path(tmp)
+        for name in ("fallocate", "chmod", "mkswap", "swapon"):
+            (fake / name).write_text("#!/bin/sh\nexit 0\n")
+        (fake / "sudo").write_text('#!/bin/sh\nexec "$@"\n')
+        (fake / "free").write_text(
+            "#!/bin/sh\n"
+            f'n=$(cat "{tmp}/calls" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "{tmp}/calls"\n'
+            f'if [ "$n" -eq 1 ]; then m={before_mb}; else m={after_mb}; fi\n'
+            'echo "              total        used        free"; echo "Mem:          15983         891       14431"\n'
+            'echo "Swap:         $m           0       $m"\n')
+        for f in fake.iterdir():
+            f.chmod(0o755)
+        env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"}
+        return subprocess.run(["bash", "-c", action_script()], env=env, capture_output=True, text=True).returncode
+
+
 def self_test() -> int:
     def job(*steps: dict, runs_on: str = "ubuntu-latest") -> dict:
         return {"runs-on": runs_on, "steps": list(steps)}
@@ -178,12 +208,26 @@ def self_test() -> int:
         ("macOS is out of scope", job({"run": "cargo test --all-features"}, runs_on="macos-15"), False, 0),
     ]
     wrong = 0
+    # The action must prove that OUR swap file took, whatever swap the runner image brings: runners differ (3 GB already
+    # there, 11263 MB total; or none, 8191 MB total, which the old absolute 10 GB floor failed on 2026-11-12).
+    for label, before, after, want_rc in (
+        ("a runner with 3 GB of swap already there: 3072 -> 11263", 3072, 11263, 0),
+        ("a runner with no swap: 0 -> 8191 (the file took)", 0, 8191, 0),
+        ("swapon did nothing on a runner with 3 GB: 3072 -> 3072", 3072, 3072, 1),
+        ("swapon did nothing on a runner with none: 0 -> 0", 0, 0, 1),
+        ("only part of the file took: 0 -> 4096", 0, 4096, 1),
+        ("just under the file's size: 0 -> 7999", 0, 7999, 1),
+    ):
+        rc = run_action(before, after)
+        ok = (rc == 0) == (want_rc == 0)
+        wrong += not ok
+        print(f"{'ok   ' if ok else 'WRONG'} add-swap action, {label}: exit {rc}")
     for label, j, want_scope, want_problems in cases:
         in_scope, problems = check_job("fixture", j)
         ok = in_scope == want_scope and len(problems) == want_problems
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} {label}: in scope {in_scope}, problems {problems}")
-    print(f"self-test: {len(cases) - wrong} ok, {wrong} wrong")
+    print(f"self-test: {len(cases) + 6 - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 

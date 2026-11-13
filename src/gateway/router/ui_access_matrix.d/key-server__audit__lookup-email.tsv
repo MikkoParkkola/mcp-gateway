@@ -1,0 +1,211 @@
+# path, method, request shape, caller, answer. One route per file; a digest named in ../ui_access_matrix_bodies.tsv is written as status:@name.
+/ui/api/key-server/audit/lookup-email	DELETE	plain	AdminKey	405
+/ui/api/key-server/audit/lookup-email	DELETE	plain	AdminKeyUnmapped	405
+/ui/api/key-server/audit/lookup-email	DELETE	plain	AuthOff	405
+/ui/api/key-server/audit/lookup-email	DELETE	plain	Bearer	405
+/ui/api/key-server/audit/lookup-email	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	DELETE	plain	OidcAdmin	405
+/ui/api/key-server/audit/lookup-email	DELETE	plain	OidcAuditor	405
+/ui/api/key-server/audit/lookup-email	DELETE	plain	OidcDeveloper	405
+/ui/api/key-server/audit/lookup-email	DELETE	plain	OidcDeveloperNoIssuer	405
+/ui/api/key-server/audit/lookup-email	DELETE	plain	OidcDeveloperNoSubject	405
+/ui/api/key-server/audit/lookup-email	DELETE	plain	OidcReviewer	405
+/ui/api/key-server/audit/lookup-email	DELETE	plain	OidcUnmapped	405
+/ui/api/key-server/audit/lookup-email	DELETE	plain	Session	405
+/ui/api/key-server/audit/lookup-email	DELETE	plain	StandardKey	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	AdminKey	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	AdminKeyUnmapped	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	AuthOff	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	Bearer	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	GET	bad-query	OidcAdmin	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	OidcAuditor	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	OidcDeveloper	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	OidcDeveloperNoIssuer	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	OidcDeveloperNoSubject	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	OidcReviewer	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	OidcUnmapped	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	Session	405
+/ui/api/key-server/audit/lookup-email	GET	bad-query	StandardKey	405
+/ui/api/key-server/audit/lookup-email	GET	plain	AdminKey	405
+/ui/api/key-server/audit/lookup-email	GET	plain	AdminKeyUnmapped	405
+/ui/api/key-server/audit/lookup-email	GET	plain	AuthOff	405
+/ui/api/key-server/audit/lookup-email	GET	plain	Bearer	405
+/ui/api/key-server/audit/lookup-email	GET	plain	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	GET	plain	OidcAdmin	405
+/ui/api/key-server/audit/lookup-email	GET	plain	OidcAuditor	405
+/ui/api/key-server/audit/lookup-email	GET	plain	OidcDeveloper	405
+/ui/api/key-server/audit/lookup-email	GET	plain	OidcDeveloperNoIssuer	405
+/ui/api/key-server/audit/lookup-email	GET	plain	OidcDeveloperNoSubject	405
+/ui/api/key-server/audit/lookup-email	GET	plain	OidcReviewer	405
+/ui/api/key-server/audit/lookup-email	GET	plain	OidcUnmapped	405
+/ui/api/key-server/audit/lookup-email	GET	plain	Session	405
+/ui/api/key-server/audit/lookup-email	GET	plain	StandardKey	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	AdminKey	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	AdminKeyUnmapped	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	AuthOff	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	Bearer	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	NoKey	401
+/ui/api/key-server/audit/lookup-email	HEAD	plain	NoKeyPublicStatus	401
+/ui/api/key-server/audit/lookup-email	HEAD	plain	OidcAdmin	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	OidcAuditor	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	OidcDeveloper	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	OidcDeveloperNoIssuer	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	OidcDeveloperNoSubject	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	OidcReviewer	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	OidcUnmapped	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	Session	405
+/ui/api/key-server/audit/lookup-email	HEAD	plain	StandardKey	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	AdminKey	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	AdminKeyUnmapped	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	AuthOff	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	Bearer	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	OidcAdmin	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	OidcAuditor	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	OidcDeveloper	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	OidcDeveloperNoIssuer	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	OidcDeveloperNoSubject	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	OidcReviewer	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	OidcUnmapped	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	Session	405
+/ui/api/key-server/audit/lookup-email	OPTIONS	plain	StandardKey	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	AdminKey	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	AdminKeyUnmapped	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	AuthOff	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	Bearer	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	OidcAdmin	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	OidcAuditor	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	OidcDeveloper	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	OidcDeveloperNoSubject	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	OidcReviewer	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	OidcUnmapped	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	Session	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-json	StandardKey	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	AdminKey	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	AdminKeyUnmapped	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	AuthOff	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	Bearer	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	OidcAdmin	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	OidcAuditor	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	OidcDeveloper	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	OidcDeveloperNoSubject	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	OidcReviewer	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	OidcUnmapped	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	Session	405
+/ui/api/key-server/audit/lookup-email	PATCH	bad-type	StandardKey	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	AdminKey	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	AdminKeyUnmapped	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	AuthOff	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	Bearer	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	PATCH	json	OidcAdmin	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	OidcAuditor	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	OidcDeveloper	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	OidcDeveloperNoIssuer	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	OidcDeveloperNoSubject	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	OidcReviewer	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	OidcUnmapped	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	Session	405
+/ui/api/key-server/audit/lookup-email	PATCH	json	StandardKey	405
+/ui/api/key-server/audit/lookup-email	POST	bad-json	AdminKey	400
+/ui/api/key-server/audit/lookup-email	POST	bad-json	AdminKeyUnmapped	400
+/ui/api/key-server/audit/lookup-email	POST	bad-json	AuthOff	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-json	Bearer	400
+/ui/api/key-server/audit/lookup-email	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	POST	bad-json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-json	Session	400
+/ui/api/key-server/audit/lookup-email	POST	bad-json	StandardKey	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-type	AdminKey	400
+/ui/api/key-server/audit/lookup-email	POST	bad-type	AdminKeyUnmapped	400
+/ui/api/key-server/audit/lookup-email	POST	bad-type	AuthOff	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-type	Bearer	400
+/ui/api/key-server/audit/lookup-email	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	POST	bad-type	OidcAdmin	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-type	OidcAuditor	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-type	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-type	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-type	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-type	OidcReviewer	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-type	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	bad-type	Session	400
+/ui/api/key-server/audit/lookup-email	POST	bad-type	StandardKey	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	json	AdminKey	400
+/ui/api/key-server/audit/lookup-email	POST	json	AdminKeyUnmapped	400
+/ui/api/key-server/audit/lookup-email	POST	json	AuthOff	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	json	Bearer	400
+/ui/api/key-server/audit/lookup-email	POST	json	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	POST	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	POST	json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	POST	json	Session	400
+/ui/api/key-server/audit/lookup-email	POST	json	StandardKey	403:error="Admin authentication required"
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	AdminKey	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	AdminKeyUnmapped	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	AuthOff	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	Bearer	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	OidcAdmin	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	OidcAuditor	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	OidcDeveloper	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	OidcDeveloperNoSubject	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	OidcReviewer	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	OidcUnmapped	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	Session	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-json	StandardKey	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	AdminKey	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	AdminKeyUnmapped	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	AuthOff	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	Bearer	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	OidcAdmin	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	OidcAuditor	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	OidcDeveloper	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	OidcDeveloperNoSubject	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	OidcReviewer	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	OidcUnmapped	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	Session	405
+/ui/api/key-server/audit/lookup-email	PUT	bad-type	StandardKey	405
+/ui/api/key-server/audit/lookup-email	PUT	json	AdminKey	405
+/ui/api/key-server/audit/lookup-email	PUT	json	AdminKeyUnmapped	405
+/ui/api/key-server/audit/lookup-email	PUT	json	AuthOff	405
+/ui/api/key-server/audit/lookup-email	PUT	json	Bearer	405
+/ui/api/key-server/audit/lookup-email	PUT	json	NoKey	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	PUT	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/key-server/audit/lookup-email	PUT	json	OidcAdmin	405
+/ui/api/key-server/audit/lookup-email	PUT	json	OidcAuditor	405
+/ui/api/key-server/audit/lookup-email	PUT	json	OidcDeveloper	405
+/ui/api/key-server/audit/lookup-email	PUT	json	OidcDeveloperNoIssuer	405
+/ui/api/key-server/audit/lookup-email	PUT	json	OidcDeveloperNoSubject	405
+/ui/api/key-server/audit/lookup-email	PUT	json	OidcReviewer	405
+/ui/api/key-server/audit/lookup-email	PUT	json	OidcUnmapped	405
+/ui/api/key-server/audit/lookup-email	PUT	json	Session	405
+/ui/api/key-server/audit/lookup-email	PUT	json	StandardKey	405

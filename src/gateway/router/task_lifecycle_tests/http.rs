@@ -150,7 +150,7 @@ pub(super) async fn state_from(auth: AuthConfig) -> Fixture {
 }
 
 pub(super) async fn state_from_with(auth: AuthConfig, backend: Arc<CountedBackend>) -> Fixture {
-    let store_dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
+    let store_dir = crate::test_dir_keep::kept_tempdir();
     let fixture = state_in(auth, backend, &store_dir).await;
     Fixture {
         _store_dir: Some(store_dir),
