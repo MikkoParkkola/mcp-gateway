@@ -275,6 +275,53 @@ fn account_claims(
     }
 }
 
+/// Step 4's comparison: every id the expected set names, and with a baseline
+/// every served id, whose served digest is not the expected one is recorded
+/// with `oob`.
+fn compare_served(
+    state: &State,
+    oob: GrantChangeVerb,
+    has_baseline: bool,
+    expected: &BTreeMap<String, Option<String>>,
+    actual: &BTreeMap<&str, &IdentityGrant>,
+    out: &mut Vec<Draft>,
+) {
+    let mut ids: BTreeSet<&str> = expected.keys().map(String::as_str).collect();
+    if has_baseline {
+        ids.extend(actual.keys().copied());
+    }
+    for id in ids {
+        let want = expected.get(id).cloned().flatten();
+        let row = actual.get(id).copied();
+        let have = row.map(grant_digest);
+        if want != have {
+            warn_outside(state, oob, id, want.as_deref(), have.as_deref());
+            out.push(mismatch(oob, id, have, row));
+        }
+    }
+}
+
+/// A row changed outside the gateway names no actor, so besides its record
+/// it is warned with the file, the row and both digests. Under a gap the
+/// cause is not known (indeterminate) and the gap record says so instead.
+fn warn_outside(
+    state: &State,
+    verb: GrantChangeVerb,
+    id: &str,
+    want: Option<&str>,
+    have: Option<&str>,
+) {
+    if verb == GrantChangeVerb::OutOfBand {
+        tracing::warn!(
+            file = %state.grants_path,
+            grant = id,
+            expected = want.unwrap_or("none"),
+            actual = have.unwrap_or("none"),
+            "identity grant row changed outside the gateway; recorded with no actor"
+        );
+    }
+}
+
 /// Steps 2-5: the records this reconciliation owes, and the state to commit
 /// after them. `reported` holds the unreadable-journal causes this process
 /// already recorded (once per cause per process); the set to keep once this
@@ -369,6 +416,13 @@ pub(super) fn plan(
             None => has_baseline && entry.prev_digest.is_some(),
         };
         if edited {
+            warn_outside(
+                state,
+                oob,
+                &entry.grant_id,
+                expected.get(&entry.grant_id).cloned().flatten().as_deref(),
+                entry.prev_digest.as_deref(),
+            );
             out.push(mismatch(
                 oob,
                 &entry.grant_id,
@@ -385,18 +439,7 @@ pub(super) fn plan(
     // The served row per id, so a record describes what is enforced.
     let actual = served_rows(rows);
     account_claims(state, &actual, &journalled, claims, &mut expected);
-    let mut ids: BTreeSet<&str> = expected.keys().map(String::as_str).collect();
-    if has_baseline {
-        ids.extend(actual.keys().copied());
-    }
-    for id in ids {
-        let want = expected.get(id).cloned().flatten();
-        let row = actual.get(id).copied();
-        let have = row.map(grant_digest);
-        if want != have {
-            out.push(mismatch(oob, id, have, row));
-        }
-    }
+    compare_served(state, oob, has_baseline, &expected, &actual, &mut out);
     next.grants = Some(
         actual
             .iter()
