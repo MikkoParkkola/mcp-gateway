@@ -62,7 +62,8 @@ def phase_problems(cmds: list[str], with_run: bool) -> list[str]:
 
     out = []
     pc = at(lambda c: c.startswith('echo "phase compile'))
-    build = at(lambda c: c.startswith("cargo test") and "--no-run" in c)
+    # `--no-run` counts only before a trailing comment.
+    build = at(lambda c: c.startswith("cargo test") and "--no-run" in c.partition("#")[0])
     if pc < 0:
         out.append('no `echo "phase compile...` line')
     else:
@@ -77,7 +78,7 @@ def phase_problems(cmds: list[str], with_run: bool) -> list[str]:
         out.append("the `phase compile` line comes after the compile")
     if with_run:
         pr = at(lambda c: c.startswith('echo "phase run'))
-        test = at(lambda c: c.startswith("cargo test") and "--no-run" not in c)
+        test = at(lambda c: c.startswith("cargo test") and "--no-run" not in c.partition("#")[0])
         if pr < 0:
             out.append('no `echo "phase run...` line')
         if test < 0:
@@ -157,6 +158,7 @@ def self_test() -> int:
         ("the run phase line only in a comment", GOOD.replace(RUN_PHASE, "# " + RUN_PHASE), 1),
         ("no --no-run", GOOD.replace(" --no-run", ""), 1),
         ("--no-run only in a comment", GOOD.replace(BUILD, "# " + BUILD), 1),
+        ("--no-run only in a trailing comment", GOOD.replace(" --no-run", " # --no-run"), 1),
         ("the compile phase line after the compile", swap(GOOD, PHASE, BUILD), 1),
         ("the run phase line after the test run", swap(GOOD, RUN_PHASE, TEST), 1),
         ("the test run before the compile", swap(GOOD, BUILD, TEST), 1),
@@ -176,6 +178,7 @@ def self_test() -> int:
         ("keychain phase line only in a comment", KGOOD.replace(PHASE, "# " + PHASE), 1),
         ("keychain phase line after the build", swap(KGOOD, PHASE, "cargo test --all-features --lib --no-run"), 1),
         ("keychain step without --no-run", KGOOD.replace(" --no-run", ""), 1),
+        ("keychain --no-run only in a trailing comment", KGOOD.replace(" --no-run", " # --no-run"), 1),
         ("keychain step without free -m", KGOOD.replace("free -m", "true"), 1),
         ("keychain step with the Mem row only", KGOOD.replace("(Mem|Swap)", "Mem"), 1),
         ("keychain step with ps aux", KGOOD.replace("          cargo test", "          ps aux\n          cargo test"), 1),
