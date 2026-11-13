@@ -86,6 +86,8 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/ci/coverage_shards.py --self-test
+          # Which executables a part bundles, in both cargo target layouts, and that an empty part fails.
+          python3 scripts/ci/test_coverage_shard_bundle.py
           cargo metadata --no-deps --format-version 1 > metadata.json
           # Fails when a target `--tests` builds falls in no part or in two.
           python3 scripts/ci/coverage_shards.py check "$COVERAGE_PARTS" metadata.json
