@@ -382,7 +382,7 @@ fn a_dashboard_session_pages_only_its_own_tokens() {
                 .await
                 .expect("infallible");
             let status = response.status();
-            let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
             (
                 status,
                 serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null),
