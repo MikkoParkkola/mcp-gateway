@@ -25,11 +25,14 @@ fn time(at: DateTime<Utc>) -> String {
 }
 
 /// The digest an access request lists and its resolve must repeat: SHA-256
-/// over a domain separator and the scope entries (capability, tool,
-/// grant scope), sorted, duplicates collapsed, each field length-prefixed so
-/// no two entry sets share an encoding. A change to what the request asks
-/// for changes it; the order the refusals arrived in does not.
-pub(crate) fn scope_digest(scope: &[Value]) -> String {
+/// over a domain separator, the scope entries (capability, tool, grant
+/// scope) and the log positions of every pending refusal, each sorted,
+/// duplicates collapsed, each field length-prefixed so no two sets share an
+/// encoding. A change to what the request asks for, or one more refusal of
+/// it, changes the digest; the order the refusals arrived in does not. The
+/// positions are what a deny closes, so an admin never closes a refusal the
+/// listing did not show.
+pub(crate) fn scope_digest(scope: &[Value], positions: &[(&str, u64)]) -> String {
     let mut entries: Vec<[String; 3]> = scope
         .iter()
         .map(|entry| {
@@ -45,12 +48,22 @@ pub(crate) fn scope_digest(scope: &[Value]) -> String {
         .collect();
     entries.sort();
     entries.dedup();
-    let mut bytes = b"mcpg/access-request/scope/v1\0".to_vec();
+    let mut positions = positions.to_vec();
+    positions.sort_unstable();
+    positions.dedup();
+    let mut bytes = b"mcpg/access-request/scope/v2\0".to_vec();
     for entry in &entries {
         for part in entry {
             bytes.extend((part.len() as u64).to_be_bytes());
             bytes.extend(part.as_bytes());
         }
+    }
+    // The entry count fixes where the scope ends and the positions begin.
+    bytes.extend((entries.len() as u64).to_be_bytes());
+    for (entry, counter) in positions {
+        bytes.extend((entry.len() as u64).to_be_bytes());
+        bytes.extend(entry.as_bytes());
+        bytes.extend(counter.to_be_bytes());
     }
     crate::hashing::sha256_hex(&bytes)
 }
@@ -226,6 +239,8 @@ fn changed_capabilities(set: &mut DecisionSet, live: &mut Vec<String>) -> (Vec<D
 /// One access request being gathered from its open capabilities.
 struct Open<'a> {
     scope: Vec<Value>,
+    /// Every pending refusal of the request, by log position.
+    positions: Vec<(&'a str, u64)>,
     capabilities: Vec<&'a str>,
     refused: usize,
     first: DateTime<Utc>,
@@ -247,6 +262,7 @@ fn access_requests(set: &DecisionSet, blocks: &Blocks) -> Vec<Dated> {
         }
         let entry = open.entry(access).or_insert_with(|| Open {
             scope: Vec::new(),
+            positions: Vec::new(),
             capabilities: Vec::new(),
             refused: 0,
             first: *first,
@@ -258,6 +274,11 @@ fn access_requests(set: &DecisionSet, blocks: &Blocks) -> Vec<Dated> {
             "grant_scope": requested.scope,
             "read_only": requested.scope == Some(GrantScope::Read),
         }));
+        entry.positions.extend(
+            requested
+                .pending_refusals(set.edge)
+                .map(|(pos, _)| (pos.entry.as_str(), pos.counter)),
+        );
         entry.capabilities.push(capability);
         entry.refused += pending.len();
         entry.first = entry.first.min(*first);
@@ -272,7 +293,7 @@ fn access_requests(set: &DecisionSet, blocks: &Blocks) -> Vec<Dated> {
             .flatten()
             .collect();
         let tuple = json!([access.authority, access.subject, access.agent]);
-        let scope_digest = scope_digest(&request.scope);
+        let scope_digest = scope_digest(&request.scope, &request.positions);
         requests.push((
             request.newest,
             json!({

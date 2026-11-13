@@ -143,11 +143,19 @@ impl Requested {
     /// The refusals newer than the last UI decision and still kept: at or
     /// after the log's `edge` counter.
     fn pending(&self, edge: Option<u64>) -> impl Iterator<Item = &DateTime<Utc>> {
+        self.pending_refusals(edge).map(|(_, at)| at)
+    }
+
+    /// The same refusals with their log positions: what an admin was shown,
+    /// and what a scope digest must cover.
+    fn pending_refusals(
+        &self,
+        edge: Option<u64>,
+    ) -> impl Iterator<Item = (&LogPos, &DateTime<Utc>)> {
         self.refused
             .iter()
             .filter(move |(pos, _)| edge.is_none_or(|edge| pos.counter >= edge))
-            .map(|(_, at)| at)
-            .filter(move |at| self.decided.is_none_or(|decided| **at > decided))
+            .filter(move |(_, at)| self.decided.is_none_or(|decided| **at > decided))
     }
 }
 

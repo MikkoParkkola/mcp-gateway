@@ -652,3 +652,27 @@ async fn two_resolves_do_not_overlap() {
     let (status, _) = pending.await.expect("joined");
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+#[tokio::test]
+async fn one_more_refusal_of_a_listed_capability_is_a_changed_request() {
+    let (state, log, id, digest, _keep) = one_request().await;
+    let later = crate::clock::utc_now().expect("a readable clock") + chrono::Duration::seconds(5);
+    write(&log, note("stripe.charges", later));
+    let body = served_when(&state, |body| {
+        body["decisions"][0]["refused_calls"] == json!(2)
+    })
+    .await;
+    assert_eq!(scope_len(&body), 1, "the scope did not widen: {body}");
+    let after = body["decisions"][0]["scope_digest"]
+        .as_str()
+        .expect("digest");
+    assert_ne!(
+        after, digest,
+        "a refusal the admin never saw is a new digest"
+    );
+
+    let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "scope_changed");
+    assert_eq!(body["scope_digest"], json!(after));
+}
