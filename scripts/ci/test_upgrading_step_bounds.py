@@ -7,10 +7,13 @@ On 2026-11-13 two Linux int-b jobs finished their shard suite in 18 to 19 minute
 job limit (runs 43340224995 and 43373402677); the step took 8 and 11 minutes in the two healthy runs read. A cancelled job's log is
 not kept, so the stall could not be diagnosed. The step now has its own `timeout-minutes` (it fails with its log) and prints a
 line before the compile phase and before the run phase of each target, so a timeout shows which one stalled. It prints no
-process listing (process arguments can carry secrets).
+process listing (process arguments can carry secrets); the one thing it may print about processes is a COUNT of the runner
+user's processes in each phase line (`ps -u "$(id -u)" -o pid= | wc -l`: pids only, never arguments), because a test child
+leaked by the shard suite could hold cargo's build-directory lock ("Blocking waiting for file lock") and look exactly like a
+stall: a count that is high at the compile phase points at it.
 
 Rows: the step exists, has a timeout between 10 and 30 minutes, compiles with `--no-run` before it runs, prints a `phase`
-line for both, and runs no `ps`/`pgrep`/`/proc` listing. `--self-test` runs the checker on fixtures. Standard library only.
+line for both, prints the process COUNT in the compile phase line, and runs no other `ps`/`pgrep`/`/proc` listing. `--self-test` runs the checker on fixtures. Standard library only.
 """
 from __future__ import annotations
 
@@ -63,8 +66,12 @@ def problems(text: str) -> list[str]:
         out.append("the `phase compile` line comes after the `phase run` line")
     if compile_at >= 0 and p_run and first_run >= 0 and p_run.start() > first_run + 400:
         pass  # ordering of the run line against the run command is covered by the phase-order check above
-    if re.search(r"\b(ps|pgrep|pstree|lsof)\b|/proc/|\bjobs\s+-l\b|\btop\b", script):
-        out.append("the step lists processes (their arguments can print secrets)")
+    count = r'ps -u "\$\(id -u\)" -o pid= \| wc -l'
+    compile_line = next((l for l in script.split("\n") if re.search(r"phase[: ]+compile", l)), "")
+    if not re.search(count, compile_line):
+        out.append("the `phase compile` line does not print the runner user's process count")
+    if re.search(r"\b(ps|pgrep|pstree|lsof)\b|/proc/|\bjobs\s+-l\b|\btop\b", re.sub(count, "", script)):
+        out.append("the step lists processes (their arguments can print secrets); only the pid count form is allowed")
     return out
 
 
@@ -74,7 +81,7 @@ GOOD = '''      - name: UPGRADING checks on the assembled guide (suffix)
         run: |
           set -euo pipefail
           for target in "--test a" "--lib b"; do
-            echo "phase compile: $target at $(date -u +%T)"
+            echo "phase compile: $target at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l)"
             cargo test --all-features $target --no-run
             echo "phase run: $target at $(date -u +%T)"
             cargo test --all-features $target 2>&1 | tee x.log
@@ -90,10 +97,13 @@ def self_test() -> int:
         ("no timeout", GOOD.replace("        timeout-minutes: 20\n", ""), 1),
         ("a timeout of 60", GOOD.replace("timeout-minutes: 20", "timeout-minutes: 60"), 1),
         ("a timeout of 5", GOOD.replace("timeout-minutes: 20", "timeout-minutes: 5"), 1),
-        ("no compile phase line", GOOD.replace('echo "phase compile: $target at $(date -u +%T)"\n', ""), 1),
+        ("no compile phase line", GOOD.replace('echo "phase compile: $target at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l)"\n', ""), 1),
         ("no run phase line", GOOD.replace('echo "phase run: $target at $(date -u +%T)"\n', ""), 1),
         ("no --no-run", GOOD.replace(" --no-run", ""), 1),
         ("a process listing", GOOD.replace("set -euo pipefail\n", "set -euo pipefail\n          ps -ef\n"), 1),
+        ("a listing with arguments next to the count", GOOD.replace("set -euo pipefail\n", "set -euo pipefail\n          ps -u \"$(id -u)\" -o pid=,args=\n"), 1),
+        ("no process count in the compile phase line", GOOD.replace(', runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l)', ""), 1),
+        ("pgrep instead of the pid count", GOOD.replace('$(ps -u "$(id -u)" -o pid= | wc -l)', "$(pgrep -a cargo)"), 1),
         ("the step missing", GOOD.replace(STEP, "something else"), 1),
         ("the timeout belongs to the next step, not this one", GOOD.replace("        timeout-minutes: 20\n", "").replace("\n  test:\n", "\n      - name: other\n        timeout-minutes: 20\n        run: x\n"), 1),
     ]

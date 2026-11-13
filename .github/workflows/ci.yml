@@ -1100,15 +1100,18 @@ jobs:
         if: matrix.shard == 'int-b'
         # Healthy runs take 7 to 11 minutes. Two int-b jobs on 2026-11-13 sat here until the 60 minute job limit (the
         # shard suite had finished in 18 minutes) and left no log; the step bound fails the step instead, with its
-        # log, and the phase lines say whether a compile or a test run stalled. No process listing here: process
-        # arguments can print secrets. Pinned by scripts/ci/test_upgrading_step_bounds.py.
+        # log, and the phase lines say whether a compile or a test run stalled. The compile phase line also prints
+        # how many processes the runner user has (a count: pids only, never arguments, which can print secrets): a
+        # test child leaked by the shard suite could hold cargo's build-directory lock and show up as "Blocking
+        # waiting for file lock" in this step's log, and a high count here would point at it. Pinned by
+        # scripts/ci/test_upgrading_step_bounds.py.
         timeout-minutes: 20
         run: |
           set -euo pipefail
           python3 scripts/release/upgrading_fragments.py assemble --dry-run > "$RUNNER_TEMP/UPGRADING-4.0.md"
           export UPGRADING_DOC="$RUNNER_TEMP/UPGRADING-4.0.md"
           for target in "--test upgrading_summary_rows" "--lib upgrade_notice_tests"; do
-            echo "phase compile: cargo test $target at $(date -u +%T)"
+            echo "phase compile: cargo test $target at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l)"
             # shellcheck disable=SC2086 # $target is two words on purpose
             cargo test --all-features $target --no-run
             echo "phase run: cargo test $target at $(date -u +%T)"
