@@ -94,18 +94,23 @@ pub(crate) const CONFIRM_GAP: std::time::Duration = std::time::Duration::from_mi
 pub(crate) fn confirm_absent(
     attempts: u32,
     gap: std::time::Duration,
-    sleep: impl FnMut(std::time::Duration),
+    mut sleep: impl FnMut(std::time::Duration),
     mut still_there: impl FnMut() -> Result<bool, KeychainError>,
 ) -> Result<(), KeychainError> {
-    let _ = (gap, sleep);
-    for _ in 0..attempts {
+    for attempt in 0..attempts {
+        if attempt > 0 {
+            sleep(gap);
+        }
         if !still_there()? {
             return Ok(());
         }
     }
-    Err(KeychainError::Unavailable(format!(
-        "could not confirm removal: the entry is still readable after {attempts} checks"
-    )))
+    let why = if attempts == 0 {
+        "could not confirm removal: no check was allowed".to_owned()
+    } else {
+        format!("could not confirm removal: the entry is still readable after {attempts} checks")
+    };
+    Err(KeychainError::Unavailable(why))
 }
 
 /// The whole delete: `remove` runs the OS delete (an entry already absent
@@ -119,8 +124,8 @@ pub(crate) fn delete_confirmed(
     remove: impl FnOnce() -> Result<(), KeychainError>,
     still_there: impl FnMut() -> Result<bool, KeychainError>,
 ) -> Result<(), KeychainError> {
-    let _ = (attempts, gap, sleep, remove, still_there);
-    Ok(())
+    remove()?;
+    confirm_absent(attempts, gap, sleep, still_there)
 }
 
 /// The reader an [`EnvOverlay`](super::EnvOverlay) resolves through. The
