@@ -433,6 +433,7 @@ pub fn mint_step_resume(
         purpose: ContinuationPurpose::BackendInput,
         next_step: None,
         rounds_used: 0,
+        lookup_scope: None,
         hold_key: plan.hold_key.clone(),
         expires_at: plan.expires_at,
         issued_at: now,
@@ -480,6 +481,8 @@ pub fn seal_chain_stop(
         // an envelope the ledger has already retired.
         jti: uuid::Uuid::new_v4().to_string(),
         rounds_used: previous.rounds_used.saturating_add(1),
+        // A chain envelope never carries a lookup page's keyed hash.
+        lookup_scope: None,
         ..previous.clone()
     }
 }
