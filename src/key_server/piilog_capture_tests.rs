@@ -399,7 +399,8 @@ fn email_subject_checks(text: &str) {
         "one warning per provider:\n{}",
         warnings.join("\n")
     );
-    let hash = crate::key_server::email_hash::EmailHashKey::for_test().hash(EMAIL);
+    // The subject field's own hash (`subject-v1`), not the address's `email_hash`.
+    let hash = crate::key_server::email_hash::EmailHashKey::for_test().hash_subject(EMAIL);
     for issuer in [ISS_A, ISS_B] {
         let mine: Vec<&&str> = warnings.iter().filter(|l| l.contains(issuer)).collect();
         assert_eq!(mine.len(), 1, "{issuer}: {warnings:?}");
