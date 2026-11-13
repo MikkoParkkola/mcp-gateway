@@ -384,10 +384,18 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         !escaped.trim().is_empty(),
         "precondition: the escaped reader started"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let held = crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || {
+        let held = transport.writer.try_lock().is_err();
+        std::future::ready(if held {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue("the write has not taken stdin yet".to_owned())
+        })
+    })
+    .await;
     assert!(
-        transport.writer.try_lock().is_err(),
-        "precondition: the write holds stdin"
+        held.is_ok(),
+        "precondition: the write holds stdin: {held:?}"
     );
     let live = |pid: &str| {
         std::process::Command::new("kill")
