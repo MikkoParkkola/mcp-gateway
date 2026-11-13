@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The key's construction check and the subject hash: rows that need the key.
 
-use super::super::check_runs;
+use super::super::{check_once, check_runs};
 use super::{EmailHashKey, KEY_HEX, KEY2_HEX, KeyTextError};
 
 /// NORM.3: building a key runs the normalization check, once per process: every
@@ -44,6 +44,29 @@ fn a_failed_normalization_check_fails_the_key() {
         EmailHashKey::from_hex_checked("short", &|| Ok(())),
         Err(KeyTextError::Length(5))
     ));
+}
+
+/// NORM.3: the once-per-process rule, on a state of the row's own (so no other
+/// test can move it): a failing check runs again at the next key and is never
+/// remembered; the first pass is remembered, and nothing runs after it.
+/// Mutant: remember a failure, never remember a pass, or skip the check.
+#[test]
+fn a_failure_is_never_remembered_and_the_first_pass_is() {
+    let state = std::sync::Mutex::new((false, 0_usize));
+    let fail = || Err::<(), String>("boom".into());
+    assert!(check_once(&state, &fail).is_err());
+    assert!(
+        check_once(&state, &fail).is_err(),
+        "a failure must not be cached"
+    );
+    assert_eq!(state.lock().unwrap().1, 2, "each failure ran the check");
+    assert!(check_once(&state, &|| Ok(())).is_ok());
+    assert_eq!(state.lock().unwrap().1, 3, "the passing run counted");
+    assert!(
+        check_once(&state, &fail).is_ok(),
+        "after a pass the check is not run again"
+    );
+    assert_eq!(state.lock().unwrap().1, 3, "no run after the pass");
 }
 
 /// NORM.3: nothing a test injects can leave a failure stuck in the process: an

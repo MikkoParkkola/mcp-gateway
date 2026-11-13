@@ -139,19 +139,28 @@ pub(crate) fn self_check_with(normalizer: &dyn Fn(&str) -> String) -> Result<(),
 static CHECK_STATE: std::sync::Mutex<(bool, usize)> = std::sync::Mutex::new((false, 0));
 
 /// The check every key's construction goes through: the real [`self_check`], run
-/// until it passes once in this process. Only a success is remembered: a failure
-/// is not cached, so it is judged again at the next key, and it can never be
-/// stuck in a process-wide cell.
+/// until it passes once in this process.
 fn process_check() -> Result<(), String> {
+    check_once(&CHECK_STATE, &self_check)
+}
+
+/// Run `check` unless `state` already records a pass, and count the run. Only a
+/// success is remembered: a failure is not cached, so it is judged again at the
+/// next key, and it can never be stuck in a process-wide cell. The state is a
+/// parameter so a row can give it its own, independent of every other test.
+fn check_once(
+    state: &std::sync::Mutex<(bool, usize)>,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<(), String> {
     // A poisoned lock still holds a valid (passed, runs) pair.
-    let mut state = CHECK_STATE
+    let mut state = state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if state.0 {
         return Ok(());
     }
     state.1 += 1;
-    self_check()?;
+    check()?;
     state.0 = true;
     Ok(())
 }
