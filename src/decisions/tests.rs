@@ -129,7 +129,10 @@ fn the_scope_digest_has_one_encoding_per_scope_and_positions() {
         ),
         digest
     );
-    assert_ne!(scope_digest(&[a.clone()], &[("h1", 1), ("h2", 2)]), digest);
+    assert_ne!(
+        scope_digest(std::slice::from_ref(&a), &[("h1", 1), ("h2", 2)]),
+        digest
+    );
     assert_ne!(scope_digest(&[a, b], &[("h1", 1), ("h2", 3)]), digest);
     let dressed = json!({"capability": "", "tool": "a", "grant_scope": "\0\0\0\0\0\0\0\u{1}b"});
     assert_ne!(
