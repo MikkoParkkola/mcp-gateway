@@ -47,7 +47,8 @@ pub(crate) fn quiet_for_secret_commands(args: &[OsString], error: clap::Error) -
             };
             *hint
         }
-        // The command could not be told: fail closed and repeat nothing.
+        // Cannot fire with clap 4.6.7 (errors ignored, help and version off:
+        // the parse returns Ok); kept so a later clap that errs repeats nothing.
         None => "The arguments are not valid",
     };
     let what = error
