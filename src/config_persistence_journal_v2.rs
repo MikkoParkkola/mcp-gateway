@@ -548,6 +548,23 @@ impl TokenState {
         let Some(decision) = &self.decision else {
             return false;
         };
+        self.records
+            .iter()
+            .any(|r| matches!(r.role, Role::Outcome | Role::Abandoned))
+            && self.terminals_agree(attempts)
+            && self.intent.delivered
+            && self.intent_counter.is_some()
+            && self.records.iter().all(|r| r.delivered)
+            && (!decision.delivery_stopped
+                || self.records.iter().any(|r| r.role == Role::DeliveryStopped))
+    }
+
+    /// No terminal frozen yet, or every frozen terminal is the one content the decision calls
+    /// for. Retries collapse by frozen content, never by delivery state or digest alone.
+    fn terminals_agree(&self, attempts: &[TokenState]) -> bool {
+        let Some(decision) = &self.decision else {
+            return false;
+        };
         let terminal = match decision.terminal {
             TerminalRole::Outcome => Role::Outcome,
             TerminalRole::Abandoned => Role::Abandoned,
@@ -557,20 +574,11 @@ impl TokenState {
             .iter()
             .filter(|r| matches!(r.role, Role::Outcome | Role::Abandoned));
         let Some(first) = terminals.next() else {
-            return false;
+            return true;
         };
-        // Retries collapse by frozen content, never by delivery state or digest alone.
-        if first.role != terminal
-            || !codec::terminal_matches(first, decision, self, attempts)
-            || !terminals.all(|r| r.role == terminal && r.same_content(first))
-        {
-            return false;
-        }
-        self.intent.delivered
-            && self.intent_counter.is_some()
-            && self.records.iter().all(|r| r.delivered)
-            && (!decision.delivery_stopped
-                || self.records.iter().any(|r| r.role == Role::DeliveryStopped))
+        first.role == terminal
+            && codec::terminal_matches(first, decision, self, attempts)
+            && terminals.all(|r| r.role == terminal && r.same_content(first))
     }
 }
 

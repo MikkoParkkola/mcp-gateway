@@ -10,8 +10,8 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use super::{
-    Fact, FrozenRecord, IntentId, JournalDecision, JournalError, JournalSession, JournalV2, ParkReason,
-    Phase, ResultClass, TerminalRole, TokenState,
+    Fact, FrozenRecord, IntentId, JournalDecision, JournalError, JournalSession, JournalV2,
+    ParkReason, Phase, ResultClass, TerminalRole, TokenState,
 };
 use crate::config_persistence::commit::{self, Action, FileRevision, Found, NotDurable, Refusal};
 use crate::config_persistence::journal::Recovered;
@@ -566,7 +566,10 @@ fn frozen(
 /// The terminal (or deferred) record `owner` still owes, built from its decision and counter;
 /// `None` when it owes none. The one builder: the drains freeze with it and the handover's size
 /// bound projects with it.
-fn terminal_record(state: &JournalV2, owner: &TokenState) -> Result<Option<FrozenRecord>, DrainError> {
+fn terminal_record(
+    state: &JournalV2,
+    owner: &TokenState,
+) -> Result<Option<FrozenRecord>, DrainError> {
     let Some(counter) = owner.intent_counter else {
         return Err(DrainError::Journal);
     };
@@ -628,7 +631,8 @@ fn terminal_record(state: &JournalV2, owner: &TokenState) -> Result<Option<Froze
         role,
         payload,
         owner.intent.attribution.clone(),
-    ).map(Some)
+    )
+    .map(Some)
 }
 
 fn freeze_records(journal: &mut JournalSession) -> Result<(), DrainError> {
