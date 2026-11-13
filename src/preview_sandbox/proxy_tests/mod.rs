@@ -22,6 +22,7 @@ mod allowlist;
 mod credential;
 mod deny;
 mod deny_vectors;
+mod hardening;
 mod tunnels;
 
 /// A globally routable address no deny rule covers.

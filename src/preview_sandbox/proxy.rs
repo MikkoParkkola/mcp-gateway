@@ -203,11 +203,11 @@ impl AllowlistProxy {
             .inspect_err(|_| {
                 let _ = std::fs::remove_dir_all(&dir);
             })?;
-        let mut tasks = vec![tokio::spawn(serve_tcp(v4, shared.clone()))];
+        let mut tasks = vec![tokio::spawn(serve(v4, shared.clone()))];
         if let Some(v6) = v6 {
-            tasks.push(tokio::spawn(serve_tcp(v6, shared.clone())));
+            tasks.push(tokio::spawn(serve(v6, shared.clone())));
         }
-        tasks.push(tokio::spawn(serve_unix(unix, shared.clone())));
+        tasks.push(tokio::spawn(serve(unix, shared.clone())));
         Ok(Self {
             port,
             unix_path,
@@ -342,19 +342,34 @@ fn lock_bound(m: &Mutex<std::time::Duration>) -> std::sync::MutexGuard<'_, std::
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-async fn serve_tcp(listener: TcpListener, shared: Arc<Shared>) {
-    loop {
-        match listener.accept().await {
-            Ok((stream, _)) => serve_connection(stream, &shared),
-            Err(error) => accept_failed(&error).await,
-        }
+/// A listener the accept loop can run over: a TCP or a Unix socket, or a
+/// row's fake that fails on cue.
+#[async_trait]
+trait Accept: Send + Sync + 'static {
+    type Stream: Tunnel + 'static;
+    async fn accept(&self) -> io::Result<Self::Stream>;
+}
+
+#[async_trait]
+impl Accept for TcpListener {
+    type Stream = TcpStream;
+    async fn accept(&self) -> io::Result<TcpStream> {
+        TcpListener::accept(self).await.map(|(stream, _)| stream)
     }
 }
 
-async fn serve_unix(listener: UnixListener, shared: Arc<Shared>) {
+#[async_trait]
+impl Accept for UnixListener {
+    type Stream = tokio::net::UnixStream;
+    async fn accept(&self) -> io::Result<tokio::net::UnixStream> {
+        UnixListener::accept(self).await.map(|(stream, _)| stream)
+    }
+}
+
+async fn serve<A: Accept>(listener: A, shared: Arc<Shared>) {
     loop {
         match listener.accept().await {
-            Ok((stream, _)) => serve_connection(stream, &shared),
+            Ok(stream) => serve_connection(stream, &shared),
             Err(error) => accept_failed(&error).await,
         }
     }
