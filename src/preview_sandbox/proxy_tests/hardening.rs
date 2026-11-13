@@ -244,7 +244,7 @@ async fn m1_a_failed_begin_fetch_still_ends_the_previous_fetch() {
 }
 
 /// H6, kills "registration accepts a revoked fetch": the fetch is revoked from
-/// inside the dial, at the moment the dial completes, so the dial itself is not
+/// as the dial completes (the connection is already made), so the dial is not
 /// interrupted and registration alone must refuse. The CONNECT is answered 407
 /// and no tunnel works.
 #[tokio::test]
