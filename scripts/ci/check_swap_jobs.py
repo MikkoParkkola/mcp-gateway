@@ -153,67 +153,34 @@ def whole_step_wrapped(run: str) -> bool:
     return first < len(text) - 1 and "'" not in text[first + 1:-1]
 
 
-def shell_commands(line: str) -> list[str]:
-    """`line` split into its commands at top-level `&&`, `||`, `;` and `|` (outside quotes and `$( )`), so a build
-    chained after another command is judged on its own: `with-memory-log.sh true && cargo test` has a bare build."""
-    out, cur, quote, depth, i = [], [], None, 0, 0
-    while i < len(line):
-        c = line[i]
-        if quote:
-            cur.append(c)
-            if c == "\\" and quote == '"' and i + 1 < len(line):
-                cur.append(line[i + 1])
-                i += 1
-            elif c == quote:
-                quote = None
-        elif c in "'\"":
-            quote = c
-            cur.append(c)
-        elif line.startswith("$(", i):
-            depth += 1
-            cur.append("$(")
-            i += 1
-        elif c == ")" and depth:
-            depth -= 1
-            cur.append(c)
-        elif not depth and line.startswith(("&&", "||"), i):
-            out.append("".join(cur))
-            cur = []
-            i += 1
-        elif not depth and c in ";|":
-            out.append("".join(cur))
-            cur = []
-        else:
-            cur.append(c)
-        i += 1
-    out.append("".join(cur))
-    return [s.strip() for s in out if s.strip()]
+INTERPRETERS = ("python3", "python", "bash", "sh")
 
 
-def substitutions(text: str) -> list[str]:
-    """The bodies of every `$( )` in `text`, nested ones included."""
-    bodies, starts, i = [], [], 0
-    while i < len(text):
-        if text.startswith("$(", i):
-            starts.append(i + 2)
-            i += 2
+def unwrapped_builds(run: str) -> list[str]:
+    """Every library build in `run` that does not run through the wrapper. Fail closed, not a shell parser: after
+    joining backslash continuations and dropping comment lines, each occurrence of a build (CARGO_RE, WRAPPERS)
+    must follow `with-memory-log.sh` directly, an interpreter word (python3 ...) and the path it runs aside. A build
+    anywhere else (after `&&` or `&`, inside `$( )` or backticks, in an echo's text) counts as bare, so a phase line
+    must not spell out `cargo test`."""
+    text = "\n".join(l for l in run.replace("\\\n", " ").split("\n") if not l.lstrip().startswith("#"))
+    starts = []
+    for m in CARGO_RE.finditer(text):
+        if m.group(1) == "llvm-cov" and LLVM_COV_NO_COMPILE.match(m.group(2)):
             continue
-        if text[i] == ")" and starts:
-            bodies.append(text[starts.pop():i])
-        i += 1
-    return bodies
-
-
-def library_builds(line: str) -> list[str]:
-    """The commands on `line` that build the library: an echo counts only through what its substitutions run (the
-    phase lines name `cargo test` as text and run date, ps and free)."""
-    found = []
-    for cmd in shell_commands(line):
-        if cmd.startswith("echo "):
-            found += [b for b in substitutions(cmd) if builds_library(b)]
-        elif builds_library(cmd):
-            found.append(cmd)
-    return found
+        if not SINGLE_TARGET.search(m.group(2)):
+            starts.append(m.start())
+    starts += [m.start() for w in WRAPPERS for m in w.finditer(text)]
+    bare = []
+    for s in sorted(starts):
+        before = text[:s].split()
+        # The build's own word may begin before the match (`"$RUNNER_TEMP/run_mutants.py`): drop that partial word.
+        if before and not text[:s].endswith((" ", "\t", "\n")):
+            before = before[:-1]
+        if before and before[-1] in INTERPRETERS:
+            before = before[:-1]
+        if not before or not before[-1].endswith(MEMLOG):
+            bare.append(text[s:s + 80].split("\n")[0])
+    return bare
 
 
 def memlog_problems(file: str, name: str, job: dict) -> list[str]:
@@ -226,13 +193,10 @@ def memlog_problems(file: str, name: str, job: dict) -> list[str]:
         # Every step's own limit counts against the job's, build or not: they all run before the job limit.
         if isinstance(limit, int):
             limit_total += limit
-        lines = [l.strip() for l in str(step.get("run", "")).split("\n")]
-        builds = [b for l in lines if l and not l.startswith("#") for b in library_builds(l)]
-        if not builds:
+        run = str(step.get("run", ""))
+        if not builds_library("\n".join(l for l in run.split("\n") if not l.lstrip().startswith("#"))):
             continue
-        bare = [b for b in builds if not b.startswith(MEMLOG + " ")]
-        if bare and whole_step_wrapped(str(step.get("run", ""))):
-            bare = []
+        bare = [] if whole_step_wrapped(run) else unwrapped_builds(run)
         if bare:
             problems.append(f"{file}:{name}: '{label}' builds the library without {MEMLOG}: {bare[0][:80]}")
         if (file, name, label) in LOG_ONLY:
@@ -397,16 +361,28 @@ def memlog_cases() -> list[tuple[str, str, str, dict, bool]]:
         ("C7b a log-only step that sets a limit", "ci.yml", "test-shards",
          job(step(w + "python3 scripts/ci/shard_tests.py run linux lib-a", 30, "Shard suite")), True),
         ("C8 two build lines, one wrapped", "ci.yml", "j", job(step(w + "cargo test --lib --no-run\ncargo test --lib")), True),
-        ("C12 an echo naming cargo test is not a build", "ci.yml", "j",
-         job(step(f'echo "phase compile: cargo test --lib --no-run at $(date -u +%T)"\n{w}cargo test --all-features --lib --no-run')), False),
-        ("C12 the real phase line: substitutions run ps, wc and free only", "ci.yml", "j",
-         job(step('echo "phase compile: cargo test --lib --no-run at $(date -u +%T), n: $(ps -u "$(id -u)" -o pid= | wc -l), '
+        ("C12 an echo spelling out cargo test counts as a bare build (fail closed)", "ci.yml", "j",
+         job(step(f'echo "phase compile: cargo test --lib --no-run at $(date -u +%T)"\n{w}cargo test --all-features --lib --no-run')), True),
+        ("C12 the real phase line: names no build, its substitutions run ps, wc and free", "ci.yml", "j",
+         job(step('echo "phase compile: the lib test binary at $(date -u +%T), n: $(ps -u "$(id -u)" -o pid= | wc -l), '
                   "m: $(free -m | awk '/^Mem:/ {print $3}')\"\n" + w + "cargo test --all-features --lib --no-run")), False),
         ("C13 a wrapped first command, then a bare build after &&", "ci.yml", "j", job(step(w + "true && cargo test --all-features --lib")), True),
         ("C13 a bare build after ;", "ci.yml", "j", job(step(w + "cargo test --lib --no-run; cargo test --lib")), True),
         ("C13 echo, then a bare build after &&", "ci.yml", "j", job(step("echo start && cargo test --all-features --lib")), True),
         ("C13 an echo whose substitution builds", "ci.yml", "j", job(step('echo "$(cargo test --all-features --lib)"')), True),
         ("C13 a wrapped build piped to tee", "ci.yml", "j", job(step(w + 'cargo test --all-features --lib 2>&1 | tee "$RUNNER_TEMP/x.log"')), False),
+        ("C15 a backtick build in an echo", "ci.yml", "j", job(step("echo `cargo test --all-features --lib`")), True),
+        ("C15 a build backgrounded after &", "ci.yml", "j", job(step("echo start & cargo test --all-features --lib")), True),
+        ("C15 a build in a substitution passed to the wrapper", "ci.yml", "j", job(step(w + 'true "$(cargo test --all-features --lib)"')), True),
+        ("C15 a one-line loop running the wrapper", "ci.yml", "j",
+         job(step(f"for t in a b; do {w}cargo test --all-features --lib $t; done")), False),
+        ("C15 the wrapper on a continued line", "ci.yml", "j", job(step(w + "\\\n  cargo test --all-features --lib --no-run")), False),
+        ("C15 the mutant harness through the wrapper", "m.yml", "j",
+         job(step(w + 'python3 "$RUNNER_TEMP/run_mutants.py" run --platform linux --out o')), False),
+        ("C16 a comment naming cargo test is not a build", "ci.yml", "j",
+         job(step(f"# cargo test --all-features --lib runs below\n{w}cargo test --all-features --lib --no-run")), False),
+        ("C16 a bare single-target run beside a wrapped library build", "ci.yml", "j",
+         job(step(f"{w}cargo test --all-features --lib --no-run\ncargo test --all-features --test one_target")), False),
         ("C14 a non-build step's limit counts against the job", "ci.yml", "j",
          job({"name": "Setup", "run": "true", "timeout-minutes": 30}, step(w + "cargo test --lib", 25), limit=60), True),
         ("C11 feature-combos continuation, wrapped", "f.yml", "j", job(step(w + feature)), False),

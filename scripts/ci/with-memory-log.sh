@@ -15,7 +15,8 @@
 # Rows: scripts/ci/test_with_memory_log.py.
 set -u
 every=${MEM_LOG_EVERY:-30}
-case $every in '' | *[!0-9]* | 0) every=30 ;; esac # a whole number of seconds, else the default
+case $every in '' | *[!0-9]*) every=30 ;; esac # digits only, else the default
+[ "$((10#$every))" -gt 0 ] || every=30         # all zeros ("0", "00") would sample in a tight loop
 proc=${MEM_LOG_PROC:-/proc}
 cgroup=${MEM_LOG_CGROUP:-/sys/fs/cgroup}
 
