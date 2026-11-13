@@ -20,6 +20,23 @@ use super::dashboard_link::LinkTls;
 /// The most bytes read from stdin: an email is at most 320 bytes.
 pub(crate) const MAX_EMAIL_INPUT: usize = 1024;
 
+/// The most bytes read from stdin for a page token: the gateway's own limit
+/// on one (2048 characters of URL-safe base64).
+pub(crate) const MAX_CURSOR_INPUT: usize = 2048;
+
+/// What the lookup asks with: the email (first page) or a page token (every
+/// later page). Never both, so a token never travels beside an email.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LookupInput {
+    Email(String),
+    Cursor(String),
+}
+
+/// Stub until the rows are proved red: no token reader yet.
+pub(crate) fn read_cursor(_input: impl std::io::Read) -> Result<String, String> {
+    Err("not implemented".to_string())
+}
+
 /// One retained issuance row, as the gateway answers it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LookupRow {
@@ -80,9 +97,12 @@ pub(crate) fn read_email(input: impl std::io::Read) -> Result<String, String> {
 }
 
 /// The request body, built in memory.
-pub(crate) fn request_body(email: &str, args: &LookupEmailArgs) -> serde_json::Value {
+pub(crate) fn request_body(input: &LookupInput, args: &LookupEmailArgs) -> serde_json::Value {
     let mut body = serde_json::Map::new();
-    body.insert("email".into(), email.into());
+    let LookupInput::Email(email) = input else {
+        return serde_json::Value::Object(body);
+    };
+    body.insert("email".into(), email.as_str().into());
     if let Some(limit) = args.limit {
         body.insert("limit".into(), limit.into());
     }
@@ -139,16 +159,19 @@ pub(crate) async fn lookup(
     base: &str,
     tls: &LinkTls,
     token: &str,
-    email: &str,
+    input: &LookupInput,
     args: &LookupEmailArgs,
 ) -> Result<LookupAnswer, String> {
     const PATH: &str = "/ui/api/key-server/audit/lookup-email";
+    let secret = match input {
+        LookupInput::Email(text) | LookupInput::Cursor(text) => text.clone(),
+    };
     let hide =
-        |text: &str| mcp_gateway::cli::redact::text(text, &[token.to_string(), email.to_string()]);
+        |text: &str| mcp_gateway::cli::redact::text(text, &[token.to_string(), secret.clone()]);
     let endpoint = reqwest::Url::parse(&format!("{}{PATH}", base.trim_end_matches('/')))
         .map_err(|_| "the gateway URL is not valid".to_string())?;
     check_window(args)?;
-    let body = request_body(email, args);
+    let body = request_body(input, args);
     let response = super::dashboard_link::admin_call_url(
         reqwest::Method::POST,
         endpoint,
@@ -210,7 +233,7 @@ pub(crate) async fn run_with(
         Ok(email) => email,
         Err(message) => return fail(message),
     };
-    match lookup(&base, &tls, &token, &email, &args).await {
+    match lookup(&base, &tls, &token, &LookupInput::Email(email), &args).await {
         Ok(answer) => match render(&answer) {
             Ok(text) => {
                 println!("{text}");

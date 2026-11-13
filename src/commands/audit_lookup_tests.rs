@@ -8,9 +8,21 @@ use mcp_gateway::cli::Cli;
 use mcp_gateway::cli::audit_lookup::LookupEmailArgs;
 use serde_json::json;
 
-use super::{MAX_EMAIL_INPUT, read_email, request_body};
+use super::{
+    LookupInput, MAX_CURSOR_INPUT, MAX_EMAIL_INPUT, read_cursor, read_email, request_body,
+};
 
 const EMAIL: &str = "Planted.Person@corp.invalid";
+/// A sealed page token as the gateway prints it: URL-safe base64, no spaces.
+const PAGE: &str = "AQEBsealedPageTokenAbCdEf-_0123456789";
+
+fn by_email() -> LookupInput {
+    LookupInput::Email(EMAIL.to_owned())
+}
+
+fn by_cursor() -> LookupInput {
+    LookupInput::Cursor(PAGE.to_owned())
+}
 
 fn parse(extra: &[&str]) -> Result<LookupEmailArgs, clap::Error> {
     let mut argv = vec!["mcp-gateway", "audit", "lookup-email"];
@@ -94,13 +106,11 @@ fn stdin_is_read_bounded_and_trimmed_to_one_line() {
 #[test]
 fn the_body_carries_the_email_and_only_the_flags_given() {
     let bare = parse(&["--email-stdin"]).expect("parses");
-    assert_eq!(request_body(EMAIL, &bare), json!({"email": EMAIL}));
+    assert_eq!(request_body(&by_email(), &bare), json!({"email": EMAIL}));
     let full = parse(&[
         "--email-stdin",
         "--limit",
         "7",
-        "--cursor",
-        "tok",
         "--from",
         "2026-11-01T00:00:00Z",
         "--to",
@@ -108,12 +118,143 @@ fn the_body_carries_the_email_and_only_the_flags_given() {
     ])
     .expect("parses");
     assert_eq!(
-        request_body(EMAIL, &full),
-        json!({"email": EMAIL, "limit": 7, "cursor": "tok",
+        request_body(&by_email(), &full),
+        json!({"email": EMAIL, "limit": 7,
                "from": "2026-11-01T00:00:00Z", "to": "2026-11-02T00:00:00Z"})
     );
     assert!(parse(&["--email-stdin", "--limit", "0"]).is_err());
     assert!(parse(&["--email-stdin", "--limit", "201"]).is_err());
+}
+
+/// MIK-9456.CLI.1: the page token is never an argument either: no
+/// `--cursor VALUE`, no positional token; the next page asks for stdin.
+/// Mutant: keep the argv `--cursor`, or accept a positional token.
+#[test]
+fn a_page_token_is_never_an_argument() {
+    assert!(parse(&["--cursor-stdin"]).is_ok());
+    assert!(
+        parse(&["--email-stdin", "--cursor", PAGE]).is_err(),
+        "no --cursor VALUE"
+    );
+    assert!(parse(&["--cursor", PAGE]).is_err(), "no --cursor VALUE");
+    assert!(
+        parse(&["--cursor-stdin", PAGE]).is_err(),
+        "no positional token"
+    );
+    assert!(parse(&["--cursor-stdin", "--cursor", PAGE]).is_err());
+}
+
+/// MIK-9456.CLI.1: exactly one of the two stdin sources; a page token
+/// carries its own window, so a window flag beside it is refused here, before
+/// the gateway charges a lookup for the 400 it would answer.
+/// Mutant: drop the group, or drop a conflict.
+#[test]
+fn exactly_one_stdin_source_and_no_window_beside_a_token() {
+    assert!(parse(&["--email-stdin"]).is_ok());
+    assert!(parse(&["--cursor-stdin"]).is_ok());
+    assert!(parse(&[]).is_err(), "one source is required");
+    assert!(
+        parse(&["--email-stdin", "--cursor-stdin"]).is_err(),
+        "both sources"
+    );
+    assert!(parse(&["--cursor-stdin", "--from", "2026-11-01T00:00:00Z"]).is_err());
+    assert!(parse(&["--cursor-stdin", "--to", "2026-11-02T00:00:00Z"]).is_err());
+    assert!(
+        parse(&["--cursor-stdin", "--limit", "7"]).is_ok(),
+        "a page size may change"
+    );
+    assert!(
+        parse(&[
+            "--email-stdin",
+            "--from",
+            "2026-11-01T00:00:00Z",
+            "--to",
+            "2026-11-02T00:00:00Z"
+        ])
+        .is_ok()
+    );
+}
+
+/// MIK-9456.CLI.1: the token line is read bounded, one line, no spaces or
+/// control bytes, and every refusal is a fixed message that never echoes it.
+/// Mutant: read without a bound, accept a second line or inner space, echo the
+/// input in the message, or move the bound.
+#[test]
+fn the_token_line_is_read_bounded_and_never_echoed() {
+    assert_eq!(
+        read_cursor(format!("{PAGE}\n").as_bytes()).as_deref(),
+        Ok(PAGE)
+    );
+    assert_eq!(
+        read_cursor(format!("{PAGE}\r\n").as_bytes()).as_deref(),
+        Ok(PAGE)
+    );
+    assert_eq!(
+        read_cursor(PAGE.as_bytes()).as_deref(),
+        Ok(PAGE),
+        "no newline needed"
+    );
+    assert_eq!(
+        read_cursor(format!("  {PAGE} \n").as_bytes()).as_deref(),
+        Ok(PAGE),
+        "ends are trimmed"
+    );
+    for (name, bad) in [
+        ("empty", Vec::new()),
+        ("blank", b"\n".to_vec()),
+        ("two lines", format!("{PAGE}\nsecond\n").into_bytes()),
+        ("inner space", format!("{PAGE} {PAGE}").into_bytes()),
+        ("control byte", format!("{PAGE}\0").into_bytes()),
+        ("not UTF-8", vec![0xff, 0xfe]),
+        (
+            "over the bound",
+            "a".repeat(MAX_CURSOR_INPUT + 1).into_bytes(),
+        ),
+    ] {
+        let message = read_cursor(bad.as_slice()).expect_err(name);
+        assert!(
+            !message.contains(PAGE) && !message.contains("second"),
+            "{name}: {message}"
+        );
+        assert!(!message.contains(&"a".repeat(8)), "{name}: {message}");
+    }
+    assert_eq!(
+        MAX_CURSOR_INPUT, 2048,
+        "the gateway's own limit on a page token"
+    );
+    let at_limit = "a".repeat(MAX_CURSOR_INPUT);
+    assert_eq!(
+        read_cursor(at_limit.as_bytes()).as_deref(),
+        Ok(at_limit.as_str())
+    );
+    // A long input is cut off one byte past the bound, not read to the end.
+    let read = std::cell::Cell::new(0);
+    assert!(read_cursor(Counting(&read, 1 << 20)).is_err());
+    assert!(
+        read.get() <= MAX_CURSOR_INPUT + 1,
+        "read {} bytes",
+        read.get()
+    );
+}
+
+/// MIK-9456.CLI.1: a next-page body is exactly the token and the page size;
+/// a first-page body never carries a token.
+/// Mutant: add the email or a window beside the token, or send a token in a
+/// first-page body.
+#[test]
+fn the_cursor_body_is_the_token_and_only_the_limit() {
+    let bare = parse(&["--cursor-stdin"]).expect("parses");
+    assert_eq!(request_body(&by_cursor(), &bare), json!({"cursor": PAGE}));
+    let sized = parse(&["--cursor-stdin", "--limit", "7"]).expect("parses");
+    assert_eq!(
+        request_body(&by_cursor(), &sized),
+        json!({"cursor": PAGE, "limit": 7})
+    );
+    let first = parse(&["--email-stdin", "--limit", "7"]).expect("parses");
+    assert_eq!(
+        request_body(&by_email(), &first),
+        json!({"email": EMAIL, "limit": 7})
+    );
 }
 
 use super::{LookupAnswer, lookup};
@@ -165,7 +306,7 @@ const GOOD: &str = r#"{"rows":[{"timestamp":"2026-11-12T10:00:00+00:00","token_j
 
 async fn ask(base: &str) -> Result<LookupAnswer, String> {
     let args = parse(&["--email-stdin"]).expect("parses");
-    lookup(base, &LinkTls::default(), TOKEN, EMAIL, &args).await
+    lookup(base, &LinkTls::default(), TOKEN, &by_email(), &args).await
 }
 
 /// MIK-9456.CLI.2: a good answer decodes into the typed answer, and the
@@ -201,6 +342,41 @@ async fn a_refusal_is_an_error_without_the_email_or_the_token() {
         assert!(message.contains(&status.to_string()), "{message}");
         assert!(!message.contains(TOKEN), "{message}");
         assert!(!message.to_lowercase().contains("planted"), "{message}");
+    }
+}
+
+/// MIK-9456.CLI.1/2: a next-page request sends the token in the body only
+/// (never the email, a window or the URL), and an error never carries the
+/// token even when the gateway echoes it.
+/// Mutant: put the token in the URL or a header, or print the gateway's
+/// message with the token in it.
+#[tokio::test]
+async fn a_next_page_request_sends_the_token_in_the_body_and_hides_it_in_errors() {
+    let args = parse(&["--cursor-stdin", "--limit", "7"]).expect("parses");
+    let (base, seen) = stand_in(200, GOOD).await;
+    lookup(&base, &LinkTls::default(), TOKEN, &by_cursor(), &args)
+        .await
+        .expect("a good answer");
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let (bearer, text) = seen[0].split_once('|').expect("recorded");
+        assert_eq!(bearer, format!("Bearer {TOKEN}"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(text).unwrap(),
+            json!({"cursor": PAGE, "limit": 7})
+        );
+    }
+    for status in [400_u16, 401, 429] {
+        let echo: &'static str =
+            Box::leak(format!(r#"{{"error":"bad {PAGE} with {TOKEN}"}}"#).into_boxed_str());
+        let (base, _) = stand_in(status, echo).await;
+        let message = lookup(&base, &LinkTls::default(), TOKEN, &by_cursor(), &args)
+            .await
+            .expect_err("a refusal");
+        assert!(message.contains(&status.to_string()), "{message}");
+        assert!(!message.contains(PAGE), "{message}");
+        assert!(!message.contains(TOKEN), "{message}");
     }
 }
 
@@ -316,6 +492,11 @@ fn the_help_names_stdin_and_the_credential() {
         .expect("lookup-email");
     let help = lookup.render_long_help().to_string();
     assert!(help.contains("--email-stdin"), "{help}");
+    assert!(help.contains("--cursor-stdin"), "{help}");
+    assert!(
+        !help.contains("--cursor <"),
+        "no --cursor VALUE option: {help}"
+    );
     assert!(help.contains("MCP_GATEWAY_TOKEN"), "{help}");
     assert!(!help.contains("--email <"), "{help}");
     assert!(!help.contains("--email "), "no bare --email option: {help}");
@@ -408,6 +589,56 @@ async fn the_composed_command_exits_nonzero_on_every_failure_class() {
         code(run(&dead, EMAIL.as_bytes(), Some(TOKEN)).await),
         fail,
         "unreachable"
+    );
+}
+
+async fn run_page(base: &str, input: &[u8]) -> std::process::ExitCode {
+    let args = parse(&["--cursor-stdin", "--url", base]).expect("parses");
+    run_with(
+        args,
+        || Err("no config in this row".to_string()),
+        None,
+        None,
+        input,
+        |name| (name == "MCP_GATEWAY_TOKEN").then(|| TOKEN.to_owned()),
+    )
+    .await
+}
+
+/// MIK-9456.CLI.2: the composed next-page command exits 0 on a good answer
+/// and nonzero when stdin holds no usable token (and then sends nothing).
+/// Mutant: read the email in cursor mode, or send a request for a bad token
+/// line.
+#[tokio::test]
+async fn the_composed_next_page_command_reads_the_token_from_stdin() {
+    let ok = code(std::process::ExitCode::SUCCESS);
+    let fail = code(std::process::ExitCode::FAILURE);
+    let (good, seen) = stand_in(200, GOOD).await;
+    assert_eq!(
+        code(run_page(&good, format!("{PAGE}\n").as_bytes()).await),
+        ok
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    let body = seen.lock().unwrap()[0]
+        .split_once('|')
+        .unwrap()
+        .1
+        .to_owned();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+        json!({"cursor": PAGE})
+    );
+    for (name, bad) in [
+        ("empty", &b""[..]),
+        ("two lines", &b"a\nb\n"[..]),
+        ("a space", &b"a b"[..]),
+    ] {
+        assert_eq!(code(run_page(&good, bad).await), fail, "{name}");
+    }
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "no bad token line sent a request"
     );
 }
 
