@@ -631,7 +631,7 @@ async fn the_digest_follows_the_scope_not_the_arrival_order() {
     assert_eq!(body["scope"].as_array().map(Vec::len), Some(2), "{body}");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn two_resolves_do_not_overlap() {
     let (state, _log, id, digest, _keep) = one_request().await;
     let decisions = state.meta_mcp.decisions().expect("decisions");
@@ -639,7 +639,11 @@ async fn two_resolves_do_not_overlap() {
     let state2 = Arc::clone(&state);
     let body = deny_body(&digest).to_string();
     let pending = tokio::spawn(async move { resolve(&state2, true, &id, body).await });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // One thread: a yield lets the spawned resolve run until it blocks on the
+    // mutex, or finish if nothing stops it. No clock is involved.
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
     assert!(
         !pending.is_finished(),
         "a resolve ran while another held the mutex"
