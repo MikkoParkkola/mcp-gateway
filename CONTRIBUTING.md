@@ -286,6 +286,17 @@ the next `pull_request` event that carries it: push after labelling (an empty co
 request. A label added at creation (`gh pr create --label`) or a re-run of an earlier run does not
 start them. The macOS lib shard takes about 75 minutes, and the macOS runners also serve every
 train, so the label is for changes that need it.
+**The `os-int` label.** A pull request whose diff adds or removes a Rust or TOML line that names
+the secret store, the keychain or a file lock (`secret_store`, `SecretStore`, `keychain`,
+`security_framework`, `fs_lock`, `flock`, `fcntl`, `keyring`, `fd-lock`, `lock_shared`; the
+crate names also with a hyphen) must carry `os-int`: the check
+`OS-sensitive diff carries the os-int label` fails until it does, and its message lists the matched
+lines and the command (`gh pr edit <n> --add-label os-int`). The label runs the macOS integration
+shard (`macOS int (os-int label)`) on the pull request, the shard a merge train runs, so a macOS
+break in the integration tests shows on the pull request instead of failing a train. Add it when the
+work is ready to board, not on every push: the shard takes 36 to 92 minutes (median 73) on one of
+the few macOS runners that also serve every train. The label counts from the next `pull_request`
+event, as for `os-sensitive` above. Docs, a file's name and platform `cfg` lines do not count.
 Mutation proofs are batched: push `throwaway/mutants-<pr>` as the pull request's head plus one
 commit adding `.mutants/manifest.tsv` and the patches; one run of the Mutants workflow classifies
 every mutant (format and rules in `scripts/ci/mutants/run_mutants.py`).

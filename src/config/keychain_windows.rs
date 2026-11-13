@@ -5,7 +5,10 @@
 
 use std::time::Duration;
 
-use super::keychain::{BOUND, KeychainError, KeychainRead, WipedBytes, bounded};
+use super::keychain::{
+    BOUND, CONFIRM_ATTEMPTS, CONFIRM_GAP, KeychainError, KeychainRead, WipedBytes, bounded,
+    confirm_absent,
+};
 use crate::secret_store::{SecretStore, StoreError, StoreKind};
 use crate::win_cred::{self, CredError};
 
@@ -98,14 +101,20 @@ impl SecretStore for WindowsKeychain {
         }
     }
 
+    /// Removed means seen gone: Credential Manager can keep answering for an
+    /// entry whose delete succeeded, so the entry is asked for again, within
+    /// the call's bound. One that is still readable fails the delete.
     fn delete(&self, name: &str) -> Result<(), StoreError> {
         let name = name.to_owned();
         bounded(self.bound, self.delay, move || {
             match win_cred::delete(&name) {
                 // Already gone is durably gone.
-                Ok(()) | Err(CredError::NotFound) => Ok(()),
-                Err(other) => Err(unavailable(&other)),
+                Ok(()) | Err(CredError::NotFound) => {}
+                Err(other) => return Err(unavailable(&other)),
             }
+            confirm_absent(CONFIRM_ATTEMPTS, CONFIRM_GAP, || {
+                win_cred::exists(&name).map_err(|e| unavailable(&e))
+            })
         })
         .map_err(store_error)
     }
