@@ -4,31 +4,19 @@
 //! a CONNECT suspended in resolution or in the dial.
 
 use super::{
-    Credential, Entry, Opened, Rig, begin, connect_bytes, open, read_head, rig, status,
-    tunnel_echoes,
+    Credential, Opened, Rig, begin, connect_bytes, open, read_head, rig, status, tunnel_echoes,
 };
-use std::net::Ipv4Addr;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt as _;
-use tokio::net::TcpStream;
+use tokio::net::UnixStream;
 
-/// An open, working tunnel through `entry` under `cred`.
-async fn open_tunnel(rig: &Rig, entry: Entry, cred: &Credential) -> Opened {
+/// An open, working tunnel under `cred`.
+async fn open_tunnel(rig: &Rig, cred: &Credential) -> Opened {
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
-    let mut t = open(rig, entry, &bytes).await.expect("connect");
+    let mut t = open(rig, &bytes).await.expect("connect");
     assert_eq!(status(&t.head().await), 200);
     assert!(t.echoes().await, "tunnel does not echo before expiry");
     t
-}
-
-/// C5, kills "tunnels kept on expiry": expiry closes a tunnel already open.
-#[tokio::test]
-async fn c5_expiry_closes_tunnels_already_open() {
-    let rig = rig().await;
-    let cred = begin(&rig);
-    let mut t = open_tunnel(&rig, Entry::Tcp, &cred).await;
-    rig.proxy.revoke(&cred);
-    assert!(t.closed().await, "tunnel survived expiry");
 }
 
 /// R3, kills "tunnels kept on expiry" on the Unix socket.
@@ -36,7 +24,7 @@ async fn c5_expiry_closes_tunnels_already_open() {
 async fn r3_expiry_closes_tunnels_opened_through_the_unix_socket() {
     let rig = rig().await;
     let cred = begin(&rig);
-    let mut t = open_tunnel(&rig, Entry::Unix, &cred).await;
+    let mut t = open_tunnel(&rig, &cred).await;
     rig.proxy.revoke(&cred);
     assert!(t.closed().await, "tunnel survived expiry");
 }
@@ -48,10 +36,10 @@ async fn c10_expiry_during_resolution_leaves_no_usable_tunnel() {
     let rig = rig().await;
     let cred = begin(&rig);
     rig.resolve.gate.close();
-    let port = rig.proxy.port();
+    let path = rig.proxy.unix_path().to_owned();
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
     let task = tokio::spawn(async move {
-        let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.ok()?;
+        let mut s = UnixStream::connect(&path).await.ok()?;
         s.write_all(&bytes).await.ok()?;
         let ok = status(&read_head(&mut s).await) == 200 && tunnel_echoes(&mut s).await;
         Some(ok)
@@ -71,10 +59,10 @@ async fn c10_expiry_during_dialling_leaves_no_usable_tunnel() {
     let rig = rig().await;
     let cred = begin(&rig);
     rig.connect.gate.close();
-    let port = rig.proxy.port();
+    let path = rig.proxy.unix_path().to_owned();
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
     let task = tokio::spawn(async move {
-        let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.ok()?;
+        let mut s = UnixStream::connect(&path).await.ok()?;
         s.write_all(&bytes).await.ok()?;
         let answer = status(&read_head(&mut s).await);
         let usable = answer == 200 && tunnel_echoes(&mut s).await;
@@ -94,10 +82,10 @@ async fn c10_expiry_during_dialling_leaves_no_usable_tunnel() {
 /// open tunnel's two halves, so the peer sees the close with no proxy task
 /// polled in between. A single-threaded runtime and no `await` after `revoke`
 /// make that checkable: only a synchronous shutdown can have closed it.
-async fn revoke_closes_the_tunnel_at_once(entry: Entry) {
+async fn revoke_closes_the_tunnel_at_once() {
     let rig = rig().await;
     let cred = begin(&rig);
-    let mut tunnel = open_tunnel(&rig, entry, &cred).await.into_plain();
+    let mut tunnel = open_tunnel(&rig, &cred).await.into_plain();
     assert!(!tunnel.peer_has_shut_down(), "closed before the revoke");
     rig.proxy.revoke(&cred);
     let mut shut = false;
@@ -112,13 +100,8 @@ async fn revoke_closes_the_tunnel_at_once(entry: Entry) {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn m1_revoke_shuts_a_tcp_tunnel_before_any_task_runs() {
-    revoke_closes_the_tunnel_at_once(Entry::Tcp).await;
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn m1_revoke_shuts_a_unix_tunnel_before_any_task_runs() {
-    revoke_closes_the_tunnel_at_once(Entry::Unix).await;
+    revoke_closes_the_tunnel_at_once().await;
 }
 
 /// M-1: a new fetch's `begin_fetch` ends the previous fetch's tunnels the same
@@ -127,7 +110,7 @@ async fn m1_revoke_shuts_a_unix_tunnel_before_any_task_runs() {
 async fn m1_a_new_fetch_shuts_the_previous_tunnels_before_any_task_runs() {
     let rig = rig().await;
     let old = begin(&rig);
-    let mut tunnel = open_tunnel(&rig, Entry::Tcp, &old).await.into_plain();
+    let mut tunnel = open_tunnel(&rig, &old).await.into_plain();
     let _new = begin(&rig);
     let mut shut = false;
     for _ in 0..1_000 {
@@ -146,7 +129,7 @@ async fn m1_a_new_fetch_shuts_the_previous_tunnels_before_any_task_runs() {
 async fn m1_a_finished_tunnel_leaves_the_registry() {
     let rig = rig().await;
     let cred = begin(&rig);
-    let tunnel = open_tunnel(&rig, Entry::Tcp, &cred).await;
+    let tunnel = open_tunnel(&rig, &cred).await;
     assert_eq!(rig.proxy.open_tunnels(), 1, "the tunnel was not registered");
     drop(tunnel);
     let gone = async {

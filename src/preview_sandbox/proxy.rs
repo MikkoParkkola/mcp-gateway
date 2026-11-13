@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The allowlist proxy for a command preview's fetch phase (ADR-027, "The
-//! allowlist proxy"): an HTTP CONNECT proxy on loopback that admits only the
+//! allowlist proxy"): an HTTP CONNECT proxy that serves one Unix socket in a
+//! fresh owner-only directory, one proxy per preview, and admits only the
 //! package registries, behind a fresh credential per fetch.
 #![cfg_attr(
     not(test),
@@ -16,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
-use tokio::net::{TcpListener, TcpStream, UnixListener};
+use tokio::net::{TcpStream, UnixListener};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -158,10 +159,9 @@ impl Shared {
     }
 }
 
-/// The gateway's allowlist proxy: loopback TCP (IPv4, and IPv6 when
-/// available, one port) plus a Unix-socket entry.
+/// The gateway's allowlist proxy: one Unix socket in a fresh owner-only
+/// directory, one proxy per preview.
 pub(crate) struct AllowlistProxy {
-    port: u16,
     unix_path: PathBuf,
     shared: Arc<Shared>,
     tasks: Vec<JoinHandle<()>>,
@@ -169,12 +169,12 @@ pub(crate) struct AllowlistProxy {
 }
 
 impl AllowlistProxy {
-    /// Bind `127.0.0.1:0`, the same port on `::1` if available, and a Unix
-    /// socket in a fresh owner-only temp directory. The listeners stay bound
-    /// for the proxy's life; outside a fetch they answer 407 to everything.
+    /// Bind one Unix socket in a fresh owner-only directory, one proxy per
+    /// preview. The listener stays bound for the proxy's life; outside a
+    /// fetch it answers 407 to everything.
     ///
     /// Synchronous on purpose: the sockets are bound with `std` and handed to
-    /// tokio, so the gateway-lifetime proxy needs no `await` to exist. The
+    /// tokio, so a preview's proxy needs no `await` to exist. The
     /// accept tasks are spawned, so a runtime context must be current.
     pub(crate) fn bind(
         resolve: Arc<dyn Resolve>,
@@ -190,29 +190,8 @@ impl AllowlistProxy {
             connect,
             interfaces,
         });
-        // Every fallible step comes first, so a failure leaves no task, port
-        // or directory behind; the tasks are spawned only once all is bound.
-        let v4 = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
-        v4.set_nonblocking(true)?;
-        let port = v4.local_addr()?.port();
-        let v4 = TcpListener::from_std(v4)?;
-        let v6 = match std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)) {
-            Ok(l) => {
-                l.set_nonblocking(true)?;
-                Some(TcpListener::from_std(l)?)
-            }
-            // A host with no IPv6 loopback serves IPv4 only; any other
-            // failure (the port taken on `::1`) must not be hidden.
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::AddrNotAvailable | io::ErrorKind::Unsupported
-                ) =>
-            {
-                None
-            }
-            Err(e) => return Err(e),
-        };
+        // Every fallible step comes first, so a failure leaves no task or
+        // directory behind; the task is spawned only once all is bound.
         let dir = private_dir()?;
         let unix_path = dir.join("proxy.sock");
         let unix = std::os::unix::net::UnixListener::bind(&unix_path)
@@ -221,22 +200,13 @@ impl AllowlistProxy {
             .inspect_err(|_| {
                 let _ = std::fs::remove_dir_all(&dir);
             })?;
-        let mut tasks = vec![tokio::spawn(serve(v4, shared.clone()))];
-        if let Some(v6) = v6 {
-            tasks.push(tokio::spawn(serve(v6, shared.clone())));
-        }
-        tasks.push(tokio::spawn(serve(unix, shared.clone())));
+        let tasks = vec![tokio::spawn(serve(unix, shared.clone()))];
         Ok(Self {
-            port,
             unix_path,
             shared,
             tasks,
             random: os_random,
         })
-    }
-
-    pub(crate) fn port(&self) -> u16 {
-        self.port
     }
 
     pub(crate) fn unix_path(&self) -> &Path {
@@ -353,14 +323,6 @@ fn lock_bound(m: &Mutex<std::time::Duration>) -> std::sync::MutexGuard<'_, std::
 trait Accept: Send + Sync + 'static {
     type Stream: Tunnel + 'static;
     async fn accept(&self) -> io::Result<Self::Stream>;
-}
-
-#[async_trait]
-impl Accept for TcpListener {
-    type Stream = TcpStream;
-    async fn accept(&self) -> io::Result<TcpStream> {
-        TcpListener::accept(self).await.map(|(stream, _)| stream)
-    }
 }
 
 #[async_trait]

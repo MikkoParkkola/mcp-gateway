@@ -3,10 +3,7 @@
 //! C2, C6, C7: only CONNECT to the three registries on 443, named exactly,
 //! is admitted.
 
-use super::{
-    ENTRIES, Entry, GLOBAL, Opened, begin, connect_bytes, connect_status, open, read_head, rig,
-    send, status, tunnel_echoes,
-};
+use super::{GLOBAL, begin, connect_bytes, connect_status, open, rig, send, status};
 use std::net::SocketAddr;
 
 /// C2, kills "suffix host match": exactly the three registries on 443 open a
@@ -16,19 +13,10 @@ async fn c2_only_the_three_registries_on_443_are_admitted() {
     let rig = rig().await;
     let cred = begin(&rig);
     for host in ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org"] {
-        for entry in ENTRIES {
-            let bytes = connect_bytes(&format!("{host}:443"), Some(&cred.basic()));
-            let opened = open(&rig, entry, &bytes).await.expect("connect");
-            let ok = match opened {
-                Opened::Tcp(mut s) => {
-                    status(&read_head(&mut s).await) == 200 && tunnel_echoes(&mut s).await
-                }
-                Opened::Unix(mut s) => {
-                    status(&read_head(&mut s).await) == 200 && tunnel_echoes(&mut s).await
-                }
-            };
-            assert!(ok, "{host} was not admitted");
-        }
+        let bytes = connect_bytes(&format!("{host}:443"), Some(&cred.basic()));
+        let mut opened = open(&rig, &bytes).await.expect("connect");
+        let ok = status(&opened.head().await) == 200 && opened.echoes().await;
+        assert!(ok, "{host} was not admitted");
     }
     let dials = rig.connect.dials();
     assert!(!dials.is_empty());
@@ -62,10 +50,8 @@ async fn c2_near_miss_hosts_and_ports_are_refused_with_403() {
         "registry.npmjs.org:8443",
         "pypi.org:22",
     ] {
-        for entry in ENTRIES {
-            let st = connect_status(&rig, entry, authority, &cred).await;
-            assert_eq!(st, 403, "{authority}");
-        }
+        let st = connect_status(&rig, authority, &cred).await;
+        assert_eq!(st, 403, "{authority}");
     }
     assert!(rig.connect.dials().is_empty());
 }
@@ -83,10 +69,8 @@ async fn c6_git_hosts_are_refused() {
         "git.sr.ht",
     ] {
         rig.resolve.set(host, vec![GLOBAL]);
-        for entry in ENTRIES {
-            let st = connect_status(&rig, entry, &format!("{host}:443"), &cred).await;
-            assert_eq!(st, 403, "{host}");
-        }
+        let st = connect_status(&rig, &format!("{host}:443"), &cred).await;
+        assert_eq!(st, 403, "{host}");
     }
     assert!(rig.connect.dials().is_empty());
 }
@@ -105,7 +89,7 @@ async fn c7_non_connect_methods_are_refused() {
             "{method} http://registry.npmjs.org/ HTTP/1.1\r\nHost: registry.npmjs.org\r\n\
              Proxy-Authorization: {auth}\r\n\r\n"
         );
-        let st = status(&send(&rig, Entry::Tcp, req.as_bytes()).await);
+        let st = status(&send(&rig, req.as_bytes()).await);
         assert!(matches!(st, 400 | 403 | 405), "{method} gave {st}");
     }
     assert!(rig.connect.dials().is_empty());
@@ -134,10 +118,8 @@ async fn c7_non_canonical_authorities_are_refused() {
         "registry.npmjs.org:",
         ":443",
     ] {
-        for entry in ENTRIES {
-            let st = connect_status(&rig, entry, authority, &cred).await;
-            assert!(matches!(st, 400 | 403), "{authority:?} gave {st}");
-        }
+        let st = connect_status(&rig, authority, &cred).await;
+        assert!(matches!(st, 400 | 403), "{authority:?} gave {st}");
     }
     assert!(rig.connect.dials().is_empty());
 }
@@ -153,7 +135,7 @@ async fn c7_a_disagreeing_host_header_is_refused() {
          Proxy-Authorization: {}\r\n\r\n",
         cred.basic()
     );
-    let st = status(&send(&rig, Entry::Tcp, req.as_bytes()).await);
+    let st = status(&send(&rig, req.as_bytes()).await);
     assert!(matches!(st, 400 | 403), "gave {st}");
     assert!(rig.connect.dials().is_empty());
 }

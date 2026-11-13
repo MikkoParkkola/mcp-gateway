@@ -5,14 +5,14 @@
 //! has overtaken, and keeps its Unix directory private and unguessable.
 
 use super::super::{Accept, MAX_CONNECTIONS, serve};
-use super::{Entry, Rig, begin, connect_bytes, open, read_head, rig, status};
+use super::{Rig, begin, connect_bytes, open, read_head, rig, status};
 use async_trait::async_trait;
 use std::io;
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, UnixStream};
 
 /// A listener whose first accept fails, as a descriptor shortage would, and
 /// whose later accepts are the real thing.
@@ -28,7 +28,7 @@ impl Accept for FailsOnce {
         if !self.failed.swap(true, Ordering::SeqCst) {
             return Err(io::Error::other("too many open files"));
         }
-        Accept::accept(&self.inner).await
+        self.inner.accept().await.map(|(stream, _)| stream)
     }
 }
 
@@ -61,11 +61,11 @@ async fn h1_the_listener_outlives_an_accept_error() {
 
 /// Holds `MAX_CONNECTIONS` connections open, each silent so each keeps its
 /// permit while the proxy waits for a request head.
-async fn fill_the_bound(rig: &Rig) -> Vec<TcpStream> {
+async fn fill_the_bound(rig: &Rig) -> Vec<UnixStream> {
     let mut held = Vec::new();
     for _ in 0..MAX_CONNECTIONS {
         held.push(
-            TcpStream::connect((Ipv4Addr::LOCALHOST, rig.proxy.port()))
+            UnixStream::connect(rig.proxy.unix_path())
                 .await
                 .expect("connect"),
         );
@@ -89,7 +89,7 @@ async fn fill_the_bound(rig: &Rig) -> Vec<TcpStream> {
 async fn h2_connections_past_the_bound_are_dropped_and_the_bound_frees_up() {
     let rig = rig().await;
     let mut held = fill_the_bound(&rig).await;
-    let mut extra = TcpStream::connect((Ipv4Addr::LOCALHOST, rig.proxy.port()))
+    let mut extra = UnixStream::connect(rig.proxy.unix_path())
         .await
         .expect("connect");
     let mut byte = [0u8; 1];
@@ -103,7 +103,7 @@ async fn h2_connections_past_the_bound_are_dropped_and_the_bound_frees_up() {
     drop(held.pop());
     let served = async {
         loop {
-            let mut next = TcpStream::connect((Ipv4Addr::LOCALHOST, rig.proxy.port()))
+            let mut next = UnixStream::connect(rig.proxy.unix_path())
                 .await
                 .expect("connect");
             if next
@@ -127,7 +127,7 @@ async fn stuck_connect(rig: &Rig, gate: &super::Gate, step: &str) -> tokio::task
     let cred = begin(rig);
     gate.close();
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
-    let mut client = open(rig, Entry::Tcp, &bytes).await.expect("connect");
+    let mut client = open(rig, &bytes).await.expect("connect");
     tokio::time::timeout(Duration::from_secs(30), gate.entered.notified())
         .await
         .unwrap_or_else(|_| panic!("the CONNECT never reached {step}"));
@@ -161,12 +161,12 @@ async fn h4_an_admission_past_its_bound_is_cut_off() {
     let cred = begin(&rig);
     rig.resolve.gate.close();
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
-    let mut client = open(&rig, Entry::Tcp, &bytes).await.expect("connect");
+    let mut client = open(&rig, &bytes).await.expect("connect");
     assert_eq!(status(&client.head().await), 502);
 }
 
 /// H5, kills "a predictable or open Unix directory": two proxies get distinct
-/// owner-only directories whose names carry neither the pid nor the port.
+/// owner-only directories whose names do not carry the pid.
 #[tokio::test]
 async fn h5_the_unix_directory_is_private_and_unguessable() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -181,7 +181,7 @@ async fn h5_the_unix_directory_is_private_and_unguessable() {
     };
     let (a, b) = (dir(&first), dir(&second));
     assert_ne!(a, b, "two proxies shared one directory");
-    for (dir, rig) in [(&a, &first), (&b, &second)] {
+    for dir in [&a, &b] {
         let mode = std::fs::metadata(dir)
             .expect("metadata")
             .permissions()
@@ -196,7 +196,6 @@ async fn h5_the_unix_directory_is_private_and_unguessable() {
             !name.contains(&std::process::id().to_string()) || name.len() > 20,
             "{name}"
         );
-        assert!(!name.contains(&rig.proxy.port().to_string()), "{name}");
     }
 }
 
@@ -208,7 +207,7 @@ async fn m1_a_stale_revoke_leaves_the_new_fetch_alone() {
     let old = begin(&rig);
     let new = begin(&rig);
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&new.basic()));
-    let mut tunnel = open(&rig, Entry::Tcp, &bytes).await.expect("connect");
+    let mut tunnel = open(&rig, &bytes).await.expect("connect");
     assert_eq!(status(&tunnel.head().await), 200);
     rig.proxy.revoke(&old);
     assert!(
@@ -224,7 +223,7 @@ async fn m1_a_failed_begin_fetch_still_ends_the_previous_fetch() {
     let mut rig = rig().await;
     let old = begin(&rig);
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&old.basic()));
-    let mut open_tunnel = open(&rig, Entry::Tcp, &bytes).await.expect("connect");
+    let mut open_tunnel = open(&rig, &bytes).await.expect("connect");
     assert_eq!(status(&open_tunnel.head().await), 200);
     let mut tunnel = open_tunnel.into_plain();
     rig.proxy.random = |_| Err(io::Error::other("no entropy"));
@@ -239,7 +238,7 @@ async fn m1_a_failed_begin_fetch_still_ends_the_previous_fetch() {
     }
     assert!(shut, "the old fetch's tunnel outlived a failed begin_fetch");
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&old.basic()));
-    let refused = super::send(&rig, Entry::Tcp, &bytes).await;
+    let refused = super::send(&rig, &bytes).await;
     assert_eq!(status(&refused), 407, "the old credential still works");
 }
 
@@ -255,7 +254,7 @@ async fn h6_a_fetch_revoked_as_the_dial_completes_gets_no_tunnel() {
     let revoked = cred.clone();
     *rig.connect.on_dial.lock().expect("lock") = Some(Box::new(move || shared.revoke(&revoked)));
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
-    let mut client = open(&rig, Entry::Tcp, &bytes).await.expect("connect");
+    let mut client = open(&rig, &bytes).await.expect("connect");
     assert_eq!(
         status(&client.head().await),
         407,

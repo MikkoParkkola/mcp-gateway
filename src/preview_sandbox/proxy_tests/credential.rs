@@ -1,15 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! C1/R1, C3/R2, C8, C9, C11: the per-fetch credential gates both entries,
+//! C1/R1, C3/R2, C8, C9, C11: the per-fetch credential gates the socket,
 //! is random, dies on expiry, and never reaches a log line or a refusal.
 
-use super::{
-    ENTRIES, Entry, GLOBAL, NPM, begin, connect_bytes, connect_status, ip, open, rig, send, status,
-};
+use super::{GLOBAL, NPM, begin, connect_bytes, connect_status, ip, open, rig, send, status};
 use std::io;
-use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
-use tokio::net::TcpListener;
 
 /// The OS random source failing refuses this preview with an error; the
 /// proxy, and so the gateway, keeps serving.
@@ -22,42 +18,38 @@ async fn c8_a_failed_random_source_refuses_and_the_proxy_lives() {
         refused,
         Err(crate::preview_sandbox::Refusal::Step(_))
     ));
-    let st = status(&send(&rig, Entry::Tcp, &connect_bytes("pypi.org:443", None)).await);
+    let st = status(&send(&rig, &connect_bytes("pypi.org:443", None)).await);
     assert_eq!(st, 407, "the proxy stopped answering");
 }
 
-/// C1/R1, kills "port open outside a fetch": during a fetch both entries
-/// carry a tunnel; with no live credential neither admits anything, nothing
-/// more is dialled, and the port stays bound.
+/// C1/R1, kills "port open outside a fetch": during a fetch the socket
+/// carries a tunnel; with no live credential it admits nothing, nothing
+/// more is dialled, and the socket stays bound.
 #[tokio::test]
-async fn c1_outside_a_fetch_nothing_is_admitted_and_the_port_stays_bound() {
+async fn c1_outside_a_fetch_nothing_is_admitted_and_the_socket_stays_bound() {
     let rig = rig().await;
     let cred = begin(&rig);
-    // During the fetch, each entry opens a tunnel that carries bytes, so a
+    // During the fetch the socket opens a tunnel that carries bytes, so a
     // proxy that refuses everything cannot pass this row.
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
-    for entry in ENTRIES {
-        let mut t = open(&rig, entry, &bytes).await.expect("connect");
-        assert_eq!(status(&t.head().await), 200, "refused during the fetch");
-        assert!(t.echoes().await, "the tunnel carried no bytes");
-    }
+    let mut t = open(&rig, &bytes).await.expect("connect");
+    assert_eq!(status(&t.head().await), 200, "refused during the fetch");
+    assert!(t.echoes().await, "the tunnel carried no bytes");
     let dialled = rig.connect.dials().len();
     rig.proxy.revoke(&cred);
-    for entry in ENTRIES {
-        let st = connect_status(&rig, entry, "registry.npmjs.org:443", &cred).await;
-        assert_ne!(st, 200, "a tunnel opened outside a fetch");
-    }
+    let st = connect_status(&rig, "registry.npmjs.org:443", &cred).await;
+    assert_ne!(st, 200, "a tunnel opened outside a fetch");
     assert_eq!(
         rig.connect.dials().len(),
         dialled,
         "dialled outside a fetch"
     );
-    let rebind = TcpListener::bind((Ipv4Addr::LOCALHOST, rig.proxy.port())).await;
-    assert!(rebind.is_err(), "the port was released");
+    let again = tokio::net::UnixStream::connect(rig.proxy.unix_path()).await;
+    assert!(again.is_ok(), "the socket was released");
 }
 
 /// C3, kills "credential check removed": a missing, wrong or expired
-/// credential gets 407 through either entry, and nothing is dialled.
+/// credential gets 407, and nothing is dialled.
 #[tokio::test]
 async fn c3_missing_wrong_or_expired_credential_gets_407() {
     let rig = rig().await;
@@ -65,16 +57,14 @@ async fn c3_missing_wrong_or_expired_credential_gets_407() {
     rig.proxy.revoke(&old);
     let live = begin(&rig);
     let wrong = format!("Basic {}", base64_of("not-the-secret:"));
-    for entry in ENTRIES {
-        let missing = connect_bytes("registry.npmjs.org:443", None);
-        assert_eq!(status(&send(&rig, entry, &missing).await), 407);
-        let bad = connect_bytes("registry.npmjs.org:443", Some(&wrong));
-        assert_eq!(status(&send(&rig, entry, &bad).await), 407);
-        let st = connect_status(&rig, entry, "registry.npmjs.org:443", &old).await;
-        assert_eq!(st, 407, "an expired credential was not refused");
-    }
+    let missing = connect_bytes("registry.npmjs.org:443", None);
+    assert_eq!(status(&send(&rig, &missing).await), 407);
+    let bad = connect_bytes("registry.npmjs.org:443", Some(&wrong));
+    assert_eq!(status(&send(&rig, &bad).await), 407);
+    let st = connect_status(&rig, "registry.npmjs.org:443", &old).await;
+    assert_eq!(st, 407, "an expired credential was not refused");
     assert_eq!(
-        connect_status(&rig, Entry::Tcp, "registry.npmjs.org:443", &live).await,
+        connect_status(&rig, "registry.npmjs.org:443", &live).await,
         200
     );
     assert_eq!(rig.connect.dials().len(), 1, "only the live CONNECT dials");
@@ -86,11 +76,8 @@ async fn r2_the_unix_socket_requires_the_credential() {
     let rig = rig().await;
     let live = begin(&rig);
     let missing = connect_bytes("pypi.org:443", None);
-    assert_eq!(status(&send(&rig, Entry::Unix, &missing).await), 407);
-    assert_eq!(
-        connect_status(&rig, Entry::Unix, "pypi.org:443", &live).await,
-        200
-    );
+    assert_eq!(status(&send(&rig, &missing).await), 407);
+    assert_eq!(connect_status(&rig, "pypi.org:443", &live).await, 200);
 }
 
 /// C11, kills "credential check removed": duplicate headers, a non-Basic
@@ -114,10 +101,8 @@ async fn c11_duplicate_non_basic_and_malformed_auth_get_407() {
         connect_text("pypi.org:443", &token),
     ];
     for case in cases {
-        for entry in ENTRIES {
-            let st = status(&send(&rig, entry, case.as_bytes()).await);
-            assert_eq!(st, 407, "{case:?}");
-        }
+        let st = status(&send(&rig, case.as_bytes()).await);
+        assert_eq!(st, 407, "{case:?}");
     }
     assert!(rig.connect.dials().is_empty());
 }
@@ -154,8 +139,8 @@ async fn c8_credentials_are_random_per_fetch_and_the_old_one_is_dead() {
     let second = begin(&rig);
     assert_ne!(first.secret(), second.secret());
     let host = "registry.npmjs.org:443";
-    assert_eq!(connect_status(&rig, Entry::Tcp, host, &first).await, 407);
-    assert_eq!(connect_status(&rig, Entry::Tcp, host, &second).await, 200);
+    assert_eq!(connect_status(&rig, host, &first).await, 407);
+    assert_eq!(connect_status(&rig, host, &second).await, 200);
 }
 
 /// Collects every tracing line the proxy emits.
@@ -199,23 +184,23 @@ async fn c9_the_credential_never_reaches_a_log_line_or_a_refusal() {
         "93.184.216.34:443",
     ] {
         let bytes = connect_bytes(authority, Some(&cred.basic()));
-        texts.push(send(&rig, Entry::Tcp, &bytes).await);
+        texts.push(send(&rig, &bytes).await);
     }
     rig.resolve.set(NPM, vec![ip("127.0.0.1")]);
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
-    texts.push(send(&rig, Entry::Unix, &bytes).await);
+    texts.push(send(&rig, &bytes).await);
     let dup = format!(
         "CONNECT pypi.org:443 HTTP/1.1\r\nProxy-Authorization: {0}\r\nProxy-Authorization: {0}\r\n\r\n",
         cred.basic()
     );
-    texts.push(send(&rig, Entry::Tcp, dup.as_bytes()).await);
+    texts.push(send(&rig, dup.as_bytes()).await);
     let get = format!(
         "GET / HTTP/1.1\r\nProxy-Authorization: {}\r\n\r\n",
         cred.basic()
     );
-    texts.push(send(&rig, Entry::Tcp, get.as_bytes()).await);
+    texts.push(send(&rig, get.as_bytes()).await);
     rig.proxy.revoke(&cred);
-    texts.push(send(&rig, Entry::Tcp, &bytes).await);
+    texts.push(send(&rig, &bytes).await);
 
     let token = cred.basic().trim_start_matches("Basic ").to_owned();
     let pct = |s: &str| {

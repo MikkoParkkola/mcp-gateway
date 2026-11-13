@@ -3,7 +3,7 @@
 //! C4, C4i: an answer holding any denied address, or one of the host's own,
 //! refuses the whole CONNECT with no dial.
 
-use super::{Entry, GLOBAL, NPM, begin, connect_status, deny_vectors::DENIED, ip, rig};
+use super::{GLOBAL, NPM, begin, connect_status, deny_vectors::DENIED, ip, rig};
 
 /// C4, kills "a range deleted": every denied address, alone, refuses the
 /// CONNECT with 403 and nothing is dialled.
@@ -13,7 +13,7 @@ async fn c4_every_denied_address_refuses_the_connect() {
     let cred = begin(&rig);
     for denied in DENIED {
         rig.resolve.set(NPM, vec![ip(denied)]);
-        let st = connect_status(&rig, Entry::Tcp, "registry.npmjs.org:443", &cred).await;
+        let st = connect_status(&rig, "registry.npmjs.org:443", &cred).await;
         assert_eq!(st, 403, "{denied} was not refused");
     }
     assert!(rig.connect.dials().is_empty(), "{:?}", rig.connect.dials());
@@ -32,7 +32,7 @@ async fn c4_denied_addresses_are_refused_through_the_unix_socket() {
         "::ffff:127.0.0.1",
     ] {
         rig.resolve.set(NPM, vec![ip(denied)]);
-        let st = connect_status(&rig, Entry::Unix, "registry.npmjs.org:443", &cred).await;
+        let st = connect_status(&rig, "registry.npmjs.org:443", &cred).await;
         assert_eq!(st, 403, "{denied}");
     }
     assert!(rig.connect.dials().is_empty());
@@ -54,7 +54,7 @@ async fn c4_a_mixed_answer_refuses_the_whole_connect() {
             vec![bad, global6],
         ] {
             rig.resolve.set(NPM, answer.clone());
-            let st = connect_status(&rig, Entry::Tcp, "registry.npmjs.org:443", &cred).await;
+            let st = connect_status(&rig, "registry.npmjs.org:443", &cred).await;
             assert_eq!(st, 403, "{answer:?}");
         }
     }
@@ -72,7 +72,7 @@ async fn c4i_a_host_interface_address_is_refused_in_every_form() {
     // 93.184.216.34 = 5db8:d822
     for form in ["93.184.216.34", "::ffff:5db8:d822", "::5db8:d822"] {
         rig.resolve.set(NPM, vec![ip(form)]);
-        let st = connect_status(&rig, Entry::Tcp, "registry.npmjs.org:443", &cred).await;
+        let st = connect_status(&rig, "registry.npmjs.org:443", &cred).await;
         assert_eq!(st, 403, "{form}");
     }
     assert!(rig.connect.dials().is_empty());
@@ -84,9 +84,9 @@ async fn c4i_the_interface_set_is_read_at_each_connect() {
     let rig = rig().await;
     let cred = begin(&rig);
     let host = "registry.npmjs.org:443";
-    assert_eq!(connect_status(&rig, Entry::Tcp, host, &cred).await, 200);
+    assert_eq!(connect_status(&rig, host, &cred).await, 200);
     *rig.interfaces.0.lock().expect("lock") = vec![GLOBAL];
-    assert_eq!(connect_status(&rig, Entry::Tcp, host, &cred).await, 403);
+    assert_eq!(connect_status(&rig, host, &cred).await, 403);
     *rig.interfaces.0.lock().expect("lock") = Vec::new();
-    assert_eq!(connect_status(&rig, Entry::Tcp, host, &cred).await, 200);
+    assert_eq!(connect_status(&rig, host, &cred).await, 200);
 }

@@ -117,15 +117,6 @@ impl Interfaces for FakeInterfaces {
     }
 }
 
-/// Which entry a request uses.
-#[derive(Clone, Copy)]
-enum Entry {
-    Tcp,
-    Unix,
-}
-
-const ENTRIES: [Entry; 2] = [Entry::Tcp, Entry::Unix];
-
 struct Rig {
     proxy: AllowlistProxy,
     resolve: Arc<FakeResolve>,
@@ -208,33 +199,23 @@ fn status(head: &str) -> u16 {
         .unwrap_or(0)
 }
 
-/// Send `bytes` through `entry` and return the response head.
-async fn send(rig: &Rig, entry: Entry, bytes: &[u8]) -> String {
-    match open(rig, entry, bytes).await {
-        Some(Opened::Tcp(mut s)) => read_head(&mut s).await,
-        Some(Opened::Unix(mut s)) => read_head(&mut s).await,
+/// Send `bytes` and return the response head.
+async fn send(rig: &Rig, bytes: &[u8]) -> String {
+    match open(rig, bytes).await {
+        Some(mut s) => s.head().await,
         None => String::new(),
     }
 }
 
-enum Opened {
-    Tcp(TcpStream),
-    Unix(UnixStream),
-}
+struct Opened(UnixStream);
 
 impl Opened {
     async fn head(&mut self) -> String {
-        match self {
-            Self::Tcp(s) => read_head(s).await,
-            Self::Unix(s) => read_head(s).await,
-        }
+        read_head(&mut self.0).await
     }
 
     async fn echoes(&mut self) -> bool {
-        match self {
-            Self::Tcp(s) => tunnel_echoes(s).await,
-            Self::Unix(s) => tunnel_echoes(s).await,
-        }
+        tunnel_echoes(&mut self.0).await
     }
 
     /// True when the stream is dead: a write or read fails or hits EOF.
@@ -245,18 +226,12 @@ impl Opened {
     /// The same connection as a plain non-blocking socket, which answers a
     /// read at once, with no event loop between the caller and the kernel.
     fn into_plain(self) -> Plain {
-        match self {
-            Self::Tcp(s) => Plain::Tcp(s.into_std().expect("std tcp stream")),
-            Self::Unix(s) => Plain::Unix(s.into_std().expect("std unix stream")),
-        }
+        Plain(self.0.into_std().expect("std unix stream"))
     }
 }
 
 /// A connection read without an event loop (see [`Opened::into_plain`]).
-enum Plain {
-    Tcp(std::net::TcpStream),
-    Unix(std::os::unix::net::UnixStream),
-}
+struct Plain(std::os::unix::net::UnixStream);
 
 impl Plain {
     /// True when the peer has already shut the connection down: the read
@@ -265,11 +240,7 @@ impl Plain {
     fn peer_has_shut_down(&mut self) -> bool {
         use std::io::{ErrorKind, Read as _};
         let mut byte = [0u8; 1];
-        let read = match self {
-            Self::Tcp(s) => s.read(&mut byte),
-            Self::Unix(s) => s.read(&mut byte),
-        };
-        match read {
+        match self.0.read(&mut byte) {
             Ok(0) => true,
             Ok(_) => false,
             Err(e) => e.kind() != ErrorKind::WouldBlock,
@@ -277,29 +248,17 @@ impl Plain {
     }
 }
 
-/// Connect through `entry` and write `bytes`; `None` when the connection
-/// itself is refused.
-async fn open(rig: &Rig, entry: Entry, bytes: &[u8]) -> Option<Opened> {
-    match entry {
-        Entry::Tcp => {
-            let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, rig.proxy.port()))
-                .await
-                .ok()?;
-            s.write_all(bytes).await.ok()?;
-            Some(Opened::Tcp(s))
-        }
-        Entry::Unix => {
-            let mut s = UnixStream::connect(rig.proxy.unix_path()).await.ok()?;
-            s.write_all(bytes).await.ok()?;
-            Some(Opened::Unix(s))
-        }
-    }
+/// Connect and write `bytes`; `None` when the connection itself is refused.
+async fn open(rig: &Rig, bytes: &[u8]) -> Option<Opened> {
+    let mut s = UnixStream::connect(rig.proxy.unix_path()).await.ok()?;
+    s.write_all(bytes).await.ok()?;
+    Some(Opened(s))
 }
 
 /// CONNECT `authority` with `cred`'s header; the response status.
-async fn connect_status(rig: &Rig, entry: Entry, authority: &str, cred: &Credential) -> u16 {
+async fn connect_status(rig: &Rig, authority: &str, cred: &Credential) -> u16 {
     let bytes = connect_bytes(authority, Some(&cred.basic()));
-    status(&send(rig, entry, &bytes).await)
+    status(&send(rig, &bytes).await)
 }
 
 /// After a 200, bytes written to the tunnel come back from the echo server.
