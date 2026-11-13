@@ -537,6 +537,10 @@ async fn resolve(
     )
 }
 
+fn accept_body(digest: &str) -> Value {
+    json!({"action": "accept", "reason": "needed", "scope_digest": digest, "ttl_seconds": 3600})
+}
+
 fn deny_body(digest: &str) -> Value {
     json!({"action": "deny", "reason": "not needed", "scope_digest": digest})
 }
@@ -606,7 +610,7 @@ async fn resolve_answers_one_status_per_state_and_writes_nothing() {
     assert_eq!(body["error"], "scope_changed");
     assert_eq!(body["scope_digest"], json!(digest));
 
-    let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    let (status, body) = resolve(&state, true, &id, accept_body(&digest).to_string()).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["error"], "not_available_yet");
 }
@@ -637,7 +641,7 @@ async fn two_resolves_do_not_overlap() {
     let decisions = state.meta_mcp.decisions().expect("decisions");
     let held = decisions.resolving().await;
     let state2 = Arc::clone(&state);
-    let body = deny_body(&digest).to_string();
+    let body = accept_body(&digest).to_string();
     let pending = tokio::spawn(async move { resolve(&state2, true, &id, body).await });
     // A deterministic handoff, not a wait: this runtime has one thread, so one
     // yield runs the spawned resolve until it first returns Pending. Every step
