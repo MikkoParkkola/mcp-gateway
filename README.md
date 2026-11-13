@@ -101,7 +101,7 @@ MCP Registry name: `mcp-name: io.github.MikkoParkkola/mcp-gateway`
 | **Cargo** | `cargo install mcp-gateway` |
 | **cargo-binstall** | `cargo binstall mcp-gateway` |
 | **Direct binary download (Windows x64)** | Download `mcp-gateway-windows-x86_64.exe` from the [latest release](https://github.com/MikkoParkkola/mcp-gateway/releases/latest) |
-| **Docker** | `docker run -p 127.0.0.1:39400:39400 -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish -v $(pwd)/gateway.container.yaml:/config.yaml:ro ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --host 0.0.0.0 --port 39400` |
+| **Docker** | `docker run -p 127.0.0.1:39400:39400 -e MCP_GATEWAY_TOKEN -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish -v $(pwd)/gateway.container.yaml:/config.yaml:ro ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --host 0.0.0.0 --port 39400` |
 | **Docker, `npx`/`uvx` backends** | Same, with `:latest-full` — the default image carries no Node or `uv`, so a stdio backend that shells out to either cannot spawn. See [Docker Deployment](docs/DEPLOYMENT.md#docker-deployment). |
 
 Release images are signed with keyless cosign. To check one, use cosign 2.6.5 or later on the 2.x
@@ -111,7 +111,10 @@ The command is in [RELEASING.md](RELEASING.md).
 On Linux, the image runs as UID/GID 1001. Make an owner-only deployment copy
 instead of changing ownership on your working config: `install -m 600
 gateway.yaml gateway.container.yaml && sudo chown 1001:1001
-gateway.container.yaml`. Do not make a credential-bearing config
+gateway.container.yaml`. `init` stores the admin token on the host and writes
+only a reference to it, which the container cannot read: in that copy set
+`auth.bearer_token: "env:MCP_GATEWAY_TOKEN"` and export the token before `docker run`
+(see [Docker Deployment](docs/DEPLOYMENT.md#docker-deployment)). Do not make a credential-bearing config
 world-readable. Docker Desktop handles bind-mount identity differently on
 macOS and Windows.
 

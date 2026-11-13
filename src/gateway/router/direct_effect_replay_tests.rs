@@ -119,7 +119,7 @@ async fn replayed_7b(
 /// may-write) nor the shared slot (no hint).
 #[tokio::test]
 async fn a_direct_completed_replay_records_the_stored_slot_effect() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (fx, generations) = generational(&dir).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.declare_slot_effects_for_test(None, vec![read_tool(None)]);
@@ -138,7 +138,7 @@ async fn a_direct_completed_replay_records_the_stored_slot_effect() {
 /// between the run and the replay: the replay reads it now.
 #[tokio::test]
 async fn a_direct_completed_replay_reads_the_stored_slot_now() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (fx, generations) = generational(&dir).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.declare_slot_effects_for_test(None, vec![read_tool(None)]);
@@ -154,7 +154,7 @@ async fn a_direct_completed_replay_reads_the_stored_slot_now() {
 /// A4, the stored slot's hint removed (the tool still listed): undeclared.
 #[tokio::test]
 async fn a_direct_completed_replay_of_a_removed_hint_records_undeclared() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (fx, generations) = generational(&dir).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.declare_slot_effects_for_test(Some(&alice_at(1)), vec![read_tool(Some(true))]);
@@ -170,7 +170,7 @@ async fn a_direct_completed_replay_of_a_removed_hint_records_undeclared() {
 /// alice's current slot declares may-write.
 #[tokio::test]
 async fn a_direct_completed_replay_of_an_unlisted_tool_records_none() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (fx, generations) = generational(&dir).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.declare_slot_effects_for_test(Some(&alice_at(1)), vec![read_tool(Some(true))]);
@@ -191,7 +191,7 @@ async fn a_direct_completed_replay_of_an_unlisted_tool_records_none() {
 /// current slot (may-write) nor the shared slot (read-only).
 #[tokio::test]
 async fn a_direct_completed_replay_of_an_evicted_slot_records_none() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (fx, generations) = generational(&dir).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(true))]);

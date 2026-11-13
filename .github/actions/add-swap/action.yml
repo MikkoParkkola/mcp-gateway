@@ -6,11 +6,12 @@
 # coverage library parts: they then use about 4.1 GB of swap, and run within
 # 2% of their time without it.
 #
-# It fails loudly: total swap must reach 10 GB, so a swapon that silently did
-# nothing fails here rather than as a lost runner later. Every job in scope uses
-# this action (scripts/ci/check_swap_jobs.py checks it); none copies the steps.
+# It fails loudly: the swap file must add about 8 GB to whatever swap the runner already has (3 GB on some images,
+# none on others: a runner with none reads 8191 MB afterwards, which an absolute 10 GB floor failed on 2026-11-12),
+# so a swapon that silently did nothing fails here rather than as a lost runner later. Every job in scope uses
+# this action (scripts/ci/check_swap_jobs.py checks it, and runs this script under stubs); none copies the steps.
 name: Add swap for the library build
-description: Adds 8 GB of swap and fails unless total swap reaches 10 GB.
+description: Adds 8 GB of swap and fails unless total swap grows by 8 GB.
 runs:
   using: composite
   steps:
@@ -18,6 +19,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        before_mb="$(free -m | awk '/^Swap:/{print $2}')"
         sudo fallocate -l 8G /swapfile-ci
         sudo chmod 600 /swapfile-ci
         sudo mkswap /swapfile-ci
@@ -25,7 +27,8 @@ runs:
         swapon --show
         free -m
         total_mb="$(free -m | awk '/^Swap:/{print $2}')"
-        if [ "$total_mb" -lt 10240 ]; then
-          echo "::error::total swap ${total_mb} MB is under 10 GB; the swap file did not take"
+        added_mb=$((total_mb - before_mb))
+        if [ "$added_mb" -lt 8000 ]; then
+          echo "::error::the swap file did not take: total swap went from ${before_mb} MB to ${total_mb} MB, under the 8000 MB it adds"
           exit 1
         fi

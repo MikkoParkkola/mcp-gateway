@@ -76,7 +76,7 @@ async fn reload_as_admin(ctx: ReloadContext) -> (StatusCode, Value) {
 /// operator's config refused, not a server fault.
 #[tokio::test]
 async fn a_posture_refusal_is_a_conflict_with_its_text_unchanged() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let file = "server:\n  public_url: \"https://gw.example.com\"\n";
     let ctx = context(&dir, file, Arc::new(BackendRegistry::new()));
 
@@ -91,7 +91,7 @@ async fn a_posture_refusal_is_a_conflict_with_its_text_unchanged() {
 /// gateway unavailable, not an internal fault.
 #[tokio::test]
 async fn a_reload_cut_short_by_shutdown_is_service_unavailable() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let registry = Arc::new(BackendRegistry::new());
     registry.stop_all().await;
     let file = "backends:\n  added:\n    command: \"true\"\n";
@@ -108,7 +108,7 @@ async fn a_reload_cut_short_by_shutdown_is_service_unavailable() {
 /// gateway unavailable too, not an internal fault.
 #[tokio::test]
 async fn a_reload_stopped_by_the_shutdown_signal_is_service_unavailable() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let stop = tokio_util::sync::CancellationToken::new();
     stop.cancel();
     let ctx = context(&dir, "{}\n", Arc::new(BackendRegistry::new())).with_stop(stop);
@@ -123,7 +123,7 @@ async fn a_reload_stopped_by_the_shutdown_signal_is_service_unavailable() {
 /// STATUS.2: any other failure, here a file that does not parse, stays 500.
 #[tokio::test]
 async fn any_other_reload_failure_stays_an_internal_error() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let ctx = context(&dir, "server: [\n", Arc::new(BackendRegistry::new()));
 
     let (status, body) = reload_as_admin(ctx).await;

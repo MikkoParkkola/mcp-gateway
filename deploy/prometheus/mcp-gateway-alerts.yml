@@ -74,3 +74,23 @@ groups:
           severity: warning
         annotations:
           summary: "Backend {{ $labels.backend }} refused callers at its {{ $labels.limit }} slot limit"
+
+      # The admin email lookup (forward lookup of issuance rows). Its budget
+      # is two lookups at once and one every six seconds per process, so a
+      # throttled lookup means an admin credential is asking faster than a
+      # person reads answers, and more than 30 attempts in 15 minutes is a
+      # search, not a lookup. Neither counter carries a label: no email, hash
+      # or caller is ever published. Capacity is per replica; add the alert's
+      # query to every scraped replica. A credential guessing slowly stays
+      # under both lines: the budget limits guessing, it does not prevent it.
+      - alert: McpKeyServerLookupVolume
+        expr: >-
+          increase(mcp_key_server_lookup_throttled_total[15m]) > 0
+          or (mcp_key_server_lookup_throttled_total
+          unless max_over_time(mcp_key_server_lookup_throttled_total[5m] offset 15m)) > 0
+          or increase(mcp_key_server_lookup_attempts_total[15m]) > 30
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "Admin email lookups are throttled or unusually frequent"

@@ -261,7 +261,7 @@ async fn keep_as_text_writes_the_value_as_typed() {
 async fn add_duplicate_returns_failure() {
     // GIVEN: a config that already has "tavily"
     let (_dir, path) = temp_config();
-    run_add_command(
+    let setup = run_add_command(
         "tavily",
         None,
         None,
@@ -271,6 +271,7 @@ async fn add_duplicate_returns_failure() {
         CommentLoss::Refuse,
     )
     .await;
+    assert_eq!(setup, ExitCode::SUCCESS, "the setup add succeeds");
 
     // WHEN: adding again
     let code = run_add_command(
@@ -329,7 +330,7 @@ async fn add_http_url_backend() {
 #[tokio::test]
 async fn get_existing_backend_returns_success() {
     let (_dir, path) = temp_config();
-    run_add_command(
+    let setup = run_add_command(
         "tavily",
         None,
         None,
@@ -339,6 +340,7 @@ async fn get_existing_backend_returns_success() {
         CommentLoss::Refuse,
     )
     .await;
+    assert_eq!(setup, ExitCode::SUCCESS, "the setup add succeeds");
     let code = run_get_command("tavily", &path);
     assert_eq!(code, ExitCode::SUCCESS);
 }
@@ -362,7 +364,7 @@ async fn list_returns_success_when_empty() {
 #[tokio::test]
 async fn list_json_returns_success_with_backends() {
     let (_dir, path) = temp_config();
-    run_add_command(
+    let setup = run_add_command(
         "tavily",
         None,
         None,
@@ -372,6 +374,7 @@ async fn list_json_returns_success_with_backends() {
         CommentLoss::Refuse,
     )
     .await;
+    assert_eq!(setup, ExitCode::SUCCESS, "the setup add succeeds");
     let code = run_list_command(true, &path);
     assert_eq!(code, ExitCode::SUCCESS);
 }
@@ -390,7 +393,7 @@ fn run_update_backend(name: &str, update: BackendUpdate, config: &Path) -> Resul
 #[tokio::test]
 async fn update_existing_backend_succeeds() {
     let (_dir, path) = temp_config();
-    run_add_command(
+    let setup = run_add_command(
         "tavily",
         None,
         None,
@@ -400,6 +403,7 @@ async fn update_existing_backend_succeeds() {
         CommentLoss::Refuse,
     )
     .await;
+    assert_eq!(setup, ExitCode::SUCCESS, "the setup add succeeds");
 
     let result = run_update_backend(
         "tavily",

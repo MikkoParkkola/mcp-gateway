@@ -36,6 +36,14 @@ pub(super) async fn open(
         "a test opened the real task store at {}; give it a temp tasks.store_dir",
         dir.display()
     );
+    #[cfg(test)]
+    let found = crate::test_dir_keep::registered_for(dir);
+    #[cfg(test)]
+    assert!(
+        found.holds_anything(),
+        "a test opened an unkept task store at {}; build the config's tasks.store_dir inside kept_tempdir()",
+        dir.display()
+    );
     crate::gateway::task_service::open_runtime_with_recovery(
         dir,
         config.tasks.max_workers,
@@ -53,7 +61,12 @@ pub(super) async fn open(
         |service, executor| {
             // Before recovery, which may start workers on this store.
             #[cfg(test)]
-            service.opened_by_gateway();
+            {
+                service.attach_registered(found);
+                service
+                    .store
+                    .assert_test_dir_kept("the gateway task opener");
+            }
             if config.events.sources.task_settled
                 && let Some(hub) = meta_mcp.events()
             {
@@ -183,8 +196,8 @@ pub(super) async fn settle_store(
 
 /// Whether `dir` lies under the operator's real `~/.mcp-gateway`.
 #[cfg(test)]
-fn is_real_store(dir: &Path) -> bool {
-    dir.starts_with(super::expand_home_path("~/.mcp-gateway"))
+pub(super) fn is_real_store(dir: &Path) -> bool {
+    crate::test_dir_keep::is_under(dir, &super::expand_home_path("~/.mcp-gateway"))
 }
 
 #[cfg(test)]

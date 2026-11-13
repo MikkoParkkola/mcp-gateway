@@ -74,7 +74,7 @@ async fn non_admin_callback_registration_is_http_403() {
         ..AuthConfig::default()
     };
     let (state, _store) = test_router_app_state_with_auth(&auth).await;
-    let caps = tempfile::tempdir().unwrap();
+    let caps = crate::test_dir_keep::kept_tempdir();
     state
         .meta_mcp
         .set_capabilities(callback_capability(caps.path()).await);

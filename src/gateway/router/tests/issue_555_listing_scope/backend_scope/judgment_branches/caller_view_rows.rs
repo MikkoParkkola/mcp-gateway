@@ -19,9 +19,9 @@ const MARKER: &str = "refusing to send a capability credential in cleartext";
 fn keyed_caps() -> (
     Arc<crate::capability::CapabilityBackend>,
     Arc<crate::config::LiveEnv>,
-    tempfile::TempDir,
+    std::sync::Arc<tempfile::TempDir>,
 ) {
-    let dir = tempfile::TempDir::new().expect("env dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let file = dir.path().join("caps.env");
     // An env file is read only when its owner alone may read it: the mode on
     // Unix, the access list on Windows.

@@ -58,7 +58,7 @@ async fn with_admin<T, F: std::future::Future<Output = T>>(build: F) -> T {
 #[tokio::test]
 async fn t2_the_budget_refuses_a_ui_call() {
     use super::direct_guards_fixture::{Answer, fixture_firewalled_budget_built};
-    let audit = tempfile::tempdir().expect("a log directory");
+    let audit = crate::test_dir_keep::kept_tempdir();
     let fx = Box::pin(with_admin(fixture_firewalled_budget_built(
         Answer::Ok,
         (audit.path().join("audit.jsonl"), 1),
