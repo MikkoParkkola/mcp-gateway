@@ -414,6 +414,20 @@ pub(super) static ROWS: &[Row] = &[
         false,
     ),
     row(
+        routes::UI_SETTINGS_UNUSED,
+        Get,
+        Admin(AdminRequired),
+        &[(Page::Gateway, Tab::Settings)],
+        false,
+    ),
+    row(
+        routes::UI_SETTINGS_UNUSED_ENTRY,
+        Delete,
+        Admin(AdminRequired),
+        &[(Page::Gateway, Tab::Settings)],
+        false,
+    ),
+    row(
         routes::UI_DISCOVERY_ADOPT,
         Post,
         Admin(AdminRequired),

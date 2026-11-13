@@ -55,6 +55,11 @@ impl Index {
         })
     }
 
+    /// Records that `name` was removed from `kind` alone.
+    pub(super) fn append_removed_in(&self, name: &str, _kind: StoreKind) -> Result<(), StoreError> {
+        self.append_removed(name)
+    }
+
     /// Records that this save removed `name` again.
     pub(super) fn append_removed(&self, name: &str) -> Result<(), StoreError> {
         self.append(&Line {

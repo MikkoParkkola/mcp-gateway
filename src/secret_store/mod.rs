@@ -13,6 +13,7 @@ mod index;
 mod pending;
 mod report;
 mod save;
+mod unused;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -25,6 +26,10 @@ pub use report::{SecretStoreReport, doctor_report};
 pub(crate) use save::{
     LOCK_WAIT, NewSecret, SaveError, UnusedEntry, Vault, save_secrets, unused_entries,
     unused_entries_until,
+};
+pub(crate) use unused::{
+    DeleteRefused, Deleted, Naming, NamingSources, delete_unused, is_generated_name, naming,
+    suffix_of,
 };
 
 /// A store new secrets are written to. Every call is bounded and never
