@@ -22,7 +22,10 @@ mod display;
 mod items;
 mod record;
 pub(crate) use items::OpenRequest;
-pub(crate) use record::{decision_record, decisions_from_record, decisions_of, event_id};
+pub(crate) use record::{
+    AcceptTtl, accept_event_id, accept_key, accept_row_id, decision_record, decisions_from_record,
+    decisions_of, event_id,
+};
 
 #[cfg(test)]
 mod tests;

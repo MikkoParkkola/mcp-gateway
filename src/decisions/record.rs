@@ -113,3 +113,80 @@ pub(crate) fn decisions_from_record(record: &UiDecisionRecord) -> Option<Vec<UiD
         })
         .collect()
 }
+
+/// How long an accepted grant lasts: the ttl the administrator asked for,
+/// or for good.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AcceptTtl {
+    /// For this many seconds from the first attempt.
+    Seconds(u64),
+    /// Until revoked.
+    Permanent,
+}
+
+/// One length-prefixed field, so no two field lists share an encoding.
+fn push_field(bytes: &mut Vec<u8>, text: &str) {
+    bytes.extend((text.len() as u64).to_be_bytes());
+    bytes.extend(text.as_bytes());
+}
+
+/// What an accept of `request` is, at the scope digest the administrator
+/// was shown and with `ttl`: a SHA-256 over a domain separator and the
+/// length-prefixed subject, agent, digest, every refusal position (sorted)
+/// and the ttl. It leaves out the generation and the expiry, so a retry and
+/// a partial revoke keep the ids of the rows still live.
+pub(crate) fn accept_key(request: &OpenRequest, scope_digest: &str, ttl: AcceptTtl) -> String {
+    let mut parts: Vec<(&str, &str, u64)> = request
+        .entries
+        .iter()
+        .flat_map(|(capability, positions)| {
+            positions
+                .iter()
+                .map(move |pos| (capability.as_str(), pos.entry.as_str(), pos.counter))
+        })
+        .collect();
+    parts.sort_unstable();
+    parts.dedup();
+    let mut bytes = b"mcpg/ui-decision/accept-key/v1\0".to_vec();
+    for text in [
+        request.authority.as_str(),
+        request.subject.as_str(),
+        request.agent.as_str(),
+        scope_digest,
+    ] {
+        push_field(&mut bytes, text);
+    }
+    push_field(&mut bytes, &parts.len().to_string());
+    for (capability, entry, counter) in &parts {
+        push_field(&mut bytes, capability);
+        push_field(&mut bytes, entry);
+        push_field(&mut bytes, &counter.to_string());
+    }
+    let ttl = match ttl {
+        AcceptTtl::Seconds(seconds) => format!("ttl:{seconds}"),
+        AcceptTtl::Permanent => "permanent".to_owned(),
+    };
+    push_field(&mut bytes, &ttl);
+    crate::hashing::sha256_hex(&bytes)
+}
+
+/// The audit event id of an accept: its key and `generation`, the count of
+/// the request's rows revoked or expired when it ran. A retry has the same
+/// id; a new accept after a revoke has another.
+pub(crate) fn accept_event_id(key: &str, generation: u64) -> String {
+    let mut bytes = b"mcpg/ui-decision/accept/v1\0".to_vec();
+    push_field(&mut bytes, key);
+    push_field(&mut bytes, &generation.to_string());
+    crate::hashing::sha256_hex(&bytes)
+}
+
+/// The grant row id an accept writes for `capability`: its key, the
+/// capability and `generation`, that capability's rows revoked or expired
+/// when it ran. Only a revoked capability gets a new id.
+pub(crate) fn accept_row_id(key: &str, capability: &str, generation: u64) -> String {
+    let mut bytes = b"mcpg/ui-decision/row/v1\0".to_vec();
+    push_field(&mut bytes, key);
+    push_field(&mut bytes, capability);
+    push_field(&mut bytes, &generation.to_string());
+    crate::hashing::sha256_hex(&bytes)
+}

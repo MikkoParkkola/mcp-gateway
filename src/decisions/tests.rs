@@ -776,5 +776,6 @@ fn a_lost_note_affects_only_its_own_log() {
     );
 }
 
+mod accept;
 mod discovery;
 mod positions;

@@ -227,6 +227,29 @@ fn journal_record(entry: &JournalEntry) -> Draft {
     }
 }
 
+/// A grant row an accept's audit record names: the row id, its digest and
+/// the record's event id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Claim {
+    pub(super) row_id: String,
+    pub(super) digest: String,
+    pub(super) event_id: String,
+}
+
+/// The digest claimed for `row_id` when every claim on it agrees on one
+/// digest and one event id; any disagreement is no claim at all.
+fn single_claim<'a>(claims: &'a [Claim], row_id: &str) -> Option<&'a str> {
+    let mut found: Option<&Claim> = None;
+    for claim in claims.iter().filter(|claim| claim.row_id == row_id) {
+        match found {
+            None => found = Some(claim),
+            Some(first) if first.digest == claim.digest && first.event_id == claim.event_id => {}
+            Some(_) => return None,
+        }
+    }
+    found.map(|claim| claim.digest.as_str())
+}
+
 /// Steps 2-5: the records this reconciliation owes, and the state to commit
 /// after them. `reported` holds the unreadable-journal causes this process
 /// already recorded (once per cause per process); the set to keep once this
@@ -235,6 +258,7 @@ pub(super) fn plan(
     state: &State,
     rows: &[IdentityGrant],
     journal: &JournalRead,
+    claims: &[Claim],
     reported: &BTreeSet<String>,
 ) -> (Vec<PlannedRecord>, State, BTreeSet<String>) {
     let mut reported = reported.clone();
@@ -303,12 +327,14 @@ pub(super) fn plan(
         .flatten()
         .map(|(id, digest)| (id.clone(), Some(digest.clone())))
         .collect();
+    let mut journalled: BTreeSet<&str> = BTreeSet::new();
     for entry in &parsed.entries {
         // New entries only, each once: a line repeated within this read is
         // skipped like one consumed earlier.
         if !next.consumed.insert(entry.entry_id.clone()) {
             continue;
         }
+        journalled.insert(entry.grant_id.as_str());
         // Step 3: an intervening direct edit shows as a `prev_digest` that is
         // not the expected digest. With no baseline, the first entry for a
         // grant seeds it instead.
@@ -333,6 +359,21 @@ pub(super) fn plan(
     // baseline; without one they predate the journal.
     // The served row per id, so a record describes what is enforced.
     let actual = served_rows(rows);
+    // A served row an accept's audit record names by id AND digest is
+    // accounted for as a journal entry would be: that record attributes it.
+    // Under a gap, where this plan's journal touched the row, or on any
+    // disagreement between claims, the row keeps the path below.
+    if !state.gap {
+        for (id, row) in &actual {
+            if journalled.contains(id) {
+                continue;
+            }
+            let digest = grant_digest(row);
+            if single_claim(claims, id) == Some(digest.as_str()) {
+                expected.insert((*id).to_string(), Some(digest));
+            }
+        }
+    }
     let mut ids: BTreeSet<&str> = expected.keys().map(String::as_str).collect();
     if has_baseline {
         ids.extend(actual.keys().copied());

@@ -174,7 +174,7 @@ impl GrantAuditor {
         let mut inner = self.inner.lock();
         let state = self.finish_pending(&mut inner)?;
         let state = state.for_path(&self.grants_path);
-        let (records, next, reported) = plan(&state, rows, journal, &inner.reported);
+        let (records, next, reported) = plan(&state, rows, journal, &[], &inner.reported);
         if records.is_empty() {
             // Nothing to record: commit the new baseline directly, and skip
             // the write when only the generation would change.
