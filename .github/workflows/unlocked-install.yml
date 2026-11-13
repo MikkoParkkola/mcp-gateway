@@ -13,7 +13,7 @@ name: Unlocked install
 # job) waits for it to pass at the tag itself.
 on:
   push:
-    branches: [docs/ranking-1-release-line]
+    branches: [docs/ranking-1-release-line, 'throwaway/unlocked-install-*']
   schedule:
     - cron: '23 3 * * *'
   workflow_dispatch:
