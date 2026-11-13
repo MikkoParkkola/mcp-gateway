@@ -22,9 +22,7 @@ mod display;
 mod items;
 mod record;
 pub(crate) use items::OpenRequest;
-pub(crate) use record::{
-    UI_DECISION_KIND, decisions_from_record, decisions_of, event_id, record_fields,
-};
+pub(crate) use record::{decision_record, decisions_from_record, decisions_of, event_id};
 
 #[cfg(test)]
 mod tests;

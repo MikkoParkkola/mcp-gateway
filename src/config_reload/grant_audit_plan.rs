@@ -164,6 +164,7 @@ pub(super) fn record(
                     .to_string(),
             },
             grant_change: Some(change),
+            ui_decision: None,
         },
     }
 }

@@ -13,6 +13,7 @@ pub mod grant_change;
 pub mod role_mapping;
 mod snapshot;
 pub mod store;
+pub mod ui_decision;
 
 pub use export::{
     CollectingSink, ExportConfig, ExportCursor, ExportEntry, ExportError, ExportSink, ExportSource,
@@ -25,6 +26,7 @@ pub use store::{
     AuditCursor, AuditFilter, AuditPage, ControlPlaneStore, FileControlPlaneStore,
     InMemoryControlPlaneStore, StoreError, StoreResult,
 };
+pub use ui_decision::{UiDecisionEntry, UiDecisionRecord};
 
 /// License tier for control-plane capabilities.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -481,6 +483,10 @@ pub struct ControlPlaneAuditEvent {
     /// Grant-change detail, on records for a grant-file change (MIK-7570.AUDIT.4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant_change: Option<GrantChangeRecord>,
+    /// UI-decision detail, on records of an administrator's decision on an
+    /// open access request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_decision: Option<UiDecisionRecord>,
 }
 
 /// Mutation request guarded by RBAC plus audit evidence.

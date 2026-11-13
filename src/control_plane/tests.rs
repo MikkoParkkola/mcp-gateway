@@ -21,6 +21,7 @@ fn rollback() -> ControlPlaneRollbackPlan {
 fn audit_event(actor: &ControlPlaneActor, action: ControlPlaneAction) -> ControlPlaneAuditEvent {
     ControlPlaneAuditEvent {
         grant_change: None,
+        ui_decision: None,
         event_id: "audit-1".to_string(),
         actor_id: actor.actor_id.clone(),
         action,

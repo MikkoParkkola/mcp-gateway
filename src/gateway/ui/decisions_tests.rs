@@ -22,13 +22,19 @@ use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
 
 fn log_in(dir: &tempfile::TempDir, max_segment_bytes: u64, retain: u32) -> Arc<TransparencyLogger> {
+    log_named(dir, "transparency.jsonl", max_segment_bytes, retain)
+}
+
+/// A log named `name` in `dir`.
+fn log_named(
+    dir: &tempfile::TempDir,
+    name: &str,
+    max_segment_bytes: u64,
+    retain: u32,
+) -> Arc<TransparencyLogger> {
     let config = TransparencyLogConfig {
         enabled: true,
-        path: dir
-            .path()
-            .join("transparency.jsonl")
-            .to_string_lossy()
-            .into_owned(),
+        path: dir.path().join(name).to_string_lossy().into_owned(),
         key_id: "test".into(),
         shared_secret: String::new(),
         rotation: RotationConfig {
@@ -77,6 +83,35 @@ async fn state_with(
         },
     )
     .await
+}
+
+/// A control-plane store in `dir` over its own governance log, and that log:
+/// where a deny is recorded.
+fn governance_in(
+    dir: &tempfile::TempDir,
+) -> (
+    Arc<TransparencyLogger>,
+    Arc<dyn crate::control_plane::ControlPlaneStore>,
+) {
+    let log = log_named(dir, "governance.jsonl", 1 << 20, 4);
+    let store = crate::control_plane::FileControlPlaneStore::open(
+        dir.path().join("store"),
+        Arc::clone(&log),
+    )
+    .expect("the store opens");
+    (log, Arc::new(store))
+}
+
+/// [`state_with`], with `store` as its control-plane store.
+async fn state_with_store(
+    log: &Arc<TransparencyLogger>,
+    store: &Arc<dyn crate::control_plane::ControlPlaneStore>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
+    let (mut state, fixture) = state_with(log).await;
+    Arc::get_mut(&mut state)
+        .expect("a state no one holds yet")
+        .control_plane_store = Some(Arc::clone(store));
+    (state, fixture)
 }
 
 fn client(admin: bool) -> AuthenticatedClient {
@@ -143,7 +178,12 @@ async fn an_admin_is_served_the_open_decisions_and_no_one_else() {
     assert_eq!(body["error"], "decisions_unavailable", "{body}");
 
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, None, shutdown);
+    let _tick = start(
+        &state.meta_mcp,
+        None,
+        shutdown,
+        state.control_plane_store.clone(),
+    );
 
     // The note kept before start is replayed.
     let body = served_when(&state, |body| scope_len(body) == 1).await;
@@ -172,7 +212,12 @@ async fn a_request_whose_refusals_left_the_log_is_closed() {
     let log = log_in(&dir, 2048, 1);
     let (state, _store) = state_with(&log).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, None, shutdown);
+    let _tick = start(
+        &state.meta_mcp,
+        None,
+        shutdown,
+        state.control_plane_store.clone(),
+    );
     let now = crate::clock::utc_now().expect("a readable clock");
 
     write(
@@ -239,7 +284,12 @@ async fn a_reader_that_cannot_take_the_set_does_not_hold_up_an_append() {
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, None, shutdown);
+    let _tick = start(
+        &state.meta_mcp,
+        None,
+        shutdown,
+        state.control_plane_store.clone(),
+    );
     served_when(&state, |_| true).await;
 
     let release = hold_the_set(Arc::clone(state.meta_mcp.decisions().expect("attached"))).await;
@@ -263,7 +313,7 @@ async fn a_burst_past_the_queue_is_replayed_not_lost() {
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
     let files = tempfile::tempdir().expect("tempdir");
     let none = super::super::discovery_wiring_tests::Scripted::new(files.path(), &[]);
-    let _tick = start_with(&state.meta_mcp, None, shutdown, 1, none);
+    let _tick = start_with(&state.meta_mcp, None, shutdown, 1, none, None);
     served_when(&state, |_| true).await;
 
     let release = hold_the_set(Arc::clone(state.meta_mcp.decisions().expect("attached"))).await;
@@ -491,7 +541,12 @@ async fn the_count_is_the_lists_length_and_revision_for_an_admin_only() {
     assert_eq!(body["error"], "decisions_unavailable", "{body}");
 
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, None, shutdown);
+    let _tick = start(
+        &state.meta_mcp,
+        None,
+        shutdown,
+        state.control_plane_store.clone(),
+    );
     let list = served_when(&state, |body| scope_len(body) == 1).await;
 
     let (status, body) = count(&state, true).await;
@@ -545,26 +600,34 @@ fn deny_body(digest: &str) -> Value {
     json!({"action": "deny", "reason": "not needed", "scope_digest": digest})
 }
 
-/// A started gateway with one open access request; its id and digest.
-async fn one_request() -> (
-    Arc<AppState>,
+/// What a test keeps alive beside its state: the temp dir, the fixture's
+/// store dir and the governance log the deny is recorded in.
+type Kept = (
+    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
     Arc<TransparencyLogger>,
-    String,
-    String,
-    (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
-) {
+);
+
+/// A started gateway with one open access request; its id and digest.
+async fn one_request() -> (Arc<AppState>, Arc<TransparencyLogger>, String, String, Kept) {
     let dir = tempfile::tempdir().expect("dir");
     let log = log_in(&dir, 1 << 20, 12);
     let now = crate::clock::utc_now().expect("a readable clock");
     write(&log, note("stripe.charges", now));
-    let (state, store) = state_with(&log).await;
+    let (governance, cp_store) = governance_in(&dir);
+    let (state, store) = state_with_store(&log, &cp_store).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, None, shutdown);
+    let _tick = start(
+        &state.meta_mcp,
+        None,
+        shutdown,
+        state.control_plane_store.clone(),
+    );
     let body = served_when(&state, |body| scope_len(body) == 1).await;
     let item = &body["decisions"][0];
     let id = item["id"].as_str().expect("an id").to_owned();
     let digest = item["scope_digest"].as_str().expect("a digest").to_owned();
-    (state, log, id, digest, (dir, store))
+    (state, log, id, digest, (dir, store, governance))
 }
 
 #[tokio::test]
@@ -732,12 +795,15 @@ async fn one_more_refusal_of_a_listed_capability_is_a_changed_request() {
 
 // ---- deny ----
 
-/// The `ui_decision` notes the log kept, oldest first.
-fn kept_decisions(dir: &tempfile::TempDir) -> Vec<Value> {
-    let text = std::fs::read_to_string(dir.path().join("transparency.jsonl")).expect("the log");
-    text.lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|entry| entry["kind"] == "ui_decision")
+/// The UI decisions the governance audit kept, newest first.
+fn kept_decisions(state: &AppState) -> Vec<crate::control_plane::ControlPlaneAuditEvent> {
+    let store = state.control_plane_store.as_ref().expect("a store");
+    store
+        .read_audit(&crate::control_plane::AuditFilter::new(200))
+        .expect("the audit reads")
+        .events
+        .into_iter()
+        .filter(|event| event.ui_decision.is_some())
         .collect()
 }
 
@@ -746,29 +812,43 @@ fn open_count(body: &Value) -> usize {
 }
 
 #[tokio::test]
-async fn a_deny_writes_one_note_and_the_item_is_gone_now_and_after_a_restart() {
-    let (state, log, id, digest, (dir, _store)) = one_request().await;
+async fn a_deny_records_one_audit_event_and_the_item_is_gone_now_and_after_a_restart() {
+    let (state, log, id, digest, _keep) = one_request().await;
     let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["action"], "deny");
 
     let (_, listed) = get(&state, true).await;
     assert_eq!(open_count(&listed), 0, "gone at once: {listed}");
-    let notes = kept_decisions(&dir);
-    assert_eq!(notes.len(), 1, "one atomic note: {notes:?}");
-    assert_eq!(notes[0]["event_id"], body["event_id"]);
-    assert_eq!(notes[0]["decision"], "decline");
-    assert!(
-        notes[0].to_string().contains("decisions-route"),
-        "the note names the caller: {}",
-        notes[0]
+    let kept = kept_decisions(&state);
+    assert_eq!(kept.len(), 1, "one atomic record: {kept:?}");
+    assert_eq!(json!(kept[0].event_id), body["event_id"]);
+    assert_eq!(
+        kept[0].action,
+        crate::control_plane::ControlPlaneAction::MutateGrant
     );
+    let caller = super::super::control_plane::mutations::actor_from_client(
+        Some(&client(true)),
+        None,
+        &Default::default(),
+    );
+    assert_eq!(
+        kept[0].actor_id, caller.actor_id,
+        "the record names the caller"
+    );
+    assert_eq!(kept[0].reason, "not needed");
 
-    // A restart: a new set over the same log replays the refusal and the
+    // A restart: a new set over the same logs replays the refusal and the
     // decision, and the request stays closed.
-    let (state2, _store2) = state_with(&log).await;
+    let store = state.control_plane_store.clone().expect("a store");
+    let (state2, _store2) = state_with_store(&log, &store).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state2.meta_mcp, None, shutdown);
+    let _tick = start(
+        &state2.meta_mcp,
+        None,
+        shutdown,
+        state2.control_plane_store.clone(),
+    );
     let after = served_when(&state2, |body| body["missing_kinds"] == json!([])).await;
     assert_eq!(open_count(&after), 0, "closed after the replay: {after}");
 }
@@ -815,18 +895,25 @@ async fn a_reopened_request_can_be_denied_again() {
     assert_ne!(second["event_id"], first["event_id"]);
     let (_, listed) = get(&state, true).await;
     assert_eq!(open_count(&listed), 0, "{listed}");
+    assert_eq!(kept_decisions(&state).len(), 2);
 }
 
 #[tokio::test]
-async fn a_deny_of_a_two_capability_request_closes_both_in_one_note() {
+async fn a_deny_of_a_two_capability_request_closes_both_in_one_record() {
     let dir = tempfile::tempdir().expect("dir");
     let log = log_in(&dir, 1 << 20, 12);
     let now = crate::clock::utc_now().expect("a readable clock");
     write(&log, note("stripe.charges", now));
     write(&log, note("stripe.refunds", now));
-    let (state, _store) = state_with(&log).await;
+    let (_governance, cp_store) = governance_in(&dir);
+    let (state, _store) = state_with_store(&log, &cp_store).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, None, shutdown);
+    let _tick = start(
+        &state.meta_mcp,
+        None,
+        shutdown,
+        state.control_plane_store.clone(),
+    );
     let body = served_when(&state, |body| scope_len(body) == 2).await;
     let id = body["decisions"][0]["id"].as_str().expect("id").to_owned();
     let digest = body["decisions"][0]["scope_digest"]
@@ -838,9 +925,10 @@ async fn a_deny_of_a_two_capability_request_closes_both_in_one_note() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let (_, listed) = get(&state, true).await;
     assert_eq!(open_count(&listed), 0, "{listed}");
-    let notes = kept_decisions(&dir);
-    assert_eq!(notes.len(), 1, "{notes:?}");
-    assert_eq!(notes[0]["entries"].as_array().map(Vec::len), Some(2));
+    let kept = kept_decisions(&state);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    let decision = kept[0].ui_decision.as_ref().expect("a decision");
+    assert_eq!(decision.entries.len(), 2);
 
     // A later refusal of one capability reopens only that one.
     write(&log, note("stripe.refunds", now));
@@ -848,46 +936,27 @@ async fn a_deny_of_a_two_capability_request_closes_both_in_one_note() {
     assert_eq!(scope_len(&body), 1, "{body}");
 }
 
-/// A deny whose note cannot be appended answers 503 `audit_unavailable`,
+/// A deny whose record cannot be appended answers 503 `audit_unavailable`,
 /// closes nothing and records no outcome, so the next deny writes it.
 #[tokio::test]
-async fn a_deny_whose_note_cannot_be_written_closes_nothing() {
-    let (state, log, id, digest, (dir, _store)) = one_request().await;
-    log.fail_next_append_of_kind_for_test("ui_decision");
+async fn a_deny_whose_record_cannot_be_written_closes_nothing() {
+    let (state, _log, id, digest, (_dir, _store, governance)) = one_request().await;
+    governance.fail_next_append_of_kind_for_test("control_plane_audit");
     let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["error"], "audit_unavailable");
     let (_, listed) = get(&state, true).await;
     assert_eq!(open_count(&listed), 1, "still open: {listed}");
-    assert!(kept_decisions(&dir).is_empty(), "nothing written");
+    assert!(kept_decisions(&state).is_empty(), "nothing written");
 
     let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
     assert_eq!(status, StatusCode::OK, "the next deny writes it: {body}");
-    assert_eq!(kept_decisions(&dir).len(), 1);
-}
-
-/// The downgrade row: a gateway without the deny reads this log by the
-/// grant-decision kind only, so a deny note is never one of its records and
-/// its read does not fail on it.
-#[tokio::test]
-async fn an_older_gateway_reads_past_a_deny_note() {
-    let (state, _log, id, digest, (dir, _store)) = one_request().await;
-    let (status, _) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(kept_decisions(&dir).len(), 1, "the deny note is in the log");
-    let mut kinds = Vec::new();
-    replay::records(
-        &dir.path().join("transparency.jsonl"),
-        GRANT_DECISION_KIND,
-        |record, _| kinds.push(record.get("kind").cloned()),
-    )
-    .expect("the older read succeeds");
-    assert_eq!(kinds.len(), 1, "only the refusal: {kinds:?}");
+    assert_eq!(kept_decisions(&state).len(), 1);
 }
 
 #[tokio::test]
 async fn a_retry_of_a_deny_answers_the_recorded_outcome_and_writes_nothing() {
-    let (state, _log, id, digest, (dir, _store)) = one_request().await;
+    let (state, _log, id, digest, _keep) = one_request().await;
     let (status, first) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
     assert_eq!(status, StatusCode::OK);
 
@@ -895,7 +964,7 @@ async fn a_retry_of_a_deny_answers_the_recorded_outcome_and_writes_nothing() {
     assert_eq!(status, StatusCode::OK, "{again}");
     assert_eq!(again["event_id"], first["event_id"]);
     assert_eq!(again["already_recorded"], json!(true));
-    assert_eq!(kept_decisions(&dir).len(), 1, "a retry appends nothing");
+    assert_eq!(kept_decisions(&state).len(), 1, "a retry appends nothing");
 
     let other = "1".repeat(64);
     let (status, body) = resolve(&state, true, &id, deny_body(&other).to_string()).await;

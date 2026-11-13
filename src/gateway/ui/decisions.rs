@@ -28,17 +28,21 @@ use super::control_plane::mutations::admitted_actor;
 use super::guard::Guard;
 use crate::capability::CapabilityBackend;
 use crate::config_reload::Generation;
-use crate::control_plane::ControlPlaneRbac;
+use crate::control_plane::{
+    AuditFilter, ControlPlaneAction, ControlPlaneAuditEvent, ControlPlaneRbac,
+    ControlPlaneRollbackPlan, ControlPlaneStore,
+};
 use crate::decisions::{
     CapabilityChange, DecisionSet, Fold, GRANT_DECISION_KIND, Health, LogPos, Lookup, OpenRequest,
-    Outcome, Shared, Source, UI_DECISION_KIND, decisions_from_record, decisions_of,
-    denial_from_record, event_id, record_fields,
+    Outcome, Shared, Source, decision_record, decisions_from_record, decisions_of,
+    denial_from_record, event_id,
 };
 use crate::discovery::config_scanner::ConfigScanner;
 use crate::discovery::listing::{CACHE_WINDOW, ClientFiles, DiscoveryCache, Listing, ScanSource};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
+use crate::identity_grants::IdentityGrantAuditEvent;
 
 /// How often the tick re-checks grants, expiry and capability changes.
 const TICK: Duration = Duration::from_secs(2);
@@ -290,10 +294,10 @@ fn answer_again(done: &Outcome, request: &ResolveRequest) -> Response {
 /// The most refusals one deny note names: it must fit one log record.
 const MAX_DENY_POSITIONS: usize = 20_000;
 
-/// Deny `open`: write one note naming every refusal the admin was shown,
-/// then fold it into the set. The write and the fold run with no await
-/// between them, so a dropped request cannot leave a note the set does not
-/// know; the log's own delivery of the note later changes nothing.
+/// Deny `open`: write one governance audit record naming every refusal the
+/// admin was shown, then fold it into the set. The write and the fold run
+/// with no await between them, so a dropped request cannot leave a record
+/// the set does not know; a replay of the record later changes nothing.
 fn deny(
     state: &AppState,
     decisions: &Shared,
@@ -314,22 +318,28 @@ fn deny(
             "too many refusals to resolve at once",
         );
     }
-    let (Some(log), Ok(now)) = (
-        state.meta_mcp.transparency_logger.as_ref(),
-        crate::clock::utc_now(),
-    ) else {
+    let Some(store) = state.control_plane_store.as_ref() else {
         return audit_unavailable();
     };
     let event_id = event_id(open);
-    let fields = record_fields(
-        open,
-        request.reason.trim(),
-        &request.scope_digest,
-        &event_id,
-        now,
-    );
-    let envelope = crate::security::audit::AuditEnvelope::governance(&actor.actor_id);
-    if log.append_event(fields, &envelope).is_err() {
+    // The admin audit stream every grant decision goes to, under the
+    // grant-mutation action: who denied what sits beside who granted what.
+    let event = ControlPlaneAuditEvent {
+        event_id: event_id.clone(),
+        actor_id: actor.actor_id.clone(),
+        action: ControlPlaneAction::MutateGrant,
+        target_id: format!("access_request:{}", open.agent),
+        reason: request.reason.trim().to_owned(),
+        rollback: ControlPlaneRollbackPlan {
+            summary: "a decline grants and revokes nothing".to_owned(),
+            step:
+                "grant the capability to allow the agent; a later refusal also reopens the request"
+                    .to_owned(),
+        },
+        grant_change: None,
+        ui_decision: Some(decision_record(open, &request.scope_digest)),
+    };
+    if store.append_audit(&event).is_err() {
         return audit_unavailable();
     }
     decisions.update(|set| set.apply_decisions(decisions_of(open)));
@@ -380,14 +390,17 @@ const LIVE_QUEUE: usize = 4096;
 /// Build the decision set for `meta`, start its replay, its tick and the
 /// client-file discovery cache's refresh, and attach both. Each ends on
 /// `shutdown`. `config_path` is the gateway.yaml the discovery route reads,
-/// so the set judges adopt eligibility against the same file.
+/// so the set judges adopt eligibility against the same file. `store` is
+/// the control-plane store whose governance audit holds the UI decisions;
+/// without one no decision can have been recorded.
 pub(in crate::gateway) fn start(
     meta: &Arc<MetaMcp>,
     config_path: Option<PathBuf>,
     shutdown: tokio::sync::broadcast::Receiver<()>,
+    store: Option<Arc<dyn ControlPlaneStore>>,
 ) -> tokio::task::JoinHandle<()> {
     let files: Arc<dyn ScanSource> = Arc::new(ClientFiles(ConfigScanner::new()));
-    start_with(meta, config_path, shutdown, LIVE_QUEUE, files)
+    start_with(meta, config_path, shutdown, LIVE_QUEUE, files, store)
 }
 
 /// [`start`] over a given client-file scan source.
@@ -398,7 +411,7 @@ pub(in crate::gateway) fn start_with_source(
     shutdown: tokio::sync::broadcast::Receiver<()>,
     source: Arc<dyn ScanSource>,
 ) -> tokio::task::JoinHandle<()> {
-    start_with(meta, config_path, shutdown, LIVE_QUEUE, source)
+    start_with(meta, config_path, shutdown, LIVE_QUEUE, source, None)
 }
 
 /// [`start`] with a hand-off queue of `queue` notes, over `files`.
@@ -408,13 +421,17 @@ fn start_with(
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
     queue: usize,
     files: Arc<dyn ScanSource>,
+    store: Option<Arc<dyn ControlPlaneStore>>,
 ) -> tokio::task::JoinHandle<()> {
     let config_path: Option<Arc<Path>> = config_path.map(Arc::from);
     let shared = Arc::new(Shared::with_key(rand::rng().random()));
     meta.set_decisions(Arc::clone(&shared));
-    // UI decisions are notes in the transparency log (the Access source); no
-    // record is read from the control-plane audit, so that source is ready.
-    shared.update(|set| set.set_health(Source::ControlPlane, Health::Ready));
+    match store {
+        None => shared.update(|set| set.set_health(Source::ControlPlane, Health::Absent)),
+        Some(store) => {
+            tokio::spawn(replay_ui_decisions_until_ready(store, Arc::clone(&shared)));
+        }
+    }
     let latest = start_discovery(
         meta,
         &shared,
@@ -433,39 +450,14 @@ fn start_with(
             // is the same record by its entry hash. The reader runs under
             // the log's lock, so it only hands off: no lock, no wait.
             let full = Arc::clone(&dropped);
-            let denials = sender.clone();
             log.subscribe(
                 GRANT_DECISION_KIND,
                 Arc::new(
                     move |record: &Map<String, Value>, hash: &str, counter: u64| {
                         if let Some(event) = denial_from_record(record)
-                            && denials
-                                .try_send((grant_pos(hash, counter), Fold::Denial(event)))
-                                .is_err()
+                            && sender.try_send((grant_pos(hash, counter), event)).is_err()
                         {
                             full.mark();
-                        }
-                    },
-                ),
-            );
-            // A deny is a note in the same log, so a refusal and the decision
-            // that closed it leave at one retention edge. One note carries a
-            // decision per capability; each is folded at the note's position.
-            let full = Arc::clone(&dropped);
-            log.subscribe(
-                UI_DECISION_KIND,
-                Arc::new(
-                    move |record: &Map<String, Value>, hash: &str, counter: u64| {
-                        let Some(decisions) = decisions_from_record(record) else {
-                            return;
-                        };
-                        for decision in decisions {
-                            if sender
-                                .try_send((grant_pos(hash, counter), Fold::Decided(decision)))
-                                .is_err()
-                            {
-                                full.mark();
-                            }
                         }
                     },
                 ),
@@ -522,7 +514,7 @@ impl Dropped {
 /// make the count wrong, so the source reads unavailable (the snapshot
 /// answers `None`) until a replay has read the log again.
 async fn apply_live(
-    mut receiver: tokio::sync::mpsc::Receiver<(LogPos, Fold)>,
+    mut receiver: tokio::sync::mpsc::Receiver<(LogPos, IdentityGrantAuditEvent)>,
     dropped: Arc<Dropped>,
     replays: Arc<Replays>,
 ) {
@@ -531,7 +523,7 @@ async fn apply_live(
         tokio::select! {
             note = receiver.recv() => {
                 let Some((pos, event)) = note else { return };
-                shared.update(|set| set.live(pos, event));
+                shared.update(|set| set.live(pos, Fold::Denial(event)));
             }
             () = dropped.wake.notified() => {}
         }
@@ -582,6 +574,60 @@ async fn replay_until_ready(replays: Arc<Replays>) {
     }
 }
 
+/// Replay the UI decisions until the control-plane source is ready: a read
+/// that fails runs again after a wait that doubles up to
+/// [`REPLAY_RETRY_MAX`]. Until then the set is unreadable, so no resolve can
+/// record a decision this replay misses; every later one the route folds
+/// itself.
+async fn replay_ui_decisions_until_ready(store: Arc<dyn ControlPlaneStore>, shared: Arc<Shared>) {
+    let mut wait = Duration::from_secs(1);
+    loop {
+        let (store, set) = (Arc::clone(&store), Arc::clone(&shared));
+        let read = tokio::task::spawn_blocking(move || replay_ui_decisions(store.as_ref(), &set))
+            .await
+            .unwrap_or(false);
+        if read {
+            shared.update(|set| set.replay_done(Source::ControlPlane));
+            return;
+        }
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(REPLAY_RETRY_MAX);
+    }
+}
+
+/// Page through the governance audit, newest first, folding every UI
+/// decision it holds. Whether the whole audit was read.
+fn replay_ui_decisions(store: &dyn ControlPlaneStore, shared: &Shared) -> bool {
+    let filter = AuditFilter {
+        action: Some(ControlPlaneAction::MutateGrant),
+        ..AuditFilter::new(1000)
+    };
+    let mut page_filter = filter.clone();
+    loop {
+        let page = match store.read_audit(&page_filter) {
+            Ok(page) => page,
+            Err(error) => {
+                tracing::warn!(%error, "decisions: the governance audit could not be read; retrying");
+                return false;
+            }
+        };
+        let decisions: Vec<_> = page
+            .events
+            .iter()
+            .filter_map(|event| event.ui_decision.as_ref())
+            .filter_map(decisions_from_record)
+            .flatten()
+            .collect();
+        if !decisions.is_empty() {
+            shared.update(|set| set.apply_decisions(decisions));
+        }
+        match page.next_cursor {
+            Some(cursor) => page_filter = filter.resume(cursor),
+            None => return true,
+        }
+    }
+}
+
 /// Read every kept grant-decision record into the set, then mark the
 /// source ready, which applies the notes held meanwhile. Whether it became
 /// ready: not if the read failed or a held note was dropped meanwhile.
@@ -595,26 +641,6 @@ fn replay_grant_decisions(path: &Path, shared: &Shared) -> bool {
         ) {
             shared.update(|set| set.replayed(grant_pos(hash, counter), Fold::Denial(event)));
         }
-    });
-    // The decisions are in the same log; read after the refusals, though a
-    // decision is order-independent.
-    let read = read.and_then(|denials| {
-        replay::records(path, UI_DECISION_KIND, |record, hash| {
-            if let (Some(decisions), Some(counter)) = (
-                decisions_from_record(record),
-                record.get("counter").and_then(Value::as_u64),
-            ) {
-                for decision in decisions {
-                    shared.update(|set| {
-                        set.replayed(grant_pos(hash, counter), Fold::Decided(decision));
-                    });
-                }
-            }
-        })
-        .map(|decided| replay::Replayed {
-            records: denials.records + decided.records,
-            unreadable: denials.unreadable + decided.unreadable,
-        })
     });
     match read {
         Ok(replayed) => {

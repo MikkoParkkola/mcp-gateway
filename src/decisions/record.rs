@@ -1,25 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The note a deny writes into the transparency log, and its reading back.
+//! The decline a deny records in the governance audit log, and its reading
+//! back.
 //!
-//! It goes in the log that holds the refusals it closes, so both leave at the
-//! same retention edge: a deny never outlives, or is outlived by, the
-//! refusals it covers. One note carries every open capability of the request
-//! with the exact refusal positions the admin was shown.
+//! One record carries every open capability of the request with the exact
+//! refusal positions the admin was shown, so a later refusal of the same
+//! capability has another position and opens the request again.
 
-use std::collections::BTreeSet;
-
-use chrono::{DateTime, Utc};
-use serde_json::{Map, Value, json};
+use crate::control_plane::{UiDecisionEntry, UiDecisionRecord};
 
 use super::items::OpenRequest;
 use super::{LogPos, Source, UiDecision};
-
-/// The record kind of a UI decision in the transparency log.
-pub(crate) const UI_DECISION_KIND: &str = "ui_decision";
-
-/// The decision a deny records.
-const DECLINE: &str = "decline";
 
 /// The same deny of the same refusals is the same id, from any process: a
 /// SHA-256 over a domain separator, the subject and agent, and every
@@ -52,46 +43,6 @@ pub(crate) fn event_id(request: &OpenRequest) -> String {
     crate::hashing::sha256_hex(&bytes)
 }
 
-/// The note's fields for a deny of `request` with `reason`, at the scope
-/// `digest` the admin saw. The logger adds the principal and the chain.
-pub(crate) fn record_fields(
-    request: &OpenRequest,
-    reason: &str,
-    digest: &str,
-    id: &str,
-    at: DateTime<Utc>,
-) -> Map<String, Value> {
-    let entries: Vec<Value> = request
-        .entries
-        .iter()
-        .map(|(capability, positions)| {
-            json!({
-                "capability": capability,
-                "positions": positions
-                    .iter()
-                    .map(|pos| json!({"entry": pos.entry, "counter": pos.counter}))
-                    .collect::<Vec<_>>(),
-            })
-        })
-        .collect();
-    let mut fields = Map::new();
-    for (key, value) in [
-        ("kind", json!(UI_DECISION_KIND)),
-        ("event_id", json!(id)),
-        ("timestamp", json!(at.to_rfc3339())),
-        ("decision", json!(DECLINE)),
-        ("authority", json!(request.authority)),
-        ("subject", json!(request.subject)),
-        ("agent", json!(request.agent)),
-        ("reason", json!(reason)),
-        ("request_digest", json!(digest)),
-        ("entries", Value::Array(entries)),
-    ] {
-        fields.insert(key.to_owned(), value);
-    }
-    fields
-}
-
 /// What a deny of `request` folds into the set: one decision per open
 /// capability, each closing exactly its positions.
 pub(crate) fn decisions_of(request: &OpenRequest) -> Vec<UiDecision> {
@@ -108,43 +59,51 @@ pub(crate) fn decisions_of(request: &OpenRequest) -> Vec<UiDecision> {
         .collect()
 }
 
-/// A written deny read back into its decisions, live or replayed alike;
-/// `None` for a record that is not a well-formed decline.
-pub(crate) fn decisions_from_record(record: &Map<String, Value>) -> Option<Vec<UiDecision>> {
-    let text = |key: &str| record.get(key).and_then(Value::as_str);
-    if text("decision")? != DECLINE {
+/// The record of a deny of `request`, at the scope `digest` the admin saw.
+pub(crate) fn decision_record(request: &OpenRequest, digest: &str) -> UiDecisionRecord {
+    UiDecisionRecord {
+        authority: request.authority.clone(),
+        subject: request.subject.clone(),
+        agent: request.agent.clone(),
+        scope_digest: digest.to_owned(),
+        entries: request
+            .entries
+            .iter()
+            .map(|(capability, positions)| UiDecisionEntry {
+                capability: capability.clone(),
+                positions: positions
+                    .iter()
+                    .map(|pos| (pos.entry.clone(), pos.counter))
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+/// A recorded deny read back into its decisions; `None` for a record that
+/// names no capability, or a capability with no refusal.
+pub(crate) fn decisions_from_record(record: &UiDecisionRecord) -> Option<Vec<UiDecision>> {
+    if record.entries.is_empty() {
         return None;
     }
-    let (authority, subject, agent) = (text("authority")?, text("subject")?, text("agent")?);
-    let entries = record.get("entries")?.as_array()?;
-    if entries.is_empty() {
-        return None;
-    }
-    entries
+    record
+        .entries
         .iter()
         .map(|entry| {
-            let positions: Option<BTreeSet<LogPos>> = entry
-                .get("positions")?
-                .as_array()?
-                .iter()
-                .map(|pos| {
-                    Some(LogPos {
+            (!entry.positions.is_empty()).then(|| UiDecision {
+                authority: record.authority.clone(),
+                subject: record.subject.clone(),
+                agent: record.agent.clone(),
+                capability: entry.capability.clone(),
+                closes: entry
+                    .positions
+                    .iter()
+                    .map(|(hash, counter)| LogPos {
                         log: Source::Access,
-                        entry: pos.get("entry")?.as_str()?.to_owned(),
-                        counter: pos.get("counter")?.as_u64()?,
+                        entry: hash.clone(),
+                        counter: *counter,
                     })
-                })
-                .collect();
-            let positions = positions?;
-            if positions.is_empty() {
-                return None;
-            }
-            Some(UiDecision {
-                authority: authority.to_owned(),
-                subject: subject.to_owned(),
-                agent: agent.to_owned(),
-                capability: entry.get("capability")?.as_str()?.to_owned(),
-                closes: positions,
+                    .collect(),
             })
         })
         .collect()
