@@ -41,7 +41,7 @@ server:
 auth:
   enabled: false
 key_server:
-  enabled: true
+  enabled: false
 security:
   transparency_log:
     enabled: true
