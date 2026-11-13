@@ -313,3 +313,25 @@ fn drain_parks_invalid() {
     assert_eq!(rig.drain(), Err(DrainError::Parked), "{ROW}: never resent");
     assert_eq!(rig.file(), Some(parked), "{ROW}: the file is unchanged");
 }
+
+/// The handover admits a token whose terminal is already frozen even when its intent payload
+/// does not parse, so the drain must accept that file too: the record parks on delivery, it is
+/// not refused as a shape the handover could never have written.
+#[test]
+fn drain_parks_prefrozen_unparseable() {
+    const ROW: &str = "drain_parks_prefrozen_unparseable";
+    let mut rig = drain_rig(ROW, |donor| {
+        donor
+            .writer
+            .as_mut()
+            .expect("fixture writer")
+            .intent
+            .payload_json = b"not json".to_vec();
+    });
+    assert_eq!(
+        rig.drain(),
+        Err(DrainError::Parked),
+        "{ROW}: parked, not refused"
+    );
+    assert!(rig.file().is_some(), "{ROW}: the file is kept");
+}
