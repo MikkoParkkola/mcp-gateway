@@ -153,13 +153,13 @@ pub fn run_init_command(
     }
     let config_content = build_init_config(with_examples, profile, &starter);
 
-    match write_init_files(output, &config_content, &sample_files) {
-        Ok(()) => {
-            print_init_success(output, profile, !sample_files.is_empty());
+    match mcp_gateway::cli_support::write_init_files(output, &config_content, &sample_files) {
+        Ok(reference) => {
+            print_init_success(output, profile, !sample_files.is_empty(), &reference);
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("Error: Failed to write {}: {e}", output.display());
+            eprintln!("Error: {e}");
             ExitCode::FAILURE
         }
     }
@@ -222,7 +222,7 @@ fn build_init_config(with_examples: bool, profile: InitProfile, starter: &str) -
             "# On Unix this file is written readable only by you. Do not commit it.\n",
             "auth:\n",
             "  enabled: true\n",
-            "  bearer_token: \"{admin_token}\"\n",
+            "  bearer_token: \"\"\n",
             "  single_user: true\n",
             "  public_paths:\n",
             "    - \"/health\"\n",
@@ -250,10 +250,6 @@ fn build_init_config(with_examples: bool, profile: InitProfile, starter: &str) -
         } else {
             format!("\n{starter}")
         },
-        // Generated rather than asked for: a setup step the operator must
-        // perform is a step most will skip, and the gateway would then have no
-        // admin path at all. The prefix makes it recognisable in a log or a paste.
-        admin_token = crate::random_secret::random_secret("mcpgw_"),
     )
 }
 
@@ -306,42 +302,12 @@ fn preflight_init_targets(
     Ok(())
 }
 
-fn write_init_files(
+fn print_init_success(
     output: &std::path::Path,
-    config_content: &str,
-    sample_files: &[(std::path::PathBuf, &'static str)],
-) -> std::io::Result<()> {
-    if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    for (path, _) in sample_files {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
-
-    // Through the config writer, not `std::fs::write`: this file now carries a
-    // generated admin credential, and a plain write leaves it at the umask for
-    // any other local account to read. Under the config lock, create only: a
-    // config another writer made after the exists check is kept (MIK-8042).
-    mcp_gateway::config_persistence::edit_config_text(output, |current| match current {
-        None => Ok(Some(config_content.to_owned())),
-        Some(_) => Err(format!(
-            "{} was created while init ran; it is left as it is",
-            output.display()
-        )),
-    })
-    .map_err(std::io::Error::other)?;
-
-    for (path, content) in sample_files {
-        std::fs::write(path, content)?;
-    }
-
-    Ok(())
-}
-
-fn print_init_success(output: &std::path::Path, profile: InitProfile, wrote_samples: bool) {
+    profile: InitProfile,
+    wrote_samples: bool,
+    reference: &str,
+) {
     println!("Created {}", output.display());
     println!("Profile: {profile}");
     if wrote_samples {
@@ -352,10 +318,25 @@ fn print_init_success(output: &std::path::Path, profile: InitProfile, wrote_samp
     // one thing in this file the operator has to know exists: management and the
     // dashboard need it, tool calls do not. Saying so here reaches the person
     // who never opens the docs.
-    println!("An admin credential was generated and written into that file,");
-    println!("which on Unix is readable only by you. Tool calls do not need it;");
+    println!("An admin credential was generated in the secret store.");
+    println!("Doctor shows its reference on the admin-token line. Tool calls do not need it;");
     println!("managing the gateway and opening the dashboard do. `serve` prints");
     println!("a single-use dashboard link on startup.");
+    if reference.starts_with("keychain:") {
+        println!("Stored in: the OS keychain");
+    } else if let Some(dir) = reference
+        .strip_prefix("file:")
+        .and_then(|path| std::path::Path::new(path).parent())
+    {
+        println!("Stored in: owner-only files under {}", dir.display());
+    }
+    if let Ok(value) = std::env::var("MCP_GATEWAY_SECRETS__STORE")
+        && !value.is_empty()
+    {
+        println!(
+            "MCP_GATEWAY_SECRETS__STORE={value} applied to this run only; gateway.yaml keeps its own setting"
+        );
+    }
     println!();
     println!("Next steps:");
     println!("  1. Run diagnostics:");
@@ -642,8 +623,8 @@ mod admin_credential_tests {
         let config = build_init_config(true, InitProfile::Local, "");
         assert!(config.contains("enabled: true"), "auth must be on");
         assert!(
-            config.contains("mcpgw_"),
-            "a credential must be generated, not left blank: {config}"
+            config.contains("bearer_token: \"\""),
+            "the template must leave credential generation to the writer: {config}"
         );
         assert!(
             config.contains("single_user: true"),

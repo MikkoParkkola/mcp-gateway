@@ -26,19 +26,12 @@ const PENDING: &[&str] = &[
     "src/events/services_audit_tests.rs",
     "src/events/subscribe_order_tests.rs",
     "src/gateway/meta_mcp/account_direct_bridge_fence_tests.rs",
-    "src/gateway/meta_mcp/account_rest_fixture.rs",
     "src/gateway/meta_mcp/audit_record_tests.rs",
     "src/gateway/meta_mcp/audit_record_tests/canary.rs",
     "src/gateway/meta_mcp/audit_record_tests/chain_replay.rs",
     "src/gateway/meta_mcp/audit_record_tests/decision_kinds.rs",
     "src/gateway/meta_mcp/audit_record_tests/tenants.rs",
-    "src/gateway/meta_mcp/cache_read_only_slot_tests.rs",
     "src/gateway/meta_mcp/callback_admin_denial_tests.rs",
-    "src/gateway/meta_mcp/caller_forward_identity_tests.rs",
-    "src/gateway/meta_mcp/catalogue_per_caller_tests.rs",
-    "src/gateway/meta_mcp/catalogue_stateless_oauth_guard_tests.rs",
-    "src/gateway/meta_mcp/chain_resume_binding_tests.rs",
-    "src/gateway/meta_mcp/grant_slot_wrap_tests.rs",
     "src/gateway/meta_mcp/invoke/audit_settlement_tests.rs",
     "src/gateway/meta_mcp/invoke/ci_rewrite_gate_tests.rs",
     "src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests.rs",
@@ -48,37 +41,10 @@ const PENDING: &[&str] = &[
     "src/gateway/meta_mcp/response_delivery_tests.rs",
     "src/gateway/meta_mcp/response_security/delivery_record_tests.rs",
     "src/gateway/meta_mcp/signing_delivery_tests.rs",
-    "src/gateway/meta_mcp/slot_verdict_fixture.rs",
-    "src/gateway/meta_mcp/trace_correlation_tests.rs",
-    "src/gateway/meta_mcp/upstream_401_direct_tests.rs",
     "src/gateway/outbound/caller_key_record_tests.rs",
     "src/gateway/outbound/coverage_tests.rs",
     "src/gateway/outbound/stdio_tests.rs",
-    "src/gateway/proxy_session_tests.rs",
     "src/gateway/record_principal_scan_tests.rs",
-    "src/gateway/router/backend_handlers/direct_audit_subject_tests.rs",
-    "src/gateway/router/backend_handlers/tests.rs",
-    "src/gateway/router/collusion_direct_tests/meta.rs",
-    "src/gateway/router/collusion_direct_tests/verdict.rs",
-    "src/gateway/router/direct_anonymous_continuation_tests.rs",
-    "src/gateway/router/direct_guards_fixture_quota.rs",
-    "src/gateway/router/direct_lent_arms_tests.rs",
-    "src/gateway/router/direct_list_scope_tests.rs",
-    "src/gateway/router/direct_notification_credential_tests.rs",
-    "src/gateway/router/direct_notification_refusal_tests.rs",
-    "src/gateway/router/direct_notification_slot_tests.rs",
-    "src/gateway/router/direct_notification_wire_tests.rs",
-    "src/gateway/router/direct_sole_operator_tests.rs",
-    "src/gateway/router/e5_dashboard_session_tests.rs",
-    "src/gateway/router/handlers/tasks/frame_subject_tests.rs",
-    "src/gateway/router/lend_refusal_tests.rs",
-    "src/gateway/router/meta_refusal_audit_tests.rs",
-    "src/gateway/router/oracle_capability_tests.rs",
-    "src/gateway/router/overview_tests.rs",
-    "src/gateway/router/r2_identity_keys_tests.rs",
-    "src/gateway/router/slot_verdict_g2_managed_http_tests.rs",
-    "src/gateway/router/sso_admin_tests/admin_action.rs",
-    "src/gateway/router/tests/meta_state_fixtures.rs",
     "src/gateway/streaming_tests.rs",
     "src/gateway/task_service/execution/upstream/recovered_rewrite_record_tests.rs",
     "src/gateway/ui/activity/export_tests.rs",
@@ -90,7 +56,6 @@ const PENDING: &[&str] = &[
     "src/gateway/ui/decisions_tests.rs",
     "src/gateway/ui/discovery_adopt_route_tests.rs",
     "src/gateway/ui/keys_tests.rs",
-    "src/identity_propagation/account_strategies_tests.rs",
     "src/identity_propagation/audit_fail_closed_tests.rs",
     "src/security/audit_tests.rs",
     "src/security/tenant_read_corpus_tests.rs",
@@ -114,19 +79,64 @@ fn is_test(rel: &str) -> bool {
 /// Whether `text` opens a log and never keeps a directory for one.
 /// A file opens a log without keeping its dir: it neither hands the log its
 /// dir (`keep_test_dir`) nor opens it in a registered one (a `kept_tempdir(`
-/// or `kept_tempdir_in(` call; a mention in prose does not count).
+/// or `kept_tempdir_in(` call), nor uses only `TempLog`s for its temp dirs.
 fn unkept(text: &str) -> bool {
     text.contains("TransparencyLogger::open")
         && !text.contains("keep_test_dir")
         && !text.contains("kept_tempdir(")
         && !text.contains("kept_tempdir_in(")
+        && !temp_log_only(text)
+}
+
+/// A real `TempLog` construction keeps its dir, but cannot vouch for a plain
+/// constructor elsewhere in the file. Keep evidence excludes prose; plain
+/// constructor evidence deliberately includes it, making the scan stricter.
+fn temp_log_only(text: &str) -> bool {
+    crate::test_source_text::sanitize(text).contains("TempLog::new(") && !plain_temp_dir(text)
+}
+
+/// Whether `text` makes a temp dir of its own, by any of the plain
+/// constructors. The match is on raw source, prose included: stricter, never
+/// looser.
+fn plain_temp_dir(text: &str) -> bool {
+    [
+        "tempdir(",
+        "tempdir_in(",
+        "TempDir::new",
+        "TempDir::with_",
+        "NamedTempFile",
+        "tempfile(",
+        "tempfile_in(",
+        "temp_dir(",
+    ]
+    .iter()
+    .any(|constructor| {
+        text.match_indices(*constructor).any(|(at, _)| {
+            text[..at]
+                .bytes()
+                .next_back()
+                .is_none_or(|c| c.is_ascii() && !c.is_ascii_alphanumeric() && c != b'_')
+        })
+    })
 }
 
 fn test_sources(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
+    sources_where(dir, root, out, &|rel| {
+        is_test(rel) && !rel.starts_with(EXEMPT_PREFIX)
+    });
+}
+
+/// Every `.rs` source under `dir` whose root-relative path `wanted` accepts.
+fn sources_where(
+    dir: &std::path::Path,
+    root: &std::path::Path,
+    out: &mut Vec<(String, String)>,
+    wanted: &dyn Fn(&str) -> bool,
+) {
     for entry in std::fs::read_dir(dir).expect("read source dir") {
         let path = entry.expect("dir entry").path();
         if path.is_dir() {
-            test_sources(&path, root, out);
+            sources_where(&path, root, out, wanted);
             continue;
         }
         let rel = path
@@ -134,7 +144,10 @@ fn test_sources(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(St
             .expect("under root")
             .to_string_lossy()
             .replace('\\', "/");
-        if is_test(&rel) && !rel.starts_with(EXEMPT_PREFIX) {
+        let is_rust = std::path::Path::new(&rel)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
+        if is_rust && wanted(&rel) {
             out.push((rel, std::fs::read_to_string(&path).expect("read source")));
         }
     }
@@ -183,4 +196,116 @@ fn the_scan_tells_a_kept_log_from_an_unkept_one() {
     assert!(!unkept(
         "let dir = kept_tempdir_in(parent);\nlet log = TransparencyLogger::open(cfg).unwrap();"
     ));
+    // R15: TempLog alone keeps the directory a log opens in.
+    assert!(!unkept(
+        "let file = TempLog::new();\nlet log = TransparencyLogger::open(cfg).unwrap();"
+    ));
+    // R16: a TempLog cannot vouch for another, plain temporary directory.
+    for constructor in [
+        "tempfile::tempdir()",
+        "tempdir_in(parent)",
+        "tempfile::TempDir::new()",
+        "tempfile::NamedTempFile::new()",
+        "tempfile::Builder::new().tempdir()",
+        "tempfile::TempDir::with_prefix(\"x\")",
+        "tempfile::TempDir::with_suffix_in(\"x\", parent)",
+        "tempfile::Builder::new().tempfile()",
+        "tempfile::Builder::new().tempfile_in(parent)",
+        "tempfile::tempfile()",
+        "std::env::temp_dir()",
+    ] {
+        assert!(unkept(&format!(
+            "let file = TempLog::new();\nlet dir = {constructor};\n\
+             let log = TransparencyLogger::open(cfg).unwrap();"
+        )));
+    }
+    // R17: a comment or literal is not evidence that a TempLog was built.
+    for prose in [
+        "// TempLog::new()\n",
+        "/* TempLog::new() */",
+        "let prose = \"TempLog::new()\";",
+        "let prose = r#\"TempLog::new()\"#;",
+    ] {
+        assert!(unkept(&format!(
+            "{prose}\nlet log = TransparencyLogger::open(cfg).unwrap();"
+        )));
+    }
+    // R18: string contents cannot hide a plain constructor between them.
+    assert!(unkept(
+        "let file = TempLog::new();\nlet start = \"/*\";\n\
+         let dir = tempfile::tempdir();\nlet end = \"*/\";\n\
+         let log = TransparencyLogger::open(cfg).unwrap();"
+    ));
+    // R19: only whole constructor names count as plain temp directories.
+    for constructor in [
+        "other_tempdir()",
+        "other_tempdir_in(parent)",
+        "OtherTempDir::new()",
+        "OtherNamedTempFile::new()",
+        "FooBuilder::new()",
+        "other_temp_dir()",
+        "other_tempfile()",
+        "other_tempfile_in(parent)",
+        "OtherTempDir::with_prefix(x)",
+    ] {
+        assert!(!unkept(&format!(
+            "let file = TempLog::new();\nlet other = {constructor};\n\
+             let log = TransparencyLogger::open(cfg).unwrap();"
+        )));
+    }
+    // R20: plain constructor evidence is retained even in prose.
+    assert!(unkept(
+        "let file = TempLog::new();\n// tempfile::tempdir()\n\
+         let log = TransparencyLogger::open(cfg).unwrap();"
+    ));
+}
+
+/// The router's tests open their transparency logs through fixtures, so the
+/// file-level scan above cannot see which temp dir a log lands in. A plain
+/// temp dir in any router source is a dir no log keeps (590 "temp dir no test
+/// kept" lines in one lib run came from these); take it from `kept_tempdir()`.
+/// [`plain_temp_dir`] for a router source: `test_tempdir::tempdir()`, the
+/// Windows-normalised helper for allowed-folder paths, is the one exemption.
+fn router_plain_temp_dir(text: &str) -> bool {
+    plain_temp_dir(&text.replace("test_tempdir::tempdir(", "windows_normalised("))
+}
+
+#[test]
+fn no_router_source_makes_a_plain_temp_dir() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = Vec::new();
+    sources_where(
+        &root.join("src/gateway/router"),
+        root,
+        &mut sources,
+        &|_| true,
+    );
+    let plain: Vec<&str> = sources
+        .iter()
+        .filter(|(_, text)| router_plain_temp_dir(text))
+        .map(|(rel, _)| rel.as_str())
+        .collect();
+    assert!(
+        plain.is_empty(),
+        "router sources make a temp dir of their own (use `crate::test_dir_keep::kept_tempdir()`, \
+         or `kept_tempdir_in(parent)` to keep the parent, which a log opened inside it keeps): \
+         {plain:?}"
+    );
+}
+
+#[test]
+fn the_router_scan_tells_a_plain_temp_dir_from_a_kept_one() {
+    assert!(plain_temp_dir("let d = tempfile::tempdir().unwrap();"));
+    assert!(plain_temp_dir(
+        "let d = Arc::new(tempfile::TempDir::new().unwrap());"
+    ));
+    assert!(!plain_temp_dir(
+        "let d = crate::test_dir_keep::kept_tempdir();"
+    ));
+    assert!(!plain_temp_dir("let d = kept_tempdir_in(parent);"));
+    assert!(!router_plain_temp_dir(
+        "let d = crate::test_tempdir::tempdir();"
+    ));
+    // A TempLog may not vouch for the helper's unregistered directory.
+    assert!(plain_temp_dir("let d = crate::test_tempdir::tempdir();"));
 }

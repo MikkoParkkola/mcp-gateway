@@ -56,10 +56,16 @@ mcp-gateway init --profile local
 docker build --target runtime -t mcp-gateway:latest .
 # Linux bind mounts: prepare a dedicated owner-only copy for container UID 1001.
 install -m 600 gateway.yaml gateway.container.yaml
+# init stored the admin token on this host and wrote a reference to it; the
+# container cannot read that path. Point the copy at an environment variable
+# and read the token out as docs/QUICKSTART.md ("Read the admin token for a client") shows.
+sed -i 's|^\( *bearer_token: *\).*|\1"env:MCP_GATEWAY_TOKEN"|' gateway.container.yaml
+export MCP_GATEWAY_TOKEN="$(cat '/absolute/config-dir/secrets/NAME')"
 sudo chown 1001:1001 gateway.container.yaml
 
 docker run -d --name mcp-gateway \
   -p 127.0.0.1:39400:39400 \
+  -e MCP_GATEWAY_TOKEN \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
   -v ./gateway.container.yaml:/config.yaml:ro \
@@ -289,6 +295,7 @@ never refused.
 | Managed accounts custody | `accounts.deployment: single_process`, one process's store and keys | **Refuses** when `accounts.enabled` |
 | Task records (tasks extension) | Each pod's task store, under the `state` volume | **Refuses** while `server.modern_protocol` is on (the default), the only path that reaches it: a task created on one pod is not found on another |
 | Continuations (retries) | Per-process key material and ledger | Degrades: a retry succeeds only on the replica that minted it |
+| Admin email lookup page tokens | The same continuation keyring and ledger, one process | Needs no limit of its own: the lookup exists only with the key server, which already refuses more than one replica. A restart ends every outstanding token: the next page answers `the page token is not valid; run the lookup again`, so run the lookup again. A page response lost on the wire has already spent its token: run the lookup again. Spent tokens share the continuation ledger's 65,536-entry capacity, which refuses rather than evicts when full: a lookup holds at most about 50 entries (ten a minute, five minutes each), under 0.1% of it |
 | MCP sessions, elicitations | One process | Degrades: a follow-up routed elsewhere does not find them |
 | Rate-limit buckets, idempotency admission | One process | Degrades: limits and de-duplication apply per replica |
 | Record key (MIK-8697) | Each pod's `<data dir>/record-principal.key`, created on first start | Degrades: one credential's records carry a different `who.principal` and `credential:rp:` value on each pod. Set `security.record_principal_key` from one shared secret only if you need them to match. Event subscription handles derive from the key; the events store records it in `record-key.id` and, if it changes, adopts the new key at startup with one warning (every handle changes). Back the key up with the data directory |
@@ -1375,15 +1382,18 @@ that is not in a working tree:
 ```json
 { "mcpServers": { "gateway": {
     "url": "http://127.0.0.1:39400/mcp",
-    "headers": { "Authorization": "Bearer <the token in gateway.yaml>" }
+    "headers": { "Authorization": "Bearer <the admin token value>" }
 } } }
 ```
 
+`gateway.yaml` holds only a reference to the token, never the token. Retrieve the
+value as described in [Read the admin token for a client](QUICKSTART.md#read-the-admin-token-for-a-client).
+
 ### Opening the dashboard
 
-`mcp-gateway init` generates an admin credential for the install and writes it
-into `gateway.yaml`, which is created readable only by you on Unix (Windows
-takes the directory's inherited permissions). Tools work without
+`mcp-gateway init` generates an admin credential for the install, stores it in the
+secret store and writes only a reference into `gateway.yaml`, which is created
+readable only by you on Unix (Windows takes the directory's inherited permissions). Tools work without
 it; managing the gateway and reading the dashboard need it.
 
 A browser cannot attach an `Authorization` header to a navigation, so `serve`

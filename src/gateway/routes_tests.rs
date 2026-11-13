@@ -28,6 +28,7 @@ const LISTENER_FILES: &[&str] = &[
     "src/gateway/ui/history.rs",
     "src/gateway/ui/import.rs",
     "src/gateway/ui/policies.rs",
+    "src/gateway/ui/restart.rs",
     "src/gateway/ui/session.rs",
     "src/gateway/ui/stream/mod.rs",
     "src/key_server/handler.rs",
@@ -146,6 +147,11 @@ const REVIEWED_MERGES: &[(&str, &str, Option<&str>)] = &[
         "src/gateway/ui/mod.rs",
         "history::history_router()",
         Some("src/gateway/ui/history.rs"),
+    ),
+    (
+        "src/gateway/ui/mod.rs",
+        "restart::restart_router()",
+        Some("src/gateway/ui/restart.rs"),
     ),
     (
         "src/gateway/ui/mod.rs",

@@ -211,7 +211,7 @@ pub(super) fn audit_log(
     std::path::PathBuf,
     Arc<TransparencyLogger>,
 ) {
-    let audit = Arc::new(tempfile::tempdir().unwrap());
+    let audit = crate::test_dir_keep::kept_tempdir();
     let path = audit.path().join("audit.jsonl");
     let policy = if fail_closed {
         AuditFailurePolicy::FailClosed

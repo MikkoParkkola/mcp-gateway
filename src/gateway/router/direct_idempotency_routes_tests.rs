@@ -178,7 +178,7 @@ async fn state_with_idempotency() -> (Arc<AppState>, Arc<tempfile::TempDir>) {
             crate::gateway::test_helpers::auth_state(&config.auth, RECORD_KEY),
         ),
     );
-    let store_dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
+    let store_dir = crate::test_dir_keep::kept_tempdir();
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,

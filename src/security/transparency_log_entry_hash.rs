@@ -26,18 +26,19 @@ pub fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
         .as_object()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "entry is not a JSON object"))?;
 
-    // Build a clean copy without the hash-and-sig fields.
-    let core: serde_json::Map<String, serde_json::Value> = obj
-        .iter()
-        .filter(|(k, _)| {
+    // Serialise the entry without the hash-and-sig fields, borrowing every
+    // value: the bytes equal those of a cloned filtered map, without a clone
+    // of each field per verified line.
+    let mut core_json = Vec::with_capacity(256);
+    let mut ser = serde_json::Serializer::new(&mut core_json);
+    serde::Serializer::collect_map(
+        &mut ser,
+        obj.iter().filter(|(k, _)| {
             k.as_str() != "entry_hash" && k.as_str() != "sig" && k.as_str() != "key_id"
-        })
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-
-    let core_json = serde_json::to_string(&core).map_err(io::Error::other)?;
-
-    Ok(crate::hashing::sha256_tagged(core_json.as_bytes()))
+        }),
+    )
+    .map_err(io::Error::other)?;
+    Ok(crate::hashing::sha256_tagged(&core_json))
 }
 
 /// Verify one entry's HMAC `sig` against `secret`, given the entry's

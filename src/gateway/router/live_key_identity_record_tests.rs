@@ -64,7 +64,7 @@ async fn call_whos(fx: &Fx) -> Vec<Value> {
 #[tokio::test]
 async fn k5_a_key_renamed_by_reload_is_recorded_under_its_new_name() {
     let fx = fixture().await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     for who in call_whos(&fx).await {
         assert_eq!(
             who["account"], ADMIN,
@@ -87,7 +87,7 @@ async fn k5_a_key_renamed_by_reload_is_recorded_under_its_new_name() {
 #[tokio::test]
 async fn k5_a_principal_written_by_reload_keys_the_next_record() {
     let fx = fixture().await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let principal_of = |whos: &[Value]| -> Value {
         let first = whos[0]["principal"].clone();
         assert!(

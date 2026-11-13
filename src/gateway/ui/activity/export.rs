@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use super::access::Access;
-use super::answer::{Joined, SCOPE_LABEL};
+use super::answer::{DELIVERY_WINDOW, Joined, SCOPE_LABEL};
 use super::csv::{Cell, CsvWriter, Truncated};
 use super::joiner::Joiner;
 use super::reader::{Cursor, Limits, Line, Look, Seen, Which, read_page_joined};
@@ -75,6 +75,10 @@ pub(super) struct Collected {
     pub(super) join_incomplete: usize,
     /// Calls whose delivery record failed the trust rule or was duplicated.
     pub(super) answer_integrity_failed: usize,
+    /// Where the first line was that failed integrity and names no trace, or null.
+    pub(super) answer_integrity_unattributed: Value,
+    /// Calls whose trace had a record held beyond the delivery window.
+    pub(super) delivery_beyond_window: usize,
     /// Each log's anchor state (invocation, governance), reported even when
     /// no row fails, so a broken anchor is never a clean-looking export.
     pub(super) signing_anchor: [&'static str; 2],
@@ -95,7 +99,7 @@ pub(super) fn collect(
     let answers = std::cell::RefCell::new(Vec::<Joined>::new());
     let mut keep = |line: &Line, seen: Seen| {
         let mut j = joiner.borrow_mut();
-        if j.observe(line) {
+        if j.observe(line, seen.above) {
             return false;
         }
         let Some(kind) = kind_of(line) else {
@@ -130,6 +134,8 @@ pub(super) fn collect(
         truncated: Truncated::None,
         join_incomplete: 0,
         answer_integrity_failed: 0,
+        answer_integrity_unattributed: Value::Null,
+        delivery_beyond_window: 0,
         signing_anchor: [Which::Invocation, Which::Governance].map(|w| check.report(w)),
     };
     // The report is taken when the export ends, after every row was judged,
@@ -157,6 +163,8 @@ pub(super) fn collect(
             let j = joiner.borrow();
             c.join_incomplete = j.join_incomplete;
             c.answer_integrity_failed = j.answer_integrity_failed;
+            c.answer_integrity_unattributed = j.unattributed();
+            c.delivery_beyond_window = j.delivery_beyond_window;
         }
         // A pass after the first that restarted (retention removed the
         // segment the export was in) would append newer rows to older ones.
@@ -265,6 +273,15 @@ pub(super) fn ndjson(
         "answer_integrity_failed".into(),
         collected.answer_integrity_failed.into(),
     );
+    manifest.insert(
+        "answer_integrity_unattributed".into(),
+        collected.answer_integrity_unattributed.clone(),
+    );
+    manifest.insert(
+        "delivery_beyond_window".into(),
+        collected.delivery_beyond_window.into(),
+    );
+    manifest.insert("delivery_window_bytes".into(), DELIVERY_WINDOW.into());
     manifest.insert("answer_integrity_scope".into(), SCOPE_LABEL.into());
     manifest.insert("truncated".into(), collected.truncated.as_str().into());
     manifest.insert("sha256".into(), hex::encode(Sha256::digest(&bytes)).into());

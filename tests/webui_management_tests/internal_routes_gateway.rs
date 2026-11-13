@@ -7,6 +7,21 @@
 use super::*;
 
 pub(super) const ROWS: &[Row] = &[
+    // PR1 contract: the empty object reaches the handler's fixed 422 JSON.
+    row(
+        "/ui/api/gateway/restart",
+        Method::POST,
+        "/ui/api/gateway/restart",
+        Payload::Json("{}"),
+        [401, 403, 403, 422],
+    ),
+    row(
+        "/ui/api/gateway/restart",
+        Method::GET,
+        "/ui/api/gateway/restart",
+        Payload::None,
+        [401, 403, 403, 200],
+    ),
     // src/gateway/ui/gateway_status.rs (gateway; admin-only read, like refusals)
     row(
         "/ui/api/gateway",

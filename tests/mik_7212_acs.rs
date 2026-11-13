@@ -37,6 +37,7 @@ fn payload() -> Payload {
         hold_key: "exchange-1".to_string(),
         next_step: None,
         rounds_used: 0,
+        lookup_scope: None,
         // A backend `input_required` continuation: this file's envelopes are
         // the ones a backend retry redeems, not confirmation grants.
         purpose: ContinuationPurpose::BackendInput,

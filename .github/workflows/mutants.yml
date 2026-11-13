@@ -91,6 +91,8 @@ jobs:
           echo "MUTANTS_QUEUE_WAIT=$wait" >> "$GITHUB_ENV"
           echo "queue wait: $wait s (plan finished $done_at, attempt $GITHUB_RUN_ATTEMPT)"
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       # The runner script and the swap action come from the release line, never
       # from the tree under test: a source head that edited them could fake its
       # own checks, and an older one lacks the action.
@@ -144,6 +146,8 @@ jobs:
           echo "MUTANTS_QUEUE_WAIT=$wait" >> "$GITHUB_ENV"
           echo "queue wait: $wait s (plan finished $done_at, attempt $GITHUB_RUN_ATTEMPT)"
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       # The runner script and the swap action come from the release line, never
       # from the tree under test: a source head that edited them could fake its
       # own checks, and an older one lacks the action.
@@ -179,6 +183,8 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       # The runner script comes from the release line, never from the tree
       # under test: a source head that edited it could fake its own checks.
       - name: Fetch the reviewed runner script

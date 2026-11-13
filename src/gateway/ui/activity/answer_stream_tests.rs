@@ -31,7 +31,20 @@ async fn r15_a_frame_is_the_list_row_as_of_its_append() {
     let served = frame(&log_of(&fx), &Access::All, &call_entry(&fx, "gw-t")).unwrap();
     let (_, page) = get(&fx, &[]).await;
     assert_eq!(served.row["effect"], "no_record");
-    assert_eq!(served.row, *row_of(&page, "gw-t"));
+    // A frame is the list row as of its append, except for one sentence: the
+    // list row states a finished search of the delivery window, and a frame,
+    // built from the appended entry alone, searched nothing (live view versus
+    // finished search), so it never claims the window.
+    let listed = row_of(&page, "gw-t");
+    assert_eq!(
+        listed["answer_findings"],
+        "no delivery record within 256 KiB after the call"
+    );
+    assert_eq!(served.row["answer_findings"], "no delivery record found");
+    let (mut frame_row, mut list_row) = (served.row.clone(), listed.clone());
+    frame_row["answer_findings"] = serde_json::Value::Null;
+    list_row["answer_findings"] = serde_json::Value::Null;
+    assert_eq!(frame_row, list_row);
 }
 
 #[test]

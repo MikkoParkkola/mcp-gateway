@@ -55,7 +55,7 @@ MCP Gateway implements defense-in-depth across the six attack vectors identified
   cannot tell its operator from a web page that rebound a hostname to loopback.
   A stdio caller is admin: it spawned the process, so it already holds whatever
   the operator holds
-- **Secrets**: OS keychain integration (macOS Keychain, Linux Secret Service, Windows Credential Manager) — never stored in config. Secrets saved through the gateway go to a fresh keychain entry or a new owner-only file (`secrets.store`: `auto`, the default, prefers the keychain; `keychain`; `files`); a value never reaches argv, a log or an error. Old entries are never deleted, and `mcp-gateway doctor` counts the unused ones; nothing cleans them up automatically
+- **Secrets**: OS keychain integration (macOS Keychain, Linux Secret Service, Windows Credential Manager). `init` stores its generated admin token in the store selected by `secrets.store` and writes only a reference into `auth.bearer_token`; no config or sample file it writes contains the literal token. Secrets saved through the gateway go to a fresh keychain entry or a new owner-only file (`secrets.store`: `auto`, the default, prefers the keychain; `keychain`; `files`); a value never reaches argv, a log or an error. Existing literal credentials still load; they are not migrated automatically. Old entries are never deleted, and `mcp-gateway doctor` counts the unused ones; nothing cleans them up automatically
 - **Circuit breakers**: Per-backend fault isolation prevents cascading failures
 - **Rate limiting**: Token-bucket per-backend rate limiting
 - **Audit logging**: NDJSON audit trail for all tool invocations
@@ -64,7 +64,7 @@ MCP Gateway implements defense-in-depth across the six attack vectors identified
 
 - **Windows file permissions**: on Windows (ADR-016: one Windows-only module calls the Win32
   security API) the gateway creates the task store, the personal-account store and every file
-  holding a secret — the config with its admin token, generated mTLS private keys, stored OAuth
+  holding a secret — secret-store files, generated mTLS private keys, stored OAuth
   tokens — owner-only, with a protected DACL from the first instant. A volume that keeps no ACLs
   (FAT, exFAT) is refused rather than written. Reads refuse a secret file another account can
   read or change and a trust file another account can change, and print the PowerShell repair

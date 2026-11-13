@@ -428,7 +428,10 @@ async fn o6_a_section_without_a_source_is_absent_not_zero() {
 }
 
 /// A transparency log at `dir`, shared with the state as the server wires it.
-fn with_log(state: &mut Arc<AppState>, dir: &tempfile::TempDir) -> Arc<TransparencyLogger> {
+fn with_log(
+    state: &mut Arc<AppState>,
+    dir: &crate::gateway::router::tests::FixtureDir,
+) -> Arc<TransparencyLogger> {
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -442,6 +445,9 @@ fn with_log(state: &mut Arc<AppState>, dir: &tempfile::TempDir) -> Arc<Transpare
         }))
         .expect("open log"),
     );
+    // A late append from a worker the test left running lands before the
+    // directory goes.
+    log.keep_test_dir(Arc::clone(dir));
     Arc::get_mut(state)
         .expect("state is unique")
         .transparency_log = Some(Arc::clone(&log));

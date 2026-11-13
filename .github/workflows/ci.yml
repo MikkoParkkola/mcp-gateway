@@ -184,6 +184,11 @@ jobs:
       # mirror.gcr.io, so the anonymous pull limit cannot fail a merge (MIK-8256).
       - name: No anonymous Docker Hub pull
         run: python3 scripts/ci/check_docker_hub_pulls.py
+      # One compiler everywhere: rust-toolchain.toml names it, every toolchain step must install it.
+      - name: Every toolchain step installs the pinned compiler
+        run: |
+          python3 scripts/ci/check_toolchain_pin.py --self-test
+          python3 scripts/ci/check_toolchain_pin.py
       # Under pipefail `x | grep -q` fails the pipeline on a match (MIK-8333).
       - name: No piped quiet grep
         run: |
@@ -197,6 +202,11 @@ jobs:
         run: |
           python3 scripts/ci/check_swap_jobs.py --self-test
           python3 scripts/ci/check_swap_jobs.py
+      # A harness struct must drop its child process before its TempDir (the child's late write fails the shard).
+      - name: Test harnesses drop the child before the temp dir
+        run: |
+          python3 scripts/ci/check_teardown_order.py --self-test
+          python3 scripts/ci/check_teardown_order.py
       - name: Validate throwaway and mutant-row routing (hosted until the trusted runner is ready)
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
@@ -253,7 +263,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: The installed compiler is the pinned one
+        run: python3 scripts/ci/check_toolchain_pin.py --runtime
       - name: Validate service-template smoke script
         run: bash -n scripts/dev/service-template-smoke.sh
       - name: Validate single-node templates with generated config
@@ -267,6 +281,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Validate first-use smoke scripts
         # One file per `bash -n`: it checks only its first argument.
@@ -305,6 +321,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # rg, PyYAML, lsof and shasum are all called by the script; a missing rg
       # would read as a missing downgrade warning, not as a missing tool.
@@ -515,6 +533,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: 1.99.1
           components: clippy
       # Runs on a release-line push too, and that run is what warms the cache: a pull request
       # restores only caches saved on its base branch (or its own ref), and this job's cache was
@@ -616,6 +635,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
       # non-elevated token create symlinks, so the row runs rather than skips.
@@ -720,6 +741,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+          components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo clippy --all-targets --all-features -- -D warnings
       # MIK-8449: the registry-ban pass (MIK-8387) over the Windows build, so
@@ -856,6 +880,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # macOS is a shipped target (Homebrew, release binaries), so its tests
       # run here, not only compile (MIK-8174): signals, process groups, file
@@ -972,6 +998,57 @@ jobs:
           # shellcheck disable=SC2086 # ROLLUP_EXPECTS is a space-separated id list on purpose
           python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
 
+  # A lane pull request whose diff touches the secret store, the keychain or a file lock needs the macOS int shard
+  # before it boards: only a merge train ran macOS, and the keychain change to `init` passed its own CI and broke the
+  # train (46u). This check reads the diff (scripts/ci/os_sensitive_diff.py) and fails, naming the lines and the
+  # `gh pr edit --add-label os-int` command, until the label is on. Seconds of work, no macOS runner.
+  os-int-label:
+    name: OS-sensitive diff carries the os-int label
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'throwaway/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The check's own rows
+        run: python3 scripts/ci/test_os_sensitive_diff.py
+      # HEAD is the pull request's merge with the base, so its first parent is the base the merge was cut from and the
+      # diff against it is exactly this pull request's, however far the base has moved since. The script refuses (exit 2)
+      # a checkout whose second parent is not the pull request's head: HEAD^1 would then cover only the tip commit.
+      - name: The diff carries the label when it needs one
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci/os_sensitive_diff.py --base HEAD^1 --head HEAD --pr "$PR_NUMBER" --labels "$LABELS" --expect-second-parent "$PR_HEAD_SHA"
+
+  # The os-int label's macOS job: the int shard alone (the bins, every integration test, the doc tests and the
+  # examples build), as the merge train runs it, without the lib halves. The lane adds the label at READY, not on every
+  # push: about two macOS runners serve every train, and int takes 36 to 92 minutes (median 73).
+  macos-int-lane:
+    name: macOS int (os-int label)
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'throwaway/') && contains(github.event.pull_request.labels.*.name, 'os-int') }}
+    runs-on: macos-latest
+    timeout-minutes: 150
+    env:
+      # As macos-shards: the 3-core, 7 GB runner swapped at the default.
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Shard suite
+        timeout-minutes: 145
+        run: python3 scripts/ci/shard_tests.py run macos int
+
   # The Linux suite as shards (MIK-8482); `test` below is the aggregate that
   # keeps the required name `Tests` (and docker-build's `needs: test`).
   test-shards:
@@ -988,6 +1065,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Each skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
@@ -1087,6 +1166,8 @@ jobs:
           done
           exit "$fail"
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       # Restore only: saving from throwaway runs would evict the entries the
       # merge-evidence jobs rely on from the shared 10 GB repository cache.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -1139,6 +1220,8 @@ jobs:
           done
           exit "$fail"
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       # Restore only: saving from throwaway runs would evict the entries the
       # merge-evidence jobs rely on from the shared 10 GB repository cache.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -1166,6 +1249,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install the pinned gws
         run: |
@@ -1195,6 +1280,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install gnome-keyring, secret-tool and gdbus
         run: |
@@ -1266,6 +1353,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install cargo-auditable
         run: cargo install cargo-auditable --locked --version 0.7.6
@@ -1356,6 +1445,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: 1.99.1
           targets: ${{ matrix.target }}
       - name: Install cargo-auditable
         run: cargo install cargo-auditable --locked --version 0.7.6
@@ -1388,6 +1478,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build the tests from the packaged crate
         run: scripts/ci/packaged-tests.sh build
@@ -1407,6 +1499,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: 1.99.1
           components: rustfmt
       - run: cargo fmt --all -- --check
 
@@ -1418,6 +1511,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install cargo-audit
         env:
@@ -1466,6 +1561,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
       - name: Validate README benchmark scenario script
         run: python3 benchmarks/token_savings.py --scenario readme --json
       # Plain-assert script, not a pytest module: invoked directly rather than
@@ -1621,6 +1718,8 @@ jobs:
       - name: Check capability pins against the catalogue and the matrix
         run: bash scripts/ci/check-capability-pin-counts.sh
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
         if: needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true'
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true'

@@ -537,6 +537,20 @@ pub(super) static ROWS: &[Row] = &[
         false,
     ),
     row(
+        routes::UI_GATEWAY_RESTART,
+        Get,
+        Admin(AdminRequired),
+        &[(Page::Gateway, Tab::Actions)],
+        false,
+    ),
+    row(
+        routes::UI_GATEWAY_RESTART,
+        Post,
+        Admin(AdminRequired),
+        &[(Page::Gateway, Tab::Actions)],
+        false,
+    ),
+    row(
         routes::UI_DASHBOARD_LINK,
         Post,
         AdminKeyLink,

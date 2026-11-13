@@ -48,9 +48,26 @@ pub(super) fn install(
         return Ok(());
     }
     let store_dir = expand_home_path(&config.events.store_dir);
+    #[cfg(test)]
+    assert!(
+        !super::task_runtime::is_real_store(&store_dir),
+        "a test opened the real events store at {}; give it a temp events.store_dir",
+        store_dir.display()
+    );
+    #[cfg(test)]
+    let found = crate::test_dir_keep::registered_for(&store_dir);
+    #[cfg(test)]
+    assert!(
+        found.holds_anything(),
+        "a test opened an unkept events store at {}; build the config's events.store_dir inside kept_tempdir()",
+        store_dir.display()
+    );
     let hub = crate::events::EventsHub::open(&config.events, &store_dir)?;
     #[cfg(test)]
-    hub.opened_by_gateway();
+    {
+        hub.attach_registered(found);
+        hub.assert_test_dir_kept("the gateway events opener");
+    }
     if config.webhooks.enabled {
         hub.set_webhook_registry(Arc::clone(webhooks));
         webhooks.write().set_events(Arc::clone(&hub));

@@ -99,6 +99,10 @@ async fn the_report_agrees_with_the_guards_for_every_caller() {
                 // path served without any access report.
                 Caller::NoKey => {
                     assert_eq!(status, StatusCode::UNAUTHORIZED);
+                    // The auth layer refuses before the handler can build a report: the
+                    // refusal carries no access list, whatever moves between them.
+                    let text = String::from_utf8_lossy(&body);
+                    assert!(!text.contains("\"access\""), "{text}");
                     continue;
                 }
                 Caller::NoKeyPublicStatus => {

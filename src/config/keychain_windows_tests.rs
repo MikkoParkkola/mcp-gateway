@@ -16,10 +16,13 @@ fn fresh(tag: &str) -> String {
 
 #[test]
 fn an_entry_reads_back_and_a_missing_one_is_missing() {
+    use crate::secret_store::SecretStore;
     let name = fresh("read");
     win_cred::create(&name, SENTINEL).expect("create");
     let read = WindowsKeychain::new().read(&name);
-    win_cred::delete(&name).expect("delete");
+    // The store's delete returns only once the entry is seen gone, so the read
+    // below cannot meet a credential Credential Manager still answers for.
+    WindowsKeychain::new().delete(&name).expect("delete");
     let read = read.expect("read");
     assert_eq!(read.as_bytes(), SENTINEL);
     assert!(!format!("{read:?}").contains("kc-sentinel-7f3a"));

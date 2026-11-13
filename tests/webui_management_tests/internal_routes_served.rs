@@ -37,6 +37,21 @@ const CP_WRITES: &[Citation] = &[(
 type Citation = (&'static str, &'static str);
 
 const SERVED_BY: &[(&str, Method, &[Citation])] = &[
+    // PR1: 422 is the handler's fixed JSON; a valid body is a served refusal.
+    (
+        "/ui/api/gateway/restart",
+        Method::POST,
+        &[
+            (
+                "src/gateway/ui/restart_tests.rs",
+                "empty_object_is_fixed_422_json",
+            ),
+            (
+                "src/gateway/ui/restart_tests.rs",
+                "well_formed_post_is_409_and_keeps_status_and_tools_call_serving",
+            ),
+        ],
+    ),
     // An admin bearer has no dashboard session, so the table's admin answer
     // is 403 dashboard_session_required; these tests sign in from a dashboard
     // session and pin the served start, confirm and cancel.

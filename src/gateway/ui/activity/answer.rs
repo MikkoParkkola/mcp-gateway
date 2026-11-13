@@ -24,11 +24,19 @@ pub(super) const RECEIPT_SCAN: u64 = DELIVERY_WINDOW;
 pub(super) const MAX_PENDING: usize = 256;
 /// Tombstones held per read.
 pub(super) const MAX_EVICTED: usize = 4_096;
+/// Delivery records already joined to a call row, kept per read so a second
+/// call row of the same trace still finds its record. Past this, completed
+/// traces stay in the pending map as before and use its bounds again.
+pub(super) const MAX_JOINED: usize = 16_384;
 
 pub(super) const NOT_SCANNED: &str = "answer not scanned";
 pub(super) const NOT_RECORDED: &str = "findings not recorded for this answer";
 pub(super) const INCOMPLETE: &str = "not stated: the join was incomplete";
-pub(super) const NO_RECORD: &str = "no delivery record found";
+/// A finished search of the delivery window found nothing.
+pub(super) const NO_RECORD: &str = "no delivery record within 256 KiB after the call";
+/// A `no_record` that is not a finished search of the window: a live frame, a
+/// search still open, a call with no trace, a row that is not a call.
+pub(super) const NO_RECORD_NOT_SEARCHED: &str = "no delivery record found";
 
 /// The effect a row states; also the `effect=` filter's values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +127,10 @@ pub(super) enum Why {
     /// The receipt's window broke the chain after a record was found: the
     /// record cannot be vouched for.
     Chain,
+    /// A line failed its integrity check and names no usable trace, so the
+    /// failure cannot be tied to a call: every older call left without a
+    /// delivery is indeterminate, never `no_record`.
+    Unattributed,
 }
 
 impl Why {
@@ -128,6 +140,7 @@ impl Why {
             Self::Invalid => Some("invalid"),
             Self::Unsigned => Some("unsigned"),
             Self::Duplicate => Some("duplicate"),
+            Self::Unattributed => Some("indeterminate"),
             Self::Evicted | Self::Overflow | Self::Chain => None,
         }
     }
@@ -181,7 +194,11 @@ impl Joined {
                 Findings::NotScanned => NOT_SCANNED.into(),
                 Findings::NotRecorded => NOT_RECORDED.into(),
             },
-            Self::NoRecord(_) => NO_RECORD.into(),
+            // Only a finished search states the window. A live frame is the call as
+            // of its append and is served from the appended entry alone, so it
+            // searched nothing and says so (row r15).
+            Self::NoRecord(Searched::Finished) => NO_RECORD.into(),
+            Self::NoRecord(_) => NO_RECORD_NOT_SEARCHED.into(),
             Self::Incomplete(_) => INCOMPLETE.into(),
         };
         row.insert("answer_findings".into(), findings);

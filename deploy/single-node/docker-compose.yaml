@@ -17,6 +17,12 @@ services:
       - ${PWD}/gateway.yaml:/config.yaml:ro
       - ${PWD}/capabilities:/capabilities:ro
     environment:
+      # init stored the admin token on the host and wrote a reference to it in
+      # gateway.yaml; the container cannot read that path. In this deployment
+      # copy set `auth.bearer_token: "env:MCP_GATEWAY_TOKEN"` and export the
+      # token before `up` (deploy/single-node/README.md). Unset, it is empty
+      # and the gateway refuses to start.
+      MCP_GATEWAY_TOKEN: ${MCP_GATEWAY_TOKEN:-}
       MCP_GATEWAY_LOG_LEVEL: info
       MCP_GATEWAY_LOG_FORMAT: json
       # The gateway refuses to serve when it is reachable by a network address

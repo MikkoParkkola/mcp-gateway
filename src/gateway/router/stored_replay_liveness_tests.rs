@@ -652,7 +652,7 @@ async fn two_account_fixture_revokes_one_account_only() {
         gateway,
         tasks,
         meta: served,
-        _store: Arc::new(tempfile::tempdir().unwrap()),
+        _store: crate::test_dir_keep::kept_tempdir(),
         audit: None,
     };
     let call = |backend: &str| {

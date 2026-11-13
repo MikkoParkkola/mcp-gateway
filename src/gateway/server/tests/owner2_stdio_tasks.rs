@@ -593,3 +593,124 @@ pub(super) async fn held_backend() -> (
 /// The stdio task store at the end of a session.
 #[path = "owner2_stdio_shutdown_tests.rs"]
 mod shutdown;
+
+/// use the real gateway opener, without an explicit store keep.
+async fn registered_gateway_tasks(
+    path: &std::path::Path,
+    data: &std::path::Path,
+) -> (
+    Arc<StdioTasks>,
+    crate::gateway::task_service::execution::ExpirySweep,
+) {
+    let mut config = Config::default();
+    config.tasks.store_dir = path.display().to_string();
+    config.events.enabled = false;
+    let built = Gateway::new(config.clone())
+        .await
+        .expect("gateway constructor")
+        .with_data_dir(data.to_path_buf())
+        .build_meta_mcp_published()
+        .await
+        .expect("gateway meta layer");
+    let live = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        config.clone(),
+        Arc::new(stdio_tasks::default_auth(
+            &crate::config::EnvOverlay::default(),
+            Arc::new(crate::gateway::record_principal::test_record_key()),
+        )),
+    ));
+    stdio_tasks::open(&config, &built.meta_mcp, &live)
+        .await
+        .expect("gateway task runtime starts")
+}
+
+#[tokio::test]
+async fn registered_gateway_task_directory_lives_until_the_last_store_handle() {
+    use crate::gateway::task_service::CreateOutcome;
+    use crate::idempotency::admission::{Mode, Request};
+    use crate::protocol::tasks::Task;
+
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let root = dir.path().to_owned();
+    let path = root.join("tasks");
+    let data = crate::test_dir_keep::kept_tempdir();
+    let (tasks, expiry) = registered_gateway_tasks(&path, data.path()).await;
+    // Join the sweep so the final owner is controlled by this row.
+    expiry.shutdown().await.expect("expiry sweep stops");
+    let service = Arc::clone(&tasks.service);
+    let last_store = service.store.clone();
+    drop(tasks);
+    drop(dir);
+    assert!(root.is_dir(), "the opener retained the original directory");
+
+    let task = Task::create("late-write").expect("task clock");
+    let operation = json!({"tool": "late-write"});
+    let representation = json!({});
+    let permit = Arc::new(tokio::sync::Semaphore::new(1));
+    let created = service
+        .create(
+            Request {
+                principal: LOCAL_OPERATOR_PRINCIPAL,
+                key: "registered-gateway-late-write",
+                operation: &operation,
+                representation: &representation,
+                mode: Mode::Task,
+            },
+            &task,
+            BACKEND,
+            move || permit.try_acquire_owned().ok(),
+        )
+        .await
+        .expect("late create completes");
+    assert!(matches!(created, CreateOutcome::Created { .. }));
+    drop(created);
+    assert!(
+        path.join("stdio")
+            .join(format!("{}.json", task.id()))
+            .is_file()
+    );
+    drop(service);
+    assert!(
+        root.is_dir(),
+        "the last store handle still owns the directory"
+    );
+    drop(last_store);
+    assert!(
+        !root.exists(),
+        "the directory goes with the last store handle"
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "kept_tempdir")]
+async fn registered_gateway_task_opener_refuses_a_plain_tempdir() {
+    let dir = tempfile::tempdir().expect("an unregistered directory");
+    let path = dir.path().join("tasks");
+    let attempted = path.clone();
+    let result = tokio::spawn(async move {
+        let data = crate::test_dir_keep::kept_tempdir();
+        let (tasks, expiry) = registered_gateway_tasks(&attempted, data.path()).await;
+        expiry
+            .shutdown()
+            .await
+            .expect("expiry stops on an unexpected open");
+        drop(tasks);
+    })
+    .await;
+    if let Err(error) = result {
+        let panic = error.into_panic();
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        assert!(
+            message.contains(&path.join("stdio").display().to_string()),
+            "missing store path"
+        );
+        assert!(message.contains("kept_tempdir"), "missing ownership hint");
+        assert!(!path.exists(), "refusal must precede store creation");
+        std::panic::resume_unwind(panic);
+    }
+    // Returning normally makes should_panic fail when the exemption survives.
+}
