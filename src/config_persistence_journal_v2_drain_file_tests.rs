@@ -297,7 +297,7 @@ fn state_from_frames_round_trips() {
                 let frames = frames_of(&marked(&donor)).expect("the donor is bound");
                 let rebuilt = state_from_frames(frames.clone());
                 assert!(rebuilt.is_some(), "{ROW}: {name}");
-                let again = rebuilt.as_ref().and_then(|donor| frames_of(donor));
+                let again = rebuilt.as_ref().and_then(frames_of);
                 assert_eq!(again.as_ref(), Some(&frames), "{ROW}: {name} frames");
                 assert_eq!(
                     again.as_ref().map(|frames| encoded(frames)),
