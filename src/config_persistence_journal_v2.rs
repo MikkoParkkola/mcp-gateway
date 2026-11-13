@@ -234,11 +234,11 @@ impl JournalSession {
         if bytes.len() > abandoned::MAX_ABANDONED_BYTES {
             return Err(JournalError::Persist);
         }
-        let path = drain::handover::abandoned_path(&self.target);
+        let path = mutant!("persist_to_journal_path", super::journal_path(&self.target), drain::handover::abandoned_path(&self.target));
         write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)
             .map_err(|_| JournalError::Persist)?;
         drain::fault::file_rewritten(&self.target)?;
-        sync_dir_of(&path).map_err(|_| JournalError::Persist)
+        mutant!("rewrite_without_dir_sync", Ok(()), sync_dir_of(&path).map_err(|_| JournalError::Persist))
     }
 
     /// A session over the abandoned file's tokens, for the file drain.
@@ -368,7 +368,7 @@ impl JournalSession {
     pub(crate) fn finish(&mut self) -> Result<(), JournalError> {
         // The abandoned file is removed whole by its drain, never finished as a journal: this
         // must not unlink the staged original or a journal it does not own.
-        if self.backing == Backing::Abandoned {
+        if mutant!("abandoned_finish_allowed", false, self.backing == Backing::Abandoned) {
             return Err(JournalError::Finish);
         }
         self.state.finish_ready()?;
@@ -532,7 +532,7 @@ impl JournalDecision {
 impl TokenState {
     /// Done for its journal: never while parked; a handed-over token is the file's to settle.
     fn finished(&self, attempts: &[TokenState]) -> bool {
-        !self.parked() && (self.handed_over || self.settled(attempts))
+        mutant!("finished_ignores_parked", self.handed_over || self.settled(attempts), !self.parked() && (self.handed_over || self.settled(attempts)))
     }
 
     fn parked(&self) -> bool {
@@ -576,9 +576,9 @@ impl TokenState {
         let Some(first) = terminals.next() else {
             return true;
         };
-        first.role == terminal
+        mutant!("settled_drops_terminal_match", true, first.role == terminal
             && codec::terminal_matches(first, decision, self, attempts)
-            && terminals.all(|r| r.role == terminal && r.same_content(first))
+            && terminals.all(|r| r.role == terminal && r.same_content(first)))
     }
 }
 

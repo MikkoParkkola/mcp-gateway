@@ -185,12 +185,12 @@ impl JournalDrain {
         // A handed-over token counts as finished, so the shortcut below would unlink a donor
         // whose file was never written. Only the handover's own resume, which proves the file
         // first, may finish a handed-over journal.
-        if journal
+        if mutant!("donor_refreezes", false, mutant!("run_finishes_flagged_donor", false, journal
             .state
             .writer
             .iter()
             .chain(&journal.state.attempts)
-            .any(|owner| owner.handed_over)
+            .any(|owner| owner.handed_over)))
         {
             return Err(DrainError::Journal);
         }
@@ -253,12 +253,12 @@ impl JournalDrain {
         if sink.log_id() != binding {
             return Err(DrainError::OtherLog);
         }
-        if journal
+        if mutant!("donor_refreezes", false, journal
             .state
             .writer
             .iter()
             .chain(&journal.state.attempts)
-            .any(|owner| owner.handed_over)
+            .any(|owner| owner.handed_over))
         {
             return Err(DrainError::Journal);
         }

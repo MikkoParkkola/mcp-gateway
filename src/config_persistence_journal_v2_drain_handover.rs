@@ -127,7 +127,7 @@ pub(super) fn maximal_size(donor: &JournalV2) -> usize {
         if token
             .records
             .iter()
-            .any(|record| matches!(record.role, Role::Outcome | Role::Abandoned))
+            .any(|record| mutant!("maximal_builds_frozen", false, matches!(record.role, Role::Outcome | Role::Abandoned)))
         {
             continue;
         }
@@ -146,8 +146,8 @@ pub(super) fn maximal_size(donor: &JournalV2) -> usize {
     .max_by_key(|reason| serde_json::to_vec(reason).map_or(0, |json| json.len()));
     for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
         for record in std::iter::once(&mut token.intent).chain(token.records.iter_mut()) {
-            record.delivered = false;
-            record.parked = longest;
+            record.delivered = mutant!("maximal_projection_delivered_true", true, false);
+            record.parked = mutant!("maximal_projection_unparked", None, longest);
         }
     }
     let Some(frames) = frames_of(&widest) else {
@@ -174,11 +174,11 @@ pub(crate) fn hand_over(session: &mut DrainSession) -> Result<(), HandoverError>
     donor.binding.as_ref().ok_or(HandoverError::Foreign)?;
     donor.finish_ready().map_err(|_| HandoverError::Journal)?;
     // The file drain freezes only a decided terminal, and must never outgrow the file cap.
-    if donor
+    if mutant!("handover_admits_undecided", false, donor
         .writer
         .iter()
         .chain(&donor.attempts)
-        .any(|token| token.decision.is_none())
+        .any(|token| token.decision.is_none()))
         || !admits(&donor, MAX_ABANDONED_BYTES)
     {
         return Err(HandoverError::Journal);
