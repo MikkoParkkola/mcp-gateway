@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The host's own addresses from `/proc/net/fib_trie` and `/proc/net/if_inet6`.
 
-use super::super::{fib_trie_local, if_inet6};
+use super::super::{fib_trie_local, if_inet6, ipv6_tree_present, optional_text};
+use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 fn v4(text: &str) -> Ipv4Addr {
@@ -125,4 +126,29 @@ fn t3_missing_if_inet6_without_ipv6_sysctl_is_empty_and_allowed() {
 #[test]
 fn t3_missing_if_inet6_with_ipv6_sysctl_is_refused() {
     assert!(if_inet6(None, true).is_err());
+}
+
+/// Kills "an unreadable lookup reads as absent".
+#[test]
+fn t3_only_a_missing_ipv6_tree_reads_as_absent() {
+    assert!(ipv6_tree_present(Ok(())));
+    assert!(!ipv6_tree_present(Err(io::Error::from(
+        io::ErrorKind::NotFound
+    ))));
+    assert!(ipv6_tree_present(Err(io::Error::from(
+        io::ErrorKind::PermissionDenied
+    ))));
+    assert!(ipv6_tree_present(Err(io::Error::other("unreadable"))));
+}
+
+/// Kills "NotFound is an error, not None".
+#[test]
+fn t3_only_a_missing_if_inet6_file_reads_as_none() {
+    assert!(matches!(optional_text(Ok("x".into())), Ok(Some(text)) if text == "x"));
+    assert!(matches!(
+        optional_text(Err(io::Error::from(io::ErrorKind::NotFound))),
+        Ok(None)
+    ));
+    let denied = optional_text(Err(io::Error::from(io::ErrorKind::PermissionDenied)));
+    assert_eq!(denied.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
 }

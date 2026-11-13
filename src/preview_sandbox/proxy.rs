@@ -733,6 +733,16 @@ async fn read_head<S: AsyncRead + Unpin>(client: &mut S, bound: Duration) -> Opt
     String::from_utf8(head).ok()
 }
 
+/// False only when the lookup failed with `NotFound`; true on success and every other error.
+fn ipv6_tree_present(lookup: io::Result<()>) -> bool {
+    lookup.is_ok()
+}
+
+/// `Ok(text)` is `Ok(Some(text))`; `NotFound` is `Ok(None)`; other errors are returned unchanged.
+fn optional_text(read: io::Result<String>) -> io::Result<Option<String>> {
+    read.map(Some)
+}
+
 /// The host's IPv4 addresses from `/proc/net/fib_trie`: every leaf with a
 /// LOCAL route, in every table.
 fn fib_trie_local(text: &str) -> io::Result<Vec<Ipv4Addr>> {
