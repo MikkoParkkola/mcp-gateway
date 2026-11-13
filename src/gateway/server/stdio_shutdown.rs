@@ -275,21 +275,13 @@ impl Gateway {
         // HTTP stop: a release thread that cannot start leaks the store to exit
         // instead of parking its drop on the blocking pool. A cancelled or
         // failed serve detaches it through its serve guard instead.
-        if let Some(Err(e)) = mutant!(
-            "c9460.w1",
-            bounded_step(
-                deadline,
-                "account custody shutdown",
-                self.shutdown_account_custody(),
-            )
-            .await,
-            bounded_step(
-                deadline,
-                "account custody shutdown",
-                self.shutdown_account_custody_by(deadline),
-            )
-            .await
-        ) {
+        if let Some(Err(e)) = bounded_step(
+            deadline,
+            "account custody shutdown",
+            self.shutdown_account_custody_by(deadline),
+        )
+        .await
+        {
             warn!(error = %e, "Personal account custody shutdown failed");
         }
         // A cut custody step leaves the store in the handle: hand it to a
