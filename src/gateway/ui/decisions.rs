@@ -198,7 +198,7 @@ async fn resolve_decision(
         return unavailable(&[]);
     };
     // One resolve at a time: the item is read and judged under this mutex.
-    let _resolving = decisions.resolving().await;
+    let _resolving = mutant!("nomutex", None, Some(decisions.resolving().await));
     let item = match decisions.item(&id) {
         Ok(Some(item)) => item,
         Ok(None) => {
