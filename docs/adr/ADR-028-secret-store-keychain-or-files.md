@@ -48,6 +48,7 @@ ADR-016 allowed one Windows-only file of `unsafe` code for owner-only DACLs. Thi
   - no aliasing of the blob.
 - The secret blob is copied into `WipedBytes` and the Win32 copy freed immediately. The value never enters an error string; Win32 errors are reported by code.
 - The module's own tests run on the Windows CI shard: create, read, delete, create-on-existing refused, read-missing named. The `unsafe` allow-list is rule 10.
+- A delete through the store is reported done only once the entry is seen gone: Credential Manager can keep answering for an entry after `CredDeleteW` succeeded, so the store asks for it again (8 asks, 100 ms apart, inside the 2 s call bound). An entry still readable at the end, or an ask that fails, fails the delete (`could not confirm removal`); it is never reported as removed.
 
 Option W2, the `keyring` crate, was rejected. It moves the same `unsafe` into a dependency we do not review, and adds a tree on every OS. Option W3, a refusal on Windows, was rejected by the requirement for full keychain support.
 
