@@ -3,8 +3,10 @@
 //! `mcp-gateway audit lookup-email`: ask a running gateway for the key
 //! server's retained issuance rows for one email.
 //!
-//! The email comes from stdin, bounded, and goes only into the request body
-//! built in memory: never an argument, never a file, never an error message.
+//! The email (first page) or the page token (every later page, from
+//! `--cursor-stdin`) comes from stdin, bounded, and goes only into the request
+//! body built in memory: never an argument, never a file, never an error
+//! message.
 //! The answer is decoded strictly and printed as the typed answer; any HTTP,
 //! authentication, read or decode failure is a nonzero exit.
 
@@ -32,9 +34,39 @@ pub(crate) enum LookupInput {
     Cursor(String),
 }
 
-/// Stub until the rows are proved red: no token reader yet.
-pub(crate) fn read_cursor(_input: impl std::io::Read) -> Result<String, String> {
-    Err("not implemented".to_string())
+/// The one line of stdin that is a page token, trimmed at its ends.
+///
+/// # Errors
+///
+/// A fixed message (never the input) when stdin is empty, too long,
+/// unreadable, not UTF-8, holds more than one line, or the line holds a space
+/// or control character: a token is URL-safe base64.
+pub(crate) fn read_cursor(input: impl std::io::Read) -> Result<String, String> {
+    use std::io::Read as _;
+    let mut raw = Vec::new();
+    // One byte over the bound proves "too long" without reading the rest.
+    input
+        .take(MAX_CURSOR_INPUT as u64 + 1)
+        .read_to_end(&mut raw)
+        .map_err(|_| "could not read the page token from stdin".to_string())?;
+    if raw.len() > MAX_CURSOR_INPUT {
+        return Err("the page token on stdin is too long".to_string());
+    }
+    let text =
+        String::from_utf8(raw).map_err(|_| "the page token on stdin is not UTF-8".to_string())?;
+    let line = text.strip_suffix('\n').unwrap_or(&text);
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    if line.contains('\n') {
+        return Err("stdin must hold one line: the page token".to_string());
+    }
+    let token = line.trim();
+    if token.is_empty() {
+        return Err("stdin held no page token".to_string());
+    }
+    if token.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("the page token on stdin is not valid".to_string());
+    }
+    Ok(token.to_owned())
 }
 
 /// One retained issuance row, as the gateway answers it.
@@ -99,21 +131,23 @@ pub(crate) fn read_email(input: impl std::io::Read) -> Result<String, String> {
 /// The request body, built in memory.
 pub(crate) fn request_body(input: &LookupInput, args: &LookupEmailArgs) -> serde_json::Value {
     let mut body = serde_json::Map::new();
-    let LookupInput::Email(email) = input else {
-        return serde_json::Value::Object(body);
-    };
-    body.insert("email".into(), email.as_str().into());
+    match input {
+        // The first page: the email and the window. A token never rides with it.
+        LookupInput::Email(email) => {
+            body.insert("email".into(), email.as_str().into());
+            for (key, value) in [("from", &args.from), ("to", &args.to)] {
+                if let Some(value) = value {
+                    body.insert(key.into(), value.clone().into());
+                }
+            }
+        }
+        // A later page: the token alone (it carries its own window) and the size.
+        LookupInput::Cursor(token) => {
+            body.insert("cursor".into(), token.as_str().into());
+        }
+    }
     if let Some(limit) = args.limit {
         body.insert("limit".into(), limit.into());
-    }
-    for (key, value) in [
-        ("cursor", &args.cursor),
-        ("from", &args.from),
-        ("to", &args.to),
-    ] {
-        if let Some(value) = value {
-            body.insert(key.into(), value.clone().into());
-        }
     }
     serde_json::Value::Object(body)
 }
@@ -229,11 +263,16 @@ pub(crate) async fn run_with(
         Ok(resolved) => resolved,
         Err(message) => return fail(message),
     };
-    let email = match read_email(input) {
-        Ok(email) => email,
+    let asked = if args.cursor_stdin {
+        read_cursor(input).map(LookupInput::Cursor)
+    } else {
+        read_email(input).map(LookupInput::Email)
+    };
+    let asked = match asked {
+        Ok(asked) => asked,
         Err(message) => return fail(message),
     };
-    match lookup(&base, &tls, &token, &LookupInput::Email(email), &args).await {
+    match lookup(&base, &tls, &token, &asked, &args).await {
         Ok(answer) => match render(&answer) {
             Ok(text) => {
                 println!("{text}");

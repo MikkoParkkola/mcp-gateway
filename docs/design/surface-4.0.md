@@ -883,13 +883,13 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway audit lookup-email --ca-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CA_CERT) | - | src/cli/dashboard_link.rs:32 |
 | `mcp-gateway audit lookup-email --client-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_CERT) | - | src/cli/dashboard_link.rs:24 |
 | `mcp-gateway audit lookup-email --client-key` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_KEY) | - | src/cli/dashboard_link.rs:27 |
-| `mcp-gateway audit lookup-email --cursor` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:26 |
-| `mcp-gateway audit lookup-email --email-stdin` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:17 |
-| `mcp-gateway audit lookup-email --from` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:29 |
-| `mcp-gateway audit lookup-email --limit` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:23 |
-| `mcp-gateway audit lookup-email --to` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:32 |
-| `mcp-gateway audit lookup-email --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:20 |
-| `mcp-gateway audit lookup-email -u` | KEEP | short alias of `--url` | - | src/cli/audit_lookup.rs:20 |
+| `mcp-gateway audit lookup-email --cursor-stdin` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:35 |
+| `mcp-gateway audit lookup-email --email-stdin` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:30 |
+| `mcp-gateway audit lookup-email --from` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:44 |
+| `mcp-gateway audit lookup-email --limit` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:41 |
+| `mcp-gateway audit lookup-email --to` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:47 |
+| `mcp-gateway audit lookup-email --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:38 |
+| `mcp-gateway audit lookup-email -u` | KEEP | short alias of `--url` | - | src/cli/audit_lookup.rs:38 |
 | `mcp-gateway audit show` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:723 |
 | `mcp-gateway audit show --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:723 |
 | `mcp-gateway audit show -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:723 |

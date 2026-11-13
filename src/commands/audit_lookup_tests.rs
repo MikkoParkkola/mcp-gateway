@@ -144,6 +144,26 @@ fn a_page_token_is_never_an_argument() {
     assert!(parse(&["--cursor-stdin", "--cursor", PAGE]).is_err());
 }
 
+/// MIK-9456.CLI.1: a page token typed after the removed `--cursor` is refused
+/// by the parser without printing the token back (a typed secret would
+/// otherwise land in the terminal scrollback and any captured stderr).
+/// Mutant: define `--cursor` again, or add a handler that prints the value.
+#[test]
+fn a_typed_cursor_flag_is_refused_without_echoing_the_token() {
+    for argv in [
+        vec!["--cursor", PAGE],
+        vec!["--email-stdin", "--cursor", PAGE],
+        vec!["--cursor-stdin", "--cursor", PAGE],
+    ] {
+        let message = parse(&argv).expect_err("no --cursor VALUE").to_string();
+        assert!(!message.contains(PAGE), "{argv:?}: {message}");
+    }
+    let message = parse(&["--email-stdin", &format!("--cursor={PAGE}")])
+        .expect_err("no --cursor=VALUE")
+        .to_string();
+    assert!(!message.contains(PAGE), "{message}");
+}
+
 /// MIK-9456.CLI.1: exactly one of the two stdin sources; a page token
 /// carries its own window, so a window flag beside it is refused here, before
 /// the gateway charges a lookup for the 400 it would answer.
@@ -493,6 +513,7 @@ fn the_help_names_stdin_and_the_credential() {
     let help = lookup.render_long_help().to_string();
     assert!(help.contains("--email-stdin"), "{help}");
     assert!(help.contains("--cursor-stdin"), "{help}");
+    assert!(help.contains("next_cursor"), "paging recipe: {help}");
     assert!(
         !help.contains("--cursor <"),
         "no --cursor VALUE option: {help}"
