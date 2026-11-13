@@ -338,6 +338,12 @@ async fn a_reopened_request_can_be_denied_again() {
     let (_, listed) = get(&state, true).await;
     assert_eq!(open_count(&listed), 0, "{listed}");
     assert_eq!(kept_decisions(&state).len(), 2);
+
+    // A late retry of the first deny still gets the first outcome.
+    let (status, late) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{late}");
+    assert_eq!(late["event_id"], first["event_id"]);
+    assert_eq!(kept_decisions(&state).len(), 2, "a retry appends nothing");
 }
 
 #[tokio::test]

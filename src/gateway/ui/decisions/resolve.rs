@@ -142,8 +142,9 @@ pub(super) async fn resolve_decision(
         // Gone: resolved here before (a retry gets what was recorded), or
         // never open.
         Ok(None) => {
-            return match decisions.outcome(&id) {
+            return match decisions.outcome(&id, &request.scope_digest) {
                 Some(done) => answer_again(&done, &request),
+                None if decisions.resolved(&id) => already_resolved(),
                 None => resolve_error(
                     StatusCode::NOT_FOUND,
                     "not_found",
@@ -163,10 +164,7 @@ pub(super) async fn resolve_decision(
     // A later refusal reopens a denied request under the same id with a new
     // digest: a retry naming the old digest gets the old outcome, and the
     // reopened request can be denied afresh.
-    if let Some(done) = decisions
-        .outcome(&id)
-        .filter(|done| done.scope_digest == request.scope_digest)
-    {
+    if let Some(done) = decisions.outcome(&id, &request.scope_digest) {
         return answer_again(&done, &request);
     }
     if let Some(changed) = check_scope(&open, &request.scope_digest) {
@@ -205,10 +203,10 @@ fn check_scope(open: &OpenRequest, scope_digest: &str) -> Option<Response> {
     })
 }
 
-/// A resolve of an id that was already resolved: the same scope digest gets
-/// the recorded outcome and nothing is written; another is a conflict.
+/// A retry of a resolve recorded at this scope digest: a deny gets the
+/// recorded outcome and nothing is written; any other action conflicts.
 fn answer_again(done: &Outcome, request: &ResolveRequest) -> Response {
-    if done.scope_digest == request.scope_digest && request.action == ResolveAction::Deny {
+    if request.action == ResolveAction::Deny {
         return Json(json!({
             "ok": true,
             "action": "deny",
@@ -217,6 +215,11 @@ fn answer_again(done: &Outcome, request: &ResolveRequest) -> Response {
         }))
         .into_response();
     }
+    already_resolved()
+}
+
+/// A resolve of an id resolved here at another digest, or with another action.
+fn already_resolved() -> Response {
     resolve_error(
         StatusCode::CONFLICT,
         "already_resolved",

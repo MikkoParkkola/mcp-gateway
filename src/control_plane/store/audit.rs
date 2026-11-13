@@ -241,9 +241,15 @@ pub(super) fn audit_event_from_entry(entry: &serde_json::Value) -> Option<Contro
         grant_change: obj
             .get("grant_change")
             .and_then(|value| serde_json::from_value(value.clone()).ok()),
-        ui_decision: obj
-            .get("ui_decision")
-            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        ui_decision: obj.get("ui_decision").and_then(|value| {
+            // Never written unreadable; one that is (a damaged log) is named,
+            // so a deny that stops closing its request has a cause on record.
+            serde_json::from_value(value.clone())
+                .map_err(|error| {
+                    tracing::warn!(%error, event_id = ?obj.get("event_id"), "a ui_decision body could not be read");
+                })
+                .ok()
+        }),
     })
 }
 

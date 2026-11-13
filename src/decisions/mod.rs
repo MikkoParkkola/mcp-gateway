@@ -575,10 +575,11 @@ pub(crate) struct Shared {
     /// Serializes the resolve route: one resolve at a time, so a second
     /// resolve of an id sees what the first one changed.
     resolve: tokio::sync::Mutex<()>,
-    /// What each resolved item id answered, so a retry of the same resolve
-    /// is answered from this and writes nothing. Held in memory: item ids
-    /// do not survive a restart.
-    outcomes: parking_lot::Mutex<BTreeMap<String, Outcome>>,
+    /// What each resolved item id answered, one per scope digest it was
+    /// resolved at (a later refusal reopens a request under the same id), so
+    /// a retry of any of them is answered from this and writes nothing. Held
+    /// in memory: item ids do not survive a restart.
+    outcomes: parking_lot::Mutex<BTreeMap<String, Vec<Outcome>>>,
 }
 
 /// What a resolve recorded, for the retry of it.
@@ -608,14 +609,29 @@ impl Shared {
         }
     }
 
-    /// What resolving `id` answered, if it was resolved.
-    pub(crate) fn outcome(&self, id: &str) -> Option<Outcome> {
-        self.outcomes.lock().get(id).cloned()
+    /// What resolving `id` at `scope_digest` answered, if it was resolved
+    /// there.
+    pub(crate) fn outcome(&self, id: &str, scope_digest: &str) -> Option<Outcome> {
+        self.outcomes
+            .lock()
+            .get(id)?
+            .iter()
+            .find(|done| done.scope_digest == scope_digest)
+            .cloned()
+    }
+
+    /// Whether `id` was resolved here, at any digest.
+    pub(crate) fn resolved(&self, id: &str) -> bool {
+        self.outcomes.lock().contains_key(id)
     }
 
     /// Remember what resolving `id` answered.
     pub(crate) fn remember(&self, id: &str, outcome: Outcome) {
-        self.outcomes.lock().insert(id.to_owned(), outcome);
+        self.outcomes
+            .lock()
+            .entry(id.to_owned())
+            .or_default()
+            .push(outcome);
     }
 
     /// Hold the resolve mutex. Taken before anything else of a resolve.
