@@ -275,11 +275,12 @@ fn alive_pids(pids: &[u32]) -> Vec<u32> {
         .collect()
 }
 
-/// After the SIGTERM: every pid of the chain dies before `deadline`, and a plain
+/// After the SIGTERM: every pid of the chain dies within `STOP_BOUND`, and a plain
 /// stop ends inside the stop budget: the sweep adds no time of its own beyond the
 /// backend stage.
-async fn wait_chain_gone(root: &Path, leaves: &[u32], deadline: Instant, total: Duration) {
+async fn wait_chain_gone(root: &Path, leaves: &[u32], total: Duration) {
     let signalled = Instant::now();
+    let deadline = signalled + STOP_BOUND;
     while leaves.iter().any(|pid| pids::alive(*pid)) {
         assert!(
             Instant::now() < deadline,
@@ -379,7 +380,7 @@ async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) {
     );
     let deadline = Instant::now() + STOP_BOUND;
     sigterm(pid);
-    wait_chain_gone(root, &leaves, deadline, total).await;
+    wait_chain_gone(root, &leaves, total).await;
     tokio::time::timeout_at(deadline, reaped.child_mut().wait())
         .await
         .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
