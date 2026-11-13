@@ -87,13 +87,23 @@ fn drain_step(rig: &mut DrainRig) {
 }
 
 fn writer_token(rig: &DrainRig) -> String {
-    rig.donor.writer.as_ref().expect("fixture writer").intent_id.0.clone()
+    rig.donor
+        .writer
+        .as_ref()
+        .expect("fixture writer")
+        .intent_id
+        .0
+        .clone()
 }
 
 /// The converged end state every crash row reaches: file and journal gone, one terminal content
 /// for the writer, and a log the reader verifies (chain and pairing).
 fn converged(rig: &DrainRig, row: &str) {
-    assert_eq!(file_at(&rig.live.path), None, "{row}: the drained file is gone");
+    assert_eq!(
+        file_at(&rig.live.path),
+        None,
+        "{row}: the drained file is gone"
+    );
     assert_eq!(
         std::fs::read(journal::journal_path(&rig.live.path)).ok(),
         None,
@@ -129,7 +139,10 @@ fn run_refuses_flagged_donor() {
             session,
             donor,
         } = rig;
-        let result = runtime(JournalDrain::run(session, Some(std::sync::Arc::clone(&live.log))));
+        let result = runtime(JournalDrain::run(
+            session,
+            Some(std::sync::Arc::clone(&live.log)),
+        ));
         let session = match result {
             Ok(_) => panic!("{ROW} {at:?}: run finished a flagged donor"),
             Err(failure) => {
@@ -142,8 +155,16 @@ fn run_refuses_flagged_donor() {
             session,
             donor,
         };
-        assert_eq!(journal_of(&rig).as_deref(), Some(before.as_slice()), "{ROW} {at:?}: donor kept");
-        assert_eq!(rig.drain(), Ok(()), "{ROW} {at:?}: the file drain resumes and drains");
+        assert_eq!(
+            journal_of(&rig).as_deref(),
+            Some(before.as_slice()),
+            "{ROW} {at:?}: donor kept"
+        );
+        assert_eq!(
+            rig.drain(),
+            Ok(()),
+            "{ROW} {at:?}: the file drain resumes and drains"
+        );
         converged(&rig, ROW);
     }
 }
@@ -152,9 +173,17 @@ fn run_refuses_flagged_donor() {
 #[test]
 fn crash_x4() {
     const ROW: &str = "crash_x4";
-    let mut rig = cut(seeded(ROW, unfrozen), At::AbandonFileSynced, Mode::KeepAll, handover_step);
+    let mut rig = cut(
+        seeded(ROW, unfrozen),
+        At::AbandonFileSynced,
+        Mode::KeepAll,
+        handover_step,
+    );
     assert!(journal_of(&rig).is_some(), "{ROW}: the donor survives");
-    assert!(file_at(&rig.live.path).is_some(), "{ROW}: the file survives");
+    assert!(
+        file_at(&rig.live.path).is_some(),
+        "{ROW}: the file survives"
+    );
     assert_eq!(rig.drain(), Ok(()), "{ROW}");
     converged(&rig, ROW);
 }
@@ -163,7 +192,12 @@ fn crash_x4() {
 #[test]
 fn crash_x5() {
     const ROW: &str = "crash_x5";
-    let mut rig = cut(seeded(ROW, unfrozen), At::HandoverFinished, Mode::KeepAll, handover_step);
+    let mut rig = cut(
+        seeded(ROW, unfrozen),
+        At::HandoverFinished,
+        Mode::KeepAll,
+        handover_step,
+    );
     assert_eq!(journal_of(&rig), None, "{ROW}: the journal is gone");
     let config = std::fs::read(&rig.live.path).expect("fixture config");
     assert_eq!(rig.drain(), Ok(()), "{ROW}");
@@ -196,7 +230,10 @@ fn crash_x5b() {
         session,
         donor: seeded_donor,
     } = rig;
-    let result = runtime(JournalDrain::run(session, Some(std::sync::Arc::clone(&live.log))));
+    let result = runtime(JournalDrain::run(
+        session,
+        Some(std::sync::Arc::clone(&live.log)),
+    ));
     let session = match result {
         Ok(_) => panic!("{ROW}: run finished the planted donor"),
         Err(failure) => {
@@ -209,9 +246,21 @@ fn crash_x5b() {
         session,
         donor: seeded_donor,
     };
-    assert_eq!(rig.drain(), Err(DrainError::Journal), "{ROW}: the drain refuses");
-    assert_eq!(journal_of(&rig).as_deref(), Some(donor.as_slice()), "{ROW}: donor kept");
-    assert_eq!(file_at(&rig.live.path).as_deref(), Some(advanced.as_slice()), "{ROW}: file kept");
+    assert_eq!(
+        rig.drain(),
+        Err(DrainError::Journal),
+        "{ROW}: the drain refuses"
+    );
+    assert_eq!(
+        journal_of(&rig).as_deref(),
+        Some(donor.as_slice()),
+        "{ROW}: donor kept"
+    );
+    assert_eq!(
+        file_at(&rig.live.path).as_deref(),
+        Some(advanced.as_slice()),
+        "{ROW}: file kept"
+    );
     assert_eq!(rig.live.records().len(), records, "{ROW}: nothing appended");
 }
 
@@ -231,7 +280,10 @@ fn crash_f1() {
     const ROW: &str = "crash_f1";
     let rig = super::tests::drain_rig(ROW, unfrozen);
     let mut rig = cut(rig, At::IntentAppended, Mode::KeepAll, drain_step);
-    assert!(file_at(&rig.live.path).is_some(), "{ROW}: the file survives");
+    assert!(
+        file_at(&rig.live.path).is_some(),
+        "{ROW}: the file survives"
+    );
     assert_eq!(rig.drain(), Ok(()), "{ROW}");
     assert_eq!(intents(&rig), 2, "{ROW}: the intent was resent once");
     converged(&rig, ROW);
@@ -256,13 +308,24 @@ fn crash_f2() {
     let mut rig = super::tests::drain_rig(ROW, unfrozen);
     let original = file_at(&rig.live.path).expect("the handed-over file");
     let armed = fault::arm(&rig.live.path, Fault::Fail(At::FileRewritten));
-    assert_eq!(rig.drain(), Err(DrainError::Journal), "{ROW}: stopped after a persist");
+    assert_eq!(
+        rig.drain(),
+        Err(DrainError::Journal),
+        "{ROW}: stopped after a persist"
+    );
     drop(armed);
     let partial = file_at(&rig.live.path).expect("the partial file survives");
-    assert_ne!(partial, original, "{ROW}: the persisted progress is in the file");
+    assert_ne!(
+        partial, original,
+        "{ROW}: the persisted progress is in the file"
+    );
     let mut rig = restart(rig);
     assert_eq!(rig.drain(), Ok(()), "{ROW}");
-    assert_eq!(intents(&rig), 1, "{ROW}: delivered records are not repeated");
+    assert_eq!(
+        intents(&rig),
+        1,
+        "{ROW}: delivered records are not repeated"
+    );
     converged(&rig, ROW);
 }
 
@@ -273,7 +336,10 @@ fn crash_f2_pl() {
     for mode in MODES {
         let rig = super::tests::drain_rig(ROW, unfrozen);
         let mut rig = cut(rig, At::FileRewritten, mode, drain_step);
-        assert!(file_at(&rig.live.path).is_some(), "{ROW} {mode:?}: a file survives");
+        assert!(
+            file_at(&rig.live.path).is_some(),
+            "{ROW} {mode:?}: a file survives"
+        );
         assert_eq!(rig.drain(), Ok(()), "{ROW} {mode:?}");
         converged(&rig, ROW);
     }
@@ -298,7 +364,11 @@ fn crash_f3() {
     let mut rig = cut(rig, At::FileUnlinked, Mode::KeepAll, drain_step);
     let records = rig.live.records().len();
     assert_eq!(rig.drain(), Ok(()), "{ROW}");
-    assert_eq!(rig.live.records().len(), records, "{ROW}: nothing appended again");
+    assert_eq!(
+        rig.live.records().len(),
+        records,
+        "{ROW}: nothing appended again"
+    );
     converged(&rig, ROW);
 }
 
@@ -309,10 +379,17 @@ fn crash_f3_pl() {
     const ROW: &str = "crash_f3_pl";
     let rig = super::tests::drain_rig(ROW, unfrozen);
     let mut rig = cut(rig, At::FileUnlinked, Mode::DropAll, drain_step);
-    assert!(file_at(&rig.live.path).is_some(), "{ROW}: the file reappears");
+    assert!(
+        file_at(&rig.live.path).is_some(),
+        "{ROW}: the file reappears"
+    );
     let records = rig.live.records().len();
     assert_eq!(rig.drain(), Ok(()), "{ROW}");
-    assert_eq!(rig.live.records().len(), records, "{ROW}: nothing appended again");
+    assert_eq!(
+        rig.live.records().len(),
+        records,
+        "{ROW}: nothing appended again"
+    );
     converged(&rig, ROW);
 
     let mut rig = super::tests::drain_rig(ROW, unfrozen);
@@ -356,12 +433,20 @@ fn late_abandoned_retry() {
         ..crate::security::audit_rotation_config::RotationConfig::default()
     };
     let mut rig = seeded_on(Live::with_rotation(small), ROW, unfrozen);
-    assert_eq!(hand_over(&mut rig.session), Ok(()), "{ROW}: fixture handover");
+    assert_eq!(
+        hand_over(&mut rig.session),
+        Ok(()),
+        "{ROW}: fixture handover"
+    );
     let mut rig = cut(rig, At::FileUnlinked, Mode::DropAll, drain_step);
     let late = file_at(&rig.live.path).expect("the flagged file returns");
     assert_eq!(rig.drain(), Ok(()), "{ROW}: first drain removes it");
     let mut rig = restart(rig);
-    std::fs::write(super::super::handover::abandoned_path(&rig.live.path), &late).expect(ROW);
+    std::fs::write(
+        super::super::handover::abandoned_path(&rig.live.path),
+        &late,
+    )
+    .expect(ROW);
     std::fs::set_permissions(
         super::super::handover::abandoned_path(&rig.live.path),
         std::os::unix::fs::PermissionsExt::from_mode(0o600),
@@ -371,6 +456,10 @@ fn late_abandoned_retry() {
     assert_eq!(rig.drain(), Ok(()), "{ROW}: the late copy drains");
     assert_eq!(audit_files(&rig), before, "{ROW}: no append in any segment");
     // Segments rotated, so the active one need not hold the terminal: judge the whole log.
-    assert_eq!(file_at(&rig.live.path), None, "{ROW}: the late copy is gone");
+    assert_eq!(
+        file_at(&rig.live.path),
+        None,
+        "{ROW}: the late copy is gone"
+    );
     rig.live.verify(ROW);
 }

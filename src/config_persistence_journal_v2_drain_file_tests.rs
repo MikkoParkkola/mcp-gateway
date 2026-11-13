@@ -11,9 +11,7 @@ use super::super::super::abandoned::{
     AbandonedFrame, MAX_ABANDONED_BYTES, Slot, decode_frames, encode_frame, frames_of, marked,
 };
 use super::super::super::fixtures::{collect_case, config, seed};
-use super::super::super::{
-    FrozenRecord, IntentId, JournalSession, JournalV2, ParkReason, Phase,
-};
+use super::super::super::{FrozenRecord, IntentId, JournalSession, JournalV2, ParkReason, Phase};
 use super::super::fixtures::{Live, attempt, decided, reread, runtime, staged, state};
 use super::super::handover::{abandoned_path, hand_over};
 use super::super::{DrainError, DrainSession};
@@ -182,10 +180,7 @@ fn bad_files(frames: &[AbandonedFrame]) -> Vec<(&'static str, Vec<u8>)> {
             "a pre-frozen terminal result differs",
             encoded(&wrong_result),
         ),
-        (
-            "over the byte cap",
-            vec![b'0'; MAX_ABANDONED_BYTES + 1],
-        ),
+        ("over the byte cap", vec![b'0'; MAX_ABANDONED_BYTES + 1]),
     ]
 }
 
@@ -224,7 +219,11 @@ fn refuse_group(rig: &mut DrainRig, row: &str, good: &[u8]) -> Result<(), String
     plant(rig, good);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).expect("mode");
     let before = rig.file();
-    assert_eq!(rig.drain(), Err(DrainError::FileRefused), "{row}: group readable");
+    assert_eq!(
+        rig.drain(),
+        Err(DrainError::FileRefused),
+        "{row}: group readable"
+    );
     assert_eq!(rig.file(), before, "{row}: group readable unchanged");
     assert_eq!(
         std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777,
@@ -256,7 +255,13 @@ fn drain_delivers_and_removes_the_file() {
     assert_eq!(rig.drain(), Ok(()), "{ROW}");
     assert_eq!(rig.file(), None, "{ROW}: the drained file is gone");
     assert_eq!(rig.journal(), None, "{ROW}: no journal was recreated");
-    let writer = &rig.donor.writer.as_ref().expect("fixture writer").intent_id.0;
+    let writer = &rig
+        .donor
+        .writer
+        .as_ref()
+        .expect("fixture writer")
+        .intent_id
+        .0;
     assert_eq!(
         terminal_contents(&rig.live, writer).len(),
         1,
@@ -362,12 +367,19 @@ fn complete_requires_every_token() {
             Ok(())
         },
     );
-    collect_case(&mut failures, ROW, "a parked record", "not complete", || {
-        let mut donor = delivered_donor();
-        donor.writer.as_mut().expect("writer").records[0].parked = Some(ParkReason::InvalidPayload);
-        assert!(!complete(&donor), "{ROW}: parked");
-        Ok(())
-    });
+    collect_case(
+        &mut failures,
+        ROW,
+        "a parked record",
+        "not complete",
+        || {
+            let mut donor = delivered_donor();
+            donor.writer.as_mut().expect("writer").records[0].parked =
+                Some(ParkReason::InvalidPayload);
+            assert!(!complete(&donor), "{ROW}: parked");
+            Ok(())
+        },
+    );
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }
 
@@ -430,7 +442,10 @@ fn drain_refuses_live_journal() {
     let journal_before = rig.journal();
     let file_before = rig.file();
     let records_before = rig.live.records().len();
-    assert!(journal_before.is_some(), "{ROW}: the journal is beside the file");
+    assert!(
+        journal_before.is_some(),
+        "{ROW}: the journal is beside the file"
+    );
     assert_eq!(rig.drain(), Err(DrainError::Journal), "{ROW}");
     assert_eq!(rig.journal(), journal_before, "{ROW}: journal unchanged");
     assert_eq!(rig.file(), file_before, "{ROW}: file unchanged");
