@@ -5,7 +5,6 @@
 //! decision says the call has an invocation record only when that retry's own
 //! dispatch recorded one.
 
-use std::sync::Arc;
 
 use serde_json::json;
 

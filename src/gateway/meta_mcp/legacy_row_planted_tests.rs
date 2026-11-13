@@ -7,7 +7,6 @@
 //! serve through `refuse_stored_delivery`, judged here. If that judge ever
 //! serves such a row, this fails and the old rows need a read-time strip.
 
-use std::sync::Arc;
 
 use super::grant_audit::with_grant_slot;
 use super::grant_audit_fixture::{CAPS, Endpoint, PERSONAL, grant};

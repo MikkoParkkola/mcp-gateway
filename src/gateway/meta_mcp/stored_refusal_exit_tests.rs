@@ -75,14 +75,14 @@ async fn alice_gateway(dir: &std::sync::Arc<tempfile::TempDir>) -> (Endpoint, Me
 
 #[tokio::test]
 async fn a_served_read_carries_no_refusal() {
-    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (_endpoint, meta) = alice_gateway(&dir).await;
     assert_eq!(read(&meta, &finished_task()).await, (false, None));
 }
 
 #[tokio::test]
 async fn a_legacy_row_without_bindings_is_refused_for_provenance() {
-    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let stored = CommittedTask {
         bindings_recorded: false,
@@ -97,7 +97,7 @@ async fn a_legacy_row_without_bindings_is_refused_for_provenance() {
 
 #[tokio::test]
 async fn a_row_without_recorded_targets_is_refused_for_provenance() {
-    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let stored = CommittedTask {
         targets: Vec::new(),
@@ -115,7 +115,7 @@ async fn a_row_without_recorded_targets_is_refused_for_provenance() {
 /// still names the grant.
 #[tokio::test]
 async fn a_revoked_grant_is_named_on_every_poll() {
-    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let stored = finished_task();
     meta.set_identity_grants(grants(vec![]));
@@ -133,7 +133,7 @@ async fn a_revoked_grant_is_named_on_every_poll() {
 /// provenance.
 #[tokio::test]
 async fn a_rebound_result_is_refused_for_provenance() {
-    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let stored = CommittedTask {
         bindings: vec![(
@@ -170,7 +170,7 @@ async fn a_rebound_result_is_refused_for_provenance() {
 #[tokio::test]
 async fn the_refusing_target_of_two_is_the_one_named() {
     const UNGRANTED: &str = "calendar_write_day";
-    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (endpoint, meta) = alice_gateway(&dir).await;
     let base_url = crate::test_fixture_host::fixture_url(endpoint.port);
     let second = crate::capability::parse_capability(&format!(
@@ -211,7 +211,7 @@ async fn the_refusing_target_of_two_is_the_one_named() {
 /// the provenance pair, which `deliver` hands to the call's delivery record.
 #[tokio::test]
 async fn a_refused_stored_repeat_carries_its_pair() {
-    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let stored = CommittedTask {
         bindings_recorded: false,
