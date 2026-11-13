@@ -67,8 +67,11 @@ impl UiDecisionRecord {
     /// else, an accept or a record that mixes the two, is not.
     #[must_use]
     pub fn is_decline(&self) -> bool {
-        matches!(self.decision, None | Some(UiDecisionKind::Decline))
-            && self.rows.is_empty()
-            && self.expires_at.is_none()
+        mutant!(
+            "defaultflip",
+            matches!(self.decision, Some(UiDecisionKind::Decline)),
+            matches!(self.decision, None | Some(UiDecisionKind::Decline))
+        ) && mutant!("norows", true, self.rows.is_empty())
+            && mutant!("noexpiry", true, self.expires_at.is_none())
     }
 }
