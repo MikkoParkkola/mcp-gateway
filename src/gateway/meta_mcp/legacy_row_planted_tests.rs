@@ -23,7 +23,7 @@ const ALICE: (&str, &str) = ("api_key", "alice");
 async fn a_pre_binding_row_with_a_planted_member_is_refused_when_served() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,

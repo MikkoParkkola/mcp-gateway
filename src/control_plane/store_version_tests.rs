@@ -8,7 +8,7 @@ use super::*;
 // the file and both versions, and a write leaves it untouched.
 #[test]
 fn a_collection_of_another_schema_version_fails_closed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = file_store(dir.path());
     store
         .put_grant(grant("g1", ControlPlaneGrantStatus::Approved))
@@ -62,7 +62,7 @@ fn a_collection_of_another_schema_version_fails_closed() {
 // file swapped to another version at the caller's generation is not rewritten.
 #[test]
 fn a_compare_and_swap_refuses_a_collection_of_another_schema_version() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = file_store(dir.path());
     store
         .put_grant(grant("g1", ControlPlaneGrantStatus::Approved))
@@ -89,7 +89,7 @@ fn a_compare_and_swap_refuses_a_collection_of_another_schema_version() {
 // do not parse as this build's is refused for its version, not as bad JSON.
 #[test]
 fn the_version_is_refused_before_the_items_are_read() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = file_store(dir.path());
     store.put_policy(policy("p1", true)).unwrap();
     let path = store.policies_file();

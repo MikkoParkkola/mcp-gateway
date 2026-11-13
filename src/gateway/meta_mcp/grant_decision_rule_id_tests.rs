@@ -30,7 +30,7 @@ fn past() -> chrono::DateTime<chrono::Utc> {
 async fn refused_without_ids(case: &str, (who, reason): (Who, &str), row: IdentityGrant) {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,

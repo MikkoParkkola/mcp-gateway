@@ -55,7 +55,7 @@ fn policy(config: &ToolPolicyConfig) -> ToolPolicy {
 /// `alpha`'s `read` invoked under `authorizer` on a fresh gateway: whether
 /// it was delivered, the calls `alpha` was sent, and the call's one record.
 async fn call_under(authorizer: &(dyn ToolAuthorizer + Sync)) -> (bool, usize, Value) {
-    let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
     let (meta, sent) = table_meta(&dir, BackendConfig::default());
     let who = api_key_caller();
     let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
@@ -214,7 +214,7 @@ async fn shell_call_under(
     rules: Vec<crate::security::firewall::FirewallRule>,
 ) -> (bool, usize, Value, crate::security::rule_id::RuleKey) {
     use crate::security::firewall::{Firewall, FirewallConfig};
-    let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
     let (mut meta, sent) = table_meta(&dir, BackendConfig::default());
     meta.set_firewall(Some(std::sync::Arc::new(
         Firewall::from_config(

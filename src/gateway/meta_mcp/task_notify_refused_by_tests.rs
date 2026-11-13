@@ -149,7 +149,7 @@ async fn alice_gateway(dir: &std::sync::Arc<tempfile::TempDir>) -> (Endpoint, Me
 /// published status only) and its record names the deny entry.
 #[tokio::test]
 async fn a_withheld_notification_names_the_deny_entry() {
-    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
+    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let policy = denying();
     let authorizer = ToolPolicyAuthorizer {
@@ -177,7 +177,7 @@ async fn a_withheld_notification_names_the_deny_entry() {
 /// policy refusal, so the record names nothing.
 #[tokio::test]
 async fn a_notification_withheld_for_a_removed_backend_names_nothing() {
-    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
+    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let alice = api_key("alice");
     let caller = context(&alice);
@@ -193,7 +193,7 @@ async fn a_notification_withheld_for_a_removed_backend_names_nothing() {
 /// A read the checks admit is served whole and names no refusal.
 #[tokio::test]
 async fn a_served_notification_names_nothing() {
-    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
+    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let alice = api_key("alice");
     let caller = context(&alice);
@@ -209,7 +209,7 @@ async fn a_served_notification_names_nothing() {
 /// and its record names the provenance check, with no rule id.
 #[tokio::test]
 async fn a_notification_withheld_for_provenance_names_it() {
-    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
+    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let alice = api_key("alice");
     let caller = context(&alice);
@@ -231,7 +231,7 @@ async fn a_notification_withheld_for_provenance_names_it() {
 /// judgement never runs, and the record names nothing.
 #[tokio::test]
 async fn a_notification_without_its_stored_task_names_nothing() {
-    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
+    let dir = std::sync::crate::test_dir_keep::kept_tempdir();
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let published = json!({
         "jsonrpc": "2.0",

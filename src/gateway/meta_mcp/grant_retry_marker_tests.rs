@@ -52,7 +52,7 @@ async fn live_retry_for(meta: &super::MetaMcp, backend: &str) -> RetryFields {
 async fn withheld_call(continuation: bool, fail_invocation: bool) -> (serde_json::Value, usize) {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,
@@ -109,7 +109,7 @@ async fn a_retry_from_another_backend_that_recorded_its_invocation_makes_the_wit
  {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,
@@ -179,7 +179,7 @@ async fn another_calls_invocation_in_the_slot_never_marks_a_retry_note() {
     use super::grant_audit_fixture::{decisions, grant};
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let alice = ("api_key", "alice");
     let meta = gateway(
