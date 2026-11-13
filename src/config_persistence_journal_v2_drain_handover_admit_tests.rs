@@ -103,7 +103,7 @@ fn reachable(donor: &Donor, marked_donor: &JournalV2) -> Vec<(String, JournalV2)
 
     let mut wide = marked_donor.clone();
     edit_tokens(&mut wide, |token| {
-        token.intent_counter = Some(9_999_999_999)
+        token.intent_counter = Some(9_999_999_999);
     });
     variants.push(("wide counter".to_owned(), wide));
 
