@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tracing::error;
 
-use super::child_tree::{ChildTree, Ending, REAP_DEADLINE, Reap};
+use super::child_tree::{ChildTree, Ending, NESTED_TERM_NEED, REAP_DEADLINE, Reap};
 
 /// What a stop leaves a backend's tree after its stdin closes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,7 +179,9 @@ pub(crate) fn stop_deadline() -> Option<tokio::time::Instant> {
 /// kill, a third of the rest goes to the wait after SIGTERM and the remainder
 /// to the wait after EOF. Stdin that could not be closed (a writer holds it)
 /// gets no EOF wait, since the child never saw EOF. Windows has no SIGTERM.
-/// A hurried deadline keeps at least `MIN_PHASE` for SIGTERM when it fits.
+/// A hurried deadline keeps at least `MIN_PHASE` for SIGTERM when it fits. An
+/// unhurried stop keeps at least `NESTED_TERM_NEED` for it (capped so EOF keeps
+/// `MIN_PHASE`): a nested gateway only learns to hurry at the SIGTERM.
 pub(super) fn graceful_ending(
     budget: Duration,
     stdin_closed: bool,
@@ -189,6 +191,13 @@ pub(super) fn graceful_ending(
     let (eof, term) = match (cfg!(unix), stdin_closed) {
         (true, true) => {
             let term = deadline.map_or(waits / 3, |deadline| deadline.term_phase(waits));
+            // An unhurried stop keeps a SIGTERM phase a nested gateway can hurry
+            // inside, leaving the EOF wait at least the minimum phase.
+            let term = if deadline.is_some_and(StopDeadline::is_hurried) {
+                term
+            } else {
+                term.max(NESTED_TERM_NEED.min(waits.saturating_sub(MIN_PHASE)))
+            };
             (waits.saturating_sub(term), term)
         }
         (true, false) => (Duration::ZERO, waits),
@@ -421,6 +430,15 @@ pub(super) async fn wait_reaped(
 }
 
 impl super::StdioTransport {
+    /// Record the tree's descendants before the first signal of a stop, which
+    /// is the stdin close: a backend that exits on EOF would otherwise
+    /// reparent its descendants before anything recorded them.
+    fn snapshot_descendants(&self) {
+        if let Some(tree) = self.child.lock().tree.as_mut() {
+            tree.sweep_snapshot();
+        }
+    }
+
     /// Close the child's stdin now, unless a write holds it: one stuck on a
     /// peer that stopped reading. SIGTERM or the kill ends that one, and the
     /// child never sees EOF. `true` when stdin was closed.
@@ -441,6 +459,7 @@ impl super::StdioTransport {
     fn hand_over_gracefully_now(&self, budget: Duration) {
         self.connected
             .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.snapshot_descendants();
         let ending = graceful_ending(
             budget,
             self.close_stdin_now(),
@@ -565,6 +584,7 @@ impl super::StdioTransport {
         self.connected
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
+        self.snapshot_descendants();
         let stdin_closed = self.close_stdin_now();
         // The per-start stdin token first, then the tree to the reaper,
         // waited for (bounded) with any reap a retire started earlier. No
@@ -654,96 +674,5 @@ mod start_tests {
 
 /// Every caller's stop budget yields a plan that fits it, by construction.
 #[cfg(test)]
-mod plan_tests {
-    use super::{DEFAULT_STOP_BUDGET, Ending, KILL_RESERVE, MIN_PHASE, graceful_ending};
-    use std::time::Duration;
-
-    fn total(ending: Ending) -> Duration {
-        ending.waits() + KILL_RESERVE
-    }
-
-    /// One row per caller: a gateway shutdown at the default and at a short
-    /// `shutdown_timeout`, eviction and restart (`close_stage`), a close with
-    /// no caller budget, and a budget at the reserve.
-    #[test]
-    fn every_callers_plan_fits_its_budget() {
-        let callers = [
-            (
-                "shutdown, default shutdown_timeout",
-                Duration::from_secs(30),
-            ),
-            ("shutdown, short shutdown_timeout", Duration::from_secs(9)),
-            ("eviction close_stage", Duration::from_secs(10)),
-            ("restart close_stage", Duration::from_secs(10)),
-            ("no caller budget", DEFAULT_STOP_BUDGET),
-            ("at the reserve", KILL_RESERVE),
-        ];
-        for (caller, budget) in callers {
-            for stdin_closed in [true, false] {
-                let ending = graceful_ending(budget, stdin_closed, None);
-                assert!(
-                    ending == Ending::Now || total(ending) <= budget,
-                    "{caller}: plan {ending:?} exceeds its budget {budget:?}"
-                );
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_split_keeps_the_reserve_and_gives_a_third_to_sigterm() {
-        // 30 s less the reserve (the 5 s reap deadline and the close's 1 s
-        // margin) leaves 24 s: a third of it after SIGTERM.
-        let waits = Duration::from_secs(24);
-        assert_eq!(
-            graceful_ending(Duration::from_secs(30), true, None),
-            Ending::Graceful {
-                eof: waits
-                    .checked_sub(waits / 3)
-                    .expect("a third never exceeds the whole"),
-                term: waits / 3,
-            }
-        );
-        // Stdin a writer still holds: no EOF wait, SIGTERM at once.
-        assert_eq!(
-            graceful_ending(Duration::from_secs(10), false, None),
-            Ending::Graceful {
-                eof: Duration::ZERO,
-                term: Duration::from_secs(4),
-            }
-        );
-    }
-
-    #[test]
-    fn a_budget_at_or_under_the_reserve_kills_at_once() {
-        assert_eq!(graceful_ending(KILL_RESERVE, true, None), Ending::Now);
-        assert_eq!(graceful_ending(Duration::ZERO, true, None), Ending::Now);
-        assert_eq!(
-            graceful_ending(KILL_RESERVE + MIN_PHASE / 2, true, None),
-            Ending::Now,
-            "waits under the minimum phase are skipped"
-        );
-    }
-
-    /// A close begun after the hurry preserves a useful term phase.
-    /// Red if setup latency drops SIGTERM, extends the budget, or extends an earlier stop.
-    #[cfg(unix)]
-    #[test]
-    fn a_hurried_close_keeps_term_after_setup_latency() {
-        let deadline = super::StopDeadline::default();
-        let now = std::time::Instant::now();
-        let cut = deadline.hurry(now);
-        let budget = cut.duration_since(now + Duration::from_millis(10));
-        let ending = graceful_ending(budget, true, Some(&deadline));
-        assert_eq!(
-            ending,
-            Ending::Graceful {
-                eof: Duration::from_millis(190),
-                term: MIN_PHASE,
-            }
-        );
-        assert!(total(ending) <= budget);
-        deadline.move_earlier(now + KILL_RESERVE);
-        assert_eq!(deadline.hurry(now), now + KILL_RESERVE);
-    }
-}
+#[path = "stdio_reaper_plan_tests.rs"]
+mod plan_tests;

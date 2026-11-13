@@ -29,11 +29,21 @@ async fn r25_manifest_counts_are_signed_and_summed_across_passes() {
     let bytes = export(&fx, "ndjson").await;
     let (rows, manifest) = ndjson(&bytes);
     assert_eq!(rows.len(), 250);
-    assert_eq!(manifest["join_incomplete"], 3);
+    // JOIN.4 (expectation changed: before, `join_incomplete` was 3): `gw-c20`'s
+    // delivery lies more than the delivery window (about 290 KiB) after its
+    // call, so it does not reach the call: that call reads `no_record` and is
+    // counted in `delivery_beyond_window`. `gw-c100` (poisoned) and `gw-c200`
+    // (evicted) are inside the window and stay incomplete.
+    assert_eq!(manifest["join_incomplete"], 2);
+    assert_eq!(manifest["delivery_beyond_window"], 1);
     assert_eq!(manifest["answer_integrity_failed"], 1);
     let trust = TrustSet::from_json(&signer().public_jwk().to_string()).unwrap();
     verify_export(bytes.as_bytes(), &trust).expect("verifies");
-    for field in ["join_incomplete", "answer_integrity_failed"] {
+    for field in [
+        "join_incomplete",
+        "answer_integrity_failed",
+        "delivery_beyond_window",
+    ] {
         let mut lines: Vec<String> = bytes.lines().map(str::to_string).collect();
         let mut m = manifest.clone();
         m[field] = json!(0);

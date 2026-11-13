@@ -18,41 +18,41 @@ fn at(total: Duration) -> (Instant, StopBudget) {
 }
 
 #[test]
-fn exactly_twelve_seconds_is_accepted() {
+fn exactly_the_minimum_total_is_accepted() {
     assert!(StopBudget::http(Instant::now(), HTTP_MIN_TOTAL).is_ok());
-    assert_eq!(HTTP_MIN_TOTAL, ms(12_000));
+    assert_eq!(HTTP_MIN_TOTAL, ms(13_000));
 }
 
 #[test]
-fn eleven_point_nine_nine_nine_seconds_is_refused_with_an_actionable_message() {
-    let err = StopBudget::http(Instant::now(), ms(11_999)).expect_err("below the minimum");
+fn twelve_point_nine_nine_nine_seconds_is_refused_with_an_actionable_message() {
+    let err = StopBudget::http(Instant::now(), ms(12_999)).expect_err("below the minimum");
     assert_eq!(
         err,
         BelowMinimum {
-            configured: ms(11_999),
-            minimum: ms(12_000)
+            configured: ms(12_999),
+            minimum: ms(13_000)
         }
     );
     let text = err.to_string();
     assert!(text.contains("server.shutdown_timeout"), "{text}");
-    assert!(text.contains("11.999") && text.contains("12s"), "{text}");
+    assert!(text.contains("12.999") && text.contains("13s"), "{text}");
 }
 
 #[test]
 fn the_deadlines_at_the_minimum_total() {
-    let (t0, b) = at(ms(12_000));
+    let (t0, b) = at(ms(13_000));
     assert_eq!(b.listener_end(), t0 + ms(100), "Dl");
     assert_eq!(b.post_listener_end(), t0 + ms(350), "Dp");
-    assert_eq!(b.backend_end(), t0 + ms(9_750), "Db");
-    assert_eq!(b.runtime_end(), t0 + ms(10_000), "Dr");
-    assert_eq!(b.end(), t0 + ms(12_000), "D");
+    assert_eq!(b.backend_end(), t0 + ms(10_750), "Db");
+    assert_eq!(b.runtime_end(), t0 + ms(11_000), "Dr");
+    assert_eq!(b.end(), t0 + ms(13_000), "D");
 }
 
 #[test]
 fn the_deadlines_at_the_default_thirty_seconds() {
     let (t0, b) = at(Duration::from_secs(30));
-    assert_eq!(b.listener_end(), t0 + ms(18_100), "Dl");
-    assert_eq!(b.post_listener_end(), t0 + ms(18_350), "Dp");
+    assert_eq!(b.listener_end(), t0 + ms(17_100), "Dl");
+    assert_eq!(b.post_listener_end(), t0 + ms(17_350), "Dp");
     assert_eq!(b.backend_end(), t0 + ms(27_750), "Db");
     assert_eq!(b.runtime_end(), t0 + ms(28_000), "Dr");
     assert_eq!(b.end(), t0 + ms(30_000), "D");
@@ -60,10 +60,10 @@ fn the_deadlines_at_the_default_thirty_seconds() {
 
 #[test]
 fn the_listener_grace_is_dl_from_the_trigger() {
-    let (_, twelve) = at(ms(12_000));
-    assert_eq!(twelve.listener_grace(), ms(100));
+    let (_, minimum) = at(ms(13_000));
+    assert_eq!(minimum.listener_grace(), ms(100));
     let (_, thirty) = at(Duration::from_secs(30));
-    assert_eq!(thirty.listener_grace(), ms(18_100));
+    assert_eq!(thirty.listener_grace(), ms(17_100));
 }
 
 #[test]
@@ -71,14 +71,14 @@ fn a_stage_window_is_capped_and_then_shrinks_with_the_clock() {
     let (t0, b) = at(Duration::from_secs(30));
     let cap = Duration::from_secs(10);
     assert_eq!(
-        b.stage_window(t0 + ms(18_100), cap),
+        b.stage_window(t0 + ms(17_100), cap),
         ms(250),
         "all of P left"
     );
     assert_eq!(b.stage_window(t0, cap), cap, "far from Dp the cap rules");
     assert_eq!(
         b.stage_window(t0 + ms(12_000), cap),
-        ms(6_350),
+        ms(5_350),
         "Dp - now, under the cap"
     );
 }
@@ -95,7 +95,7 @@ fn early_completion_flows_time_forward_and_late_work_never_resets_it() {
         "the window shrinks by exactly the time spent"
     );
     assert_eq!(
-        b.stage_window(t0 + ms(18_350), cap),
+        b.stage_window(t0 + ms(17_350), cap),
         Duration::ZERO,
         "at Dp"
     );
@@ -121,7 +121,7 @@ async fn a_stuck_stage_with_a_huge_cap_still_ends_at_dp() {
         b.post_listener_end(),
         "at Dp, not at the cap"
     );
-    assert_eq!(Instant::now() - t0, ms(18_350));
+    assert_eq!(Instant::now() - t0, ms(17_350));
 }
 
 #[tokio::test(start_paused = true)]
@@ -147,7 +147,7 @@ async fn a_second_stage_after_dp_gets_no_time_and_dp_is_not_renewed() {
             .is_none()
     );
     assert_eq!(Instant::now(), at_dp, "the second stage waited for nothing");
-    assert_eq!(Instant::now() - t0, ms(18_350));
+    assert_eq!(Instant::now() - t0, ms(17_350));
 }
 
 #[tokio::test(start_paused = true)]
@@ -174,7 +174,7 @@ async fn a_stage_that_finishes_early_hands_its_time_to_the_next() {
     );
     assert_eq!(
         Instant::now() - t0,
-        ms(18_350),
+        ms(17_350),
         "the freed time was available"
     );
 }
@@ -182,9 +182,9 @@ async fn a_stage_that_finishes_early_hands_its_time_to_the_next() {
 #[test]
 fn the_listener_grace_for_a_total_is_what_the_budget_would_give() {
     for (total, grace) in [
-        (ms(12_000), ms(100)),
-        (ms(30_000), ms(18_100)),
-        (ms(600_000), ms(588_100)),
+        (ms(13_000), ms(100)),
+        (ms(30_000), ms(17_100)),
+        (ms(600_000), ms(587_100)),
     ] {
         let (_, budget) = at(total);
         assert_eq!(
@@ -198,7 +198,7 @@ fn the_listener_grace_for_a_total_is_what_the_budget_would_give() {
 
 #[test]
 fn the_post_listener_offset_for_a_total_is_dp_from_the_trigger() {
-    for (total, offset) in [(ms(12_000), ms(350)), (ms(30_000), ms(18_350))] {
+    for (total, offset) in [(ms(13_000), ms(350)), (ms(30_000), ms(17_350))] {
         let (t0, budget) = at(total);
         assert_eq!(
             StopBudget::post_listener_offset(total),
@@ -250,8 +250,8 @@ fn the_budget_after_the_listener_never_refuses_and_never_goes_before_the_trigger
     for total in [
         ms(0),
         ms(1),
-        ms(11_999),
-        ms(12_000),
+        ms(12_999),
+        ms(13_000),
         Duration::from_secs(30),
     ] {
         let t0 = Instant::now();
@@ -269,8 +269,8 @@ fn the_budget_after_the_listener_never_refuses_and_never_goes_before_the_trigger
         assert_eq!(b.end(), t0 + total, "D for {total:?}");
     }
     let t0 = Instant::now();
-    let accepted = StopBudget::http(t0, ms(12_000)).expect("accepted");
-    let fixed = StopBudget::fixed_at(t0, ms(12_000));
+    let accepted = StopBudget::http(t0, ms(13_000)).expect("accepted");
+    let fixed = StopBudget::fixed_at(t0, ms(13_000));
     assert_eq!(fixed.post_listener_end(), accepted.post_listener_end());
     assert_eq!(fixed.backend_end(), accepted.backend_end());
 }
@@ -310,10 +310,16 @@ async fn a_step_before_the_backends_does_not_poll_after_db() {
 }
 
 /// What a stopping nested gateway needs, before the reaper's kill reserve, to
-/// take its own leaf down when its parent's stdin closes and SIGTERM follows: a
-/// hurried nested gateway took 2.3 s in the nested stop rows, plus a margin.
+/// take its own leaf down when its parent closes its stdin and then sends
+/// SIGTERM: the reaper's SIGTERM floor (the gateway only learns to hurry at the
+/// SIGTERM; measured 0.37 s from SIGTERM to exit, planned for its worst case
+/// plus a margin). The EOF phase before it is pinned by the reaper's own rows.
+/// Derived from the reaper's constant, so changing the inner's hurried path
+/// moves it.
 #[cfg(unix)]
-const NESTED_GATEWAY_NEED: Duration = Duration::from_millis(2_400);
+fn nested_gateway_need() -> Duration {
+    crate::transport::NESTED_TERM_NEED_FOR_TEST
+}
 
 /// The nested busy-gateway case, at the minimum and with the listener having
 /// used its whole grace: the backend stage must still leave a stopping nested
@@ -328,9 +334,35 @@ fn the_backend_stage_keeps_a_graceful_window_for_a_busy_nested_gateway() {
         .backend_end()
         .saturating_duration_since(b.post_listener_end());
     let graceful = backend_stage.saturating_sub(crate::transport::KILL_RESERVE_FOR_TEST);
+    let need = nested_gateway_need();
     assert!(
-        graceful >= NESTED_GATEWAY_NEED,
-        "the reaper's graceful window is {graceful:?}, under the {NESTED_GATEWAY_NEED:?} a busy nested gateway needs"
+        graceful >= need,
+        "the reaper's graceful window is {graceful:?}, under the {need:?} a busy nested gateway needs"
     );
-    assert_eq!(graceful, ms(3_400), "the share kept over the kill reserve");
+    assert_eq!(graceful, ms(4_400), "the share kept over the kill reserve");
+}
+
+/// The minimum is at least the sum of its parts, computed from the constants: the
+/// listener's minimum grace, the post-listener share, the reaper's kill reserve,
+/// the EOF wait the backend stop had before the SIGTERM floor (two thirds of the
+/// previous 3.4 s window), the reaper's nested need for the SIGTERM wait, and the
+/// retirement share. A later change to any part then fails this row instead of
+/// silently shrinking the EOF or SIGTERM phase.
+/// Red if the minimum or the backend share falls under the sum of those parts.
+#[cfg(unix)]
+#[test]
+fn the_minimum_is_at_least_the_sum_of_its_parts() {
+    use super::{BACKEND_RESERVE, LISTENER_MIN, POST_RESERVE, TERMINAL_RESERVE};
+    let eof_before_the_floor = ms(3_400) * 2 / 3;
+    let graceful_window = eof_before_the_floor + crate::transport::NESTED_TERM_NEED_FOR_TEST;
+    let backend_share = crate::transport::KILL_RESERVE_FOR_TEST + graceful_window;
+    assert!(
+        BACKEND_RESERVE >= backend_share,
+        "the backend share {BACKEND_RESERVE:?} is under {backend_share:?}: the kill reserve, the old EOF wait and the nested SIGTERM need"
+    );
+    let parts = LISTENER_MIN + POST_RESERVE + backend_share + TERMINAL_RESERVE;
+    assert!(
+        HTTP_MIN_TOTAL >= parts,
+        "the minimum {HTTP_MIN_TOTAL:?} is under the sum of its parts {parts:?}"
+    );
 }

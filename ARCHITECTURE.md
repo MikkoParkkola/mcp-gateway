@@ -390,9 +390,13 @@ Loaded via Figment (`config.rs`): YAML file + environment variable overrides. Ke
 4. Save ranker usage data and transition tracking data to disk
 5. Drain in-flight requests: acquire all 10,000 semaphore permits, within what is left to the post-listener deadline
 6. Stop all backends (`BackendRegistry::stop_all_by`), by the budget's backend deadline
+   Each stdio backend ends with its descendants: before its group kill, the descendant sweep
+   (`transport/stdio_sweep.rs`, with a `/proc`+pidfd table on Linux and a libproc table on macOS)
+   freezes, verifies and kills every process still attached to it by parent pid, ordinary and
+   hurried stops alike (ADR-030 for the macOS table's `unsafe`).
 
 `config.server.shutdown_timeout` is the total of steps 3 to 6, counted from the signal; no
-step starts a timeout of its own. An HTTP gateway whose value is below 12 s refuses to start.
+step starts a timeout of its own. An HTTP gateway whose value is below 13 s refuses to start.
 
 Implemented in `gateway/server/mod.rs` (`Gateway::run`) and `gateway/server/listener.rs`.
 
@@ -400,4 +404,4 @@ Implemented in `gateway/server/mod.rs` (`Gateway::run`) and `gateway/server/list
 
 Runtime: `axum` (HTTP), `tokio` (async), `reqwest` (HTTP client), `tower` (middleware), `serde_json` (serialization), `dashmap` (concurrent maps), `parking_lot` (fast locks), `governor` (rate limiting), `notify` (file watching for hot-reload), `figment` (config), `sha2`/`hmac` (hashing/signatures).
 
-No `unsafe` code (enforced via `#![deny(unsafe_code)]`).
+`unsafe` code is denied (`#![deny(unsafe_code)]`) except in the scoped modules `src/unsafe_allowlist_tests.rs` pins (ADR-016, ADR-028, ADR-030).

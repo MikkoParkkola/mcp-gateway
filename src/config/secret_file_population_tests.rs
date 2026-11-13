@@ -47,6 +47,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     ("src/cli/invoke.rs", "reads stdin, not a file"),
     (
+        "src/cli_support/init.rs",
+        "init creates its own config and sample files with create_new and removes them on rollback; the admin token goes through the secret store, never a raw file here; it reads no existing secret file",
+    ),
+    (
         "src/commands/add_remove.rs",
         "`add --env-file FILE`: the operator-named JSON of env values, read bounded (64 KiB + 1); the values go through the store rule, never echoed; not a gateway secret file",
     ),
@@ -141,6 +145,15 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
          the bytes",
     ),
     (
+        "src/config_persistence_journal_v2_drain_handover.rs",
+        "the handover writer: opens the abandoned file (unix: no symlink follow, without waiting) \
+         and checks the OPENED handle before any read, on every path (also for a file it created \
+         itself): on unix a regular file, owned by this user, one link, no group or other \
+         permission bit; elsewhere the handover refuses before it writes or reads anything, until the \
+         owner check through win_acl lands (a tracked precondition of the startup caller); reads it only to prove it against the donor journal; it holds frozen \
+         journal records, not credentials",
+    ),
+    (
         "src/config_persistence_lock.rs",
         "config lock file; opened only to judge its mode, never read",
     ),
@@ -207,6 +220,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "writability probe for a backend's package cache: creates, writes and removes its own marker; reads nothing",
     ),
     (
+        "src/transport/stdio_sweep_linux.rs",
+        "the descendant sweep's Linux process table: reads /proc/<pid>/stat (pid, parent, state, start time); no file of the operator's, nothing secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/packaged.rs",
         "cfg(test) helper reading the repo files the MIK-8387/MIK-8481 pins check (registry-ban clippy.toml, pre-push.sh, the CI workflow); no secret",
     ),
@@ -225,6 +242,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/gateway/meta_mcp/boundary_pins/email_sinks.rs",
         "cfg(test) scanner for the email-sink inventory, reading the crate's own sources; no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/secret_writers.rs",
+        "cfg(test) pin reading the repo's own init admin-token test source to check its rows exist; no secret",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/creation_sites.rs",

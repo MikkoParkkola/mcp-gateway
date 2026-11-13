@@ -198,6 +198,20 @@ impl Subscribers {
     }
 }
 
+/// The log under a bound append was replaced while space was being freed:
+/// the append stopped before it wrote to, or expired anything in, the log
+/// that took its place.
+#[derive(Debug)]
+pub(super) struct LogReplaced;
+
+impl std::fmt::Display for LogReplaced {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("transparency log: the bound log was replaced while freeing space")
+    }
+}
+
+impl std::error::Error for LogReplaced {}
+
 impl TransparencyLogger {
     /// Tell `reader` of every record of `kind` written from now on, at least
     /// once: a settle whose write was unconfirmed and then retried can land
@@ -251,7 +265,7 @@ impl TransparencyLogger {
         resync: bool,
     ) -> io::Result<String> {
         self.refresh(inner, resync)?;
-        self.append_refreshed(inner, fields, resync)
+        self.append_refreshed(inner, fields, resync, None)
     }
 
     /// Bring `inner` to the log on disk before an append: every append
@@ -278,6 +292,7 @@ impl TransparencyLogger {
         inner: &mut Inner,
         fields: Map<String, Value>,
         resync: bool,
+        bound: Option<&LogId>,
     ) -> io::Result<String> {
         let published = self.subscribers.wants(&fields).then(|| fields.clone());
         let path = self.path();
@@ -321,7 +336,7 @@ impl TransparencyLogger {
                 if e.kind() == io::ErrorKind::StorageFull
                     && rot.on_disk_full == OnDiskFull::ExpireOldest =>
             {
-                self.free_space(inner, &path, &self.lease, e)?;
+                self.free_space(inner, &path, &self.lease, e, bound)?;
                 let retried = self.write_record(inner, &path, fields, resync);
                 if let Err(e) = segments::ensure_reserve(&path) {
                     tracing::warn!(error = %e, "audit log: disk-full reserve not recreated");
@@ -432,13 +447,28 @@ impl TransparencyLogger {
     #[cfg(not(test))]
     #[allow(clippy::unused_self)]
     fn injected_sync(&self, inner: &mut Inner) -> io::Result<()> {
-        inner.file.sync_all()
+        Self::durable(&inner.file)
+    }
+
+    /// The one place an acknowledged append reaches the disk; the test build
+    /// records each successful call per file so a path that skips it fails a row.
+    #[cfg(not(test))]
+    fn durable(file: &std::fs::File) -> io::Result<()> {
+        file.sync_all()
+    }
+
+    #[cfg(test)]
+    fn durable(file: &std::fs::File) -> io::Result<()> {
+        file.sync_all()?;
+        Self::note_synced(file);
+        Ok(())
     }
 
     /// The seam: a fault writes a partial prefix and returns ENOSPC.
     #[cfg(test)]
     fn injected_write(&self, inner: &mut Inner, bytes: &[u8]) -> Option<io::Result<()>> {
         use super::rotation::WriteFault;
+        use std::sync::atomic::Ordering;
         let stall = self.hooks.stall.lock().unwrap().take();
         if let Some(gate) = stall {
             gate.hold(); // held under `Inner`, like a write stuck in the kernel
@@ -446,9 +476,7 @@ impl TransparencyLogger {
         let fault = *self.hooks.fault.lock().unwrap();
         if fault == Some(WriteFault::WriteError) {
             *self.hooks.fault.lock().unwrap() = None;
-            self.hooks
-                .fault_fired
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.hooks.fault_fired.fetch_add(1, Ordering::AcqRel);
             return Some(Err(io::Error::other("injected write failure")));
         }
         let full = match fault {
@@ -462,10 +490,13 @@ impl TransparencyLogger {
         if !full {
             return None;
         }
-        self.hooks
-            .fault_fired
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        self.hooks.fault_fired.fetch_add(1, Ordering::AcqRel);
+        self.note_partial_write_trace(bytes);
         let _ = inner.file.write_all(&bytes[..bytes.len() / 2]);
+        let after_partial_write = self.hooks.after_partial_write.lock().unwrap().take();
+        if let Some(callback) = after_partial_write {
+            callback();
+        }
         Some(Err(io::Error::from(io::ErrorKind::StorageFull)))
     }
 
@@ -493,7 +524,7 @@ impl TransparencyLogger {
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             return Err(io::Error::other("injected expiry sync failure"));
         }
-        inner.file.sync_all()
+        Self::durable(&inner.file)
     }
 
     fn mark_hwm(&self, inner: &Inner, path: &Path, sync: bool) {
@@ -662,6 +693,7 @@ impl TransparencyLogger {
         path: &Path,
         g: &ExclusiveFileLock,
         cause: io::Error,
+        bound: Option<&LogId>,
     ) -> io::Result<()> {
         if segments::list_segments(path)?.is_empty() {
             return Err(cause);
@@ -680,6 +712,12 @@ impl TransparencyLogger {
         let on_active = path_id(path).is_ok_and(|id| id == inner.seg.id);
         if !on_active {
             self.rebuild(inner, path, g)?;
+            // A log put in place of the bound one: refuse before the expiry or
+            // the retried write reaches it. The rebuild above has already run
+            // its own recovery, as `refresh` does for any moved log.
+            if bound.is_some_and(|bound| inner.log_id != *bound) {
+                return Err(io::Error::other(LogReplaced));
+            }
         }
         let oldest = segments::list_segments(path)?;
         let Some(oldest) = oldest.first() else {

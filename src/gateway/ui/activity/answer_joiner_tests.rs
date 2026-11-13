@@ -126,7 +126,7 @@ fn delivery_line(trace: &str, findings: &serde_json::Value) -> Line {
 fn r7c_a_found_record_stays_found_when_the_window_is_unfinished() {
     let joiner_check = Check::bare(None);
     let mut joiner = Joiner::new(&joiner_check);
-    assert!(joiner.observe(&delivery_line("gw-t", &json!([]))));
+    assert!(joiner.observe(&delivery_line("gw-t", &json!([])), 0));
     let near = Seen {
         above: 10,
         head_covered: false,
@@ -157,7 +157,7 @@ fn findings_are_projected_through_kind_severity_and_where_only() {
         {"kind": {"deep": "object"}, "severity": "high", "where": "text"},
         "not an object",
     ]);
-    joiner.observe(&delivery_line("gw-t", &findings));
+    joiner.observe(&delivery_line("gw-t", &findings), 0);
     let seen = Seen {
         above: 0,
         head_covered: true,
@@ -178,7 +178,7 @@ fn a_finding_field_is_capped_so_the_projection_stays_bounded() {
     let mut joiner = Joiner::new(&joiner_check);
     let long = "k".repeat(10_000);
     let findings = json!([{"kind": long, "severity": "low", "where": "text"}]);
-    joiner.observe(&delivery_line("gw-t", &findings));
+    joiner.observe(&delivery_line("gw-t", &findings), 0);
     let seen = Seen {
         above: 0,
         head_covered: true,
@@ -194,7 +194,7 @@ fn a_finding_field_keeps_the_first_128_characters_not_bytes() {
     let mut joiner = Joiner::new(&joiner_check);
     let text: String = "é日🦀a".chars().cycle().take(200).collect();
     let findings = json!([{"kind": text, "severity": text, "where": text}]);
-    joiner.observe(&delivery_line("gw-t", &findings));
+    joiner.observe(&delivery_line("gw-t", &findings), 0);
     let seen = Seen {
         above: 0,
         head_covered: true,

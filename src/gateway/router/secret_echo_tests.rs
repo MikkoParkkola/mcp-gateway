@@ -652,7 +652,7 @@ for line in sys.stdin:
 #[cfg(unix)]
 #[tokio::test]
 async fn a_stdio_backend_echo_is_redacted() {
-    let dir = tempfile::tempdir().expect("script directory");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let script = dir.path().join("echo.py");
     std::fs::write(&script, STDIO_ECHO).expect("write the child script");
     let rule: crate::secret_injection::CredentialRule = serde_json::from_value(json!({

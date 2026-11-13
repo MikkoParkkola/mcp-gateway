@@ -71,7 +71,7 @@ struct Fixture {
 
 /// One logger, shared by the meta route and `AppState`, as the server wires it.
 async fn fixture(policy: AuditFailurePolicy) -> Fixture {
-    let audit = Arc::new(tempfile::tempdir().unwrap());
+    let audit = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,

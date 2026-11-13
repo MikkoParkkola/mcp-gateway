@@ -467,7 +467,7 @@ async fn state_with_record_budget(
 ) {
     let (state, first) = state_with(mock).await;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
-    let dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let limits = crate::gateway::task_service::StoreLimits {
         record_bytes,
         ..crate::gateway::task_service::StoreLimits::default()
