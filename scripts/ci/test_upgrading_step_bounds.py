@@ -26,6 +26,7 @@ from pathlib import Path
 
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 STEP = "UPGRADING checks on the assembled guide"
+MEMLOG = "scripts/ci/with-memory-log.sh"
 
 
 def step_block(text: str, name: str = STEP) -> list[str] | None:
@@ -48,10 +49,11 @@ LISTING = re.compile(r"\b(ps|pgrep|pstree|lsof)\b|/proc/|\bjobs\s+-l\b|\btop\b")
 
 def commands(block: list[str]) -> list[str]:
     """The step's `run: |` script as stripped, non-blank lines. The phase lines and the cargo commands count only at
-    the start of a line, so one that sits in a comment counts for nothing; the listing ban reads comments too."""
+    the start of a line, so one that sits in a comment counts for nothing; the listing ban reads comments too. A
+    leading memory-log wrapper (scripts/ci/with-memory-log.sh, which logs numbers only) is read through."""
     run = re.search(r"^\s+run: \|\n(.*)$", "\n".join(block), re.M | re.S)
     script = run.group(1) if run else ""
-    return [s for s in (l.strip() for l in script.split("\n")) if s]
+    return [s.removeprefix(MEMLOG + " ") for s in (l.strip() for l in script.split("\n")) if s]
 
 
 def phase_problems(cmds: list[str], with_run: bool) -> list[str]:
@@ -147,6 +149,8 @@ def self_test() -> int:
 
     cases = [
         ("a bounded, phased step", GOOD, 0),
+        ("the cargo lines through the memory log", GOOD.replace(BUILD, MEMLOG + " " + BUILD).replace(TEST, MEMLOG + " " + TEST), 0),
+        ("a wrapped run line before the compile", swap(GOOD.replace(TEST, MEMLOG + " " + TEST), BUILD, MEMLOG + " " + TEST), 1),
         ("no timeout", GOOD.replace("        timeout-minutes: 20\n", ""), 1),
         ("a timeout of 60", GOOD.replace("timeout-minutes: 20", "timeout-minutes: 60"), 1),
         ("a timeout of 10, under the slowest healthy run", GOOD.replace("timeout-minutes: 20", "timeout-minutes: 10"), 1),
@@ -174,6 +178,7 @@ def self_test() -> int:
     ]
     kcases = [
         ("keychain step with the phase line", KGOOD, 0),
+        ("keychain build through the memory log", KGOOD.replace("          cargo test", "          " + MEMLOG + " cargo test"), 0),
         ("keychain step without the phase line", KGOOD.replace("phase compile", "phase xx"), 1),
         ("keychain phase line only in a comment", KGOOD.replace(PHASE, "# " + PHASE), 1),
         ("keychain phase line after the build", swap(KGOOD, PHASE, "cargo test --all-features --lib --no-run"), 1),

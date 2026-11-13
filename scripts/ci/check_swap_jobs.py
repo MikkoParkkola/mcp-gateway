@@ -142,6 +142,17 @@ RESERVE = 10
 JOB_DEFAULT = 360  # GitHub's job limit when timeout-minutes is unset
 
 
+def whole_step_wrapped(run: str) -> bool:
+    """Whether the step is ONE command run through the memory log, its script in a single-quoted `bash -c` body that
+    ends the step (the keychain steps: `with-memory-log.sh dbus-run-session -- bash -euo pipefail -c '...'`). Then
+    every build line inside it is wrapped. Anything after the closing quote, or a second quote inside, is not."""
+    text = run.strip()
+    if not text.startswith(MEMLOG + " ") or not text.endswith("'"):
+        return False
+    first = text.find("'")
+    return first < len(text) - 1 and "'" not in text[first + 1:-1]
+
+
 def memlog_problems(file: str, name: str, job: dict) -> list[str]:
     """Problems with the memory log and the step limits of one in-scope job."""
     problems: list[str] = []
@@ -149,10 +160,13 @@ def memlog_problems(file: str, name: str, job: dict) -> list[str]:
     for i, step in enumerate(job.get("steps") or []):
         label = step.get("name", f"step {i}")
         lines = [l.strip() for l in str(step.get("run", "")).split("\n")]
-        builds = [l for l in lines if l and not l.startswith("#") and builds_library(l)]
+        # A comment or an echo never builds, even when it names `cargo test` (the phase lines do).
+        builds = [l for l in lines if l and not l.startswith(("#", "echo ")) and builds_library(l)]
         if not builds:
             continue
         bare = [l for l in builds if not l.startswith(MEMLOG + " ")]
+        if bare and whole_step_wrapped(str(step.get("run", ""))):
+            bare = []
         if bare:
             problems.append(f"{file}:{name}: '{label}' builds the library without {MEMLOG}: {bare[0][:80]}")
         limit = step.get("timeout-minutes")
@@ -320,6 +334,8 @@ def memlog_cases() -> list[tuple[str, str, str, dict, bool]]:
         ("C7b a log-only step that sets a limit", "ci.yml", "test-shards",
          job(step(w + "python3 scripts/ci/shard_tests.py run linux lib-a", 30, "Shard suite")), True),
         ("C8 two build lines, one wrapped", "ci.yml", "j", job(step(w + "cargo test --lib --no-run\ncargo test --lib")), True),
+        ("C12 an echo naming cargo test is not a build", "ci.yml", "j",
+         job(step(f'echo "phase compile: cargo test --lib --no-run at $(date -u +%T)"\n{w}cargo test --all-features --lib --no-run')), False),
         ("C11 feature-combos continuation, wrapped", "f.yml", "j", job(step(w + feature)), False),
         ("C11 feature-combos continuation, bare", "f.yml", "j", job(step(feature)), True),
         ("C11 UPGRADING loop, both cargo lines wrapped", "ci.yml", "j",
@@ -327,6 +343,11 @@ def memlog_cases() -> list[tuple[str, str, str, dict, bool]]:
         ("C11 UPGRADING loop, the run line bare", "ci.yml", "j",
          job(step(loop.replace("  cargo test --all-features $target --no-run", f"  {w}cargo test --all-features $target --no-run"))), True),
         ("C11 keychain dbus script, inner cargo wrapped", "ci.yml", "j", job(step(dbus.replace("  cargo test", "  " + w + "cargo test"), 5)), False),
+        ("C11 keychain dbus script, the whole command wrapped", "ci.yml", "j", job(step(w + dbus, 5)), False),
+        ("C11 whole command wrapped, then a bare build after it", "ci.yml", "j",
+         job(step(w + dbus + "\ncargo test --all-features --lib", 5)), True),
+        ("C11 whole command wrapped, but its body has a second quote", "ci.yml", "j",
+         job(step(w + dbus.replace("--exact a15", "--exact 'a15'"), 5)), True),
         ("C11 keychain dbus script, bare", "ci.yml", "j", job(step(dbus, 5)), True),
         ("C11 coverage tee pipeline, wrapped", "c.yml", "j", job(step(cov.replace("python3 scripts", w + "python3 scripts"), 70), limit=180), False),
         ("C11 coverage tee pipeline, bare", "c.yml", "j", job(step(cov, 70), limit=180), True),

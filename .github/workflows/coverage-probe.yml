@@ -154,10 +154,13 @@ jobs:
       - name: Run the part
         env:
           PART: ${{ matrix.part }}
+        # Healthy parts take up to 41 min; a stall ends here with its log, and the memory log samples it every 30 s
+        # (scripts/ci/check_swap_jobs.py). Its lines go to stderr, so they are in run.log too, as "memory ..." lines.
+        timeout-minutes: 70
         run: |
           set -o pipefail
           cargo llvm-cov clean --workspace
-          python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1 | tee run.log
+          scripts/ci/with-memory-log.sh python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1 | tee run.log
       - name: Bundle
         env:
           PART: ${{ matrix.part }}

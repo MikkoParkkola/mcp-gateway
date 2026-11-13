@@ -207,6 +207,9 @@ jobs:
         run: |
           python3 scripts/ci/check_swap_jobs.py --self-test
           python3 scripts/ci/check_swap_jobs.py
+      # The memory log those library builds run through (stub free and /proc, 1 s samples, about 15 s).
+      - name: The memory-log wrapper keeps status, output and signals
+        run: python3 scripts/ci/test_with_memory_log.py
       # A harness struct must drop its child process before its TempDir (the child's late write fails the shard).
       - name: Test harnesses drop the child before the temp dir
         run: |
@@ -1090,7 +1093,9 @@ jobs:
       - name: Shard suite
         env:
           PREVIEW_SANDBOX_REQUIRED: "1"
-        run: python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}
+        # Memory every 30 s while it builds (scripts/ci/with-memory-log.sh). No step limit yet: a healthy lib-b run
+        # took 52 min on 2026-11-13, so it logs only until its tail is measured (check_swap_jobs.py LOG_ONLY).
+        run: scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}
       # MIK-8185: the UPGRADING checks again, on the guide as release
       # preparation will assemble it from upgrading.d/, so a fragment that
       # would break a check at release breaks its own PR. A run that selects
@@ -1113,10 +1118,10 @@ jobs:
           for target in "--test upgrading_summary_rows" "--lib upgrade_notice_tests"; do
             echo "phase compile: cargo test $target at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^(Mem|Swap):/ {printf "%s total %s used %s free %s; ", $1, $2, $3, $4}')"
             # shellcheck disable=SC2086 # $target is two words on purpose
-            cargo test --all-features $target --no-run
+            scripts/ci/with-memory-log.sh cargo test --all-features $target --no-run
             echo "phase run: cargo test $target at $(date -u +%T)"
             # shellcheck disable=SC2086 # $target is two words on purpose
-            cargo test --all-features $target 2>&1 | tee "$RUNNER_TEMP/assembled.log"
+            scripts/ci/with-memory-log.sh cargo test --all-features $target 2>&1 | tee "$RUNNER_TEMP/assembled.log"
             if ! grep -Eq '^running [1-9][0-9]* tests?$' "$RUNNER_TEMP/assembled.log"; then
               echo "::error::cargo test $target selected no test"
               exit 1
@@ -1194,7 +1199,9 @@ jobs:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
       #   release.yml `verify` needs it green on the released revision.
-      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+      - name: Run the tests
+        # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.
+        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
   # Same run on the self-hosted arm64 runner. Mutation evidence asks whether a
   # named test fails on a mutant and passes on the fix; that is logic, not
@@ -1276,7 +1283,9 @@ jobs:
           npm install --global @googleworkspace/cli@0.22.5
           test "$(gws --version | head -1)" = "gws 0.22.5"
       - name: Every gws capability dry-runs against the real binary
-        run: cargo test --all-features --lib -- --ignored every_gws_capability_is_accepted_by_the_real_binary_in_dry_run
+        # Healthy runs take up to 12 min; a stall ends here with its log (check_swap_jobs.py).
+        timeout-minutes: 30
+        run: scripts/ci/with-memory-log.sh cargo test --all-features --lib -- --ignored every_gws_capability_is_accepted_by_the_real_binary_in_dry_run
 
   # The Linux keychain reader and writer against a real Secret Service
   # (ADR-028): an unlocked gnome-keyring on a private session bus. The reader
@@ -1288,7 +1297,8 @@ jobs:
     needs: scope
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # The build step's 25 min and the two run steps' 5 each, plus 10 for setup and post steps (check_swap_jobs.py).
+    timeout-minutes: 50
     permissions:
       contents: read
     steps:
@@ -1307,13 +1317,17 @@ jobs:
       - name: Build the test binary outside the session
         # The phase line (numbers only: the runner user's process count and `free -m` rows) tells a build that waits
         # on a lock from one that thrashes on memory when this step hangs; a hang here ran to the job limit once.
-        # Pinned by scripts/ci/test_upgrading_step_bounds.py.
+        # Pinned by scripts/ci/test_upgrading_step_bounds.py. Healthy builds take up to 12 min; the step limit ends a
+        # stall with its log, and the memory log samples it every 30 s (check_swap_jobs.py).
+        timeout-minutes: 25
         run: |
           echo "phase compile: cargo test --lib --no-run at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^(Mem|Swap):/ {printf "%s total %s used %s free %s; ", $1, $2, $3, $4}')"
-          cargo test --all-features --lib --no-run
+          scripts/ci/with-memory-log.sh cargo test --all-features --lib --no-run
       - name: Read a stored entry, then refuse it locked
+        # The binary is built above: this runs one test in under a minute.
+        timeout-minutes: 5
         run: |
-          dbus-run-session -- bash -euo pipefail -c '
+          scripts/ci/with-memory-log.sh dbus-run-session -- bash -euo pipefail -c '
             # A throwaway keyring password: the keyring lives and dies with this step.
             printf "ci" | gnome-keyring-daemon --unlock --components=secrets > /dev/null
             printf " a\n" | secret-tool store --label=a15 service mcp-gateway-ci-a15
@@ -1321,8 +1335,9 @@ jobs:
             grep -Eq "^test result: ok\. 1 passed" "$RUNNER_TEMP/a15.log"
           '
       - name: Create, read back, refuse a taken name, delete, then refuse locked
+        timeout-minutes: 5
         run: |
-          dbus-run-session -- bash -euo pipefail -c '
+          scripts/ci/with-memory-log.sh dbus-run-session -- bash -euo pipefail -c '
             printf "ci" | gnome-keyring-daemon --unlock --components=secrets > /dev/null
             cargo test --all-features --lib -- --ignored --exact config::keychain_linux::writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked 2>&1 | tee "$RUNNER_TEMP/b18.log"
             grep -Eq "^test result: ok\. 1 passed" "$RUNNER_TEMP/b18.log"
@@ -1504,7 +1519,9 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build the tests from the packaged crate
-        run: scripts/ci/packaged-tests.sh build
+        # Healthy builds take up to 17 min; a stall ends here with its log (check_swap_jobs.py).
+        timeout-minutes: 35
+        run: scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh build
 
   # The post-merge packaged run, on demand: a workflow file that is not on the
   # default branch yet cannot be dispatched itself.
