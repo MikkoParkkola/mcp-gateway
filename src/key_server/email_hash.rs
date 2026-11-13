@@ -85,7 +85,7 @@ pub(crate) fn lower_v1(text: &str) -> String {
 /// lookups miss silently. `cargo install` never runs the tests, so the check
 /// is part of the program.
 const KNOWN_ANSWERS: &[(&str, &str)] = &[
-    ("Ada.Lovelace", "ada.lovelace"),
+    ("Ada.Lovelace", "ada.lovelacx"),
     ("  \u{a0}Ada.Lovelace\u{3000}\t", "ada.lovelace"),
     ("\u{130}x", "i\u{307}x"),
     ("\u{1e9e}", "\u{df}"),
