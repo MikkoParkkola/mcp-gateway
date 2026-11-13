@@ -432,3 +432,37 @@ async fn t4l_unjournalled_add_is_out_of_band() {
         Some((V::OutOfBand, "g2".into(), d(&row("g2", "r"))))
     );
 }
+
+/// JRN.3: only a recorded plan warns about a row changed outside the
+/// gateway. A refused prepare warns nothing, and neither does the retry's
+/// prepare; its record warns once with the file, the row and both digests.
+#[tokio::test]
+async fn only_a_recorded_plan_warns_about_an_outside_change() {
+    let f = Fixture::new();
+    f.cli(add(row("g1", "r"))).await;
+    f.reconcile().await.unwrap();
+    f.direct_write(vec![row("g1", "edited")]).await;
+    let rows = f.rows().await;
+    *f.auditor.fault.lock() = Some(super::grant_audit::GrantAuditFault::PlanWrite);
+    let (refused, logs) =
+        crate::test_log_capture::capture_warnings(|| f.auditor.prepare(&rows, &f.journal()));
+    assert!(refused.is_err());
+    assert!(!logs.contains("outside the gateway"), "refused: {logs}");
+    *f.auditor.fault.lock() = None;
+    let (prepared, logs) =
+        crate::test_log_capture::capture_warnings(|| f.auditor.prepare(&rows, &f.journal()));
+    assert!(!logs.contains("outside the gateway"), "prepare: {logs}");
+    let prepared = prepared.map_err(|r| r.0).unwrap();
+    let (_, logs) = crate::test_log_capture::capture_warnings(|| f.auditor.record(prepared));
+    assert_eq!(logs.matches("outside the gateway").count(), 1, "{logs}");
+    let grants = f.grants.display().to_string();
+    let before = d(&row("g1", "r")).unwrap();
+    let after = d(&row("g1", "edited")).unwrap();
+    for part in [grants.as_str(), "g1", &before, &after] {
+        assert!(logs.contains(part), "{part}: {logs}");
+    }
+    assert_eq!(
+        f.records().last().cloned(),
+        Some((V::OutOfBand, "g1".into(), Some(after)))
+    );
+}
