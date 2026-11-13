@@ -1,0 +1,7 @@
+head_sha	7b909ee2fbbee3ab45d359e52214ea0d40cca83f
+cs-drops-result	windows	cs-drops-result.patch	--lib config::keychain_windows_tests::the_store_delete
+cs-ask-error-as-gone	windows	cs-ask-error-as-gone.patch	--lib config::keychain_windows_tests::the_store_delete
+cs-swallows-delete-error	windows	cs-swallows-delete-error.patch	--lib config::keychain_windows_tests::the_store_delete
+cs-no-asks	windows	cs-no-asks.patch	--lib config::keychain_windows_tests::the_store_delete
+cs-fewer-asks	windows	cs-fewer-asks.patch	--lib config::keychain_windows_tests::the_store_delete
+cs-asks-wrong-name	windows	cs-asks-wrong-name.patch	--lib config::keychain_windows_tests::the_store_delete

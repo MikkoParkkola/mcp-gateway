@@ -1,0 +1,12 @@
+diff --git a/src/config/keychain_windows.rs b/src/config/keychain_windows.rs
+--- a/src/config/keychain_windows.rs
++++ b/src/config/keychain_windows.rs
+@@ -142,7 +142,7 @@
+                     Ok(()) | Err(CredError::NotFound) => Ok(()),
+                     Err(other) => Err(unavailable(&other)),
+                 },
+-                || cred_exists(&name).map_err(|e| unavailable(&e)),
++                || cred_exists("").map_err(|e| unavailable(&e)),
+             )
+         })
+         .map_err(store_error)

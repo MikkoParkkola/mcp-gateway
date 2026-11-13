@@ -1,0 +1,12 @@
+diff --git a/src/config/keychain_windows.rs b/src/config/keychain_windows.rs
+--- a/src/config/keychain_windows.rs
++++ b/src/config/keychain_windows.rs
+@@ -134,7 +134,7 @@
+         let (cred_delete, cred_exists) = (self.cred_delete, self.cred_exists);
+         bounded(self.bound, self.delay, move || {
+             delete_confirmed(
+-                CONFIRM_ATTEMPTS,
++                0,
+                 CONFIRM_GAP,
+                 std::thread::sleep,
+                 || match cred_delete(&name) {

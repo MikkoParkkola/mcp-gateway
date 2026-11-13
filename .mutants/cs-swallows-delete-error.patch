@@ -1,0 +1,12 @@
+diff --git a/src/config/keychain_windows.rs b/src/config/keychain_windows.rs
+--- a/src/config/keychain_windows.rs
++++ b/src/config/keychain_windows.rs
+@@ -140,7 +140,7 @@
+                 || match cred_delete(&name) {
+                     // Already gone is durably gone.
+                     Ok(()) | Err(CredError::NotFound) => Ok(()),
+-                    Err(other) => Err(unavailable(&other)),
++                    Err(_) => Ok(()),
+                 },
+                 || cred_exists(&name).map_err(|e| unavailable(&e)),
+             )

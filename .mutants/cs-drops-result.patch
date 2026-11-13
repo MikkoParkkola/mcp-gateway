@@ -1,0 +1,22 @@
+diff --git a/src/config/keychain_windows.rs b/src/config/keychain_windows.rs
+--- a/src/config/keychain_windows.rs
++++ b/src/config/keychain_windows.rs
+@@ -133,7 +133,7 @@
+         let name = name.to_owned();
+         let (cred_delete, cred_exists) = (self.cred_delete, self.cred_exists);
+         bounded(self.bound, self.delay, move || {
+-            delete_confirmed(
++            let _ = delete_confirmed(
+                 CONFIRM_ATTEMPTS,
+                 CONFIRM_GAP,
+                 std::thread::sleep,
+@@ -143,7 +143,8 @@
+                     Err(other) => Err(unavailable(&other)),
+                 },
+                 || cred_exists(&name).map_err(|e| unavailable(&e)),
+-            )
++            );
++            Ok(())
+         })
+         .map_err(store_error)
+     }
