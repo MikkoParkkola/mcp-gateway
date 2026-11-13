@@ -279,6 +279,19 @@ async fn a_deny_records_one_audit_event_and_the_item_is_gone_now_and_after_a_res
         "the record names the caller"
     );
     assert_eq!(kept[0].reason, "not needed");
+    // A deny grants nothing: no grant change is recorded beside it.
+    let store = state.control_plane_store.as_ref().expect("a store");
+    let audit = store
+        .read_audit(&crate::control_plane::AuditFilter::new(200))
+        .expect("the audit reads");
+    assert!(
+        audit
+            .events
+            .iter()
+            .all(|event| event.grant_change.is_none()),
+        "no grant change: {:?}",
+        audit.events
+    );
 
     // A restart: a new set over the same logs replays the refusal and the
     // decision, and the request stays closed.
