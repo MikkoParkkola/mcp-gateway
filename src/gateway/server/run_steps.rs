@@ -214,6 +214,9 @@ impl Gateway {
         audit_log: Option<&Arc<crate::security::TransparencyLogger>>,
     ) -> Result<Option<Arc<KeyServer>>> {
         let step = if self.config.key_server.enabled {
+            // Before any key is read or created: a build whose email
+            // normalization differs would hash every address differently.
+            crate::key_server::email_hash::self_check().map_err(crate::Error::ConfigValidation)?;
             let mut ks_config = self.config.key_server.clone();
             // Resolve admin token (expand env:VAR_NAME)
             ks_config.admin_token = ks_config.resolve_admin_token(self.env.startup())?;

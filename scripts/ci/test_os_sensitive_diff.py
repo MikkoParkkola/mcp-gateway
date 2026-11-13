@@ -90,6 +90,7 @@ def main() -> int:
     row("the message names the file and line", "src/cli_support/init.rs:10" in text, True)
     row("the message names the matched line", "secret_store::write_admin" in text, True)
     row("the message gives the exact command", "gh pr edit 4839 --add-label os-int" in text, True)
+    row("the message says how to create the label when it is gone", "gh label create os-int" in text, True)
     row("labelled hit passes", osd.verdict(osd.scan(init), labels=["os-int"], pr=4839), None)
     row("the other label does not satisfy it", osd.verdict(osd.scan(init), labels=["os-sensitive"], pr=7) is not None, True)
     row("no hit passes unlabelled", osd.verdict([], labels=[], pr=7), None)
