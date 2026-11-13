@@ -1018,8 +1018,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh api "repos/$GITHUB_REPOSITORY/labels/os-int" --jq .name > /dev/null; then
-            echo "::error::the os-int label does not exist in $GITHUB_REPOSITORY (renamed or deleted?); this check and the macOS int lane depend on it. Recreate it: gh label create os-int --description 'run the macOS int shard on this pull request'"
+          if ! out="$(gh api "repos/$GITHUB_REPOSITORY/labels/os-int" --jq .name 2>&1)"; then
+            case "$out" in
+              *"Not Found"*|*"HTTP 404"*)
+                echo "::error::the os-int label does not exist in $GITHUB_REPOSITORY (renamed or deleted?); this check and the macOS int lane depend on it. Recreate it: gh label create os-int --description 'run the macOS int shard on this pull request'" ;;
+              *)
+                echo "::error::could not read the os-int label (not a missing label; a permission or API error): $out" ;;
+            esac
             exit 1
           fi
       # HEAD is the pull request's merge with the base, so its first parent is the base the merge was cut from and the
