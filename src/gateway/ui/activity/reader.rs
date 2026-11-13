@@ -372,8 +372,9 @@ pub(super) struct Seen {
 
 /// How a page learns what lies above its cursor.
 pub(super) enum Look<'a> {
-    /// Read forward from the cursor and give each line to the callback.
-    Fold(&'a mut dyn FnMut(&Line)),
+    /// Read forward from the cursor and give each line to the callback, with the
+    /// bytes of log above it in this read (known once the look-above ends).
+    Fold(&'a mut dyn FnMut(&Line, u64)),
     /// Nothing is read: this is where an earlier pass of the same read stopped.
     Carried(Seen),
 }
@@ -487,13 +488,17 @@ pub(super) fn read_page_joined(
 }
 
 /// Read forward from the invocation cursor over at most `budget` bytes,
-/// crossing newer retained segments, giving each line to `fold`. Charged to
-/// `spent`. A gap in the segment numbers, a vanished file or the byte limit
-/// leaves `head_covered` false; only reaching the active file's end sets it.
+/// crossing newer retained segments, giving each line to `fold` with the bytes
+/// of log above it (the total read minus the bytes from the cursor through the
+/// line's terminator, counted across segments, never a file offset). The
+/// callback runs once the total is known, in the order the lines were read.
+/// Charged to `spent`. A gap in the segment numbers, a vanished file or the
+/// byte limit leaves `head_covered` false; only reaching the active file's end
+/// sets it.
 fn look_above(
     inv: &Path,
     cursor: Option<&Cursor>,
-    fold: &mut dyn FnMut(&Line),
+    fold: &mut dyn FnMut(&Line, u64),
     spent: &mut u64,
     budget: u64,
 ) -> io::Result<Seen> {
@@ -507,6 +512,8 @@ fn look_above(
     };
     let mut above = 0_u64;
     let mut previous: Option<u64> = None;
+    let mut folded: Vec<(Line, u64)> = Vec::new();
+    let mut head_covered = false;
     for seq in segments(inv)? {
         if seq < pos.segment {
             continue;
@@ -520,10 +527,14 @@ fn look_above(
         let offset = if seq == pos.segment { pos.offset } else { 0 };
         let mut forward = Forward::open(file, offset, budget - above)?;
         let mut at = offset;
+        let mut through = above;
         let ended = loop {
             match forward.next_line()? {
                 Next::Line(bytes) => {
-                    fold_line(&bytes, seq, at, fold);
+                    through += bytes.len() as u64 + 1;
+                    if let Some(line) = line_of(&bytes, seq, at) {
+                        folded.push((line, through));
+                    }
                     at += bytes.len() as u64 + 1;
                 }
                 other => break other,
@@ -534,17 +545,17 @@ fn look_above(
             break;
         }
         if previous == seg_last(inv)? {
-            *spent += above;
-            return Ok(Seen {
-                above,
-                head_covered: true,
-            });
+            head_covered = true;
+            break;
         }
     }
     *spent += above;
+    for (line, through) in &folded {
+        fold(line, above.saturating_sub(*through));
+    }
     Ok(Seen {
         above,
-        head_covered: false,
+        head_covered,
     })
 }
 
@@ -553,15 +564,17 @@ fn seg_last(inv: &Path) -> io::Result<Option<u64>> {
     Ok(segments(inv)?.last().copied())
 }
 
-fn fold_line(bytes: &[u8], segment: u64, offset: u64, fold: &mut dyn FnMut(&Line)) {
-    if let Ok(entry @ Value::Object(_)) = serde_json::from_slice::<Value>(bytes) {
-        fold(&Line {
-            log: Which::Invocation,
-            entry,
-            segment,
-            span: Some((offset, bytes.len() as u64)),
-        });
-    }
+/// The line at `offset` of `segment`, when it parses as a JSON object.
+fn line_of(bytes: &[u8], segment: u64, offset: u64) -> Option<Line> {
+    let entry @ Value::Object(_) = serde_json::from_slice::<Value>(bytes).ok()? else {
+        return None;
+    };
+    Some(Line {
+        log: Which::Invocation,
+        entry,
+        segment,
+        span: Some((offset, bytes.len() as u64)),
+    })
 }
 
 /// Where a later page resumes in `tail`: a head read but not taken is unread,

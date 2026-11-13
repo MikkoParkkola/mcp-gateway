@@ -36,6 +36,7 @@ python3 scripts/ci/test_feature_shards.py	0	closed
 python3 scripts/ci/test_heavy_train_gating.py	1	closed
 python3 scripts/ci/test_os_shards.py	1	closed
 python3 scripts/ci/test_os_label_routing.py	1	closed
+python3 scripts/ci/test_os_sensitive_diff.py	1	closed
 python3 scripts/ci/test_mingw_debs.py	1	closed
 python3 scripts/ci/test_release_features.py	0	closed
 python3 scripts/ci/test_rollup_train_skip.py	1	closed
