@@ -133,7 +133,7 @@ fn generations_move_only_the_ids_they_belong_to() {
 
 /// R2b, R3: only a decline closes refusals. An accept record, an unknown kind
 /// and a record mixing the two close nothing; a decline in the old form (no
-/// kind) and the new form both do.
+/// kind) and the new form both do, unless they name rows or an expiry.
 #[test]
 fn only_a_decline_record_closes_refusals() {
     let decline = decision_record(&request(), DIGEST);
@@ -158,6 +158,12 @@ fn only_a_decline_record_closes_refusals() {
     assert!(
         decisions_from_record(&rows_no_kind).is_none(),
         "rows without a kind"
+    );
+    let mut decline_with_expiry = decline.clone();
+    decline_with_expiry.expires_at = Some(chrono::DateTime::from_timestamp(0, 0).expect("epoch"));
+    assert!(
+        decisions_from_record(&decline_with_expiry).is_none(),
+        "a decline with an expiry"
     );
     let mut decline_with_rows = decline;
     decline_with_rows.rows = vec![("r1".to_owned(), "sha256:ab".to_owned())];
