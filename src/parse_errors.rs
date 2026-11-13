@@ -18,11 +18,14 @@ use mcp_gateway::cli::Cli;
 
 /// Subcommand paths whose secrets come from stdin, with the hint their fixed
 /// message gives.
-const STDIN_SECRET_COMMANDS: &[(&[&str], &str)] = &[(
-    &["audit", "lookup-email"],
-    "The email and the page token are read from stdin only: --email-stdin \
-     (first page) or --cursor-stdin (next page)",
-)];
+const STDIN_SECRET_COMMANDS: &[(&[&str], &str)] = &[
+    (
+        &["audit", "lookup-email"],
+        "The email and the page token are read from stdin only: --email-stdin \
+         (first page) or --cursor-stdin (next page)",
+    ),
+    (&["hash-key"], "The API key is read from stdin only"),
+];
 
 /// `error` as it is printed for `args`: unchanged, or, for a command that
 /// reads a secret from stdin, a message of the same kind that never repeats
@@ -41,7 +44,7 @@ pub(crate) fn quiet_for_secret_commands(args: &[OsString], error: clap::Error) -
         Some(path) => {
             let Some((_, hint)) = STDIN_SECRET_COMMANDS
                 .iter()
-                .find(|(secret, _)| secret.iter().copied().eq(path.iter().map(String::as_str)))
+                .find(|(secret, _)| names(secret, &path, args))
             else {
                 return error;
             };
@@ -59,6 +62,24 @@ pub(crate) fn quiet_for_secret_commands(args: &[OsString], error: clap::Error) -
         error.kind(),
         format!("{what}; what was typed is not repeated here. {hint}; see --help.\n"),
     )
+}
+
+/// Whether the command line names `secret`: the parse recorded exactly that
+/// path, or it stopped earlier (something typed before the command name, such
+/// as `audit <email> lookup-email`) and the remaining names still follow, in
+/// order, later in `args`.
+fn names(secret: &[&str], path: &[String], args: &[OsString]) -> bool {
+    if path.len() > secret.len() || !path.iter().zip(secret).all(|(p, s)| p.as_str() == *s) {
+        return false;
+    }
+    let mut rest = secret.iter().skip(path.len());
+    let mut want = rest.next();
+    for arg in args.iter().skip(1) {
+        if want.is_some_and(|name| arg.to_str() == Some(*name)) {
+            want = rest.next();
+        }
+    }
+    want.is_none()
 }
 
 /// The subcommand names `args` selects, read by a second parse that ignores
