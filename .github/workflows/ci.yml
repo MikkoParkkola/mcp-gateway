@@ -189,6 +189,11 @@ jobs:
         run: |
           python3 scripts/ci/check_toolchain_pin.py --self-test
           python3 scripts/ci/check_toolchain_pin.py
+      # The int-b UPGRADING step stalled twice to the job limit with no log: it is bounded and prints its phase.
+      - name: The int-b UPGRADING step is bounded and phased
+        run: |
+          python3 scripts/ci/test_upgrading_step_bounds.py --self-test
+          python3 scripts/ci/test_upgrading_step_bounds.py
       # Under pipefail `x | grep -q` fails the pipeline on a match (MIK-8333).
       - name: No piped quiet grep
         run: |
@@ -1093,11 +1098,20 @@ jobs:
       - name: UPGRADING checks on the assembled guide (MIK-8185)
         # int-b: its `[!a-l]*` targets include upgrading_summary_rows.
         if: matrix.shard == 'int-b'
+        # Healthy runs take 7 to 11 minutes. Two int-b jobs on 2026-11-13 sat here until the 60 minute job limit (the
+        # shard suite had finished in 18 minutes) and left no log; the step bound fails the step instead, with its
+        # log, and the phase lines say whether a compile or a test run stalled. No process listing here: process
+        # arguments can print secrets. Pinned by scripts/ci/test_upgrading_step_bounds.py.
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           python3 scripts/release/upgrading_fragments.py assemble --dry-run > "$RUNNER_TEMP/UPGRADING-4.0.md"
           export UPGRADING_DOC="$RUNNER_TEMP/UPGRADING-4.0.md"
           for target in "--test upgrading_summary_rows" "--lib upgrade_notice_tests"; do
+            echo "phase compile: cargo test $target at $(date -u +%T)"
+            # shellcheck disable=SC2086 # $target is two words on purpose
+            cargo test --all-features $target --no-run
+            echo "phase run: cargo test $target at $(date -u +%T)"
             # shellcheck disable=SC2086 # $target is two words on purpose
             cargo test --all-features $target 2>&1 | tee "$RUNNER_TEMP/assembled.log"
             if ! grep -Eq '^running [1-9][0-9]* tests?$' "$RUNNER_TEMP/assembled.log"; then
