@@ -124,6 +124,53 @@ def check_job(name: str, job: dict) -> tuple[bool, list[str]]:
     return True, problems
 
 
+# Every library build line in scope runs through the memory log, and every such step carries its own
+# timeout-minutes, so a stalled build ends while the runner is alive and the step keeps its log (a job cancelled at
+# its own limit keeps none). Limits come from measured healthy durations; a step with no measurement yet logs
+# only, named here per step. Its limit must not be set until it is measured.
+MEMLOG = "scripts/ci/with-memory-log.sh"
+LOG_ONLY = {
+    # A healthy lib-b run took 52 min on 2026-11-13: no limit until the shard suite's tail is measured.
+    ("ci.yml", "test-shards", "Shard suite"),
+    ("ci.yml", "test-throwaway-hosted", "Run the tests"),
+    ("packaged-suite.yml", "packaged-suite", "Run the tests from the packaged crate"),
+    ("mutants.yml", "linux-hosted", "Run the linux rows"),
+    ("release.yml", "verify", "Test"),
+}
+# Minutes kept free of step limits in each job: setup, cache, swap and post steps measured at 3 min or less.
+RESERVE = 10
+JOB_DEFAULT = 360  # GitHub's job limit when timeout-minutes is unset
+
+
+def memlog_problems(file: str, name: str, job: dict) -> list[str]:
+    """Problems with the memory log and the step limits of one in-scope job."""
+    problems: list[str] = []
+    limit_total = 0
+    for i, step in enumerate(job.get("steps") or []):
+        label = step.get("name", f"step {i}")
+        lines = [l.strip() for l in str(step.get("run", "")).split("\n")]
+        builds = [l for l in lines if l and not l.startswith("#") and builds_library(l)]
+        if not builds:
+            continue
+        bare = [l for l in builds if not l.startswith(MEMLOG + " ")]
+        if bare:
+            problems.append(f"{file}:{name}: '{label}' builds the library without {MEMLOG}: {bare[0][:80]}")
+        limit = step.get("timeout-minutes")
+        if (file, name, label) in LOG_ONLY:
+            if limit is not None:
+                problems.append(f"{file}:{name}: '{label}' is log-only (not measured yet) but sets timeout-minutes")
+        elif not isinstance(limit, int):
+            problems.append(f"{file}:{name}: '{label}' builds the library with no timeout-minutes of its own")
+        else:
+            limit_total += limit
+    job_limit = job.get("timeout-minutes", JOB_DEFAULT)
+    if not isinstance(job_limit, int):
+        problems.append(f"{file}:{name}: job timeout-minutes is not a number")
+    elif limit_total + RESERVE >= job_limit:
+        problems.append(f"{file}:{name}: step limits {limit_total} + {RESERVE} reserve must stay under the job's {job_limit}")
+    return problems
+
+
 def check_workflow(file: str, doc: dict) -> tuple[set[tuple[str, str]], list[str]]:
     scope: set[tuple[str, str]] = set()
     problems: list[str] = []
@@ -136,6 +183,7 @@ def check_workflow(file: str, doc: dict) -> tuple[set[tuple[str, str]], list[str
         problems += found
         if in_scope:
             scope.add((file, name))
+            problems += memlog_problems(file, name, job)
     return scope, problems
 
 
@@ -227,8 +275,62 @@ def self_test() -> int:
         ok = in_scope == want_scope and len(problems) == want_problems
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} {label}: in scope {in_scope}, problems {problems}")
-    print(f"self-test: {len(cases) + 6 - wrong} ok, {wrong} wrong")
+    for label, file, name, j, want_bad in memlog_cases():
+        problems = memlog_problems(file, name, j)
+        ok = bool(problems) == want_bad
+        wrong += not ok
+        print(f"{'ok   ' if ok else 'WRONG'} memory log, {label}: problems {problems}")
+    print(f"self-test: {len(cases) + 6 + len(memlog_cases()) - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
+
+
+def memlog_cases() -> list[tuple[str, str, str, dict, bool]]:
+    """(label, workflow, job id, job, problems expected) for memlog_problems, from the real step shapes."""
+    w = MEMLOG + " "
+
+    def job(*steps: dict, limit: int | None = 60) -> dict:
+        return {"runs-on": "ubuntu-latest", "steps": list(steps), **({"timeout-minutes": limit} if limit else {})}
+
+    def step(run: str, limit: int | None = 20, name: str = "Build") -> dict:
+        return {"name": name, "run": run, **({"timeout-minutes": limit} if limit else {})}
+
+    feature = ("cargo test --all-targets --no-run --config profile.dev.debug-assertions=false \\\n"
+               "  --config profile.test.debug-assertions=false")
+    loop = ('for target in "--test a" "--lib b"; do\n  echo "phase compile"\n  cargo test --all-features $target --no-run\n'
+            '  echo "phase run"\n  cargo test --all-features $target 2>&1 | tee "$RUNNER_TEMP/a.log"\ndone')
+    dbus = ("dbus-run-session -- bash -euo pipefail -c '\n  printf \"ci\" | gnome-keyring-daemon --unlock > /dev/null\n"
+            "  cargo test --all-features --lib -- --ignored --exact a15 2>&1 | tee \"$RUNNER_TEMP/a15.log\"\n'")
+    cov = 'set -o pipefail\ncargo llvm-cov clean --workspace\npython3 scripts/ci/coverage_shards.py run "$P" "$PART" 2>&1 | tee run.log'
+    return [
+        ("C1 a bare library build", "ci.yml", "j", job(step("cargo test --all-features --lib --no-run")), True),
+        ("C2 a wrapped build with a limit", "ci.yml", "j", job(step(w + "cargo test --all-features --lib --no-run")), False),
+        ("C3 the wrapper only in a comment above", "ci.yml", "j",
+         job(step(f"# {w}cargo test\ncargo test --all-features --lib --no-run")), True),
+        ("C3b the wrapper only in a trailing comment", "ci.yml", "j",
+         job(step(f"cargo test --all-features --lib --no-run # {w}")), True),
+        ("C4 limits + reserve under the job limit", "ci.yml", "j",
+         job(step(w + "cargo test --lib", 25), step(w + "cargo test --lib", 5), step(w + "cargo test --lib", 5), limit=50), False),
+        ("C4b limits + reserve equal to the job limit", "ci.yml", "j",
+         job(step(w + "cargo test --lib", 25), step(w + "cargo test --lib", 5), step(w + "cargo test --lib", 5), limit=45), True),
+        ("C5 no job limit counts as 360", "ci.yml", "j", job(step(w + "cargo test --lib", 340), limit=None), False),
+        ("C5b no job limit, steps past 360", "ci.yml", "j", job(step(w + "cargo test --lib", 351), limit=None), True),
+        ("C6 a build step with no limit of its own", "ci.yml", "j", job(step(w + "cargo test --lib", None)), True),
+        ("C7 a log-only step with no limit", "ci.yml", "test-shards",
+         job(step(w + "python3 scripts/ci/shard_tests.py run linux lib-a", None, "Shard suite")), False),
+        ("C7b a log-only step that sets a limit", "ci.yml", "test-shards",
+         job(step(w + "python3 scripts/ci/shard_tests.py run linux lib-a", 30, "Shard suite")), True),
+        ("C8 two build lines, one wrapped", "ci.yml", "j", job(step(w + "cargo test --lib --no-run\ncargo test --lib")), True),
+        ("C11 feature-combos continuation, wrapped", "f.yml", "j", job(step(w + feature)), False),
+        ("C11 feature-combos continuation, bare", "f.yml", "j", job(step(feature)), True),
+        ("C11 UPGRADING loop, both cargo lines wrapped", "ci.yml", "j",
+         job(step(loop.replace("  cargo test", "  " + w + "cargo test"))), False),
+        ("C11 UPGRADING loop, the run line bare", "ci.yml", "j",
+         job(step(loop.replace("  cargo test --all-features $target --no-run", f"  {w}cargo test --all-features $target --no-run"))), True),
+        ("C11 keychain dbus script, inner cargo wrapped", "ci.yml", "j", job(step(dbus.replace("  cargo test", "  " + w + "cargo test"), 5)), False),
+        ("C11 keychain dbus script, bare", "ci.yml", "j", job(step(dbus, 5)), True),
+        ("C11 coverage tee pipeline, wrapped", "c.yml", "j", job(step(cov.replace("python3 scripts", w + "python3 scripts"), 70), limit=180), False),
+        ("C11 coverage tee pipeline, bare", "c.yml", "j", job(step(cov, 70), limit=180), True),
+    ]
 
 
 if __name__ == "__main__":
