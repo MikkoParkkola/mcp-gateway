@@ -22,6 +22,9 @@ mod pids;
 mod yaml;
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const READY_BOUND: Duration = Duration::from_secs(60);
+/// What the chain's last process may outlive the configured stop total by: the
+/// poll interval and a loaded host's scheduling, not a second stop.
+const BUDGET_SLACK: Duration = Duration::from_secs(2);
 /// How long a gateway's stop may take before its leaves must be gone: above the 30 s parent timeout, with slack for a loaded host.
 const STOP_BOUND: Duration = Duration::from_secs(45);
 /// The smallest `server.shutdown_timeout` an HTTP gateway accepts. A start below it
@@ -353,10 +356,7 @@ async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) {
     );
     let deadline = Instant::now() + STOP_BOUND;
     sigterm(pid);
-    tokio::time::timeout_at(deadline, reaped.child_mut().wait())
-        .await
-        .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
-        .expect("gateway exit");
+    let signalled = Instant::now();
     while leaves.iter().any(|pid| pids::alive(*pid)) {
         assert!(
             Instant::now() < deadline,
@@ -366,6 +366,18 @@ async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    // A plain stop of a gateway-child chain ends inside the stop budget: the
+    // sweep adds no time of its own beyond the backend stage.
+    let gone = signalled.elapsed();
+    assert!(
+        gone <= total + BUDGET_SLACK,
+        "the chain outlived the stop budget: {gone:?} against {total:?}\n{}",
+        logs(root)
+    );
+    tokio::time::timeout_at(deadline, reaped.child_mut().wait())
+        .await
+        .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
+        .expect("gateway exit");
     // Safety net only: the gateway has already exited, so this sends no signal.
     reaped.reap().await;
     std::mem::forget(cleanup);
