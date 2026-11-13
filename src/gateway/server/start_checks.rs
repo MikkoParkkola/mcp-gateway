@@ -21,16 +21,20 @@ pub(super) fn clock() -> Result<()> {
     })
 }
 
-/// Refuse an HTTP start whose configuration cannot work over HTTP.
-#[cfg_attr(
-    not(feature = "firewall"),
-    allow(unused_variables, clippy::unnecessary_wraps)
-)]
+/// Refuse an HTTP start whose configuration cannot work over HTTP: an anomaly
+/// detector with no caller key, or a `server.shutdown_timeout` too short to hold
+/// the stop's stages. A stdio start never comes through here, so stdio keeps its
+/// own small bound.
 pub(super) fn http(config: &Config) -> Result<()> {
     #[cfg(feature = "firewall")]
     crate::security::firewall::anomaly_config::refuse_keyless_http_anomaly(config)
         .map_err(crate::Error::Config)?;
-    Ok(())
+    crate::gateway::stop_budget::StopBudget::http(
+        tokio::time::Instant::now(),
+        config.server.shutdown_timeout,
+    )
+    .map(drop)
+    .map_err(|below| crate::Error::Config(below.to_string()))
 }
 
 impl super::Gateway {
