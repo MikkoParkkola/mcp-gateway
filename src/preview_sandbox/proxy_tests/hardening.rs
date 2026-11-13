@@ -271,7 +271,13 @@ fn x1_the_runtime_base_is_xdg_when_absolute_else_the_temp_dir() {
         super::super::runtime_base(Some("/run/user/1000".into())),
         PathBuf::from("/run/user/1000")
     );
-    assert_eq!(super::super::runtime_base(Some("relative/dir".into())), std::env::temp_dir());
-    assert_eq!(super::super::runtime_base(Some("".into())), std::env::temp_dir());
+    assert_eq!(
+        super::super::runtime_base(Some("relative/dir".into())),
+        std::env::temp_dir()
+    );
+    assert_eq!(
+        super::super::runtime_base(Some("".into())),
+        std::env::temp_dir()
+    );
     assert_eq!(super::super::runtime_base(None), std::env::temp_dir());
 }

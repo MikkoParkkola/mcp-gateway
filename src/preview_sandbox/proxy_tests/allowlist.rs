@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! C2, C6, C7: only CONNECT to the three registries on 443, named exactly,
+//! C2, C6, C7: only CONNECT to the three registries on 443, named exactly, ASCII case aside,
 //! is admitted.
 
 use super::{GLOBAL, begin, connect_bytes, connect_status, open, rig, send, status};
@@ -144,7 +144,11 @@ async fn t2_an_uppercase_registry_name_is_admitted() {
     let rig = rig().await;
     let cred = begin(&rig);
     for authority in ["REGISTRY.NPMJS.ORG:443", "Registry.npmjs.org:443"] {
-        assert_eq!(connect_status(&rig, authority, &cred).await, 200, "{authority}");
+        assert_eq!(
+            connect_status(&rig, authority, &cred).await,
+            200,
+            "{authority}"
+        );
     }
     let req = format!(
         "CONNECT registry.npmjs.org:443 HTTP/1.1\r\nHost: REGISTRY.npmjs.org:443\r\n\
@@ -175,13 +179,10 @@ async fn t2_a_head_over_eight_kib_is_refused() {
         .await
         .expect("connect");
     let (mut reader, mut writer) = stream.into_split();
-    let (head, _) = tokio::join!(
-        super::read_head(&mut reader),
-        async {
-            use tokio::io::AsyncWriteExt as _;
-            let _ = writer.write_all(req.as_bytes()).await;
-        }
-    );
+    let (head, _) = tokio::join!(super::read_head(&mut reader), async {
+        use tokio::io::AsyncWriteExt as _;
+        let _ = writer.write_all(req.as_bytes()).await;
+    });
     assert_eq!(status(&head), 400);
     assert!(rig.connect.dials().is_empty());
 }

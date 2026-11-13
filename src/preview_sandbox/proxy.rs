@@ -57,27 +57,28 @@ pub(crate) struct Credential {
 }
 
 impl Credential {
-    /// 32 bytes from the OS random source, URL-safe base64 without padding,
-    /// so it sits in a proxy URL's user part with no escaping.
+    /// 64 lowercase hex characters (32 random bytes), URL-safe as a proxy
+    /// URL's password with no escaping.
     fn fresh(random: Random) -> io::Result<Self> {
-        use base64::Engine as _;
         let mut bytes = [0u8; 32];
         random(&mut bytes)?;
         Ok(Self {
-            secret: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+            secret: hex::encode(bytes),
         })
     }
 
-    /// The random token, URL-safe base64 without padding.
+    /// 64 lowercase hex characters (32 random bytes), URL-safe as a proxy
+    /// URL's password with no escaping.
     pub(crate) fn secret(&self) -> &str {
         &self.secret
     }
 
     /// The `Proxy-Authorization` header value for this credential: `Basic `
-    /// plus base64 of `<secret>:` (the secret is the proxy URL's user part).
+    /// plus standard base64 of `x:<secret>` (user `x`, the secret as the
+    /// password).
     pub(crate) fn basic(&self) -> String {
         use base64::Engine as _;
-        let raw = format!("{}:", self.secret);
+        let raw = format!("x:{}", self.secret);
         format!(
             "Basic {}",
             base64::engine::general_purpose::STANDARD.encode(raw)
@@ -344,26 +345,26 @@ async fn serve<A: Accept>(listener: A, shared: Arc<Shared>) {
 
 /// Where a preview's private directory goes: `$XDG_RUNTIME_DIR` when it is
 /// an absolute path, else the temp dir.
-fn runtime_base(_xdg: Option<std::ffi::OsString>) -> PathBuf {
-    // Stub: the real choice lands with its implementation.
-    std::env::temp_dir()
+fn runtime_base(xdg: Option<std::ffi::OsString>) -> PathBuf {
+    match xdg {
+        Some(value) if Path::new(&value).is_absolute() => PathBuf::from(value),
+        _ => std::env::temp_dir(),
+    }
 }
 
-/// A fresh owner-only directory under the temp dir, with a random name so
-/// another local user cannot pre-create it; made exclusively, so an existing
-/// path is an error and a new name is tried.
+/// A fresh owner-only directory under `$XDG_RUNTIME_DIR` when absolute, else
+/// the temp dir, with a random name so another local user cannot pre-create
+/// it; made exclusively, so an existing path is an error and a new name is
+/// tried.
 fn private_dir() -> io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt as _;
     let mut last = io::Error::other("no private directory name was free");
     for _ in 0..8 {
         let mut bytes = [0u8; 8];
         os_random(&mut bytes)?;
-        let name: String = bytes
-            .iter()
-            .flat_map(|byte| [byte >> 4, byte & 0xf])
-            .filter_map(|nibble| char::from_digit(u32::from(nibble), 16))
-            .collect();
-        let dir = std::env::temp_dir().join(format!("mcp-gw-proxy-{name}"));
+        let name = hex::encode(bytes);
+        let dir =
+            runtime_base(std::env::var_os("XDG_RUNTIME_DIR")).join(format!("mcp-gw-proxy-{name}"));
         match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = e,
@@ -373,8 +374,8 @@ fn private_dir() -> io::Result<PathBuf> {
     Err(last)
 }
 
-/// The only authorities a CONNECT may name, compared byte for byte: no case
-/// folding, no trailing dot, no percent-decoding, port 443 written plainly.
+/// The only authorities a CONNECT may name, compared after ASCII lowercasing:
+/// no trailing dot, no percent-decoding, port 443 written plainly.
 const ALLOWED: [&str; 3] = [
     "registry.npmjs.org:443",
     "pypi.org:443",
@@ -526,6 +527,7 @@ where
     let [method, authority, version] = parts[..] else {
         return Err(Status::BadRequest);
     };
+    let authority = authority.to_ascii_lowercase();
     if method != "CONNECT" {
         return Err(Status::BadMethod);
     }
@@ -544,14 +546,14 @@ where
         }
     }
     let fetch = authorized(&auth, shared).ok_or(Status::AuthRequired)?;
-    if !ALLOWED.contains(&authority) {
+    if !ALLOWED.contains(&authority.as_str()) {
         return Err(Status::Forbidden);
     }
     // A Host header, when sent, names the same place (with or without port).
     let name = authority.trim_end_matches(":443");
     match host[..] {
         [] => {}
-        [h] if h == authority || h == name => {}
+        [h] if h.to_ascii_lowercase() == authority || h.to_ascii_lowercase() == name => {}
         _ => return Err(Status::BadRequest),
     }
     let addrs = unless_revoked(&fetch.closed, shared.resolve.resolve(name))
@@ -603,7 +605,7 @@ async fn unless_revoked<T>(
 }
 
 /// The live fetch's close token when exactly one `Proxy-Authorization`
-/// header carries its credential as `Basic base64(<secret>:)`.
+/// header carries its credential as `Basic base64(x:<secret>)`.
 fn authorized(auth: &[&str], shared: &Shared) -> Option<Fetch> {
     use base64::Engine as _;
     use subtle::ConstantTimeEq as _;
@@ -614,7 +616,7 @@ fn authorized(auth: &[&str], shared: &Shared) -> Option<Fetch> {
         .ok()?;
     let live = lock(&shared.live);
     let live = live.as_ref()?;
-    let expected = format!("{}:", live.credential.secret);
+    let expected = format!("x:{}", live.credential.secret);
     bool::from(decoded.ct_eq(expected.as_bytes())).then(|| Fetch {
         id: live.id,
         closed: live.closed.clone(),
