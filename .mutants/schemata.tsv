@@ -1,10 +1,7 @@
-head_sha	084c5c25d0b4a4f9abfd32ee4548a826dff4b854
+head_sha	9912de988b49505179fb731d2c534e064950d4fc
 #mutant c9460.w1
-mcp_gateway	gateway::server::signing_allocation_tests::owner2_stdio_tasks::shutdown::stdio_eof_releases_the_store_lease_before_returning	src/gateway/server/tests/owner2_stdio_shutdown_tests.rs:12
-mcp_gateway	gateway::server::gateway_bootstrap_tests::explicit_account_shutdown_frees_both_locks_while_the_gateway_stays_alive	src/gateway/server/gateway_bootstrap_tests.rs:459
+mcp_gateway	gateway::server::gateway_bootstrap_tests::the_stdio_stop_releases_custody_with_the_bounded_call	src/gateway/server/gateway_bootstrap_tests.rs:637
 #mutant c9460.w2
-mcp_gateway	gateway::server::stop_budget_start_tests::an_http_start_below_the_stop_budget_minimum_is_refused_before_it_binds	src/gateway/server/stop_budget_start_tests.rs:41
-mcp_gateway	gateway::server::gateway_bootstrap_tests::explicit_account_shutdown_frees_both_locks_while_the_gateway_stays_alive	src/gateway/server/gateway_bootstrap_tests.rs:459
+mcp_gateway	gateway::server::gateway_bootstrap_tests::an_http_serve_that_returns_early_starts_the_custody_release	src/gateway/server/gateway_bootstrap_tests.rs:604
 #mutant c9460.w3
-mcp_gateway	gateway::server::signing_allocation_tests::owner2_stdio_tasks::shutdown::stdio_eof_releases_the_store_lease_before_returning	src/gateway/server/tests/owner2_stdio_shutdown_tests.rs:12
-mcp_gateway	gateway::server::gateway_bootstrap_tests::explicit_account_shutdown_frees_both_locks_while_the_gateway_stays_alive	src/gateway/server/gateway_bootstrap_tests.rs:459
+mcp_gateway	gateway::server::gateway_bootstrap_tests::a_cancelled_stdio_serve_starts_the_custody_release	src/gateway/server/gateway_bootstrap_tests.rs:672
