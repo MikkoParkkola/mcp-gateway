@@ -74,7 +74,7 @@ pub(super) fn scan(
     let mut joiner = Joiner::new(check);
     // The call is judged first, as the list judges it: a call whose own line was
     // tampered with poisons its trace here too.
-    joiner.observe(call);
+    joiner.observe(call, 0);
     let mut out = Scanned {
         joined: Joined::NoRecord(Searched::Finished),
         records: Vec::new(),
@@ -130,7 +130,7 @@ pub(super) fn scan(
                     segment: seq,
                     span,
                 };
-                joiner.observe(&line);
+                joiner.observe(&line, 0);
             }
             prev = entry;
         };
@@ -211,7 +211,7 @@ pub(super) fn answer_block(call: &Line, s: &Scanned) -> Value {
         ),
         Joined::NoRecord(_) => (
             format!(
-                "no delivery record for trace {} in the {} bytes and {} lines after the call; the search stopped at: {}",
+                "no delivery record for trace {} in the {} bytes and {} lines after the call (the delivery window is 256 KiB); the search stopped at: {}",
                 trace.unwrap_or_default(),
                 s.bytes,
                 s.lines,

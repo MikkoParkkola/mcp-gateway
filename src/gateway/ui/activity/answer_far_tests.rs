@@ -43,7 +43,7 @@ async fn r37_the_look_above_stops_at_its_bound_and_never_reads_the_far_record() 
     let cursor = super::cursor::decode(&token).expect("a cursor");
     let folded = Cell::new(0_u64);
     let far_read = Cell::new(false);
-    let mut fold = |line: &Line| {
+    let mut fold = |line: &Line, _above: u64| {
         folded.set(folded.get() + line.entry.to_string().len() as u64 + 1);
         let e = &line.entry;
         far_read.set(
