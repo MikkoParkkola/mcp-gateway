@@ -153,15 +153,23 @@ def whole_step_wrapped(run: str) -> bool:
     return first < len(text) - 1 and "'" not in text[first + 1:-1]
 
 
-INTERPRETERS = ("python3", "python", "bash", "sh")
+# What may stand between the start of a command and the build it runs, for the build to count as wrapped: an
+# optional loop/branch keyword, the wrapper as the command's first word, an optional interpreter, and the start of
+# the build's own word when the match begins inside it (`"$RUNNER_TEMP/run_mutants.py`). No `(` or backtick.
+WRAPPED_PREFIX = re.compile(
+    r"\s*(?:(?:do|then|else)\s+)?(?:\./)?" + re.escape(MEMLOG) + r"\s+(?:(?:python3?|bash|sh)\s+)?[\w$./{}\"'-]*")
+# Characters that end one command and start another (or a substitution's): a build's command starts after the
+# last of them.
+COMMAND_BREAKS = "\n;&|(`"
 
 
 def unwrapped_builds(run: str) -> list[str]:
     """Every library build in `run` that does not run through the wrapper. Fail closed, not a shell parser: after
-    joining backslash continuations and dropping comment lines, each occurrence of a build (CARGO_RE, WRAPPERS)
-    must follow `with-memory-log.sh` directly, an interpreter word (python3 ...) and the path it runs aside. A build
-    anywhere else (after `&&` or `&`, inside `$( )` or backticks, in an echo's text) counts as bare, so a phase line
-    must not spell out `cargo test`."""
+    joining backslash continuations and dropping comment lines, each occurrence of a build (CARGO_RE, WRAPPERS) is
+    wrapped only when the text from the start of its command (after the last newline, `;`, `&`, `|`, `(` or
+    backtick) to the build is exactly WRAPPED_PREFIX. Anything else counts as bare: a build on the line after a
+    mention of the wrapper, after `VAR=`, inside `$( )` or backticks, or in an echo's text (so a phase line must
+    not spell out `cargo test`)."""
     text = "\n".join(l for l in run.replace("\\\n", " ").split("\n") if not l.lstrip().startswith("#"))
     starts = []
     for m in CARGO_RE.finditer(text):
@@ -172,13 +180,8 @@ def unwrapped_builds(run: str) -> list[str]:
     starts += [m.start() for w in WRAPPERS for m in w.finditer(text)]
     bare = []
     for s in sorted(starts):
-        before = text[:s].split()
-        # The build's own word may begin before the match (`"$RUNNER_TEMP/run_mutants.py`): drop that partial word.
-        if before and not text[:s].endswith((" ", "\t", "\n")):
-            before = before[:-1]
-        if before and before[-1] in INTERPRETERS:
-            before = before[:-1]
-        if not before or not before[-1].endswith(MEMLOG):
+        command_start = max(text.rfind(c, 0, s) for c in COMMAND_BREAKS) + 1
+        if not WRAPPED_PREFIX.fullmatch(text[command_start:s]):
             bare.append(text[s:s + 80].split("\n")[0])
     return bare
 
@@ -383,6 +386,14 @@ def memlog_cases() -> list[tuple[str, str, str, dict, bool]]:
          job(step(f"# cargo test --all-features --lib runs below\n{w}cargo test --all-features --lib --no-run")), False),
         ("C16 a bare single-target run beside a wrapped library build", "ci.yml", "j",
          job(step(f"{w}cargo test --all-features --lib --no-run\ncargo test --all-features --test one_target")), False),
+        ("C17 the wrapper named on the line before a bare build", "ci.yml", "j",
+         job(step(f"ls -l {MEMLOG}\ncargo test --all-features --lib")), True),
+        ("C17 the wrapper as an assignment's value", "ci.yml", "j", job(step(f"VAR={MEMLOG} cargo test --all-features --lib")), True),
+        ("C17 a substitution glued to the wrapper's argument", "ci.yml", "j", job(step(w + '"$(cargo test --all-features --lib)"')), True),
+        ("C17 the wrapper after && before a bare build", "ci.yml", "j", job(step(f"test -x {MEMLOG} && cargo test --all-features --lib")), True),
+        ("C18 a wrapped build inside a subshell", "ci.yml", "j", job(step(f"({w}cargo test --all-features --lib)")), False),
+        ("C18 a wrapped build after a backgrounded command", "ci.yml", "j", job(step(f"sleep 1 & {w}cargo test --all-features --lib")), False),
+        ("C18 a wrapped build after &&", "ci.yml", "j", job(step(f"true && {w}cargo test --all-features --lib")), False),
         ("C14 a non-build step's limit counts against the job", "ci.yml", "j",
          job({"name": "Setup", "run": "true", "timeout-minutes": 30}, step(w + "cargo test --lib", 25), limit=60), True),
         ("C11 feature-combos continuation, wrapped", "f.yml", "j", job(step(w + feature)), False),

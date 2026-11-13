@@ -1255,7 +1255,9 @@ jobs:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
       #   release.yml `verify` needs it green on the released revision.
-      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+      - name: Run the tests
+        # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.
+        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
   # CAT.1 (MIK-7782): the real `gws` binary, pinned, accepts the argv every
   # shipped gws_* capability builds. `--dry-run` needs no credentials and sends
