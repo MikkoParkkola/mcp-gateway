@@ -149,7 +149,6 @@ async fn rig() -> Rig {
     });
     let interfaces = Arc::new(FakeInterfaces(Mutex::new(Vec::new())));
     let proxy = AllowlistProxy::bind(resolve.clone(), connect.clone(), interfaces.clone())
-        .await
         .expect("proxy bind");
     Rig {
         proxy,

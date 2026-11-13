@@ -42,7 +42,7 @@ async fn c1_outside_a_fetch_nothing_is_admitted_and_the_port_stays_bound() {
         assert!(t.echoes().await, "the tunnel carried no bytes");
     }
     let dialled = rig.connect.dials().len();
-    rig.proxy.expire(&cred);
+    rig.proxy.revoke(&cred);
     for entry in ENTRIES {
         let st = connect_status(&rig, entry, "registry.npmjs.org:443", &cred).await;
         assert_ne!(st, 200, "a tunnel opened outside a fetch");
@@ -62,7 +62,7 @@ async fn c1_outside_a_fetch_nothing_is_admitted_and_the_port_stays_bound() {
 async fn c3_missing_wrong_or_expired_credential_gets_407() {
     let rig = rig().await;
     let old = begin(&rig);
-    rig.proxy.expire(&old);
+    rig.proxy.revoke(&old);
     let live = begin(&rig);
     let wrong = format!("Basic {}", base64_of("not-the-secret:"));
     for entry in ENTRIES {
@@ -140,7 +140,7 @@ async fn c8_credentials_are_random_per_fetch_and_the_old_one_is_dead() {
     let mut seen = std::collections::HashSet::new();
     for _ in 0..16 {
         let c = begin(&rig);
-        rig.proxy.expire(&c);
+        rig.proxy.revoke(&c);
         assert!(seen.insert(c.secret().to_owned()), "repeated credential");
         let s = c.secret();
         assert!(s.len() >= 43, "under 32 bytes of base64: {}", s.len());
@@ -150,7 +150,7 @@ async fn c8_credentials_are_random_per_fetch_and_the_old_one_is_dead() {
         );
     }
     let first = begin(&rig);
-    rig.proxy.expire(&first);
+    rig.proxy.revoke(&first);
     let second = begin(&rig);
     assert_ne!(first.secret(), second.secret());
     let host = "registry.npmjs.org:443";
@@ -214,7 +214,7 @@ async fn c9_the_credential_never_reaches_a_log_line_or_a_refusal() {
         cred.basic()
     );
     texts.push(send(&rig, Entry::Tcp, get.as_bytes()).await);
-    rig.proxy.expire(&cred);
+    rig.proxy.revoke(&cred);
     texts.push(send(&rig, Entry::Tcp, &bytes).await);
 
     let token = cred.basic().trim_start_matches("Basic ").to_owned();

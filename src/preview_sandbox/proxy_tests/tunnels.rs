@@ -27,7 +27,7 @@ async fn c5_expiry_closes_tunnels_already_open() {
     let rig = rig().await;
     let cred = begin(&rig);
     let mut t = open_tunnel(&rig, Entry::Tcp, &cred).await;
-    rig.proxy.expire(&cred);
+    rig.proxy.revoke(&cred);
     assert!(t.closed().await, "tunnel survived expiry");
 }
 
@@ -37,7 +37,7 @@ async fn r3_expiry_closes_tunnels_opened_through_the_unix_socket() {
     let rig = rig().await;
     let cred = begin(&rig);
     let mut t = open_tunnel(&rig, Entry::Unix, &cred).await;
-    rig.proxy.expire(&cred);
+    rig.proxy.revoke(&cred);
     assert!(t.closed().await, "tunnel survived expiry");
 }
 
@@ -57,7 +57,7 @@ async fn c10_expiry_during_resolution_leaves_no_usable_tunnel() {
         Some(ok)
     });
     reached(&rig.resolve.gate, "resolution").await;
-    rig.proxy.expire(&cred);
+    rig.proxy.revoke(&cred);
     rig.resolve.gate.release.notify_one();
     let usable = task.await.expect("task");
     assert_ne!(usable, Some(true), "a tunnel was usable after expiry");
@@ -80,7 +80,7 @@ async fn c10_expiry_during_dialling_leaves_no_usable_tunnel() {
         Some(ok)
     });
     reached(&rig.connect.gate, "the dial").await;
-    rig.proxy.expire(&cred);
+    rig.proxy.revoke(&cred);
     rig.connect.gate.release.notify_one();
     let usable = task.await.expect("task");
     assert_ne!(usable, Some(true), "a tunnel was usable after expiry");

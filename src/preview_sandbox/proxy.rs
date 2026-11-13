@@ -3,6 +3,10 @@
 //! The allowlist proxy for a command preview's fetch phase (ADR-027, "The
 //! allowlist proxy"): an HTTP CONNECT proxy on loopback that admits only the
 //! package registries, behind a fresh credential per fetch.
+#![cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the fetch session, a later part, calls the proxy")
+)]
 
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -107,7 +111,11 @@ impl AllowlistProxy {
     /// Bind `127.0.0.1:0`, the same port on `::1` if available, and a Unix
     /// socket in a fresh owner-only temp directory. The listeners stay bound
     /// for the proxy's life; outside a fetch they answer 407 to everything.
-    pub(crate) async fn bind(
+    ///
+    /// Synchronous on purpose: the sockets are bound with `std` and handed to
+    /// tokio, so the gateway-lifetime proxy needs no `await` to exist. The
+    /// accept tasks are spawned, so a runtime context must be current.
+    pub(crate) fn bind(
         resolve: Arc<dyn Resolve>,
         connect: Arc<dyn Connect>,
         interfaces: Arc<dyn Interfaces>,
@@ -118,10 +126,17 @@ impl AllowlistProxy {
             connect,
             interfaces,
         });
-        let v4 = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let v4 = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+        v4.set_nonblocking(true)?;
         let port = v4.local_addr()?.port();
-        let mut tasks = vec![tokio::spawn(serve_tcp(v4, shared.clone()))];
-        if let Ok(v6) = TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).await {
+        let mut tasks = vec![tokio::spawn(serve_tcp(
+            TcpListener::from_std(v4)?,
+            shared.clone(),
+        ))];
+        let v6 = std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port))
+            .and_then(|l| l.set_nonblocking(true).map(|()| l))
+            .and_then(TcpListener::from_std);
+        if let Ok(v6) = v6 {
             tasks.push(tokio::spawn(serve_tcp(v6, shared.clone())));
         }
         let dir = std::env::temp_dir().join(format!("mcp-gw-proxy-{}-{port}", std::process::id()));
@@ -130,7 +145,9 @@ impl AllowlistProxy {
             std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
         }
         let unix_path = dir.join("proxy.sock");
-        let unix = UnixListener::bind(&unix_path)?;
+        let unix = std::os::unix::net::UnixListener::bind(&unix_path)?;
+        unix.set_nonblocking(true)?;
+        let unix = UnixListener::from_std(unix)?;
         let unix_shared = shared.clone();
         tasks.push(tokio::spawn(async move {
             while let Ok((stream, _)) = unix.accept().await {
@@ -154,7 +171,7 @@ impl AllowlistProxy {
         &self.unix_path
     }
 
-    /// Start a fetch: a fresh credential, valid until [`Self::expire`]. Any
+    /// Start a fetch: a fresh credential, valid until [`Self::revoke`]. Any
     /// earlier fetch's credential and tunnels end here too. A failed random
     /// source refuses this preview only; the gateway carries on.
     pub(crate) fn begin_fetch(&self) -> Result<Credential, super::Refusal> {
@@ -171,8 +188,8 @@ impl AllowlistProxy {
         Ok(credential)
     }
 
-    /// End a fetch: the credential stops working and its tunnels close.
-    pub(crate) fn expire(&self, credential: &Credential) {
+    /// Revoke a fetch's credential: it stops working and its tunnels close.
+    pub(crate) fn revoke(&self, credential: &Credential) {
         let mut live = lock(&self.shared.live);
         if live
             .as_ref()
