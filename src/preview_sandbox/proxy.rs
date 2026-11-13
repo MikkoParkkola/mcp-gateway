@@ -226,7 +226,8 @@ impl AllowlistProxy {
         // so no tunnel can register into either in between.
         let mut live = lock(&self.shared.live);
         let old = live.take();
-        let made = Credential::fresh(self.random).map(|credential| {
+        let made = Credential::fresh(self.random);
+        if let Ok(credential) = &made {
             let id = self
                 .shared
                 .fetches
@@ -238,8 +239,7 @@ impl AllowlistProxy {
                 tunnels: HashMap::new(),
                 next_tunnel: 0,
             });
-            credential
-        });
+        }
         drop(live);
         if let Some(old) = old {
             old.end();
@@ -381,13 +381,11 @@ where
 {
     match admit(&mut client, &shared).await {
         Ok((mut upstream, fetch)) => {
-            let halves = match (client.half(), upstream.half()) {
-                (Ok(a), Ok(b)) => [a, b],
-                _ => {
-                    let _ = client.write_all(Status::BadGateway.head()).await;
-                    return;
-                }
+            let (Ok(mine), Ok(theirs)) = (client.half(), upstream.half()) else {
+                let _ = client.write_all(Status::BadGateway.head()).await;
+                return;
             };
+            let halves = [mine, theirs];
             // Registered before the 200 goes out: a fetch revoked meanwhile
             // never gets a tunnel it could use.
             let Some(tunnel) = register(&shared, &fetch, halves) else {

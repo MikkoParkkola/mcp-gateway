@@ -6,6 +6,7 @@
 //! the `sandbox-fixtures` seams.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -166,7 +167,7 @@ fn begin(rig: &Rig) -> Credential {
 fn connect_bytes(authority: &str, auth: Option<&str>) -> Vec<u8> {
     let mut s = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n");
     if let Some(v) = auth {
-        s.push_str(&format!("Proxy-Authorization: {v}\r\n"));
+        write!(s, "Proxy-Authorization: {v}\r\n").expect("String write");
     }
     s.push_str("\r\n");
     s.into_bytes()
@@ -305,4 +306,17 @@ async fn tunnel_echoes<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
 /// A test address literal.
 fn ip(s: &str) -> IpAddr {
     s.parse().unwrap_or_else(|_| panic!("bad address {s}"))
+}
+
+/// The production parts on Linux: the host's interface read finds the loopback
+/// address, so the deny check against the host's own addresses has something
+/// to compare with.
+#[cfg(target_os = "linux")]
+#[test]
+fn s8_the_system_interfaces_include_loopback() {
+    let own = super::System.addresses().expect("getifaddrs answers");
+    assert!(
+        own.contains(&IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        "the host's own addresses lack loopback: {own:?}"
+    );
 }
