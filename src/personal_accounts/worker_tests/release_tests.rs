@@ -78,7 +78,9 @@ fn a_stalled_release_ends_the_bounded_shutdown_at_its_deadline() {
     let tmp = tempfile::TempDir::new().expect("root");
     seed(tmp.path(), &[(&alice(), unexpired())]);
 
-    paused(async {
+    current_thread(async {
+        // Paused here, in the row itself: the clock is virtual from the first poll.
+        tokio::time::pause();
         let fx = start(tmp.path(), 2);
         let stall = stall_release(&fx);
         let began = tokio::time::Instant::now();
