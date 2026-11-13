@@ -56,7 +56,7 @@ struct Rig {
 /// The personal capability is owned by the caller, who holds no grant. It is
 /// surfaced when `surface`, and the caller's key denies it when `denied`.
 async fn rig(endpoint: &Endpoint, policy: AuditFailurePolicy, surface: bool, denied: bool) -> Rig {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = logger(&dir, policy);
     let auth = AuthConfig {
         enabled: true,

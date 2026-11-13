@@ -106,7 +106,7 @@ pub(super) async fn owned_capability(
         );
         drop(axum::serve(listener, app).await);
     });
-    let caps_dir = tempfile::tempdir().expect("a capability directory");
+    let caps_dir = crate::test_dir_keep::kept_tempdir();
     std::fs::write(
         caps_dir.path().join(format!("{PROBE}.yaml")),
         personal_probe(port),
@@ -141,7 +141,7 @@ pub(super) async fn owned_capability(
     let grants = crate::identity_grants::LocalIdentityGrantStore::from_grants(
         with_grant.then_some(grant).into_iter().collect::<Vec<_>>(),
     );
-    let log_dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let log_dir = crate::test_dir_keep::kept_tempdir();
     let log = logger(&log_dir, AuditFailurePolicy::FailClosed);
     let fx = fixture_logged(Answer::Ok, Arc::clone(&log), |mut meta| {
         meta.enable_transparency_log(log);
@@ -258,7 +258,7 @@ async fn a_direct_call_records_its_declared_effect() {
         (Some(false), "may_write"),
         (None, "undeclared"),
     ] {
-        let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let log = logger(&dir, AuditFailurePolicy::FailClosed);
         let fx = fixture_logged(Answer::Ok, Arc::clone(&log), |mut meta| {
             meta.enable_transparency_log(log);
@@ -375,7 +375,7 @@ async fn keyed(fx: &Fx, subject: &str, key: &str) -> (axum::http::StatusCode, Va
 /// may-write, alice's slot read-only.
 #[tokio::test]
 async fn direct_effect_follows_the_caller_bound_slot() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = bound(&dir).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(false))]);
@@ -394,7 +394,7 @@ async fn direct_effect_follows_the_caller_bound_slot() {
 /// alice's slot as listed for this call, never the shared slot's read-only.
 #[tokio::test]
 async fn direct_effect_of_an_unlisted_bound_slot_is_its_own() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = bound(&dir).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(true))]);
@@ -443,7 +443,7 @@ async fn cache_hit(fx: &Fx, dir: &tempfile::TempDir, key: &str, between: impl Fn
 /// alice's own slot declares (read-only), never the shared slot's may-write.
 #[tokio::test]
 async fn a_direct_cache_hit_records_the_callers_slot_effect() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = bound_with(&dir, Cache::On).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(false))]);
@@ -461,7 +461,7 @@ async fn a_direct_cache_hit_records_the_callers_slot_effect() {
 /// read-only): the hit records alice's slot as it is now.
 #[tokio::test]
 async fn a_direct_cache_hit_reads_the_callers_slot_now() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = bound_with(&dir, Cache::On).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(false))]);
@@ -479,7 +479,7 @@ async fn a_direct_cache_hit_reads_the_callers_slot_now() {
 /// records her slot as refilled: undeclared, never the shared read-only.
 #[tokio::test]
 async fn a_direct_cache_hit_on_an_evicted_slot_reads_it_as_refilled() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = bound_with(&dir, Cache::On).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(true))]);
@@ -520,7 +520,7 @@ async fn a_direct_cache_hit_on_an_evicted_slot_reads_it_as_refilled() {
 #[tokio::test]
 async fn another_caller_on_the_same_key_is_never_served_a_stored_answer() {
     for cache in [Cache::Off, Cache::On] {
-        let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let fx = bound_with(&dir, cache).await;
         let (_, alice) = keyed(&fx, "alice", "k-shared").await;
         assert!(alice.get("result").is_some(), "premise: alice ran: {alice}");
@@ -550,7 +550,7 @@ async fn another_caller_on_the_same_key_is_never_served_a_stored_answer() {
 #[tokio::test]
 async fn the_decision_object_carries_no_secret_or_caller_text() {
     const SUBJECT: &str = "zq-canary-subject";
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = bound(&dir).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     let binding = format!("{SUBJECT}@aud-alpha");
@@ -600,7 +600,7 @@ async fn the_decision_object_carries_no_secret_or_caller_text() {
 /// alice's own slot (read-only), never the shared slot's may-write.
 #[tokio::test]
 async fn a_direct_cached_failure_records_the_callers_slot_effect() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = bound_answering(&dir, Cache::On, Answer::RpcError(-32010)).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(false))]);
