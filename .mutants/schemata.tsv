@@ -1,0 +1,37 @@
+head_sha	8ffa46b54c9a117483d8076b0b52e98e8cc4e4f8
+#mutant sigma-never-final
+mcp_gateway	key_server::email_hash::tests::lower_v1_golden_vectors	src/key_server/email_hash_tests.rs:311
+#mutant sigma-swapped
+mcp_gateway	key_server::email_hash::tests::lower_v1_golden_vectors	src/key_server/email_hash_tests.rs:311
+#mutant ascii-not-lowered
+mcp_gateway	key_server::email_hash::tests::lower_v1_golden_vectors	src/key_server/email_hash_tests.rs:311
+#mutant known-answer-ignored
+mcp_gateway	key_server::email_hash::tests::the_self_check_passes_the_real_normalization_and_fails_a_different_one	src/key_server/email_hash_tests.rs:584
+#mutant no-final-nfc
+mcp_gateway	key_server::email_hash::tests::the_final_nfc_pass_composes_and_reorders	src/key_server/email_hash_tests.rs:174
+#mutant no-trim
+mcp_gateway	key_server::email_hash::tests::padding_does_not_change_the_hash_and_inner_or_blank_looking_characters_do	src/key_server/email_hash.rs:351
+#mutant trim-start-only
+mcp_gateway	key_server::email_hash::tests::padding_does_not_change_the_hash_and_inner_or_blank_looking_characters_do	src/key_server/email_hash.rs:351
+#mutant trim-ascii-only
+mcp_gateway	key_server::email_hash::tests::padding_does_not_change_the_hash_and_inner_or_blank_looking_characters_do	src/key_server/email_hash.rs:351
+#mutant check-result-ignored
+mcp_gateway	key_server::email_hash::tests::key_rows::a_failed_normalization_check_fails_the_key	src/key_server/email_hash_key_tests.rs:39
+#mutant from-hex-unchecked
+mcp_gateway	key_server::email_hash::tests::key_rows::building_a_key_runs_the_normalization_check_once_per_process	src/key_server/email_hash_key_tests.rs:17
+#mutant run-not-counted
+mcp_gateway	key_server::email_hash::tests::key_rows::a_failure_is_never_remembered_and_the_first_pass_is	src/key_server/email_hash_key_tests.rs:62
+#mutant check-skipped
+mcp_gateway	key_server::email_hash::tests::key_rows::a_failure_is_never_remembered_and_the_first_pass_is	src/key_server/email_hash_key_tests.rs:57
+#mutant failure-remembered
+mcp_gateway	key_server::email_hash::tests::key_rows::a_failure_is_never_remembered_and_the_first_pass_is	src/key_server/email_hash_key_tests.rs:58
+#mutant pass-not-remembered
+mcp_gateway	key_server::email_hash::tests::key_rows::a_failure_is_never_remembered_and_the_first_pass_is	src/key_server/email_hash_key_tests.rs:65
+#mutant subject-domain-email
+mcp_gateway	key_server::email_hash::tests::key_rows::a_subject_hashes_under_its_own_domain_and_exactly	src/key_server/email_hash_key_tests.rs:106
+#mutant subject-normalized
+mcp_gateway	key_server::email_hash::tests::key_rows::a_subject_hashes_under_its_own_domain_and_exactly	src/key_server/email_hash_key_tests.rs:110
+#mutant subject-trimmed
+mcp_gateway	key_server::email_hash::tests::key_rows::a_subject_hashes_under_its_own_domain_and_exactly	src/key_server/email_hash_key_tests.rs:133
+#mutant subject-nfc-only
+mcp_gateway	key_server::email_hash::tests::key_rows::a_subject_hashes_under_its_own_domain_and_exactly	src/key_server/email_hash_key_tests.rs:138
