@@ -1,14 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A decision that closes refusals by position, and the note it is written
-//! as: order independence, the equal-time case, the note's round trip and
+//! A decision that closes refusals by position, and the record it is written
+//! as: order independence, the equal-time case, the record's round trip and
 //! its id.
 
-use serde_json::{Map, Value};
-
 use super::super::{
-    Fold, LogPos, OpenRequest, Source, UiDecision, decisions_from_record, decisions_of, event_id,
-    record_fields,
+    Fold, LogPos, OpenRequest, Source, UiDecision, decision_record, decisions_from_record,
+    decisions_of, event_id,
 };
 use super::{AGENT, at, count, decision, deny, missing, pos, ready};
 
@@ -29,6 +27,18 @@ fn a_position_close_leaves_a_refusal_at_an_equal_time_open() {
         1,
         "a later refusal reopens, even at an equal time"
     );
+}
+
+/// At a start the governance audit can be read after the refusals, so a
+/// decision can be folded after a later refusal of the same capability: it
+/// still closes only the refusal it names.
+#[test]
+fn a_decision_folded_after_a_later_refusal_closes_only_its_own() {
+    let mut set = ready();
+    deny(&mut set, 1, &missing("stripe.charges", 5));
+    deny(&mut set, 2, &missing("stripe.charges", 6));
+    set.live(pos(Source::ControlPlane, 1), close("stripe.charges", &[1]));
+    assert_eq!(count(&set), 1, "the later refusal stays open");
 }
 
 #[test]
@@ -95,12 +105,10 @@ fn the_event_id_follows_what_was_denied_and_not_the_order_it_is_listed_in() {
 }
 
 #[test]
-fn a_written_note_reads_back_into_the_decisions_it_was_written_from() {
+fn a_written_record_reads_back_into_the_decisions_it_was_written_from() {
     let open = request();
-    let id = event_id(&open);
-    let fields: Map<String, Value> =
-        record_fields(&open, "not needed", &"a".repeat(64), &id, at(1));
-    let read = decisions_from_record(&fields).expect("a well-formed decline");
+    let record = decision_record(&open, &"a".repeat(64));
+    let read = decisions_from_record(&record).expect("a well-formed decline");
     let mut wrote = decisions_of(&open);
     let key = |d: &UiDecision| d.capability.clone();
     wrote.sort_by_key(key);
@@ -111,23 +119,12 @@ fn a_written_note_reads_back_into_the_decisions_it_was_written_from() {
 }
 
 #[test]
-fn a_note_that_is_not_a_complete_decline_closes_nothing() {
-    let open = request();
-    let good = record_fields(&open, "r", &"a".repeat(64), &event_id(&open), at(1));
-    for broken in [
-        |f: &mut Map<String, Value>| drop(f.remove("decision")),
-        |f: &mut Map<String, Value>| drop(f.insert("decision".into(), "allow".into())),
-        |f: &mut Map<String, Value>| drop(f.insert("entries".into(), Value::Array(Vec::new()))),
-        |f: &mut Map<String, Value>| drop(f.remove("agent")),
-        |f: &mut Map<String, Value>| {
-            drop(f.insert(
-                "entries".into(),
-                serde_json::json!([{"capability": "c", "positions": []}]),
-            ));
-        },
-    ] {
-        let mut fields = good.clone();
-        broken(&mut fields);
-        assert!(decisions_from_record(&fields).is_none(), "{fields:?}");
-    }
+fn a_record_with_no_capability_or_no_refusal_closes_nothing() {
+    let good = decision_record(&request(), &"a".repeat(64));
+    let mut no_capability = good.clone();
+    no_capability.entries.clear();
+    assert!(decisions_from_record(&no_capability).is_none());
+    let mut no_refusal = good;
+    no_refusal.entries[0].positions.clear();
+    assert!(decisions_from_record(&no_refusal).is_none());
 }
