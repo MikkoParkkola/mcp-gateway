@@ -148,6 +148,10 @@ fn process_check() -> Result<(), String> {
 /// success is remembered: a failure is not cached, so it is judged again at the
 /// next key, and it can never be stuck in a process-wide cell. The state is a
 /// parameter so a row can give it its own, independent of every other test.
+///
+/// The check runs while the state's lock is held, which is what makes it run
+/// exactly once. It must therefore never build a key or call `process_check`
+/// again (that would wait on its own lock): `self_check` does neither.
 fn check_once(
     state: &std::sync::Mutex<(bool, usize)>,
     check: &dyn Fn() -> Result<(), String>,
