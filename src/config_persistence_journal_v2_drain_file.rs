@@ -28,10 +28,10 @@ pub(crate) async fn drain_abandoned(
     if let Some(journal) = &session.journal {
         let mut tokens = journal.state.writer.iter().chain(&journal.state.attempts);
         let first = tokens.next();
-        if !first.is_some_and(|token| token.handed_over) || !tokens.all(|token| token.handed_over) {
+        if mutant!("drain_ignores_live_journal", false, !first.is_some_and(|token| token.handed_over) || !tokens.all(|token| token.handed_over)) {
             return Err(DrainError::Journal);
         }
-        match hand_over(session) {
+        match mutant!("drain_skips_handover_resume", Ok(()), hand_over(session)) {
             Ok(()) => {}
             Err(HandoverError::Foreign) => {
                 return Err(refused(&path, Refusal::ForeignDonor, DrainError::Journal));
@@ -53,13 +53,13 @@ pub(crate) async fn drain_abandoned(
     else {
         return Ok(());
     };
-    if bytes.is_empty() {
+    if mutant!("empty_file_kept", false, bytes.is_empty()) {
         // A created-but-empty file holds no evidence, and no donor is left to complete it.
         return remove(&target, &path);
     }
     let read = decode_frames(&bytes)
         .map_err(|_| refused(&path, Refusal::Wire, DrainError::FileRefused))?;
-    if matches!(read.tail, Tail::Incomplete { .. }) {
+    if mutant!("drain_accepts_torn_tail", false, matches!(read.tail, Tail::Incomplete { .. })) {
         // Only a handover with its donor may truncate a torn tail; there is no donor here.
         return Err(refused(&path, Refusal::TornTail, DrainError::FileRefused));
     }
@@ -76,11 +76,11 @@ pub(crate) async fn drain_abandoned(
     }
     let state = state_from_frames(read.frames)
         .ok_or_else(|| refused(&path, Refusal::Shape, DrainError::FileRefused))?;
-    let logger = log.ok_or(DrainError::NoLogger)?;
+    let Some(logger) = log else { return mutant!("drain_without_logger_ok", Ok(()), Err(DrainError::NoLogger)); };
     let binding = state.binding.clone().ok_or(DrainError::Journal)?;
     // Refreshed from the file on disk: a log replaced behind this handle is refused here.
     let current = logger.refreshed_log_id().map_err(|_| DrainError::Refused)?;
-    if current != binding {
+    if mutant!("drain_ignores_binding", false, current != binding) {
         return Err(DrainError::OtherLog);
     }
     let mut file = JournalSession::over_abandoned(target.clone(), state);
@@ -96,7 +96,7 @@ pub(crate) async fn drain_abandoned(
 fn remove(target: &Path, path: &Path) -> Result<(), DrainError> {
     super::super::super::remove_if_present(path).map_err(|_| DrainError::Journal)?;
     fault::hit(target, At::FileUnlinked).map_err(|_| DrainError::Journal)?;
-    sync_dir_of(path).map_err(|_| DrainError::Journal)
+    mutant!("unlink_without_dir_sync", Ok(()), sync_dir_of(path).map_err(|_| DrainError::Journal))
 }
 
 /// The file's tokens, rebuilt from its frames, or `None` when the frames are not one
@@ -114,10 +114,10 @@ pub(super) fn state_from_frames(frames: Vec<AbandonedFrame>) -> Option<JournalV2
         match (frame.slot, frame.owner) {
             (Slot::Intent, Some(owner)) => {
                 let fresh = tokens.iter().all(|t| t.intent_id != frame.intent_id);
-                if !fresh || !owner.handed_over || owner.decision.is_none() {
+                if mutant!("shape_duplicate_unchecked", false, !fresh) || mutant!("shape_unflagged_accepted", false, !owner.handed_over) || mutant!("shape_undecided_accepted", false, owner.decision.is_none()) {
                     return None;
                 }
-                if *root.get_or_insert(owner.root) != owner.root {
+                if mutant!("shape_root_unchecked", false, *root.get_or_insert(owner.root) != owner.root) {
                     return None;
                 }
                 tokens.push(TokenState {
@@ -131,19 +131,19 @@ pub(super) fn state_from_frames(frames: Vec<AbandonedFrame>) -> Option<JournalV2
             }
             (Slot::Record(index), None) => {
                 let token = tokens.last_mut()?;
-                if token.intent_id != frame.intent_id || token.records.len() != index {
+                if token.intent_id != frame.intent_id || mutant!("shape_order_unchecked", false, token.records.len() != index) {
                     return None;
                 }
-                token.records.push(frame.record);
+                if mutant!("state_from_frames_drops_records", false, true) { token.records.push(frame.record); }
             }
             _ => return None,
         }
     }
     let writer = if root? { None } else { Some(tokens.remove(0)) };
-    if writer
+    if mutant!("shape_terminals_unchecked", false, writer
         .iter()
         .chain(&tokens)
-        .any(|token| !token.terminals_agree(&tokens))
+        .any(|token| !token.terminals_agree(&tokens)))
     {
         return None;
     }
@@ -163,11 +163,11 @@ pub(super) fn state_from_frames(frames: Vec<AbandonedFrame>) -> Option<JournalV2
 /// Whether every token is settled (the journal's own per-token check, without its handed-over
 /// shortcut) and every record delivered.
 pub(super) fn complete(state: &JournalV2) -> bool {
-    state
+    mutant!("complete_any_token", state.writer.iter().chain(&state.attempts).any(|token| token.settled(&state.attempts)), state
         .writer
         .iter()
         .chain(&state.attempts)
-        .all(|token| token.settled(&state.attempts))
+        .all(|token| token.settled(&state.attempts)))
 }
 
 /// Why a file was refused. The name is the counter's label and the warning's reason.
@@ -201,10 +201,10 @@ impl Refusal {
 fn refused(path: &Path, why: Refusal, error: DrainError) -> DrainError {
     tracing::warn!(
         path = %path.display(),
-        reason = why.as_str(),
+        reason = mutant!("refusal_unreported", "", why.as_str()),
         "the abandoned config-write file is refused and kept as found"
     );
-    telemetry_metrics::counter!("mcp_config_abandoned_refused_total", "reason" => why.as_str())
+    telemetry_metrics::counter!("mcp_config_abandoned_refused_total", "reason" => mutant!("refusal_unreported", "", why.as_str()))
         .increment(1);
     error
 }
