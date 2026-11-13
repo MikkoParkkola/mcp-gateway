@@ -128,7 +128,7 @@ fn scope_len(body: &Value) -> usize {
 
 #[tokio::test]
 async fn an_admin_is_served_the_open_decisions_and_no_one_else() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let now = crate::clock::utc_now().expect("a readable clock");
     write(&log, note("stripe.charges", now));
@@ -167,7 +167,7 @@ async fn an_admin_is_served_the_open_decisions_and_no_one_else() {
 
 #[tokio::test]
 async fn a_request_whose_refusals_left_the_log_is_closed() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     // Small segments, one kept: the fillers below expire the first one.
     let log = log_in(&dir, 2048, 1);
     let (state, _store) = state_with(&log).await;
@@ -235,7 +235,7 @@ async fn hold_the_set(decisions: Arc<Shared>) -> std::sync::mpsc::Sender<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reader_that_cannot_take_the_set_does_not_hold_up_an_append() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
@@ -257,11 +257,11 @@ async fn a_reader_that_cannot_take_the_set_does_not_hold_up_an_append() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_burst_past_the_queue_is_replayed_not_lost() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let files = tempfile::tempdir().expect("tempdir");
+    let files = crate::test_dir_keep::kept_tempdir();
     let none = super::super::discovery_wiring_tests::Scripted::new(files.path(), &[]);
     let _tick = start_with(&state.meta_mcp, None, shutdown, 1, none);
     served_when(&state, |_| true).await;
@@ -287,7 +287,7 @@ async fn a_burst_past_the_queue_is_replayed_not_lost() {
 fn measure_the_replay_at_the_retention_cap() {
     use std::io::Write as _;
 
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("transparency.jsonl");
     let mut file = std::io::BufWriter::new(std::fs::File::create(&path).expect("file"));
     let (mut bytes, mut notes) = (0_u64, 0_u64);
@@ -349,7 +349,7 @@ fn measure_the_replay_at_the_retention_cap() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_replay_waits_for_the_one_already_running() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let shared = Arc::new(Shared::with_key([7; 32]));
     shared.update(|set| {
@@ -385,7 +385,7 @@ async fn a_replay_waits_for_the_one_already_running() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_waiting_replay_unmarks_a_ready_it_did_not_read() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let shared = Arc::new(Shared::with_key([7; 32]));
     // A directory is no log: this replay cannot read, so it never marks ready.
     let replays = Arc::new(Replays {
@@ -420,7 +420,7 @@ async fn a_waiting_replay_unmarks_a_ready_it_did_not_read() {
 
 #[test]
 fn a_log_with_no_sealed_segment_has_an_edge() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let now = crate::clock::utc_now().expect("a readable clock");
     write(&log, note("stripe.charges", now));
@@ -455,7 +455,7 @@ async fn count(state: &Arc<AppState>, admin: bool) -> (StatusCode, Value) {
 /// never a number.
 #[tokio::test]
 async fn the_count_is_unavailable_while_a_source_is() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let shared = Arc::new(Shared::with_key([7; 32]));
@@ -476,7 +476,7 @@ async fn the_count_is_unavailable_while_a_source_is() {
 /// R6: the count is the list's length and revision, for an admin only.
 #[tokio::test]
 async fn the_count_is_the_lists_length_and_revision_for_an_admin_only() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let now = crate::clock::utc_now().expect("a readable clock");
     write(&log, note("stripe.charges", now));

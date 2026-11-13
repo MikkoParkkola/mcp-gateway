@@ -235,7 +235,7 @@ fn args() -> Value {
 /// and grant label are never written.
 #[tokio::test]
 async fn invocation_record_names_oidc_subject_and_kind() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta(Ok(ok_result()), &dir);
     let who = oidc_caller();
     meta.invoke_tool(&args(), None, &context(&AllowAll, &who))
@@ -264,7 +264,7 @@ async fn invocation_record_names_oidc_subject_and_kind() {
 /// itself nowhere in the log.
 #[tokio::test]
 async fn api_key_record_never_contains_secret() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta(Ok(ok_result()), &dir);
     let who = api_key_caller();
     meta.invoke_tool(&args(), None, &context(&AllowAll, &who))
@@ -295,7 +295,7 @@ async fn api_key_record_never_contains_secret() {
 /// refusal's code (`DenyAll`'s -32003) and that answer's response hash.
 #[tokio::test]
 async fn denied_call_writes_denied_record() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta(Ok(ok_result()), &dir);
     let who = api_key_caller();
     let answer = meta
@@ -314,7 +314,7 @@ async fn denied_call_writes_denied_record() {
 /// result (the dispatch path converts it for the LLM's recovery hint).
 #[tokio::test]
 async fn backend_error_writes_error_record() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta(Err("connection reset".to_string()), &dir);
     let who = api_key_caller();
     let _ = meta
@@ -328,7 +328,7 @@ async fn backend_error_writes_error_record() {
 /// D1-T8. A result with `isError: true` is a `tool_error`, with no code.
 #[tokio::test]
 async fn tool_error_result_is_tool_error() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let failing = json!({"content": [{"type": "text", "text": "bad"}], "isError": true});
     let meta = meta(Ok(failing), &dir);
     let who = api_key_caller();
@@ -351,7 +351,7 @@ fn sha256_of(value: &Value) -> String {
 /// gateway directives included.
 #[tokio::test]
 async fn request_hash_covers_what_caller_sent() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta(Ok(ok_result()), &dir);
     let who = api_key_caller();
     let with_full = json!({
@@ -387,7 +387,7 @@ async fn request_hash_covers_what_caller_sent() {
 #[tokio::test]
 async fn response_hash_covers_returned_value() {
     use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut meta = meta(Ok(ok_result()), &dir);
     meta.enable_provenance_stamping(
         BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
@@ -420,7 +420,7 @@ async fn response_hash_covers_returned_value() {
 async fn a_replay_whose_record_fails_is_withheld() {
     use crate::security::audit::AuditFailurePolicy;
     use crate::security::transparency_log::rotation_fault::WriteFault;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut meta = meta(Ok(ok_result()), &dir);
     let logger = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -487,7 +487,7 @@ mod fixture_allow_rows;
 #[tokio::test]
 async fn a_peer_error_code_is_not_a_gateway_denial() {
     for code in [-32001, -32004] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let meta = meta(Ok(ok_result()), &dir);
         let backend = meta.backends.for_test().get("alpha").expect("alpha");
         backend.set_transport_for_test(Arc::new(PeerError(code)));
@@ -513,7 +513,7 @@ async fn a_replay_keeps_the_stored_class_of_its_first_execution() {
         (AuditOutcome::Error(-32001), "error"),
         (AuditOutcome::Denied(-32001), "denied"),
     ] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let meta = meta(Ok(ok_result()), &dir);
         let who = api_key_caller();
         let delivered =
@@ -544,7 +544,7 @@ async fn a_replay_keeps_the_stored_class_of_its_first_execution() {
 /// provenance: it must not claim a gateway denial for a bare `-32001`.
 #[tokio::test]
 async fn a_replayed_error_with_no_stored_class_is_not_claimed_as_a_denial() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta(Ok(ok_result()), &dir);
     let who = api_key_caller();
     let delivered =

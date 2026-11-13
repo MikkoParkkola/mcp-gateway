@@ -306,7 +306,8 @@ fn g_logsites_every_production_logger_is_keyed_or_never_keys() {
             }
             let text = std::fs::read_to_string(&path).expect("source readable");
             for (_, line) in production_lines(&text) {
-                if line.contains("TransparencyLogger::open(")
+                // Split so the test-log keep scan does not read this needle as a log open.
+                if line.contains(concat!("TransparencyLogger", "::open("))
                     && !line.trim_start().starts_with("//")
                 {
                     hits.push(rel.clone());

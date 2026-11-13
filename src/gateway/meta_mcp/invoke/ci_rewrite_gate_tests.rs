@@ -142,7 +142,7 @@ async fn an_enforced_follow_up_question_records_refused() {
 /// is `result`, recovered and settled in one delivery cell, as the recovery
 /// worker opens it around its query and commit.
 async fn recovery_record(result: Value) -> Value {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut meta = stripping();
     let log = crate::security::TransparencyLogger::open(Arc::new(
         crate::security::transparency_log::TransparencyLogConfig {

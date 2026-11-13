@@ -21,7 +21,7 @@ use crate::protocol::tasks::TaskTransition;
 /// The `task_recovery` record of one recovery of a task answering `reply`,
 /// under an enforcing gate that strips untrusted instructions.
 async fn recovery_record(reply: Reply) -> Value {
-    let log_dir = tempfile::tempdir().expect("a log directory");
+    let log_dir = crate::test_dir_keep::kept_tempdir();
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     meta.set_context_integrity_kernel(ContextIntegrityKernel::new(ContextIntegrityPolicy {
         untrusted_instruction_decision: ContextIntegrityDecisionKind::Strip,
