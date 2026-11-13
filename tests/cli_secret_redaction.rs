@@ -175,15 +175,17 @@ fn audit_lookup_email_never_repeats_a_value_typed_as_an_argument() {
     }
 }
 
-/// `hash-key` reads the API key from stdin only; a key typed as an argument
-/// is refused without being repeated.
-/// Mutant: drop `hash-key` from the stdin-secret commands.
+/// `hash-key` reads the API key from stdin only; a key typed as an argument,
+/// after the command name or before it, is refused without being repeated.
+/// Mutant: drop `hash-key` from the stdin-secret commands, or match only the
+/// path the parse recorded.
 #[test]
 fn hash_key_never_repeats_a_key_typed_as_an_argument() {
     const TYPED_KEY: &str = "sk-live-SENTINEL_9d3e";
     for argv in [
         vec!["hash-key", TYPED_KEY],
         vec!["hash-key", "--", TYPED_KEY],
+        vec![TYPED_KEY, "hash-key"],
     ] {
         let output = run_bare(&argv);
         let text = combined_output(&output);
