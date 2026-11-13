@@ -271,7 +271,7 @@ pub(crate) fn frames_of(donor: &JournalV2) -> Option<Vec<AbandonedFrame>> {
         frames.push(frame(
             Slot::Intent,
             &token.intent,
-            Some(owner_facts(donor, token)),
+            mutant!("intent_owner_dropped", None, Some(owner_facts(donor, token))),
         ));
         for (index, record) in token.records.iter().enumerate() {
             frames.push(frame(Slot::Record(index), record, None));
@@ -400,7 +400,7 @@ pub(crate) fn marked(donor: &JournalV2) -> JournalV2 {
 pub(crate) fn against_donor(existing: &[u8], donor: &JournalV2) -> Placement {
     // The projection is taken here, so a caller cannot pass the unflagged donor and get a false
     // `Foreign`: the frames a handover writes carry the flag, and `proves` requires it.
-    let donor = &marked(donor);
+    let donor = &mutant!("against_donor_unmarked", donor.clone(), marked(donor));
     let canonical = canonical_frames(donor);
     let Ok(read) = read(existing) else {
         return Placement::Foreign;

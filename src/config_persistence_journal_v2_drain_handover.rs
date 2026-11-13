@@ -66,8 +66,7 @@ fn checked(file: &File) -> Result<std::fs::Metadata, HandoverError> {
 #[cfg(unix)]
 fn open_guarded(path: &Path, create: bool) -> std::io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt as _;
-    let flags =
-        rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY;
+    let flags = mutant!("follows_symlinks", rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY, rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY);
     let mut options = std::fs::OpenOptions::new();
     options
         .read(true)
@@ -93,10 +92,9 @@ fn open_guarded(path: &Path, create: bool) -> std::io::Result<File> {
 #[cfg(unix)]
 fn private_to_us(meta: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-    meta.uid() == rustix::process::getuid().as_raw()
-        && meta.nlink() == 1
-        // No group or other permission bit: the low six bits are all zero.
-        && meta.mode().trailing_zeros() >= 6
+    mutant!("handle_checks_skipped", true, meta.uid() == rustix::process::getuid().as_raw()
+        && mutant!("link_count_unchecked", true, meta.nlink() == 1)
+        && meta.mode().trailing_zeros() >= 6)
 }
 
 /// Fails closed off Unix: no owner check exists there yet, so no file counts as private to this
@@ -115,7 +113,7 @@ pub(crate) fn hand_over(session: &mut DrainSession) -> Result<(), HandoverError>
     let journal = session.journal.as_mut().ok_or(HandoverError::Journal)?;
     let donor = marked(&journal.state);
     donor.binding.as_ref().ok_or(HandoverError::Foreign)?;
-    donor.finish_ready().map_err(|_| HandoverError::Journal)?;
+    mutant!("finish_gate_dropped", Ok::<(), HandoverError>(()), donor.finish_ready().map_err(|_| HandoverError::Journal))?;
     let frames: Vec<Vec<u8>> = frames_of(&donor)
         .ok_or(HandoverError::Foreign)?
         .iter()
@@ -127,7 +125,7 @@ pub(crate) fn hand_over(session: &mut DrainSession) -> Result<(), HandoverError>
     let existing = open_existing(&path, total)?;
     let bytes = existing.as_ref().map_or(&[][..], |(_, bytes)| bytes);
     let placement = against_donor(bytes, &donor);
-    if placement == Placement::Foreign {
+    if mutant!("accept_foreign_existing", false, placement == Placement::Foreign) {
         return Err(HandoverError::Foreign);
     }
     let target = journal.target.clone();
@@ -163,7 +161,7 @@ fn commit(
         return Err(HandoverError::Foreign);
     }
     journal.state = donor;
-    journal.persist().map_err(|_| HandoverError::Journal)?;
+    mutant!("flag_not_persisted", Ok::<(), HandoverError>(()), journal.persist().map_err(|_| HandoverError::Journal))?;
     seam(&journal.target, At::HandoverFlagged)?;
     let mut file = match file {
         Some(file) => file,
@@ -173,32 +171,32 @@ fn commit(
     // read, including the seal's, is ever behind a handle that was not checked.
     checked(&file).map_err(|_| HandoverError::Write)?;
     let from = match placement {
-        Placement::Whole => frames.len(),
+        Placement::Whole => mutant!("append_after_whole", 0, frames.len()),
         Placement::Torn { complete, proof } => {
             truncate_to(&file, &proof)?;
             complete
         }
-        Placement::Missing { complete } => complete,
+        Placement::Missing { complete } => mutant!("missing_as_absent", 0, complete),
         Placement::Absent | Placement::Foreign => 0,
     };
-    file.seek(SeekFrom::End(0))
-        .map_err(|_| HandoverError::Write)?;
+    mutant!("cursor_not_at_end", Ok::<u64, HandoverError>(0), file.seek(SeekFrom::End(0))
+        .map_err(|_| HandoverError::Write))?;
     for frame in &frames[from..] {
         file.write_all(frame).map_err(|_| HandoverError::Write)?;
     }
     seam(&journal.target, At::AbandonFileAppended)?;
-    file.sync_all().map_err(|_| HandoverError::Sync)?;
-    crate::config_persistence::crash_fs::note_flushed(&journal.target, &mut file)
-        .map_err(|_| HandoverError::Sync)?;
+    mutant!("unlink_before_file_sync", Ok::<(), HandoverError>(()), file.sync_all().map_err(|_| HandoverError::Sync))?;
+    mutant!("skip_note_flushed", Ok::<(), HandoverError>(()), mutant!("unlink_before_file_sync", Ok::<(), HandoverError>(()), crate::config_persistence::crash_fs::note_flushed(&journal.target, &mut file)
+        .map_err(|_| HandoverError::Sync)))?;
     seam(&journal.target, At::AbandonFileDataSynced)?;
-    sync_dir_of(path).map_err(|_| HandoverError::Sync)?;
+    mutant!("skip_dir_sync_before_finish", Ok::<(), HandoverError>(()), sync_dir_of(path).map_err(|_| HandoverError::Sync))?;
     seam(&journal.target, At::AbandonFileSynced)?;
     seal(&mut file, path, frames)
 }
 
 /// The only shortening of the file: to the start of a torn frame a donor-backed placement proved.
 fn truncate_to(file: &File, proof: &TornProof) -> Result<(), HandoverError> {
-    file.set_len(proof.start() as u64)
+    file.set_len(mutant!("truncate_wrong_offset", 0, proof.start() as u64))
         .map_err(|_| HandoverError::Write)
 }
 
@@ -211,15 +209,15 @@ fn seal(file: &mut File, path: &Path, frames: &[Vec<u8>]) -> Result<(), Handover
     let mut have = Vec::new();
     file.read_to_end(&mut have)
         .map_err(|_| HandoverError::Write)?;
-    if have != want {
+    if mutant!("seal_content_skipped", false, have != want) {
         return Err(HandoverError::Write);
     }
     // Identity only, never read; a replaced path must not make the open wait.
     let at_path =
         crate::open_nonblocking::open_nonblocking(path).map_err(|_| HandoverError::Write)?;
     match (file_id(file), file_id(&at_path)) {
-        (Ok(ours), Ok(theirs)) if ours == theirs => Ok(()),
-        _ => Err(HandoverError::Write),
+        (Ok(ours), Ok(theirs)) if mutant!("identity_check_skipped", true, ours == theirs) => Ok(()),
+        _ => mutant!("stat_failure_falls_through", Ok(()), Err(HandoverError::Write)),
     }
 }
 
