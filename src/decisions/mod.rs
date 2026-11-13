@@ -84,7 +84,16 @@ pub(crate) struct UiDecision {
 /// The refusals a UI decision closes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Closes {
-    /// Every refusal at or before this time.
+    /// Every refusal at or before this time: the rule the set always
+    /// folded, which no route writes now that a deny names positions. The
+    /// rows that pin it keep it from changing meaning.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "a deny closes by position; kept for the timestamp rule's rows"
+        )
+    )]
     Until(DateTime<Utc>),
     /// Exactly these refusals, by log position: the ones the admin was
     /// shown. A later refusal, even at an equal time, has another position

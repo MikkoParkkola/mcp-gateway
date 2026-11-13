@@ -325,6 +325,10 @@ fn access_requests(set: &DecisionSet, blocks: &Blocks) -> Vec<Dated> {
     requests
 }
 
+/// Each open capability of a request with the position of every refusal
+/// still pending on it.
+pub(crate) type Entries = Vec<(String, Vec<LogPos>)>;
+
 /// One open access request as a resolve needs it: the listed item, whose
 /// digest the admin saw, and the raw parts a decision names.
 pub(crate) struct OpenRequest {
@@ -337,7 +341,7 @@ pub(crate) struct OpenRequest {
     /// The proven agent, `source:id`.
     pub(crate) agent: String,
     /// Each open capability with every pending refusal's position.
-    pub(crate) entries: Vec<(String, Vec<LogPos>)>,
+    pub(crate) entries: Entries,
 }
 
 /// The open access request with `item_id`, or `None` if none is open. The
@@ -349,7 +353,7 @@ pub(super) fn open_request(set: &DecisionSet, item_id: &str) -> Option<OpenReque
         .iter()
         .find(|item| item.get("id").and_then(Value::as_str) == Some(item_id))?
         .clone();
-    let mut found: Option<(&AccessKey, Vec<(String, Vec<LogPos>)>)> = None;
+    let mut found: Option<(&AccessKey, Entries)> = None;
     for ((access, capability), requested) in &set.requested {
         let tuple = json!([access.authority, access.subject, access.agent]);
         if id(&set.key, "access_request", &tuple) != item_id {
