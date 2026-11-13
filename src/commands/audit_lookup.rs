@@ -6,8 +6,8 @@
 //! The email (first page) or the page token (every later page, from
 //! `--cursor-stdin`) comes from stdin, bounded, and goes only into the request
 //! body built in memory: never an argument, never a file, never an error
-//! message of this command. (A value typed as an argument anyway is refused by
-//! the argument parser, whose error names it.)
+//! message of this command. (A value typed as an argument anyway is refused,
+//! and the binary's parse entry, `src/parse_errors.rs`, never repeats it.)
 //! The answer is decoded strictly and printed as the typed answer; any HTTP,
 //! authentication, read or decode failure is a nonzero exit.
 
