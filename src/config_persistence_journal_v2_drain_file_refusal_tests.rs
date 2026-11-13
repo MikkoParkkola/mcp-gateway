@@ -196,9 +196,14 @@ fn refused_file_kept_and_reported() {
             "{ROW} {reason}: kept"
         );
         assert_eq!(rig.journal(), journal, "{ROW} {reason}: any donor kept");
-        assert!(
-            warnings.contains(&path.display().to_string()) && warnings.contains(reason),
-            "{ROW} {reason}: one WARN names the path and the reason: {warnings}"
+        let named = path.display().to_string();
+        let lines = warnings
+            .lines()
+            .filter(|line| line.contains(&named) && line.contains(reason))
+            .count();
+        assert_eq!(
+            lines, 1,
+            "{ROW} {reason}: exactly one WARN names the path and the reason: {warnings}"
         );
         #[cfg(feature = "metrics")]
         assert!(

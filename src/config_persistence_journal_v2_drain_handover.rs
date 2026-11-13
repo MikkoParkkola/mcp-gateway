@@ -15,6 +15,7 @@ use super::DrainSession;
 use super::fault::{self, At};
 use crate::config_persistence::sync_dir_of;
 use crate::security::transparency_log::rotation::file_id;
+use crate::security::transparency_log::settle::Role;
 
 /// Why a handover did not complete. The donor is byte-identical after `Foreign`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +123,14 @@ pub(super) fn maximal_size(donor: &JournalV2) -> usize {
     // Built against the widened state, so a `settled_by` counter is the widest too.
     let snapshot = widest.clone();
     for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
+        // A terminal already frozen is never built again, so its intent is never parsed here.
+        if token
+            .records
+            .iter()
+            .any(|record| matches!(record.role, Role::Outcome | Role::Abandoned))
+        {
+            continue;
+        }
         match super::terminal_record(&snapshot, token) {
             Ok(Some(record)) => token.records.push(record),
             Ok(None) => {}

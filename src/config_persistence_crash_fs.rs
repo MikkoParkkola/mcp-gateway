@@ -185,19 +185,20 @@ pub(crate) fn cut(dir: &Path, mode: Mode) {
         &durable.current
     };
     for (name, bytes) in want {
+        let path = dir.join(&name);
         if observed.get(&name) != Some(&bytes) {
-            let path = dir.join(&name);
             std::fs::write(&path, bytes).expect("crash_fs: restore file");
-            // The same inode would come back with the mode it was created with, so a writer
-            // that created it too open is still caught after the cut.
-            let held = restored_from.get(&name).and_then(|g| durable.held.get(g));
-            if let Some(file) = held {
-                let permissions = file
-                    .metadata()
-                    .expect("crash_fs: generation metadata")
-                    .permissions();
-                std::fs::set_permissions(&path, permissions).expect("crash_fs: restore mode");
-            }
+        }
+        // Every surviving name has its generation's mode, as the same inode would, also when an
+        // unsynced replacement left equal bytes under another mode: a writer that created a file
+        // too open is still caught after the cut.
+        let held = restored_from.get(&name).and_then(|g| durable.held.get(g));
+        if let Some(file) = held {
+            let permissions = file
+                .metadata()
+                .expect("crash_fs: generation metadata")
+                .permissions();
+            std::fs::set_permissions(&path, permissions).expect("crash_fs: restore mode");
         }
     }
 }

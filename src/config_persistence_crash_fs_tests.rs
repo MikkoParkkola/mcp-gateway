@@ -295,4 +295,24 @@ fn a_restored_file_keeps_its_generation_mode() {
             "the restored file has its generation's mode {mode:o}"
         );
     }
+    // An unsynced replacement with equal bytes but a looser mode: the synced generation's mode
+    // comes back too, although no bytes need restoring.
+    let (dir, path) = config();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
+    let bytes = std::fs::read(&path).expect("config bytes");
+    let _armed = crash_fs::arm(dir.path());
+    let replacement = dir.path().join("replacement");
+    std::fs::write(&replacement, &bytes).expect("replacement");
+    std::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(0o644)).expect("mode");
+    std::fs::rename(&replacement, &path).expect("an unsynced replacement");
+    crash_fs::cut(dir.path(), Mode::DropAll);
+    let restored = std::fs::metadata(&path)
+        .expect("restored")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        restored, 0o600,
+        "equal bytes, but the synced generation's mode"
+    );
 }

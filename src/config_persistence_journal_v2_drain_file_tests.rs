@@ -166,6 +166,15 @@ fn bad_files(frames: &[AbandonedFrame]) -> Vec<(&'static str, Vec<u8>)> {
     owned_record[1].owner = frames[0].owner.clone();
     let mut no_decision = frames.to_vec();
     no_decision[0].owner.as_mut().expect("owner").decision = None;
+    // One unfrozen token whose terminal cites an attempt the file does not hold.
+    let mut unbound = vec![frames[0].clone()];
+    if let Some(decision) = unbound[0].owner.as_mut().expect("owner").decision.as_mut() {
+        decision.settled_by = Some(IntentId("no-such-attempt".to_owned()));
+    }
+    // One token whose intent is delivered but whose counter is lost.
+    let mut uncounted = vec![frames[0].clone()];
+    uncounted[0].record.delivered = true;
+    uncounted[0].owner.as_mut().expect("owner").intent_counter = None;
     let mut wrong_result = frames.to_vec();
     set_result(&mut wrong_result[1].record, "written");
     vec![
@@ -176,6 +185,11 @@ fn bad_files(frames: &[AbandonedFrame]) -> Vec<(&'static str, Vec<u8>)> {
         ("roots that differ", encoded(&roots)),
         ("owner facts on a record", encoded(&owned_record)),
         ("a decision missing", encoded(&no_decision)),
+        ("a terminal citing a missing attempt", encoded(&unbound)),
+        (
+            "a delivered intent without its counter",
+            encoded(&uncounted),
+        ),
         (
             "a pre-frozen terminal result differs",
             encoded(&wrong_result),

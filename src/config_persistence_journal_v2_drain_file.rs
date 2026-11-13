@@ -15,6 +15,7 @@ use super::handover::{HandoverError, abandoned_path, hand_over, open_existing};
 use super::{DrainError, DrainSession, SettleSink, deliver_all};
 use crate::config_persistence::sync_dir_of;
 use crate::security::transparency_log::TransparencyLogger;
+use crate::security::transparency_log::settle::Role;
 
 /// Deliver the abandoned file beside the session's config through `log`, with the config lock
 /// held in `session` for the whole call. A handed-over journal beside the file is first finished
@@ -147,7 +148,7 @@ pub(super) fn state_from_frames(frames: Vec<AbandonedFrame>) -> Option<JournalV2
     {
         return None;
     }
-    Some(JournalV2 {
+    let state = JournalV2 {
         version: 2,
         binding: Some(binding),
         phase: Phase::Accepted,
@@ -157,6 +158,29 @@ pub(super) fn state_from_frames(frames: Vec<AbandonedFrame>) -> Option<JournalV2
         fact: None,
         writer,
         attempts: tokens,
+    };
+    completable(&state).then_some(state)
+}
+
+/// Whether the drain can finish this state from the file alone: no delivered intent without its
+/// counter, and every terminal the drain may still freeze builds, at the widest counters, with
+/// the drain's own builder (a `settled_by` names an attempt in the file). Checked before any
+/// delivery, so an unfinishable file is refused as found instead of half delivered.
+fn completable(state: &JournalV2) -> bool {
+    let mut widest = state.clone();
+    for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
+        if token.intent.delivered && token.intent_counter.is_none() {
+            return false;
+        }
+        token.intent_counter.get_or_insert(u64::MAX);
+    }
+    widest.writer.iter().chain(&widest.attempts).all(|token| {
+        // A terminal already frozen is never built again: the same skip as the size bound.
+        token
+            .records
+            .iter()
+            .any(|record| matches!(record.role, Role::Outcome | Role::Abandoned))
+            || super::terminal_record(&widest, token).is_ok()
     })
 }
 
