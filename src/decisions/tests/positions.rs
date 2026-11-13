@@ -4,6 +4,8 @@
 //! as: order independence, the equal-time case, the record's round trip and
 //! its id.
 
+use serde_json::Value;
+
 use super::super::{
     Fold, LogPos, OpenRequest, Source, UiDecision, decision_record, decisions_from_record,
     decisions_of, event_id,
