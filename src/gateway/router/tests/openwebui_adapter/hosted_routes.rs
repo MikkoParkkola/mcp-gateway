@@ -105,11 +105,11 @@ accounts:
 struct Gateway {
     router: axum::Router,
     _fixture: RevokeFixture,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 async fn gateway(shape: Shape) -> Gateway {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let env = dir.path().join("adapter.env");
     crate::gateway::test_helpers::write_owner_only(
         &env,

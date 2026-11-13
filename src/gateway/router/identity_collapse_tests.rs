@@ -414,7 +414,7 @@ async fn nameless_certificates_never_share_a_per_caller_child() {
          tool_selector:\n        param: operation\n        tools:\n          \
          say: {{ tool: echo, arguments: {{ message: \"{{text}}\" }} }}\n"
     );
-    let dir = tempfile::TempDir::new().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     // Pinned, as `mcp-gateway cap pin` would: a local process runs only
     // from a verified file.
     let hash = crate::capability::hash::compute_capability_hash(&yaml);
@@ -546,7 +546,7 @@ async fn nameless_certificates_never_share_a_cached_personal_result() {
         );
         axum::serve(listener, app).await.unwrap();
     });
-    let dir = tempfile::TempDir::new().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let placeholder = nameless_cert().display_name().to_owned();
     std::fs::write(
         dir.path().join("placeholder_probe.yaml"),

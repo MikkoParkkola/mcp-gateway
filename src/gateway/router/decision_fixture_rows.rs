@@ -131,7 +131,7 @@ const NOT_FOUND: Refusal = Refusal {
 /// `note_absent`, `:257`).
 #[tokio::test]
 async fn n4_direct_not_found_in_a_scoped_view() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = table(&dir).await;
     let before = (
         records(&dir).len(),
@@ -153,7 +153,7 @@ async fn n4_direct_not_found_in_a_scoped_view() {
 /// finds none (`direct_caller.rs:487`).
 #[tokio::test]
 async fn n5_direct_not_found_by_lookup() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = table(&dir).await;
     let before = (
         records(&dir).len(),
@@ -177,7 +177,7 @@ async fn n5_direct_not_found_by_lookup() {
 /// in-process `invoke_tool` skips this gate (it reaches N2's site instead).
 #[tokio::test]
 async fn n1_meta_not_found_at_the_gate() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = table(&dir).await;
     let before = (
         records(&dir).len(),
@@ -209,7 +209,7 @@ async fn n1_meta_not_found_at_the_gate() {
 /// withholds it (`direct_preflight.rs:60`, via `blocked_tool_kind`).
 #[tokio::test]
 async fn t2_direct_allowed_tools() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = table(&dir).await;
     let config = crate::config::BackendConfig {
         allowed_tools: Some(vec!["write".to_string()]),
@@ -248,7 +248,7 @@ async fn t2_direct_allowed_tools() {
 /// (`dispatch_guards.rs:319` in `admit_target`, via `direct_guards.rs:36`).
 #[tokio::test]
 async fn c2_direct_capability_disabled() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = table(&dir).await;
     let budget = crate::kill_switch::CapabilityErrorBudgetConfig::default();
     let kill = fx.state.meta_mcp.kill_switch();
@@ -293,7 +293,7 @@ async fn c2_direct_capability_disabled() {
 #[tokio::test]
 async fn p3_direct_routing_profile_preflight() {
     use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = logger(&dir, AuditFailurePolicy::FailClosed);
     let meta_log = Arc::clone(&log);
     let profiles = std::collections::HashMap::from([(
@@ -409,7 +409,7 @@ async fn t2c_direct_allowed_tools_per_user_optional() {
 /// T2b and T2c. No denial code is noted, so the record reads the answer:
 /// `error` with its code (`direct_audit.rs:94-96`), whichever site built it.
 async fn allowed_tools_per_user(row: &'static str, propagation: Propagation) {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = table(&dir).await;
     let calls = super::direct_guards_fixture::replace_backend_configured(
         &fx,
@@ -483,7 +483,7 @@ async fn p3c_direct_routing_profile_preflight_per_user_optional() {
 /// (`direct_audit.rs:353-358`), whichever site built the answer.
 async fn routing_profile_per_user(row: &'static str, propagation: Propagation) {
     use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = logger(&dir, AuditFailurePolicy::FailClosed);
     let meta_log = Arc::clone(&log);
     let profiles = std::collections::HashMap::from([(
@@ -547,7 +547,7 @@ async fn routing_profile_per_user(row: &'static str, propagation: Propagation) {
 /// mutant there fails this row's control as well as T2 and P3.
 #[tokio::test]
 async fn a6b_direct_no_rule() {
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = table(&dir).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     let read: crate::protocol::Tool = serde_json::from_value(json!({
