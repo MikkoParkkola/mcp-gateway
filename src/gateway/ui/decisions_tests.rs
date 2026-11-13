@@ -639,11 +639,11 @@ async fn two_resolves_do_not_overlap() {
     let state2 = Arc::clone(&state);
     let body = deny_body(&digest).to_string();
     let pending = tokio::spawn(async move { resolve(&state2, true, &id, body).await });
-    // One thread: a yield lets the spawned resolve run until it blocks on the
-    // mutex, or finish if nothing stops it. No clock is involved.
-    for _ in 0..8 {
-        tokio::task::yield_now().await;
-    }
+    // A deterministic handoff, not a wait: this runtime has one thread, so one
+    // yield runs the spawned resolve until it first returns Pending. Every step
+    // before the mutex is synchronous, so without the mutex it would finish in
+    // that one poll; with it, it is parked until `held` drops.
+    tokio::task::yield_now().await;
     assert!(
         !pending.is_finished(),
         "a resolve ran while another held the mutex"
