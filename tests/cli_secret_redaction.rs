@@ -123,21 +123,34 @@ fn run_bare(args: &[&str]) -> Output {
 }
 
 /// MIK-9456.CLI.1: `audit lookup-email` reads the email and the page token
-/// from stdin only. A value typed as an argument anyway (positional, attached
-/// to a source flag, or given to another flag) is refused with a fixed message
-/// that never repeats it, so it cannot reach stderr or a log that captures it.
+/// from stdin only. A value typed as an argument anyway (positional, after
+/// `--`, attached to a flag, given to another flag, or as a flag name) is
+/// refused with a fixed message that never repeats it, in the parse phase and
+/// the validation phase alike, so it cannot reach stderr or a log that
+/// captures it.
 /// Mutant: let the parser's own error through for this command.
 #[test]
 fn audit_lookup_email_never_repeats_a_value_typed_as_an_argument() {
     let email_attached = format!("--email-stdin={TYPED_EMAIL}");
     let token_attached = format!("--cursor-stdin={TYPED_TOKEN}");
+    let old_cursor_attached = format!("--cursor={TYPED_TOKEN}");
+    let limit_attached = format!("--limit={TYPED_TOKEN}");
+    let token_as_flag = format!("--{TYPED_TOKEN}");
     for (shape, typed) in [
         (vec!["--email-stdin", TYPED_EMAIL], TYPED_EMAIL),
         (vec!["--cursor-stdin", TYPED_TOKEN], TYPED_TOKEN),
         (vec![TYPED_EMAIL], TYPED_EMAIL),
+        (vec!["--cursor-stdin", "--", TYPED_TOKEN], TYPED_TOKEN),
         (vec![email_attached.as_str()], TYPED_EMAIL),
         (vec![token_attached.as_str()], TYPED_TOKEN),
+        (vec![old_cursor_attached.as_str()], TYPED_TOKEN),
+        (vec!["--cursor-stdin", limit_attached.as_str()], TYPED_TOKEN),
         (vec!["--cursor-stdin", "--limit", TYPED_TOKEN], TYPED_TOKEN),
+        (vec!["--email-stdin", "--limit", "7777777"], "7777777"),
+        (vec!["--cursor-stdin", token_as_flag.as_str()], TYPED_TOKEN),
+        // Accepted by the parser as the URL, then refused in validation: no
+        // source flag was given.
+        (vec!["--url", TYPED_TOKEN], TYPED_TOKEN),
     ] {
         let mut argv = vec!["audit", "lookup-email"];
         argv.extend(&shape);
@@ -151,10 +164,11 @@ fn audit_lookup_email_never_repeats_a_value_typed_as_an_argument() {
 }
 
 /// MIK-9456.CLI.1: only the commands that read a secret from stdin get the
-/// fixed message: a typo anywhere else still names what was typed, and help
+/// fixed message: a typo anywhere else still names what was typed, a
+/// `--help` after a failing argument does not change that, and help itself
 /// still prints.
-/// Mutant: give every command the fixed message, match the path by prefix, or
-/// replace help.
+/// Mutant: give every command the fixed message, match the path by prefix,
+/// let a later `--help` decide the path, or replace help.
 #[test]
 fn other_parse_errors_and_help_keep_the_parsers_own_output() {
     for argv in [
@@ -162,6 +176,7 @@ fn other_parse_errors_and_help_keep_the_parsers_own_output() {
         vec!["no-such-command-77c2"],
         vec!["list", "--no-such-flag-77c2"],
         vec!["audit", "show", "--no-such-flag-77c2"],
+        vec!["audit", "verify", "--no-such-flag-77c2", "--help"],
     ] {
         let output = run_bare(&argv);
         let text = combined_output(&output);
@@ -169,7 +184,18 @@ fn other_parse_errors_and_help_keep_the_parsers_own_output() {
         assert!(text.contains("77c2"), "{argv:?}: {text}");
         assert!(!text.contains("is not repeated"), "{argv:?}: {text}");
     }
+    // `--path` takes a value and gets none: the parser's own message names it.
+    let missing = run_bare(&["audit", "verify", "--path", "--help"]);
+    let text = combined_output(&missing);
+    assert_eq!(missing.status.code(), Some(2), "{text}");
+    assert!(text.contains("--path"), "{text}");
+    assert!(!text.contains("is not repeated"), "{text}");
+    // Real help: the usage line and the credential's variable, which the
+    // fixed message does not carry.
     let help = run_bare(&["audit", "lookup-email", "--help"]);
     assert_eq!(help.status.code(), Some(0), "{}", combined_output(&help));
-    assert!(String::from_utf8_lossy(&help.stdout).contains("--cursor-stdin"));
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(stdout.contains("Usage:"), "{stdout}");
+    assert!(stdout.contains("MCP_GATEWAY_TOKEN"), "{stdout}");
+    assert!(!stdout.contains("is not repeated"), "{stdout}");
 }

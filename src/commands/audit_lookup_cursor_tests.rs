@@ -177,7 +177,7 @@ fn a_full_length_token_with_its_line_end_is_accepted() {
 /// source flag) is refused by the parser; a source flag takes no value, so
 /// `=false` cannot switch a source off. That the refusal never repeats the
 /// value is proven on the binary, whose parse entry replaces the message
-/// (tests/cli_secret_redaction.rs).
+/// (`tests/cli_secret_redaction.rs`).
 /// Mutant: accept a positional value, or let a source flag take a value.
 #[test]
 fn a_value_typed_as_an_argument_is_refused_by_the_parser() {
