@@ -136,7 +136,7 @@ async fn post(router: &axum::Router, body: Value) -> Value {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_stdio_env_credential_echo_is_redacted() {
-    let dir = tempfile::tempdir().expect("config directory");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let backend = stdio_backend(dir.path(), "ECHO_TOKEN: \"env:ECHO_CFG_TOKEN\"");
     let path = config(dir.path(), &backend, &format!("ECHO_CFG_TOKEN={SECRET}\n"));
     let body = invoke_echo(&path).await;
@@ -163,7 +163,7 @@ async fn an_http_header_credential_echo_is_redacted() {
     use super::secret_echo_tests::{Calls, Reply, echo_server};
     let calls = Calls::default();
     let url = echo_server(Arc::clone(&calls), Reply::EchoHeader).await;
-    let dir = tempfile::tempdir().expect("config directory");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let backend = format!(
         "    http_url: \"{url}\"\n    streamable_http: true\n    headers:\n      \
          X-Api-Key: \"env:ECHO_CFG_HEADER\"\n"
@@ -191,7 +191,7 @@ async fn an_http_header_credential_echo_is_redacted() {
 async fn a_websocket_upgrade_header_credential_echo_is_redacted() {
     use crate::transport::websocket_test_server::{Behaviour, WsPeer};
     let peer = WsPeer::start(Behaviour::EchoUpgradeHeaders).await;
-    let dir = tempfile::tempdir().expect("config directory");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let backend = format!(
         "    ws_url: \"{}\"\n    headers:\n      Authorization: \"Bearer ${{ECHO_CFG_WS}}\"\n",
         peer.url
@@ -231,7 +231,7 @@ async fn a_value_not_marked_secret_passes_unchanged() {
             "environment 1",
         ),
     ] {
-        let dir = tempfile::tempdir().expect("config directory");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let backend = stdio_backend(dir.path(), env_line);
         let path = config(dir.path(), &backend, &env_body);
         let body = invoke_echo(&path).await;

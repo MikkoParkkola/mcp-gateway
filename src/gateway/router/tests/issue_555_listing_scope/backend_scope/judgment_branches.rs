@@ -200,8 +200,11 @@ async fn a_direct_call_hides_by_its_session_profile() {
 
 /// The provider `caps` with `cap_open` and `cap_callback`, an admin-only
 /// capability (it registers a caller-addressed callback).
-async fn caps_with_callback() -> (Arc<crate::capability::CapabilityBackend>, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().expect("capability dir");
+async fn caps_with_callback() -> (
+    Arc<crate::capability::CapabilityBackend>,
+    std::sync::Arc<tempfile::TempDir>,
+) {
+    let dir = crate::test_dir_keep::kept_tempdir();
     let files = [
         ("cap_open", ""),
         ("cap_callback", "  registers_external_callback: true\n"),
@@ -435,7 +438,10 @@ async fn hidden_recorded() -> (
     axum::Router,
     Arc<crate::gateway::router::AppState>,
     Arc<super::super::Upstream>,
-    (Arc<crate::capability::CapabilityBackend>, tempfile::TempDir),
+    (
+        Arc<crate::capability::CapabilityBackend>,
+        std::sync::Arc<tempfile::TempDir>,
+    ),
 ) {
     let profiles = HashMap::from([(
         "neither".to_string(),

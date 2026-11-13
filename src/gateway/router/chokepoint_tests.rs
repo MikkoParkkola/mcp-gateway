@@ -93,7 +93,7 @@ async fn f6_a_playbook_step_carrying_a_blocked_pattern_is_refused_at_dispatch() 
     let playbook = "name: hostile\ndescription: one step the firewall blocks\non_error: continue\n\
          steps:\n  - name: read\n    server: alpha\n    tool: read\n    arguments:\n      \
          cmd: $inputs.cmd\n";
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let audit = dir.path().join("audit.jsonl");
     let fx = fixture_firewalled_audited(Answer::Ok, audit.clone()).await;
     let mut engine = crate::playbook::PlaybookEngine::new();
@@ -179,7 +179,7 @@ async fn f7_string_form_arguments_are_judged_as_the_object_they_dispatch() {
     ] {
         let mut seen = Vec::new();
         for form in [&object, &stringly] {
-            let dir = tempfile::tempdir().expect("tempdir");
+            let dir = crate::test_dir_keep::kept_tempdir();
             let audit = dir.path().join("audit.jsonl");
             let fx = fixture_firewalled_audited(Answer::Ok, audit.clone()).await;
             let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", build(form), None).await;
