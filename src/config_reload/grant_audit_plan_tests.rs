@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::grant_audit::{JournalRead, PlannedRecord};
-use super::grant_audit_plan::{Claim, State, plan};
+use super::grant_audit_plan::{Claim, Outside, State, plan};
 use super::grant_audit_tests::row;
 use crate::control_plane::GrantChangeVerb;
 use crate::identity_grants::IdentityGrant;
@@ -39,7 +39,7 @@ fn run(
     journal: &JournalRead,
     claims: &[Claim],
 ) -> (Vec<PlannedRecord>, State) {
-    let (records, next, _) = plan(state, rows, journal, claims, &BTreeSet::new());
+    let (records, next, _, _) = plan(state, rows, journal, claims, &BTreeSet::new());
     (records, next)
 }
 
@@ -209,10 +209,11 @@ fn an_accounted_row_survives_a_state_round_trip() {
 }
 
 /// JRN.3: a served row whose digest is not the one its records name is
-/// recorded out-of-band and warned with the file, the row and both digests
-/// (control: a row whose digest matches is neither recorded nor warned).
+/// recorded out-of-band and returned with both digests for the warning,
+/// which the plan does not give itself: a plan may still be refused
+/// (control: a row whose digest matches is neither recorded nor returned).
 #[test]
-fn a_row_changed_outside_the_gateway_is_warned_with_both_digests() {
+fn a_row_changed_outside_the_gateway_is_returned_with_both_digests() {
     let before = row("g1", "r");
     let after = row("g1", "edited");
     let state = State {
@@ -220,24 +221,20 @@ fn a_row_changed_outside_the_gateway_is_warned_with_both_digests() {
         ..based()
     };
     let none = &JournalRead::Missing;
-    let ((same, _), quiet) = crate::test_log_capture::capture_warnings(|| {
-        run(&state, std::slice::from_ref(&before), none, &[])
-    });
+    let plan_of = |rows: &[IdentityGrant]| plan(&state, rows, none, &[], &BTreeSet::new());
+    let (same, _, _, quiet) = plan_of(std::slice::from_ref(&before));
     assert!(same.is_empty(), "control: {:?}", out_of_band(&same));
-    assert!(!quiet.contains("outside the gateway"), "control: {quiet}");
-    let ((records, _), logs) = crate::test_log_capture::capture_warnings(|| {
-        run(&state, std::slice::from_ref(&after), none, &[])
-    });
+    assert!(quiet.is_empty(), "control: {quiet:?}");
+    let ((records, _, _, outside), logs) =
+        crate::test_log_capture::capture_warnings(|| plan_of(std::slice::from_ref(&after)));
     assert_eq!(out_of_band(&records), ["g1"]);
-    for part in [
-        "outside the gateway",
-        GRANTS,
-        "g1",
-        &grant_digest(&before),
-        &grant_digest(&after),
-    ] {
-        assert!(logs.contains(part), "{part}: {logs}");
-    }
+    let want = Outside {
+        id: "g1".to_owned(),
+        expected: Some(grant_digest(&before)),
+        actual: Some(grant_digest(&after)),
+    };
+    assert_eq!(outside, [want]);
+    assert!(!logs.contains("outside the gateway"), "{logs}");
 }
 
 /// A claim explains only a row the records do not already name: with the

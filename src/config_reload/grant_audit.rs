@@ -18,7 +18,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use super::grant_audit_plan::{Pending, State, plan, record as grant_record};
+use super::grant_audit_plan::{Outside, Pending, State, plan, record as grant_record};
 use crate::control_plane::store::AuditFilter;
 use crate::control_plane::{
     ControlPlaneAction, ControlPlaneStore, GrantChangeRecord, GrantChangeVerb,
@@ -54,6 +54,21 @@ pub(crate) struct PlannedRecord {
 #[derive(Debug)]
 pub(crate) struct Prepared {
     pub(crate) records: Vec<PlannedRecord>,
+    /// Rows changed outside the gateway, warned by [`GrantAuditor::record`]:
+    /// a refused plan is not published, so it warns nothing.
+    pub(super) outside: Vec<Outside>,
+}
+
+impl Prepared {
+    /// How many rows, not records, changed outside the gateway: one row can
+    /// differ both before and after a journalled change.
+    pub(super) fn outside_rows(&self) -> usize {
+        self.outside
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    }
 }
 
 /// Why a reconciliation refuses the change (design 5.2, paragraph after step 7).
@@ -174,7 +189,7 @@ impl GrantAuditor {
         let mut inner = self.inner.lock();
         let state = self.finish_pending(&mut inner)?;
         let state = state.for_path(&self.grants_path);
-        let (records, next, reported) = plan(&state, rows, journal, &[], &inner.reported);
+        let (records, next, reported, outside) = plan(&state, rows, journal, &[], &inner.reported);
         if records.is_empty() {
             // Nothing to record: commit the new baseline directly, and skip
             // the write when only the generation would change.
@@ -192,6 +207,7 @@ impl GrantAuditor {
             inner.reported = reported;
             return Ok(Prepared {
                 records: Vec::new(),
+                outside,
             });
         }
         let mut planned = state;
@@ -213,7 +229,7 @@ impl GrantAuditor {
         if self.fault_is(GrantAuditFault::AfterPlanWrite) {
             return Err(Refusal("injected crash after the plan write".to_string()));
         }
-        Ok(Prepared { records })
+        Ok(Prepared { records, outside })
     }
 
     /// Step 1: load the state, then recover and commit a pending plan.
@@ -304,6 +320,10 @@ impl GrantAuditor {
     /// A failed append never unpublishes (AUDIT4.6): it keeps the plan
     /// pending, marks the gap durably, and reports the change unrecorded.
     pub(crate) fn record(&self, prepared: Prepared) -> Recorded {
+        // The change is published whether or not its records land.
+        for row in &prepared.outside {
+            row.warn(&self.grants_path);
+        }
         let total = prepared.records.len();
         if total == 0 {
             return Recorded::All(0);

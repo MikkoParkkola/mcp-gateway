@@ -267,14 +267,7 @@ fn audit_clause(auditor: Option<&GrantAuditor>, prepared: Option<Prepared>) -> S
     };
     // Rows changed outside the gateway are counted in the answer: their
     // records name no actor, so this is where an operator sees them.
-    let outside = prepared
-        .records
-        .iter()
-        .filter(|r| {
-            r.event.grant_change.as_ref().map(|c| c.verb)
-                == Some(crate::control_plane::GrantChangeVerb::OutOfBand)
-        })
-        .count();
+    let outside = prepared.outside_rows();
     let outside = if outside == 0 {
         String::new()
     } else {
