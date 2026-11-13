@@ -8,6 +8,7 @@
     expect(dead_code, reason = "the fetch session, a later part, calls the proxy")
 )]
 
+use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -83,15 +84,52 @@ impl Credential {
     }
 }
 
-/// The fetch in progress: its credential, and the token that closes every
-/// tunnel opened under it.
+/// One socket of a tunnel, kept as a duplicate descriptor so a revoke can shut
+/// it down directly, without waiting for any task to be polled.
+enum Half {
+    Tcp(std::net::TcpStream),
+    Unix(std::os::unix::net::UnixStream),
+}
+
+impl Half {
+    /// Both directions; a socket already closed is no error.
+    fn shut(&self) {
+        let _ = match self {
+            Self::Tcp(s) => s.shutdown(std::net::Shutdown::Both),
+            Self::Unix(s) => s.shutdown(std::net::Shutdown::Both),
+        };
+    }
+}
+
+/// The fetch in progress: its credential, the token that wakes every tunnel
+/// task opened under it, and the sockets of every open tunnel.
 struct Live {
+    id: u64,
     credential: Credential,
     closed: CancellationToken,
+    tunnels: HashMap<u64, [Half; 2]>,
+    next_tunnel: u64,
+}
+
+impl Live {
+    /// End the fetch: wake the tunnel tasks, and shut every tunnel's sockets
+    /// now. Called with the fetch already taken out of the proxy, so nothing
+    /// can register a tunnel into it any more.
+    fn end(self) {
+        self.closed.cancel();
+        for halves in self.tunnels.values() {
+            for half in halves {
+                half.shut();
+            }
+        }
+    }
 }
 
 struct Shared {
     live: Mutex<Option<Live>>,
+    /// Counts fetches, so a tunnel admitted under one fetch can never be
+    /// registered into the next.
+    fetches: std::sync::atomic::AtomicU64,
     resolve: Arc<dyn Resolve>,
     connect: Arc<dyn Connect>,
     interfaces: Arc<dyn Interfaces>,
@@ -122,6 +160,7 @@ impl AllowlistProxy {
     ) -> io::Result<Self> {
         let shared = Arc::new(Shared {
             live: Mutex::new(None),
+            fetches: std::sync::atomic::AtomicU64::new(0),
             resolve,
             connect,
             interfaces,
@@ -175,29 +214,46 @@ impl AllowlistProxy {
     /// earlier fetch's credential and tunnels end here too. A failed random
     /// source refuses this preview only; the gateway carries on.
     pub(crate) fn begin_fetch(&self) -> Result<Credential, super::Refusal> {
+        // The old fetch leaves and the new one arrives under one lock hold,
+        // so no tunnel can register into either in between.
         let mut live = lock(&self.shared.live);
-        if let Some(old) = live.take() {
-            old.closed.cancel();
-        }
-        let credential = Credential::fresh(self.random)
-            .map_err(|e| super::Refusal::Step(format!("generating the fetch credential ({e})")))?;
-        *live = Some(Live {
-            credential: credential.clone(),
-            closed: CancellationToken::new(),
+        let old = live.take();
+        let made = Credential::fresh(self.random).map(|credential| {
+            let id = self
+                .shared
+                .fetches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *live = Some(Live {
+                id,
+                credential: credential.clone(),
+                closed: CancellationToken::new(),
+                tunnels: HashMap::new(),
+                next_tunnel: 0,
+            });
+            credential
         });
-        Ok(credential)
+        drop(live);
+        if let Some(old) = old {
+            old.end();
+        }
+        made.map_err(|e| super::Refusal::Step(format!("generating the fetch credential ({e})")))
     }
 
     /// Revoke a fetch's credential: it stops working and its tunnels close.
     pub(crate) fn revoke(&self, credential: &Credential) {
-        let mut live = lock(&self.shared.live);
-        if live
-            .as_ref()
-            .is_some_and(|l| l.credential.secret == credential.secret)
-        {
-            if let Some(old) = live.take() {
-                old.closed.cancel();
+        let old = {
+            let mut live = lock(&self.shared.live);
+            if live
+                .as_ref()
+                .is_some_and(|l| l.credential.secret == credential.secret)
+            {
+                live.take()
+            } else {
+                None
             }
+        };
+        if let Some(old) = old {
+            old.end();
         }
     }
 }
@@ -207,8 +263,9 @@ impl Drop for AllowlistProxy {
         for task in &self.tasks {
             task.abort();
         }
-        if let Some(live) = lock(&self.shared.live).take() {
-            live.closed.cancel();
+        let live = lock(&self.shared.live).take();
+        if let Some(live) = live {
+            live.end();
         }
         if let Some(dir) = self.unix_path.parent() {
             let _ = std::fs::remove_dir_all(dir);
@@ -261,24 +318,87 @@ impl Status {
     }
 }
 
+/// A stream a tunnel can run over: its duplicate descriptor is what a revoke
+/// shuts down.
+trait Tunnel: AsyncRead + AsyncWrite + Unpin + Send {
+    fn half(&self) -> io::Result<Half>;
+}
+
+impl Tunnel for TcpStream {
+    fn half(&self) -> io::Result<Half> {
+        use std::os::fd::AsFd as _;
+        Ok(Half::Tcp(std::net::TcpStream::from(
+            self.as_fd().try_clone_to_owned()?,
+        )))
+    }
+}
+
+impl Tunnel for tokio::net::UnixStream {
+    fn half(&self) -> io::Result<Half> {
+        use std::os::fd::AsFd as _;
+        Ok(Half::Unix(std::os::unix::net::UnixStream::from(
+            self.as_fd().try_clone_to_owned()?,
+        )))
+    }
+}
+
+/// The fetch a request was admitted under.
+struct Fetch {
+    id: u64,
+    closed: CancellationToken,
+}
+
+/// Record a tunnel's two sockets under its fetch, if that fetch is still the
+/// live one: the check and the insert are one lock hold, so a revoke either
+/// sees the tunnel (and shuts it) or has already made this return `None`.
+fn register(shared: &Shared, fetch: &Fetch, halves: [Half; 2]) -> Option<u64> {
+    let mut live = lock(&shared.live);
+    let live = live.as_mut().filter(|l| l.id == fetch.id)?;
+    let id = live.next_tunnel;
+    live.next_tunnel += 1;
+    live.tunnels.insert(id, halves);
+    Some(id)
+}
+
+/// Forget a finished tunnel's sockets.
+fn unregister(shared: &Shared, fetch: &Fetch, tunnel: u64) {
+    if let Some(live) = lock(&shared.live).as_mut().filter(|l| l.id == fetch.id) {
+        live.tunnels.remove(&tunnel);
+    }
+}
+
 async fn handle<S>(mut client: S, shared: Arc<Shared>)
 where
-    S: AsyncRead + AsyncWrite + Unpin + Send,
+    S: Tunnel,
 {
     match admit(&mut client, &shared).await {
-        Ok((mut upstream, closed)) => {
+        Ok((mut upstream, fetch)) => {
+            let halves = match (client.half(), upstream.half()) {
+                (Ok(a), Ok(b)) => [a, b],
+                _ => {
+                    let _ = client.write_all(Status::BadGateway.head()).await;
+                    return;
+                }
+            };
+            // Registered before the 200 goes out: a fetch revoked meanwhile
+            // never gets a tunnel it could use.
+            let Some(tunnel) = register(&shared, &fetch, halves) else {
+                let _ = client.write_all(Status::AuthRequired.head()).await;
+                return;
+            };
             if client
                 .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 .await
-                .is_err()
+                .is_ok()
             {
-                return;
+                // A revoke shuts both sockets itself; the token is the
+                // wake-up for this task.
+                tokio::select! {
+                    _ = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {}
+                    () = fetch.closed.cancelled() => {}
+                }
             }
-            // Expiry drops both ends, so a tunnel never outlives its fetch.
-            tokio::select! {
-                _ = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {}
-                () = closed.cancelled() => {}
-            }
+            unregister(&shared, &fetch, tunnel);
         }
         Err(status) => {
             tracing::debug!(?status, "preview proxy refused a request");
@@ -289,7 +409,7 @@ where
 
 /// Every check, in order; the tunnel's upstream and its fetch's close token
 /// when all pass.
-async fn admit<S>(client: &mut S, shared: &Shared) -> Result<(TcpStream, CancellationToken), Status>
+async fn admit<S>(client: &mut S, shared: &Shared) -> Result<(TcpStream, Fetch), Status>
 where
     S: AsyncRead + Unpin,
 {
@@ -316,7 +436,7 @@ where
             host.push(value);
         }
     }
-    let closed = authorized(&auth, shared).ok_or(Status::AuthRequired)?;
+    let fetch = authorized(&auth, shared).ok_or(Status::AuthRequired)?;
     if !ALLOWED.contains(&authority) {
         return Err(Status::Forbidden);
     }
@@ -332,7 +452,7 @@ where
         .resolve(name)
         .await
         .map_err(|_| Status::BadGateway)?;
-    if closed.is_cancelled() {
+    if fetch.closed.is_cancelled() {
         return Err(Status::AuthRequired);
     }
     // One denied address refuses the whole answer, so a mixed answer cannot
@@ -352,15 +472,15 @@ where
         }
     }
     let upstream = upstream.ok_or(Status::BadGateway)?;
-    if closed.is_cancelled() {
+    if fetch.closed.is_cancelled() {
         return Err(Status::AuthRequired);
     }
-    Ok((upstream, closed))
+    Ok((upstream, fetch))
 }
 
 /// The live fetch's close token when exactly one `Proxy-Authorization`
 /// header carries its credential as `Basic base64(<secret>:)`.
-fn authorized(auth: &[&str], shared: &Shared) -> Option<CancellationToken> {
+fn authorized(auth: &[&str], shared: &Shared) -> Option<Fetch> {
     use base64::Engine as _;
     use subtle::ConstantTimeEq as _;
     let [value] = auth else { return None };
@@ -371,7 +491,10 @@ fn authorized(auth: &[&str], shared: &Shared) -> Option<CancellationToken> {
     let live = lock(&shared.live);
     let live = live.as_ref()?;
     let expected = format!("{}:", live.credential.secret);
-    bool::from(decoded.ct_eq(expected.as_bytes())).then(|| live.closed.clone())
+    bool::from(decoded.ct_eq(expected.as_bytes())).then(|| Fetch {
+        id: live.id,
+        closed: live.closed.clone(),
+    })
 }
 
 /// The SSRF deny list, or one of the host's own addresses. Mapped and
