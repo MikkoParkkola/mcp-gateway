@@ -4,24 +4,16 @@
 //! as: order independence, the equal-time case, the note's round trip and
 //! its id.
 
-use std::collections::BTreeSet;
-
 use serde_json::{Map, Value};
 
 use super::super::{
-    Closes, Fold, LogPos, OpenRequest, Source, UiDecision, decisions_from_record, decisions_of,
-    event_id, record_fields,
+    Fold, LogPos, OpenRequest, Source, UiDecision, decisions_from_record, decisions_of, event_id,
+    record_fields,
 };
-use super::{AGENT, at, count, deny, missing, pos, ready};
+use super::{AGENT, at, count, decision, deny, missing, pos, ready};
 
 fn close(capability: &str, offsets: &[u64]) -> Fold {
-    Fold::Decided(UiDecision {
-        authority: "https://idp.example".to_string(),
-        subject: "alice".to_string(),
-        agent: AGENT.to_string(),
-        capability: capability.to_string(),
-        closes: Closes::Positions(offsets.iter().map(|o| pos(Source::Access, *o)).collect()),
-    })
+    Fold::Decided(decision(capability, offsets))
 }
 
 #[test]
@@ -115,11 +107,7 @@ fn a_written_note_reads_back_into_the_decisions_it_was_written_from() {
     let mut got = read;
     got.sort_by_key(key);
     assert_eq!(got, wrote);
-    let closed: BTreeSet<LogPos> = match &got[0].closes {
-        Closes::Positions(set) => set.clone(),
-        Closes::Until(_) => panic!("a deny closes by position"),
-    };
-    assert_eq!(closed.len(), 1, "stripe.charges had one refusal");
+    assert_eq!(got[0].closes.len(), 1, "stripe.charges had one refusal");
 }
 
 #[test]

@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
 
 use super::items::OpenRequest;
-use super::{Closes, LogPos, Source, UiDecision};
+use super::{LogPos, Source, UiDecision};
 
 /// The record kind of a UI decision in the transparency log.
 pub(crate) const UI_DECISION_KIND: &str = "ui_decision";
@@ -103,7 +103,7 @@ pub(crate) fn decisions_of(request: &OpenRequest) -> Vec<UiDecision> {
             subject: request.subject.clone(),
             agent: request.agent.clone(),
             capability: capability.clone(),
-            closes: Closes::Positions(positions.iter().cloned().collect()),
+            closes: positions.iter().cloned().collect(),
         })
         .collect()
 }
@@ -144,7 +144,7 @@ pub(crate) fn decisions_from_record(record: &Map<String, Value>) -> Option<Vec<U
                 subject: subject.to_owned(),
                 agent: agent.to_owned(),
                 capability: entry.get("capability")?.as_str()?.to_owned(),
-                closes: Closes::Positions(positions),
+                closes: positions,
             })
         })
         .collect()

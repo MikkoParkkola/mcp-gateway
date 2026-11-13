@@ -77,28 +77,10 @@ pub(crate) struct UiDecision {
     pub(crate) agent: String,
     /// The capability decided on.
     pub(crate) capability: String,
-    /// Which refusals it closes.
-    pub(crate) closes: Closes,
-}
-
-/// The refusals a UI decision closes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Closes {
-    /// Every refusal at or before this time: the rule the set always
-    /// folded, which no route writes now that a deny names positions. The
-    /// rows that pin it keep it from changing meaning.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "a deny closes by position; kept for the timestamp rule's rows"
-        )
-    )]
-    Until(DateTime<Utc>),
-    /// Exactly these refusals, by log position: the ones the admin was
-    /// shown. A later refusal, even at an equal time, has another position
-    /// and stays open.
-    Positions(BTreeSet<LogPos>),
+    /// The refusals it closes, by log position: exactly the ones the admin
+    /// was shown. A later refusal, even at an equal time, has another
+    /// position and stays open.
+    pub(crate) closes: BTreeSet<LogPos>,
 }
 
 /// One event for the set, from either log.
@@ -147,21 +129,20 @@ struct AccessKey {
 }
 
 /// What is known of one (subject and agent, capability): every refused call
-/// by its log position, and the newest UI decision. Kept whether or not an
-/// item is open, so folding is a max-merge and order cannot change it.
+/// by its log position, and the refusals UI decisions closed. Kept whether
+/// or not an item is open, so folding is a union and order cannot change it.
 #[derive(Debug, Clone, Default)]
 struct Requested {
     refused: BTreeMap<LogPos, DateTime<Utc>>,
     tool: Option<String>,
     scope: Option<GrantScope>,
-    decided: Option<DateTime<Utc>>,
-    /// Refusals a decision closed by position; never moves `decided`.
+    /// Refusals a UI decision closed, by log position.
     closed: BTreeSet<LogPos>,
 }
 
 impl Requested {
-    /// The refusals newer than the last UI decision and still kept: at or
-    /// after the log's `edge` counter.
+    /// The refusals no UI decision closed and still kept: at or after the
+    /// log's `edge` counter.
     fn pending(&self, edge: Option<u64>) -> impl Iterator<Item = &DateTime<Utc>> {
         self.pending_refusals(edge).map(|(_, at)| at)
     }
@@ -176,7 +157,6 @@ impl Requested {
             .iter()
             .filter(move |(pos, _)| edge.is_none_or(|edge| pos.counter >= edge))
             .filter(move |(pos, _)| !self.closed.contains(*pos))
-            .filter(move |(_, at)| self.decided.is_none_or(|decided| **at > decided))
     }
 }
 
@@ -318,9 +298,7 @@ impl DecisionSet {
         self.requested.retain(|_, requested| {
             requested.refused.retain(|pos, _| pos.counter >= edge);
             requested.closed.retain(|pos| pos.counter >= edge);
-            !requested.refused.is_empty()
-                || requested.decided.is_some()
-                || !requested.closed.is_empty()
+            !requested.refused.is_empty() || !requested.closed.is_empty()
         });
         self.refresh();
     }
@@ -354,8 +332,7 @@ impl DecisionSet {
         }
     }
 
-    /// Apply one UI decision: a union or a max, so order and repeats change
-    /// nothing.
+    /// Apply one UI decision: a union, so order and repeats change nothing.
     fn fold_decided(&mut self, decision: UiDecision) {
         let key = AccessKey {
             authority: decision.authority,
@@ -366,12 +343,7 @@ impl DecisionSet {
             .requested
             .entry((key, decision.capability))
             .or_default();
-        match decision.closes {
-            Closes::Until(at) => {
-                requested.decided = Some(requested.decided.map_or(at, |old| old.max(at)));
-            }
-            Closes::Positions(positions) => requested.closed.extend(positions),
-        }
+        requested.closed.extend(decision.closes);
     }
 
     /// Apply UI decisions now, never held behind a replay: the resolve route
