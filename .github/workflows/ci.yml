@@ -202,6 +202,11 @@ jobs:
         run: |
           python3 scripts/ci/check_swap_jobs.py --self-test
           python3 scripts/ci/check_swap_jobs.py
+      # A harness struct must drop its child process before its TempDir (the child's late write fails the shard).
+      - name: Test harnesses drop the child before the temp dir
+        run: |
+          python3 scripts/ci/check_teardown_order.py --self-test
+          python3 scripts/ci/check_teardown_order.py
       - name: Validate throwaway and mutant-row routing (hosted until the trusted runner is ready)
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
