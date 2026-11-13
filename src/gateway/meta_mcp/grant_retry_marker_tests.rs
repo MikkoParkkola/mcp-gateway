@@ -5,7 +5,6 @@
 //! decision says the call has an invocation record only when that retry's own
 //! dispatch recorded one.
 
-
 use serde_json::json;
 
 use super::grant_audit_fixture::{CAPS, Endpoint, PERSONAL, invocations, wait_for_decisions};

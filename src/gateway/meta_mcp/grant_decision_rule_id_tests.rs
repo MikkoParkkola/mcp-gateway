@@ -4,7 +4,6 @@
 //! the grant check and neither a rule id nor a grant id, even when the store
 //! is keyed and a row that does not match holds an id.
 
-
 use serde_json::json;
 
 use super::super::grant_audit_fixture::{
