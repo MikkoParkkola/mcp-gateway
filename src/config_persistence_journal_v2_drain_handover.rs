@@ -8,8 +8,8 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use super::super::JournalSession;
-use super::super::abandoned::{Placement, against_donor, frames_of, marked};
 use super::super::abandoned::{MAX_ABANDONED_BYTES, TornProof, encode_frame};
+use super::super::abandoned::{Placement, against_donor, frames_of, marked};
 use super::super::{JournalV2, ParkReason};
 use super::DrainSession;
 use super::fault::{self, At};
@@ -36,7 +36,10 @@ pub(crate) fn abandoned_path(target: &Path) -> PathBuf {
 /// Open an existing abandoned file for the whole call: no symlink follow, no waiting on a
 /// FIFO, then the opened handle must be a private regular file of this user with one link.
 /// `Ok(None)` when there is no file.
-pub(super) fn open_existing(path: &Path, bound: usize) -> Result<Option<(File, Vec<u8>)>, HandoverError> {
+pub(super) fn open_existing(
+    path: &Path,
+    bound: usize,
+) -> Result<Option<(File, Vec<u8>)>, HandoverError> {
     let file = match open_guarded(path, false) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
