@@ -83,3 +83,50 @@ fn a_probe_that_times_out_is_unavailable() {
     let store = WindowsKeychain::with_timing(Duration::from_millis(100), Duration::from_secs(30));
     assert!(matches!(store.probe(), Err(StoreError::Unavailable(_))));
 }
+
+// The call site, through fake Credential Manager calls: the store's delete
+// must carry the confirmation's answer, whatever the real entry does.
+
+#[test]
+fn the_store_delete_fails_while_the_entry_stays_readable() {
+    use crate::secret_store::{SecretStore, StoreError};
+    let err = WindowsKeychain::with_cred(|_| Ok(()), |_| Ok(true))
+        .delete("call-site")
+        .expect_err("an entry that stays readable is not removed");
+    assert!(
+        matches!(&err, StoreError::Unavailable(why) if why.contains("still readable")),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn the_store_delete_fails_when_the_ask_errors() {
+    use crate::secret_store::{SecretStore, StoreError};
+    let err = WindowsKeychain::with_cred(|_| Ok(()), |_| Err(win_cred::CredError::Win32(5)))
+        .delete("call-site")
+        .expect_err("an entry whose state cannot be read is not removed");
+    assert!(
+        matches!(&err, StoreError::Unavailable(why) if why.contains("Win32(5)")),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn the_store_delete_fails_when_the_os_delete_fails() {
+    use crate::secret_store::{SecretStore, StoreError};
+    let err = WindowsKeychain::with_cred(|_| Err(win_cred::CredError::Win32(5)), |_| Ok(false))
+        .delete("call-site")
+        .expect_err("a failed OS delete is not removed");
+    assert!(matches!(err, StoreError::Unavailable(_)), "{err:?}");
+}
+
+#[test]
+fn the_store_delete_succeeds_once_the_entry_is_gone() {
+    use crate::secret_store::SecretStore;
+    WindowsKeychain::with_cred(|_| Ok(()), |_| Ok(false))
+        .delete("call-site")
+        .expect("a deleted entry seen gone");
+    WindowsKeychain::with_cred(|_| Err(win_cred::CredError::NotFound), |_| Ok(false))
+        .delete("call-site")
+        .expect("an entry already absent");
+}
