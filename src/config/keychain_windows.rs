@@ -49,8 +49,7 @@ impl WindowsKeychain {
         Self {
             bound,
             delay,
-            cred_delete: win_cred::delete,
-            cred_exists: win_cred::exists,
+            ..Self::new()
         }
     }
 
@@ -59,10 +58,9 @@ impl WindowsKeychain {
     #[cfg(test)]
     pub(crate) fn with_cred(cred_delete: CredDelete, cred_exists: CredExists) -> Self {
         Self {
-            bound: BOUND,
-            delay: Duration::ZERO,
             cred_delete,
             cred_exists,
+            ..Self::new()
         }
     }
 }

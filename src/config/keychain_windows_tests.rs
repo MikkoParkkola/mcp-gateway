@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::keychain::{KeychainError, KeychainRead};
+use super::keychain::{CONFIRM_ATTEMPTS, KeychainError, KeychainRead};
 use super::keychain_windows::WindowsKeychain;
 use crate::win_cred;
 
@@ -93,8 +93,10 @@ fn the_store_delete_fails_while_the_entry_stays_readable() {
     let err = WindowsKeychain::with_cred(|_| Ok(()), |_| Ok(true))
         .delete("call-site")
         .expect_err("an entry that stays readable is not removed");
+    // The whole production budget was asked, not a smaller one.
+    let checks = format!("still readable after {CONFIRM_ATTEMPTS} checks");
     assert!(
-        matches!(&err, StoreError::Unavailable(why) if why.contains("still readable")),
+        matches!(&err, StoreError::Unavailable(why) if why.contains(&checks)),
         "{err:?}"
     );
 }
@@ -117,16 +119,33 @@ fn the_store_delete_fails_when_the_os_delete_fails() {
     let err = WindowsKeychain::with_cred(|_| Err(win_cred::CredError::Win32(5)), |_| Ok(false))
         .delete("call-site")
         .expect_err("a failed OS delete is not removed");
-    assert!(matches!(err, StoreError::Unavailable(_)), "{err:?}");
+    assert!(
+        matches!(&err, StoreError::Unavailable(why) if why.contains("Win32(5)")),
+        "{err:?}"
+    );
 }
 
 #[test]
 fn the_store_delete_succeeds_once_the_entry_is_gone() {
     use crate::secret_store::SecretStore;
-    WindowsKeychain::with_cred(|_| Ok(()), |_| Ok(false))
+    // Each fake also checks it was handed the entry being deleted: a fake that
+    // panics fails the delete, so wrong-name wiring fails this row.
+    let delete = |name: &str| {
+        assert_eq!(name, "call-site");
+        Ok(())
+    };
+    let gone = |name: &str| {
+        assert_eq!(name, "call-site");
+        Ok(false)
+    };
+    WindowsKeychain::with_cred(delete, gone)
         .delete("call-site")
         .expect("a deleted entry seen gone");
-    WindowsKeychain::with_cred(|_| Err(win_cred::CredError::NotFound), |_| Ok(false))
+    let absent = |name: &str| {
+        assert_eq!(name, "call-site");
+        Err(win_cred::CredError::NotFound)
+    };
+    WindowsKeychain::with_cred(absent, gone)
         .delete("call-site")
         .expect("an entry already absent");
 }
