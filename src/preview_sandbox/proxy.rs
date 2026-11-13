@@ -733,6 +733,21 @@ async fn read_head<S: AsyncRead + Unpin>(client: &mut S, bound: Duration) -> Opt
     String::from_utf8(head).ok()
 }
 
+/// The host's IPv4 addresses from `/proc/net/fib_trie`: every leaf with a
+/// LOCAL route, in every table.
+fn fib_trie_local(_text: &str) -> io::Result<Vec<std::net::Ipv4Addr>> {
+    Err(io::Error::other("not yet parsed"))
+}
+
+/// The host's IPv6 addresses from `/proc/net/if_inet6`; a missing file means
+/// no IPv6 only when the IPv6 sysctl tree is absent too.
+fn if_inet6(
+    _text: Option<&str>,
+    _ipv6_sysctl_present: bool,
+) -> io::Result<Vec<std::net::Ipv6Addr>> {
+    Err(io::Error::other("not yet parsed"))
+}
+
 /// The production parts on Linux: the system resolver (the proxy applies the
 /// SSRF deny list to its answer itself and dials only what it checked), a
 /// plain dial, and the host's interfaces through nix's safe `getifaddrs`.
