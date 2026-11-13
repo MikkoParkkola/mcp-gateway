@@ -369,7 +369,7 @@ async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) {
     // A plain stop of a gateway-child chain ends inside the stop budget: the
     // sweep adds no time of its own beyond the backend stage.
     let gone = signalled.elapsed();
-    // timing-oracle: vs shutdown_timeout (why: the chain must be gone inside the stop total, so the sweep adds no second stop)
+    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
     assert!(
         gone <= total + BUDGET_SLACK,
         "the chain outlived the stop budget: {gone:?} against {total:?}\n{}",
