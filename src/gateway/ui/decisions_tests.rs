@@ -817,6 +817,43 @@ async fn a_deny_of_a_two_capability_request_closes_both_in_one_note() {
     assert_eq!(scope_len(&body), 1, "{body}");
 }
 
+/// A deny whose note cannot be appended answers 503 `audit_unavailable`,
+/// closes nothing and records no outcome, so the next deny writes it.
+#[tokio::test]
+async fn a_deny_whose_note_cannot_be_written_closes_nothing() {
+    let (state, log, id, digest, (dir, _store)) = one_request().await;
+    log.fail_next_append_of_kind_for_test("ui_decision");
+    let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "audit_unavailable");
+    let (_, listed) = get(&state, true).await;
+    assert_eq!(open_count(&listed), 1, "still open: {listed}");
+    assert!(kept_decisions(&dir).is_empty(), "nothing written");
+
+    let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::OK, "the next deny writes it: {body}");
+    assert_eq!(kept_decisions(&dir).len(), 1);
+}
+
+/// The downgrade row: a gateway without the deny reads this log by the
+/// grant-decision kind only, so a deny note is never one of its records and
+/// its read does not fail on it.
+#[tokio::test]
+async fn an_older_gateway_reads_past_a_deny_note() {
+    let (state, _log, id, digest, (dir, _store)) = one_request().await;
+    let (status, _) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(kept_decisions(&dir).len(), 1, "the deny note is in the log");
+    let mut kinds = Vec::new();
+    replay::records(
+        &dir.path().join("transparency.jsonl"),
+        GRANT_DECISION_KIND,
+        |record, _| kinds.push(record.get("kind").cloned()),
+    )
+    .expect("the older read succeeds");
+    assert_eq!(kinds.len(), 1, "only the refusal: {kinds:?}");
+}
+
 #[tokio::test]
 async fn a_retry_of_a_deny_answers_the_recorded_outcome_and_writes_nothing() {
     let (state, _log, id, digest, (dir, _store)) = one_request().await;
