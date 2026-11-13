@@ -112,13 +112,17 @@ struct Live {
     closed: CancellationToken,
     tunnels: HashMap<u64, [Half; 2]>,
     next_tunnel: u64,
+    deadline: tokio::task::AbortHandle,
 }
 
 impl Live {
     /// End the fetch: wake the tunnel tasks, and shut every tunnel's sockets
-    /// now. Called with the fetch already taken out of the proxy, so nothing
-    /// can register a tunnel into it any more.
+    /// now. It runs with the proxy's `live` lock held, so a second revoker
+    /// waits until every socket of this fetch is shut.
     fn end(self) {
+        // Takes no lock on `live` and never awaits, so running it under that
+        // lock cannot deadlock.
+        self.deadline.abort();
         self.closed.cancel();
         for halves in self.tunnels.values() {
             for half in halves {
@@ -163,18 +167,9 @@ impl Shared {
     }
 
     fn revoke(&self, credential: &Credential) {
-        let old = {
-            let mut live = lock(&self.live);
-            if live
-                .as_ref()
-                .is_some_and(|l| l.credential.secret == credential.secret)
-            {
-                live.take()
-            } else {
-                None
-            }
-        };
-        if let Some(old) = old {
+        // Finished under the lock: a second revoker waits for this teardown.
+        let mut live = lock(&self.live);
+        if let Some(old) = live.take_if(|l| l.credential.secret == credential.secret) {
             self.finish(old);
         }
     }
@@ -268,10 +263,10 @@ impl AllowlistProxy {
     /// earlier fetch's credential and tunnels end here too. A failed random
     /// source refuses this preview only; the gateway carries on.
     ///
-    /// The fetch ends at `deadline` (a later step enforces it).
+    /// The fetch ends at `deadline`.
     pub(crate) fn begin_fetch(
         &self,
-        _deadline: tokio::time::Instant,
+        deadline: tokio::time::Instant,
     ) -> Result<Credential, super::Refusal> {
         // The old fetch leaves and the new one arrives under one lock hold,
         // so no tunnel can register into either in between.
@@ -283,18 +278,27 @@ impl AllowlistProxy {
                 .shared
                 .fetches
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let shared = Arc::downgrade(&self.shared);
+            let timer_credential = credential.clone();
+            let timer = tokio::spawn(async move {
+                tokio::time::sleep_until(deadline).await;
+                if let Some(shared) = shared.upgrade() {
+                    shared.revoke(&timer_credential);
+                }
+            });
             *live = Some(Live {
                 id,
                 credential: credential.clone(),
                 closed: CancellationToken::new(),
                 tunnels: HashMap::new(),
                 next_tunnel: 0,
+                deadline: timer.abort_handle(),
             });
         }
-        drop(live);
         if let Some(old) = old {
             self.shared.finish(old);
         }
+        drop(live);
         made.map_err(|e| super::Refusal::Step(format!("generating the fetch credential ({e})")))
     }
 
@@ -309,9 +313,11 @@ impl Drop for AllowlistProxy {
         for task in &self.tasks {
             task.abort();
         }
-        let live = lock(&self.shared.live).take();
-        if let Some(live) = live {
-            self.shared.finish(live);
+        {
+            let mut live = lock(&self.shared.live);
+            if let Some(old) = live.take() {
+                self.shared.finish(old);
+            }
         }
         if let Some(dir) = self.unix_path.parent() {
             let _ = std::fs::remove_dir_all(dir);
