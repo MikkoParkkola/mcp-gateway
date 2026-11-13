@@ -22,7 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PINNED = "1.99.1"
+PINNED = "1.100.0"
 USES = re.compile(r"^(\s*)(- )?uses:\s*[\"']?dtolnay/rust-toolchain@", re.I)
 
 
