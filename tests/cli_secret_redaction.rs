@@ -108,3 +108,68 @@ fn backend_inspection_commands_never_print_config_secrets() {
         "the path must not survive: {combined}"
     );
 }
+
+/// An email and a live page token as `audit lookup-email` would see them
+/// typed by mistake as arguments.
+const TYPED_EMAIL: &str = "Planted.Person@corp.invalid";
+const TYPED_TOKEN: &str = "AQEBsealedPageTokenSENTINEL_c41a";
+
+fn run_bare(args: &[&str]) -> Output {
+    let home = tempfile::tempdir().expect("create an isolated home");
+    gateway_bin::command(home.path(), gateway_bin::Inherit::Nothing)
+        .args(args)
+        .output()
+        .expect("run mcp-gateway")
+}
+
+/// MIK-9456.CLI.1: `audit lookup-email` reads the email and the page token
+/// from stdin only. A value typed as an argument anyway (positional, attached
+/// to a source flag, or given to another flag) is refused with a fixed message
+/// that never repeats it, so it cannot reach stderr or a log that captures it.
+/// Mutant: let the parser's own error through for this command.
+#[test]
+fn audit_lookup_email_never_repeats_a_value_typed_as_an_argument() {
+    let email_attached = format!("--email-stdin={TYPED_EMAIL}");
+    let token_attached = format!("--cursor-stdin={TYPED_TOKEN}");
+    for (shape, typed) in [
+        (vec!["--email-stdin", TYPED_EMAIL], TYPED_EMAIL),
+        (vec!["--cursor-stdin", TYPED_TOKEN], TYPED_TOKEN),
+        (vec![TYPED_EMAIL], TYPED_EMAIL),
+        (vec![email_attached.as_str()], TYPED_EMAIL),
+        (vec![token_attached.as_str()], TYPED_TOKEN),
+        (vec!["--cursor-stdin", "--limit", TYPED_TOKEN], TYPED_TOKEN),
+    ] {
+        let mut argv = vec!["audit", "lookup-email"];
+        argv.extend(&shape);
+        let output = run_bare(&argv);
+        let text = combined_output(&output);
+        assert_eq!(output.status.code(), Some(2), "{shape:?}: {text}");
+        assert!(!text.contains(typed), "{shape:?} repeated: {text}");
+        assert!(text.contains("is not repeated"), "{shape:?}: {text}");
+        assert!(text.contains("--email-stdin"), "{shape:?}: {text}");
+    }
+}
+
+/// MIK-9456.CLI.1: only the commands that read a secret from stdin get the
+/// fixed message: a typo anywhere else still names what was typed, and help
+/// still prints.
+/// Mutant: give every command the fixed message, match the path by prefix, or
+/// replace help.
+#[test]
+fn other_parse_errors_and_help_keep_the_parsers_own_output() {
+    for argv in [
+        vec!["--no-such-root-flag-77c2"],
+        vec!["no-such-command-77c2"],
+        vec!["list", "--no-such-flag-77c2"],
+        vec!["audit", "show", "--no-such-flag-77c2"],
+    ] {
+        let output = run_bare(&argv);
+        let text = combined_output(&output);
+        assert_eq!(output.status.code(), Some(2), "{argv:?}: {text}");
+        assert!(text.contains("77c2"), "{argv:?}: {text}");
+        assert!(!text.contains("is not repeated"), "{argv:?}: {text}");
+    }
+    let help = run_bare(&["audit", "lookup-email", "--help"]);
+    assert_eq!(help.status.code(), Some(0), "{}", combined_output(&help));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--cursor-stdin"));
+}

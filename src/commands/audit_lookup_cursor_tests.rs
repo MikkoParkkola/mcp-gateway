@@ -174,25 +174,26 @@ fn a_full_length_token_with_its_line_end_is_accepted() {
 }
 
 /// MIK-9456.CLI.1: a value typed as an argument (positional, or attached to a
-/// source flag) is refused by the parser, whose error names the stray value:
-/// the docs say so and send the email and the token to stdin only. A source
-/// flag takes no value, so `=false` cannot switch a source off.
+/// source flag) is refused by the parser; a source flag takes no value, so
+/// `=false` cannot switch a source off. That the refusal never repeats the
+/// value is proven on the binary, whose parse entry replaces the message
+/// (tests/cli_secret_redaction.rs).
 /// Mutant: accept a positional value, or let a source flag take a value.
 #[test]
-fn a_value_typed_as_an_argument_is_refused_and_named_by_the_parser() {
+fn a_value_typed_as_an_argument_is_refused_by_the_parser() {
+    use clap::error::ErrorKind;
     let email_attached = format!("--email-stdin={EMAIL}");
     let page_attached = format!("--cursor-stdin={PAGE}");
-    for (argv, value) in [
-        (vec!["--email-stdin", EMAIL], EMAIL),
-        (vec!["--cursor-stdin", PAGE], PAGE),
-        (vec![email_attached.as_str()], EMAIL),
-        (vec![page_attached.as_str()], PAGE),
+    for (argv, kind) in [
+        (vec!["--email-stdin", EMAIL], ErrorKind::UnknownArgument),
+        (vec!["--cursor-stdin", PAGE], ErrorKind::UnknownArgument),
+        (vec![email_attached.as_str()], ErrorKind::TooManyValues),
+        (vec![page_attached.as_str()], ErrorKind::TooManyValues),
+        (vec!["--email-stdin=false"], ErrorKind::TooManyValues),
+        (vec!["--cursor-stdin=false"], ErrorKind::TooManyValues),
     ] {
-        let message = parse(&argv).expect_err("a typed value").to_string();
-        assert!(message.contains(value), "{argv:?}: {message}");
-    }
-    for flag in ["--email-stdin=false", "--cursor-stdin=false"] {
-        assert!(parse(&[flag]).is_err(), "{flag}");
+        let error = parse(&argv).expect_err("a typed value");
+        assert_eq!(error.kind(), kind, "{argv:?}");
     }
 }
 
