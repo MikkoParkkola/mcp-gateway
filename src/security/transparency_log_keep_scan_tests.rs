@@ -92,33 +92,51 @@ fn unkept(text: &str) -> bool {
 /// constructor elsewhere in the file. Keep evidence excludes prose; plain
 /// constructor evidence deliberately includes it, making the scan stricter.
 fn temp_log_only(text: &str) -> bool {
-    crate::test_source_text::sanitize(text).contains("TempLog::new(")
-        && ![
-            "tempdir(",
-            "tempdir_in(",
-            "TempDir::new",
-            "TempDir::with_",
-            "NamedTempFile",
-            "tempfile(",
-            "tempfile_in(",
-            "temp_dir(",
-        ]
-        .iter()
-        .any(|constructor| {
-            text.match_indices(*constructor).any(|(at, _)| {
-                text[..at]
-                    .bytes()
-                    .next_back()
-                    .is_none_or(|c| c.is_ascii() && !c.is_ascii_alphanumeric() && c != b'_')
-            })
+    crate::test_source_text::sanitize(text).contains("TempLog::new(") && !plain_temp_dir(text)
+}
+
+/// Whether `text` makes a temp dir of its own, by any of the plain
+/// constructors. The match is on raw source, prose included: stricter, never
+/// looser.
+fn plain_temp_dir(text: &str) -> bool {
+    [
+        "tempdir(",
+        "tempdir_in(",
+        "TempDir::new",
+        "TempDir::with_",
+        "NamedTempFile",
+        "tempfile(",
+        "tempfile_in(",
+        "temp_dir(",
+    ]
+    .iter()
+    .any(|constructor| {
+        text.match_indices(*constructor).any(|(at, _)| {
+            text[..at]
+                .bytes()
+                .next_back()
+                .is_none_or(|c| c.is_ascii() && !c.is_ascii_alphanumeric() && c != b'_')
         })
+    })
 }
 
 fn test_sources(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
+    sources_where(dir, root, out, &|rel| {
+        is_test(rel) && !rel.starts_with(EXEMPT_PREFIX)
+    });
+}
+
+/// Every `.rs` source under `dir` whose root-relative path `wanted` accepts.
+fn sources_where(
+    dir: &std::path::Path,
+    root: &std::path::Path,
+    out: &mut Vec<(String, String)>,
+    wanted: &dyn Fn(&str) -> bool,
+) {
     for entry in std::fs::read_dir(dir).expect("read source dir") {
         let path = entry.expect("dir entry").path();
         if path.is_dir() {
-            test_sources(&path, root, out);
+            sources_where(&path, root, out, wanted);
             continue;
         }
         let rel = path
@@ -126,7 +144,10 @@ fn test_sources(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(St
             .expect("under root")
             .to_string_lossy()
             .replace('\\', "/");
-        if is_test(&rel) && !rel.starts_with(EXEMPT_PREFIX) {
+        let is_rust = std::path::Path::new(&rel)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
+        if is_rust && wanted(&rel) {
             out.push((rel, std::fs::read_to_string(&path).expect("read source")));
         }
     }
@@ -237,4 +258,54 @@ fn the_scan_tells_a_kept_log_from_an_unkept_one() {
         "let file = TempLog::new();\n// tempfile::tempdir()\n\
          let log = TransparencyLogger::open(cfg).unwrap();"
     ));
+}
+
+/// The router's tests open their transparency logs through fixtures, so the
+/// file-level scan above cannot see which temp dir a log lands in. A plain
+/// temp dir in any router source is a dir no log keeps (590 "temp dir no test
+/// kept" lines in one lib run came from these); take it from `kept_tempdir()`.
+/// [`plain_temp_dir`] for a router source: `test_tempdir::tempdir()`, the
+/// Windows-normalised helper for allowed-folder paths, is the one exemption.
+fn router_plain_temp_dir(text: &str) -> bool {
+    plain_temp_dir(&text.replace("test_tempdir::tempdir(", "windows_normalised("))
+}
+
+#[test]
+fn no_router_source_makes_a_plain_temp_dir() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = Vec::new();
+    sources_where(
+        &root.join("src/gateway/router"),
+        root,
+        &mut sources,
+        &|_| true,
+    );
+    let plain: Vec<&str> = sources
+        .iter()
+        .filter(|(_, text)| router_plain_temp_dir(text))
+        .map(|(rel, _)| rel.as_str())
+        .collect();
+    assert!(
+        plain.is_empty(),
+        "router sources make a temp dir of their own (use `crate::test_dir_keep::kept_tempdir()`, \
+         or `kept_tempdir_in(parent)` to keep the parent, which a log opened inside it keeps): \
+         {plain:?}"
+    );
+}
+
+#[test]
+fn the_router_scan_tells_a_plain_temp_dir_from_a_kept_one() {
+    assert!(plain_temp_dir("let d = tempfile::tempdir().unwrap();"));
+    assert!(plain_temp_dir(
+        "let d = Arc::new(tempfile::TempDir::new().unwrap());"
+    ));
+    assert!(!plain_temp_dir(
+        "let d = crate::test_dir_keep::kept_tempdir();"
+    ));
+    assert!(!plain_temp_dir("let d = kept_tempdir_in(parent);"));
+    assert!(!router_plain_temp_dir(
+        "let d = crate::test_tempdir::tempdir();"
+    ));
+    // A TempLog may not vouch for the helper's unregistered directory.
+    assert!(plain_temp_dir("let d = crate::test_tempdir::tempdir();"));
 }

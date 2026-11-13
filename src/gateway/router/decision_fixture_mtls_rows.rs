@@ -60,7 +60,7 @@ fn mtls_config_for(cn: &str) -> crate::mtls::MtlsConfig {
 async fn a2_mtls_rule_allow() {
     use super::super::direct_effect_tests::call;
     use super::super::direct_guards_fixture::with_mtls_policy;
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = with_mtls_policy(mtls_policy_for("agent-a"), Box::pin(table(&dir))).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     let read: crate::protocol::Tool = serde_json::from_value(json!({
@@ -119,7 +119,7 @@ async fn a2_mtls_rule_allow() {
     };
     assert_row(&record["decision"], &row);
 
-    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fx = with_mtls_policy(mtls_policy_for("agent-b"), Box::pin(table(&dir))).await;
     let sent = super::super::direct_continuation_tests::dispatched(&fx);
     let body = call(&fx, "/mcp/alpha", "read", json!({})).await;

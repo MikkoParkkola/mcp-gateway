@@ -12,14 +12,14 @@ const PLAIN: &str = "/ui/api/status\tGET\tplain\tAdminKey\t200\n";
 const NAMED: &str = "/ui/api/status\tGET\tplain\tNoKey\t401:@refused\n";
 
 struct Fixture {
-    _root: tempfile::TempDir,
+    _root: std::sync::Arc<tempfile::TempDir>,
     dir: PathBuf,
     bodies: PathBuf,
 }
 
 impl Fixture {
     fn new(files: &[(&str, &str)], bodies: &str) -> Self {
-        let root = tempfile::tempdir().expect("create isolated fixture");
+        let root = crate::test_dir_keep::kept_tempdir();
         let dir = root.path().join("ui_access_matrix.d");
         let bodies_path = root.path().join("ui_access_matrix_bodies.tsv");
         fs::create_dir(&dir).expect("create fragment directory");

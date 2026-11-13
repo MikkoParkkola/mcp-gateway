@@ -537,7 +537,7 @@ async fn c0_a_keyed_playbook_call_on_mcp_replays_its_sealed_question_from_the_st
 /// the slot and keeps it; the slot is given back when the task expires unread.
 #[tokio::test]
 async fn b8_a_refused_tasks_get_leaves_the_slot_with_its_task() {
-    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = crate::gateway::meta_mcp::grant_audit_fixture::logger(
         &dir,
         crate::security::audit::AuditFailurePolicy::FailClosed,
