@@ -261,7 +261,8 @@ fn the_token_line_is_read_bounded_and_never_echoed() {
 /// MIK-9456.CLI.1: the 2048-byte bound is on the token, not on its line end:
 /// a full-length token piped by `jq -r` (which ends it with `\n`) or saved
 /// with `\r\n` is accepted, and one byte more is refused however it ends.
-/// Mutant: count the line end toward the bound, or drop the token's bound.
+/// Mutant: count the line end toward the bound, drop the token's bound, or
+/// read no byte past the bound.
 #[test]
 fn a_full_length_token_with_its_line_end_is_accepted() {
     let full = "a".repeat(MAX_CURSOR_INPUT);
@@ -278,6 +279,13 @@ fn a_full_length_token_with_its_line_end_is_accepted() {
             read_cursor(format!("{over}{end}").as_bytes()),
             Err("the page token on stdin is too long".to_string()),
             "{end:?}"
+        );
+    }
+    // A read cut at the bound must not drop what follows the line end.
+    for tail in ["\nx", "\r\nx"] {
+        assert!(
+            read_cursor(format!("{full}{tail}").as_bytes()).is_err(),
+            "{tail:?}"
         );
     }
 }
