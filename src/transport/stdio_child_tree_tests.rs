@@ -746,9 +746,11 @@ async fn a_retire_between_spawn_and_install_refuses_the_start() {
 /// awaited on this thread, where the reader task runs.
 #[test]
 fn a_line_after_the_transport_dropped_stops_the_reader() {
-    let late = "perl -MPOSIX -e 'setsid; exec @ARGV' sh -c \
+    // Detached by a double fork (the subshell exits at once), since an escaped
+    // member still attached to the backend by parent pid is swept with it.
+    let late = "(perl -MPOSIX -e 'setsid; exec @ARGV' sh -c \
                 'echo $$ > d.pid; while [ ! -e go ]; do sleep 0.05; done; echo \"{}\"' \
-                </dev/null 2>/dev/null &\nwhile IFS= read -r l; do :; done";
+                </dev/null 2>/dev/null &)\nwhile IFS= read -r l; do :; done";
     let (_capture, mut seen) =
         crate::test_log_capture::live_count("Transport dropped while reading");
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -758,6 +760,7 @@ fn a_line_after_the_transport_dropped_stops_the_reader() {
     runtime.block_on(async {
         let (w, t) = started(late, None).await;
         let writer = descendant(w.path()).await;
+        assert!(alive(writer), "precondition: the detached member is live");
         drop(Arc::into_inner(t).expect("the only handle"));
         std::fs::write(w.path().join("go"), b"").expect("release the writer");
         let logged = tokio::time::timeout(ROW_LIMIT, seen.wait_for(|n| *n >= 1)).await;
