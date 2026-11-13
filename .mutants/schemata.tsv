@@ -1,0 +1,37 @@
+head_sha	2d8c26bd2573835167fcd3acf96f6e053a2365ba
+#mutant finish_gate_dropped
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::handover_refusals_leave_bytes	src/config_persistence_journal_v2_drain_handover_tests.rs:223
+#mutant accept_foreign_existing
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::handover_refusals_leave_bytes	src/config_persistence_journal_v2_drain_handover_tests.rs:133
+#mutant handle_checks_skipped
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::handover_refusals_leave_bytes	src/config_persistence_journal_v2_drain_handover_tests.rs:133
+#mutant link_count_unchecked
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::handover_refusals_leave_bytes	src/config_persistence_journal_v2_drain_handover_tests.rs:201
+#mutant follows_symlinks
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::handover_fifo_and_symlink_refused	src/config_persistence_journal_v2_drain_handover_tests.rs:450
+#mutant flag_not_persisted
+mcp_gateway	config_persistence::journal::v2::drain::handover::crash_tests::crash_before_first_append	src/config_persistence_journal_v2_drain_handover_crash_tests.rs:127
+#mutant unlink_before_file_sync multi=2
+mcp_gateway	config_persistence::journal::v2::drain::handover::crash_tests::crash_after_file_sync	src/config_persistence_journal_v2_drain_handover_crash_tests.rs:169
+#mutant skip_note_flushed
+mcp_gateway	config_persistence::journal::v2::drain::handover::crash_tests::crash_after_file_sync	src/config_persistence_journal_v2_drain_handover_crash_tests.rs:169
+#mutant skip_dir_sync_before_finish
+mcp_gateway	config_persistence::journal::v2::drain::handover::crash_tests::crash_after_file_sync	src/config_persistence_journal_v2_drain_handover_crash_tests.rs:169
+#mutant truncate_wrong_offset
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::crash_x3b_resume_from_every_cut	src/config_persistence_journal_v2_drain_handover_tests.rs:252
+#mutant cursor_not_at_end
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::crash_x3b_resume_from_every_cut	src/config_persistence_journal_v2_drain_handover_tests.rs:252
+#mutant missing_as_absent
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::crash_x3b_resume_from_every_cut	src/config_persistence_journal_v2_drain_handover_tests.rs:252
+#mutant append_after_whole
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::crash_x5_pl_whole_file_and_reappeared_journal	src/config_persistence_journal_v2_drain_handover_tests.rs:252
+#mutant seal_content_skipped
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::handover_seal_checks	src/config_persistence_journal_v2_drain_handover_tests.rs:366
+#mutant identity_check_skipped
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::handover_seal_checks	src/config_persistence_journal_v2_drain_handover_tests.rs:391
+#mutant stat_failure_falls_through
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::handover_seal_checks	src/config_persistence_journal_v2_drain_handover_tests.rs:391
+#mutant against_donor_unmarked
+mcp_gateway	config_persistence::journal::v2::abandoned::placement::placement_empty_donor_and_post_flag_bytes	src/config_persistence_journal_v2_abandoned_placement_tests.rs:330
+#mutant intent_owner_dropped
+mcp_gateway	config_persistence::journal::v2::drain::handover::tests::handover_file_alone_reconstructs	src/config_persistence_journal_v2_drain_handover_tests.rs:309
