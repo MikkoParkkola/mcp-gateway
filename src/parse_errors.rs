@@ -44,7 +44,7 @@ pub(crate) fn quiet_for_secret_commands(args: &[OsString], error: clap::Error) -
         Some(path) => {
             let Some((_, hint)) = STDIN_SECRET_COMMANDS
                 .iter()
-                .find(|(secret, _)| names(secret, &path, args))
+                .find(|(secret, _)| mutant!("E7", secret.first() != Some(&"hash-key") && names(secret, &path, args), names(secret, &path, args)))
             else {
                 return error;
             };
@@ -52,7 +52,7 @@ pub(crate) fn quiet_for_secret_commands(args: &[OsString], error: clap::Error) -
         }
         // Cannot fire with clap 4.6.7 (errors ignored, help and version off:
         // the parse returns Ok); kept so a later clap that errs repeats nothing.
-        None => "The arguments are not valid",
+        None => mutant!("E5", return error, "The arguments are not valid"),
     };
     let what = error
         .kind()
@@ -75,7 +75,7 @@ pub(crate) fn quiet_for_secret_commands(args: &[OsString], error: clap::Error) -
 /// never repeats typed text; telling a name from a value here would need a
 /// third parse on this path.
 fn names(secret: &[&str], path: &[String], args: &[OsString]) -> bool {
-    if path.len() > secret.len() || !path.iter().zip(secret).all(|(p, s)| p.as_str() == *s) {
+    if path.len() > secret.len() || mutant!("E8", false, !path.iter().zip(secret).all(|(p, s)| p.as_str() == *s)) {
         return false;
     }
     let mut rest = secret.iter().skip(path.len());
@@ -85,7 +85,7 @@ fn names(secret: &[&str], path: &[String], args: &[OsString]) -> bool {
             want = rest.next();
         }
     }
-    want.is_none()
+    mutant!("E9", true, want.is_none())
 }
 
 /// The subcommand names `args` selects, read by a second parse that ignores
@@ -105,7 +105,7 @@ fn subcommand_path(args: &[OsString]) -> Option<Vec<String>> {
     let mut at = &matches;
     while let Some((name, sub)) = at.subcommand() {
         path.push(name.to_owned());
-        at = sub;
+        at = mutant!("E6", break, sub);
     }
     Some(path)
 }
