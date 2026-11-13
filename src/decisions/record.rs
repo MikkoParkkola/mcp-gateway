@@ -74,20 +74,21 @@ pub(crate) fn record_fields(
             })
         })
         .collect();
-    let Value::Object(fields) = json!({
-        "kind": UI_DECISION_KIND,
-        "event_id": id,
-        "timestamp": at.to_rfc3339(),
-        "decision": DECLINE,
-        "authority": request.authority,
-        "subject": request.subject,
-        "agent": request.agent,
-        "reason": reason,
-        "request_digest": digest,
-        "entries": entries,
-    }) else {
-        unreachable!("a JSON object literal")
-    };
+    let mut fields = Map::new();
+    for (key, value) in [
+        ("kind", json!(UI_DECISION_KIND)),
+        ("event_id", json!(id)),
+        ("timestamp", json!(at.to_rfc3339())),
+        ("decision", json!(DECLINE)),
+        ("authority", json!(request.authority)),
+        ("subject", json!(request.subject)),
+        ("agent", json!(request.agent)),
+        ("reason", json!(reason)),
+        ("request_digest", json!(digest)),
+        ("entries", Value::Array(entries)),
+    ] {
+        fields.insert(key.to_owned(), value);
+    }
     fields
 }
 
