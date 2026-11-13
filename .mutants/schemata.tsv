@@ -1,0 +1,20 @@
+head_sha	a95a581520e43f59c8baf912b0afe72b99d74032
+#mutant noadmit
+mcp_gateway	gateway::ui::decisions::tests::resolve_answers_one_status_per_state_and_writes_nothing	src/gateway/ui/decisions_tests.rs:573
+#mutant nodigest
+mcp_gateway	gateway::ui::decisions::tests::resolve_answers_one_status_per_state_and_writes_nothing	src/gateway/ui/decisions_tests.rs:607
+mcp_gateway	gateway::ui::decisions::tests::the_digest_follows_the_scope_not_the_arrival_order	src/gateway/ui/decisions_tests.rs:657
+mcp_gateway	gateway::ui::decisions::tests::one_more_refusal_of_a_listed_capability_is_a_changed_request	src/gateway/ui/decisions_tests.rs:707
+#mutant nomutex
+mcp_gateway	gateway::ui::decisions::tests::two_resolves_do_not_overlap	src/gateway/ui/decisions_tests.rs:678
+#mutant nopositions
+mcp_gateway	decisions::tests::the_scope_digest_has_one_encoding_per_scope_and_positions	src/decisions/tests.rs:136
+mcp_gateway	gateway::ui::decisions::tests::one_more_refusal_of_a_listed_capability_is_a_changed_request	src/gateway/ui/decisions_tests.rs:701
+#mutant layout multi=2
+mcp_gateway	decisions::tests::the_scope_digest_has_one_encoding_per_scope_and_positions	src/decisions/tests.rs:138
+#mutant trimctl
+mcp_gateway	gateway::ui::decisions::tests::resolve_answers_one_status_per_state_and_writes_nothing	src/gateway/ui/decisions_tests.rs:596
+#mutant upperhex
+mcp_gateway	gateway::ui::decisions::tests::resolve_answers_one_status_per_state_and_writes_nothing	src/gateway/ui/decisions_tests.rs:595
+#mutant noready
+mcp_gateway	gateway::ui::decisions::tests::a_resolve_while_a_source_replays_is_unavailable	src/gateway/ui/decisions_tests.rs:642
