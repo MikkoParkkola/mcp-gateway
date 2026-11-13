@@ -231,7 +231,11 @@ async fn m1_a_failed_begin_fetch_still_ends_the_previous_fetch() {
     assert_eq!(status(&open_tunnel.head().await), 200);
     let mut tunnel = open_tunnel.into_plain();
     rig.proxy.random = |_| Err(io::Error::other("no entropy"));
-    assert!(rig.proxy.begin_fetch().is_err());
+    assert!(
+        rig.proxy
+            .begin_fetch(tokio::time::Instant::now() + Duration::from_secs(60))
+            .is_err()
+    );
     let mut shut = false;
     for _ in 0..1_000 {
         if tunnel.peer_has_shut_down() {

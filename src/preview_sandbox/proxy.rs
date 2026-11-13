@@ -140,9 +140,28 @@ struct Shared {
     resolve: Arc<dyn Resolve>,
     connect: Arc<dyn Connect>,
     interfaces: Arc<dyn Interfaces>,
+    /// Runs at the start of a fetch's teardown, before its sockets shut.
+    #[cfg(test)]
+    on_end: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl Shared {
+    /// End `live`. A test hook, when one is set, runs first.
+    fn finish(&self, live: Live) {
+        #[cfg(test)]
+        {
+            if let Some(hook) = self
+                .on_end
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+            {
+                hook();
+            }
+        }
+        live.end();
+    }
+
     fn revoke(&self, credential: &Credential) {
         let old = {
             let mut live = lock(&self.live);
@@ -156,7 +175,7 @@ impl Shared {
             }
         };
         if let Some(old) = old {
-            old.end();
+            self.finish(old);
         }
     }
 }
@@ -191,6 +210,8 @@ impl AllowlistProxy {
             resolve,
             connect,
             interfaces,
+            #[cfg(test)]
+            on_end: Mutex::new(None),
         });
         // Every fallible step comes first, so a failure leaves no task or
         // directory behind; the task is spawned only once all is bound.
@@ -233,10 +254,25 @@ impl AllowlistProxy {
             .map_or(0, |l| l.tunnels.len())
     }
 
+    /// Install `hook` to run at the start of the next teardown, for the rows.
+    #[cfg(test)]
+    pub(crate) fn set_on_end(&self, hook: Box<dyn Fn() + Send + Sync>) {
+        *self
+            .shared
+            .on_end
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
+
     /// Start a fetch: a fresh credential, valid until [`Self::revoke`]. Any
     /// earlier fetch's credential and tunnels end here too. A failed random
     /// source refuses this preview only; the gateway carries on.
-    pub(crate) fn begin_fetch(&self) -> Result<Credential, super::Refusal> {
+    ///
+    /// The fetch ends at `deadline` (a later step enforces it).
+    pub(crate) fn begin_fetch(
+        &self,
+        _deadline: tokio::time::Instant,
+    ) -> Result<Credential, super::Refusal> {
         // The old fetch leaves and the new one arrives under one lock hold,
         // so no tunnel can register into either in between.
         let mut live = lock(&self.shared.live);
@@ -257,7 +293,7 @@ impl AllowlistProxy {
         }
         drop(live);
         if let Some(old) = old {
-            old.end();
+            self.shared.finish(old);
         }
         made.map_err(|e| super::Refusal::Step(format!("generating the fetch credential ({e})")))
     }
@@ -275,7 +311,7 @@ impl Drop for AllowlistProxy {
         }
         let live = lock(&self.shared.live).take();
         if let Some(live) = live {
-            live.end();
+            self.shared.finish(live);
         }
         if let Some(dir) = self.unix_path.parent() {
             let _ = std::fs::remove_dir_all(dir);

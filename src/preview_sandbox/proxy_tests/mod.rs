@@ -24,6 +24,7 @@ mod credential;
 mod deny;
 mod deny_vectors;
 mod hardening;
+mod teardown;
 mod tunnels;
 
 /// A globally routable address no deny rule covers.
@@ -81,7 +82,8 @@ impl Resolve for FakeResolve {
     }
 }
 
-/// Records every dial, then connects to the local echo server.
+/// Records every dial, then connects to the local echo server, or to `target`
+/// when a row has set one.
 struct FakeConnect {
     dials: Mutex<Vec<SocketAddr>>,
     echo: SocketAddr,
@@ -91,6 +93,8 @@ struct FakeConnect {
     on_dial: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// A dial to this address never completes.
     hang: Mutex<Option<SocketAddr>>,
+    /// A row's upstream. `None` dials the echo server.
+    target: Mutex<Option<SocketAddr>>,
 }
 
 impl FakeConnect {
@@ -107,7 +111,8 @@ impl Connect for FakeConnect {
             std::future::pending::<()>().await;
         }
         self.gate.pass().await;
-        let stream = TcpStream::connect(self.echo).await?;
+        let target = (*self.target.lock().expect("lock")).unwrap_or(self.echo);
+        let stream = TcpStream::connect(target).await?;
         // After the connection is made, in the poll that returns it: the
         // dial is complete when the hook runs.
         if let Some(hook) = self.on_dial.lock().expect("lock").as_ref() {
@@ -158,6 +163,7 @@ async fn rig() -> Rig {
         gate: Gate::default(),
         on_dial: Mutex::new(None),
         hang: Mutex::new(None),
+        target: Mutex::new(None),
     });
     let interfaces = Arc::new(FakeInterfaces(Mutex::new(Vec::new())));
     let proxy = AllowlistProxy::bind(resolve.clone(), connect.clone(), interfaces.clone())
@@ -171,7 +177,9 @@ async fn rig() -> Rig {
 }
 
 fn begin(rig: &Rig) -> Credential {
-    rig.proxy.begin_fetch().expect("credential")
+    rig.proxy
+        .begin_fetch(tokio::time::Instant::now() + Duration::from_secs(60))
+        .expect("credential")
 }
 
 /// Raw CONNECT bytes for `authority`, with an optional auth header value.

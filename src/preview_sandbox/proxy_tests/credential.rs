@@ -6,6 +6,7 @@
 use super::{GLOBAL, NPM, begin, connect_bytes, connect_status, ip, open, rig, send, status};
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// The OS random source failing refuses this preview with an error; the
 /// proxy, and so the gateway, keeps serving.
@@ -13,7 +14,9 @@ use std::sync::{Arc, Mutex};
 async fn c8_a_failed_random_source_refuses_and_the_proxy_lives() {
     let mut rig = rig().await;
     rig.proxy.random = |_| Err(io::Error::other("no entropy"));
-    let refused = rig.proxy.begin_fetch();
+    let refused = rig
+        .proxy
+        .begin_fetch(tokio::time::Instant::now() + Duration::from_secs(60));
     assert!(matches!(
         refused,
         Err(crate::preview_sandbox::Refusal::Step(_))
