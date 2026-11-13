@@ -56,6 +56,10 @@ if [ "$mode" = install-unlocked ]; then
   # log names each version that was compiled; the normalizer's are echoed.
   rm Cargo.lock
   cargo install --path . --debug --root "$out/root" 2>&1 | tee "$out/install.txt"
+  # The lock the install's own solve wrote, when it leaves one.
+  if [ -f Cargo.lock ]; then
+    cp Cargo.lock "$out/resolved-Cargo.lock"
+  fi
   sed -E 's/\x1b\[[0-9;]*m//g' "$out/install.txt" \
     | grep -E 'Compiling (icu_|zerovec|zerotrie|tinystr|yoke|potential_utf)' || true
   UNLOCKED_INSTALL_LOG="$out/gateway.log" \

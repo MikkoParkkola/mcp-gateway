@@ -68,6 +68,7 @@ jobs:
           name: unlocked-install
           path: |
             ${{ runner.temp }}/unlocked-install/shipped-Cargo.lock
+            ${{ runner.temp }}/unlocked-install/resolved-Cargo.lock
             ${{ runner.temp }}/unlocked-install/install.txt
             ${{ runner.temp }}/unlocked-install/gateway.log
           if-no-files-found: warn

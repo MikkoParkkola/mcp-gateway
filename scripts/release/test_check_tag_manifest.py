@@ -2786,6 +2786,18 @@ class WorkflowWiring(unittest.TestCase):
         self.assertIn("uses: ./.github/workflows/unlocked-install.yml", release_jobs.get("unlocked-install", ""))
         self.assertIn("unlocked-install", needs_of(release_jobs["verify"]) or "", "verify must wait for the unlocked install")
 
+    def test_the_unlocked_install_really_drops_the_lock(self):
+        # The gate exists to differ from the locked builds: the install mode
+        # must delete the packaged lock before it installs, and install
+        # without --locked, or it proves what every other job already does.
+        script = (pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "packaged-tests.sh").read_text(encoding="utf-8")
+        block = script[script.index('if [ "$mode" = install-unlocked ]') : script.index('elif [ "$mode" = build ]')]
+        install = [l for l in block.splitlines() if l.strip().startswith("cargo install ")]
+        self.assertEqual(len(install), 1, install)
+        self.assertNotIn("--locked", install[0])
+        self.assertIn("rm Cargo.lock", block)
+        self.assertLess(block.index("rm Cargo.lock"), block.index(install[0]), "the lock goes before the install")
+
     def test_windows_skips_the_full_burst_and_keeps_its_property(self):
         # MIK-7644: 1,026 calls miss the full burst's deadline on the Windows
         # runner, so the Windows suite skips it by name as `test` does. The

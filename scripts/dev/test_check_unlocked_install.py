@@ -25,6 +25,9 @@ import http.server, os, sys, threading
 mode = os.environ["STUB_MODE"]
 config = sys.argv[sys.argv.index("--config") + 1]
 assert os.path.isfile(config), config
+# The self-check runs only when the key server starts: the checker's config
+# must turn it on, or the real gate could pass without the check.
+assert "key_server:\n  enabled: true\n" in open(config).read(), "the config does not enable the key server"
 if mode == "exits":
     print("Error: email hash self-check: known answer 0 missed", flush=True)
     sys.exit(1)
