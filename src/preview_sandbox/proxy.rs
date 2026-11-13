@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -735,22 +735,71 @@ async fn read_head<S: AsyncRead + Unpin>(client: &mut S, bound: Duration) -> Opt
 
 /// The host's IPv4 addresses from `/proc/net/fib_trie`: every leaf with a
 /// LOCAL route, in every table.
-fn fib_trie_local(_text: &str) -> io::Result<Vec<std::net::Ipv4Addr>> {
-    Err(io::Error::other("not yet parsed"))
+fn fib_trie_local(text: &str) -> io::Result<Vec<Ipv4Addr>> {
+    let mut addresses = Vec::new();
+    let mut current: Option<Ipv4Addr> = None;
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let line = line.trim();
+        // A table header or an inner node: the next leaf starts afresh.
+        if line.ends_with(':') || line.starts_with("+-- ") {
+            current = None;
+        } else if let Some(rest) = line.strip_prefix("|-- ") {
+            current = Some(
+                rest.parse()
+                    .map_err(|_| io::Error::other(format!("bad fib_trie line: {line}")))?,
+            );
+        } else if line.starts_with('/') {
+            let leaf =
+                current.ok_or_else(|| io::Error::other(format!("bad fib_trie line: {line}")))?;
+            if line.split_whitespace().next_back() == Some("LOCAL") && !addresses.contains(&leaf) {
+                addresses.push(leaf);
+            }
+        } else {
+            return Err(io::Error::other(format!("bad fib_trie line: {line}")));
+        }
+    }
+    if addresses.is_empty() {
+        return Err(io::Error::other("no LOCAL entry in fib_trie"));
+    }
+    Ok(addresses)
 }
 
 /// The host's IPv6 addresses from `/proc/net/if_inet6`; a missing file means
 /// no IPv6 only when the IPv6 sysctl tree is absent too.
-fn if_inet6(
-    _text: Option<&str>,
-    _ipv6_sysctl_present: bool,
-) -> io::Result<Vec<std::net::Ipv6Addr>> {
-    Err(io::Error::other("not yet parsed"))
+fn if_inet6(text: Option<&str>, ipv6_sysctl_present: bool) -> io::Result<Vec<Ipv6Addr>> {
+    let Some(text) = text else {
+        return if ipv6_sysctl_present {
+            Err(io::Error::other(
+                "/proc/net/if_inet6 is missing while IPv6 is enabled",
+            ))
+        } else {
+            Ok(Vec::new())
+        };
+    };
+    let mut addresses = Vec::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let Some(field) = line.split_whitespace().next() else {
+            return Err(io::Error::other(format!("bad if_inet6 line: {line}")));
+        };
+        if field.len() != 32 || !field.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(io::Error::other(format!("bad if_inet6 line: {line}")));
+        }
+        let value = u128::from_str_radix(field, 16)
+            .map_err(|_| io::Error::other(format!("bad if_inet6 line: {line}")))?;
+        addresses.push(Ipv6Addr::from(value));
+    }
+    Ok(addresses)
 }
 
 /// The production parts on Linux: the system resolver (the proxy applies the
 /// SSRF deny list to its answer itself and dials only what it checked), a
-/// plain dial, and the host's interfaces through nix's safe `getifaddrs`.
+/// plain dial, and the host's own addresses read from /proc at each call.
 #[cfg(target_os = "linux")]
 pub(crate) struct System;
 
@@ -777,14 +826,24 @@ impl Connect for System {
 #[cfg(target_os = "linux")]
 impl Interfaces for System {
     fn addresses(&self) -> io::Result<Vec<IpAddr>> {
-        let all = nix::ifaddrs::getifaddrs().map_err(io::Error::from)?;
-        Ok(all
-            .filter_map(|i| {
-                let a = i.address?;
-                a.as_sockaddr_in()
-                    .map(|v4| IpAddr::V4(v4.ip()))
-                    .or_else(|| a.as_sockaddr_in6().map(|v6| IpAddr::V6(v6.ip())))
-            })
+        let v4 = fib_trie_local(&std::fs::read_to_string("/proc/net/fib_trie")?)?;
+        let inet6 = match std::fs::read_to_string("/proc/net/if_inet6") {
+            Ok(text) => Some(text),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        // Any error but a missing tree counts as present, so an unreadable
+        // /proc refuses the read instead of reporting that IPv6 is off.
+        let ipv6_sysctl_present = match std::fs::symlink_metadata("/proc/sys/net/ipv6") {
+            Ok(_) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(_) => true,
+        };
+        let v6 = if_inet6(inet6.as_deref(), ipv6_sysctl_present)?;
+        Ok(v4
+            .into_iter()
+            .map(IpAddr::V4)
+            .chain(v6.into_iter().map(IpAddr::V6))
             .collect())
     }
 }
