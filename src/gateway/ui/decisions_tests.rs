@@ -786,6 +786,37 @@ async fn a_deny_closes_the_refusals_it_was_shown_and_not_a_later_one() {
     assert_eq!(body["decisions"][0]["refused_calls"], json!(1), "{body}");
 }
 
+/// A later refusal reopens a denied request under the same id: a retry of
+/// the first deny still gets the first outcome, and the reopened request
+/// can be denied again.
+#[tokio::test]
+async fn a_reopened_request_can_be_denied_again() {
+    let (state, log, id, digest, _keep) = one_request().await;
+    let (status, first) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let now = crate::clock::utc_now().expect("a readable clock");
+    write(&log, note("stripe.charges", now));
+    let body = served_when(&state, |body| open_count(body) == 1).await;
+    assert_eq!(body["decisions"][0]["id"], json!(id), "the same id: {body}");
+    let reopened = body["decisions"][0]["scope_digest"]
+        .as_str()
+        .expect("a digest")
+        .to_owned();
+    assert_ne!(reopened, digest);
+
+    let (status, again) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["already_recorded"], json!(true));
+    assert_eq!(again["event_id"], first["event_id"]);
+
+    let (status, second) = resolve(&state, true, &id, deny_body(&reopened).to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_ne!(second["already_recorded"], json!(true), "{second}");
+    assert_ne!(second["event_id"], first["event_id"]);
+    let (_, listed) = get(&state, true).await;
+    assert_eq!(open_count(&listed), 0, "{listed}");
+}
+
 #[tokio::test]
 async fn a_deny_of_a_two_capability_request_closes_both_in_one_note() {
     let dir = tempfile::tempdir().expect("dir");

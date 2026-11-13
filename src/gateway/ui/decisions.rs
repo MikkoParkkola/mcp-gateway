@@ -200,17 +200,19 @@ async fn resolve_decision(
     // One resolve at a time: the item is read, judged and written under this
     // mutex, so a second resolve of an id sees what the first one did.
     let _resolving = decisions.resolving().await;
-    if let Some(done) = decisions.outcome(&id) {
-        return answer_again(&done, &request);
-    }
     let open = match decisions.request(&id) {
         Err(sources) => return unavailable(&sources),
+        // Gone: resolved here before (a retry gets what was recorded), or
+        // never open.
         Ok(None) => {
-            return resolve_error(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "no open decision has this id",
-            );
+            return match decisions.outcome(&id) {
+                Some(done) => answer_again(&done, &request),
+                None => resolve_error(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "no open decision has this id",
+                ),
+            };
         }
         Ok(Some(Lookup::Other)) => {
             return resolve_error(
@@ -221,6 +223,15 @@ async fn resolve_decision(
         }
         Ok(Some(Lookup::Access(open))) => open,
     };
+    // A later refusal reopens a denied request under the same id with a new
+    // digest: a retry naming the old digest gets the old outcome, and the
+    // reopened request can be denied afresh.
+    if let Some(done) = decisions
+        .outcome(&id)
+        .filter(|done| done.scope_digest == request.scope_digest)
+    {
+        return answer_again(&done, &request);
+    }
     if let Some(changed) = check_scope(&open, &request.scope_digest) {
         return changed;
     }
