@@ -414,6 +414,22 @@ fn placement_two_tokens_and_trailing_garbage() {
     collect_case(
         &mut failures,
         ROW,
+        "attempt_frame_replaced_by_its_neighbour",
+        "a same-length file whose last frame is a copy of the one before it is Foreign",
+        || {
+            let mut replaced = frames.clone();
+            let last = replaced.len() - 1;
+            replaced[last] = replaced[last - 1].clone();
+            assert_eq!(
+                against_donor(&replaced.concat(), &donor),
+                Placement::Foreign
+            );
+            Ok(())
+        },
+    );
+    collect_case(
+        &mut failures,
+        ROW,
         "trailing_garbage",
         "bytes with no header after a proven prefix are a torn tail, cut back to that prefix",
         || {

@@ -518,6 +518,12 @@ fn handover_multi_token_and_root_donors() {
                     canonical_frames(&donor).len(),
                     "every frame"
                 );
+                let intents = read.frames.iter().filter(|f| f.owner.is_some()).count();
+                assert_eq!(
+                    intents,
+                    usize::from(rig.donor.writer.is_some()) + rig.donor.attempts.len(),
+                    "one intent frame per token, so the checks below are not vacuous"
+                );
                 for frame in read.frames.iter().filter(|f| f.owner.is_some()) {
                     let owner = frame.owner.as_ref().expect("an intent frame");
                     assert_eq!(owner.root, root, "the root fact on every intent frame");

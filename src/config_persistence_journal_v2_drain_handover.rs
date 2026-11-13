@@ -179,7 +179,9 @@ fn commit(
             complete
         }
         Placement::Missing { complete } => complete,
-        Placement::Absent | Placement::Foreign => 0,
+        Placement::Absent => 0,
+        // Refused above; if that guard is ever removed this fails loudly instead of appending.
+        Placement::Foreign => return Err(HandoverError::Foreign),
     };
     file.seek(SeekFrom::End(0))
         .map_err(|_| HandoverError::Write)?;
