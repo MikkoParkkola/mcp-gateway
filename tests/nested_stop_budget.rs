@@ -418,7 +418,8 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
     // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
     assert!(
         gone <= HTTP_MINIMUM + BUDGET_SLACK,
-        "the chain outlived the stop budget: {gone:?}\n{}",
+        "the chain outlived the stop budget: {gone:?} against {:?}\n{}",
+        HTTP_MINIMUM + BUDGET_SLACK,
         stop.logs
     );
 }
@@ -431,7 +432,8 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it_30s() {
     // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
     assert!(
         gone <= PARENT_30S + BUDGET_SLACK,
-        "the chain outlived the stop budget: {gone:?}\n{}",
+        "the chain outlived the stop budget: {gone:?} against {:?}\n{}",
+        PARENT_30S + BUDGET_SLACK,
         stop.logs
     );
 }
@@ -444,7 +446,8 @@ async fn a_busy_nested_gateway_stops_two_leaves_within_one_deadline() {
     // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
     assert!(
         gone <= HTTP_MINIMUM + BUDGET_SLACK,
-        "the chain outlived the stop budget: {gone:?}\n{}",
+        "the chain outlived the stop budget: {gone:?} against {:?}\n{}",
+        HTTP_MINIMUM + BUDGET_SLACK,
         stop.logs
     );
 }
@@ -458,7 +461,8 @@ async fn a_nested_gateway_whose_own_stop_outlasts_its_parents_plan_leaves_no_lea
     // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
     assert!(
         gone <= HTTP_MINIMUM + BUDGET_SLACK,
-        "the chain outlived the stop budget: {gone:?}\n{}",
+        "the chain outlived the stop budget: {gone:?} against {:?}\n{}",
+        HTTP_MINIMUM + BUDGET_SLACK,
         stop.logs
     );
 }
