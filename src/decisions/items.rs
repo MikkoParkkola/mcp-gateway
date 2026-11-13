@@ -27,7 +27,8 @@ fn time(at: DateTime<Utc>) -> String {
 /// The digest an access request lists and its resolve must repeat: SHA-256
 /// over a domain separator, the scope entries (capability, tool, grant
 /// scope) and the log positions of every pending refusal, each sorted,
-/// duplicates collapsed, each field length-prefixed so no two sets share an
+/// duplicates collapsed. Each section opens with its count and each field
+/// is length-prefixed, so no two scopes and position sets share an
 /// encoding. A change to what the request asks for, or one more refusal of
 /// it, changes the digest; the order the refusals arrived in does not. The
 /// positions are what a deny closes, so an admin never closes a refusal the
@@ -51,15 +52,15 @@ pub(crate) fn scope_digest(scope: &[Value], positions: &[(&str, u64)]) -> String
     let mut positions = positions.to_vec();
     positions.sort_unstable();
     positions.dedup();
-    let mut bytes = b"mcpg/access-request/scope/v2\0".to_vec();
+    let mut bytes = b"mcpg/access-request/scope/v3\0".to_vec();
+    bytes.extend((entries.len() as u64).to_be_bytes());
     for entry in &entries {
         for part in entry {
             bytes.extend((part.len() as u64).to_be_bytes());
             bytes.extend(part.as_bytes());
         }
     }
-    // The entry count fixes where the scope ends and the positions begin.
-    bytes.extend((entries.len() as u64).to_be_bytes());
+    bytes.extend((positions.len() as u64).to_be_bytes());
     for (entry, counter) in positions {
         bytes.extend((entry.len() as u64).to_be_bytes());
         bytes.extend(entry.as_bytes());

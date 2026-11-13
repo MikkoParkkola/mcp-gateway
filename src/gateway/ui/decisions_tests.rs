@@ -584,7 +584,9 @@ async fn resolve_answers_one_status_per_state_and_writes_nothing() {
         "not json".to_owned(),
         json!({"action": "deny", "reason": "r", "scope_digest": digest, "extra": 1}).to_string(),
         json!({"action": "deny", "reason": " ", "scope_digest": digest}).to_string(),
+        json!({"action": "deny", "reason": "not needed\n", "scope_digest": digest}).to_string(),
         json!({"action": "deny", "reason": "r", "scope_digest": "abc"}).to_string(),
+        json!({"action": "deny", "reason": "r", "scope_digest": digest.to_uppercase()}).to_string(),
         json!({"action": "accept", "reason": "r", "scope_digest": digest}).to_string(),
         json!({"action": "accept", "reason": "r", "scope_digest": digest,
                "ttl_seconds": 60, "permanent": true})
@@ -613,6 +615,52 @@ async fn resolve_answers_one_status_per_state_and_writes_nothing() {
     let (status, body) = resolve(&state, true, &id, accept_body(&digest).to_string()).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["error"], "not_available_yet");
+}
+
+#[tokio::test]
+async fn an_open_item_of_another_kind_is_not_resolvable() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let (state, _store) = state_with(&log).await;
+    let shared = Arc::new(Shared::with_key([7; 32]));
+    let now = crate::clock::utc_now().expect("a readable clock");
+    let id = shared.update(|set| {
+        set.set_health(Source::Access, Health::Ready);
+        set.set_health(Source::ControlPlane, Health::Ready);
+        set.set_discovery(Vec::new(), Vec::new(), 0, now);
+        let change = crate::decisions::CapabilityChange {
+            file: "/c/a.yaml".to_owned(),
+            actual: "h1".to_owned(),
+            loaded_as: Some("stripe.charges".to_owned()),
+            content: "name: stripe.charges\ndescription: d\n".to_owned(),
+        };
+        set.set_capability_changes("caps", vec![change], now);
+        set.list()[0]["id"].as_str().expect("an id").to_owned()
+    });
+    state.meta_mcp.set_decisions(shared);
+    let body = deny_body(&"0".repeat(64)).to_string();
+    let (status, body) = resolve(&state, true, &id, &body).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"], "not_resolvable", "{body}");
+}
+
+/// While a source replays, the items are partial: a resolve answers 503
+/// naming it, never `not_found` for a request it cannot see yet.
+#[tokio::test]
+async fn a_resolve_while_a_source_replays_is_unavailable() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let (state, _store) = state_with(&log).await;
+    let shared = Arc::new(Shared::with_key([7; 32]));
+    shared.update(|set| {
+        set.set_health(Source::ControlPlane, Health::Ready);
+        set.set_health(Source::Capability, Health::Absent);
+        set.discovery_down();
+    });
+    state.meta_mcp.set_decisions(shared);
+    let body = deny_body(&"0".repeat(64)).to_string();
+    let (status, body) = resolve(&state, true, "any-id", &body).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
 }
 
 #[tokio::test]
