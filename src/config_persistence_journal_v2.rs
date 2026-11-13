@@ -196,7 +196,19 @@ pub(crate) fn create_intended(
     Ok(JournalSession {
         target: locked.target.clone(),
         state,
+        backing: Backing::Journal,
     })
+}
+
+/// Which file a session's state lives in. The delivery core is shared; only `persist` and
+/// `finish` look at this.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Backing {
+    /// The config's write journal.
+    Journal,
+    /// The framed abandoned file: rewritten whole, never finished as a journal.
+    Abandoned,
 }
 
 #[cfg(test)]
@@ -204,10 +216,20 @@ pub(crate) fn create_intended(
 pub(crate) struct JournalSession {
     target: PathBuf,
     state: JournalV2,
+    backing: Backing,
 }
 
 #[cfg(test)]
 impl JournalSession {
+    /// A session over the abandoned file's tokens, for the file drain.
+    pub(crate) fn over_abandoned(target: PathBuf, state: JournalV2) -> Self {
+        Self {
+            target,
+            state,
+            backing: Backing::Abandoned,
+        }
+    }
+
     pub(crate) fn persist(&mut self) -> Result<(), JournalError> {
         #[cfg(test)]
         observe::plan_tokens(&self.target, &self.state);

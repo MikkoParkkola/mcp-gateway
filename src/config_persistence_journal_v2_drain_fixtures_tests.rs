@@ -112,6 +112,7 @@ pub(super) fn reopen(locked: Locked) -> DrainSession {
         Some(OpenJournal::Current(state)) => Some(JournalSession {
             target: locked.target.clone(),
             state: *state,
+            backing: super::super::Backing::Journal,
         }),
         _ => None,
     };
@@ -127,6 +128,7 @@ pub(super) fn reread(owner: &mut DrainSession) {
         owner.journal = Some(JournalSession {
             target: owner.locked.target.clone(),
             state: *state,
+            backing: super::super::Backing::Journal,
         });
     }
 }

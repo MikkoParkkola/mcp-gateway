@@ -34,6 +34,10 @@ pub(super) enum At {
     AbandonFileSynced,
     /// Handover: the journal and staged original are gone and the directory is synced.
     HandoverFinished,
+    /// File drain: a rewrite is renamed into place, its directory is not yet synced.
+    FileRewritten,
+    /// File drain: the drained file is unlinked, its directory is not yet synced.
+    FileUnlinked,
 }
 
 #[derive(Clone)]
@@ -168,6 +172,8 @@ pub(super) fn event(at: At) -> Event {
         At::AbandonFileDataSynced => Event::AbandonFileDataSynced,
         At::AbandonFileSynced => Event::AbandonFileSynced,
         At::HandoverFinished => Event::HandoverFinished,
+        At::FileRewritten => Event::FileRewritten,
+        At::FileUnlinked => Event::FileUnlinked,
     }
 }
 
