@@ -16,6 +16,25 @@ use super::{LogPos, Source, UiDecision};
 /// SHA-256 over a domain separator, the subject and agent, and every
 /// (capability, position), sorted, each field length-prefixed.
 pub(crate) fn event_id(request: &OpenRequest) -> String {
+    let mut bytes = b"mcpg/ui-decision/decline/v1\0".to_vec();
+    for text in [
+        request.authority.as_str(),
+        request.subject.as_str(),
+        request.agent.as_str(),
+    ] {
+        push_field(&mut bytes, text);
+    }
+    for (capability, entry, counter) in &sorted_positions(request) {
+        push_field(&mut bytes, capability);
+        push_field(&mut bytes, entry);
+        push_field(&mut bytes, &counter.to_string());
+    }
+    crate::hashing::sha256_hex(&bytes)
+}
+
+/// Every (capability, entry, counter) `request` names, sorted and without
+/// repeats, so the order they are listed in changes no id.
+fn sorted_positions(request: &OpenRequest) -> Vec<(&str, &str, u64)> {
     let mut parts: Vec<(&str, &str, u64)> = request
         .entries
         .iter()
@@ -27,20 +46,7 @@ pub(crate) fn event_id(request: &OpenRequest) -> String {
         .collect();
     parts.sort_unstable();
     parts.dedup();
-    let mut bytes = b"mcpg/ui-decision/decline/v1\0".to_vec();
-    let mut field = |text: &str| {
-        bytes.extend((text.len() as u64).to_be_bytes());
-        bytes.extend(text.as_bytes());
-    };
-    field(&request.authority);
-    field(&request.subject);
-    field(&request.agent);
-    for (capability, entry, counter) in &parts {
-        field(capability);
-        field(entry);
-        field(&counter.to_string());
-    }
-    crate::hashing::sha256_hex(&bytes)
+    parts
 }
 
 /// What a deny of `request` folds into the set: one decision per open
@@ -136,17 +142,7 @@ fn push_field(bytes: &mut Vec<u8>, text: &str) {
 /// and the ttl. It leaves out the generation and the expiry, so a retry and
 /// a partial revoke keep the ids of the rows still live.
 pub(crate) fn accept_key(request: &OpenRequest, scope_digest: &str, ttl: AcceptTtl) -> String {
-    let mut parts: Vec<(&str, &str, u64)> = request
-        .entries
-        .iter()
-        .flat_map(|(capability, positions)| {
-            positions
-                .iter()
-                .map(move |pos| (capability.as_str(), pos.entry.as_str(), pos.counter))
-        })
-        .collect();
-    parts.sort_unstable();
-    parts.dedup();
+    let parts = sorted_positions(request);
     let mut bytes = b"mcpg/ui-decision/accept-key/v1\0".to_vec();
     for text in [
         request.authority.as_str(),
