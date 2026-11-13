@@ -131,12 +131,20 @@ mod mtls_listener {
         let grace = Duration::from_millis(100);
         let mut config = crate::config::Config::default();
         config.mtls = pki.config(true);
-        config.server.shutdown_timeout = grace;
+        // Far longer than the row waits: only the explicit grace can stop it in time.
+        config.server.shutdown_timeout = Duration::from_secs(600);
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(async move {
-            crate::gateway::server::listener::serve(app, listener, addr, &config, async move {
-                let _ = stop_rx.await;
-            })
+            crate::gateway::server::listener::serve(
+                app,
+                listener,
+                addr,
+                &config,
+                grace,
+                async move {
+                    let _ = stop_rx.await;
+                },
+            )
             .await
         });
         let client = pki.client(Some("client"));
