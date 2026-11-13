@@ -271,7 +271,7 @@ pub(crate) fn frames_of(donor: &JournalV2) -> Option<Vec<AbandonedFrame>> {
         frames.push(frame(
             Slot::Intent,
             &token.intent,
-            Some(owner_facts(donor, token)),
+            mutant!("intent_owner_dropped", None, Some(owner_facts(donor, token))),
         ));
         for (index, record) in token.records.iter().enumerate() {
             frames.push(frame(Slot::Record(index), record, None));
