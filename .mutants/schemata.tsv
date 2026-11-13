@@ -1,0 +1,23 @@
+head_sha	f3757bc853ecf23b03392a3b21a0c2cc7dd15690
+#mutant nopositions
+mcp_gateway	gateway::ui::decisions::tests::resolve::a_deny_records_one_audit_event_and_the_item_is_gone_now_and_after_a_restart	src/gateway/ui/decisions_resolve_tests.rs:264
+#mutant closeall
+mcp_gateway	decisions::tests::positions::a_decision_folded_after_a_later_refusal_closes_only_its_own	src/decisions/tests/positions.rs:43
+#mutant nofold
+mcp_gateway	gateway::ui::decisions::tests::resolve::a_deny_records_one_audit_event_and_the_item_is_gone_now_and_after_a_restart	src/gateway/ui/decisions_resolve_tests.rs:264
+#mutant noappend
+mcp_gateway	gateway::ui::decisions::tests::resolve::a_deny_records_one_audit_event_and_the_item_is_gone_now_and_after_a_restart	src/gateway/ui/decisions_resolve_tests.rs:266
+#mutant foldfirst
+mcp_gateway	gateway::ui::decisions::tests::resolve::a_deny_whose_record_cannot_be_written_closes_nothing	src/gateway/ui/decisions_resolve_tests.rs:397
+#mutant randomid
+mcp_gateway	decisions::tests::positions::the_event_id_follows_what_was_denied_and_not_the_order_it_is_listed_in	src/decisions/tests/positions.rs:95
+#mutant noreplay
+mcp_gateway	gateway::ui::decisions::tests::resolve::a_deny_records_one_audit_event_and_the_item_is_gone_now_and_after_a_restart	src/gateway/ui/decisions_resolve_tests.rs:295
+#mutant noretry
+mcp_gateway	gateway::ui::decisions::tests::resolve::a_retry_of_a_deny_answers_the_recorded_outcome_and_writes_nothing	src/gateway/ui/decisions_resolve_tests.rs:412
+#mutant reopenorder
+mcp_gateway	gateway::ui::decisions::tests::resolve::a_reopened_request_can_be_denied_again	src/gateway/ui/decisions_resolve_tests.rs:336
+#mutant actorlit
+mcp_gateway	gateway::ui::decisions::tests::resolve::a_deny_records_one_audit_event_and_the_item_is_gone_now_and_after_a_restart	src/gateway/ui/decisions_resolve_tests.rs:277
+#mutant oneentry
+mcp_gateway	gateway::ui::decisions::tests::resolve::a_deny_of_a_two_capability_request_closes_both_in_one_record	src/gateway/ui/decisions_resolve_tests.rs:379
