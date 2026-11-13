@@ -115,7 +115,12 @@ impl Opened {
     /// page that waited for a reader slot and a scan is judged again at the
     /// moment it would be delivered.
     pub(super) fn alive_at(&self, now: u64) -> bool {
-        now <= self.expires_at && now <= self.scope.born.saturating_add(CHAIN_CEILING_SECS)
+        now <= self.expires_at
+            && mutant!(
+                "ceiling-ignored",
+                true,
+                now <= self.scope.born.saturating_add(CHAIN_CEILING_SECS)
+            )
     }
 }
 
@@ -631,7 +636,12 @@ pub(super) async fn lookup(
         && response.status() == StatusCode::OK
     {
         let delivered = crate::clock::unix_secs().unwrap_or(u64::MAX);
-        if !opened.alive_at(delivered) || !spend(&state, &opened, delivered).await {
+        if mutant!(
+            "delivery-expiry-ignored",
+            false,
+            !opened.alive_at(delivered)
+        ) || !spend(&state, &opened, delivered).await
+        {
             return bad_token();
         }
     }
