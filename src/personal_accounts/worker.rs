@@ -451,7 +451,7 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
                 let Ok(permits) = tokio::time::timeout_at(at, draining).await else {
                     // A detach may have started (or failed to start) the
                     // release while this call drained: report that, not "in flight".
-                    if let Some(end) = self.settled_end(deadline).await {
+                    if let Some(end) = mutant!("c9460.f2", None, self.settled_end(deadline).await) {
                         return end;
                     }
                     report_once(
@@ -470,7 +470,7 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
             match slot.take_open() {
                 // Taken by a concurrent call while this one drained: a stuck
                 // store is never waited on, a running release is.
-                None if matches!(*slot, Slot::Stuck) => Some(false),
+                None if mutant!("c9460.f1", false, matches!(*slot, Slot::Stuck)) => Some(false),
                 None => None,
                 Some(held) => match self.spawn_release(held) {
                     Ok(()) => Some(true),
@@ -597,7 +597,9 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Drop
     for DetachOnDrop<P, O>
 {
     fn drop(&mut self) {
-        self.0.detach_release();
+        if mutant!("c9460.f5", false, true) {
+            self.0.detach_release();
+        }
     }
 }
 
