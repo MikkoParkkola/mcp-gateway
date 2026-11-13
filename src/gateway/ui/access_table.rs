@@ -255,6 +255,16 @@ pub(super) static ROWS: &[Row] = &[
         true,
     ),
     row(routes::UI_KEYS, Post, Admin(Forbidden), &[], false),
+    // Reads retained audit rows by a keyed email hash: gateway-wide admin
+    // only. A scoped admin, an auditor, a user and an anonymous caller are
+    // refused before the email is hashed or anything is read.
+    row(
+        routes::UI_KEY_SERVER_LOOKUP_EMAIL,
+        Post,
+        Admin(AdminRequired),
+        &[],
+        false,
+    ),
     row(routes::UI_KEYS_NAME, Delete, Admin(Forbidden), &[], false),
     row(
         routes::UI_DEAD_LETTERS,

@@ -106,6 +106,15 @@ impl EmailHashKey {
                 .expect("a valid fixed key"),
         )
     }
+
+    /// A second fixed key, so a row can show another key id never matches.
+    #[cfg(feature = "webui")]
+    pub(crate) fn for_test_other() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(
+            Self::from_hex("1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100")
+                .expect("a valid fixed key"),
+        )
+    }
 }
 
 #[cfg(test)]
