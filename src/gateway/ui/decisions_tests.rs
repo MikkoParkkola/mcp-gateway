@@ -580,7 +580,9 @@ async fn resolve_answers_one_status_per_state_and_writes_nothing() {
         "not json".to_owned(),
         json!({"action": "deny", "reason": "r", "scope_digest": digest, "extra": 1}).to_string(),
         json!({"action": "deny", "reason": " ", "scope_digest": digest}).to_string(),
+        json!({"action": "deny", "reason": "not needed\n", "scope_digest": digest}).to_string(),
         json!({"action": "deny", "reason": "r", "scope_digest": "abc"}).to_string(),
+        json!({"action": "deny", "reason": "r", "scope_digest": digest.to_uppercase()}).to_string(),
         json!({"action": "accept", "reason": "r", "scope_digest": digest}).to_string(),
         json!({"action": "accept", "reason": "r", "scope_digest": digest,
                "ttl_seconds": 60, "permanent": true})
@@ -609,6 +611,35 @@ async fn resolve_answers_one_status_per_state_and_writes_nothing() {
     let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["error"], "not_available_yet");
+}
+
+#[tokio::test]
+async fn an_open_item_of_another_kind_is_not_resolvable() {
+    let item = json!({"kind": "capability_change", "scope_digest": "0".repeat(64)});
+    let response = judge_item(&item, &"0".repeat(64));
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+    let body: Value = serde_json::from_slice(&bytes).expect("a json body");
+    assert_eq!(body["error"], "not_resolvable", "{body}");
+}
+
+/// While a source replays, the items are partial: a resolve answers 503
+/// naming it, never `not_found` for a request it cannot see yet.
+#[tokio::test]
+async fn a_resolve_while_a_source_replays_is_unavailable() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let (state, _store) = state_with(&log).await;
+    let shared = Arc::new(Shared::with_key([7; 32]));
+    shared.update(|set| {
+        set.set_health(Source::ControlPlane, Health::Ready);
+        set.set_health(Source::Capability, Health::Absent);
+        set.discovery_down();
+    });
+    state.meta_mcp.set_decisions(shared);
+    let body = deny_body(&"0".repeat(64)).to_string();
+    let (status, body) = resolve(&state, true, "any-id", &body).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
 }
 
 #[tokio::test]
