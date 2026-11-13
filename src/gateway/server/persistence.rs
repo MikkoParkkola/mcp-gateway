@@ -278,8 +278,8 @@ pub(super) type CostShutdown = (Arc<BudgetEnforcer>, PathBuf);
 pub(super) type CostShutdown = std::convert::Infallible;
 
 /// The HTTP shutdown's saves of search ranking, transition tracking and, with
-/// cost governance on, today's spend, all together under
-/// [`SHUTDOWN_SAVES_TIMEOUT`]. The periodic saver needs no stopping first:
+/// cost governance on, today's spend, all together under the stop budget's
+/// `deadline`. The periodic saver needs no stopping first:
 /// cost writes take turns and each snapshots the spend as it writes.
 pub(super) async fn save_state_on_shutdown(
     ranker: Arc<crate::ranking::SearchRanker>,
@@ -288,8 +288,8 @@ pub(super) async fn save_state_on_shutdown(
     transition_path: PathBuf,
     cost: Option<CostShutdown>,
     more: Vec<ShutdownSave>,
+    deadline: tokio::time::Instant,
 ) {
-    let deadline = tokio::time::Instant::now() + SHUTDOWN_SAVES_TIMEOUT;
     #[allow(unused_mut)]
     let mut saves: Vec<ShutdownSave> = vec![
         (
@@ -408,5 +408,42 @@ mod shutdown_deadline_tests {
         let returned = tokio::time::timeout(std::time::Duration::from_secs(5), shutdown).await;
         drop(release);
         assert!(returned.is_ok(), "a stuck save held the shutdown");
+    }
+
+    /// `MIK-8867.BUDGET.1`: the HTTP stop's state saves end at the deadline
+    /// the stop budget hands them, not at a timeout of their own. The clock is
+    /// paused, so the elapsed time is the deadline itself and no wall-clock
+    /// window decides the row.
+    #[tokio::test(start_paused = true)]
+    async fn the_state_saves_end_at_the_deadline_they_are_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let (release, stuck) = std::sync::mpsc::channel::<()>();
+        let stuck_save: ShutdownSave = (
+            "stuck save",
+            Box::new(move || {
+                let _ = stuck.recv();
+            }),
+        );
+        let start = tokio::time::Instant::now();
+        let given = std::time::Duration::from_secs(2);
+        save_state_on_shutdown(
+            Arc::new(crate::ranking::SearchRanker::new()),
+            dir.path().join("ranker.json"),
+            Arc::new(crate::transition::TransitionTracker::new()),
+            dir.path().join("transitions.json"),
+            None,
+            vec![stuck_save],
+            start + given,
+        )
+        .await;
+        let elapsed = start.elapsed();
+        drop(release);
+        // Paused time moves only to the next timer, so the stop ends at the given
+        // deadline exactly: neither a timeout of its own nor skipped saves ends it
+        // at another instant.
+        assert_eq!(
+            elapsed, given,
+            "the saves did not end at the deadline they were given"
+        );
     }
 }
