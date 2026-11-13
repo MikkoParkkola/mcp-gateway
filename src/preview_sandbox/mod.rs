@@ -246,3 +246,5 @@ pub async fn availability() -> &'static Result<(), Refusal> {
 }
 
 mod fetch_output;
+#[cfg(test)]
+mod staged_tests;

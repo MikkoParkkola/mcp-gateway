@@ -1,0 +1,2 @@
+# Sources under src/preview_sandbox that still carry expect(dead_code): <path><TAB><the part that wires it up>.
+# The ratchet row in staged_tests.rs keeps this list exact; the sandbox ticket closes when it is empty.
