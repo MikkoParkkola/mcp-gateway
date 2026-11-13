@@ -217,7 +217,7 @@ async fn m1_a_stale_revoke_leaves_the_new_fetch_alone() {
     );
 }
 
-/// M-1: a begin_fetch that fails to make a credential still ends the previous
+/// M-1: a `begin_fetch` that fails to make a credential still ends the previous
 /// fetch, so a failed start never leaves the old credential live.
 #[tokio::test]
 async fn m1_a_failed_begin_fetch_still_ends_the_previous_fetch() {
