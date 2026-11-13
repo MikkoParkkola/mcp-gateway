@@ -68,6 +68,12 @@ pub(crate) fn quiet_for_secret_commands(args: &[OsString], error: clap::Error) -
 /// path, or it stopped earlier (something typed before the command name, such
 /// as `audit <email> lookup-email`) and the remaining names still follow, in
 /// order, later in `args`.
+///
+/// Accepted residual: a later argument spelled like a remaining name also
+/// matches, so `audit --bogus verify --path lookup-email` gets the fixed
+/// message instead of the parser's note about `--bogus`. That hides detail but
+/// never repeats typed text; telling a name from a value here would need a
+/// third parse on this path.
 fn names(secret: &[&str], path: &[String], args: &[OsString]) -> bool {
     if path.len() > secret.len() || !path.iter().zip(secret).all(|(p, s)| p.as_str() == *s) {
         return false;
