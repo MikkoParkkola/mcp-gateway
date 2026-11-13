@@ -1027,6 +1027,11 @@ jobs:
             esac
             exit 1
           fi
+          # The lookup ignores case; the check below matches the name exactly, so a rename to another case must fail here.
+          if [ "$out" != "os-int" ]; then
+            echo "::error::the label is now named '$out'; the check and the macOS int lane match 'os-int' exactly. Rename it back: gh label edit '$out' --name os-int"
+            exit 1
+          fi
       # HEAD is the pull request's merge with the base, so its first parent is the base the merge was cut from and the
       # diff against it is exactly this pull request's, however far the base has moved since. The script refuses (exit 2)
       # a checkout whose second parent is not the pull request's head: HEAD^1 would then cover only the tip commit.
