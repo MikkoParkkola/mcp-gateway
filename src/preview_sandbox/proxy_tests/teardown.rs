@@ -12,8 +12,10 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 /// How long a row waits for a deadline or a teardown. A missing behavior
-/// fails the row here.
-const GUARD: Duration = Duration::from_secs(3);
+/// fails the row here. Over the 10 s hang-guard floor and under the 30 s
+/// production bounds, so a missing behavior fails at the guard, not at
+/// another bound.
+const GUARD: Duration = Duration::from_secs(15);
 
 /// D4, kills "a fetch ignores its deadline and stays open until revoke".
 #[tokio::test]
@@ -81,7 +83,10 @@ async fn d4_a_stale_deadline_leaves_the_next_fetch_alone() {
         .await
         .expect("the CONNECT was not answered within the guard");
     assert_eq!(status(&head), 200, "{head}");
-    // Past the first fetch's 300 ms deadline, inside the second's minute.
+    // Past the first fetch's 300 ms deadline, inside the second's minute. A
+    // slow runner can only fire the stale timer later, which passes the row;
+    // it cannot fail it.
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(600)).await;
     let echoed = tokio::time::timeout(GUARD, tunnel.echoes())
         .await
@@ -124,6 +129,9 @@ async fn t4c_a_second_revoke_waits_for_the_first_teardown() {
             .recv_timeout(GUARD)
             .expect("the first revoke never reached teardown");
         let second = scope.spawn(|| rig.proxy.revoke(&cred));
+        // A second revoke that does not wait returns at once; a slow runner
+        // can only make it return later, which passes the row, never fails it.
+        // timing: absence
         thread::sleep(Duration::from_millis(200));
         // Taken while the first revoke is still inside the hook. Sent before
         // the assert so that failure still lets the parked revoke finish.

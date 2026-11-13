@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 use tokio::net::UnixStream;
 
 /// How long a row waits for a bound. A missing bound fails the row here.
-const GUARD: Duration = Duration::from_secs(3);
+/// Over the 10 s hang-guard floor and under the 30 s production bounds.
+const GUARD: Duration = Duration::from_secs(15);
 
 /// D0, kills "the production bounds differ from the design".
 #[test]

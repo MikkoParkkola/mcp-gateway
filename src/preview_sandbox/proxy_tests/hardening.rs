@@ -167,7 +167,7 @@ async fn h4_an_admission_past_its_bound_is_cut_off() {
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
     let mut client = open(&rig, &bytes).await.expect("connect");
     // Guarded, so an admission that is never cut off fails here instead of hanging.
-    let head = tokio::time::timeout(Duration::from_secs(5), client.head())
+    let head = tokio::time::timeout(Duration::from_secs(15), client.head())
         .await
         .expect("the admission was not cut off at its 1 s bound");
     assert_eq!(status(&head), 502);
