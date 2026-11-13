@@ -4,7 +4,7 @@
 //! bounded number of connections, ends an admission a revoke or a deadline
 //! has overtaken, and keeps its Unix directory private and unguessable.
 
-use super::super::{Accept, MAX_CONNECTIONS, serve};
+use super::super::{Accept, BOUNDS, Bounds, MAX_CONNECTIONS, serve};
 use super::{Rig, begin, connect_bytes, open, read_head, rig, status};
 use async_trait::async_trait;
 use std::io;
@@ -158,7 +158,10 @@ async fn h3_a_revoke_ends_a_connect_stuck_in_the_dial() {
 #[tokio::test]
 async fn h4_an_admission_past_its_bound_is_cut_off() {
     let rig = rig().await;
-    rig.proxy.set_admit_bound(Duration::from_secs(1));
+    rig.proxy.set_bounds(Bounds {
+        admit: Duration::from_secs(1),
+        ..BOUNDS
+    });
     let cred = begin(&rig);
     rig.resolve.gate.close();
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));

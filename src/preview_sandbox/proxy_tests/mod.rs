@@ -19,6 +19,7 @@ use tokio::net::{TcpListener, TcpStream, UnixStream};
 use super::{AllowlistProxy, Connect, Credential, Interfaces, Resolve};
 
 mod allowlist;
+mod bounds;
 mod credential;
 mod deny;
 mod deny_vectors;
@@ -27,6 +28,8 @@ mod tunnels;
 
 /// A globally routable address no deny rule covers.
 const GLOBAL: IpAddr = IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34));
+/// A second public address, distinct from [`GLOBAL`], that no deny rule covers.
+const OTHER: IpAddr = IpAddr::V4(Ipv4Addr::new(93, 184, 216, 35));
 const NPM: &str = "registry.npmjs.org";
 
 /// Suspends a fake call until the test releases it (C10).
@@ -86,6 +89,8 @@ struct FakeConnect {
     /// Runs as the dial completes, once the connection is made: a row's way to make
     /// something happen at the exact moment the dial completes.
     on_dial: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    /// A dial to this address never completes.
+    hang: Mutex<Option<SocketAddr>>,
 }
 
 impl FakeConnect {
@@ -98,6 +103,9 @@ impl FakeConnect {
 impl Connect for FakeConnect {
     async fn connect(&self, addr: SocketAddr) -> io::Result<TcpStream> {
         self.dials.lock().expect("lock").push(addr);
+        if *self.hang.lock().expect("lock") == Some(addr) {
+            std::future::pending::<()>().await;
+        }
         self.gate.pass().await;
         let stream = TcpStream::connect(self.echo).await?;
         // After the connection is made, in the poll that returns it: the
@@ -149,6 +157,7 @@ async fn rig() -> Rig {
         echo: echo_addr,
         gate: Gate::default(),
         on_dial: Mutex::new(None),
+        hang: Mutex::new(None),
     });
     let interfaces = Arc::new(FakeInterfaces(Mutex::new(Vec::new())));
     let proxy = AllowlistProxy::bind(resolve.clone(), connect.clone(), interfaces.clone())

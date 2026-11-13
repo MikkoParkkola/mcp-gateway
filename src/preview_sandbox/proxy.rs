@@ -14,6 +14,7 @@ use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
@@ -131,8 +132,8 @@ struct Shared {
     live: Mutex<Option<Live>>,
     /// One permit per connection being served.
     permits: Arc<tokio::sync::Semaphore>,
-    /// How long an admission may take; tests shorten it.
-    admit_bound: Mutex<std::time::Duration>,
+    /// The time bounds; rows replace them.
+    bounds: Mutex<Bounds>,
     /// Counts fetches, so a tunnel admitted under one fetch can never be
     /// registered into the next.
     fetches: std::sync::atomic::AtomicU64,
@@ -185,7 +186,7 @@ impl AllowlistProxy {
         let shared = Arc::new(Shared {
             live: Mutex::new(None),
             permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS)),
-            admit_bound: Mutex::new(ADMIT_BOUND),
+            bounds: Mutex::new(BOUNDS),
             fetches: std::sync::atomic::AtomicU64::new(0),
             resolve,
             connect,
@@ -214,10 +215,14 @@ impl AllowlistProxy {
         &self.unix_path
     }
 
-    /// Shorten the admission bound, for the rows.
+    /// Replace the time bounds, for the rows.
     #[cfg(test)]
-    pub(crate) fn set_admit_bound(&self, bound: std::time::Duration) {
-        *lock_bound(&self.shared.admit_bound) = bound;
+    pub(crate) fn set_bounds(&self, bounds: Bounds) {
+        *self
+            .shared
+            .bounds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = bounds;
     }
 
     /// How many tunnels the live fetch has open, for the rows.
@@ -289,9 +294,22 @@ fn lock(m: &Mutex<Option<Live>>) -> std::sync::MutexGuard<'_, Option<Live>> {
 /// before any credential is checked.
 const MAX_CONNECTIONS: usize = 64;
 
-/// The longest a CONNECT may spend being admitted: reading the request,
-/// resolving, dialling. A tunnel, once admitted, runs until its fetch ends.
-const ADMIT_BOUND: std::time::Duration = std::time::Duration::from_secs(30);
+/// The proxy's time bounds; rows shorten them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Bounds {
+    pub(crate) admit: Duration,
+    pub(crate) head: Duration,
+    pub(crate) dial: Duration,
+    pub(crate) splice: Duration,
+}
+
+/// The design's bounds.
+pub(crate) const BOUNDS: Bounds = Bounds {
+    admit: Duration::from_secs(30),
+    head: Duration::from_secs(5),
+    dial: Duration::from_secs(5),
+    splice: Duration::from_secs(30),
+};
 
 /// Serve one accepted connection, or drop it (closing it) when the proxy
 /// is already serving [`MAX_CONNECTIONS`].
@@ -314,8 +332,8 @@ async fn accept_failed(error: &io::Error) {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 }
 
-fn lock_bound(m: &Mutex<std::time::Duration>) -> std::sync::MutexGuard<'_, std::time::Duration> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+fn copy_bounds(m: &Mutex<Bounds>) -> Bounds {
+    *m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// A listener the accept loop can run over: a TCP or a Unix socket, or a
@@ -472,7 +490,7 @@ async fn handle<S>(mut client: S, shared: Arc<Shared>)
 where
     S: Tunnel,
 {
-    let bound = *lock_bound(&shared.admit_bound);
+    let bound = copy_bounds(&shared.bounds).admit;
     let admitted = tokio::time::timeout(bound, admit(&mut client, &shared))
         .await
         .unwrap_or(Err(Status::BadGateway));
