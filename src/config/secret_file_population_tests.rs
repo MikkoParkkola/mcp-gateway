@@ -328,6 +328,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the sandboxed child's stderr pipe, capped at 64 KiB, to classify a refusal; not a file",
     ),
     (
+        "src/preview_sandbox/proxy/host_addresses.rs",
+        "the host's own addresses from /proc/net/fib_trie and /proc/net/if_inet6; kernel tables, no secret",
+    ),
+    (
         "src/private_fs.rs",
         "Windows store custody: no-follow open, DACL judged on the handle (ADR-016)",
     ),

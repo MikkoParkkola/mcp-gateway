@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The host's own addresses from `/proc/net/fib_trie` and `/proc/net/if_inet6`.
 
-use super::super::{fib_trie_local, if_inet6, ipv6_tree_present, optional_text};
+use super::super::host_addresses::{fib_trie_local, if_inet6, ipv6_tree_present, optional_text};
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
