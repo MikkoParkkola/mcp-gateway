@@ -15,7 +15,7 @@ const OLD: &str = "r1-child-previous";
 pub(super) async fn fixture() -> (
     Arc<super::AppState>,
     super::tests::FixtureDir,
-    tempfile::TempDir,
+    Arc<tempfile::TempDir>,
     Vec<ApiKeyConfig>,
 ) {
     let key = |secret: &str| ApiKeyConfig {
@@ -50,7 +50,7 @@ pub(super) async fn fixture() -> (
     child.previous_key_sha256 = Some(crate::config::api_key_digest_spec(OLD.as_bytes()));
     child.previous_expires_at = Some("2999-01-01T00:00:00Z".parse().expect("time"));
     let keys = vec![auth.api_keys[0].clone(), auth.api_keys[1].clone(), child];
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     reload(&state, dir.path(), &keys).await;
     (state, store, dir, keys)
 }
@@ -121,7 +121,7 @@ async fn event_admission_and_admin_standing_end_with_the_root() {
             .meta_mcp
             .events_services(Arc::clone(&state.live_config), LiveCredentials::default())
     };
-    let hub_dir = Arc::new(tempfile::tempdir().expect("events dir"));
+    let hub_dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&EventsConfig::default(), hub_dir.path()).expect("hub");
     hub.keep_test_dir(hub_dir);
     hub.start(services());
