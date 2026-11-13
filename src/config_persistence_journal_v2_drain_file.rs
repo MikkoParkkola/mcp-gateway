@@ -32,14 +32,14 @@ pub(super) fn complete(_state: &JournalV2) -> bool {
 
 // The success-path rows need a file that passes the owner check, which only exists on Unix.
 #[cfg(all(test, unix))]
-#[path = "config_persistence_journal_v2_drain_file_tests.rs"]
-mod tests;
-#[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_file_crash_tests.rs"]
 mod crash_tests;
 #[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_file_refusal_tests.rs"]
 mod refusal_tests;
+#[cfg(all(test, unix))]
+#[path = "config_persistence_journal_v2_drain_file_tests.rs"]
+mod tests;
 #[cfg(all(test, not(unix)))]
 #[path = "config_persistence_journal_v2_drain_file_windows_tests.rs"]
 mod windows_tests;

@@ -102,7 +102,9 @@ fn reachable(donor: &Donor, marked_donor: &JournalV2) -> Vec<(String, JournalV2)
     variants.push(("marked".to_owned(), marked_donor.clone()));
 
     let mut wide = marked_donor.clone();
-    edit_tokens(&mut wide, |token| token.intent_counter = Some(9_999_999_999));
+    edit_tokens(&mut wide, |token| {
+        token.intent_counter = Some(9_999_999_999)
+    });
     variants.push(("wide counter".to_owned(), wide));
 
     let mut delivered = marked_donor.clone();
@@ -144,7 +146,10 @@ fn reachable(donor: &Donor, marked_donor: &JournalV2) -> Vec<(String, JournalV2)
     ] {
         let mut worst = marked_donor.clone();
         if donor.owe_terminal {
-            let writer = worst.writer.as_mut().expect("the cleared donor has a writer");
+            let writer = worst
+                .writer
+                .as_mut()
+                .expect("the cleared donor has a writer");
             writer
                 .records
                 .push(record(Role::Outcome, OUTCOME, OUTCOME_DIGEST));

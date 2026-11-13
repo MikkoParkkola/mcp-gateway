@@ -42,8 +42,16 @@ fn refused_unchanged(rig: &mut DrainRig, row: &str, case: &str, want: DrainError
     let before = rig.file();
     let records = rig.live.records().len();
     assert_eq!(rig.drain(), Err(want), "{row} {case}: refused");
-    assert_eq!(rig.file(), before, "{row} {case}: the file is byte-identical");
-    assert_eq!(rig.live.records().len(), records, "{row} {case}: nothing appended");
+    assert_eq!(
+        rig.file(),
+        before,
+        "{row} {case}: the file is byte-identical"
+    );
+    assert_eq!(
+        rig.live.records().len(),
+        records,
+        "{row} {case}: nothing appended"
+    );
 }
 
 /// The drain half of the closed design's corrupt-file row: a torn tail with no donor, and
@@ -56,7 +64,10 @@ fn abandoned_corrupt_without_donor_drain() {
     let first = encode_frame(&frames(&rig)[0]).expect("a frame fits").len();
     let torn = good[..good.len() - 3].to_vec();
     let mut bad_sum = good.clone();
-    let tab = bad_sum.iter().position(|b| *b == b'\t').expect("a header tab");
+    let tab = bad_sum
+        .iter()
+        .position(|b| *b == b'\t')
+        .expect("a header tab");
     bad_sum[tab + 1] = if bad_sum[tab + 1] == b'0' { b'1' } else { b'0' };
     let mut bad_length = good.clone();
     bad_length[first] = b'9';
@@ -79,9 +90,20 @@ fn crash_f4() {
     let other = Live::new();
     let before = rig.file();
     let other_records = other.records().len();
-    let result = runtime(drain_abandoned(&mut rig.session, Some(Arc::clone(&other.log))));
-    assert_eq!(result, Err(DrainError::OtherLog), "{ROW}: another log is refused");
-    assert_eq!(other.records().len(), other_records, "{ROW}: zero appends to the other log");
+    let result = runtime(drain_abandoned(
+        &mut rig.session,
+        Some(Arc::clone(&other.log)),
+    ));
+    assert_eq!(
+        result,
+        Err(DrainError::OtherLog),
+        "{ROW}: another log is refused"
+    );
+    assert_eq!(
+        other.records().len(),
+        other_records,
+        "{ROW}: zero appends to the other log"
+    );
     assert_eq!(rig.file(), before, "{ROW}: the file is byte-identical");
 
     let mut mixed = frames(&rig);
@@ -131,11 +153,19 @@ fn refused_file_kept_and_reported() {
         }),
         ("shape", DrainError::FileRefused, |rig| {
             let mut shaped = frames(rig);
-            shaped[0].owner.as_mut().expect("intent owner facts").handed_over = false;
+            shaped[0]
+                .owner
+                .as_mut()
+                .expect("intent owner facts")
+                .handed_over = false;
             encoded(&shaped)
         }),
-        ("over_cap", DrainError::FileRefused, |_| vec![b'0'; MAX_ABANDONED_BYTES + 1]),
-        ("unsafe_handle", DrainError::FileRefused, |rig| rig.file().expect("file")),
+        ("over_cap", DrainError::FileRefused, |_| {
+            vec![b'0'; MAX_ABANDONED_BYTES + 1]
+        }),
+        ("unsafe_handle", DrainError::FileRefused, |rig| {
+            rig.file().expect("file")
+        }),
         ("foreign_donor", DrainError::Journal, |rig| {
             let mut altered = frames(rig);
             altered[0].record.delivered = true;
@@ -157,7 +187,11 @@ fn refused_file_kept_and_reported() {
         let journal = rig.journal();
         let (result, warnings, _metrics) = observed(&mut rig);
         assert_eq!(result, Err(want), "{ROW} {reason}: refused");
-        assert_eq!(rig.file().as_deref(), Some(bytes.as_slice()), "{ROW} {reason}: kept");
+        assert_eq!(
+            rig.file().as_deref(),
+            Some(bytes.as_slice()),
+            "{ROW} {reason}: kept"
+        );
         assert_eq!(rig.journal(), journal, "{ROW} {reason}: any donor kept");
         assert!(
             warnings.contains(&path.display().to_string()) && warnings.contains(reason),
@@ -185,18 +219,37 @@ fn attribution_redelivered() {
         attributed(donor);
     });
     assert_eq!(rig.drain(), Ok(()), "{ROW}");
-    let token = rig.donor.writer.as_ref().expect("fixture writer").intent_id.0.clone();
+    let token = rig
+        .donor
+        .writer
+        .as_ref()
+        .expect("fixture writer")
+        .intent_id
+        .0
+        .clone();
     let records = rig.live.records();
-    let owned: Vec<_> = records.iter().filter(|r| r["token"] == token.as_str()).collect();
-    assert!(owned.len() >= 2, "{ROW}: intent and terminal both delivered");
+    let owned: Vec<_> = records
+        .iter()
+        .filter(|r| r["token"] == token.as_str())
+        .collect();
+    assert!(
+        owned.len() >= 2,
+        "{ROW}: intent and terminal both delivered"
+    );
     for record in owned {
         assert_eq!(
             record["who"],
             serde_json::to_value(actor()).expect(ROW),
             "{ROW}: the complete frozen actor, never the gateway actor"
         );
-        assert_eq!(record["who"]["principal"], "0123ab45cd67", "{ROW}: principal kept");
-        assert!(record.get("subject").is_none(), "{ROW}: no envelope subject");
+        assert_eq!(
+            record["who"]["principal"], "0123ab45cd67",
+            "{ROW}: principal kept"
+        );
+        assert!(
+            record.get("subject").is_none(),
+            "{ROW}: no envelope subject"
+        );
     }
     rig.live.verify(ROW);
 }
@@ -208,13 +261,20 @@ fn drain_parks_invalid() {
     const ROW: &str = "drain_parks_invalid";
     let mut rig = drain_rig(ROW, |donor| {
         unfrozen(donor);
-        donor.writer.as_mut().expect("fixture writer").intent.payload_json =
-            br#"{"kind":17}"#.to_vec();
+        donor
+            .writer
+            .as_mut()
+            .expect("fixture writer")
+            .intent
+            .payload_json = br#"{"kind":17}"#.to_vec();
     });
     assert_eq!(rig.drain(), Err(DrainError::Parked), "{ROW}: parked");
     let parked = rig.file().expect("the file is kept");
     let frame = &decode_frames(&parked).expect(ROW).frames[0];
-    assert!(frame.record.parked.is_some(), "{ROW}: the park is persisted in the file");
+    assert!(
+        frame.record.parked.is_some(),
+        "{ROW}: the park is persisted in the file"
+    );
     assert_eq!(rig.drain(), Err(DrainError::Parked), "{ROW}: never resent");
     assert_eq!(rig.file(), Some(parked), "{ROW}: the file is unchanged");
 }
