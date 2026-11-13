@@ -62,10 +62,15 @@ pub(crate) fn quiet_for_secret_commands(args: &[OsString], error: clap::Error) -
 
 /// The subcommand names `args` selects, read by a second parse that ignores
 /// errors: the parser then records a subcommand even when that subcommand's
-/// own arguments failed.
+/// own arguments failed. Help and version are switched off for it, so a
+/// `--help` after the failing argument (`--path --help`) cannot end this parse
+/// with a help request instead of a path.
 fn subcommand_path(args: &[OsString]) -> Option<Vec<String>> {
     let matches = Cli::command()
         .ignore_errors(true)
+        .disable_help_flag(true)
+        .disable_help_subcommand(true)
+        .disable_version_flag(true)
         .try_get_matches_from(args)
         .ok()?;
     let mut path = Vec::new();
