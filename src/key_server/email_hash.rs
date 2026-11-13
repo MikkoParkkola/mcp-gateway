@@ -42,8 +42,16 @@ const SUBJECT_DOMAIN: &[u8] = b"subject-v1\0";
 /// build that normalizes differently.
 pub(crate) fn normalize(email: &str) -> String {
     let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc();
-    nfc.normalize(&lower_v1(&nfc.normalize(trim_v1(email))))
+    mutant!(
+        "no-final-nfc",
+        lower_v1(&nfc.normalize(trim_v1(email))),
+        nfc.normalize(&lower_v1(&nfc.normalize(mutant!(
+            "no-trim",
+            email,
+            trim_v1(email)
+        ))))
         .into_owned()
+    )
 }
 
 /// Version 1's lowercase: the standard library's `str::to_lowercase` at
@@ -58,7 +66,15 @@ pub(crate) fn normalize(email: &str) -> String {
 /// whitespace stays, and so do characters that only look blank (zero-width
 /// space, byte-order mark), which are not `White_Space`.
 pub(crate) fn trim_v1(text: &str) -> &str {
-    text.trim_matches(case_v1::is_white_space)
+    mutant!(
+        "trim-start-only",
+        text.trim_start_matches(case_v1::is_white_space),
+        mutant!(
+            "trim-ascii-only",
+            text.trim_matches(|c: char| c.is_ascii_whitespace()),
+            text.trim_matches(case_v1::is_white_space)
+        )
+    )
 }
 
 pub(crate) fn lower_v1(text: &str) -> String {
@@ -66,10 +82,18 @@ pub(crate) fn lower_v1(text: &str) -> String {
     for (at, c) in text.char_indices() {
         if c == '\u{3a3}' {
             let word_final = case_v1::case_ignorable_then_cased(text[..at].chars().rev())
-                && !case_v1::case_ignorable_then_cased(text[at + c.len_utf8()..].chars());
-            out.push(if word_final { '\u{3c2}' } else { '\u{3c3}' });
+                && mutant!(
+                    "sigma-swapped",
+                    case_v1::case_ignorable_then_cased(text[at + c.len_utf8()..].chars()),
+                    !case_v1::case_ignorable_then_cased(text[at + c.len_utf8()..].chars())
+                );
+            out.push(if mutant!("sigma-never-final", false, word_final) {
+                '\u{3c2}'
+            } else {
+                '\u{3c3}'
+            });
         } else if c.is_ascii() {
-            out.push(c.to_ascii_lowercase());
+            out.push(mutant!("ascii-not-lowered", c, c.to_ascii_lowercase()));
         } else if let Some(mapped) = case_v1::lower(c) {
             out.extend(mapped);
         } else {
@@ -118,7 +142,7 @@ const KNOWN_ANSWERS: &[(&str, &str)] = &[
 pub(crate) fn self_check_with(normalizer: &dyn Fn(&str) -> String) -> Result<(), String> {
     for (index, (input, expected)) in KNOWN_ANSWERS.iter().enumerate() {
         let got = normalizer(input);
-        if got != *expected {
+        if mutant!("known-answer-ignored", false, got != *expected) {
             return Err(format!(
                 "this build's email normalization differs from the one the retained audit rows were \
                  hashed with (known answer #{index}, input U+{:04X}... gave {} code points, \
@@ -163,9 +187,17 @@ fn check_once(
     if state.0 {
         return Ok(());
     }
-    state.1 += 1;
-    check()?;
-    state.0 = true;
+    state.1 += mutant!("run-not-counted", 0, 1);
+    mutant!(
+        "failure-remembered",
+        {
+            let r = check();
+            state.0 = true;
+            r
+        },
+        mutant!("check-skipped", Ok(()), check())
+    )?;
+    state.0 = mutant!("pass-not-remembered", false, true);
     Ok(())
 }
 
@@ -220,7 +252,14 @@ impl EmailHashKey {
     /// Parse the stored or configured text: exactly 64 lowercase hex digits,
     /// with one trailing newline allowed (the record key file's rule).
     pub(crate) fn from_hex(text: &str) -> Result<Self, KeyTextError> {
-        Self::from_hex_checked(text, &process_check)
+        Self::from_hex_checked(
+            text,
+            mutant!(
+                "from-hex-unchecked",
+                &(|| Ok(())) as &dyn Fn() -> Result<(), String>,
+                &process_check as &dyn Fn() -> Result<(), String>
+            ),
+        )
     }
 
     /// [`Self::from_hex`] with the normalization check passed in, so a row can
@@ -234,7 +273,11 @@ impl EmailHashKey {
         check: &dyn Fn() -> Result<(), String>,
     ) -> Result<Self, KeyTextError> {
         let key = Self::parse_hex(text)?;
-        check().map_err(KeyTextError::Normalization)?;
+        mutant!(
+            "check-result-ignored",
+            Ok(()),
+            check().map_err(KeyTextError::Normalization)
+        )?;
         Ok(key)
     }
 
@@ -261,8 +304,23 @@ impl EmailHashKey {
     /// that equals an email address does not collide with that email's hash.
     pub(crate) fn hash_subject(&self, subject: &str) -> String {
         let mut message = Vec::with_capacity(SUBJECT_DOMAIN.len() + subject.len());
-        message.extend_from_slice(SUBJECT_DOMAIN);
-        message.extend_from_slice(subject.as_bytes());
+        message.extend_from_slice(mutant!("subject-domain-email", DOMAIN, SUBJECT_DOMAIN));
+        message.extend_from_slice(&mutant!(
+            "subject-normalized",
+            normalize(subject).into_bytes(),
+            mutant!(
+                "subject-trimmed",
+                trim_v1(subject).as_bytes().to_vec(),
+                mutant!(
+                    "subject-nfc-only",
+                    icu_normalizer::ComposingNormalizerBorrowed::new_nfc()
+                        .normalize(subject)
+                        .into_owned()
+                        .into_bytes(),
+                    subject.as_bytes().to_vec()
+                )
+            )
+        ));
         crate::hashing::hmac_sha256_hex(self.0.as_bytes(), &message)
     }
 
