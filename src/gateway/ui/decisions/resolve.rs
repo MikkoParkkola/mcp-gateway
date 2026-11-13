@@ -142,7 +142,11 @@ pub(super) async fn resolve_decision(
         // Gone: resolved here before (a retry gets what was recorded), or
         // never open.
         Ok(None) => {
-            return match decisions.outcome(&id, &request.scope_digest) {
+            return match mutant!(
+                "noretry",
+                None,
+                decisions.outcome(&id, &request.scope_digest)
+            ) {
                 Some(done) => answer_again(&done, &request),
                 None if decisions.resolved(&id) => already_resolved(),
                 None => resolve_error(
@@ -262,7 +266,7 @@ fn deny(
     // grant-mutation action: who denied what sits beside who granted what.
     let event = ControlPlaneAuditEvent {
         event_id: event_id.clone(),
-        actor_id: actor.actor_id.clone(),
+        actor_id: mutant!("actorlit", "unknown".to_owned(), actor.actor_id.clone()),
         action: ControlPlaneAction::MutateGrant,
         target_id: format!("access_request:{}", open.agent),
         reason: request.reason.trim().to_owned(),
@@ -275,10 +279,19 @@ fn deny(
         grant_change: None,
         ui_decision: Some(decision_record(open, &request.scope_digest)),
     };
-    if store.append_audit(&event).is_err() {
+    mutant!(
+        "foldfirst",
+        decisions.update(|set| set.apply_decisions(decisions_of(open))),
+        ()
+    );
+    if mutant!("noappend", false, store.append_audit(&event).is_err()) {
         return audit_unavailable();
     }
-    decisions.update(|set| set.apply_decisions(decisions_of(open)));
+    mutant!(
+        "nofold",
+        (),
+        decisions.update(|set| set.apply_decisions(decisions_of(open)))
+    );
     decisions.remember(
         id,
         Outcome {

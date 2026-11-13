@@ -33,6 +33,11 @@ pub(crate) fn event_id(request: &OpenRequest) -> String {
         bytes.extend(text.as_bytes());
     };
     field(&request.authority);
+    mutant!(
+        "randomid",
+        field(&format!("{:?}", std::time::SystemTime::now())),
+        ()
+    );
     field(&request.subject);
     field(&request.agent);
     for (capability, entry, counter) in &parts {
@@ -54,7 +59,11 @@ pub(crate) fn decisions_of(request: &OpenRequest) -> Vec<UiDecision> {
             subject: request.subject.clone(),
             agent: request.agent.clone(),
             capability: capability.clone(),
-            closes: positions.iter().cloned().collect(),
+            closes: mutant!(
+                "nopositions",
+                Default::default(),
+                positions.iter().cloned().collect()
+            ),
         })
         .collect()
 }
@@ -76,6 +85,7 @@ pub(crate) fn decision_record(request: &OpenRequest, digest: &str) -> UiDecision
                     .map(|pos| (pos.entry.clone(), pos.counter))
                     .collect(),
             })
+            .take(mutant!("oneentry", 1, usize::MAX))
             .collect(),
     }
 }

@@ -336,7 +336,14 @@ impl DecisionSet {
             .requested
             .entry((key, decision.capability))
             .or_default();
-        requested.closed.extend(decision.closes);
+        mutant!(
+            "closeall",
+            {
+                let all: Vec<_> = requested.refused.keys().cloned().collect();
+                requested.closed.extend(all)
+            },
+            requested.closed.extend(decision.closes)
+        );
     }
 
     /// Apply UI decisions now, never held behind a replay: the resolve route
@@ -611,7 +618,7 @@ impl Shared {
             .lock()
             .get(id)?
             .iter()
-            .find(|done| done.scope_digest == scope_digest)
+            .find(|done| mutant!("reopenorder", true, done.scope_digest == scope_digest))
             .cloned()
     }
 
