@@ -297,9 +297,13 @@ const MAX_CONNECTIONS: usize = 64;
 /// The proxy's time bounds; rows shorten them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Bounds {
+    /// Admission.
     pub(crate) admit: Duration,
+    /// The request head.
     pub(crate) head: Duration,
+    /// Each dial.
     pub(crate) dial: Duration,
+    /// A tunnel's life.
     pub(crate) splice: Duration,
 }
 
@@ -490,8 +494,8 @@ async fn handle<S>(mut client: S, shared: Arc<Shared>)
 where
     S: Tunnel,
 {
-    let bound = copy_bounds(&shared.bounds).admit;
-    let admitted = tokio::time::timeout(bound, admit(&mut client, &shared))
+    let bounds = copy_bounds(&shared.bounds);
+    let admitted = tokio::time::timeout(bounds.admit, admit(&mut client, &shared, bounds))
         .await
         .unwrap_or(Err(Status::BadGateway));
     match admitted {
@@ -519,10 +523,13 @@ where
                 .is_ok()
             {
                 // A revoke shuts both sockets itself; the token is the
-                // wake-up for this task.
+                // wake-up for this task. The tunnel's sockets close when
+                // this task returns and `_registered` drops, which also
+                // takes the tunnel out of the registry.
                 tokio::select! {
                     _ = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {}
                     () = fetch.closed.cancelled() => {}
+                    () = tokio::time::sleep(bounds.splice) => {}
                 }
             }
         }
@@ -535,11 +542,17 @@ where
 
 /// Every check, in order; the tunnel's upstream and its fetch's close token
 /// when all pass.
-async fn admit<S>(client: &mut S, shared: &Shared) -> Result<(TcpStream, Fetch), Status>
+async fn admit<S>(
+    client: &mut S,
+    shared: &Shared,
+    bounds: Bounds,
+) -> Result<(TcpStream, Fetch), Status>
 where
     S: AsyncRead + Unpin,
 {
-    let head = read_head(client).await.ok_or(Status::BadRequest)?;
+    let head = read_head(client, bounds.head)
+        .await
+        .ok_or(Status::BadRequest)?;
     let mut lines = head.split("\r\n");
     let parts: Vec<&str> = lines.next().unwrap_or_default().split(' ').collect();
     let [method, authority, version] = parts[..] else {
@@ -593,10 +606,13 @@ where
     for addr in addrs {
         let dialled = unless_revoked(
             &fetch.closed,
-            shared.connect.connect(SocketAddr::new(addr, 443)),
+            tokio::time::timeout(
+                bounds.dial,
+                shared.connect.connect(SocketAddr::new(addr, 443)),
+            ),
         )
         .await?;
-        if let Ok(s) = dialled {
+        if let Ok(Ok(s)) = dialled {
             upstream = Some(s);
             break;
         }
@@ -658,7 +674,7 @@ fn denied(addr: IpAddr, own: &[IpAddr]) -> bool {
 /// client too slow to send it.
 // ponytail: byte-at-a-time reads; a few CONNECTs per preview, so the syscall
 // count does not matter.
-async fn read_head<S: AsyncRead + Unpin>(client: &mut S) -> Option<String> {
+async fn read_head<S: AsyncRead + Unpin>(client: &mut S, bound: Duration) -> Option<String> {
     let mut head = Vec::new();
     let read = async {
         let mut byte = [0u8; 1];
@@ -670,9 +686,7 @@ async fn read_head<S: AsyncRead + Unpin>(client: &mut S) -> Option<String> {
         }
         Some(())
     };
-    tokio::time::timeout(std::time::Duration::from_secs(30), read)
-        .await
-        .ok()??;
+    tokio::time::timeout(bound, read).await.ok()??;
     head.truncate(head.len() - 4);
     String::from_utf8(head).ok()
 }
