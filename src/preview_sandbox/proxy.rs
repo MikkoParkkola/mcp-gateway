@@ -9,6 +9,7 @@
 )]
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -127,6 +128,10 @@ impl Live {
 
 struct Shared {
     live: Mutex<Option<Live>>,
+    /// One permit per connection being served.
+    permits: Arc<tokio::sync::Semaphore>,
+    /// How long an admission may take; tests shorten it.
+    admit_bound: Mutex<std::time::Duration>,
     /// Counts fetches, so a tunnel admitted under one fetch can never be
     /// registered into the next.
     fetches: std::sync::atomic::AtomicU64,
@@ -160,39 +165,49 @@ impl AllowlistProxy {
     ) -> io::Result<Self> {
         let shared = Arc::new(Shared {
             live: Mutex::new(None),
+            permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS)),
+            admit_bound: Mutex::new(ADMIT_BOUND),
             fetches: std::sync::atomic::AtomicU64::new(0),
             resolve,
             connect,
             interfaces,
         });
+        // Every fallible step comes first, so a failure leaves no task, port
+        // or directory behind; the tasks are spawned only once all is bound.
         let v4 = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
         v4.set_nonblocking(true)?;
         let port = v4.local_addr()?.port();
-        let mut tasks = vec![tokio::spawn(serve_tcp(
-            TcpListener::from_std(v4)?,
-            shared.clone(),
-        ))];
-        let v6 = std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port))
+        let v4 = TcpListener::from_std(v4)?;
+        let v6 = match std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)) {
+            Ok(l) => {
+                l.set_nonblocking(true)?;
+                Some(TcpListener::from_std(l)?)
+            }
+            // A host with no IPv6 loopback serves IPv4 only; any other
+            // failure (the port taken on `::1`) must not be hidden.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::AddrNotAvailable | io::ErrorKind::Unsupported
+                ) =>
+            {
+                None
+            }
+            Err(e) => return Err(e),
+        };
+        let dir = private_dir()?;
+        let unix_path = dir.join("proxy.sock");
+        let unix = std::os::unix::net::UnixListener::bind(&unix_path)
             .and_then(|l| l.set_nonblocking(true).map(|()| l))
-            .and_then(TcpListener::from_std);
-        if let Ok(v6) = v6 {
+            .and_then(UnixListener::from_std)
+            .inspect_err(|_| {
+                let _ = std::fs::remove_dir_all(&dir);
+            })?;
+        let mut tasks = vec![tokio::spawn(serve_tcp(v4, shared.clone()))];
+        if let Some(v6) = v6 {
             tasks.push(tokio::spawn(serve_tcp(v6, shared.clone())));
         }
-        let dir = std::env::temp_dir().join(format!("mcp-gw-proxy-{}-{port}", std::process::id()));
-        {
-            use std::os::unix::fs::DirBuilderExt as _;
-            std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
-        }
-        let unix_path = dir.join("proxy.sock");
-        let unix = std::os::unix::net::UnixListener::bind(&unix_path)?;
-        unix.set_nonblocking(true)?;
-        let unix = UnixListener::from_std(unix)?;
-        let unix_shared = shared.clone();
-        tasks.push(tokio::spawn(async move {
-            while let Ok((stream, _)) = unix.accept().await {
-                tokio::spawn(handle(stream, unix_shared.clone()));
-            }
-        }));
+        tasks.push(tokio::spawn(serve_unix(unix, shared.clone())));
         Ok(Self {
             port,
             unix_path,
@@ -208,6 +223,12 @@ impl AllowlistProxy {
 
     pub(crate) fn unix_path(&self) -> &Path {
         &self.unix_path
+    }
+
+    /// Shorten the admission bound, for the rows.
+    #[cfg(test)]
+    pub(crate) fn set_admit_bound(&self, bound: std::time::Duration) {
+        *lock_bound(&self.shared.admit_bound) = bound;
     }
 
     /// How many tunnels the live fetch has open, for the rows.
@@ -286,10 +307,80 @@ fn lock(m: &Mutex<Option<Live>>) -> std::sync::MutexGuard<'_, Option<Live>> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The most connections the proxy serves at once, tunnels included. A
+/// preview's fetch opens a handful; the bound is generous, and exists so a
+/// hostile local client cannot spend the gateway's descriptors and tasks
+/// before any credential is checked.
+const MAX_CONNECTIONS: usize = 64;
+
+/// The longest a CONNECT may spend being admitted: reading the request,
+/// resolving, dialling. A tunnel, once admitted, runs until its fetch ends.
+const ADMIT_BOUND: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Serve one accepted connection, or drop it (closing it) when the proxy
+/// is already serving [`MAX_CONNECTIONS`].
+fn serve_connection<S: Tunnel + 'static>(stream: S, shared: &Arc<Shared>) {
+    let Ok(permit) = shared.permits.clone().try_acquire_owned() else {
+        tracing::debug!("preview proxy at its connection bound; dropped a connection");
+        return;
+    };
+    let shared = shared.clone();
+    tokio::spawn(async move {
+        let _permit = permit;
+        handle(stream, shared).await;
+    });
+}
+
+/// An accept error is usually transient (descriptors exhausted, a connection
+/// aborted before it was accepted); the listener must outlive it.
+async fn accept_failed(error: &io::Error) {
+    tracing::debug!(%error, "preview proxy accept failed; carrying on");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+}
+
+fn lock_bound(m: &Mutex<std::time::Duration>) -> std::sync::MutexGuard<'_, std::time::Duration> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 async fn serve_tcp(listener: TcpListener, shared: Arc<Shared>) {
-    while let Ok((stream, _)) = listener.accept().await {
-        tokio::spawn(handle(stream, shared.clone()));
+    loop {
+        match listener.accept().await {
+            Ok((stream, _)) => serve_connection(stream, &shared),
+            Err(error) => accept_failed(&error).await,
+        }
     }
+}
+
+async fn serve_unix(listener: UnixListener, shared: Arc<Shared>) {
+    loop {
+        match listener.accept().await {
+            Ok((stream, _)) => serve_connection(stream, &shared),
+            Err(error) => accept_failed(&error).await,
+        }
+    }
+}
+
+/// A fresh owner-only directory under the temp dir, with a random name so
+/// another local user cannot pre-create it; made exclusively, so an existing
+/// path is an error and a new name is tried.
+fn private_dir() -> io::Result<PathBuf> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    let mut last = io::Error::other("no private directory name was free");
+    for _ in 0..8 {
+        let mut bytes = [0u8; 8];
+        os_random(&mut bytes)?;
+        let mut name = String::new();
+        for byte in bytes {
+            write!(name, "{byte:02x}").expect("String write");
+        }
+        let dir = std::env::temp_dir().join(format!("mcp-gw-proxy-{name}"));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = e,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
 }
 
 /// The only authorities a CONNECT may name, compared byte for byte: no case
@@ -368,10 +459,21 @@ fn register(shared: &Shared, fetch: &Fetch, halves: [Half; 2]) -> Option<u64> {
     Some(id)
 }
 
-/// Forget a finished tunnel's sockets.
-fn unregister(shared: &Shared, fetch: &Fetch, tunnel: u64) {
-    if let Some(live) = lock(&shared.live).as_mut().filter(|l| l.id == fetch.id) {
-        live.tunnels.remove(&tunnel);
+/// A tunnel's place in its fetch's registry, given up when this drops.
+struct Registered {
+    shared: Arc<Shared>,
+    fetch: u64,
+    tunnel: u64,
+}
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        if let Some(live) = lock(&self.shared.live)
+            .as_mut()
+            .filter(|l| l.id == self.fetch)
+        {
+            live.tunnels.remove(&self.tunnel);
+        }
     }
 }
 
@@ -379,7 +481,11 @@ async fn handle<S>(mut client: S, shared: Arc<Shared>)
 where
     S: Tunnel,
 {
-    match admit(&mut client, &shared).await {
+    let bound = *lock_bound(&shared.admit_bound);
+    let admitted = tokio::time::timeout(bound, admit(&mut client, &shared))
+        .await
+        .unwrap_or(Err(Status::BadGateway));
+    match admitted {
         Ok((mut upstream, fetch)) => {
             let (Ok(mine), Ok(theirs)) = (client.half(), upstream.half()) else {
                 let _ = client.write_all(Status::BadGateway.head()).await;
@@ -391,6 +497,12 @@ where
             let Some(tunnel) = register(&shared, &fetch, halves) else {
                 let _ = client.write_all(Status::AuthRequired.head()).await;
                 return;
+            };
+            // Leaves the registry however this task ends, a drop included.
+            let _registered = Registered {
+                shared: shared.clone(),
+                fetch: fetch.id,
+                tunnel,
             };
             if client
                 .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -404,7 +516,6 @@ where
                     () = fetch.closed.cancelled() => {}
                 }
             }
-            unregister(&shared, &fetch, tunnel);
         }
         Err(status) => {
             tracing::debug!(?status, "preview proxy refused a request");
@@ -453,10 +564,8 @@ where
         [h] if h == authority || h == name => {}
         _ => return Err(Status::BadRequest),
     }
-    let addrs = shared
-        .resolve
-        .resolve(name)
-        .await
+    let addrs = unless_revoked(&fetch.closed, shared.resolve.resolve(name))
+        .await?
         .map_err(|_| Status::BadGateway)?;
     if fetch.closed.is_cancelled() {
         return Err(Status::AuthRequired);
@@ -472,7 +581,12 @@ where
     }
     let mut upstream = None;
     for addr in addrs {
-        if let Ok(s) = shared.connect.connect(SocketAddr::new(addr, 443)).await {
+        let dialled = unless_revoked(
+            &fetch.closed,
+            shared.connect.connect(SocketAddr::new(addr, 443)),
+        )
+        .await?;
+        if let Ok(s) = dialled {
             upstream = Some(s);
             break;
         }
@@ -481,6 +595,18 @@ where
     // check that counts there, made under the same lock a revoke takes.
     let upstream = upstream.ok_or(Status::BadGateway)?;
     Ok((upstream, fetch))
+}
+
+/// Runs `work` unless the fetch is revoked first, so a resolver or a dial that
+/// never answers cannot keep a revoked fetch's connection alive.
+async fn unless_revoked<T>(
+    closed: &CancellationToken,
+    work: impl std::future::Future<Output = T>,
+) -> Result<T, Status> {
+    tokio::select! {
+        out = work => Ok(out),
+        () = closed.cancelled() => Err(Status::AuthRequired),
+    }
 }
 
 /// The live fetch's close token when exactly one `Proxy-Authorization`
