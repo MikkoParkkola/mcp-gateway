@@ -570,11 +570,13 @@ async fn a_disabled_accounts_block_starts_an_ordinary_gateway_with_no_custody() 
 /// A hang bound only: every wait below ends on an event.
 const SERVE_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// The fixture gateway with its task store and data directory inside the
-/// fixture root, so a serve never touches the developer's own.
-fn serving(mut gateway: Gateway, fx: &Fixture) -> Gateway {
-    gateway.config.tasks.store_dir = fx.root.join("tasks").display().to_string();
-    gateway.with_data_dir(fx.root.join("data"))
+/// The fixture gateway with its task store and data directory inside a kept temp
+/// dir (a serve opens its task store, which must be kept), so a serve never
+/// touches the developer's own. Hold the returned dir for the whole test.
+fn serving(mut gateway: Gateway) -> (Gateway, std::sync::Arc<tempfile::TempDir>) {
+    let kept = crate::test_dir_keep::kept_tempdir();
+    gateway.config.tasks.store_dir = kept.path().join("tasks").display().to_string();
+    (gateway.with_data_dir(kept.path().join("data")), kept)
 }
 
 fn attached(gateway: &Gateway) -> Arc<crate::personal_accounts::GatewayCustody> {
@@ -593,7 +595,7 @@ fn attached(gateway: &Gateway) -> Arc<crate::personal_accounts::GatewayCustody> 
 async fn an_http_serve_that_returns_early_starts_the_custody_release() {
     let fx = fixture(&Accounts::Configured(KEY_B64));
     fx.seed();
-    let mut gateway = serving(build(&fx.config_path).await.expect("custody starts"), &fx);
+    let (mut gateway, _kept) = serving(build(&fx.config_path).await.expect("custody starts"));
     let custody = attached(&gateway);
     // Below the HTTP minimum: `run` refuses at its start checks.
     gateway.config.server.shutdown_timeout = std::time::Duration::from_secs(1);
@@ -619,7 +621,7 @@ async fn an_http_serve_that_returns_early_starts_the_custody_release() {
 async fn the_stdio_stop_releases_custody_with_the_bounded_call() {
     let fx = fixture(&Accounts::Configured(KEY_B64));
     fx.seed();
-    let gateway = serving(build(&fx.config_path).await.expect("custody starts"), &fx);
+    let (gateway, _kept) = serving(build(&fx.config_path).await.expect("custody starts"));
     let custody = attached(&gateway);
     custody.fail_next_release_spawn();
     let (stdin, input) = tokio::io::duplex(64 * 1024);
@@ -647,7 +649,7 @@ async fn a_cancelled_stdio_serve_starts_the_custody_release() {
     use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
     let fx = fixture(&Accounts::Configured(KEY_B64));
     fx.seed();
-    let gateway = serving(build(&fx.config_path).await.expect("custody starts"), &fx);
+    let (gateway, _kept) = serving(build(&fx.config_path).await.expect("custody starts"));
     let custody = attached(&gateway);
     let (mut stdin, input) = tokio::io::duplex(64 * 1024);
     let (output, reader) = tokio::io::duplex(1 << 20);
