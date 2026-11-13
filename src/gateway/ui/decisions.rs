@@ -30,15 +30,15 @@ use crate::capability::CapabilityBackend;
 use crate::config_reload::Generation;
 use crate::control_plane::ControlPlaneRbac;
 use crate::decisions::{
-    CapabilityChange, DecisionSet, Fold, GRANT_DECISION_KIND, Health, LogPos, Shared, Source,
-    denial_from_record,
+    CapabilityChange, DecisionSet, Fold, GRANT_DECISION_KIND, Health, LogPos, Lookup, OpenRequest,
+    Outcome, Shared, Source, UI_DECISION_KIND, decisions_from_record, decisions_of,
+    denial_from_record, event_id, record_fields,
 };
 use crate::discovery::config_scanner::ConfigScanner;
 use crate::discovery::listing::{CACHE_WINDOW, ClientFiles, DiscoveryCache, Listing, ScanSource};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
-use crate::identity_grants::IdentityGrantAuditEvent;
 
 /// How often the tick re-checks grants, expiry and capability changes.
 const TICK: Duration = Duration::from_secs(2);
@@ -189,49 +189,147 @@ async fn resolve_decision(
     let Some(decisions) = state.meta_mcp.decisions() else {
         return unavailable(&[]);
     };
-    // One resolve at a time: the item is read and judged under this mutex.
+    // One resolve at a time: the item is read, judged and written under this
+    // mutex, so a second resolve of an id sees what the first one did.
     let _resolving = decisions.resolving().await;
-    let Some(item) = decisions.item(&id) else {
-        return resolve_error(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "no open decision has this id",
-        );
+    if let Some(done) = decisions.outcome(&id) {
+        return answer_again(&done, &request);
+    }
+    let open = match decisions.request(&id) {
+        Err(sources) => return unavailable(&sources),
+        Ok(None) => {
+            return resolve_error(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "no open decision has this id",
+            );
+        }
+        Ok(Some(Lookup::Other)) => {
+            return resolve_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "not_resolvable",
+                "only access requests can be resolved here yet",
+            );
+        }
+        Ok(Some(Lookup::Access(open))) => open,
     };
-    judge_item(&item, &request.scope_digest)
+    if let Some(changed) = check_scope(&open, &request.scope_digest) {
+        return changed;
+    }
+    match request.action {
+        ResolveAction::Deny => deny(&state, decisions, &actor, &id, &open, &request),
+        ResolveAction::Accept => resolve_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "not_available_yet",
+            "accepting an access request is not available yet",
+        ),
+    }
 }
 
-/// What a resolve may do with one open item, judged from that one snapshot:
-/// only an access request, only at the scope the admin was shown. Neither
-/// action has an effect in this slice, so a match is `not_available_yet`.
-fn judge_item(item: &Value, scope_digest: &str) -> Response {
-    if item.get("kind").and_then(Value::as_str) != Some("access_request") {
-        return resolve_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "not_resolvable",
-            "only access requests can be resolved here yet",
-        );
-    }
-    let current = item
+/// The scope the admin was shown against the request as it is now: a
+/// request that changed since is answered with what it is now, and nothing
+/// is written.
+fn check_scope(open: &OpenRequest, scope_digest: &str) -> Option<Response> {
+    let current = open
+        .item
         .get("scope_digest")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if current != scope_digest {
-        return (
+    (current != scope_digest).then(|| {
+        (
             StatusCode::CONFLICT,
             Json(json!({
                 "error": "scope_changed",
                 "message": "the request changed since it was listed; nothing was written",
-                "scope": item.get("scope").cloned().unwrap_or(Value::Null),
+                "scope": open.item.get("scope").cloned().unwrap_or(Value::Null),
                 "scope_digest": current,
             })),
         )
-            .into_response();
+            .into_response()
+    })
+}
+
+/// A resolve of an id that was already resolved: the same scope digest gets
+/// the recorded outcome and nothing is written; another is a conflict.
+fn answer_again(done: &Outcome, request: &ResolveRequest) -> Response {
+    if done.scope_digest == request.scope_digest && request.action == ResolveAction::Deny {
+        return Json(json!({
+            "ok": true,
+            "action": "deny",
+            "event_id": done.event_id,
+            "already_recorded": true,
+        }))
+        .into_response();
     }
     resolve_error(
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "not_available_yet",
-        "resolving an access request is not available yet",
+        StatusCode::CONFLICT,
+        "already_resolved",
+        "this request was already resolved",
+    )
+}
+
+/// The most refusals one deny note names: it must fit one log record.
+const MAX_DENY_POSITIONS: usize = 20_000;
+
+/// Deny `open`: write one note naming every refusal the admin was shown,
+/// then fold it into the set. The write and the fold run with no await
+/// between them, so a dropped request cannot leave a note the set does not
+/// know; the log's own delivery of the note later changes nothing.
+fn deny(
+    state: &AppState,
+    decisions: &Shared,
+    actor: &crate::control_plane::ControlPlaneActor,
+    id: &str,
+    open: &OpenRequest,
+    request: &ResolveRequest,
+) -> Response {
+    let total: usize = open
+        .entries
+        .iter()
+        .map(|(_, positions)| positions.len())
+        .sum();
+    if total > MAX_DENY_POSITIONS {
+        return resolve_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "request_too_large",
+            "too many refusals to resolve at once",
+        );
+    }
+    let (Some(log), Ok(now)) = (
+        state.meta_mcp.transparency_logger.as_ref(),
+        crate::clock::utc_now(),
+    ) else {
+        return audit_unavailable();
+    };
+    let event_id = event_id(open);
+    let fields = record_fields(
+        open,
+        request.reason.trim(),
+        &request.scope_digest,
+        &event_id,
+        now,
+    );
+    let envelope = crate::security::audit::AuditEnvelope::governance(&actor.actor_id);
+    if log.append_event(fields, &envelope).is_err() {
+        return audit_unavailable();
+    }
+    decisions.update(|set| set.apply_decisions(decisions_of(open)));
+    decisions.remember(
+        id,
+        Outcome {
+            event_id: event_id.clone(),
+            scope_digest: request.scope_digest.clone(),
+        },
+    );
+    Json(json!({"ok": true, "action": "deny", "event_id": event_id})).into_response()
+}
+
+/// The answer when the note could not be written: nothing was folded.
+fn audit_unavailable() -> Response {
+    resolve_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "audit_unavailable",
+        "the decision could not be recorded; nothing was changed",
     )
 }
 
@@ -295,8 +393,8 @@ fn start_with(
     let config_path: Option<Arc<Path>> = config_path.map(Arc::from);
     let shared = Arc::new(Shared::with_key(rand::rng().random()));
     meta.set_decisions(Arc::clone(&shared));
-    // UI decisions (a decline, a consumed allow) are first written by the
-    // resolve routes; this build writes none, so there is none to read.
+    // UI decisions are notes in the transparency log (the Access source); no
+    // record is read from the control-plane audit, so that source is ready.
     shared.update(|set| set.set_health(Source::ControlPlane, Health::Ready));
     let latest = start_discovery(
         meta,
@@ -316,14 +414,39 @@ fn start_with(
             // is the same record by its entry hash. The reader runs under
             // the log's lock, so it only hands off: no lock, no wait.
             let full = Arc::clone(&dropped);
+            let denials = sender.clone();
             log.subscribe(
                 GRANT_DECISION_KIND,
                 Arc::new(
                     move |record: &Map<String, Value>, hash: &str, counter: u64| {
                         if let Some(event) = denial_from_record(record)
-                            && sender.try_send((grant_pos(hash, counter), event)).is_err()
+                            && denials
+                                .try_send((grant_pos(hash, counter), Fold::Denial(event)))
+                                .is_err()
                         {
                             full.mark();
+                        }
+                    },
+                ),
+            );
+            // A deny is a note in the same log, so a refusal and the decision
+            // that closed it leave at one retention edge. One note carries a
+            // decision per capability; each is folded at the note's position.
+            let full = Arc::clone(&dropped);
+            log.subscribe(
+                UI_DECISION_KIND,
+                Arc::new(
+                    move |record: &Map<String, Value>, hash: &str, counter: u64| {
+                        let Some(decisions) = decisions_from_record(record) else {
+                            return;
+                        };
+                        for decision in decisions {
+                            if sender
+                                .try_send((grant_pos(hash, counter), Fold::Decided(decision)))
+                                .is_err()
+                            {
+                                full.mark();
+                            }
                         }
                     },
                 ),
@@ -380,7 +503,7 @@ impl Dropped {
 /// make the count wrong, so the source reads unavailable (the snapshot
 /// answers `None`) until a replay has read the log again.
 async fn apply_live(
-    mut receiver: tokio::sync::mpsc::Receiver<(LogPos, IdentityGrantAuditEvent)>,
+    mut receiver: tokio::sync::mpsc::Receiver<(LogPos, Fold)>,
     dropped: Arc<Dropped>,
     replays: Arc<Replays>,
 ) {
@@ -389,7 +512,7 @@ async fn apply_live(
         tokio::select! {
             note = receiver.recv() => {
                 let Some((pos, event)) = note else { return };
-                shared.update(|set| set.live(pos, Fold::Denial(event)));
+                shared.update(|set| set.live(pos, event));
             }
             () = dropped.wake.notified() => {}
         }
@@ -453,6 +576,26 @@ fn replay_grant_decisions(path: &Path, shared: &Shared) -> bool {
         ) {
             shared.update(|set| set.replayed(grant_pos(hash, counter), Fold::Denial(event)));
         }
+    });
+    // The decisions are in the same log; read after the refusals, though a
+    // decision is order-independent.
+    let read = read.and_then(|denials| {
+        replay::records(path, UI_DECISION_KIND, |record, hash| {
+            if let (Some(decisions), Some(counter)) = (
+                decisions_from_record(record),
+                record.get("counter").and_then(Value::as_u64),
+            ) {
+                for decision in decisions {
+                    shared.update(|set| {
+                        set.replayed(grant_pos(hash, counter), Fold::Decided(decision));
+                    });
+                }
+            }
+        })
+        .map(|decided| replay::Replayed {
+            records: denials.records + decided.records,
+            unreadable: denials.unreadable + decided.unreadable,
+        })
     });
     match read {
         Ok(replayed) => {

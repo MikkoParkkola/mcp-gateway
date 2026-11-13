@@ -9,7 +9,7 @@
 //! grant row covers it. A changed capability is one capability file whose
 //! bytes no longer match their pin.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
@@ -20,6 +20,11 @@ use crate::identity_grants::{
 
 mod display;
 mod items;
+mod record;
+pub(crate) use items::OpenRequest;
+pub(crate) use record::{
+    UI_DECISION_KIND, decisions_from_record, decisions_of, event_id, record_fields,
+};
 
 #[cfg(test)]
 mod tests;
@@ -72,8 +77,19 @@ pub(crate) struct UiDecision {
     pub(crate) agent: String,
     /// The capability decided on.
     pub(crate) capability: String,
-    /// When it was decided.
-    pub(crate) at: DateTime<Utc>,
+    /// Which refusals it closes.
+    pub(crate) closes: Closes,
+}
+
+/// The refusals a UI decision closes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Closes {
+    /// Every refusal at or before this time.
+    Until(DateTime<Utc>),
+    /// Exactly these refusals, by log position: the ones the admin was
+    /// shown. A later refusal, even at an equal time, has another position
+    /// and stays open.
+    Positions(BTreeSet<LogPos>),
 }
 
 /// One event for the set, from either log.
@@ -81,14 +97,7 @@ pub(crate) struct UiDecision {
 pub(crate) enum Fold {
     /// A grant-decision note.
     Denial(IdentityGrantAuditEvent),
-    /// A UI decision from the control-plane audit.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "UI decisions are first written by the resolve routes"
-        )
-    )]
+    /// A UI decision.
     Decided(UiDecision),
 }
 
@@ -137,6 +146,8 @@ struct Requested {
     tool: Option<String>,
     scope: Option<GrantScope>,
     decided: Option<DateTime<Utc>>,
+    /// Refusals a decision closed by position; never moves `decided`.
+    closed: BTreeSet<LogPos>,
 }
 
 impl Requested {
@@ -155,6 +166,7 @@ impl Requested {
         self.refused
             .iter()
             .filter(move |(pos, _)| edge.is_none_or(|edge| pos.counter >= edge))
+            .filter(move |(pos, _)| !self.closed.contains(*pos))
             .filter(move |(_, at)| self.decided.is_none_or(|decided| **at > decided))
     }
 }
@@ -296,7 +308,10 @@ impl DecisionSet {
         // Refusals whose record left the log can never count again.
         self.requested.retain(|_, requested| {
             requested.refused.retain(|pos, _| pos.counter >= edge);
-            !requested.refused.is_empty() || requested.decided.is_some()
+            requested.closed.retain(|pos| pos.counter >= edge);
+            !requested.refused.is_empty()
+                || requested.decided.is_some()
+                || !requested.closed.is_empty()
         });
         self.refresh();
     }
@@ -326,23 +341,39 @@ impl DecisionSet {
                     requested.scope = Some(event.scope);
                 }
             }
-            Fold::Decided(decision) => {
-                let key = AccessKey {
-                    authority: decision.authority,
-                    subject: decision.subject,
-                    agent: decision.agent,
-                };
-                let requested = self
-                    .requested
-                    .entry((key, decision.capability))
-                    .or_default();
-                requested.decided = Some(
-                    requested
-                        .decided
-                        .map_or(decision.at, |old| old.max(decision.at)),
-                );
-            }
+            Fold::Decided(decision) => self.fold_decided(decision),
         }
+    }
+
+    /// Apply one UI decision: a union or a max, so order and repeats change
+    /// nothing.
+    fn fold_decided(&mut self, decision: UiDecision) {
+        let key = AccessKey {
+            authority: decision.authority,
+            subject: decision.subject,
+            agent: decision.agent,
+        };
+        let requested = self
+            .requested
+            .entry((key, decision.capability))
+            .or_default();
+        match decision.closes {
+            Closes::Until(at) => {
+                requested.decided = Some(requested.decided.map_or(at, |old| old.max(at)));
+            }
+            Closes::Positions(positions) => requested.closed.extend(positions),
+        }
+    }
+
+    /// Apply UI decisions now, never held behind a replay: the resolve route
+    /// folds what it just wrote so the item leaves the queue at once. A
+    /// decision is order-independent, so the log's own delivery of the same
+    /// record later changes nothing.
+    pub(crate) fn apply_decisions(&mut self, decisions: Vec<UiDecision>) {
+        for decision in decisions {
+            self.fold_decided(decision);
+        }
+        self.refresh();
     }
 
     /// Rebuild the items; the revision rises only if what is shown changed.
@@ -565,6 +596,27 @@ pub(crate) struct Shared {
     /// Serializes the resolve route: one resolve at a time, so a second
     /// resolve of an id sees what the first one changed.
     resolve: tokio::sync::Mutex<()>,
+    /// What each resolved item id answered, so a retry of the same resolve
+    /// is answered from this and writes nothing. Held in memory: item ids
+    /// do not survive a restart.
+    outcomes: parking_lot::Mutex<BTreeMap<String, Outcome>>,
+}
+
+/// What a resolve recorded, for the retry of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Outcome {
+    /// The id of the note it wrote.
+    pub(crate) event_id: String,
+    /// The scope digest it was resolved at.
+    pub(crate) scope_digest: String,
+}
+
+/// What an open decision id names.
+pub(crate) enum Lookup {
+    /// An access request, with the raw parts a decision names.
+    Access(Box<items::OpenRequest>),
+    /// Another kind of decision, which a resolve does not take.
+    Other,
 }
 
 impl Shared {
@@ -573,7 +625,18 @@ impl Shared {
         Self {
             set: parking_lot::RwLock::new(DecisionSet::with_key(key)),
             resolve: tokio::sync::Mutex::new(()),
+            outcomes: parking_lot::Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// What resolving `id` answered, if it was resolved.
+    pub(crate) fn outcome(&self, id: &str) -> Option<Outcome> {
+        self.outcomes.lock().get(id).cloned()
+    }
+
+    /// Remember what resolving `id` answered.
+    pub(crate) fn remember(&self, id: &str, outcome: Outcome) {
+        self.outcomes.lock().insert(id.to_owned(), outcome);
     }
 
     /// Hold the resolve mutex. Taken before anything else of a resolve.
@@ -581,15 +644,25 @@ impl Shared {
         self.resolve.lock().await
     }
 
-    /// One open item by id, cloned under a single read lock: its fields are
-    /// one consistent snapshot of the set.
-    pub(crate) fn item(&self, id: &str) -> Option<Value> {
-        self.set
-            .read()
+    /// The open access request with `id`, read under one lock: the listed
+    /// item and the raw refusal positions its digest covers. `Err` names the
+    /// sources not yet readable; `Ok(None)` is no such open request.
+    pub(crate) fn request(
+        &self,
+        id: &str,
+    ) -> Result<Option<Lookup>, Vec<(&'static str, &'static str)>> {
+        let set = self.set.read();
+        if set.view().is_none() {
+            return Err(set.unavailable());
+        }
+        if let Some(request) = items::open_request(&set, id) {
+            return Ok(Some(Lookup::Access(Box::new(request))));
+        }
+        Ok(set
             .items
             .iter()
-            .find(|item| item.get("id").and_then(Value::as_str) == Some(id))
-            .cloned()
+            .any(|item| item.get("id").and_then(Value::as_str) == Some(id))
+            .then_some(Lookup::Other))
     }
 
     /// Apply `change` under the write lock.

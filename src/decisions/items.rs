@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
-use super::{AccessKey, DecisionSet, display};
+use super::{AccessKey, DecisionSet, LogPos, display};
 use crate::identity_grants::GrantScope;
 
 /// An opaque id: a keyed digest of the kind and its identifying tuple, in
@@ -323,4 +323,56 @@ fn access_requests(set: &DecisionSet, blocks: &Blocks) -> Vec<Dated> {
     }
 
     requests
+}
+
+/// One open access request as a resolve needs it: the listed item, whose
+/// digest the admin saw, and the raw parts a decision names.
+pub(crate) struct OpenRequest {
+    /// The item exactly as listed.
+    pub(crate) item: Value,
+    /// The subject's authority.
+    pub(crate) authority: String,
+    /// The subject id.
+    pub(crate) subject: String,
+    /// The proven agent, `source:id`.
+    pub(crate) agent: String,
+    /// Each open capability with every pending refusal's position.
+    pub(crate) entries: Vec<(String, Vec<LogPos>)>,
+}
+
+/// The open access request with `item_id`, or `None` if none is open. The
+/// raw parts use the same open-ness rule as the list, so they are the
+/// refusals its digest covers.
+pub(super) fn open_request(set: &DecisionSet, item_id: &str) -> Option<OpenRequest> {
+    let item = set
+        .items
+        .iter()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(item_id))?
+        .clone();
+    let mut found: Option<(&AccessKey, Vec<(String, Vec<LogPos>)>)> = None;
+    for ((access, capability), requested) in &set.requested {
+        let tuple = json!([access.authority, access.subject, access.agent]);
+        if id(&set.key, "access_request", &tuple) != item_id {
+            continue;
+        }
+        let pending: Vec<LogPos> = requested
+            .pending_refusals(set.edge)
+            .map(|(pos, _)| pos.clone())
+            .collect();
+        if pending.is_empty() || set.covered(access, capability, requested) {
+            continue;
+        }
+        found
+            .get_or_insert_with(|| (access, Vec::new()))
+            .1
+            .push((capability.clone(), pending));
+    }
+    let (access, entries) = found?;
+    Some(OpenRequest {
+        item,
+        authority: access.authority.clone(),
+        subject: access.subject.clone(),
+        agent: access.agent.clone(),
+        entries,
+    })
 }

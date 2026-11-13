@@ -677,3 +677,108 @@ async fn one_more_refusal_of_a_listed_capability_is_a_changed_request() {
     assert_eq!(body["error"], "scope_changed");
     assert_eq!(body["scope_digest"], json!(after));
 }
+
+// ---- deny ----
+
+/// The `ui_decision` notes the log kept, oldest first.
+fn kept_decisions(dir: &tempfile::TempDir) -> Vec<Value> {
+    let text = std::fs::read_to_string(dir.path().join("transparency.jsonl")).expect("the log");
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["kind"] == "ui_decision")
+        .collect()
+}
+
+fn open_count(body: &Value) -> usize {
+    body["decisions"].as_array().map_or(0, Vec::len)
+}
+
+#[tokio::test]
+async fn a_deny_writes_one_note_and_the_item_is_gone_now_and_after_a_restart() {
+    let (state, log, id, digest, (dir, _store)) = one_request().await;
+    let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["action"], "deny");
+
+    let (_, listed) = get(&state, true).await;
+    assert_eq!(open_count(&listed), 0, "gone at once: {listed}");
+    let notes = kept_decisions(&dir);
+    assert_eq!(notes.len(), 1, "one atomic note: {notes:?}");
+    assert_eq!(notes[0]["event_id"], body["event_id"]);
+    assert_eq!(notes[0]["decision"], "decline");
+    assert!(
+        notes[0].to_string().contains("decisions-route"),
+        "the note names the caller: {}",
+        notes[0]
+    );
+
+    // A restart: a new set over the same log replays the refusal and the
+    // decision, and the request stays closed.
+    let (state2, _store2) = state_with(&log).await;
+    let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let _tick = start(&state2.meta_mcp, None, shutdown);
+    let after = served_when(&state2, |body| body["missing_kinds"] == json!([])).await;
+    assert_eq!(open_count(&after), 0, "closed after the replay: {after}");
+}
+
+#[tokio::test]
+async fn a_deny_closes_the_refusals_it_was_shown_and_not_a_later_one() {
+    let (state, log, id, digest, _keep) = one_request().await;
+    // The refusal the admin saw was written at `now`; a later one carries
+    // the same time and must still reopen the request.
+    let (status, _) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::OK);
+    let now = crate::clock::utc_now().expect("a readable clock");
+    write(&log, note("stripe.charges", now));
+    let body = served_when(&state, |body| open_count(body) == 1).await;
+    assert_eq!(body["decisions"][0]["refused_calls"], json!(1), "{body}");
+}
+
+#[tokio::test]
+async fn a_deny_of_a_two_capability_request_closes_both_in_one_note() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let now = crate::clock::utc_now().expect("a readable clock");
+    write(&log, note("stripe.charges", now));
+    write(&log, note("stripe.refunds", now));
+    let (state, _store) = state_with(&log).await;
+    let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let _tick = start(&state.meta_mcp, None, shutdown);
+    let body = served_when(&state, |body| scope_len(body) == 2).await;
+    let id = body["decisions"][0]["id"].as_str().expect("id").to_owned();
+    let digest = body["decisions"][0]["scope_digest"]
+        .as_str()
+        .expect("d")
+        .to_owned();
+
+    let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, listed) = get(&state, true).await;
+    assert_eq!(open_count(&listed), 0, "{listed}");
+    let notes = kept_decisions(&dir);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_eq!(notes[0]["entries"].as_array().map(Vec::len), Some(2));
+
+    // A later refusal of one capability reopens only that one.
+    write(&log, note("stripe.refunds", now));
+    let body = served_when(&state, |body| open_count(body) == 1).await;
+    assert_eq!(scope_len(&body), 1, "{body}");
+}
+
+#[tokio::test]
+async fn a_retry_of_a_deny_answers_the_recorded_outcome_and_writes_nothing() {
+    let (state, _log, id, digest, (dir, _store)) = one_request().await;
+    let (status, first) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, again) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["event_id"], first["event_id"]);
+    assert_eq!(again["already_recorded"], json!(true));
+    assert_eq!(kept_decisions(&dir).len(), 1, "a retry appends nothing");
+
+    let other = "1".repeat(64);
+    let (status, body) = resolve(&state, true, &id, deny_body(&other).to_string()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "already_resolved");
+}

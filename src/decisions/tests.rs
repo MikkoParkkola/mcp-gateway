@@ -96,7 +96,7 @@ fn decision(capability: &str, minute: i64) -> UiDecision {
         subject: "alice".to_string(),
         agent: AGENT.to_string(),
         capability: capability.to_string(),
-        at: at(minute),
+        closes: super::Closes::Until(at(minute)),
     }
 }
 
