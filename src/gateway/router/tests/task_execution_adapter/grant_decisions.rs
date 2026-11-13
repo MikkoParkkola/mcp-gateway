@@ -43,7 +43,7 @@ pub(super) async fn armed(
     policy: AuditFailurePolicy,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Armed {
-    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let endpoint = Endpoint::start(hold).await;
     let log = logger(&dir, policy);
     let sink = Arc::clone(&log);

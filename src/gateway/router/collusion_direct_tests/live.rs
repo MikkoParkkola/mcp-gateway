@@ -234,7 +234,7 @@ async fn sg6_route_observe_then_block_refuses() {
 /// is staged under a startup `off`.
 #[tokio::test]
 async fn sg7_a_read_admitted_under_off_is_held_once_observe_is_published() {
-    let scratch = tempfile::tempdir().expect("a private folder");
+    let scratch = crate::test_dir_keep::kept_tempdir();
     let log = scratch.path().join("audit.ndjson");
     let fx = fixture(Setup {
         action: CollusionAction::Off,

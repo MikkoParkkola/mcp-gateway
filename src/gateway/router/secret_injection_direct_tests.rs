@@ -266,7 +266,7 @@ fn sends(fx: &super::direct_guards_fixture::Fx) -> (usize, bool) {
 /// the audit log. Each sink is first shown to have recorded the call.
 #[tokio::test]
 async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
-    let audit_dir = tempfile::tempdir().expect("audit directory");
+    let audit_dir = crate::test_dir_keep::kept_tempdir();
     let audit = audit_dir.path().join("audit.jsonl");
     let fx = fixture_with_secrets(vec![argument_rule()], None, Some(audit.clone())).await;
     let session = initialize(&fx, "k-std").await;
