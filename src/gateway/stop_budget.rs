@@ -12,14 +12,15 @@ use tokio::time::Instant;
 const LISTENER_MIN: Duration = Duration::from_millis(100);
 /// Reserved for the post-listener, pre-backend work: saves, window close, drains.
 const POST_RESERVE: Duration = Duration::from_millis(250);
-/// Reserved for the backend stage: the stdio reaper's kill reserve (6 s), the
-/// graceful window a stopping nested gateway needs before it (3 s: a hurried
-/// nested gateway took 2.3 s to take its own leaf down in the nested stop rows),
-/// and 0.4 s of first-step and scheduling allowances for the reaper's phases.
-/// With less, a parent that reaches its backend stage after the listener has
-/// used its grace group-kills a busy nested gateway first, and the leaf, which
-/// has its own process group, is orphaned.
-const BACKEND_RESERVE: Duration = Duration::from_millis(9_400);
+/// Reserved for the backend stage: the stdio reaper's kill reserve (6 s) and a
+/// graceful window of 4.4 s, which the reaper splits into the wait after stdin
+/// closes (2.9 s, longer than the 2.27 s a third-split gave before the SIGTERM
+/// floor) and the wait after SIGTERM (1.5 s, the reaper's nested need: a nested
+/// gateway only learns to hurry at the SIGTERM, and its hurried path takes 0.37 s
+/// measured, about 1.35 s worst case). With less, a parent that reaches its
+/// backend stage after the listener has used its grace group-kills a busy nested
+/// gateway first, and the leaf, which has its own process group, is orphaned.
+const BACKEND_RESERVE: Duration = Duration::from_millis(10_400);
 /// Reserved for retirement: runtime and main-stack coordination, then the logger.
 const TERMINAL_RESERVE: Duration = Duration::from_millis(2_250);
 /// The logger's share of the terminal reserve: the runtime wait ends this long

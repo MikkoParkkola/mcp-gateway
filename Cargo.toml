@@ -268,7 +268,11 @@ mimalloc = { version = "0.1.52", default-features = false }
 # promoted to direct, with no features beyond what is already built.
 # `core-foundation` is the `CFData` the keychain writer hands `SecItemAdd`,
 # already in the lock file through `security-framework`.
+# ADR-030: the macOS process table behind the descendant sweep, used only by
+# `src/transport/stdio_sweep_macos.rs`. `libc` is already in the lock file; only
+# `proc_listallpids` and `proc_pidinfo(PROC_PIDTBSDINFO)` are called.
 [target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 core-foundation = { version = "0.10", default-features = false }
 security-framework = { version = "3.7", default-features = false }
 
