@@ -397,11 +397,12 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         held.is_ok(),
         "precondition: the write holds stdin: {held:?}"
     );
+    // A signal-0 probe: it sends nothing, so it is not a raw kill.
     let live = |pid: &str| {
-        std::process::Command::new("kill")
-            .args(["-0", pid])
-            .status()
-            .is_ok_and(|s| s.success())
+        pid.parse::<i32>()
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
     };
     assert!(
         live(escaped.trim()),
