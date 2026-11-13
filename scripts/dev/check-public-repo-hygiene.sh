@@ -197,6 +197,7 @@ root_doc_allowlist=(
   "demo.tape"
   "gateway.example.yaml"
   "glama.json"
+  "rust-toolchain.toml"
   "security-controls.toml"
   "server.json"
   "smithery.yaml"
