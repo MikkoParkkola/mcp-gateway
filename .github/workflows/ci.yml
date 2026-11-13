@@ -1111,7 +1111,7 @@ jobs:
           python3 scripts/release/upgrading_fragments.py assemble --dry-run > "$RUNNER_TEMP/UPGRADING-4.0.md"
           export UPGRADING_DOC="$RUNNER_TEMP/UPGRADING-4.0.md"
           for target in "--test upgrading_summary_rows" "--lib upgrade_notice_tests"; do
-            echo "phase compile: cargo test $target at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l)"
+            echo "phase compile: cargo test $target at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^(Mem|Swap):/ {printf "%s total %s used %s free %s; ", $1, $2, $3, $4}')"
             # shellcheck disable=SC2086 # $target is two words on purpose
             cargo test --all-features $target --no-run
             echo "phase run: cargo test $target at $(date -u +%T)"
@@ -1305,7 +1305,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gnome-keyring libsecret-tools libglib2.0-bin dbus
       - name: Build the test binary outside the session
-        run: cargo test --all-features --lib --no-run
+        # The phase line (numbers only: the runner user's process count and `free -m` rows) tells a build that waits
+        # on a lock from one that thrashes on memory when this step hangs; a hang here ran to the job limit once.
+        # Pinned by scripts/ci/test_upgrading_step_bounds.py.
+        run: |
+          echo "phase compile: cargo test --lib --no-run at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^(Mem|Swap):/ {printf "%s total %s used %s free %s; ", $1, $2, $3, $4}')"
+          cargo test --all-features --lib --no-run
       - name: Read a stored entry, then refuse it locked
         run: |
           dbus-run-session -- bash -euo pipefail -c '

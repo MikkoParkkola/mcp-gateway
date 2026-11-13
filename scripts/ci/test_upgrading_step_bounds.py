@@ -70,9 +70,36 @@ def problems(text: str) -> list[str]:
     compile_line = next((l for l in script.split("\n") if re.search(r"phase[: ]+compile", l)), "")
     if not re.search(count, compile_line):
         out.append("the `phase compile` line does not print the runner user's process count")
+    if "free -m" not in compile_line:
+        out.append("the `phase compile` line does not print `free -m` (memory and swap rows)")
     if re.search(r"\b(ps|pgrep|pstree|lsof)\b|/proc/|\bjobs\s+-l\b|\btop\b", re.sub(count, "", script)):
         out.append("the step lists processes (their arguments can print secrets); only the pid count form is allowed")
     return out
+
+
+KEYCHAIN_STEP = "Build the test binary outside the session"
+
+
+def keychain_problems(text: str) -> list[str]:
+    """The keychain job's build step hung to the job limit once: it prints the same phase line (count + memory)."""
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if re.match(rf"^\s*- name: {re.escape(KEYCHAIN_STEP)}", line):
+            indent = len(line) - len(line.lstrip())
+            body = []
+            for nxt in lines[i + 1:]:
+                if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= indent:
+                    break
+                body.append(nxt)
+            body = "\n".join(body)
+            pl = next((l for l in body.split("\n") if re.search(r"phase[: ]+compile", l)), "")
+            out = []
+            if not pl:
+                out.append(f"keychain step '{KEYCHAIN_STEP}': no `phase compile` line")
+            elif "free -m" not in pl or not re.search(r'ps -u "\$\(id -u\)" -o pid= \| wc -l', pl):
+                out.append(f"keychain step '{KEYCHAIN_STEP}': phase line lacks the process count or `free -m`")
+            return out
+    return [f"keychain step '{KEYCHAIN_STEP}' is missing"]
 
 
 GOOD = '''      - name: UPGRADING checks on the assembled guide (suffix)
@@ -81,7 +108,7 @@ GOOD = '''      - name: UPGRADING checks on the assembled guide (suffix)
         run: |
           set -euo pipefail
           for target in "--test a" "--lib b"; do
-            echo "phase compile: $target at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l)"
+            echo "phase compile: $target at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^Mem:/ {print $3}')"
             cargo test --all-features $target --no-run
             echo "phase run: $target at $(date -u +%T)"
             cargo test --all-features $target 2>&1 | tee x.log
@@ -97,28 +124,49 @@ def self_test() -> int:
         ("no timeout", GOOD.replace("        timeout-minutes: 20\n", ""), 1),
         ("a timeout of 60", GOOD.replace("timeout-minutes: 20", "timeout-minutes: 60"), 1),
         ("a timeout of 5", GOOD.replace("timeout-minutes: 20", "timeout-minutes: 5"), 1),
-        ("no compile phase line", GOOD.replace('echo "phase compile: $target at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l)"\n', ""), 1),
+        ("no compile phase line", GOOD.replace('echo "phase compile: $target at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk \'/^Mem:/ {print $3}\')"\n', ""), 1),
         ("no run phase line", GOOD.replace('echo "phase run: $target at $(date -u +%T)"\n', ""), 1),
         ("no --no-run", GOOD.replace(" --no-run", ""), 1),
         ("a process listing", GOOD.replace("set -euo pipefail\n", "set -euo pipefail\n          ps -ef\n"), 1),
         ("a listing with arguments next to the count", GOOD.replace("set -euo pipefail\n", "set -euo pipefail\n          ps -u \"$(id -u)\" -o pid=,args=\n"), 1),
         ("no process count in the compile phase line", GOOD.replace(', runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l)', ""), 1),
+        ("no free -m in the compile phase line", GOOD.replace(', memory MB: $(free -m | awk \'/^Mem:/ {print $3}\')', ""), 1),
         ("pgrep instead of the pid count", GOOD.replace('$(ps -u "$(id -u)" -o pid= | wc -l)', "$(pgrep -a cargo)"), 1),
         ("the step missing", GOOD.replace(STEP, "something else"), 1),
         ("the timeout belongs to the next step, not this one", GOOD.replace("        timeout-minutes: 20\n", "").replace("\n  test:\n", "\n      - name: other\n        timeout-minutes: 20\n        run: x\n"), 1),
     ]
+    kgood = f"""      - name: {KEYCHAIN_STEP}
+        run: |
+          echo "phase compile: x at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^Mem:/ {{print $3}}')"
+          cargo test --all-features --lib --no-run
+      - name: next
+        run: x
+"""
+    kcases = [
+        ("keychain step with the phase line", kgood, 0),
+        ("keychain step without the phase line", kgood.replace("phase compile", "phase xx"), 1),
+        ("keychain step without free -m", kgood.replace("free -m", "true"), 1),
+        ("keychain step missing", kgood.replace(KEYCHAIN_STEP, "other"), 1),
+    ]
     wrong = 0
+    for label, text, want in kcases:
+        got = len(keychain_problems(text))
+        ok = (got == 0) == (want == 0)
+        wrong += not ok
+        print(f"{'ok   ' if ok else 'WRONG'} {label}: {got} problem(s), want {'some' if want else 'none'}")
+    cases = cases
     for label, text, want in cases:
         got = len(problems(text))
         ok = (got == 0) == (want == 0)
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} {label}: {got} problem(s), want {'some' if want else 'none'}")
-    print(f"self-test: {len(cases) - wrong} ok, {wrong} wrong")
+    print(f"self-test: {len(cases) + len(kcases) - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 
 def main() -> int:
-    ps = problems(WORKFLOW.read_text())
+    text = WORKFLOW.read_text()
+    ps = problems(text) + keychain_problems(text)
     for p in ps:
         print(f"::error::ci.yml: step '{STEP}': {p}")
     print(f"int-b upgrading step: {len(ps)} problem(s)")
