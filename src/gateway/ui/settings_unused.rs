@@ -39,7 +39,3 @@ pub(super) async fn delete_unused_entry(
     }
     StatusCode::NOT_IMPLEMENTED.into_response()
 }
-
-#[cfg(test)]
-#[path = "settings_unused_tests.rs"]
-mod tests;

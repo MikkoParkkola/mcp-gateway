@@ -569,3 +569,6 @@ mod route_tests;
 #[cfg(test)]
 #[path = "settings_support_tests.rs"]
 mod test_support;
+#[cfg(test)]
+#[path = "settings_unused_tests.rs"]
+mod unused_route_tests;

@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use super::{SecretStore, Vault};
+use super::{SecretStore, StoreKind, UnusedEntry, Vault};
 
 /// Every source that can name an entry, read fresh for each check.
 pub(crate) struct NamingSources {
@@ -83,9 +83,42 @@ pub(crate) fn delete_unused(
     Err(DeleteRefused::Failed("not built".to_owned()))
 }
 
+/// What [`listing`] found: unused entries, and each store that could not be read.
+#[derive(Debug, Default)]
+pub(crate) struct Listing {
+    pub(crate) entries: Vec<UnusedEntry>,
+    pub(crate) errors: Vec<(StoreKind, String)>,
+}
+
+/// Unused entries per store, each filtered by [`naming`]. A store that fails is
+/// reported by kind and the others still list.
+pub(crate) fn listing(
+    _vault: &Vault,
+    _stores: &[&dyn SecretStore],
+    _sources: &NamingSources,
+) -> Listing {
+    Listing::default()
+}
+
+/// Per-thread seams inside [`delete_unused`], set by a row (the `sync_seam` pattern).
 #[cfg(test)]
-#[path = "unused_tests.rs"]
-mod tests;
+mod seam {
+    use std::cell::{Cell, RefCell};
+
+    thread_local! {
+        /// Runs once after the naming read and before the digest re-check: a
+        /// source edited inside that window.
+        pub(super) static BEFORE_RECHECK: RefCell<Option<Box<dyn FnOnce()>>> =
+            const { RefCell::new(None) };
+        /// Set: the delete returns `Failed` right after the store delete and
+        /// before the removal line, as a kill there would leave it.
+        pub(super) static STOP_AFTER_STORE_DELETE: Cell<bool> = const { Cell::new(false) };
+    }
+}
+
 #[cfg(test)]
 #[path = "unused_delete_tests.rs"]
 mod delete_tests;
+#[cfg(test)]
+#[path = "unused_tests.rs"]
+mod tests;
