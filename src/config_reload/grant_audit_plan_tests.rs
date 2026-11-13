@@ -239,3 +239,25 @@ fn a_row_changed_outside_the_gateway_is_warned_with_both_digests() {
         assert!(logs.contains(part), "{part}: {logs}");
     }
 }
+
+/// A claim explains only a row the records do not already name: with the
+/// baseline at a later digest, a file reverted outside the gateway to the
+/// digest an old accept named stays out-of-band (control: no claim).
+#[test]
+fn a_stale_claim_does_not_explain_a_revert_of_a_known_row() {
+    let accepted = row("g1", "r");
+    let later = row("g1", "later");
+    let state = State {
+        grants: Some(BTreeMap::from([("g1".to_owned(), grant_digest(&later))])),
+        ..based()
+    };
+    let none = &JournalRead::Missing;
+    let reverted = std::slice::from_ref(&accepted);
+    assert_eq!(
+        out_of_band(&run(&state, reverted, none, &[]).0),
+        ["g1"],
+        "control"
+    );
+    let stale = [claim("g1", &grant_digest(&accepted), "e1")];
+    assert_eq!(out_of_band(&run(&state, reverted, none, &stale).0), ["g1"]);
+}
