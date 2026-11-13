@@ -1,7 +1,10 @@
-head_sha	8ea8a6a1d1eac867cb627b04b89756fabccdb2fd
-#mutant c9460.f1
-mcp_gateway	personal_accounts::worker::worker_tests::release_tests::a_shutdown_draining_behind_a_failed_detach_reports_stuck_not_a_hang	src/personal_accounts/worker_tests/release_tests.rs:572
-#mutant c9460.f2
-mcp_gateway	personal_accounts::worker::worker_tests::release_tests::a_drain_cut_after_a_detach_reports_the_running_release	src/personal_accounts/worker_tests/release_tests.rs:605
-#mutant c9460.f5
-mcp_gateway	personal_accounts::worker::worker_tests::release_tests::dropping_the_serve_guard_detaches_the_release	src/personal_accounts/worker_tests/release_tests.rs:661
+head_sha	084c5c25d0b4a4f9abfd32ee4548a826dff4b854
+#mutant c9460.w1
+mcp_gateway	gateway::server::signing_allocation_tests::owner2_stdio_tasks::shutdown::stdio_eof_releases_the_store_lease_before_returning	src/gateway/server/tests/owner2_stdio_shutdown_tests.rs:12
+mcp_gateway	gateway::server::gateway_bootstrap_tests::explicit_account_shutdown_frees_both_locks_while_the_gateway_stays_alive	src/gateway/server/gateway_bootstrap_tests.rs:459
+#mutant c9460.w2
+mcp_gateway	gateway::server::stop_budget_start_tests::an_http_start_below_the_stop_budget_minimum_is_refused_before_it_binds	src/gateway/server/stop_budget_start_tests.rs:41
+mcp_gateway	gateway::server::gateway_bootstrap_tests::explicit_account_shutdown_frees_both_locks_while_the_gateway_stays_alive	src/gateway/server/gateway_bootstrap_tests.rs:459
+#mutant c9460.w3
+mcp_gateway	gateway::server::signing_allocation_tests::owner2_stdio_tasks::shutdown::stdio_eof_releases_the_store_lease_before_returning	src/gateway/server/tests/owner2_stdio_shutdown_tests.rs:12
+mcp_gateway	gateway::server::gateway_bootstrap_tests::explicit_account_shutdown_frees_both_locks_while_the_gateway_stays_alive	src/gateway/server/gateway_bootstrap_tests.rs:459
