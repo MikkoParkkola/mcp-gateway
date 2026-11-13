@@ -153,30 +153,93 @@ def whole_step_wrapped(run: str) -> bool:
     return first < len(text) - 1 and "'" not in text[first + 1:-1]
 
 
+def shell_commands(line: str) -> list[str]:
+    """`line` split into its commands at top-level `&&`, `||`, `;` and `|` (outside quotes and `$( )`), so a build
+    chained after another command is judged on its own: `with-memory-log.sh true && cargo test` has a bare build."""
+    out, cur, quote, depth, i = [], [], None, 0, 0
+    while i < len(line):
+        c = line[i]
+        if quote:
+            cur.append(c)
+            if c == "\\" and quote == '"' and i + 1 < len(line):
+                cur.append(line[i + 1])
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in "'\"":
+            quote = c
+            cur.append(c)
+        elif line.startswith("$(", i):
+            depth += 1
+            cur.append("$(")
+            i += 1
+        elif c == ")" and depth:
+            depth -= 1
+            cur.append(c)
+        elif not depth and line.startswith(("&&", "||"), i):
+            out.append("".join(cur))
+            cur = []
+            i += 1
+        elif not depth and c in ";|":
+            out.append("".join(cur))
+            cur = []
+        else:
+            cur.append(c)
+        i += 1
+    out.append("".join(cur))
+    return [s.strip() for s in out if s.strip()]
+
+
+def substitutions(text: str) -> list[str]:
+    """The bodies of every `$( )` in `text`, nested ones included."""
+    bodies, starts, i = [], [], 0
+    while i < len(text):
+        if text.startswith("$(", i):
+            starts.append(i + 2)
+            i += 2
+            continue
+        if text[i] == ")" and starts:
+            bodies.append(text[starts.pop():i])
+        i += 1
+    return bodies
+
+
+def library_builds(line: str) -> list[str]:
+    """The commands on `line` that build the library: an echo counts only through what its substitutions run (the
+    phase lines name `cargo test` as text and run date, ps and free)."""
+    found = []
+    for cmd in shell_commands(line):
+        if cmd.startswith("echo "):
+            found += [b for b in substitutions(cmd) if builds_library(b)]
+        elif builds_library(cmd):
+            found.append(cmd)
+    return found
+
+
 def memlog_problems(file: str, name: str, job: dict) -> list[str]:
     """Problems with the memory log and the step limits of one in-scope job."""
     problems: list[str] = []
     limit_total = 0
     for i, step in enumerate(job.get("steps") or []):
         label = step.get("name", f"step {i}")
+        limit = step.get("timeout-minutes")
+        # Every step's own limit counts against the job's, build or not: they all run before the job limit.
+        if isinstance(limit, int):
+            limit_total += limit
         lines = [l.strip() for l in str(step.get("run", "")).split("\n")]
-        # A comment or an echo never builds, even when it names `cargo test` (the phase lines do).
-        builds = [l for l in lines if l and not l.startswith(("#", "echo ")) and builds_library(l)]
+        builds = [b for l in lines if l and not l.startswith("#") for b in library_builds(l)]
         if not builds:
             continue
-        bare = [l for l in builds if not l.startswith(MEMLOG + " ")]
+        bare = [b for b in builds if not b.startswith(MEMLOG + " ")]
         if bare and whole_step_wrapped(str(step.get("run", ""))):
             bare = []
         if bare:
             problems.append(f"{file}:{name}: '{label}' builds the library without {MEMLOG}: {bare[0][:80]}")
-        limit = step.get("timeout-minutes")
         if (file, name, label) in LOG_ONLY:
             if limit is not None:
                 problems.append(f"{file}:{name}: '{label}' is log-only (not measured yet) but sets timeout-minutes")
         elif not isinstance(limit, int):
             problems.append(f"{file}:{name}: '{label}' builds the library with no timeout-minutes of its own")
-        else:
-            limit_total += limit
     job_limit = job.get("timeout-minutes", JOB_DEFAULT)
     if not isinstance(job_limit, int):
         problems.append(f"{file}:{name}: job timeout-minutes is not a number")
@@ -336,6 +399,16 @@ def memlog_cases() -> list[tuple[str, str, str, dict, bool]]:
         ("C8 two build lines, one wrapped", "ci.yml", "j", job(step(w + "cargo test --lib --no-run\ncargo test --lib")), True),
         ("C12 an echo naming cargo test is not a build", "ci.yml", "j",
          job(step(f'echo "phase compile: cargo test --lib --no-run at $(date -u +%T)"\n{w}cargo test --all-features --lib --no-run')), False),
+        ("C12 the real phase line: substitutions run ps, wc and free only", "ci.yml", "j",
+         job(step('echo "phase compile: cargo test --lib --no-run at $(date -u +%T), n: $(ps -u "$(id -u)" -o pid= | wc -l), '
+                  "m: $(free -m | awk '/^Mem:/ {print $3}')\"\n" + w + "cargo test --all-features --lib --no-run")), False),
+        ("C13 a wrapped first command, then a bare build after &&", "ci.yml", "j", job(step(w + "true && cargo test --all-features --lib")), True),
+        ("C13 a bare build after ;", "ci.yml", "j", job(step(w + "cargo test --lib --no-run; cargo test --lib")), True),
+        ("C13 echo, then a bare build after &&", "ci.yml", "j", job(step("echo start && cargo test --all-features --lib")), True),
+        ("C13 an echo whose substitution builds", "ci.yml", "j", job(step('echo "$(cargo test --all-features --lib)"')), True),
+        ("C13 a wrapped build piped to tee", "ci.yml", "j", job(step(w + 'cargo test --all-features --lib 2>&1 | tee "$RUNNER_TEMP/x.log"')), False),
+        ("C14 a non-build step's limit counts against the job", "ci.yml", "j",
+         job({"name": "Setup", "run": "true", "timeout-minutes": 30}, step(w + "cargo test --lib", 25), limit=60), True),
         ("C11 feature-combos continuation, wrapped", "f.yml", "j", job(step(w + feature)), False),
         ("C11 feature-combos continuation, bare", "f.yml", "j", job(step(feature)), True),
         ("C11 UPGRADING loop, both cargo lines wrapped", "ci.yml", "j",

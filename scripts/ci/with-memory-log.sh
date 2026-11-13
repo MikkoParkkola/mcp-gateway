@@ -15,6 +15,7 @@
 # Rows: scripts/ci/test_with_memory_log.py.
 set -u
 every=${MEM_LOG_EVERY:-30}
+case $every in '' | *[!0-9]* | 0) every=30 ;; esac # a whole number of seconds, else the default
 proc=${MEM_LOG_PROC:-/proc}
 cgroup=${MEM_LOG_CGROUP:-/sys/fs/cgroup}
 
@@ -42,11 +43,12 @@ if [ "${BASH_VERSINFO[0]}" -lt 5 ] || { [ "${BASH_VERSINFO[0]}" -eq 5 ] && [ "${
   echo "memory log: off (bash ${BASH_VERSION} is older than 5.1)" >&2
   exec "$@"
 fi
+# Any of TERM, INT or HUP reaches CMD as TERM: a command started with & in a non-interactive shell ignores INT
+# and cannot trap it, so passing INT on as INT would do nothing. Set before the launch, so no signal falls between.
+cmd=
+trap '[ -n "$cmd" ] && kill -TERM "$cmd" 2>/dev/null' TERM INT HUP
 "$@" &
 cmd=$!
-# Any of TERM, INT or HUP reaches CMD as TERM: a command started with & in a non-interactive shell ignores INT
-# and cannot trap it, so passing INT on as INT would do nothing.
-trap 'kill -TERM "$cmd" 2>/dev/null' TERM INT HUP
 sample start
 nap=
 while :; do

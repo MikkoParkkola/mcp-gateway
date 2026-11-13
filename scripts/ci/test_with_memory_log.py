@@ -83,6 +83,14 @@ def rows() -> list[tuple[str, bool, str]]:
             child = marker.read_text().strip() if marker.exists() else ""
             gone = bool(child) and subprocess.run(["kill", "-0", child], capture_output=True).returncode != 0
             out.append((f"W4 {sig} reaches the command as TERM: exit 42 within 2 s, child gone", rc == 42 and t < 4 and gone, se[-200:]))
+        # W11: a command that ignores the forwarded TERM keeps running and its own later status is the result.
+        cmd = (f"set -m; {w} bash -c 'trap \"\" TERM; sleep 2; exit 7' & wp=$!; sleep 0.5; kill -TERM $wp; wait $wp")
+        rc, so, se, t = run(cmd, env)
+        out.append(("W11 TERM ignored by the command: it finishes, rc 7", rc == 7 and "end, exit 7:" in se and t >= 1.8, se[-200:]))
+        # W12: a bad interval falls back to the default (30 s) instead of sampling in a tight loop.
+        rc, so, se, t = run(f"{w} sleep 2", dict(env, MEM_LOG_EVERY="abc"))
+        n = sum(l.startswith("memory ") for l in se.splitlines())
+        out.append(("W12 MEM_LOG_EVERY=abc falls back to 30 s: start and end lines only", rc == 0 and n == 2, f"{n} lines"))
         # W6: the command's arguments never reach the wrapper's own output.
         rc, so, se, t = run(f"{w} true sk-SECRET-not-printed", env)
         out.append(("W6 no argv in the wrapper's output", "SECRET" not in se and "SECRET" not in so, se[-200:]))
