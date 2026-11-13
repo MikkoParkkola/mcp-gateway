@@ -1,0 +1,26 @@
+# Throwaway canary for the memory log (never merged): a wrapped step that ignores TERM runs past its own
+# timeout-minutes. Pass: the step ends at its limit, the job finishes, and the step's log (memory lines and
+# GitHub's timeout error) is still downloadable afterwards.
+name: Memory-log canary
+on:
+  pull_request:
+    branches: [docs/ranking-1-release-line]
+permissions:
+  contents: read
+jobs:
+  canary:
+    if: ${{ startsWith(github.head_ref, 'throwaway/memlog-canary') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: A stalled build past its step limit
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          MEM_LOG_EVERY: "10"
+        run: scripts/ci/with-memory-log.sh bash -c 'trap "" TERM; echo canary-started; sleep 600'
+      - name: The job goes on after the limit
+        run: echo "canary-after-limit"
