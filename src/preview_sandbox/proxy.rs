@@ -9,7 +9,6 @@
 )]
 
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -390,10 +389,11 @@ fn private_dir() -> io::Result<PathBuf> {
     for _ in 0..8 {
         let mut bytes = [0u8; 8];
         os_random(&mut bytes)?;
-        let mut name = String::new();
-        for byte in bytes {
-            write!(name, "{byte:02x}").expect("String write");
-        }
+        let name: String = bytes
+            .iter()
+            .flat_map(|byte| [byte >> 4, byte & 0xf])
+            .filter_map(|nibble| char::from_digit(u32::from(nibble), 16))
+            .collect();
         let dir = std::env::temp_dir().join(format!("mcp-gw-proxy-{name}"));
         match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
             Ok(()) => return Ok(dir),
