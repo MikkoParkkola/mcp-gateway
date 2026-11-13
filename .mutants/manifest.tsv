@@ -1,0 +1,21 @@
+head_sha	970309f39d7bb26b42737af79f1b3afb57914bfb
+r1	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r2	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r3	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r4	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r5	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r6	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r7	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r8	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r9	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r10	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r11	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r12	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r13	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r14	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r15	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r16	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r17	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r18	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r19	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
+r20	windows	p.patch	--test mik_7212_acs -- --exact ac_mrtr_2_the_backends_state_is_not_readable_by_the_client
