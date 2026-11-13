@@ -484,3 +484,38 @@ if os.fork() == 0:
 os.wait()";
     a_detached_survivor_outlives_the_stop(helper, "a double-forked daemon").await;
 }
+
+/// The cost of the stop's first snapshot, the one the graceful handover takes
+/// before it closes stdin: a fresh transport each time, so the sweep is built
+/// and the table read cold. Printed as p50, p99 and max over 60 starts for a
+/// lone process and for a four-member tree. Run by hand under load:
+/// `cargo test --lib measure_the_first_snapshot -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "a measurement, run by hand with --nocapture"]
+async fn measure_the_first_snapshot_on_the_handover_path() {
+    for (what, tail) in [
+        ("lone process", "exec sleep 60"),
+        (
+            "four members",
+            "sleep 60 &\nsleep 60 &\nsleep 60 &\nwhile :; do sleep 0.05; done",
+        ),
+    ] {
+        let mut took = Vec::new();
+        for _ in 0..60 {
+            let (_w, t) = started(tail, None).await;
+            // Let a backgrounded member be forked before the table is read.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let at = std::time::Instant::now();
+            t.child.lock().tree.as_mut().expect("tree").sweep_snapshot();
+            took.push(at.elapsed());
+            t.close().await.expect("close");
+        }
+        took.sort();
+        println!(
+            "snapshot {what}: p50 {:?} p99 {:?} max {:?}",
+            took[took.len() / 2],
+            took[took.len() * 99 / 100],
+            took[took.len() - 1]
+        );
+    }
+}
