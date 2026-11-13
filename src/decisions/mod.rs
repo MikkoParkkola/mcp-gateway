@@ -552,28 +552,52 @@ fn reason_and_scope(
 
 /// The set as the gateway holds it: one lock, read by the list route and the
 /// stream's snapshot, written by the producers.
-pub(crate) struct Shared(parking_lot::RwLock<DecisionSet>);
+pub(crate) struct Shared {
+    set: parking_lot::RwLock<DecisionSet>,
+    /// Serializes the resolve route: one resolve at a time, so a second
+    /// resolve of an id sees what the first one changed.
+    resolve: tokio::sync::Mutex<()>,
+}
 
 impl Shared {
     /// A handle over a set keyed by `key`.
     pub(crate) fn with_key(key: [u8; 32]) -> Self {
-        Self(parking_lot::RwLock::new(DecisionSet::with_key(key)))
+        Self {
+            set: parking_lot::RwLock::new(DecisionSet::with_key(key)),
+            resolve: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    /// Hold the resolve mutex. Taken before anything else of a resolve.
+    pub(crate) async fn resolving(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.resolve.lock().await
+    }
+
+    /// One open item by id, cloned under a single read lock: its fields are
+    /// one consistent snapshot of the set.
+    pub(crate) fn item(&self, id: &str) -> Option<Value> {
+        self.set
+            .read()
+            .items
+            .iter()
+            .find(|item| item.get("id").and_then(Value::as_str) == Some(id))
+            .cloned()
     }
 
     /// Apply `change` under the write lock.
     pub(crate) fn update<T>(&self, change: impl FnOnce(&mut DecisionSet) -> T) -> T {
-        change(&mut self.0.write())
+        change(&mut self.set.write())
     }
 
     /// [`DecisionSet::snapshot`] under the read lock.
     pub(crate) fn snapshot(&self) -> Option<(usize, u64)> {
-        self.0.read().snapshot()
+        self.set.read().snapshot()
     }
 
     /// [`DecisionSet::view`] under the read lock, or the sources not yet
     /// readable.
     pub(crate) fn view(&self) -> Result<View, Vec<(&'static str, &'static str)>> {
-        let set = self.0.read();
+        let set = self.set.read();
         set.view().ok_or_else(|| set.unavailable())
     }
 }

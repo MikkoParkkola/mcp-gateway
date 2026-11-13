@@ -13,17 +13,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::body::Bytes;
+use axum::extract::{Path as RoutePath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::routing::{get, post};
+use axum::{Extension, Json, Router};
 use rand::RngExt as _;
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::activity::replay;
+use super::control_plane::mutations::admitted_actor;
 use super::guard::Guard;
 use crate::capability::CapabilityBackend;
+use crate::config_reload::Generation;
+use crate::control_plane::ControlPlaneRbac;
 use crate::decisions::{
     CapabilityChange, DecisionSet, Fold, GRANT_DECISION_KIND, Health, LogPos, Shared, Source,
     denial_from_record,
@@ -46,6 +51,7 @@ pub(super) fn decisions_router() -> Router<Arc<AppState>> {
     Router::new()
         .route(routes::UI_DECISIONS, get(list_decisions))
         .route(routes::UI_DECISIONS_COUNT, get(count_decisions))
+        .route(routes::UI_DECISIONS_RESOLVE, post(resolve_decision))
 }
 
 async fn list_decisions(State(state): State<Arc<AppState>>, guard: Guard) -> Response {
@@ -83,6 +89,151 @@ async fn count_decisions(State(state): State<Arc<AppState>>, guard: Guard) -> Re
         }
         None => unavailable(&decisions.view().err().unwrap_or_default()),
     }
+}
+
+/// What a resolve may ask of an open decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ResolveAction {
+    Accept,
+    Deny,
+}
+
+/// The resolve body: strict, so a field this route does not know is refused
+/// and never read as something it is not.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolveRequest {
+    action: ResolveAction,
+    reason: String,
+    scope_digest: String,
+    ttl_seconds: Option<u64>,
+    #[serde(default)]
+    permanent: bool,
+}
+
+/// The longest reason a resolve takes, in characters.
+const REASON_MAX: usize = 500;
+/// The longest grant an accept may ask for: one year.
+const TTL_MAX_SECONDS: u64 = 365 * 24 * 60 * 60;
+
+/// One refusal answer: a status, a code a client branches on, and a fixed
+/// sentence. Nothing the caller sent is echoed back.
+fn resolve_error(status: StatusCode, code: &str, message: &str) -> Response {
+    (status, Json(json!({"error": code, "message": message}))).into_response()
+}
+
+/// The body's own rules, apart from the open item it names.
+fn check_resolve(request: &ResolveRequest) -> Result<(), &'static str> {
+    let reason = request.reason.trim();
+    if reason.is_empty() || reason.chars().count() > REASON_MAX {
+        return Err("the reason must be 1 to 500 characters");
+    }
+    if reason.chars().any(char::is_control) {
+        return Err("the reason must not contain control characters");
+    }
+    let digest = request.scope_digest.as_str();
+    if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("scope_digest must be the 64 hex characters the listing gave");
+    }
+    match (request.action, request.ttl_seconds, request.permanent) {
+        (ResolveAction::Accept, Some(ttl), false) if (1..=TTL_MAX_SECONDS).contains(&ttl) => Ok(()),
+        (ResolveAction::Accept, None, true) => Ok(()),
+        (ResolveAction::Accept, ..) => {
+            Err("an accept needs ttl_seconds (1 second to 1 year) or permanent: true, not both")
+        }
+        (ResolveAction::Deny, None, false) => Ok(()),
+        (ResolveAction::Deny, ..) => Err("a deny takes no ttl_seconds and no permanent"),
+    }
+}
+
+/// `POST /ui/api/decisions/{id}/resolve`: resolve one open access request.
+///
+/// This slice is the frame: the strict body, one status per state, the
+/// permission, the resolve mutex and the scope check against one snapshot.
+/// Neither action has an effect yet; the siblings add accept and deny.
+async fn resolve_decision(
+    State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<Generation>>,
+    guard: Guard,
+    RoutePath(id): RoutePath<String>,
+    body: Bytes,
+) -> Response {
+    // The permission first: a caller without it learns nothing and writes
+    // nothing, whatever the body says. The row names the action; the role
+    // the request's pinned generation maps must allow it.
+    let (actor, action) = match admitted_actor(&generation, &guard) {
+        Ok(admitted) => admitted,
+        Err(refused) => return *refused,
+    };
+    let authorization = ControlPlaneRbac::authorize(&actor, action);
+    if !authorization.allowed {
+        return resolve_error(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "this caller may not resolve access requests",
+        );
+    }
+    let request: ResolveRequest = match serde_json::from_slice(&body) {
+        Ok(request) => request,
+        Err(_) => {
+            return resolve_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_body",
+                "the body is not a valid resolve request",
+            );
+        }
+    };
+    if let Err(message) = check_resolve(&request) {
+        return resolve_error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_body", message);
+    }
+    let Some(decisions) = state.meta_mcp.decisions() else {
+        return unavailable(&[]);
+    };
+    // One resolve at a time: the item is read and judged under this mutex.
+    let _resolving = decisions.resolving().await;
+    let Some(item) = decisions.item(&id) else {
+        return resolve_error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no open decision has this id",
+        );
+    };
+    judge_item(&item, &request.scope_digest)
+}
+
+/// What a resolve may do with one open item, judged from that one snapshot:
+/// only an access request, only at the scope the admin was shown. Neither
+/// action has an effect in this slice, so a match is `not_available_yet`.
+fn judge_item(item: &Value, scope_digest: &str) -> Response {
+    if item.get("kind").and_then(Value::as_str) != Some("access_request") {
+        return resolve_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "not_resolvable",
+            "only access requests can be resolved here yet",
+        );
+    }
+    let current = item
+        .get("scope_digest")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if current != scope_digest {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "scope_changed",
+                "message": "the request changed since it was listed; nothing was written",
+                "scope": item.get("scope").cloned().unwrap_or(Value::Null),
+                "scope_digest": current,
+            })),
+        )
+            .into_response();
+    }
+    resolve_error(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "not_available_yet",
+        "resolving an access request is not available yet",
+    )
 }
 
 /// 503 naming each source not yet readable and why.

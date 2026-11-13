@@ -24,6 +24,37 @@ fn time(at: DateTime<Utc>) -> String {
     at.to_rfc3339()
 }
 
+/// The digest an access request lists and its resolve must repeat: SHA-256
+/// over a domain separator and the scope entries (capability, tool,
+/// grant scope), sorted, duplicates collapsed, each field length-prefixed so
+/// no two entry sets share an encoding. A change to what the request asks
+/// for changes it; the order the refusals arrived in does not.
+pub(crate) fn scope_digest(scope: &[Value]) -> String {
+    let mut entries: Vec<[String; 3]> = scope
+        .iter()
+        .map(|entry| {
+            let field = |name: &str| {
+                entry
+                    .get(name)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            [field("capability"), field("tool"), field("grant_scope")]
+        })
+        .collect();
+    entries.sort();
+    entries.dedup();
+    let mut bytes = b"mcpg/access-request/scope/v1\0".to_vec();
+    for entry in &entries {
+        for part in entry {
+            bytes.extend((part.len() as u64).to_be_bytes());
+            bytes.extend(part.as_bytes());
+        }
+    }
+    crate::hashing::sha256_hex(&bytes)
+}
+
 /// Newest first, then by id: the order within one kind.
 fn sort(items: &mut [(DateTime<Utc>, Value)]) {
     items.sort_by(|(a_at, a), (b_at, b)| {
@@ -241,6 +272,7 @@ fn access_requests(set: &DecisionSet, blocks: &Blocks) -> Vec<Dated> {
             .flatten()
             .collect();
         let tuple = json!([access.authority, access.subject, access.agent]);
+        let scope_digest = scope_digest(&request.scope);
         requests.push((
             request.newest,
             json!({
@@ -252,6 +284,7 @@ fn access_requests(set: &DecisionSet, blocks: &Blocks) -> Vec<Dated> {
                 },
                 "agent": display::agent(&key, &access.agent),
                 "scope": request.scope,
+                "scope_digest": scope_digest,
                 "server_tools_total": null,
                 "server_tools_total_reason": "not_tracked",
                 "refused_calls": request.refused,

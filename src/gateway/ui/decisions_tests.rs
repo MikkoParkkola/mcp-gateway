@@ -507,3 +507,144 @@ async fn the_count_is_the_lists_length_and_revision_for_an_admin_only() {
     let (status, _) = count(&state, false).await;
     assert_eq!(status, admin_auth_required().0, "a non-admin is refused");
 }
+
+// ---- POST /ui/api/decisions/{id}/resolve: the frame ----
+
+async fn resolve(
+    state: &Arc<AppState>,
+    admin: bool,
+    id: &str,
+    body: impl AsRef<[u8]>,
+) -> (StatusCode, Value) {
+    let guard = Guard::for_route(
+        routes::UI_DECISIONS_RESOLVE,
+        &Method::POST,
+        Some(client(admin)),
+    );
+    let response = resolve_decision(
+        State(Arc::clone(state)),
+        axum::Extension(state.live_config.generation()),
+        guard,
+        axum::extract::Path(id.to_owned()),
+        axum::body::Bytes::copy_from_slice(body.as_ref()),
+    )
+    .await;
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+fn deny_body(digest: &str) -> Value {
+    json!({"action": "deny", "reason": "not needed", "scope_digest": digest})
+}
+
+/// A started gateway with one open access request; its id and digest.
+async fn one_request() -> (
+    Arc<AppState>,
+    Arc<TransparencyLogger>,
+    String,
+    String,
+    (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
+) {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let now = crate::clock::utc_now().expect("a readable clock");
+    write(&log, note("stripe.charges", now));
+    let (state, store) = state_with(&log).await;
+    let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let _tick = start(&state.meta_mcp, None, shutdown);
+    let body = served_when(&state, |body| scope_len(body) == 1).await;
+    let item = &body["decisions"][0];
+    let id = item["id"].as_str().expect("an id").to_owned();
+    let digest = item["scope_digest"].as_str().expect("a digest").to_owned();
+    (state, log, id, digest, (dir, store))
+}
+
+#[tokio::test]
+async fn resolve_answers_one_status_per_state_and_writes_nothing() {
+    let (state, _log, id, digest, _keep) = one_request().await;
+    assert_eq!(digest.len(), 64, "{digest}");
+
+    let (status, body) = resolve(&state, false, &id, deny_body(&digest).to_string()).await;
+    assert_ne!(status, StatusCode::OK, "a non-admin is refused: {body}");
+    assert_ne!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "refused before the body: {body}"
+    );
+
+    for bad in [
+        "not json".to_owned(),
+        json!({"action": "deny", "reason": "r", "scope_digest": digest, "extra": 1}).to_string(),
+        json!({"action": "deny", "reason": " ", "scope_digest": digest}).to_string(),
+        json!({"action": "deny", "reason": "r", "scope_digest": "abc"}).to_string(),
+        json!({"action": "accept", "reason": "r", "scope_digest": digest}).to_string(),
+        json!({"action": "accept", "reason": "r", "scope_digest": digest,
+               "ttl_seconds": 60, "permanent": true})
+        .to_string(),
+        json!({"action": "deny", "reason": "r", "scope_digest": digest,
+               "ttl_seconds": 60})
+        .to_string(),
+    ] {
+        let (status, body) = resolve(&state, true, &id, &bad).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}: {body}");
+        assert_eq!(body["error"], "invalid_body", "{bad}");
+    }
+
+    let (status, body) = resolve(&state, true, "no-such-id", deny_body(&digest).to_string()).await;
+    assert_eq!(
+        (status, &body["error"]),
+        (StatusCode::NOT_FOUND, &json!("not_found"))
+    );
+
+    let stale = "0".repeat(64);
+    let (status, body) = resolve(&state, true, &id, deny_body(&stale).to_string()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "scope_changed");
+    assert_eq!(body["scope_digest"], json!(digest));
+
+    let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"], "not_available_yet");
+}
+
+#[tokio::test]
+async fn the_digest_follows_the_scope_not_the_arrival_order() {
+    let (state, log, id, digest, _keep) = one_request().await;
+    let now = crate::clock::utc_now().expect("a readable clock");
+    write(&log, note("stripe.refunds", now));
+    let body = served_when(&state, |body| scope_len(body) == 2).await;
+    let after = body["decisions"][0]["scope_digest"]
+        .as_str()
+        .expect("digest");
+    assert_ne!(after, digest, "a wider scope is a new digest");
+
+    let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "the listed digest is stale: {body}"
+    );
+    assert_eq!(body["scope"].as_array().map(Vec::len), Some(2), "{body}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_resolves_do_not_overlap() {
+    let (state, _log, id, digest, _keep) = one_request().await;
+    let decisions = state.meta_mcp.decisions().expect("decisions");
+    let held = decisions.resolving().await;
+    let state2 = Arc::clone(&state);
+    let body = deny_body(&digest).to_string();
+    let pending = tokio::spawn(async move { resolve(&state2, true, &id, body).await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !pending.is_finished(),
+        "a resolve ran while another held the mutex"
+    );
+    drop(held);
+    let (status, _) = pending.await.expect("joined");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
