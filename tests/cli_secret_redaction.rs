@@ -161,6 +161,39 @@ fn audit_lookup_email_never_repeats_a_value_typed_as_an_argument() {
         assert!(text.contains("is not repeated"), "{shape:?}: {text}");
         assert!(text.contains("--email-stdin"), "{shape:?}: {text}");
     }
+    // Typed before the command name: the parse stops before it reaches
+    // `lookup-email`, and the names that follow still select the fixed message.
+    for (argv, typed) in [
+        (vec!["audit", TYPED_EMAIL, "lookup-email"], TYPED_EMAIL),
+        (vec![TYPED_TOKEN, "audit", "lookup-email"], TYPED_TOKEN),
+    ] {
+        let output = run_bare(&argv);
+        let text = combined_output(&output);
+        assert_eq!(output.status.code(), Some(2), "{argv:?}: {text}");
+        assert!(!text.contains(typed), "{argv:?} repeated: {text}");
+        assert!(text.contains("is not repeated"), "{argv:?}: {text}");
+    }
+}
+
+/// `hash-key` reads the API key from stdin only; a key typed as an argument
+/// is refused without being repeated.
+/// Mutant: drop `hash-key` from the stdin-secret commands.
+#[test]
+fn hash_key_never_repeats_a_key_typed_as_an_argument() {
+    const TYPED_KEY: &str = "sk-live-SENTINEL_9d3e";
+    for argv in [
+        vec!["hash-key", TYPED_KEY],
+        vec!["hash-key", "--", TYPED_KEY],
+    ] {
+        let output = run_bare(&argv);
+        let text = combined_output(&output);
+        assert_eq!(output.status.code(), Some(2), "{argv:?}: {text}");
+        assert!(!text.contains(TYPED_KEY), "{argv:?} repeated: {text}");
+        assert!(
+            text.contains("The API key is read from stdin only"),
+            "{text}"
+        );
+    }
 }
 
 /// MIK-9456.CLI.1: only the commands that read a secret from stdin get the
