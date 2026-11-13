@@ -229,13 +229,6 @@ fn journal_record(entry: &JournalEntry) -> Draft {
 
 /// A grant row an accept's audit record names: the row id, its digest and
 /// the record's event id.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged: the reload lookup, a later part, builds claims"
-    )
-)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Claim {
     pub(super) row_id: String,
@@ -255,6 +248,31 @@ fn single_claim<'a>(claims: &'a [Claim], row_id: &str) -> Option<&'a str> {
         }
     }
     found.map(|claim| claim.digest.as_str())
+}
+
+/// A served row an accept's audit record names by id AND digest is
+/// accounted for as a journal entry would be: that record attributes it.
+/// Where this plan's journal touched the row, or on any disagreement between
+/// claims, the row keeps the comparison; under a gap no claim applies.
+fn account_claims(
+    state: &State,
+    actual: &BTreeMap<&str, &IdentityGrant>,
+    journalled: &BTreeSet<&str>,
+    claims: &[Claim],
+    expected: &mut BTreeMap<String, Option<String>>,
+) {
+    if state.gap {
+        return;
+    }
+    for (id, row) in actual {
+        if journalled.contains(id) {
+            continue;
+        }
+        let digest = grant_digest(row);
+        if single_claim(claims, id) == Some(digest.as_str()) {
+            expected.insert((*id).to_string(), Some(digest));
+        }
+    }
 }
 
 /// Steps 2-5: the records this reconciliation owes, and the state to commit
@@ -366,21 +384,7 @@ pub(super) fn plan(
     // baseline; without one they predate the journal.
     // The served row per id, so a record describes what is enforced.
     let actual = served_rows(rows);
-    // A served row an accept's audit record names by id AND digest is
-    // accounted for as a journal entry would be: that record attributes it.
-    // Under a gap, where this plan's journal touched the row, or on any
-    // disagreement between claims, the row keeps the path below.
-    if !state.gap {
-        for (id, row) in &actual {
-            if journalled.contains(id) {
-                continue;
-            }
-            let digest = grant_digest(row);
-            if single_claim(claims, id) == Some(digest.as_str()) {
-                expected.insert((*id).to_string(), Some(digest));
-            }
-        }
-    }
+    account_claims(state, &actual, &journalled, claims, &mut expected);
     let mut ids: BTreeSet<&str> = expected.keys().map(String::as_str).collect();
     if has_baseline {
         ids.extend(actual.keys().copied());
