@@ -109,7 +109,7 @@ fn write_inner_config(root: &Path, leaves: &[&str], inner_stop: Duration) -> Pat
 }
 fn write_outer_config(root: &Path, inner: &Path, total: Duration) -> PathBuf {
     // Record the inner before exec so cleanup also covers failure during warm start.
-    std::fs::write(root.join("inner.py"), "import os, sys\nwith open('inner.pid', 'w') as f: f.write(str(os.getpid()))\nos.execv(sys.argv[1], sys.argv[1:])\n").expect("launcher");
+    std::fs::write(root.join("inner.py"), "import os, sys\nwith open('inner.pid', 'w') as f: f.write(str(os.getpid()))\nos.dup2(os.open('inner.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644), 2)\nos.execv(sys.argv[1], sys.argv[1:])\n").expect("launcher");
     let mut config = base_config(root, "outer");
     config.server.host = "127.0.0.1".into();
     config.server.port = gateway_bin::ANY_PORT;
@@ -152,8 +152,15 @@ fn write_chain_parent(root: &Path, name: &str, child: &str, child_config: &Path)
     );
     save(root, &format!("{name}.yaml"), &config)
 }
+/// The outer gateway's log, then the inner gateway's own (its stderr goes to `inner.log`),
+/// so a red row prints both stops.
 fn logs(root: &Path) -> String {
-    std::fs::read_to_string(root.join("gateway.log")).unwrap_or_default()
+    let read = |name: &str| std::fs::read_to_string(root.join(name)).unwrap_or_default();
+    format!(
+        "{}\n--- inner.log ---\n{}",
+        read("gateway.log"),
+        read("inner.log")
+    )
 }
 async fn post(
     client: &reqwest::Client,
