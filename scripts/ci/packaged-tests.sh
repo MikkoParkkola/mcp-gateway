@@ -9,15 +9,19 @@
 # build from the packaged crate sees the gap. `build` compiles every test
 # target there and runs on every pull request; `run` also executes them, with
 # the same skip list as ci.yml's `test` job, after a merge.
+# `install-unlocked` installs the packaged crate the way `cargo install
+# mcp-gateway` does (dependencies resolved today, not from the shipped lock) and
+# starts it with the key server, whose startup runs the email-hash self-check
+# (unlocked-install.yml). Its evidence goes to $UNLOCKED_INSTALL_OUT.
 #
-#   scripts/ci/packaged-tests.sh build|run
+#   scripts/ci/packaged-tests.sh build|run|install-unlocked
 set -euo pipefail
 
 mode="${1:-}"
 case "$mode" in
-  build | run) ;;
+  build | run | install-unlocked) ;;
   *)
-    echo "usage: $0 build|run" >&2
+    echo "usage: $0 build|run|install-unlocked" >&2
     exit 2
     ;;
 esac
@@ -38,7 +42,25 @@ trap 'rm -rf -- "$unpacked"' EXIT
 tar -xzf "$crate" -C "$unpacked"
 cd "$unpacked/mcp-gateway-$version"
 
-if [ "$mode" = build ]; then
+if [ "$mode" = install-unlocked ]; then
+  out="${UNLOCKED_INSTALL_OUT:?set UNLOCKED_INSTALL_OUT to the evidence directory}"
+  mkdir -p "$out"
+  # The crate must carry its lock: `cargo install --locked` builds from it.
+  if [ ! -s Cargo.lock ]; then
+    echo "::error::the packaged crate carries no Cargo.lock, so cargo install --locked cannot rebuild the tested versions"
+    exit 1
+  fi
+  cp Cargo.lock "$out/shipped-Cargo.lock"
+  # Exactly what `cargo install mcp-gateway` does: no lock, so every dependency
+  # resolves as of today (dev-dependencies left out of the solve). The build
+  # log names each version that was compiled; the normalizer's are echoed.
+  rm Cargo.lock
+  cargo install --path . --debug --root "$out/root" 2>&1 | tee "$out/install.txt"
+  sed -E 's/\x1b\[[0-9;]*m//g' "$out/install.txt" \
+    | grep -E 'Compiling (icu_|zerovec|zerotrie|tinystr|yoke|potential_utf)' || true
+  UNLOCKED_INSTALL_LOG="$out/gateway.log" \
+    bash "$root/scripts/ci/check-unlocked-install.sh" "$out/root/bin/mcp-gateway"
+elif [ "$mode" = build ]; then
   cargo test --all-features --locked --no-run
 else
   # The first two skips are ci.yml `test`'s: each has a dedicated job that
