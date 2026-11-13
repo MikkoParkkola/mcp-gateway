@@ -22,8 +22,14 @@ mod pids;
 mod yaml;
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const READY_BOUND: Duration = Duration::from_secs(60);
+/// What the chain's last process may outlive the configured stop total by: the
+/// poll interval and a loaded host's scheduling, not a second stop.
+const BUDGET_SLACK: Duration = Duration::from_secs(2);
 /// How long a gateway's stop may take before its leaves must be gone: above the 30 s parent timeout, with slack for a loaded host.
 const STOP_BOUND: Duration = Duration::from_secs(45);
+/// The smallest `server.shutdown_timeout` an HTTP gateway accepts. A start below it
+/// is refused, so a row that starts a gateway with it also proves it is accepted.
+const HTTP_MINIMUM: Duration = Duration::from_secs(13);
 /// How long a stdio gateway sent SIGTERM with stdin still open may take to exit. Its worst case is
 /// the 30 s drain, the 10 s teardown bound and the 10 s serve-runtime shutdown bound (the blocked
 /// stdin reader keeps the runtime waiting until that bound), 50 s in all, plus slack for a loaded
@@ -101,13 +107,13 @@ fn write_inner_config(root: &Path, leaves: &[&str], inner_stop: Duration) -> Pat
     }
     save(root, "inner.yaml", &config)
 }
-fn write_outer_config(root: &Path, inner: &Path, seconds: u64) -> PathBuf {
+fn write_outer_config(root: &Path, inner: &Path, total: Duration) -> PathBuf {
     // Record the inner before exec so cleanup also covers failure during warm start.
-    std::fs::write(root.join("inner.py"), "import os, sys\nwith open('inner.pid', 'w') as f: f.write(str(os.getpid()))\nos.execv(sys.argv[1], sys.argv[1:])\n").expect("launcher");
+    std::fs::write(root.join("inner.py"), "import os, sys\nwith open('inner.pid', 'w') as f: f.write(str(os.getpid()))\nos.dup2(os.open('inner.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644), 2)\nos.execv(sys.argv[1], sys.argv[1:])\n").expect("launcher");
     let mut config = base_config(root, "outer");
     config.server.host = "127.0.0.1".into();
     config.server.port = gateway_bin::ANY_PORT;
-    config.server.shutdown_timeout = Duration::from_secs(seconds);
+    config.server.shutdown_timeout = total;
     let mut inner_backend = backend(
         root,
         format!(
@@ -146,8 +152,15 @@ fn write_chain_parent(root: &Path, name: &str, child: &str, child_config: &Path)
     );
     save(root, &format!("{name}.yaml"), &config)
 }
+/// The outer gateway's log, then the inner gateway's own (its stderr goes to `inner.log`),
+/// so a red row prints both stops.
 fn logs(root: &Path) -> String {
-    std::fs::read_to_string(root.join("gateway.log")).unwrap_or_default()
+    let read = |name: &str| std::fs::read_to_string(root.join(name)).unwrap_or_default();
+    format!(
+        "{}\n--- inner.log ---\n{}",
+        read("gateway.log"),
+        read("inner.log")
+    )
 }
 async fn post(
     client: &reqwest::Client,
@@ -269,12 +282,37 @@ fn alive_pids(pids: &[u32]) -> Vec<u32> {
         .collect()
 }
 
-async fn run(seconds: u64, inner_stop: Duration, leaves: &[&str]) {
+/// Sends the SIGTERM, with `started` taken just before it and nothing between: every pid of the
+/// chain dies within `STOP_BOUND`, and a plain stop ends inside the stop budget: the sweep adds no time of its own beyond the
+/// backend stage.
+async fn stop_and_wait_chain_gone(root: &Path, pid: u32, leaves: &[u32], total: Duration) {
+    let deadline = Instant::now() + STOP_BOUND;
+    let started = Instant::now();
+    sigterm(pid);
+    while leaves.iter().any(|pid| pids::alive(*pid)) {
+        assert!(
+            Instant::now() < deadline,
+            "inner or leaf outlived parent stop budget: {:?}\n{}",
+            alive_pids(leaves),
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let gone = started.elapsed();
+    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
+    assert!(
+        gone <= total + BUDGET_SLACK,
+        "the chain outlived the stop budget: {gone:?} against {total:?}\n{}",
+        logs(root)
+    );
+}
+
+async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path().to_path_buf();
     let root = root.as_path();
     let inner = write_inner_config(root, leaves, inner_stop);
-    let config = write_outer_config(root, &inner, seconds);
+    let config = write_outer_config(root, &inner, total);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
     let mut command = tokio::process::Command::from(gateway_bin::command(
         &root.join("home"),
@@ -349,50 +387,41 @@ async fn run(seconds: u64, inner_stop: Duration, leaves: &[&str]) {
         "inner and leaves must be live at stop"
     );
     let deadline = Instant::now() + STOP_BOUND;
-    sigterm(pid);
+    stop_and_wait_chain_gone(root, pid, &leaves, total).await;
     tokio::time::timeout_at(deadline, reaped.child_mut().wait())
         .await
         .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
         .expect("gateway exit");
-    while leaves.iter().any(|pid| pids::alive(*pid)) {
-        assert!(
-            Instant::now() < deadline,
-            "inner or leaf outlived parent stop budget: {:?}\n{}",
-            alive_pids(&leaves),
-            logs(root)
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
     // Safety net only: the gateway has already exited, so this sends no signal.
     reaped.reap().await;
     std::mem::forget(cleanup);
     drop(stdin);
 }
 
-/// A busy inner stops its leaf within the 9 s parent budget plus slack.
+/// A busy inner stops its leaf within the minimum parent budget plus slack.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
-    run(9, Duration::from_secs(8), &["leaf"]).await;
+    run(HTTP_MINIMUM, Duration::from_secs(8), &["leaf"]).await;
 }
 /// The same ownership claim holds with a 30 s parent budget.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it_30s() {
-    run(30, Duration::from_secs(8), &["leaf"]).await;
+    run(Duration::from_secs(30), Duration::from_secs(8), &["leaf"]).await;
 }
-/// Both busy leaves stop within one 9 s parent budget plus 15 s slack.
+/// Both busy leaves stop within one minimum parent budget plus 15 s slack.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_two_leaves_within_one_deadline() {
-    run(9, Duration::from_secs(8), &["leaf_a", "leaf_b"]).await;
+    run(HTTP_MINIMUM, Duration::from_secs(8), &["leaf_a", "leaf_b"]).await;
 }
 
 /// A nested gateway whose own stop outlasts its parent's plan leaves no leaf or grandchild alive.
 /// Red if a stopping stdio gateway ignores its parent's SIGTERM and lets its leaves' waits run past its own kill.
 #[tokio::test]
 async fn a_nested_gateway_whose_own_stop_outlasts_its_parents_plan_leaves_no_leaf() {
-    run(9, Duration::from_secs(30), &["leaf_a", "leaf_b"]).await;
+    run(HTTP_MINIMUM, Duration::from_secs(30), &["leaf_a", "leaf_b"]).await;
 }
 
 /// Each nested hurry must fit its parent's remaining kill window, rather than
@@ -480,6 +509,111 @@ async fn a_three_level_nested_gateway_chain_leaves_no_leaf_after_a_hurry() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let tree = live_chain(root, pid, &leaves);
+    // EOF installs the hurry listener before logging this message. The busy
+    // calls keep teardown pending until the subsequent SIGTERM cuts it short.
+    drop(stdin);
+    let eof_by = Instant::now() + READY_BOUND;
+    while !logs(root).contains("stdio: EOF reached, shutting down") {
+        assert!(
+            Instant::now() < eof_by,
+            "outer never saw EOF\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let hurried_at = Instant::now();
+    sigterm(pid);
+    // Observation time, not a watchdog: the outer kills at ~300 ms; allow
+    // another 2 s for scheduling and exit, not the 6 s reap reserve.
+    tokio::time::sleep_until(hurried_at + Duration::from_millis(2300)).await;
+    assert!(
+        logs(root).contains("shutdown hurried by a signal"),
+        "outer did not hurry\n{}",
+        logs(root)
+    );
+    let alive = alive_pids(&tree);
+    assert!(
+        alive.is_empty(),
+        "chain processes survived the outer's hurry kill window: {alive:?}; all pids: {tree:?}\n{}",
+        logs(root)
+    );
+    tokio::time::timeout(Duration::from_secs(10), reaped.child_mut().wait())
+        .await
+        .expect("outer exit deadline")
+        .expect("outer exit");
+    reaped.reap().await;
+    std::mem::forget(cleanup);
+}
+
+/// A hurried stop (EOF then a second signal) of an outer gateway whose backend is a
+/// gateway with two leaves of its own: the outer's group kill lands before the
+/// inner's own hurried path has killed the leaves, which have their own process
+/// groups, so every pid of the tree must still be dead afterwards.
+/// Red if a gateway-child's leaves outlive the stop (the sweep before the kill is missing).
+#[tokio::test]
+async fn a_two_level_hurried_stop_leaves_no_leaf() {
+    let temp = tempfile::tempdir().expect("temp root");
+    let root = temp.path();
+    let leaves = ["leaf_a", "leaf_b"];
+    let inner = write_inner_config(root, &leaves, Duration::from_secs(30));
+    let outer = write_chain_parent(root, "outer", "inner", &inner);
+    let log = std::fs::File::create(root.join("gateway.log")).expect("log");
+    let mut reaped = gateway_bin::Reaped::new(
+        tokio::process::Command::from(gateway_bin::command(
+            &root.join("home"),
+            gateway_bin::Inherit::Environment,
+        ))
+        .env("RUST_LOG", "mcp_gateway=info")
+        .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
+        .current_dir(root)
+        .arg("--config")
+        .arg(outer)
+        .args(["serve", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(log.try_clone().expect("log handle")))
+        .stderr(Stdio::from(log))
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()
+        .expect("outer gateway"),
+    );
+    let pid = reaped.child_mut().id().expect("outer pid");
+    let cleanup = KillGroup {
+        pid,
+        root: root.into(),
+    };
+    let mut stdin = reaped.child_mut().stdin.take().expect("stdin");
+    let mut messages = vec![
+        initialize(),
+        json!({"jsonrpc":"2.0", "method":"notifications/initialized"}),
+    ];
+    for (id, name) in leaves.iter().enumerate() {
+        let message = invoke(name, id + 1);
+        messages.push(message);
+    }
+    for message in messages {
+        stdin
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .expect("stdio");
+    }
+    let ready_by = Instant::now() + READY_BOUND;
+    while leaves
+        .iter()
+        .any(|name| !root.join(format!("called-{name}")).exists())
+    {
+        assert!(
+            Instant::now() < ready_by,
+            "holds never started\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let mut tree = vec![pid, read_pid(root, "inner.pid")];
+    for name in leaves {
+        tree.push(read_pid(root, &format!("leaf-{name}.pid")));
+        tree.push(read_pid(root, &format!("leaf-{name}.grandchild.pid")));
+    }
     // EOF installs the hurry listener before logging this message. The busy
     // calls keep teardown pending until the subsequent SIGTERM cuts it short.
     drop(stdin);

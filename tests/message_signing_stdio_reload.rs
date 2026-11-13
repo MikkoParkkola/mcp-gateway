@@ -23,9 +23,10 @@ use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
+use signing_gateway::gateway_bin::{Reaped, Teardown};
 use signing_gateway::{BACKEND, BackendFixture, KEY, child_command, fixture_config, invoke};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::process::{ChildStdin, ChildStdout};
 
 const KEY_ID: &str = "signing-test-current";
 const PREVIOUS: &str = "signing-test-previous-key-0123456789abcdef";
@@ -37,11 +38,11 @@ const NOT_ENABLED: &str = "Config reload is not enabled on this gateway";
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct StdioGateway {
-    _child: Child,
-    _directory: tempfile::TempDir,
     config_path: PathBuf,
     input: ChildStdin,
     output: Lines<BufReader<ChildStdout>>,
+    /// Declared last, so it drops last: the pipes close first (EOF reaches the gateway), then `Reaped` waits for it.
+    _process: Reaped,
 }
 
 impl StdioGateway {
@@ -59,8 +60,11 @@ impl StdioGateway {
         let input = child.stdin.take().expect("gateway stdin");
         let output = BufReader::new(child.stdout.take().expect("gateway stdout")).lines();
         let mut gateway = Self {
-            _child: child,
-            _directory: directory,
+            _process: {
+                let mut process = Reaped::new(child).with_teardown(Teardown::DrainThenRemove);
+                process.owning(directory);
+                process
+            },
             config_path,
             input,
             output,
