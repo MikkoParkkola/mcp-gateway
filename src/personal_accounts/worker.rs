@@ -554,10 +554,32 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         }
     }
 
+    /// A guard for a serve's whole body: dropped by any exit (an early error
+    /// return, a cancelled future, the normal end after the stop's own detach),
+    /// it hands the store to a release thread, so the gateway's drop never
+    /// releases it on that thread. Idempotent with [`Self::detach_release`].
+    pub(crate) fn detach_on_drop(self: &Arc<Self>) -> DetachOnDrop<P, O> {
+        DetachOnDrop(Arc::clone(self))
+    }
+
     /// Test seam: the next release thread fails to start.
     #[cfg(test)]
     pub(crate) fn fail_next_release_spawn(&self) {
         self.fail_next_spawn.store(true, Ordering::SeqCst);
+    }
+}
+
+/// See [`CustodyHandle::detach_on_drop`].
+pub(crate) struct DetachOnDrop<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static>(
+    Arc<CustodyHandle<P, O>>,
+);
+
+impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Drop
+    for DetachOnDrop<P, O>
+{
+    fn drop(&mut self) {
+        // STUB for the red run: the real guard detaches.
+        let _ = &self.0;
     }
 }
 

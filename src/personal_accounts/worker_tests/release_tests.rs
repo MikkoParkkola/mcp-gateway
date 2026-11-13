@@ -519,3 +519,157 @@ fn after_a_cut_custody_step_the_final_detach_keeps_the_last_drop_off_the_caller(
         );
     });
 }
+
+/// Hold `alice` in the provider through a real operation, which keeps one permit
+/// until the returned sender lets it go. Returns once the provider is entered.
+async fn hold_a_permit(fx: &Fixture) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    let (entered, release) = fx.provider.hold(&alice());
+    let op = {
+        let handle = Arc::clone(&fx.handle);
+        tokio::spawn(async move {
+            let _ = handle.refresh_if_expired(&alice()).await;
+        })
+    };
+    tokio::time::timeout(HANG_BOUND, entered)
+        .await
+        .expect("the provider was entered")
+        .expect("entry signal");
+    (release, op)
+}
+
+/// Yield on a current-thread runtime until a spawned shutdown has refused new
+/// work: it then has read the slot and is parked in the permit drain, because
+/// nothing between the refusal and the drain awaits.
+async fn until_draining(fx: &Fixture) {
+    while !fx.handle.shutting_down.load(Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
+}
+
+/// A shutdown that read `Open` and drained behind an operation must not wait on
+/// done when, meanwhile, a detach could not start its thread and left the store
+/// stuck: the unbounded call returns `ReleaseStuck` instead of hanging.
+#[test]
+fn a_shutdown_draining_behind_a_failed_detach_reports_stuck_not_a_hang() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), grant())]);
+
+    current_thread(async {
+        let fx = start(tmp.path(), 2);
+        let (release, op) = hold_a_permit(&fx).await;
+        let waiting = {
+            let handle = Arc::clone(&fx.handle);
+            tokio::spawn(async move { handle.shutdown().await })
+        };
+        until_draining(&fx).await;
+        fx.handle.fail_next_release_spawn();
+        fx.handle.detach_release();
+        let _ = release.send(());
+        let _ = op.await;
+        let outcome = tokio::time::timeout(HANG_BOUND, waiting)
+            .await
+            .expect("the draining shutdown returned instead of waiting forever")
+            .expect("the shutdown task");
+        assert!(
+            matches!(outcome, Err(CustodyError::ReleaseStuck)),
+            "a stuck store after the drain: {outcome:?}"
+        );
+    });
+}
+
+/// A bounded shutdown whose drain runs out after a detach already started the
+/// release reports that release (`ReleasePending`), not `InFlightPending`.
+#[test]
+fn a_drain_cut_after_a_detach_reports_the_running_release() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), grant())]);
+
+    current_thread(async {
+        let fx = start(tmp.path(), 2);
+        let (release, op) = hold_a_permit(&fx).await;
+        let waiting = {
+            let handle = Arc::clone(&fx.handle);
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+            tokio::spawn(async move { handle.shutdown_by(deadline).await })
+        };
+        until_draining(&fx).await;
+        fx.handle.detach_release();
+        let end = tokio::time::timeout(HANG_BOUND, waiting)
+            .await
+            .expect("the bounded shutdown returned")
+            .expect("the shutdown task");
+        let end = refuse_scaffold(end, "bounded shutdown").expect("outcome");
+        // The operation still owns the service, so the release cannot be done yet.
+        assert_eq!(end, ShutdownEnd::ReleasePending);
+        let _ = release.send(());
+        let _ = op.await;
+        refuse_scaffold(fx.handle.shutdown().await, "shutdown after the release")
+            .expect("released");
+        assert!(store_is_free(tmp.path()));
+    });
+}
+
+/// A standalone (unbounded) shutdown whose release thread cannot start drops the
+/// store on the blocking pool, never inline and never leaked: it returns Ok, the
+/// locks are free, and the drop ran off the calling thread.
+#[test]
+fn an_unbounded_shutdown_whose_spawn_fails_still_releases_off_the_caller() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+
+    multi_thread(async {
+        let fx = start(tmp.path(), 2);
+        let caller = std::thread::current().id();
+        fx.handle.fail_next_release_spawn();
+        let done = tokio::time::timeout(HANG_BOUND, fx.handle.shutdown())
+            .await
+            .expect("the unbounded shutdown returned");
+        refuse_scaffold(done, "unbounded shutdown").expect("released");
+        assert!(store_is_free(tmp.path()), "the locks were not freed");
+        let dropped_on = fx
+            .provider
+            .drop_thread
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the store was dropped by now");
+        assert_ne!(dropped_on, caller, "the drop ran on the calling thread");
+    });
+}
+
+/// A serve that ends by any path (an early error return, a cancelled future)
+/// drops its guard: the guard hands the store to a release thread and returns at
+/// once, so the gateway's own drop never releases the store on that thread.
+#[test]
+fn dropping_the_serve_guard_detaches_the_release() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+
+    multi_thread(async {
+        let fx = start(tmp.path(), 2);
+        let stall = stall_release(&fx);
+        let caller = std::thread::current().id();
+        let began = std::time::Instant::now();
+        drop(fx.handle.detach_on_drop());
+        assert!(
+            began.elapsed() < RELEASE_HANG_GUARD / 4,
+            "the guard's drop waited on the stalled release"
+        );
+        assert!(
+            stall.entered.recv_timeout(HANG_BOUND).is_ok(),
+            "the guard's drop started no release"
+        );
+        stall.let_go();
+        refuse_scaffold(fx.handle.shutdown().await, "shutdown after the guard").expect("released");
+        let dropped_on = fx
+            .provider
+            .drop_thread
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the store was dropped by now");
+        assert_ne!(dropped_on, caller, "the drop ran on the calling thread");
+    });
+}
