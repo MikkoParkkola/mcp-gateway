@@ -122,6 +122,13 @@ pub(crate) fn decisions_from_record(record: &UiDecisionRecord) -> Option<Vec<UiD
 
 /// How long an accepted grant lasts: the ttl the administrator asked for,
 /// or for good.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "staged: the accept route, a later part, calls this"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AcceptTtl {
     /// For this many seconds from the first attempt.
@@ -141,6 +148,13 @@ fn push_field(bytes: &mut Vec<u8>, text: &str) {
 /// length-prefixed subject, agent, digest, every refusal position (sorted)
 /// and the ttl. It leaves out the generation and the expiry, so a retry and
 /// a partial revoke keep the ids of the rows still live.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "staged: the accept route, a later part, calls this"
+    )
+)]
 pub(crate) fn accept_key(request: &OpenRequest, scope_digest: &str, ttl: AcceptTtl) -> String {
     let parts = sorted_positions(request);
     let mut bytes = b"mcpg/ui-decision/accept-key/v1\0".to_vec();
@@ -169,6 +183,13 @@ pub(crate) fn accept_key(request: &OpenRequest, scope_digest: &str, ttl: AcceptT
 /// The audit event id of an accept: its key and `generation`, the count of
 /// the request's rows revoked or expired when it ran. A retry has the same
 /// id; a new accept after a revoke has another.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "staged: the accept route, a later part, calls this"
+    )
+)]
 pub(crate) fn accept_event_id(key: &str, generation: u64) -> String {
     let mut bytes = b"mcpg/ui-decision/accept/v1\0".to_vec();
     push_field(&mut bytes, key);
@@ -179,6 +200,13 @@ pub(crate) fn accept_event_id(key: &str, generation: u64) -> String {
 /// The grant row id an accept writes for `capability`: its key, the
 /// capability and `generation`, that capability's rows revoked or expired
 /// when it ran. Only a revoked capability gets a new id.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "staged: the accept route, a later part, calls this"
+    )
+)]
 pub(crate) fn accept_row_id(key: &str, capability: &str, generation: u64) -> String {
     let mut bytes = b"mcpg/ui-decision/row/v1\0".to_vec();
     push_field(&mut bytes, key);

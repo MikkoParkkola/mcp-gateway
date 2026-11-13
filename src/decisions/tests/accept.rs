@@ -5,10 +5,8 @@
 
 use serde_json::{Value, json};
 
-use super::super::{
-    AcceptTtl, LogPos, OpenRequest, Source, accept_event_id, accept_key, accept_row_id,
-    decision_record, decisions_from_record,
-};
+use super::super::record::{AcceptTtl, accept_event_id, accept_key, accept_row_id};
+use super::super::{LogPos, OpenRequest, Source, decision_record, decisions_from_record};
 use super::{AGENT, at, count, deny, grant, missing, ready};
 use crate::control_plane::{UiDecisionKind, UiDecisionRecord};
 use crate::identity_grants::GrantScope;

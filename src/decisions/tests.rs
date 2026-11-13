@@ -754,3 +754,4 @@ fn held_notes_are_bounded_and_a_lost_one_forces_another_replay() {
 mod accept;
 mod discovery;
 mod positions;
+mod staged;

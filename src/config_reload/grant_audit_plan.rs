@@ -229,6 +229,13 @@ fn journal_record(entry: &JournalEntry) -> Draft {
 
 /// A grant row an accept's audit record names: the row id, its digest and
 /// the record's event id.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "staged: the reload lookup, a later part, builds claims"
+    )
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Claim {
     pub(super) row_id: String,
