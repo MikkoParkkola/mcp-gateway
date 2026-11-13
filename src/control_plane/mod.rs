@@ -26,7 +26,7 @@ pub use store::{
     AuditCursor, AuditFilter, AuditPage, ControlPlaneStore, FileControlPlaneStore,
     InMemoryControlPlaneStore, StoreError, StoreResult,
 };
-pub use ui_decision::{UiDecisionEntry, UiDecisionRecord};
+pub use ui_decision::{UiDecisionEntry, UiDecisionKind, UiDecisionRecord};
 
 /// License tier for control-plane capabilities.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

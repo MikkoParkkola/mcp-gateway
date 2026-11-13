@@ -7,7 +7,7 @@
 //! refusal positions the admin was shown, so a later refusal of the same
 //! capability has another position and opens the request again.
 
-use crate::control_plane::{UiDecisionEntry, UiDecisionRecord};
+use crate::control_plane::{UiDecisionEntry, UiDecisionKind, UiDecisionRecord};
 
 use super::items::OpenRequest;
 use super::{LogPos, Source, UiDecision};
@@ -66,6 +66,9 @@ pub(crate) fn decision_record(request: &OpenRequest, digest: &str) -> UiDecision
         subject: request.subject.clone(),
         agent: request.agent.clone(),
         scope_digest: digest.to_owned(),
+        decision: Some(UiDecisionKind::Decline),
+        rows: Vec::new(),
+        expires_at: None,
         entries: request
             .entries
             .iter()
@@ -83,7 +86,9 @@ pub(crate) fn decision_record(request: &OpenRequest, digest: &str) -> UiDecision
 /// A recorded deny read back into its decisions; `None` for a record that
 /// names no capability, or a capability with no refusal.
 pub(crate) fn decisions_from_record(record: &UiDecisionRecord) -> Option<Vec<UiDecision>> {
-    if record.entries.is_empty() {
+    // Only a decline closes refusals: an accept closes its request once its
+    // rows are published, so a revoke of them can open it again.
+    if !record.is_decline() || record.entries.is_empty() {
         return None;
     }
     record

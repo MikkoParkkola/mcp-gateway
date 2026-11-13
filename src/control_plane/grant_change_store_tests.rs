@@ -85,6 +85,9 @@ fn a_ui_decision_round_trips_and_only_adds_its_own_key() {
             capability: "stripe.charges".to_string(),
             positions: vec![("h1".to_string(), 7)],
         }],
+        decision: None,
+        rows: Vec::new(),
+        expires_at: None,
     };
     let mut decided = event("d1", None);
     decided.ui_decision = Some(decision.clone());
