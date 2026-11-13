@@ -86,3 +86,6 @@ pub(crate) fn delete_unused(
 #[cfg(test)]
 #[path = "unused_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "unused_delete_tests.rs"]
+mod delete_tests;
