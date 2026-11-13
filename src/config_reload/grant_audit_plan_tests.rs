@@ -207,3 +207,35 @@ fn an_accounted_row_survives_a_state_round_trip() {
     let changed = vec![row("g1", "another reason")];
     assert_eq!(out_of_band(&run(&after, &changed, none, &[]).0), ["g1"]);
 }
+
+/// JRN.3: a served row whose digest is not the one its records name is
+/// recorded out-of-band and warned with the file, the row and both digests
+/// (control: a row whose digest matches is neither recorded nor warned).
+#[test]
+fn a_row_changed_outside_the_gateway_is_warned_with_both_digests() {
+    let before = row("g1", "r");
+    let after = row("g1", "edited");
+    let state = State {
+        grants: Some(BTreeMap::from([("g1".to_owned(), grant_digest(&before))])),
+        ..based()
+    };
+    let none = &JournalRead::Missing;
+    let ((same, _), quiet) = crate::test_log_capture::capture_warnings(|| {
+        run(&state, std::slice::from_ref(&before), none, &[])
+    });
+    assert!(same.is_empty(), "control: {:?}", out_of_band(&same));
+    assert!(!quiet.contains("outside the gateway"), "control: {quiet}");
+    let ((records, _), logs) = crate::test_log_capture::capture_warnings(|| {
+        run(&state, std::slice::from_ref(&after), none, &[])
+    });
+    assert_eq!(out_of_band(&records), ["g1"]);
+    for part in [
+        "outside the gateway",
+        GRANTS,
+        "g1",
+        &grant_digest(&before),
+        &grant_digest(&after),
+    ] {
+        assert!(logs.contains(part), "{part}: {logs}");
+    }
+}

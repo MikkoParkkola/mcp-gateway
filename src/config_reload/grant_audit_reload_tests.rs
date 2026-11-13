@@ -289,3 +289,25 @@ async fn torn_multibyte_line_does_not_block_later_entries() {
         "{got:?}"
     );
 }
+
+/// JRN.3: the reload counts the rows changed outside the gateway in its
+/// answer, and records them with no actor.
+#[tokio::test]
+async fn a_reload_counts_rows_changed_outside_the_gateway() {
+    let r = Reload::new();
+    r.cli(add(row("g1", "r"))).await;
+    let first = r.reload().await.unwrap();
+    assert!(!first.contains("outside the gateway"), "control: {first}");
+    crate::identity_grants::write_identity_grants_file(
+        &r.grants,
+        &crate::identity_grants::IdentityGrantFile::new(vec![row("g1", "edited")]),
+    )
+    .await
+    .unwrap();
+    let outcome = r.reload().await.unwrap();
+    assert!(
+        outcome.contains("1 changed outside the gateway"),
+        "{outcome}"
+    );
+    assert_eq!(r.verbs().last(), Some(&(V::OutOfBand, "g1".into())));
+}
