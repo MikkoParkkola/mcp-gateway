@@ -203,7 +203,8 @@ fn hash_key_never_repeats_a_key_typed_as_an_argument() {
 /// `--help` after a failing argument does not change that, and help itself
 /// still prints.
 /// Mutant: give every command the fixed message, match the path by prefix,
-/// let a later `--help` decide the path, or replace help.
+/// let a later `--help` decide the path, read only the first level of the
+/// path, or replace help.
 #[test]
 fn other_parse_errors_and_help_keep_the_parsers_own_output() {
     for argv in [
@@ -212,6 +213,15 @@ fn other_parse_errors_and_help_keep_the_parsers_own_output() {
         vec!["list", "--no-such-flag-77c2"],
         vec!["audit", "show", "--no-such-flag-77c2"],
         vec!["audit", "verify", "--no-such-flag-77c2", "--help"],
+        // The parse recorded `audit verify`, so a later value spelled like a
+        // secret command does not select the fixed message.
+        vec![
+            "audit",
+            "verify",
+            "--no-such-flag-77c2",
+            "--path",
+            "lookup-email",
+        ],
     ] {
         let output = run_bare(&argv);
         let text = combined_output(&output);
