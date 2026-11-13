@@ -443,6 +443,13 @@ fn handover_fifo_and_symlink_refused() {
             let mut rig = rig(|_| {});
             let target = rig.dir().join("elsewhere");
             std::fs::write(&target, good_file()).expect("symlink target");
+            {
+                // Private, so a followed link would pass every other check: only refusing to
+                // follow the link itself can turn it away.
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
+                    .expect("mode");
+            }
             let link = abandoned_path(&rig.path);
             std::os::unix::fs::symlink(&target, &link).expect("symlink");
             let (journal_before, target_before) =
