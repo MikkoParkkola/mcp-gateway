@@ -1,0 +1,5 @@
+head_sha	c2ba014c1c6d903f995af18f3d217557a66b4e8f
+#mutant c9460.w2
+mcp_gateway	gateway::server::gateway_bootstrap_tests::an_http_serve_that_returns_early_starts_the_custody_release	src/gateway/server/gateway_bootstrap_tests.rs:606
+#mutant c9460.w3
+mcp_gateway	gateway::server::gateway_bootstrap_tests::a_cancelled_stdio_serve_starts_the_custody_release	src/gateway/server/gateway_bootstrap_tests.rs:674
