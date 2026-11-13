@@ -33,24 +33,27 @@ fn request() -> OpenRequest {
     }
 }
 
+/// The administrator who accepts.
+const ADMIN: &str = "admin-1";
+
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 /// R1a: the encoding is pinned by fixed vectors, computed outside this code
 /// from the documented layout.
 #[test]
 fn the_accept_ids_match_their_fixed_vectors() {
-    let key = accept_key(&request(), DIGEST, AcceptTtl::Seconds(3600));
+    let key = accept_key(&request(), ADMIN, DIGEST, AcceptTtl::Seconds(3600));
     assert_eq!(
         key,
-        "04164a0566799ce5aae33c2af81d9f63f9e36c43fb5034dc953137aa015790da"
+        "5a978ef54b8a7f2d6b2b15f1ffe4fc5544bdd6bcc475e42788de0de3e016d1f4"
     );
     assert_eq!(
         accept_event_id(&key, 0),
-        "2936c618c3e6bd23b54302cc5797262a9b008af8f312f3f911462867351e15a8"
+        "c4928fcdd7a9a09b80d7a6669f42d44fd004037e8b83ec3b87538e3d49e1f3dd"
     );
     assert_eq!(
         accept_row_id(&key, "stripe.charges", 0),
-        "8a0116befcda5b31b08900e3f0a6f29280a4257e626b7fbd352626bbfcda734f"
+        "6f1a1fdf31d9deb1a3bc83cfe8b2b312acdac24c90437a7ae839137dd9898c00"
     );
 }
 
@@ -58,15 +61,18 @@ fn the_accept_ids_match_their_fixed_vectors() {
 /// does not.
 #[test]
 fn each_accept_input_changes_the_key_and_the_listing_order_does_not() {
-    let base = accept_key(&request(), DIGEST, AcceptTtl::Seconds(60));
+    let base = accept_key(&request(), ADMIN, DIGEST, AcceptTtl::Seconds(60));
     let mut reordered = request();
     reordered.entries.reverse();
-    assert_eq!(accept_key(&reordered, DIGEST, AcceptTtl::Seconds(60)), base);
+    assert_eq!(
+        accept_key(&reordered, ADMIN, DIGEST, AcceptTtl::Seconds(60)),
+        base
+    );
 
     let changed = |edit: &dyn Fn(&mut OpenRequest)| {
         let mut other = request();
         edit(&mut other);
-        accept_key(&other, DIGEST, AcceptTtl::Seconds(60))
+        accept_key(&other, ADMIN, DIGEST, AcceptTtl::Seconds(60))
     };
     assert_ne!(changed(&|r| r.authority.push('x')), base, "authority");
     assert_ne!(changed(&|r| r.subject.push('x')), base, "subject");
@@ -77,19 +83,24 @@ fn each_accept_input_changes_the_key_and_the_listing_order_does_not() {
         "a position"
     );
     assert_ne!(changed(&|r| r.entries[0].0.push('x')), base, "a capability");
+    assert_ne!(
+        accept_key(&request(), "admin-2", DIGEST, AcceptTtl::Seconds(60)),
+        base,
+        "another administrator"
+    );
     let digest = "b".repeat(64);
     assert_ne!(
-        accept_key(&request(), &digest, AcceptTtl::Seconds(60)),
+        accept_key(&request(), ADMIN, &digest, AcceptTtl::Seconds(60)),
         base,
         "digest"
     );
     assert_ne!(
-        accept_key(&request(), DIGEST, AcceptTtl::Seconds(120)),
+        accept_key(&request(), ADMIN, DIGEST, AcceptTtl::Seconds(120)),
         base,
         "ttl"
     );
     assert_ne!(
-        accept_key(&request(), DIGEST, AcceptTtl::Permanent),
+        accept_key(&request(), ADMIN, DIGEST, AcceptTtl::Permanent),
         base,
         "permanent"
     );
@@ -105,8 +116,15 @@ fn the_accept_key_keeps_its_field_boundaries() {
     two.authority = "a".to_owned();
     two.subject = "bc".to_owned();
     assert_ne!(
-        accept_key(&one, DIGEST, AcceptTtl::Permanent),
-        accept_key(&two, DIGEST, AcceptTtl::Permanent)
+        accept_key(&one, ADMIN, DIGEST, AcceptTtl::Permanent),
+        accept_key(&two, ADMIN, DIGEST, AcceptTtl::Permanent)
+    );
+    // The agent and the administrator are neighbouring fields too.
+    let mut three = request();
+    three.agent.push('x');
+    assert_ne!(
+        accept_key(&three, ADMIN, DIGEST, AcceptTtl::Permanent),
+        accept_key(&request(), "xadmin-1", DIGEST, AcceptTtl::Permanent)
     );
 }
 
@@ -115,7 +133,7 @@ fn the_accept_key_keeps_its_field_boundaries() {
 /// revoke the live row keeps its id.
 #[test]
 fn generations_move_only_the_ids_they_belong_to() {
-    let key = accept_key(&request(), DIGEST, AcceptTtl::Permanent);
+    let key = accept_key(&request(), ADMIN, DIGEST, AcceptTtl::Permanent);
     assert_ne!(accept_event_id(&key, 0), accept_event_id(&key, 1));
     let live = accept_row_id(&key, "stripe.charges", 0);
     let revoked_before = accept_row_id(&key, "stripe.refunds", 0);

@@ -143,11 +143,13 @@ fn push_field(bytes: &mut Vec<u8>, text: &str) {
     bytes.extend(text.as_bytes());
 }
 
-/// What an accept of `request` is, at the scope digest the administrator
-/// was shown and with `ttl`: a SHA-256 over a domain separator and the
-/// length-prefixed subject, agent, digest, every refusal position (sorted)
-/// and the ttl. It leaves out the generation and the expiry, so a retry and
-/// a partial revoke keep the ids of the rows still live.
+/// What an accept of `request` by `actor` is, at the scope digest the
+/// administrator was shown and with `ttl`: a SHA-256 over a domain separator
+/// and the length-prefixed authority, subject, agent, actor, digest, every
+/// refusal position (sorted) and the ttl. Another administrator's accept is
+/// another decision, not a retry. It leaves out the generation and the
+/// expiry, so a retry and a partial revoke keep the ids of the rows still
+/// live.
 #[cfg_attr(
     not(test),
     expect(
@@ -155,13 +157,19 @@ fn push_field(bytes: &mut Vec<u8>, text: &str) {
         reason = "staged: the accept route, a later part, calls this"
     )
 )]
-pub(crate) fn accept_key(request: &OpenRequest, scope_digest: &str, ttl: AcceptTtl) -> String {
+pub(crate) fn accept_key(
+    request: &OpenRequest,
+    actor: &str,
+    scope_digest: &str,
+    ttl: AcceptTtl,
+) -> String {
     let parts = sorted_positions(request);
     let mut bytes = b"mcpg/ui-decision/accept-key/v1\0".to_vec();
     for text in [
         request.authority.as_str(),
         request.subject.as_str(),
         request.agent.as_str(),
+        actor,
         scope_digest,
     ] {
         push_field(&mut bytes, text);
