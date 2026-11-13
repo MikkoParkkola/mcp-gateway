@@ -12,15 +12,11 @@ use super::super::{
 };
 use super::{AGENT, at, count, decision, deny, missing, pos, ready};
 
-fn close(capability: &str, offsets: &[u64]) -> Fold {
-    Fold::Decided(decision(capability, offsets))
-}
-
 #[test]
 fn a_position_close_leaves_a_refusal_at_an_equal_time_open() {
     let mut set = ready();
     deny(&mut set, 1, &missing("stripe.charges", 5));
-    set.live(pos(Source::Access, 2), close("stripe.charges", &[1]));
+    set.apply_decisions(vec![decision("stripe.charges", &[1])]);
     assert_eq!(count(&set), 0, "the shown refusal is closed");
     // The same minute, another position: not what the admin saw.
     deny(&mut set, 3, &missing("stripe.charges", 5));
@@ -39,14 +35,14 @@ fn a_decision_folded_after_a_later_refusal_closes_only_its_own() {
     let mut set = ready();
     deny(&mut set, 1, &missing("stripe.charges", 5));
     deny(&mut set, 2, &missing("stripe.charges", 6));
-    set.live(pos(Source::ControlPlane, 1), close("stripe.charges", &[1]));
+    set.apply_decisions(vec![decision("stripe.charges", &[1])]);
     assert_eq!(count(&set), 1, "the later refusal stays open");
 }
 
 #[test]
 fn a_decision_replayed_before_its_refusals_closes_them_all_the_same() {
     let mut set = ready();
-    set.replayed(pos(Source::Access, 9), close("stripe.charges", &[1, 2]));
+    set.apply_decisions(vec![decision("stripe.charges", &[1, 2])]);
     set.replayed(
         pos(Source::Access, 1),
         Fold::Denial(missing("stripe.charges", 5)),
@@ -63,7 +59,7 @@ fn a_decision_replayed_before_its_refusals_closes_them_all_the_same() {
 fn a_position_close_is_dropped_with_its_refusals_at_the_retention_edge() {
     let mut set = ready();
     deny(&mut set, 1, &missing("stripe.charges", 5));
-    set.live(pos(Source::Access, 2), close("stripe.charges", &[1]));
+    set.apply_decisions(vec![decision("stripe.charges", &[1])]);
     set.evict_before(5);
     assert!(
         set.requested.is_empty(),
@@ -85,6 +81,16 @@ fn request() -> OpenRequest {
             ("stripe.charges".to_string(), positions(&[1])),
         ],
     }
+}
+
+/// The id's layout is pinned by a vector computed outside this code from the
+/// documented encoding, so a change to the encoder cannot move it unseen.
+#[test]
+fn the_event_id_matches_its_fixed_vector() {
+    assert_eq!(
+        event_id(&request()),
+        "51fb8053d14f565dadf0e07d194788b27146441b712629300251c2c9b70438c5"
+    );
 }
 
 #[test]

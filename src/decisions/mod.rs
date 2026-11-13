@@ -84,13 +84,12 @@ pub(crate) struct UiDecision {
     pub(crate) closes: BTreeSet<LogPos>,
 }
 
-/// One event for the set, from either log.
+/// One event for the set from the access log. UI decisions are not events:
+/// they come from the governance audit through `apply_decisions`.
 #[derive(Debug, Clone)]
 pub(crate) enum Fold {
     /// A grant-decision note.
     Denial(IdentityGrantAuditEvent),
-    /// A UI decision.
-    Decided(UiDecision),
 }
 
 /// One capability whose pinned bytes no longer match their pin, as the
@@ -316,20 +315,16 @@ impl DecisionSet {
 
     /// Apply one event. A repeat at the same position changes nothing.
     fn fold(&mut self, pos: LogPos, event: Fold) {
-        match event {
-            Fold::Denial(event) => {
-                let Some((key, capability)) = access_key(&event) else {
-                    return;
-                };
-                let requested = self.requested.entry((key, capability)).or_default();
-                let newest = requested.refused.values().max().copied();
-                requested.refused.insert(pos, event.timestamp);
-                if newest.is_none_or(|newest| event.timestamp >= newest) {
-                    requested.tool = event.tool;
-                    requested.scope = Some(event.scope);
-                }
-            }
-            Fold::Decided(decision) => self.fold_decided(decision),
+        let Fold::Denial(event) = event;
+        let Some((key, capability)) = access_key(&event) else {
+            return;
+        };
+        let requested = self.requested.entry((key, capability)).or_default();
+        let newest = requested.refused.values().max().copied();
+        requested.refused.insert(pos, event.timestamp);
+        if newest.is_none_or(|newest| event.timestamp >= newest) {
+            requested.tool = event.tool;
+            requested.scope = Some(event.scope);
         }
     }
 
@@ -348,9 +343,9 @@ impl DecisionSet {
     }
 
     /// Apply UI decisions now, never held behind a replay: the resolve route
-    /// folds what it just wrote so the item leaves the queue at once. A
-    /// decision is order-independent, so the log's own delivery of the same
-    /// record later changes nothing.
+    /// folds what it just wrote so the item leaves the queue at once, and the
+    /// start folds the ones the governance audit recorded. A decision is
+    /// order-independent, so applying the same one again changes nothing.
     pub(crate) fn apply_decisions(&mut self, decisions: Vec<UiDecision>) {
         for decision in decisions {
             self.fold_decided(decision);

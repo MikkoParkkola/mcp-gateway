@@ -272,7 +272,7 @@ async fn a_deny_records_one_audit_event_and_the_item_is_gone_now_and_after_a_res
     let caller = crate::gateway::ui::control_plane::mutations::actor_from_client(
         Some(&client(true)),
         None,
-        &Default::default(),
+        &crate::control_plane::ControlPlaneRoleMappingConfig::default(),
     );
     assert_eq!(
         kept[0].actor_id, caller.actor_id,

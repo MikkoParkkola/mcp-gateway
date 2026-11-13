@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::super::{
     AcceptTtl, LogPos, OpenRequest, Source, accept_event_id, accept_key, accept_row_id,
-    decision_record, decisions_from_record, event_id,
+    decision_record, decisions_from_record,
 };
 use super::{AGENT, at, count, deny, grant, missing, ready};
 use crate::control_plane::{UiDecisionKind, UiDecisionRecord};
@@ -53,16 +53,6 @@ fn the_accept_ids_match_their_fixed_vectors() {
     assert_eq!(
         accept_row_id(&key, "stripe.charges", 0),
         "8a0116befcda5b31b08900e3f0a6f29280a4257e626b7fbd352626bbfcda734f"
-    );
-}
-
-/// The deny's event id keeps its layout now that it shares the accept's
-/// encoding: pinned by a vector computed outside this code.
-#[test]
-fn the_deny_event_id_matches_its_fixed_vector() {
-    assert_eq!(
-        event_id(&request()),
-        "b00d52d0577960aabd36254d9f11b35071bbcfca4e47a2a84428659ec612d6b9"
     );
 }
 
