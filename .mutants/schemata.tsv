@@ -1,0 +1,5 @@
+head_sha	d4119740f693a5f68b6e4be381f63cde75bf051f
+#mutant delivery-expiry-ignored
+mcp_gateway	gateway::ui::activity::key_lookup_route_tests::page::a_token_that_expires_while_its_read_runs_is_refused_at_delivery	src/gateway/ui/activity/key_lookup_route_tests/page.rs:568
+#mutant ceiling-ignored
+mcp_gateway	gateway::ui::activity::key_lookup_route_tests::page::a_token_is_alive_until_its_expiry_and_its_chains_ceiling	src/gateway/ui/activity/key_lookup_route_tests/page.rs:432
