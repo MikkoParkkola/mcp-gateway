@@ -675,6 +675,9 @@ class Rows(unittest.TestCase):
             # `env` and quoted assignment prefixes are peeled off
             "env FOO=x python3 scripts/d.py": [("scripts/d.py", ())],
             'FOO="a b" python3 scripts/e.py': [("scripts/e.py", ())],
+            # the memory-log wrapper is read through: the command it runs is the execution
+            'scripts/ci/with-memory-log.sh python3 scripts/ci/w.py run "$P" 2>&1': [("scripts/ci/w.py", ("run", "$P"))],
+            "scripts/ci/with-memory-log.sh scripts/ci/v.sh build": [("scripts/ci/v.sh", ("build",))],
             # a chain operator inside a substitution does not split the command
             'v="$(true && python3 scripts/f.py)"': [("scripts/f.py", ())],
         }
