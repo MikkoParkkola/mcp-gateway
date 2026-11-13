@@ -26,7 +26,7 @@ fn gateway_target() -> Value {
 /// One cell: the answer with the name blanked, and every response row's
 /// `policy_targets` for the call.
 async fn cell(server: &str) -> (String, Vec<Value>) {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let audit = dir.path().join("firewall.jsonl");
     let fx = fixture_firewalled_audited(Answer::Ok, audit.clone()).await;
     let call = json!({"name": "gateway_invoke",

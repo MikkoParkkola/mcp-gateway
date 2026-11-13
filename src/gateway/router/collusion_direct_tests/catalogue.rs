@@ -286,7 +286,7 @@ async fn direct_classified_read_is_a_relay_source() {
 /// fingerprint, and each names its own.
 #[tokio::test]
 async fn meta_catalogue_relay_audit_names_the_callers_session() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("firewall-audit.ndjson");
     let observe = Setup {
         action: CollusionAction::Observe,

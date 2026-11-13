@@ -59,8 +59,12 @@ mod meta_refusal_audit;
 #[cfg(any(test, feature = "webui"))]
 pub(crate) use identity::grant_subject_from_verified_identity;
 pub(crate) mod helpers;
+#[cfg(feature = "webui")]
+mod lookup_budget;
 mod origin_guard;
 mod process_facts;
+#[cfg(feature = "webui")]
+pub(crate) use lookup_budget::{Charge, LookupBudget};
 pub use process_facts::{ProcessFacts, ProcessStart};
 mod view_judge;
 mod watch_poll;

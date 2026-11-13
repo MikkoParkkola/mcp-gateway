@@ -185,7 +185,7 @@ pub(super) async fn fixture_with(setup: Setup) -> Fx {
     };
     let (mut state, store) =
         test_router_app_state_with_auth_and_config(&auth, crate::config::Config::default()).await;
-    let audit = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let audit = crate::test_dir_keep::kept_tempdir();
     let audit_path = audit.path().join("audit.jsonl");
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(

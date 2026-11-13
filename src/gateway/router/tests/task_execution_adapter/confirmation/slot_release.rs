@@ -24,7 +24,7 @@ async fn logged(
         crate::gateway::router::tests::FixtureDir,
     ),
 ) {
-    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = logger(&dir, AuditFailurePolicy::FailClosed);
     let sink = Arc::clone(&log);
     let (state, store) = fixture_with(mock, crate::config::Config::default(), move |meta| {

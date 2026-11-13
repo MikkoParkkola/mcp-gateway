@@ -221,7 +221,7 @@ pub(super) struct Twin {
     /// O3's drift switch.
     pub(super) drifted: Arc<std::sync::atomic::AtomicBool>,
     pub(super) audit: PathBuf,
-    pub(super) _dir: tempfile::TempDir,
+    pub(super) _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 /// What one call answered: status, body without `id`, and the backend's
@@ -243,7 +243,7 @@ pub(super) async fn twin(side: Side, state: State) -> Twin {
 /// [`twin`], surfacing [`TOOL`] only when `surface_tool`: a surfaced name's
 /// absent twin maps to no backend (design r3 item 3).
 pub(super) async fn twin_surfacing(side: Side, state: State, surface_tool: bool) -> Twin {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let audit = dir.path().join("audit.jsonl");
     let (calls, lists) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let drifted = Arc::new(std::sync::atomic::AtomicBool::new(false));

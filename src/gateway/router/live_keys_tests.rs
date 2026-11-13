@@ -149,7 +149,7 @@ async fn hardened_initialize(state: &Arc<super::AppState>, secret: &str) -> (Sta
 #[tokio::test]
 async fn k1_a_key_added_by_reload_is_accepted_on_the_next_call() {
     let (state, _store) = test_router_app_state_with_auth(&auth(vec![key(KEPT, None)])).await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     for path in ["/mcp", "/mcp/absent"] {
         assert_eq!(
             status(&state, path, ADDED).await,
@@ -179,7 +179,7 @@ async fn k1_a_key_added_by_reload_is_accepted_on_the_next_call() {
 async fn k2_a_key_removed_or_expired_by_reload_is_refused_on_the_next_call() {
     let (state, _store) =
         test_router_app_state_with_auth(&auth(vec![key(KEPT, None), key(ADDED, None)])).await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     for secret in [KEPT, ADDED] {
         let got = status(&state, "/mcp", secret).await;
         assert!(
@@ -276,7 +276,7 @@ const ROTATED: &str = "live-keys-rotated-secret";
 #[tokio::test]
 async fn k5_a_key_digest_changed_by_reload_applies_on_the_next_call() {
     let (state, _store) = test_router_app_state_with_auth(&auth(vec![key(KEPT, None)])).await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     assert_ne!(
         status(&state, "/mcp", KEPT).await,
         StatusCode::UNAUTHORIZED,
@@ -315,7 +315,7 @@ async fn k5_a_key_digest_changed_by_reload_applies_on_the_next_call() {
 #[tokio::test]
 async fn k5_a_rotation_written_by_reload_honours_its_grace() {
     let (state, _store) = test_router_app_state_with_auth(&auth(vec![key(KEPT, None)])).await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let rotation = |previous_expires_at: &str| ApiKeyConfig {
         key_sha256: Some(crate::config::api_key_digest_spec(ROTATED.as_bytes())),
         previous_key_sha256: Some(crate::config::api_key_digest_spec(KEPT.as_bytes())),
@@ -443,7 +443,7 @@ fn accepted_admits_only_a_served_call() {
 async fn k2_an_explicit_principal_rotation_by_reload_keeps_identity_and_window() {
     let _clock = crate::clock::test_clock::at_secs(GRACE_ENDS - 1);
     let (state, _store) = test_router_app_state_with_auth(&auth(vec![ops_key(KEPT)])).await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let before = ops_identity(&state, KEPT);
     assert_eq!(before[0], OPS_PRINCIPAL, "premise: the explicit principal");
     assert!(
@@ -503,7 +503,7 @@ fn hardened(keys: &[ApiKeyConfig]) -> String {
 async fn k5_a_key_kind_changed_by_reload_applies_on_the_next_call() {
     // Started from the same file text its reloads write, loaded as startup
     // loads it, so the reloads differ from it in the key alone.
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(&path, hardened(&[key(KEPT, None)]))
         .expect("write");
@@ -520,7 +520,7 @@ async fn k5_a_key_kind_changed_by_reload_applies_on_the_next_call() {
     // Control: a gateway started with the key already personal admits it,
     // so a refusal after the reload below is the reload's, not the fixture's.
     {
-        let control_dir = tempfile::tempdir().expect("tempdir");
+        let control_dir = crate::test_dir_keep::kept_tempdir();
         let control_path = control_dir.path().join("gateway.yaml");
         let personal = ApiKeyConfig {
             kind: crate::config::ApiKeyKind::Personal,
@@ -581,7 +581,7 @@ async fn a_reload_rotating_a_leaked_key_ends_its_old_watch() {
         k
     };
     let (state, _store) = test_router_app_state_with_auth(&auth(vec![with(OLD)])).await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let services = state.meta_mcp.events_services(
         Arc::clone(&state.live_config),
         crate::events::LiveCredentials::default(),

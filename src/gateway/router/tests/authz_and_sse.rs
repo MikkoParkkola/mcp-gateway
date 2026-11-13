@@ -414,7 +414,7 @@ async fn gateway_reload_capabilities_needs_an_admin_key() {
         )
     }
     // Admin half: the edited description is served after the reload.
-    let dir = tempfile::tempdir().expect("a tempdir for caps");
+    let dir = crate::test_dir_keep::kept_tempdir();
     std::fs::write(dir.path().join("a.yaml"), cap_yaml("v1")).expect("write v1");
     let backend = Arc::new(crate::capability::CapabilityBackend::new(
         "caps",

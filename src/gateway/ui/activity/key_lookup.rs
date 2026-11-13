@@ -1,0 +1,336 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! `POST /ui/api/key-server/audit/lookup-email`: the admin forward lookup. An
+//! admin types an email; the key server's retained `token.issued` rows whose
+//! keyed `email_hash` matches come back. No reverse table exists: the email
+//! is hashed with the installation key for the one request and never stored,
+//! logged or echoed.
+//!
+//! Order matters: admission (gateway-wide admin only) first, then the shared
+//! budget, then the body is parsed, then the email is hashed, then the
+//! blocking scan. Nothing before admission reads the body's content.
+
+use std::sync::Arc;
+
+use axum::Json;
+use axum::body::Bytes;
+use axum::extract::State;
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, FixedOffset};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+use super::reader::{Cursor, Limits, Line, read_page};
+use super::{DEFAULT_LIMIT, MAX_LIMIT, PAGE_SCAN_BYTES, blocking, cursor};
+use crate::gateway::router::Charge;
+use crate::gateway::ui::AppState;
+use crate::gateway::ui::admin_audit::attach_lookup;
+use crate::gateway::ui::errors::flat_error;
+use crate::gateway::ui::guard::Guard;
+use crate::key_server::email_hash::{self, EmailHashKey};
+
+/// The most bytes of request body read; a lookup carries an email, a cursor
+/// and two timestamps.
+const MAX_BODY: usize = 8 * 1024;
+/// The longest email accepted, as in RFC 5321.
+const MAX_EMAIL: usize = 320;
+
+/// The request body. Unknown fields are refused.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Request {
+    email: String,
+    limit: Option<usize>,
+    cursor: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+}
+
+/// One refusal of a request that was admitted: fixed words, never the input.
+fn refuse(status: StatusCode, message: &'static str) -> Response {
+    flat_error(status, message).into_response()
+}
+
+fn no_store(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+/// Stamp the outcome on the request's own audit record: an operation and a
+/// fixed outcome, counts, never the email.
+fn finish(mut response: Response, outcome: &'static str, results: usize, scanned: u64) -> Response {
+    attach_lookup(&mut response, outcome, results, scanned);
+    no_store(response)
+}
+
+fn parse_time(text: &str) -> Option<DateTime<FixedOffset>> {
+    DateTime::parse_from_rfc3339(text).ok()
+}
+
+/// The digest a page token is bound to: the keyed hash, its version and key,
+/// and the time window. Not the email.
+fn bind_of(hash: &str, key: &EmailHashKey, from: Option<&str>, to: Option<&str>) -> String {
+    let mut sha = Sha256::new();
+    for part in [
+        hash,
+        &email_hash::VERSION.to_string(),
+        &key.key_id(),
+        from.unwrap_or(""),
+        to.unwrap_or(""),
+    ] {
+        sha.update(part.as_bytes());
+        sha.update([0]);
+    }
+    hex::encode(&sha.finalize()[..16])
+}
+
+/// Whether `entry` is an issuance row of this hash, key and version, inside
+/// the window.
+fn matches(
+    line: &Line,
+    hash: &str,
+    version: u64,
+    key_id: &str,
+    window: (Option<DateTime<FixedOffset>>, Option<DateTime<FixedOffset>>),
+) -> bool {
+    let e = &line.entry;
+    if e.get("event").and_then(Value::as_str) != Some("token.issued") {
+        return false;
+    }
+    let Some(id) = e.get("identity") else {
+        return false;
+    };
+    let same = id.get("email_hash").and_then(Value::as_str) == Some(hash)
+        && id.get("email_hash_version").and_then(Value::as_u64) == Some(version)
+        && id.get("email_hash_key_id").and_then(Value::as_str) == Some(key_id);
+    if !same {
+        return false;
+    }
+    let at = e
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(parse_time);
+    match (window.0, window.1, at) {
+        (None, None, _) => true,
+        (_, _, None) => false,
+        (from, to, Some(t)) => from.is_none_or(|f| t >= f) && to.is_none_or(|u| t <= u),
+    }
+}
+
+/// The allowlisted row a match becomes: no email, name or groups exist in a
+/// retained issuance row, and none of its other fields is copied blindly.
+fn row_of(line: &Line) -> Value {
+    let e = &line.entry;
+    let id = e.get("identity");
+    let pick = |v: Option<&Value>, k: &str| v.and_then(|v| v.get(k)).cloned();
+    json!({
+        "timestamp": e.get("timestamp").cloned(),
+        "token_jti": e.get("token_jti").cloned(),
+        "subject": pick(id, "subject"),
+        "issuer": pick(id, "issuer"),
+        "backends": e.get("backends").cloned(),
+        "tools": e.get("tools").cloned(),
+        "segment": line.segment,
+    })
+}
+
+/// Everything a scan needs, owned so it can move onto the blocking pool.
+struct Scan {
+    log: std::path::PathBuf,
+    hash: String,
+    key_id: String,
+    bind: String,
+    limit: usize,
+    window: (Option<DateTime<FixedOffset>>, Option<DateTime<FixedOffset>>),
+    token: Option<String>,
+}
+
+/// Read one page of retained rows. A read that fails is an error answer, never
+/// an empty result: an empty result must mean no retained row matched.
+fn scan(s: &Scan) -> Response {
+    let given = s.token.is_some();
+    let decoded: Option<Cursor> = s
+        .token
+        .as_deref()
+        .and_then(|t| cursor::decode_bound(t, &s.bind));
+    let version = u64::from(email_hash::VERSION);
+    let page = read_page(
+        &s.log,
+        None,
+        decoded.as_ref(),
+        Limits {
+            matches: s.limit,
+            bytes: PAGE_SCAN_BYTES,
+        },
+        |line| matches(line, &s.hash, version, &s.key_id, s.window),
+    );
+    let Ok(page) = page else {
+        return finish(
+            refuse(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the retained audit log could not be read",
+            ),
+            "unreadable",
+            0,
+            0,
+        );
+    };
+    let rows: Vec<Value> = page.lines.iter().map(row_of).collect();
+    let next = page.next.as_ref().map(|c| cursor::encode_bound(c, &s.bind));
+    let body = json!({
+        "rows": rows,
+        "next_cursor": next,
+        "scan_exhausted": page.scan_exhausted,
+        "cursor_reset": page.cursor_reset || (given && decoded.is_none()),
+        "unreadable": page.unreadable.len(),
+        "scope": "retained",
+    });
+    finish(
+        (StatusCode::OK, Json(body)).into_response(),
+        "ok",
+        rows.len(),
+        page.bytes_examined,
+    )
+}
+
+fn throttled(retry_after_secs: u64) -> Response {
+    let mut response = refuse(
+        StatusCode::TOO_MANY_REQUESTS,
+        "too many email lookups; retry later",
+    );
+    if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    finish(response, "throttled", 0, 0)
+}
+
+/// How long the body may take to arrive once the caller is admitted and has
+/// paid: a slow body holds a connection, not a permit.
+const BODY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Read the body: the listener's configured size cap applies (the extractor
+/// reads through it), the lookup's own 8 KiB limit is judged on what arrived,
+/// and the whole read has a deadline. Called only after admission and the
+/// budget, so an unauthorized or over-budget caller's body is never waited
+/// for.
+pub(super) async fn read_body(request: axum::extract::Request) -> Result<Bytes, Box<Response>> {
+    use axum::extract::FromRequest as _;
+    let read = Bytes::from_request(request, &());
+    let too_large = || {
+        Box::new(finish(
+            refuse(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "the request body is too large",
+            ),
+            "bad_request",
+            0,
+            0,
+        ))
+    };
+    match tokio::time::timeout(BODY_DEADLINE, read).await {
+        Ok(Ok(bytes)) if bytes.len() <= MAX_BODY => Ok(bytes),
+        Ok(Ok(_) | Err(_)) => Err(too_large()),
+        Err(_) => Err(Box::new(finish(
+            refuse(
+                StatusCode::REQUEST_TIMEOUT,
+                "the request body took too long",
+            ),
+            "bad_request",
+            0,
+            0,
+        ))),
+    }
+}
+
+pub(super) async fn lookup(
+    State(state): State<Arc<AppState>>,
+    guard: Guard,
+    request: axum::extract::Request,
+) -> Response {
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
+    }
+    telemetry_metrics::counter!("mcp_key_server_lookup_attempts_total").increment(1);
+    if let Charge::Throttled { retry_after_secs } = state.process.lookup_budget().charge() {
+        telemetry_metrics::counter!("mcp_key_server_lookup_throttled_total").increment(1);
+        return throttled(retry_after_secs);
+    }
+    let bad = |message: &'static str| {
+        finish(
+            refuse(StatusCode::BAD_REQUEST, message),
+            "bad_request",
+            0,
+            0,
+        )
+    };
+    let body = match read_body(request).await {
+        Ok(body) => body,
+        Err(refusal) => return *refusal,
+    };
+    let parsed = serde_json::from_slice::<Request>(&body);
+    drop(body);
+    let Ok(Request {
+        email: raw,
+        limit,
+        cursor,
+        from,
+        to,
+    }) = parsed
+    else {
+        return bad("the body must be a JSON object with an email");
+    };
+    let email = raw.trim();
+    if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(char::is_control) {
+        return bad("the email is not valid");
+    }
+    let (from, to) = (from.as_deref(), to.as_deref());
+    let (Some(window_from), Some(window_to)) = (
+        from.map_or(Some(None), |t| parse_time(t).map(Some)),
+        to.map_or(Some(None), |t| parse_time(t).map(Some)),
+    ) else {
+        return bad("from and to must be RFC 3339 times");
+    };
+    if let (Some(f), Some(t)) = (window_from, window_to)
+        && f > t
+    {
+        return bad("from must not be after to");
+    }
+    let limit = limit.unwrap_or(DEFAULT_LIMIT);
+    if limit == 0 || limit > MAX_LIMIT {
+        return bad("limit is out of range");
+    }
+    let Some(ks) = state.key_server.clone() else {
+        return finish(
+            refuse(StatusCode::NOT_FOUND, "no key server is running"),
+            "not_found",
+            0,
+            0,
+        );
+    };
+    let Some(log) = state.transparency_log.as_ref() else {
+        return finish(
+            refuse(StatusCode::NOT_FOUND, "no transparency log is configured"),
+            "not_found",
+            0,
+            0,
+        );
+    };
+    // The email is hashed here and goes no further: the suspended handler
+    // owns only the hash while it waits for a reader slot.
+    let hash = ks.email_key.hash(email);
+    drop(raw);
+    let scan_job = Scan {
+        log: log.path(),
+        bind: bind_of(&hash, &ks.email_key, from, to),
+        key_id: ks.email_key.key_id(),
+        hash,
+        limit,
+        window: (window_from, window_to),
+        token: cursor,
+    };
+    blocking(state.process.activity_reads(), move || scan(&scan_job)).await
+}

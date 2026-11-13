@@ -123,7 +123,7 @@ async fn scan4_string_form_direct_arguments_are_judged_as_their_object() {
     let stringly = json!(serde_json::to_string(&object).expect("serializes"));
     let mut seen = Vec::new();
     for form in [&object, &stringly] {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let audit = dir.path().join("audit.jsonl");
         let fx = fixture_firewalled_audited(Answer::Ok, audit.clone()).await;
         let (_, body) = direct(&fx, ("k-std", "alpha"), form.clone(), json!({})).await;

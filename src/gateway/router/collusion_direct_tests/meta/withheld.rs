@@ -77,7 +77,7 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
     let endpoint =
         runtime.block_on(crate::gateway::meta_mcp::grant_audit_fixture::Endpoint::start(false));
     // Premise: the granted owner's fresh call succeeds; bob's reaches nothing.
-    let control_dir = Arc::new(tempfile::tempdir().unwrap());
+    let control_dir = crate::test_dir_keep::kept_tempdir();
     let (control, _) = runtime.block_on(gateway(endpoint.port, &control_dir, true));
     let allowed = runtime.block_on(call(&control, ALICE));
     assert!(
@@ -85,7 +85,7 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
         "premise: the granted control did not succeed: {allowed}"
     );
     // One record per withheld call, no fault armed.
-    let counted_dir = Arc::new(tempfile::tempdir().unwrap());
+    let counted_dir = crate::test_dir_keep::kept_tempdir();
     let (counted, _) = runtime.block_on(gateway(endpoint.port, &counted_dir, true));
     let refused = runtime.block_on(call(&counted, BOB));
     assert_eq!(
@@ -96,8 +96,8 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
     // Written after the call settles, on the slot's own task.
     let one = runtime.block_on(wait_for_decisions(&counted_dir, 1)).len();
     // Under a failing decision record.
-    let dir = Arc::new(tempfile::tempdir().unwrap());
-    let absent_dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let absent_dir = crate::test_dir_keep::kept_tempdir();
     let (withheld, log) = runtime.block_on(gateway(endpoint.port, &dir, true));
     let (absent, _) = runtime.block_on(gateway(endpoint.port, &absent_dir, false));
     log.fail_next_append_of_kind_for_test(DECISION_KIND);
