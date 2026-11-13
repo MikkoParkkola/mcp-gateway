@@ -48,6 +48,8 @@ pub(crate) enum DrainError {
     Unconfirmed,
     Parked,
     Finish,
+    /// The abandoned file was refused as found; it is kept byte-identical.
+    FileRefused,
 }
 
 pub(crate) struct Delivery {
@@ -717,6 +719,8 @@ mod crash_tests;
 pub(crate) mod fault;
 #[path = "config_persistence_journal_v2_drain_fixtures_tests.rs"]
 mod fixtures;
+#[path = "config_persistence_journal_v2_drain_file.rs"]
+pub(crate) mod file;
 #[path = "config_persistence_journal_v2_drain_handover.rs"]
 pub(crate) mod handover;
 #[path = "config_persistence_journal_v2_repair_tests.rs"]

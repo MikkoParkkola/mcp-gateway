@@ -35,6 +35,8 @@ pub(super) enum Event {
     AbandonFileDataSynced,
     AbandonFileSynced,
     HandoverFinished,
+    FileRewritten,
+    FileUnlinked,
 }
 
 #[derive(Default)]

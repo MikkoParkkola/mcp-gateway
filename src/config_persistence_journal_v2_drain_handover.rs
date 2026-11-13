@@ -107,6 +107,17 @@ fn private_to_us(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
+/// The encoded size of the largest file any reachable state of `donor` can be: every counter at
+/// its widest, every owed terminal frozen, every record undelivered and parked.
+pub(super) fn maximal_size(_donor: &super::super::JournalV2) -> usize {
+    0
+}
+
+/// Whether a handover of `donor` can never outgrow `cap`, whatever the drain does later.
+pub(super) fn admits(_donor: &super::super::JournalV2, _cap: usize) -> bool {
+    true
+}
+
 pub(crate) fn hand_over(session: &mut DrainSession) -> Result<(), HandoverError> {
     // Refuse before anything is written: off Unix the file cannot be proven private to this user.
     if !cfg!(unix) {
@@ -232,6 +243,9 @@ mod crash_tests;
 #[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_handover_tests.rs"]
 mod tests;
+#[cfg(all(test, unix))]
+#[path = "config_persistence_journal_v2_drain_handover_admit_tests.rs"]
+mod admit_tests;
 #[cfg(all(test, not(unix)))]
 #[path = "config_persistence_journal_v2_drain_handover_windows_tests.rs"]
 mod windows_tests;
