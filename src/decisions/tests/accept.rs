@@ -205,7 +205,13 @@ fn an_accepted_request_closes_by_its_grant_and_reopens_on_revoke() {
     let mut accept = decision_record(&request(), DIGEST);
     accept.decision = Some(UiDecisionKind::Accept);
     accept.rows = vec![("r1".to_owned(), "sha256:ab".to_owned())];
-    assert!(decisions_from_record(&accept).is_none());
+    // Folded as the startup replay folds every kept record.
+    set.apply_decisions(
+        decisions_from_record(&accept)
+            .into_iter()
+            .flatten()
+            .collect(),
+    );
     assert_eq!(count(&set), 1, "the record alone closes nothing");
     let mut row = grant("stripe.charges", GrantScope::Execute);
     set.set_grants(vec![row.clone()], at(2));
