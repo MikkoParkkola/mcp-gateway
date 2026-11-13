@@ -184,15 +184,14 @@ fn bad_files(frames: &[AbandonedFrame]) -> Vec<(&'static str, Vec<u8>)> {
     ]
 }
 
-fn refuse_planted(rig: &mut DrainRig, row: &str, name: &str, bytes: &[u8]) -> Result<(), String> {
+fn refuse_planted(rig: &mut DrainRig, row: &str, name: &str, bytes: &[u8]) {
     plant(rig, bytes);
     let before = rig.file();
     assert_eq!(rig.drain(), Err(DrainError::FileRefused), "{row}: {name}");
     assert_eq!(rig.file(), before, "{row}: {name} unchanged");
-    Ok(())
 }
 
-fn refuse_symlink(rig: &mut DrainRig, row: &str, good: &[u8]) -> Result<(), String> {
+fn refuse_symlink(rig: &mut DrainRig, row: &str, good: &[u8]) {
     let path = abandoned_path(&rig.live.path);
     let target = rig.live.path.with_file_name("good-file");
     std::fs::write(&target, good).expect("symlink target");
@@ -211,10 +210,9 @@ fn refuse_symlink(rig: &mut DrainRig, row: &str, good: &[u8]) -> Result<(), Stri
         Some(good),
         "{row}: target unchanged"
     );
-    Ok(())
 }
 
-fn refuse_group(rig: &mut DrainRig, row: &str, good: &[u8]) -> Result<(), String> {
+fn refuse_group(rig: &mut DrainRig, row: &str, good: &[u8]) {
     let path = abandoned_path(&rig.live.path);
     plant(rig, good);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).expect("mode");
@@ -230,7 +228,6 @@ fn refuse_group(rig: &mut DrainRig, row: &str, good: &[u8]) -> Result<(), String
         0o640,
         "{row}: group readable mode"
     );
-    Ok(())
 }
 
 /// One decided writer, plus an attempt whose terminal is frozen and not delivered.
@@ -409,7 +406,10 @@ fn drain_refuses_bad_shape() {
             ROW,
             name,
             "FileRefused and the same bytes",
-            || refuse_planted(&mut rig, ROW, name, &bytes),
+            || {
+                refuse_planted(&mut rig, ROW, name, &bytes);
+                Ok(())
+            },
         );
     }
     collect_case(
@@ -417,14 +417,20 @@ fn drain_refuses_bad_shape() {
         ROW,
         "a symlink",
         "FileRefused, link and target unchanged",
-        || refuse_symlink(&mut rig, ROW, &good),
+        || {
+            refuse_symlink(&mut rig, ROW, &good);
+            Ok(())
+        },
     );
     collect_case(
         &mut failures,
         ROW,
         "group readable",
         "FileRefused and the same bytes",
-        || refuse_group(&mut rig, ROW, &good),
+        || {
+            refuse_group(&mut rig, ROW, &good);
+            Ok(())
+        },
     );
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }

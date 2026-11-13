@@ -130,12 +130,15 @@ fn observed(rig: &mut DrainRig) -> (Result<(), DrainError>, String, String) {
     }
 }
 
+/// Builds the bytes a refusal case plants.
+type Build = fn(&DrainRig) -> Vec<u8>;
+
 /// Lead condition on D1/D3: every refusal keeps the file exactly as found, at its path, logs one
 /// WARN naming the path and the reason, and counts the reason.
 #[test]
 fn refused_file_kept_and_reported() {
     const ROW: &str = "refused_file_kept_and_reported";
-    let cases: [(&str, DrainError, fn(&DrainRig) -> Vec<u8>); 7] = [
+    let cases: [(&str, DrainError, Build); 7] = [
         ("mixed_binding", DrainError::FileRefused, |rig| {
             let mut mixed = frames(rig);
             mixed.last_mut().expect("a second frame").log_id = Live::new().log.log_id();
@@ -185,7 +188,7 @@ fn refused_file_kept_and_reported() {
             super::super::fixtures::reread(&mut rig.session);
         }
         let journal = rig.journal();
-        let (result, warnings, _metrics) = observed(&mut rig);
+        let (result, warnings, metrics) = observed(&mut rig);
         assert_eq!(result, Err(want), "{ROW} {reason}: refused");
         assert_eq!(
             rig.file().as_deref(),
@@ -199,12 +202,17 @@ fn refused_file_kept_and_reported() {
         );
         #[cfg(feature = "metrics")]
         assert!(
-            _metrics.lines().any(|line| {
+            metrics.lines().any(|line| {
                 line.starts_with("mcp_config_abandoned_refused_total")
                     && line.contains(&format!("reason=\"{reason}\""))
                     && line.ends_with(" 1")
             }),
-            "{ROW} {reason}: counted once: {_metrics}"
+            "{ROW} {reason}: counted once: {metrics}"
+        );
+        #[cfg(not(feature = "metrics"))]
+        assert!(
+            metrics.is_empty(),
+            "{ROW} {reason}: no recorder without metrics"
         );
     }
 }
