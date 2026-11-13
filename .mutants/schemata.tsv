@@ -1,0 +1,59 @@
+head_sha	2d9859be59dd7d70d259a401a7cdd427b5e332cc
+#mutant run_finishes_flagged_donor
+mcp_gateway	config_persistence::journal::v2::drain::file::crash_tests::run_refuses_flagged_donor	src/config_persistence_journal_v2_drain_file_crash_tests.rs:147
+#mutant donor_refreezes multi=2
+mcp_gateway	config_persistence::journal::v2::drain::file::crash_tests::crash_x5b	src/config_persistence_journal_v2_drain_file_crash_tests.rs:238
+#mutant drain_skips_handover_resume
+mcp_gateway	config_persistence::journal::v2::drain::file::crash_tests::crash_x4	src/config_persistence_journal_v2_drain_file_crash_tests.rs:107
+#mutant drain_ignores_live_journal
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::drain_refuses_live_journal	src/config_persistence_journal_v2_drain_file_tests.rs:469
+#mutant drain_accepts_torn_tail
+mcp_gateway	config_persistence::journal::v2::drain::file::refusal_tests::abandoned_corrupt_without_donor_drain	src/config_persistence_journal_v2_drain_file_refusal_tests.rs:44
+#mutant shape_order_unchecked
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::drain_refuses_bad_shape	src/config_persistence_journal_v2_drain_file_tests.rs:204
+#mutant shape_duplicate_unchecked
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::drain_refuses_bad_shape	src/config_persistence_journal_v2_drain_file_tests.rs:205
+#mutant shape_unflagged_accepted
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::drain_refuses_bad_shape	src/config_persistence_journal_v2_drain_file_tests.rs:204
+#mutant shape_root_unchecked
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::drain_refuses_bad_shape	src/config_persistence_journal_v2_drain_file_tests.rs:204
+#mutant shape_terminals_unchecked
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::drain_refuses_bad_shape	src/config_persistence_journal_v2_drain_file_tests.rs:205
+#mutant drain_ignores_binding
+mcp_gateway	config_persistence::journal::v2::drain::file::refusal_tests::crash_f4	src/config_persistence_journal_v2_drain_file_refusal_tests.rs:120
+#mutant drain_without_logger_ok
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::drain_without_logger	src/config_persistence_journal_v2_drain_file_tests.rs:484
+#mutant rewrite_without_dir_sync
+mcp_gateway	config_persistence::journal::v2::drain::file::crash_tests::crash_f2_pl_after_freeze	src/config_persistence_journal_v2_drain_file_crash_tests.rs:113
+#mutant persist_to_journal_path
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::abandoned_backing_contained	src/config_persistence_journal_v2_drain_file_tests.rs:499
+#mutant abandoned_finish_allowed
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::abandoned_backing_contained	src/config_persistence_journal_v2_drain_file_tests.rs:510
+#mutant complete_any_token
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::complete_requires_every_token	src/config_persistence_journal_v2_drain_file_tests.rs:350
+#mutant unlink_without_dir_sync
+mcp_gateway	config_persistence::journal::v2::drain::file::crash_tests::crash_f3_pl	src/config_persistence_journal_v2_drain_file_crash_tests.rs:403
+#mutant settled_drops_terminal_match
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::complete_requires_every_token	src/config_persistence_journal_v2_drain_file_tests.rs:362
+#mutant handover_admits_undecided
+mcp_gateway	config_persistence::journal::v2::drain::handover::admit_tests::handover_refuses_undecided_and_parked	src/config_persistence_journal_v2_drain_handover_admit_tests.rs:217
+#mutant maximal_projection_delivered_true
+mcp_gateway	config_persistence::journal::v2::drain::handover::admit_tests::maximal_size_bounds_every_state	src/config_persistence_journal_v2_drain_handover_admit_tests.rs:183
+#mutant maximal_projection_unparked
+mcp_gateway	config_persistence::journal::v2::drain::handover::admit_tests::maximal_size_bounds_every_state	src/config_persistence_journal_v2_drain_handover_admit_tests.rs:183
+#mutant refusal_unreported multi=2
+mcp_gateway	config_persistence::journal::v2::drain::file::refusal_tests::refused_file_kept_and_reported	src/config_persistence_journal_v2_drain_file_refusal_tests.rs:226
+#mutant empty_file_kept
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::drain_empty_file_removed	src/config_persistence_journal_v2_drain_file_tests.rs:527
+#mutant finished_ignores_parked
+mcp_gateway	config_persistence::journal::v2::drain::handover::admit_tests::handover_refuses_undecided_and_parked	src/config_persistence_journal_v2_drain_handover_admit_tests.rs:217
+#mutant state_from_frames_drops_records
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::state_from_frames_round_trips	src/config_persistence_journal_v2_drain_file_tests.rs:315
+#mutant completable_unchecked
+mcp_gateway	config_persistence::journal::v2::drain::file::tests::drain_refuses_bad_shape	src/config_persistence_journal_v2_drain_file_tests.rs:204
+#mutant completable_builds_frozen
+mcp_gateway	config_persistence::journal::v2::drain::file::refusal_tests::drain_parks_prefrozen_unparseable	src/config_persistence_journal_v2_drain_file_refusal_tests.rs:331
+#mutant maximal_builds_frozen
+mcp_gateway	config_persistence::journal::v2::drain::handover::admit_tests::handover_admits_prefrozen_unparseable	src/config_persistence_journal_v2_drain_handover_admit_tests.rs:271
+#mutant mode_not_restored
+mcp_gateway	config_persistence::crash_fs_tests::a_restored_file_keeps_its_generation_mode	src/config_persistence_crash_fs_tests.rs:293
