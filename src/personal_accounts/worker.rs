@@ -595,7 +595,9 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
     }
 }
 
-/// See [`CustodyHandle::detach_on_drop`].
+/// See [`CustodyHandle::detach_on_drop`]. Held for a serve's whole body: a
+/// temporary dropped at once would start the release before the serve runs.
+#[must_use = "hold the guard for the whole serve; dropping it starts the custody release"]
 pub(crate) struct DetachOnDrop<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static>(
     Arc<CustodyHandle<P, O>>,
 );

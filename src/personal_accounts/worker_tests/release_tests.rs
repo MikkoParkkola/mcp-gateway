@@ -350,8 +350,9 @@ fn detach_release_returns_at_once_and_the_drop_runs_elsewhere() {
         fx.handle.detach_release();
         // A detach that dropped inline would sit in the stalled drop for its whole
         // hang guard; a real one returns at once with the release still stalled.
+        // The bound is that whole guard, so only an inline drop reaches it.
         assert!(
-            began.elapsed() < RELEASE_HANG_GUARD / 4,
+            began.elapsed() < RELEASE_HANG_GUARD,
             "detach_release waited on the stalled release"
         );
         stall.wait_entered();
@@ -426,10 +427,16 @@ fn a_panicking_release_still_signals_done_and_frees_the_locks() {
         .expect("outcome");
         assert_eq!(end, ShutdownEnd::Released, "the guard signals on unwind");
         assert!(store_is_free(tmp.path()), "unwinding freed the locks");
-        assert!(
-            fx.handle.reported.load(Ordering::SeqCst),
-            "the panic was reported"
-        );
+        // The thread reports after `catch_unwind` returns, which can come after
+        // the done signal the unwinding guard sent: wait for it, bounded.
+        let report_by = std::time::Instant::now() + HANG_BOUND;
+        while !fx.handle.reported.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < report_by,
+                "the panic was reported"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     });
 }
 
@@ -654,8 +661,9 @@ fn dropping_the_serve_guard_detaches_the_release() {
         let caller = std::thread::current().id();
         let began = std::time::Instant::now();
         drop(fx.handle.detach_on_drop());
+        // Only an inline drop, stalled for the whole hang guard, reaches it.
         assert!(
-            began.elapsed() < RELEASE_HANG_GUARD / 4,
+            began.elapsed() < RELEASE_HANG_GUARD,
             "the guard's drop waited on the stalled release"
         );
         assert!(
@@ -671,5 +679,42 @@ fn dropping_the_serve_guard_detaches_the_release() {
             .unwrap_or_else(PoisonError::into_inner)
             .expect("the store was dropped by now");
         assert_ne!(dropped_on, caller, "the drop ran on the calling thread");
+    });
+}
+
+/// Cancelling the bounded shutdown while it waits in the permit drain (the stop
+/// budget cuts the stage there) takes nothing: the store stays in the handle,
+/// and a later shutdown releases it once the operation lets go.
+#[test]
+fn cancelling_the_shutdown_in_its_drain_takes_nothing() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), grant())]);
+
+    current_thread(async {
+        let fx = start(tmp.path(), 2);
+        let (release, op) = hold_a_permit(&fx).await;
+        {
+            let pending = fx
+                .handle
+                .shutdown_by(tokio::time::Instant::now() + HANG_BOUND);
+            tokio::pin!(pending);
+            // One poll parks it in the drain, behind the operation's permit.
+            assert!(
+                futures::poll!(pending.as_mut()).is_pending(),
+                "the shutdown did not wait for the operation"
+            );
+        }
+        assert!(
+            !fx.handle.release_started(),
+            "a shutdown cancelled in its drain took the store"
+        );
+        let _ = release.send(());
+        let _ = op.await;
+        refuse_scaffold(fx.handle.shutdown().await, "later shutdown").expect("released");
+        assert!(
+            store_is_free(tmp.path()),
+            "the later shutdown freed the locks"
+        );
     });
 }
