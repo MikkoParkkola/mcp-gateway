@@ -449,6 +449,7 @@ async fn a_detached_survivor_outlives_the_stop(helper: &str, what: &str) {
     })
     .await;
     t.close().await.expect("close");
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(300)).await;
     let survived = alive(leaf);
     let _ = std::process::Command::new("kill")
