@@ -125,15 +125,23 @@ fn resolve_error(status: StatusCode, code: &str, message: &str) -> Response {
 
 /// The body's own rules, apart from the open item it names.
 fn check_resolve(request: &ResolveRequest) -> Result<(), &'static str> {
+    // Control characters are refused anywhere, a trailing newline too:
+    // the check reads the reason as sent, before any trim.
+    if request.reason.chars().any(char::is_control) {
+        return Err("the reason must not contain control characters");
+    }
     let reason = request.reason.trim();
     if reason.is_empty() || reason.chars().count() > REASON_MAX {
         return Err("the reason must be 1 to 500 characters");
     }
-    if reason.chars().any(char::is_control) {
-        return Err("the reason must not contain control characters");
-    }
+    // Lowercase only, as the listing writes it: an uppercase copy would
+    // otherwise pass here and then read as a changed request.
     let digest = request.scope_digest.as_str();
-    if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return Err("scope_digest must be the 64 hex characters the listing gave");
     }
     match (request.action, request.ttl_seconds, request.permanent) {
@@ -191,12 +199,16 @@ async fn resolve_decision(
     };
     // One resolve at a time: the item is read and judged under this mutex.
     let _resolving = decisions.resolving().await;
-    let Some(item) = decisions.item(&id) else {
-        return resolve_error(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "no open decision has this id",
-        );
+    let item = match decisions.item(&id) {
+        Ok(Some(item)) => item,
+        Ok(None) => {
+            return resolve_error(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "no open decision has this id",
+            );
+        }
+        Err(sources) => return unavailable(&sources),
     };
     judge_item(&item, &request.scope_digest)
 }

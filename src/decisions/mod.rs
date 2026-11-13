@@ -582,14 +582,22 @@ impl Shared {
     }
 
     /// One open item by id, cloned under a single read lock: its fields are
-    /// one consistent snapshot of the set.
-    pub(crate) fn item(&self, id: &str) -> Option<Value> {
-        self.set
-            .read()
+    /// one consistent snapshot of the set. While any source is not yet
+    /// readable the items are partial, so the sources are returned instead:
+    /// a real request must never read as `not_found` during a replay.
+    pub(crate) fn item(
+        &self,
+        id: &str,
+    ) -> Result<Option<Value>, Vec<(&'static str, &'static str)>> {
+        let set = self.set.read();
+        if !set.readable() {
+            return Err(set.unavailable());
+        }
+        Ok(set
             .items
             .iter()
             .find(|item| item.get("id").and_then(Value::as_str) == Some(id))
-            .cloned()
+            .cloned())
     }
 
     /// Apply `change` under the write lock.
