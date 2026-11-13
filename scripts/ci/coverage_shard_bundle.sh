@@ -30,6 +30,12 @@ done
 # Fail closed: a part with profiles but no executables cannot be graded (it graded every function at 0%).
 [ -s bundle/executables.list ] || { echo "::error::shard $shard: no instrumented executables under $t"; exit 1; }
 tar -C "$t" --null -T bundle/executables.list -cf bundle/files.tar
+# cargo-llvm-cov's report tells cargo 1.100's layout from a `fingerprint` folder beside each `out`; without it it
+# reads build/<package>/<hash>/out as build-script output and skips every test binary there (it passed only the two
+# uplifted bins). Carry those folders, empty: the marker is all the report needs.
+(cd "$t" && find . -type d -path '*/build/*/fingerprint' -print0 | sort -z) > bundle/fingerprints.list
+[ ! -s bundle/fingerprints.list ] || tar -C "$t" --null --no-recursion -T bundle/fingerprints.list -rf bundle/files.tar
+rm bundle/fingerprints.list
 tar -C bundle -rf bundle/files.tar profraw
 rm -rf bundle/profraw
 cp run.log bundle/run.log

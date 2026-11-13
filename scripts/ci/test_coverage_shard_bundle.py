@@ -20,8 +20,9 @@ SCRIPT = ROOT / "scripts" / "ci" / "coverage_shard_bundle.sh"
 T = "target/llvm-cov-target"
 
 
-def bundle(files: list[str]) -> tuple[int, set[str], str]:
-    """(exit code, bundled executable paths, stderr+stdout) for a target tree holding `files` (all executable)."""
+def bundle(files: list[str], dirs: tuple[str, ...] = ()) -> tuple[int, set[str], str, set[str]]:
+    """(exit code, bundled executable paths, stderr+stdout, bundled directory entries) for a target tree holding
+    `files` (all executable) and the folders `dirs` (each with one plain file inside)."""
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         target = tmp / T
@@ -32,6 +33,9 @@ def bundle(files: list[str]) -> tuple[int, set[str], str]:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(b"#!/bin/sh\n")
             p.chmod(0o755)
+        for rel in dirs:
+            (target / rel).mkdir(parents=True, exist_ok=True)
+            (target / rel / "lib-x.json").write_text("{}")
         (tmp / "run.log").write_text("log\n")
         (tmp / "tests.tsv").write_text("bin\tname\tok\n")
         stub = tmp / "stub"
@@ -41,16 +45,21 @@ def bundle(files: list[str]) -> tuple[int, set[str], str]:
         # COPYFILE_DISABLE: macOS tar would add `._` resource-fork entries (CI's GNU tar adds none).
         env = {**os.environ, "PATH": f"{stub}:{os.environ['PATH']}", "COPYFILE_DISABLE": "1"}
         p = subprocess.run(["bash", str(SCRIPT), "lib-a"], cwd=tmp, env=env, capture_output=True, text=True)
-        got = set()
+        got, got_dirs = set(), set()
         tar = tmp / "bundle" / "files.tar"
         if p.returncode == 0 and tar.exists():
             with tarfile.open(tar) as tf:
-                got = {os.path.normpath(n) for n in tf.getnames() if not n.startswith("profraw")}
-        return p.returncode, got, p.stdout + p.stderr
+                for m in tf.getmembers():
+                    name = os.path.normpath(m.name)
+                    if name.startswith("profraw"):
+                        continue
+                    (got_dirs if m.isdir() else got).add(name)
+        return p.returncode, got, p.stdout + p.stderr, got_dirs
 
 
 def main() -> int:
     new_test = "debug/build/mcp-gateway/a2aa1ac763c42e38/out/mcp_gateway-a2aa1ac763c42e38"
+    new_fingerprint = "debug/build/mcp-gateway/a2aa1ac763c42e38/fingerprint"
     new_script = "debug/build/serde/0123456789abcdef/out/build_script_build"
     old_test = "debug/deps/mcp_gateway-ab12"
     old_script = "debug/build/serde-0123/build-script-build"
@@ -65,10 +74,17 @@ def main() -> int:
     ]
     wrong = 0
     for label, files, want_rc, want in rows:
-        rc, got, out = bundle(files)
+        rc, got, out, _ = bundle(files)
         ok = (rc == 0) == (want_rc == 0) and (want_rc != 0 or got == want)
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} {label}: exit {rc}, bundled {sorted(got)}" + ("" if ok else f"\n      {out[-300:]!r}"))
+    # cargo-llvm-cov tells cargo 1.100's layout from a `fingerprint` folder beside each `out`; without it the
+    # report skips the test binary. The bundle carries the folder (empty: its files are not needed).
+    rc, got, out, dirs = bundle([new_test], (new_fingerprint,))
+    ok = rc == 0 and new_fingerprint in dirs and not any(g.startswith(new_fingerprint + "/") for g in got)
+    wrong += not ok
+    print(f"{'ok   ' if ok else 'WRONG'} cargo 1.100 layout: the fingerprint folder beside out is bundled, empty: "
+          f"dirs {sorted(dirs)}" + ("" if ok else f"\n      {out[-300:]!r}"))
     print(f"coverage bundle rows: {wrong} wrong")
     return 1 if wrong else 0
 
