@@ -11,7 +11,7 @@ use super::super::super::abandoned::{
 };
 use super::super::DrainError;
 use super::super::fixtures::{Live, actor, attributed, runtime};
-use super::super::handover::{abandoned_path, hand_over};
+use super::super::handover::abandoned_path;
 use super::drain_abandoned;
 use super::tests::{DrainRig, drain_rig, unfrozen};
 
