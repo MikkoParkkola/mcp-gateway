@@ -258,3 +258,17 @@ fn handover_refuses_undecided_and_parked() {
     );
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }
+
+/// A token whose terminal is already frozen is never built again, so its intent payload is never
+/// parsed: the size bound must not refuse it for a payload only a builder would read.
+#[test]
+fn handover_admits_prefrozen_unparseable() {
+    const ROW: &str = "handover_admits_prefrozen_unparseable";
+    let mut rig = rig(|donor| {
+        donor.writer.as_mut().expect("a writer").intent.payload_json = b"not json".to_vec();
+    });
+    let bound = maximal_size(&marked(&rig.donor));
+    assert_ne!(bound, usize::MAX, "{ROW}: the bound is finite");
+    assert_eq!(hand_over(&mut rig.session), Ok(()), "{ROW}: handed over");
+    assert!(file_bytes(&rig.path).is_some(), "{ROW}: the file exists");
+}

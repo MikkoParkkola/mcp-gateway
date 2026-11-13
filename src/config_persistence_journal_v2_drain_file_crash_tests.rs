@@ -463,3 +463,78 @@ fn late_abandoned_retry() {
     );
     rig.live.verify(ROW);
 }
+
+/// A rolled-back write: the writer's terminal cites the recovery attempt's counter through
+/// `settled_by`, and both intents are undelivered at handover.
+fn rolled_back(donor: &mut JournalV2) {
+    use super::super::super::fixtures::decision;
+    use super::super::super::{Fact, IntentId, Phase, ResultClass};
+    use crate::security::transparency_log::settle::Reason;
+    unfrozen(donor);
+    donor.phase = Phase::Staged;
+    donor.fact = donor.original_revision.clone().map(Fact::RolledBack);
+    let mut attempt = super::super::fixtures::attempt();
+    attempt.decision = Some(decision(ResultClass::Written, Reason::RolledBack));
+    let writer = donor.writer.as_mut().expect("fixture writer");
+    let mut cited = decision(ResultClass::NotWritten, Reason::RolledBack);
+    cited.settled_by = Some(IntentId(attempt.intent_id.0.clone()));
+    writer.decision = Some(cited);
+    donor.attempts.push(attempt);
+}
+
+/// Every token has one terminal content, and the writer's cites the attempt's logged counter.
+fn two_tokens_converged(rig: &DrainRig, row: &str) {
+    assert_eq!(
+        file_at(&rig.live.path),
+        None,
+        "{row}: the drained file is gone"
+    );
+    let records = rig.live.records();
+    let attempt = &rig.donor.attempts[0].intent_id.0;
+    let counters: Vec<_> = records
+        .iter()
+        .filter(|r| r["token"] == attempt.as_str() && r["event"] == "config_recovery_intent")
+        .map(|r| r["counter"].clone())
+        .collect();
+    for token in [writer_token(rig), attempt.clone()] {
+        assert_eq!(
+            terminal_contents(&rig.live, &token).len(),
+            1,
+            "{row}: one terminal content for {token}"
+        );
+    }
+    let writer = writer_token(rig);
+    let cited = records
+        .iter()
+        .find(|r| r["token"] == writer.as_str() && r["event"] == "config_write_outcome")
+        .map(|r| r["settled_by"]["intent_counter"].clone())
+        .expect("the writer's terminal");
+    assert!(
+        counters.contains(&cited),
+        "{row}: settled_by cites a logged attempt counter: {cited} in {counters:?}"
+    );
+    rig.live.verify(row);
+}
+
+/// F2 with two tokens (closed design): a drain stopped after a persist, and one cut by power
+/// loss after a terminal's append, both converge with the cross-token citation intact.
+#[test]
+fn crash_f2_two_tokens() {
+    const ROW: &str = "crash_f2_two_tokens";
+    let mut rig = super::tests::drain_rig(ROW, rolled_back);
+    let armed = fault::arm(&rig.live.path, Fault::Fail(At::FileRewritten));
+    assert_eq!(
+        rig.drain(),
+        Err(DrainError::Journal),
+        "{ROW}: stopped after a persist"
+    );
+    drop(armed);
+    let mut rig = restart(rig);
+    assert_eq!(rig.drain(), Ok(()), "{ROW}: resumed");
+    two_tokens_converged(&rig, ROW);
+
+    let rig = super::tests::drain_rig(ROW, rolled_back);
+    let mut rig = cut(rig, At::OutcomeAppended, Mode::DropAll, drain_step);
+    assert_eq!(rig.drain(), Ok(()), "{ROW}: after power loss");
+    two_tokens_converged(&rig, ROW);
+}

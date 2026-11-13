@@ -106,6 +106,28 @@ fn crash_f4() {
     );
     assert_eq!(rig.file(), before, "{ROW}: the file is byte-identical");
 
+    // A fully delivered file still waits for its own log: with no record left to settle, only
+    // the drain's own binding check stands between another log and the file's removal.
+    let mut delivered = frames(&rig);
+    for frame in &mut delivered {
+        frame.record.delivered = true;
+    }
+    plant(&rig, &encoded(&delivered));
+    let result = runtime(drain_abandoned(
+        &mut rig.session,
+        Some(Arc::clone(&other.log)),
+    ));
+    assert_eq!(
+        result,
+        Err(DrainError::OtherLog),
+        "{ROW}: a delivered file is not removed under another log"
+    );
+    assert_eq!(
+        rig.file().as_deref(),
+        Some(encoded(&delivered).as_slice()),
+        "{ROW}: the delivered file is byte-identical"
+    );
+
     let mut mixed = frames(&rig);
     mixed.last_mut().expect("a second frame").log_id = other.log.log_id();
     plant(&rig, &encoded(&mixed));

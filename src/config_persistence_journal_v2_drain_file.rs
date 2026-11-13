@@ -115,10 +115,9 @@ pub(super) fn state_from_frames(frames: Vec<AbandonedFrame>) -> Option<JournalV2
         match (frame.slot, frame.owner) {
             (Slot::Intent, Some(owner)) => {
                 let fresh = tokens.iter().all(|t| t.intent_id != frame.intent_id);
-                if !fresh || !owner.handed_over || owner.decision.is_none() {
-                    return None;
-                }
-                if *root.get_or_insert(owner.root) != owner.root {
+                let first_root = *root.get_or_insert(owner.root);
+                // An undecided token is refused below: `terminals_agree` needs a decision.
+                if !fresh || !owner.handed_over || first_root != owner.root {
                     return None;
                 }
                 tokens.push(TokenState {
