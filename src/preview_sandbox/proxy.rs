@@ -342,6 +342,13 @@ async fn serve<A: Accept>(listener: A, shared: Arc<Shared>) {
     }
 }
 
+/// Where a preview's private directory goes: `$XDG_RUNTIME_DIR` when it is
+/// an absolute path, else the temp dir.
+fn runtime_base(_xdg: Option<std::ffi::OsString>) -> PathBuf {
+    // Stub: the real choice lands with its implementation.
+    std::env::temp_dir()
+}
+
 /// A fresh owner-only directory under the temp dir, with a random name so
 /// another local user cannot pre-create it; made exclusively, so an existing
 /// path is an error and a new name is tried.

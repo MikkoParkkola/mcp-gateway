@@ -117,7 +117,7 @@ fn connect_text(authority: &str, auth: &str) -> String {
 }
 
 /// C8/V3, kills "constant credential": credentials differ per fetch, carry
-/// at least 32 random bytes as URL-safe base64, and an expired one from
+/// 64 lowercase hex characters, 32 random bytes, and an expired one from
 /// fetch 1 is refused during fetch 2.
 #[tokio::test]
 async fn c8_credentials_are_random_per_fetch_and_the_old_one_is_dead() {
@@ -128,11 +128,8 @@ async fn c8_credentials_are_random_per_fetch_and_the_old_one_is_dead() {
         rig.proxy.revoke(&c);
         assert!(seen.insert(c.secret().to_owned()), "repeated credential");
         let s = c.secret();
-        assert!(s.len() >= 43, "under 32 bytes of base64: {}", s.len());
-        assert!(
-            s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        );
+        assert_eq!(s.len(), 64);
+        assert!(s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
     }
     let first = begin(&rig);
     rig.proxy.revoke(&first);
@@ -141,6 +138,29 @@ async fn c8_credentials_are_random_per_fetch_and_the_old_one_is_dead() {
     let host = "registry.npmjs.org:443";
     assert_eq!(connect_status(&rig, host, &first).await, 407);
     assert_eq!(connect_status(&rig, host, &second).await, 200);
+}
+
+/// Kills "the credential accepted in another user:password form".
+#[tokio::test]
+async fn k1_the_basic_header_is_x_colon_credential() {
+    use base64::Engine as _;
+    let rig = rig().await;
+    let cred = begin(&rig);
+    let basic = cred.basic();
+    let token = basic.strip_prefix("Basic ").expect("a Basic header");
+    let decoded = String::from_utf8(
+        base64::engine::general_purpose::STANDARD
+            .decode(token)
+            .expect("basic decodes"),
+    )
+    .expect("basic is utf-8");
+    assert_eq!(decoded, format!("x:{}", cred.secret()));
+    let old = format!("Basic {}", base64_of(&format!("{}:", cred.secret())));
+    let old_bytes = connect_bytes("registry.npmjs.org:443", Some(&old));
+    assert_eq!(status(&send(&rig, &old_bytes).await), 407);
+    let hand = format!("Basic {}", base64_of(&format!("x:{}", cred.secret())));
+    let hand_bytes = connect_bytes("registry.npmjs.org:443", Some(&hand));
+    assert_eq!(status(&send(&rig, &hand_bytes).await), 200);
 }
 
 /// Collects every tracing line the proxy emits.

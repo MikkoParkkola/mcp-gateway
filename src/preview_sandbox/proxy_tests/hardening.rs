@@ -9,6 +9,7 @@ use super::{Rig, begin, connect_bytes, open, read_head, rig, status};
 use async_trait::async_trait;
 use std::io;
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -261,4 +262,16 @@ async fn h6_a_fetch_revoked_as_the_dial_completes_gets_no_tunnel() {
         "a tunnel was admitted for a fetch revoked at the dial"
     );
     assert!(client.closed().await, "a tunnel worked after the revoke");
+}
+
+/// Kills "XDG_RUNTIME_DIR is ignored when absolute, or used when it is not".
+#[test]
+fn x1_the_runtime_base_is_xdg_when_absolute_else_the_temp_dir() {
+    assert_eq!(
+        super::super::runtime_base(Some("/run/user/1000".into())),
+        PathBuf::from("/run/user/1000")
+    );
+    assert_eq!(super::super::runtime_base(Some("relative/dir".into())), std::env::temp_dir());
+    assert_eq!(super::super::runtime_base(Some("".into())), std::env::temp_dir());
+    assert_eq!(super::super::runtime_base(None), std::env::temp_dir());
 }
