@@ -35,7 +35,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use self::access::{Access, Refused};
-use self::answer::{Effect, Joined, SCOPE_LABEL, SUPPORTED_EFFECTS};
+use self::answer::{DELIVERY_WINDOW, Effect, Joined, SCOPE_LABEL, SUPPORTED_EFFECTS};
 use self::joiner::Joiner;
 use self::reader::{Limits, Look, read_page_joined};
 use self::rows::{FeedOutcome, Filter, Kind, NOT_A_CALL, kind_of, row};
@@ -371,12 +371,12 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
     let check = logs.check();
     let joiner = std::cell::RefCell::new(Joiner::new(&check));
     let mut answers: Vec<Joined> = Vec::new();
-    let mut fold = |line: &reader::Line| {
-        joiner.borrow_mut().observe(line);
+    let mut fold = |line: &reader::Line, above: u64| {
+        joiner.borrow_mut().observe(line, above);
     };
-    let keep = |line: &reader::Line, seen| {
+    let keep = |line: &reader::Line, seen: reader::Seen| {
         let mut j = joiner.borrow_mut();
-        if j.observe(line) {
+        if j.observe(line, seen.above) {
             return false;
         }
         let Some(kind) = kind_of(line) else {
@@ -449,6 +449,8 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         "join_incomplete": counts.join_incomplete,
         "answer_integrity_failed": counts.answer_integrity_failed,
         "answer_integrity_unattributed": counts.unattributed(),
+        "delivery_beyond_window": counts.delivery_beyond_window,
+        "delivery_window_bytes": DELIVERY_WINDOW,
         "answer_integrity_scope": SCOPE_LABEL,
     }))
     .into_response()
@@ -631,6 +633,9 @@ mod answer_profile_tests;
 #[path = "answer_progress_tests.rs"]
 mod answer_progress_tests;
 #[cfg(test)]
+#[path = "answer_reach_tests.rs"]
+mod answer_reach_tests;
+#[cfg(test)]
 #[path = "answer_receipt2_tests.rs"]
 mod answer_receipt2_tests;
 #[cfg(test)]
@@ -648,6 +653,9 @@ mod answer_stream_tests;
 #[cfg(test)]
 #[path = "answer_unattributed_tests.rs"]
 mod answer_unattributed_tests;
+#[cfg(test)]
+#[path = "answer_window_tests.rs"]
+mod answer_window_tests;
 #[cfg(test)]
 #[path = "decision_export_tests.rs"]
 mod decision_export_tests;

@@ -202,6 +202,11 @@ jobs:
         run: |
           python3 scripts/ci/check_swap_jobs.py --self-test
           python3 scripts/ci/check_swap_jobs.py
+      # A harness struct must drop its child process before its TempDir (the child's late write fails the shard).
+      - name: Test harnesses drop the child before the temp dir
+        run: |
+          python3 scripts/ci/check_teardown_order.py --self-test
+          python3 scripts/ci/check_teardown_order.py
       - name: Validate throwaway and mutant-row routing (hosted until the trusted runner is ready)
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
@@ -992,6 +997,57 @@ jobs:
         run: |
           # shellcheck disable=SC2086 # ROLLUP_EXPECTS is a space-separated id list on purpose
           python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
+
+  # A lane pull request whose diff touches the secret store, the keychain or a file lock needs the macOS int shard
+  # before it boards: only a merge train ran macOS, and the keychain change to `init` passed its own CI and broke the
+  # train (46u). This check reads the diff (scripts/ci/os_sensitive_diff.py) and fails, naming the lines and the
+  # `gh pr edit --add-label os-int` command, until the label is on. Seconds of work, no macOS runner.
+  os-int-label:
+    name: OS-sensitive diff carries the os-int label
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'throwaway/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The check's own rows
+        run: python3 scripts/ci/test_os_sensitive_diff.py
+      # HEAD is the pull request's merge with the base, so its first parent is the base the merge was cut from and the
+      # diff against it is exactly this pull request's, however far the base has moved since. The script refuses (exit 2)
+      # a checkout whose second parent is not the pull request's head: HEAD^1 would then cover only the tip commit.
+      - name: The diff carries the label when it needs one
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci/os_sensitive_diff.py --base HEAD^1 --head HEAD --pr "$PR_NUMBER" --labels "$LABELS" --expect-second-parent "$PR_HEAD_SHA"
+
+  # The os-int label's macOS job: the int shard alone (the bins, every integration test, the doc tests and the
+  # examples build), as the merge train runs it, without the lib halves. The lane adds the label at READY, not on every
+  # push: about two macOS runners serve every train, and int takes 36 to 92 minutes (median 73).
+  macos-int-lane:
+    name: macOS int (os-int label)
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'throwaway/') && contains(github.event.pull_request.labels.*.name, 'os-int') }}
+    runs-on: macos-latest
+    timeout-minutes: 150
+    env:
+      # As macos-shards: the 3-core, 7 GB runner swapped at the default.
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Shard suite
+        timeout-minutes: 145
+        run: python3 scripts/ci/shard_tests.py run macos int
 
   # The Linux suite as shards (MIK-8482); `test` below is the aggregate that
   # keeps the required name `Tests` (and docker-build's `needs: test`).
