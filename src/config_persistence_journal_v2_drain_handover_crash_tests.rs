@@ -195,3 +195,34 @@ fn handover_cleanup_drop_all() {
         "{ROW}: at the same path"
     );
 }
+
+#[test]
+fn crash_between_file_and_dir_sync() {
+    const ROW: &str = "crash_between_file_and_dir_sync";
+    let good = good_file();
+    let mut failures = Vec::new();
+    for mode in MODES {
+        collect_case(
+            &mut failures,
+            ROW,
+            &format!("{mode:?}"),
+            "data durable, directory entry not yet: DropAll loses the name, the others keep the file; resume finishes",
+            || {
+                let (mut rig, survived) = cut_at(At::AbandonFileDataSynced, mode);
+                assert!(survived && flagged(&rig), "the flagged journal survives");
+                let expected = match mode {
+                    Mode::DropAll => None,
+                    _ => Some(good.clone()),
+                };
+                assert_eq!(
+                    file_bytes(&rig.path),
+                    expected,
+                    "the name is durable only if the directory was synced"
+                );
+                resumes(&mut rig, &good);
+                Ok(())
+            },
+        );
+    }
+    assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
+}

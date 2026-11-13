@@ -32,6 +32,7 @@ pub(super) enum Event {
     RepairPaused,
     HandoverFlagged,
     AbandonFileAppended,
+    AbandonFileDataSynced,
     AbandonFileSynced,
     HandoverFinished,
 }

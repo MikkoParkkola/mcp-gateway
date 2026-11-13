@@ -28,6 +28,8 @@ pub(super) enum At {
     HandoverFlagged,
     /// Handover: every missing frame is written, none is synced.
     AbandonFileAppended,
+    /// Handover: the file's data is synced, its directory entry is not yet.
+    AbandonFileDataSynced,
     /// Handover: the file and its directory are synced; the journal still exists.
     AbandonFileSynced,
     /// Handover: the journal and staged original are gone and the directory is synced.
@@ -163,6 +165,7 @@ pub(super) fn event(at: At) -> Event {
         At::RepairPaused => Event::RepairPaused,
         At::HandoverFlagged => Event::HandoverFlagged,
         At::AbandonFileAppended => Event::AbandonFileAppended,
+        At::AbandonFileDataSynced => Event::AbandonFileDataSynced,
         At::AbandonFileSynced => Event::AbandonFileSynced,
         At::HandoverFinished => Event::HandoverFinished,
     }

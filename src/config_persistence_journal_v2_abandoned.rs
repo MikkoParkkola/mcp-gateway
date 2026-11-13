@@ -367,14 +367,8 @@ pub(crate) fn inspect(bytes: &[u8], donor: Option<&JournalV2>) -> Inspection {
 pub(crate) enum Placement {
     Absent,
     Whole,
-    Missing {
-        complete: usize,
-    },
-    Torn {
-        complete: usize,
-        start: usize,
-        proof: TornProof,
-    },
+    Missing { complete: usize },
+    Torn { complete: usize, proof: TornProof },
     Foreign,
 }
 
@@ -400,9 +394,13 @@ pub(crate) fn marked(donor: &JournalV2) -> JournalV2 {
     marked
 }
 
-/// Judge an existing abandoned file against the marked donor: its complete frames must be a
-/// proven leading run of the donor's frames, clean or torn, or the file is `Foreign`.
+/// Judge an existing abandoned file against the donor as it will be once handed over: its
+/// complete frames must be a proven leading run of the donor's frames, clean or torn, or the
+/// file is `Foreign`.
 pub(crate) fn against_donor(existing: &[u8], donor: &JournalV2) -> Placement {
+    // The projection is taken here, so a caller cannot pass the unflagged donor and get a false
+    // `Foreign`: the frames a handover writes carry the flag, and `proves` requires it.
+    let donor = &marked(donor);
     let canonical = canonical_frames(donor);
     let Ok(read) = read(existing) else {
         return Placement::Foreign;
@@ -417,7 +415,6 @@ pub(crate) fn against_donor(existing: &[u8], donor: &JournalV2) -> Placement {
         Tail::Clean => Placement::Missing { complete },
         Tail::Incomplete { start } if complete < canonical.len() => Placement::Torn {
             complete,
-            start,
             proof: TornProof { start },
         },
         Tail::Incomplete { .. } => Placement::Foreign,

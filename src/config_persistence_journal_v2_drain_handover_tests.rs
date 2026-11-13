@@ -180,6 +180,35 @@ fn handover_refusals_leave_bytes() {
             },
         );
     }
+    #[cfg(unix)]
+    collect_case(
+        &mut failures,
+        ROW,
+        "a second hard link",
+        "a whole file with link count 2 is refused and both names keep their bytes",
+        || {
+            let mut rig = rig(|_| {});
+            let path = abandoned_path(&rig.path);
+            std::fs::write(&path, &good).expect("pre-existing file");
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                    .expect("mode");
+            }
+            let other = rig.dir().join("second-name");
+            std::fs::hard_link(&path, &other).expect("a second link to the same file");
+            let before = journal_bytes(&rig.path);
+            assert_eq!(
+                hand_over(&mut rig.session),
+                Err(HandoverError::Foreign),
+                "link count 2"
+            );
+            assert_eq!(journal_bytes(&rig.path), before, "journal untouched");
+            assert_eq!(std::fs::read(&path).expect("file"), good, "file untouched");
+            assert_eq!(std::fs::read(&other).expect("link"), good, "link untouched");
+            Ok(())
+        },
+    );
     collect_case(
         &mut failures,
         ROW,
@@ -442,5 +471,62 @@ fn handover_fifo_and_symlink_refused() {
             Ok(())
         },
     );
+    assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
+}
+
+fn with_attempt(donor: &mut JournalV2) {
+    let mut attempt = donor.writer.clone().expect("a writer");
+    attempt.intent_id = super::super::super::IntentId("attempt-1".to_owned());
+    attempt.handed_over = false;
+    donor.attempts.push(attempt);
+}
+
+#[test]
+fn handover_multi_token_and_root_donors() {
+    const ROW: &str = "handover_multi_token_and_root_donors";
+    let mut failures = Vec::new();
+    for (name, root) in [
+        ("a writer and an attempt", false),
+        ("a root donor: attempts only", true),
+    ] {
+        collect_case(
+            &mut failures,
+            ROW,
+            name,
+            "every token's frames are written, in order, with the root fact stamped",
+            || {
+                let mut rig = rig(|donor| {
+                    with_attempt(donor);
+                    if root {
+                        donor.writer = None;
+                    }
+                });
+                assert_eq!(hand_over(&mut rig.session), Ok(()), "hand over");
+                let bytes = file_bytes(&rig.path).expect("the abandoned file exists");
+                let donor = marked(&rig.donor);
+                let want: Vec<u8> = frames_of(&donor)
+                    .expect("bound")
+                    .iter()
+                    .map(|frame| encode_frame(frame).expect("fits"))
+                    .collect::<Vec<_>>()
+                    .concat();
+                assert_eq!(bytes, want, "byte for byte the frames the codec builds");
+                assert_eq!(against_donor(&bytes, &rig.donor), Placement::Whole, "whole");
+                let read = decode_frames(&bytes).expect("frames decode");
+                assert_eq!(
+                    read.frames.len(),
+                    canonical_frames(&donor).len(),
+                    "every frame"
+                );
+                for frame in read.frames.iter().filter(|f| f.owner.is_some()) {
+                    let owner = frame.owner.as_ref().expect("an intent frame");
+                    assert_eq!(owner.root, root, "the root fact on every intent frame");
+                    assert!(owner.handed_over, "handed over, in the file itself");
+                }
+                assert_eq!(journal_bytes(&rig.path), None, "the journal is gone");
+                Ok(())
+            },
+        );
+    }
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }

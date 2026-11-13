@@ -6,7 +6,7 @@
 use super::super::fixtures::{JOURNAL_V2_HANDED_OVER, collect_case};
 use super::super::{Fact, JournalError, JournalV2, ParkReason, Pending, Phase};
 use super::fixtures::{HANDED_OVER_JSON, donor, file, handed_over, record_0, record_1, reframe};
-use super::{Placement, against_donor, marked};
+use super::{Placement, against_donor, encode_frame, frames_of, marked};
 use crate::config_persistence::commit::{Action, FileRevision};
 
 const OLD: &[u8] = b"old: 1\n";
@@ -178,7 +178,6 @@ fn placement_exact_cases() {
                         };
                         Placement::Torn {
                             complete,
-                            start,
                             proof: super::TornProof { start },
                         }
                     }
@@ -196,12 +195,12 @@ fn placement_exact_cases() {
         &mut failures,
         ROW,
         "proof_carries_the_start",
-        "a torn placement's proof names the same start as the placement",
+        "a torn placement's proof names the start of the torn frame",
         || {
             let bytes = file(&[&i, &torn(&r0, 10)]);
             match against_donor(&bytes, &donor) {
-                Placement::Torn { start, proof, .. } => {
-                    assert_eq!((start, proof.start()), (b1, b1));
+                Placement::Torn { proof, .. } => {
+                    assert_eq!(proof.start(), b1);
                 }
                 other => panic!("expected a torn placement, got {other:?}"),
             }
@@ -319,7 +318,7 @@ fn placement_empty_donor_and_post_flag_bytes() {
         &mut failures,
         ROW,
         "post_flag_bytes",
-        "frames carry handed_over: true, so they match the marked donor and not the unmarked one",
+        "frames carry handed_over: true; the judgement takes the donor as it will be once handed over, so the unflagged donor gives the same answer",
         || {
             let unmarked = unflagged(donor());
             let bytes = file(&[&handed_over(), &record_0(), &record_1()]);
@@ -330,9 +329,102 @@ fn placement_empty_donor_and_post_flag_bytes() {
             );
             assert_eq!(
                 against_donor(&bytes, &unmarked),
-                Placement::Foreign,
-                "unmarked"
+                Placement::Whole,
+                "unmarked: the projection is taken inside"
             );
+            Ok(())
+        },
+    );
+    assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
+}
+
+/// A donor with a writer and one attempt, so frame order and token lookup cross two tokens.
+fn two_token_donor() -> JournalV2 {
+    let mut state = donor();
+    let mut attempt = state.writer.clone().expect("a writer");
+    attempt.intent_id = super::super::IntentId("attempt-1".to_owned());
+    attempt.handed_over = false;
+    state.attempts.push(attempt);
+    state
+}
+
+fn frame_list(donor: &JournalV2) -> Vec<Vec<u8>> {
+    frames_of(&marked(donor))
+        .expect("the donor is bound")
+        .iter()
+        .map(|frame| encode_frame(frame).expect("a frame fits"))
+        .collect()
+}
+
+#[test]
+fn placement_two_tokens_and_trailing_garbage() {
+    const ROW: &str = "placement_two_tokens_and_trailing_garbage";
+    let donor = two_token_donor();
+    let frames = frame_list(&donor);
+    let mut failures = Vec::new();
+    collect_case(
+        &mut failures,
+        ROW,
+        "writer_then_attempt",
+        "the writer's frames then the attempt's: whole, and every boundary is a proven prefix",
+        || {
+            assert_eq!(
+                against_donor(&frames.concat(), &donor),
+                Placement::Whole,
+                "whole"
+            );
+            for k in 1..frames.len() {
+                assert_eq!(
+                    against_donor(&frames[..k].concat(), &donor),
+                    Placement::Missing { complete: k },
+                    "prefix of {k} frames"
+                );
+            }
+            Ok(())
+        },
+    );
+    collect_case(
+        &mut failures,
+        ROW,
+        "cross_token_reorder",
+        "the attempt's intent frame before the writer's last record is Foreign",
+        || {
+            let last_writer = frames.len() - 2;
+            let mut swapped = frames.clone();
+            swapped.swap(last_writer, last_writer + 1);
+            assert_eq!(against_donor(&swapped.concat(), &donor), Placement::Foreign);
+            Ok(())
+        },
+    );
+    collect_case(
+        &mut failures,
+        ROW,
+        "attempt_frame_twice",
+        "a repeated attempt frame is Foreign",
+        || {
+            let mut repeated = frames.clone();
+            repeated.push(frames[frames.len() - 1].clone());
+            assert_eq!(
+                against_donor(&repeated.concat(), &donor),
+                Placement::Foreign
+            );
+            Ok(())
+        },
+    );
+    collect_case(
+        &mut failures,
+        ROW,
+        "trailing_garbage",
+        "bytes with no header after a proven prefix are a torn tail, cut back to that prefix",
+        || {
+            let first = &frames[0];
+            let bytes = file(&[first.as_slice(), b"no header here".as_slice()]);
+            match against_donor(&bytes, &donor) {
+                Placement::Torn { complete, proof } => {
+                    assert_eq!((complete, proof.start()), (1, first.len()));
+                }
+                other => panic!("expected a torn placement, got {other:?}"),
+            }
             Ok(())
         },
     );

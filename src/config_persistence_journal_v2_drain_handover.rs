@@ -158,6 +158,10 @@ fn commit(
     placement: Placement,
     frames: &[Vec<u8>],
 ) -> Result<(), HandoverError> {
+    // Never append donor frames onto bytes the donor does not prove, whoever the caller is.
+    if placement == Placement::Foreign {
+        return Err(HandoverError::Foreign);
+    }
     journal.state = donor;
     journal.persist().map_err(|_| HandoverError::Journal)?;
     seam(&journal.target, At::HandoverFlagged)?;
@@ -170,9 +174,7 @@ fn commit(
     checked(&file).map_err(|_| HandoverError::Write)?;
     let from = match placement {
         Placement::Whole => frames.len(),
-        Placement::Torn {
-            complete, proof, ..
-        } => {
+        Placement::Torn { complete, proof } => {
             truncate_to(&file, &proof)?;
             complete
         }
@@ -188,6 +190,7 @@ fn commit(
     file.sync_all().map_err(|_| HandoverError::Sync)?;
     crate::config_persistence::crash_fs::note_flushed(&journal.target, &mut file)
         .map_err(|_| HandoverError::Sync)?;
+    seam(&journal.target, At::AbandonFileDataSynced)?;
     sync_dir_of(path).map_err(|_| HandoverError::Sync)?;
     seam(&journal.target, At::AbandonFileSynced)?;
     seal(&mut file, path, frames)
