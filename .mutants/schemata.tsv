@@ -1,0 +1,7 @@
+head_sha	8ea8a6a1d1eac867cb627b04b89756fabccdb2fd
+#mutant c9460.f1
+mcp_gateway	personal_accounts::worker::worker_tests::release_tests::a_shutdown_draining_behind_a_failed_detach_reports_stuck_not_a_hang	src/personal_accounts/worker_tests/release_tests.rs:572
+#mutant c9460.f2
+mcp_gateway	personal_accounts::worker::worker_tests::release_tests::a_drain_cut_after_a_detach_reports_the_running_release	src/personal_accounts/worker_tests/release_tests.rs:605
+#mutant c9460.f5
+mcp_gateway	personal_accounts::worker::worker_tests::release_tests::dropping_the_serve_guard_detaches_the_release	src/personal_accounts/worker_tests/release_tests.rs:661
