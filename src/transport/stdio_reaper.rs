@@ -430,6 +430,15 @@ pub(super) async fn wait_reaped(
 }
 
 impl super::StdioTransport {
+    /// Record the tree's descendants before the first signal of a stop, which
+    /// is the stdin close: a backend that exits on EOF would otherwise
+    /// reparent its descendants before anything recorded them.
+    fn snapshot_descendants(&self) {
+        if let Some(tree) = self.child.lock().tree.as_mut() {
+            tree.sweep_snapshot();
+        }
+    }
+
     /// Close the child's stdin now, unless a write holds it: one stuck on a
     /// peer that stopped reading. SIGTERM or the kill ends that one, and the
     /// child never sees EOF. `true` when stdin was closed.
@@ -450,11 +459,7 @@ impl super::StdioTransport {
     fn hand_over_gracefully_now(&self, budget: Duration) {
         self.connected
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        // Before the stdin close, the first signal of the stop: a backend that
-        // exits on EOF would otherwise reparent its descendants unrecorded.
-        if let Some(tree) = self.child.lock().tree.as_mut() {
-            tree.sweep_snapshot();
-        }
+        self.snapshot_descendants();
         let ending = graceful_ending(
             budget,
             self.close_stdin_now(),
@@ -579,6 +584,7 @@ impl super::StdioTransport {
         self.connected
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
+        self.snapshot_descendants();
         let stdin_closed = self.close_stdin_now();
         // The per-start stdin token first, then the tree to the reaper,
         // waited for (bounded) with any reap a retire started earlier. No
