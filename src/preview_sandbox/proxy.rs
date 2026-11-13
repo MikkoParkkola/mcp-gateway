@@ -735,12 +735,16 @@ async fn read_head<S: AsyncRead + Unpin>(client: &mut S, bound: Duration) -> Opt
 
 /// False only when the lookup failed with `NotFound`; true on success and every other error.
 fn ipv6_tree_present(lookup: io::Result<()>) -> bool {
-    lookup.is_ok()
+    !matches!(lookup, Err(e) if e.kind() == io::ErrorKind::NotFound)
 }
 
 /// `Ok(text)` is `Ok(Some(text))`; `NotFound` is `Ok(None)`; other errors are returned unchanged.
 fn optional_text(read: io::Result<String>) -> io::Result<Option<String>> {
-    read.map(Some)
+    match read {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// The host's IPv4 addresses from `/proc/net/fib_trie`: every leaf with a
@@ -837,18 +841,11 @@ impl Connect for System {
 impl Interfaces for System {
     fn addresses(&self) -> io::Result<Vec<IpAddr>> {
         let v4 = fib_trie_local(&std::fs::read_to_string("/proc/net/fib_trie")?)?;
-        let inet6 = match std::fs::read_to_string("/proc/net/if_inet6") {
-            Ok(text) => Some(text),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error),
-        };
+        let inet6 = optional_text(std::fs::read_to_string("/proc/net/if_inet6"))?;
         // Any error but a missing tree counts as present, so an unreadable
         // /proc refuses the read instead of reporting that IPv6 is off.
-        let ipv6_sysctl_present = match std::fs::symlink_metadata("/proc/sys/net/ipv6") {
-            Ok(_) => true,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-            Err(_) => true,
-        };
+        let ipv6_sysctl_present =
+            ipv6_tree_present(std::fs::symlink_metadata("/proc/sys/net/ipv6").map(|_| ()));
         let v6 = if_inet6(inet6.as_deref(), ipv6_sysctl_present)?;
         Ok(v4
             .into_iter()
