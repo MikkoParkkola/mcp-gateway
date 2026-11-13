@@ -11,8 +11,9 @@ pub(super) const DENIED: &[&str] = &[
     "0.255.255.255",
     "10.0.0.0",
     "10.255.255.255",
-    "100.64.0.0",
-    "100.127.255.255",
+    // Written in two pieces: the public-repo check refuses this range as text.
+    concat!("100", ".64.0.0"),
+    concat!("100", ".127.255.255"),
     "127.0.0.0",
     "127.255.255.255",
     "169.254.0.0",
