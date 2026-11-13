@@ -127,7 +127,11 @@ fn resolve_error(status: StatusCode, code: &str, message: &str) -> Response {
 fn check_resolve(request: &ResolveRequest) -> Result<(), &'static str> {
     // Control characters are refused anywhere, a trailing newline too:
     // the check reads the reason as sent, before any trim.
-    if request.reason.chars().any(char::is_control) {
+    if mutant!(
+        "trimctl",
+        request.reason.trim().chars().any(char::is_control),
+        request.reason.chars().any(char::is_control)
+    ) {
         return Err("the reason must not contain control characters");
     }
     let reason = request.reason.trim();
@@ -138,9 +142,13 @@ fn check_resolve(request: &ResolveRequest) -> Result<(), &'static str> {
     // otherwise pass here and then read as a changed request.
     let digest = request.scope_digest.as_str();
     if digest.len() != 64
-        || !digest
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || !digest.bytes().all(|b| {
+            mutant!(
+                "upperhex",
+                b.is_ascii_hexdigit(),
+                b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
+            )
+        })
     {
         return Err("scope_digest must be the 64 hex characters the listing gave");
     }
@@ -174,7 +182,7 @@ async fn resolve_decision(
         Err(refused) => return *refused,
     };
     let authorization = ControlPlaneRbac::authorize(&actor, action);
-    if !authorization.allowed {
+    if mutant!("noadmit", false, !authorization.allowed) {
         return resolve_error(
             StatusCode::FORBIDDEN,
             "forbidden",
@@ -199,6 +207,7 @@ async fn resolve_decision(
     };
     // One resolve at a time: the item is read and judged under this mutex.
     let _resolving = decisions.resolving().await;
+    mutant!("nomutex", drop(_resolving), ());
     let item = match decisions.item(&id) {
         Ok(Some(item)) => item,
         Ok(None) => {
@@ -228,7 +237,7 @@ fn judge_item(item: &Value, scope_digest: &str) -> Response {
         .get("scope_digest")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if current != scope_digest {
+    if mutant!("nodigest", false, current != scope_digest) {
         return (
             StatusCode::CONFLICT,
             Json(json!({

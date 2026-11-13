@@ -49,18 +49,26 @@ pub(crate) fn scope_digest(scope: &[Value], positions: &[(&str, u64)]) -> String
         .collect();
     entries.sort();
     entries.dedup();
-    let mut positions = positions.to_vec();
+    let mut positions = mutant!("nopositions", Vec::new(), positions.to_vec());
     positions.sort_unstable();
     positions.dedup();
     let mut bytes = b"mcpg/access-request/scope/v3\0".to_vec();
-    bytes.extend((entries.len() as u64).to_be_bytes());
+    mutant!(
+        "layout",
+        (),
+        bytes.extend((entries.len() as u64).to_be_bytes())
+    );
     for entry in &entries {
         for part in entry {
             bytes.extend((part.len() as u64).to_be_bytes());
             bytes.extend(part.as_bytes());
         }
     }
-    bytes.extend((positions.len() as u64).to_be_bytes());
+    mutant!(
+        "layout",
+        bytes.extend((entries.len() as u64).to_be_bytes()),
+        bytes.extend((positions.len() as u64).to_be_bytes())
+    );
     for (entry, counter) in positions {
         bytes.extend((entry.len() as u64).to_be_bytes());
         bytes.extend(entry.as_bytes());

@@ -590,7 +590,7 @@ impl Shared {
         id: &str,
     ) -> Result<Option<Value>, Vec<(&'static str, &'static str)>> {
         let set = self.set.read();
-        if !set.readable() {
+        if mutant!("noready", false, !set.readable()) {
             return Err(set.unavailable());
         }
         Ok(set
