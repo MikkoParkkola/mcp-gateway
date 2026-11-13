@@ -512,6 +512,13 @@ probe = "none"
 reason = "fires only when the audit append fails or stalls; a live probe cannot induce that without breaking the install it probes"
 
 [[control]]
+id = "key-server-email-lookup"
+description = "the admin email lookup (POST /ui/api/key-server/audit/lookup-email) admits only gateway-wide admin standing before it hashes the email or reads a byte, charges every authorized attempt, malformed ones included, to one process-wide budget (two at once, then one every six seconds, 429 with Retry-After), keeps no copy of the email and answers retained issuance rows only. Covered by the lookup rows (key_lookup_route_tests) and the budget rows (lookup_budget tests)"
+source = "src/gateway/ui/activity/key_lookup.rs"
+probe = "none"
+reason = "needs an admin credential and a retained issuance row to answer anything; a live probe holds neither"
+
+[[control]]
 id = "audit-settle-fail-closed"
 description = "settle appends a journaled config-write record only into the log its journal is bound to, synced, under the F20 permit: it never reports Appended without a confirmed sync; a permit it cannot take is Refused with no task, and past the bound a dispatched write is Unconfirmed; it refuses another log (OtherLog) and a payload outside the settle. kind namespace or naming a reserved field (Invalid); plain appends refuse a settle. kind. Covered by the settle rows (settle_tests: bound log, OtherLog, refusals by class), the bound rows (settle_bound_tests: permit, closed and stalled refusal, held task, 2x bound, faults, refresh failure) and the kind rows (settle_kind_tests)"
 source = "src/security/transparency_log_settle.rs"

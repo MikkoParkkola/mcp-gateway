@@ -137,6 +137,14 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         )],
     ),
     (
+        "/ui/api/key-server/audit/lookup-email",
+        Method::POST,
+        &[(
+            "src/gateway/ui/activity/key_lookup_route_tests.rs",
+            "matching_rows_come_from_every_segment_and_only_for_the_same_hash",
+        )],
+    ),
+    (
         "/ui/api/reload",
         Method::POST,
         &[(

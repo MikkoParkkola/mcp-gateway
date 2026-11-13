@@ -384,3 +384,46 @@ tests:
       - eval_time: 31m
         alertname: McpBackendCallerSlotsRefused
         exp_alerts: []
+
+  # Admin email lookup volume. (a) No lookups -> no alert.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_key_server_lookup_attempts_total'
+        values: "0x20"
+
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: McpKeyServerLookupVolume
+        exp_alerts: []
+
+  # (b) A throttled lookup (the counter appears at 1) fires the alert.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_key_server_lookup_throttled_total'
+        values: "_x5 1 1x14"
+
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: McpKeyServerLookupVolume
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              category: security
+            exp_annotations:
+              summary: "Admin email lookups are throttled or unusually frequent"
+
+  # (c) More than 30 attempts in 15 minutes fires it with no throttle at all.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_key_server_lookup_attempts_total'
+        values: "0x2 40x14"
+
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: McpKeyServerLookupVolume
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              category: security
+            exp_annotations:
+              summary: "Admin email lookups are throttled or unusually frequent"
