@@ -181,7 +181,9 @@ def workflow_problems(jobs: dict, st) -> list[str]:
             out.append(f"{shard_key}: fail-fast must be false, so one red shard does not cancel the rest")
         name = shard.get("name", "")
         py = "python" if os_kind == "windows" else "python3"
-        call = f"{py} scripts/ci/shard_tests.py run {os_kind} ${{{{ matrix.shard }}}}"
+        # Linux shards build the library test binary through the memory log (check_swap_jobs.py enforces it there).
+        memlog = "scripts/ci/with-memory-log.sh " if os_kind == "linux" else ""
+        call = f"{memlog}{py} scripts/ci/shard_tests.py run {os_kind} ${{{{ matrix.shard }}}}"
         # An OS with PREBUILT shards also exports the lib binary first and runs each prebuilt
         # shard from it after the suite.
         prebuilt = sorted(getattr(st, "PREBUILT", {}).get(os_kind, {}))
