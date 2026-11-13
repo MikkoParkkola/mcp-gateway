@@ -581,6 +581,13 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         DetachOnDrop(Arc::clone(self))
     }
 
+    /// Test seam: whether a release has started (or is stuck), read without
+    /// starting one.
+    #[cfg(test)]
+    pub(crate) fn release_started(&self) -> bool {
+        !matches!(*self.lock_slot(), Slot::Open(_))
+    }
+
     /// Test seam: the next release thread fails to start.
     #[cfg(test)]
     pub(crate) fn fail_next_release_spawn(&self) {
@@ -588,7 +595,9 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
     }
 }
 
-/// See [`CustodyHandle::detach_on_drop`].
+/// See [`CustodyHandle::detach_on_drop`]. Held for a serve's whole body: a
+/// temporary dropped at once would start the release before the serve runs.
+#[must_use = "hold the guard for the whole serve; dropping it starts the custody release"]
 pub(crate) struct DetachOnDrop<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static>(
     Arc<CustodyHandle<P, O>>,
 );
