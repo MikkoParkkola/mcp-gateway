@@ -5,8 +5,6 @@
 //! again writes no new record within the window; a changed decision, such as
 //! a revoked grant, is written at once.
 
-use std::sync::Arc;
-
 use serde_json::json;
 
 use super::grant_audit::with_grant_slot;

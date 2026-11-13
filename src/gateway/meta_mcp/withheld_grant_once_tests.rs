@@ -5,8 +5,6 @@
 //! grant reload landing between two evaluations must not leave a record that
 //! names a decision other than the refusal served.
 
-use std::sync::Arc;
-
 use serde_json::json;
 
 use super::super::grant_audit::{allow_unslotted_check_for_test, with_grant_slot};
