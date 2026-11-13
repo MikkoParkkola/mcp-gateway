@@ -343,7 +343,7 @@ fn replay_ui_decisions(store: &dyn ControlPlaneStore, shared: &Shared) -> bool {
         let decisions: Vec<_> = page
             .events
             .iter()
-            .filter_map(|event| event.ui_decision.as_ref())
+            .filter_map(|event| mutant!("noreplay", None, event.ui_decision.as_ref()))
             .filter_map(decisions_from_record)
             .flatten()
             .collect();
