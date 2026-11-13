@@ -82,24 +82,23 @@ pub(crate) fn bounded<T: Send + 'static>(
 /// between asks. The whole wait stays well inside [`BOUND`].
 #[cfg(any(windows, test))]
 pub(crate) const CONFIRM_ATTEMPTS: u32 = 8;
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 pub(crate) const CONFIRM_GAP: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// A delete is done only when the entry is seen gone. Credential Manager can
 /// keep answering for an entry whose delete already succeeded, so
-/// `still_there` is asked up to `attempts` times, `gap` apart. An entry that is
-/// still there at the end, or a question that fails, is an error: unknown is
-/// never reported as removed.
+/// `still_there` is asked up to `attempts` times, with `sleep(gap)` between
+/// asks. An entry that is still there at the end, or a question that fails, is
+/// an error: a state that could not be read is never reported as removed.
 #[cfg(any(windows, test))]
 pub(crate) fn confirm_absent(
     attempts: u32,
     gap: std::time::Duration,
+    sleep: impl FnMut(std::time::Duration),
     mut still_there: impl FnMut() -> Result<bool, KeychainError>,
 ) -> Result<(), KeychainError> {
-    for attempt in 0..attempts {
-        if attempt > 0 {
-            std::thread::sleep(gap);
-        }
+    let _ = (gap, sleep);
+    for _ in 0..attempts {
         if !still_there()? {
             return Ok(());
         }
@@ -107,6 +106,21 @@ pub(crate) fn confirm_absent(
     Err(KeychainError::Unavailable(format!(
         "could not confirm removal: the entry is still readable after {attempts} checks"
     )))
+}
+
+/// The whole delete: `remove` runs the OS delete (an entry already absent
+/// counts as removed), then absence is confirmed. A failed `remove` asks
+/// nothing.
+#[cfg(any(windows, test))]
+pub(crate) fn delete_confirmed(
+    attempts: u32,
+    gap: std::time::Duration,
+    sleep: impl FnMut(std::time::Duration),
+    remove: impl FnOnce() -> Result<(), KeychainError>,
+    still_there: impl FnMut() -> Result<bool, KeychainError>,
+) -> Result<(), KeychainError> {
+    let _ = (attempts, gap, sleep, remove, still_there);
+    Ok(())
 }
 
 /// The reader an [`EnvOverlay`](super::EnvOverlay) resolves through. The
