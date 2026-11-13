@@ -36,6 +36,9 @@ impl Gateway {
         R: tokio::io::AsyncRead + Unpin + Send + 'static,
         W: tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
+        // Any exit, an early error or a cancelled call included, hands the
+        // custody store to a release thread before `self` drops here.
+        let _custody_release = self.account_custody().map(|c| c.detach_on_drop());
         let orphan = stdio_shutdown::orphan_watch(
             #[cfg(test)]
             self.test_seams.parent_pid.clone(),

@@ -390,6 +390,8 @@ impl Gateway {
     /// # Errors
     ///
     /// Returns the custody handle's own refusal if the drain cannot complete.
+    /// Test-only: both serve paths use the bounded form.
+    #[cfg(test)]
     pub(crate) async fn shutdown_account_custody(
         &self,
     ) -> std::result::Result<(), crate::personal_accounts::CustodyError> {

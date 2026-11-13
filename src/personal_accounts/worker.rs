@@ -439,15 +439,8 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         self.shutting_down.store(true, Ordering::Release);
         // A later call inspects the slot BEFORE draining permits, so it is never
         // told "in flight" about a release that is already running or stuck.
-        let state = match &*self.lock_slot() {
-            Slot::Open(_) => None,
-            Slot::Releasing => Some(false),
-            Slot::Stuck => Some(true),
-        };
-        match state {
-            Some(true) => return Self::stuck_end(deadline),
-            Some(false) => return Ok(self.release_end(deadline).await),
-            None => {}
+        if let Some(end) = self.settled_end(deadline).await {
+            return end;
         }
         // Holding every permit means no operation is in flight. In-flight work
         // is awaited, not cancelled, up to the deadline.
@@ -456,6 +449,11 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         let drained = match deadline {
             Some(at) => {
                 let Ok(permits) = tokio::time::timeout_at(at, draining).await else {
+                    // A detach may have started (or failed to start) the
+                    // release while this call drained: report that, not "in flight".
+                    if let Some(end) = self.settled_end(deadline).await {
+                        return end;
+                    }
                     report_once(
                         &self.reported,
                         "in-flight work still running at the stop deadline; the store was not released",
@@ -470,6 +468,9 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         let started = {
             let mut slot = self.lock_slot();
             match slot.take_open() {
+                // Taken by a concurrent call while this one drained: a stuck
+                // store is never waited on, a running release is.
+                None if matches!(*slot, Slot::Stuck) => Some(false),
                 None => None,
                 Some(held) => match self.spawn_release(held) {
                     Ok(()) => Some(true),
@@ -500,6 +501,24 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
                 Self::stuck_end(deadline)
             }
         }
+    }
+
+    /// How a call ends when the release is already running or stuck; `None`
+    /// while the slot is still `Open`. The slot lock is released before any wait.
+    async fn settled_end(
+        &self,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Option<Result<ShutdownEnd, CustodyError>> {
+        let stuck = match &*self.lock_slot() {
+            Slot::Open(_) => return None,
+            Slot::Releasing => false,
+            Slot::Stuck => true,
+        };
+        Some(if stuck {
+            Self::stuck_end(deadline)
+        } else {
+            Ok(self.release_end(deadline).await)
+        })
     }
 
     /// How a call ends when the release thread is (or was) running.
@@ -578,8 +597,7 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Drop
     for DetachOnDrop<P, O>
 {
     fn drop(&mut self) {
-        // STUB for the red run: the real guard detaches.
-        let _ = &self.0;
+        self.0.detach_release();
     }
 }
 

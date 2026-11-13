@@ -53,6 +53,9 @@ impl Gateway {
         // Taken first, so the uptime the web UI reports counts from the start
         // of this call, not from the first request it serves.
         let started = ProcessStart::now();
+        // Any exit, an early error or a cancelled call included, hands the
+        // custody store to a release thread before `self` drops here.
+        let _custody_release = self.account_custody().map(|c| c.detach_on_drop());
         start_checks::http(&self.config)?;
         let addr = SocketAddr::new(
             self.config
