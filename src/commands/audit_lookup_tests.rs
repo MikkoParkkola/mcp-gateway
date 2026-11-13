@@ -247,14 +247,74 @@ fn the_token_line_is_read_bounded_and_never_echoed() {
         read_cursor(at_limit.as_bytes()).as_deref(),
         Ok(at_limit.as_str())
     );
-    // A long input is cut off one byte past the bound, not read to the end.
+    // A long input is cut off one byte past the bound and a `\r\n` line end,
+    // not read to the end.
     let read = std::cell::Cell::new(0);
     assert!(read_cursor(Counting(&read, 1 << 20)).is_err());
     assert!(
-        read.get() <= MAX_CURSOR_INPUT + 1,
+        read.get() <= MAX_CURSOR_INPUT + 3,
         "read {} bytes",
         read.get()
     );
+}
+
+/// MIK-9456.CLI.1: the 2048-byte bound is on the token, not on its line end:
+/// a full-length token piped by `jq -r` (which ends it with `\n`) or saved
+/// with `\r\n` is accepted, and one byte more is refused however it ends.
+/// Mutant: count the line end toward the bound, or drop the token's bound.
+#[test]
+fn a_full_length_token_with_its_line_end_is_accepted() {
+    let full = "a".repeat(MAX_CURSOR_INPUT);
+    for end in ["\n", "\r\n"] {
+        assert_eq!(
+            read_cursor(format!("{full}{end}").as_bytes()).as_deref(),
+            Ok(full.as_str()),
+            "{end:?}"
+        );
+    }
+    let over = "a".repeat(MAX_CURSOR_INPUT + 1);
+    for end in ["", "\n", "\r\n"] {
+        assert_eq!(
+            read_cursor(format!("{over}{end}").as_bytes()),
+            Err("the page token on stdin is too long".to_string()),
+            "{end:?}"
+        );
+    }
+}
+
+/// MIK-9456.CLI.1: a value typed as an argument (positional, or attached to a
+/// source flag) is refused by the parser, whose error names the stray value:
+/// the docs say so and send the email and the token to stdin only. A source
+/// flag takes no value, so `=false` cannot switch a source off.
+/// Mutant: accept a positional value, or let a source flag take a value.
+#[test]
+fn a_value_typed_as_an_argument_is_refused_and_named_by_the_parser() {
+    let email_attached = format!("--email-stdin={EMAIL}");
+    let page_attached = format!("--cursor-stdin={PAGE}");
+    for (argv, value) in [
+        (vec!["--email-stdin", EMAIL], EMAIL),
+        (vec!["--cursor-stdin", PAGE], PAGE),
+        (vec![email_attached.as_str()], EMAIL),
+        (vec![page_attached.as_str()], PAGE),
+    ] {
+        let message = parse(&argv).expect_err("a typed value").to_string();
+        assert!(message.contains(value), "{argv:?}: {message}");
+    }
+    for flag in ["--email-stdin=false", "--cursor-stdin=false"] {
+        assert!(parse(&[flag]).is_err(), "{flag}");
+    }
+}
+
+/// MIK-9456.CLI.1: the input's debug form never prints the email or the
+/// token, so a future log line or panic message cannot carry either.
+/// Mutant: derive `Debug` again.
+#[test]
+fn the_input_debug_form_hides_the_email_and_the_token() {
+    for (input, secret) in [(by_email(), EMAIL), (by_cursor(), PAGE)] {
+        let shown = format!("{input:?}");
+        assert!(!shown.contains(secret), "{shown}");
+    }
+    assert_ne!(format!("{:?}", by_email()), format!("{:?}", by_cursor()));
 }
 
 /// MIK-9456.CLI.1: a next-page body is exactly the token and the page size;
@@ -513,7 +573,12 @@ fn the_help_names_stdin_and_the_credential() {
     let help = lookup.render_long_help().to_string();
     assert!(help.contains("--email-stdin"), "{help}");
     assert!(help.contains("--cursor-stdin"), "{help}");
-    assert!(help.contains("next_cursor"), "paging recipe: {help}");
+    assert!(
+        help.contains("jq -r '.next_cursor // empty'"),
+        "paging recipe: {help}"
+    );
+    assert!(help.contains("single use"), "{help}");
+    assert!(help.contains("sensitive"), "{help}");
     assert!(
         !help.contains("--cursor <"),
         "no --cursor VALUE option: {help}"
