@@ -477,10 +477,9 @@ where
             break;
         }
     }
+    // No liveness check after the dial: registering the tunnel is the one
+    // check that counts there, made under the same lock a revoke takes.
     let upstream = upstream.ok_or(Status::BadGateway)?;
-    if fetch.closed.is_cancelled() {
-        return Err(Status::AuthRequired);
-    }
     Ok((upstream, fetch))
 }
 

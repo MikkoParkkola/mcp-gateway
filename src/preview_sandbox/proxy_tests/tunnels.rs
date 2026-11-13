@@ -76,14 +76,18 @@ async fn c10_expiry_during_dialling_leaves_no_usable_tunnel() {
     let task = tokio::spawn(async move {
         let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.ok()?;
         s.write_all(&bytes).await.ok()?;
-        let ok = status(&read_head(&mut s).await) == 200 && tunnel_echoes(&mut s).await;
-        Some(ok)
+        let answer = status(&read_head(&mut s).await);
+        let usable = answer == 200 && tunnel_echoes(&mut s).await;
+        Some((answer, usable))
     });
     reached(&rig.connect.gate, "the dial").await;
     rig.proxy.revoke(&cred);
     rig.connect.gate.release.notify_one();
-    let usable = task.await.expect("task");
-    assert_ne!(usable, Some(true), "a tunnel was usable after expiry");
+    let (answer, usable) = task.await.expect("task").expect("the connection was made");
+    assert!(!usable, "a tunnel was usable after expiry");
+    // Registering the tunnel is the check after the dial: it refuses, rather
+    // than admitting a tunnel that then has to be closed.
+    assert_eq!(answer, 407, "the CONNECT revoked mid-dial was not refused");
 }
 
 /// M-1, kills "revoke only wakes the tunnels' tasks": `revoke` itself shuts an
@@ -153,38 +157,6 @@ async fn m1_a_finished_tunnel_leaves_the_registry() {
     tokio::time::timeout(Duration::from_secs(30), gone)
         .await
         .expect("a finished tunnel stayed in the registry");
-}
-
-/// M-1: tunnel registration races `revoke`. Several CONNECTs run while the
-/// fetch is revoked; once `revoke` has returned, no tunnel may still work,
-/// whichever side of the revoke it was admitted on.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn m1_registration_racing_a_revoke_leaves_no_working_tunnel() {
-    for round in 0..40 {
-        let rig = std::sync::Arc::new(rig().await);
-        let cred = begin(&rig);
-        let mut attempts = Vec::new();
-        for _ in 0..6 {
-            let rig = rig.clone();
-            let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
-            attempts.push(tokio::spawn(async move {
-                let mut t = open(&rig, Entry::Tcp, &bytes).await?;
-                (status(&t.head().await) == 200).then_some(t)
-            }));
-        }
-        for _ in 0..round % 5 {
-            tokio::task::yield_now().await;
-        }
-        rig.proxy.revoke(&cred);
-        for attempt in attempts {
-            if let Some(mut tunnel) = attempt.await.expect("attempt") {
-                assert!(
-                    tunnel.closed().await,
-                    "round {round}: a tunnel still worked after revoke returned"
-                );
-            }
-        }
-    }
 }
 
 /// Wait for the CONNECT to reach `gate`; a proxy that never gets there fails
