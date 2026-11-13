@@ -600,8 +600,8 @@ async fn resolve_answers_one_status_per_state_and_writes_nothing() {
         (StatusCode::NOT_FOUND, &json!("not_found"))
     );
 
-    let stale = "0".repeat(64);
-    let (status, body) = resolve(&state, true, &id, deny_body(&stale).to_string()).await;
+    let outdated = "0".repeat(64);
+    let (status, body) = resolve(&state, true, &id, deny_body(&outdated).to_string()).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "scope_changed");
     assert_eq!(body["scope_digest"], json!(digest));

@@ -138,11 +138,10 @@ fn check_resolve(request: &ResolveRequest) -> Result<(), &'static str> {
     }
     match (request.action, request.ttl_seconds, request.permanent) {
         (ResolveAction::Accept, Some(ttl), false) if (1..=TTL_MAX_SECONDS).contains(&ttl) => Ok(()),
-        (ResolveAction::Accept, None, true) => Ok(()),
+        (ResolveAction::Accept, None, true) | (ResolveAction::Deny, None, false) => Ok(()),
         (ResolveAction::Accept, ..) => {
             Err("an accept needs ttl_seconds (1 second to 1 year) or permanent: true, not both")
         }
-        (ResolveAction::Deny, None, false) => Ok(()),
         (ResolveAction::Deny, ..) => Err("a deny takes no ttl_seconds and no permanent"),
     }
 }
