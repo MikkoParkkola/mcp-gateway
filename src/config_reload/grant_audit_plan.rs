@@ -247,11 +247,14 @@ pub(super) struct Claim {
 /// digest and one event id; any disagreement is no claim at all.
 fn single_claim<'a>(claims: &'a [Claim], row_id: &str) -> Option<&'a str> {
     let mut found: Option<&Claim> = None;
-    for claim in claims.iter().filter(|claim| claim.row_id == row_id) {
+    for claim in claims
+        .iter()
+        .filter(|claim| mutant!("digestonly", true, claim.row_id == row_id))
+    {
         match found {
             None => found = Some(claim),
             Some(first) if first.digest == claim.digest && first.event_id == claim.event_id => {}
-            Some(_) => return None,
+            Some(_) => mutant!("firstwins", {}, return None),
         }
     }
     found.map(|claim| claim.digest.as_str())
@@ -370,17 +373,35 @@ pub(super) fn plan(
     // accounted for as a journal entry would be: that record attributes it.
     // Under a gap, where this plan's journal touched the row, or on any
     // disagreement between claims, the row keeps the path below.
-    if !state.gap {
+    if mutant!("nogap", true, !state.gap) {
         for (id, row) in &actual {
-            if journalled.contains(id) {
+            if mutant!("nojournal", false, journalled.contains(id)) {
                 continue;
             }
             let digest = grant_digest(row);
-            if single_claim(claims, id) == Some(digest.as_str()) {
-                expected.insert((*id).to_string(), Some(digest));
+            if mutant!(
+                "idonly",
+                single_claim(claims, id).is_some(),
+                single_claim(claims, id) == Some(digest.as_str())
+            ) {
+                mutant!(
+                    "noaccount",
+                    (),
+                    expected
+                        .insert((*id).to_string(), Some(digest))
+                        .map(drop)
+                        .unwrap_or(())
+                );
             }
         }
     }
+    mutant!(
+        "unserved",
+        for claim in claims {
+            expected.insert(claim.row_id.clone(), Some(claim.digest.clone()));
+        },
+        ()
+    );
     let mut ids: BTreeSet<&str> = expected.keys().map(String::as_str).collect();
     if has_baseline {
         ids.extend(actual.keys().copied());
