@@ -29,6 +29,7 @@ use crate::gateway::proxy::ProxyManager;
 use crate::gateway::router::{
     AppState, ProcessFacts, ProcessStart, account_handles_of, create_router_with_accounts,
 };
+use crate::gateway::stop_budget::{DRAIN_CAP, StopBudget};
 use crate::gateway::streaming::NotificationMultiplexer;
 use crate::gateway::webhooks::WebhookRegistry;
 use crate::playbook::PlaybookEngine;
@@ -638,6 +639,9 @@ impl Gateway {
             {
                 settings.spawner = self.test_seams.spawner();
             }
+            // Its close waits end where the stop budget's post-listener deadline does.
+            settings.close_bound =
+                StopBudget::post_listener_offset(self.config.server.shutdown_timeout);
             window_saver::start_window_saver(
                 self.config.server.protocol_revision_window,
                 data_dir.clone(),
@@ -658,8 +662,28 @@ impl Gateway {
         );
         #[cfg(not(test))]
         let shutdown = support::shutdown_signal(shutdown_tx);
+        // The stop's total starts at the trigger, however the listener returns.
+        let total = self.config.server.shutdown_timeout;
+        let fired = Arc::new(std::sync::OnceLock::<tokio::time::Instant>::new());
+        let shutdown = {
+            let fired = Arc::clone(&fired);
+            async move {
+                shutdown.await;
+                let _ = fired.set(tokio::time::Instant::now());
+            }
+        };
         let std_listener = listener.into_std()?;
-        listener::serve(app, std_listener, addr, &self.config, shutdown).await?;
+        let grace = StopBudget::listener_grace_for(total);
+        listener::serve(app, std_listener, addr, &self.config, grace, shutdown).await?;
+        // The start check accepted the total; nothing here may refuse it and
+        // skip the stop.
+        let budget = StopBudget::fixed_at(
+            fired
+                .get()
+                .copied()
+                .unwrap_or_else(tokio::time::Instant::now),
+            total,
+        );
 
         // Saved under one deadline, off the runtime's threads (MIK-8157).
         #[cfg(feature = "cost-governance")]
@@ -679,44 +703,67 @@ impl Gateway {
         drop(counter_saver);
         drop((health_saver, health_sampler));
         let more = vec![counters.shutdown_save(), health.shutdown_save()];
-        persistence::save_state_on_shutdown(ranker, paths.0, tracker, paths.1, cost, more).await;
+        persistence::save_state_on_shutdown(
+            ranker,
+            paths.0,
+            tracker,
+            paths.1,
+            cost,
+            more,
+            budget.post_listener_end(),
+        )
+        .await;
         // Awaited after the state saves, not before: its own deadline runs
         // from the broadcast, so a stalled window disk never delays them.
         if let Some(saver) = window_saver {
-            drop(saver.await);
+            budget
+                .stage("window saver join", total, async { drop(saver.await) })
+                .await;
         }
 
-        let drain_timeout = self.config.server.shutdown_timeout;
-        Self::drain_inflight(&inflight, drain_timeout).await;
+        // Each drain waits at most DRAIN_CAP and never past Dp; time an earlier
+        // stage left over is available to the next one.
+        let drain_window = || budget.stage_window(tokio::time::Instant::now(), DRAIN_CAP);
+        Self::drain_inflight(&inflight, drain_window()).await;
         // Every reload entry point has stopped: the listener has returned and
         // the watcher goes now. What they queued is written, or named.
         drop(config_watcher);
-        override_drain.drain(&self.backends, drain_timeout).await;
+        override_drain.drain(&self.backends, drain_window()).await;
 
         // Workers drain, and a drain that runs out cancels the rest; then the
         // expiry sweep is joined while the store is still open, and the store
         // closes (`task_runtime::shutdown` documents the order).
+        let tasks_window = drain_window();
         task_runtime::shutdown(
             expiry_sweep,
             &task_executor_for_shutdown,
             &task_service_for_shutdown,
-            task_runtime::ShutdownBudget::within(drain_timeout, drain_timeout),
+            task_runtime::ShutdownBudget::within(tasks_window, tasks_window),
         )
         .await;
 
         // Release the custody store before the backends go: the drain above is
         // what guarantees no in-flight request is still holding a credential.
         // Not covered by gateway_bootstrap_tests — no test drives `run`.
-        if let Err(e) = self.shutdown_account_custody().await {
-            warn!(error = %e, "Personal account custody shutdown failed");
-        }
+        budget
+            .stage("account custody shutdown", total, async {
+                if let Err(e) = self.shutdown_account_custody().await {
+                    warn!(error = %e, "Personal account custody shutdown failed");
+                }
+            })
+            .await;
 
         // Stop all backends, after their warmers can no longer start one.
         info!("Shutting down backends...");
-        warmer.cancel().await;
+        // It may use the time up to Db: an aborted warm-start must have unwound
+        // before the backends are listed.
+        budget
+            .stage_until_backend_end("warmer cancel", warmer.cancel())
+            .await;
         // One deadline for the whole stage: each stdio backend gets its EOF,
-        // then SIGTERM, then the kill, planned to end by then.
-        let stop_deadline = tokio::time::Instant::now() + self.config.server.shutdown_timeout;
+        // then SIGTERM, then the kill, planned to end by then. The stop budget
+        // fixes it, however long the stages before took.
+        let stop_deadline = budget.backend_end();
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
