@@ -275,6 +275,29 @@ fn alive_pids(pids: &[u32]) -> Vec<u32> {
         .collect()
 }
 
+/// After the SIGTERM: every pid of the chain dies before `deadline`, and a plain
+/// stop ends inside the stop budget: the sweep adds no time of its own beyond the
+/// backend stage.
+async fn wait_chain_gone(root: &Path, leaves: &[u32], deadline: Instant, total: Duration) {
+    let signalled = Instant::now();
+    while leaves.iter().any(|pid| pids::alive(*pid)) {
+        assert!(
+            Instant::now() < deadline,
+            "inner or leaf outlived parent stop budget: {:?}\n{}",
+            alive_pids(leaves),
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let gone = signalled.elapsed();
+    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
+    assert!(
+        gone <= total + BUDGET_SLACK,
+        "the chain outlived the stop budget: {gone:?} against {total:?}\n{}",
+        logs(root)
+    );
+}
+
 async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path().to_path_buf();
@@ -356,25 +379,7 @@ async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) {
     );
     let deadline = Instant::now() + STOP_BOUND;
     sigterm(pid);
-    let signalled = Instant::now();
-    while leaves.iter().any(|pid| pids::alive(*pid)) {
-        assert!(
-            Instant::now() < deadline,
-            "inner or leaf outlived parent stop budget: {:?}\n{}",
-            alive_pids(&leaves),
-            logs(root)
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    // A plain stop of a gateway-child chain ends inside the stop budget: the
-    // sweep adds no time of its own beyond the backend stage.
-    let gone = signalled.elapsed();
-    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
-    assert!(
-        gone <= total + BUDGET_SLACK,
-        "the chain outlived the stop budget: {gone:?} against {total:?}\n{}",
-        logs(root)
-    );
+    wait_chain_gone(root, &leaves, deadline, total).await;
     tokio::time::timeout_at(deadline, reaped.child_mut().wait())
         .await
         .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))

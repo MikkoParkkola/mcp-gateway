@@ -452,9 +452,6 @@ async fn a_detached_survivor_outlives_the_stop(helper: &str, what: &str) {
     // timing: absence
     tokio::time::sleep(Duration::from_millis(300)).await;
     let survived = alive(leaf);
-    let _ = std::process::Command::new("kill")
-        .arg(leaf.to_string())
-        .status();
     assert!(
         survived,
         "{what} detached before the stop, so the sweep must leave it running"
@@ -467,7 +464,7 @@ async fn a_detached_survivor_outlives_the_stop(helper: &str, what: &str) {
 async fn a_helper_detached_before_the_stop_survives_it() {
     let helper = "import os, subprocess
 null = subprocess.DEVNULL
-leaf = subprocess.Popen(['sleep', '600'], start_new_session=True, stdin=null, stdout=null, stderr=null)
+leaf = subprocess.Popen(['sleep', '30'], start_new_session=True, stdin=null, stdout=null, stderr=null)
 open('leaf.tmp', 'w').write(str(leaf.pid))
 os.rename('leaf.tmp', 'leaf.pid')";
     a_detached_survivor_outlives_the_stop(helper, "an orphaned helper process").await;
@@ -482,7 +479,7 @@ if os.fork() == 0:
     if os.fork() == 0:
         open('leaf.tmp', 'w').write(str(os.getpid()))
         os.rename('leaf.tmp', 'leaf.pid')
-        time.sleep(600)
+        time.sleep(30)
     os._exit(0)
 os.wait()";
     a_detached_survivor_outlives_the_stop(helper, "a double-forked daemon").await;

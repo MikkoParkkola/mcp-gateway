@@ -93,7 +93,7 @@ fn check(id: Identity) -> Check {
     }
 }
 
-fn refusal(check: &Check) -> SignalError {
+fn error_for(check: &Check) -> SignalError {
     match check {
         Check::Unreadable => SignalError::Failed,
         _ => SignalError::Mismatch,
@@ -160,7 +160,7 @@ impl LinuxTable {
                 };
                 match check(id) {
                     Check::Same => {}
-                    other => return Err(refusal(&other)),
+                    other => return Err(error_for(&other)),
                 }
                 slot.insert(fd)
             }

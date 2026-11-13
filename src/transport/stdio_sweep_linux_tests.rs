@@ -276,8 +276,8 @@ fn a_read_error_is_unreadable_never_gone() {
 
 #[test]
 fn an_unreadable_identity_is_refused_as_a_failure_not_a_mismatch() {
-    assert_eq!(refusal(&Check::Unreadable), SignalError::Failed);
-    assert_eq!(refusal(&Check::Different), SignalError::Mismatch);
+    assert_eq!(error_for(&Check::Unreadable), SignalError::Failed);
+    assert_eq!(error_for(&Check::Different), SignalError::Mismatch);
 }
 
 /// Over a bare pid the table refuses a Kill to a running child and allows it
