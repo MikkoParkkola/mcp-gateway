@@ -286,21 +286,34 @@ fn tail_verdict(read: &FrameRead, start: usize, donor: Option<&JournalV2>) -> In
             cause: Cause::TailBeyondDonor,
         };
     }
-    for (index, frame) in read.frames.iter().enumerate() {
-        if (frame.intent_id.clone(), frame.slot) != canonical[index] {
-            return Inspection::Corrupt {
+    match walk_prefix(&read.frames, donor, &canonical) {
+        Ok(()) => Inspection::RepairableTail { start },
+        Err(corrupt) => corrupt,
+    }
+}
+
+/// Whether the frames are exactly the donor's leading frames, in order, each proven: the one
+/// prefix check, shared by the torn-tail verdict and by `against_donor`.
+fn walk_prefix(
+    frames: &[AbandonedFrame],
+    donor: &JournalV2,
+    canonical: &[(IntentId, Slot)],
+) -> Result<(), Inspection> {
+    for (index, frame) in frames.iter().enumerate() {
+        if canonical.get(index) != Some(&(frame.intent_id.clone(), frame.slot)) {
+            return Err(Inspection::Corrupt {
                 at: index,
                 cause: Cause::NotAPrefix,
-            };
+            });
         }
         if !proves(donor, frame) {
-            return Inspection::Corrupt {
+            return Err(Inspection::Corrupt {
                 at: index,
                 cause: Cause::DonorMismatch,
-            };
+            });
         }
     }
-    Inspection::RepairableTail { start }
+    Ok(())
 }
 
 /// Classify the bytes of an abandoned file without touching it. `Structural` is not donor
@@ -318,9 +331,74 @@ pub(crate) fn inspect(bytes: &[u8], donor: Option<&JournalV2>) -> Inspection {
     }
 }
 
+/// What an existing abandoned file is, judged against the donor about to be handed over.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Placement {
+    Absent,
+    Whole,
+    Missing {
+        complete: usize,
+    },
+    Torn {
+        complete: usize,
+        start: usize,
+        proof: TornProof,
+    },
+    Foreign,
+}
+
+/// Evidence that the bytes from `start` are a torn last frame of a donor-proven file. Only
+/// `against_donor` builds one, so nothing can shorten a file without that judgment.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct TornProof {
+    start: usize,
+}
+
+impl TornProof {
+    pub(crate) fn start(&self) -> usize {
+        self.start
+    }
+}
+
+/// The donor as it will be once handed over: every token flagged. Nothing is persisted.
+pub(crate) fn marked(donor: &JournalV2) -> JournalV2 {
+    let mut marked = donor.clone();
+    for token in marked.writer.iter_mut().chain(marked.attempts.iter_mut()) {
+        token.handed_over = true;
+    }
+    marked
+}
+
+/// Judge an existing abandoned file against the marked donor: its complete frames must be a
+/// proven leading run of the donor's frames, clean or torn, or the file is `Foreign`.
+pub(crate) fn against_donor(existing: &[u8], donor: &JournalV2) -> Placement {
+    let canonical = canonical_frames(donor);
+    let Ok(read) = read(existing) else {
+        return Placement::Foreign;
+    };
+    let complete = read.frames.len();
+    if complete > canonical.len() || walk_prefix(&read.frames, donor, &canonical).is_err() {
+        return Placement::Foreign;
+    }
+    match read.tail {
+        Tail::Clean if complete == canonical.len() => Placement::Whole,
+        Tail::Clean if existing.is_empty() => Placement::Absent,
+        Tail::Clean => Placement::Missing { complete },
+        Tail::Incomplete { start } if complete < canonical.len() => Placement::Torn {
+            complete,
+            start,
+            proof: TornProof { start },
+        },
+        Tail::Incomplete { .. } => Placement::Foreign,
+    }
+}
+
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned_fixtures_tests.rs"]
 mod fixtures;
+#[cfg(test)]
+#[path = "config_persistence_journal_v2_abandoned_placement_tests.rs"]
+mod placement;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned_tests.rs"]
 mod tests;
