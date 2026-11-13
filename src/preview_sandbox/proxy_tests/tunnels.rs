@@ -136,6 +136,25 @@ async fn m1_a_new_fetch_shuts_the_previous_tunnels_before_any_task_runs() {
     assert!(shut, "begin_fetch returned with the old tunnel still open");
 }
 
+/// M-1: a tunnel that ends on its own leaves the registry, so a long fetch
+/// does not pile up sockets it will never need to shut.
+#[tokio::test]
+async fn m1_a_finished_tunnel_leaves_the_registry() {
+    let rig = rig().await;
+    let cred = begin(&rig);
+    let tunnel = open_tunnel(&rig, Entry::Tcp, &cred).await;
+    assert_eq!(rig.proxy.open_tunnels(), 1, "the tunnel was not registered");
+    drop(tunnel);
+    let gone = async {
+        while rig.proxy.open_tunnels() != 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), gone)
+        .await
+        .expect("a finished tunnel stayed in the registry");
+}
+
 /// M-1: tunnel registration races `revoke`. Several CONNECTs run while the
 /// fetch is revoked; once `revoke` has returned, no tunnel may still work,
 /// whichever side of the revoke it was admitted on.

@@ -210,6 +210,14 @@ impl AllowlistProxy {
         &self.unix_path
     }
 
+    /// How many tunnels the live fetch has open, for the rows.
+    #[cfg(test)]
+    pub(crate) fn open_tunnels(&self) -> usize {
+        lock(&self.shared.live)
+            .as_ref()
+            .map_or(0, |l| l.tunnels.len())
+    }
+
     /// Start a fetch: a fresh credential, valid until [`Self::revoke`]. Any
     /// earlier fetch's credential and tunnels end here too. A failed random
     /// source refuses this preview only; the gateway carries on.
