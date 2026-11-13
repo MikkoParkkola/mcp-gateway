@@ -140,6 +140,25 @@ struct Shared {
     interfaces: Arc<dyn Interfaces>,
 }
 
+impl Shared {
+    fn revoke(&self, credential: &Credential) {
+        let old = {
+            let mut live = lock(&self.live);
+            if live
+                .as_ref()
+                .is_some_and(|l| l.credential.secret == credential.secret)
+            {
+                live.take()
+            } else {
+                None
+            }
+        };
+        if let Some(old) = old {
+            old.end();
+        }
+    }
+}
+
 /// The gateway's allowlist proxy: loopback TCP (IPv4, and IPv6 when
 /// available, one port) plus a Unix-socket entry.
 pub(crate) struct AllowlistProxy {
@@ -270,20 +289,7 @@ impl AllowlistProxy {
 
     /// Revoke a fetch's credential: it stops working and its tunnels close.
     pub(crate) fn revoke(&self, credential: &Credential) {
-        let old = {
-            let mut live = lock(&self.shared.live);
-            if live
-                .as_ref()
-                .is_some_and(|l| l.credential.secret == credential.secret)
-            {
-                live.take()
-            } else {
-                None
-            }
-        };
-        if let Some(old) = old {
-            old.end();
-        }
+        self.shared.revoke(credential);
     }
 }
 
@@ -619,6 +625,9 @@ async fn unless_revoked<T>(
     work: impl std::future::Future<Output = T>,
 ) -> Result<T, Status> {
     tokio::select! {
+        // Finished work wins a tie: the tunnel's registration is then the one
+        // check that decides, and it refuses a revoked fetch.
+        biased;
         out = work => Ok(out),
         () = closed.cancelled() => Err(Status::AuthRequired),
     }

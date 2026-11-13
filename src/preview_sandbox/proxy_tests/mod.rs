@@ -83,6 +83,9 @@ struct FakeConnect {
     dials: Mutex<Vec<SocketAddr>>,
     echo: SocketAddr,
     gate: Gate,
+    /// Runs inside the dial, after it is recorded: a row's way to make
+    /// something happen at the exact moment the dial completes.
+    on_dial: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl FakeConnect {
@@ -95,6 +98,9 @@ impl FakeConnect {
 impl Connect for FakeConnect {
     async fn connect(&self, addr: SocketAddr) -> io::Result<TcpStream> {
         self.dials.lock().expect("lock").push(addr);
+        if let Some(hook) = self.on_dial.lock().expect("lock").as_ref() {
+            hook();
+        }
         self.gate.pass().await;
         TcpStream::connect(self.echo).await
     }
@@ -148,6 +154,7 @@ async fn rig() -> Rig {
         dials: Mutex::new(Vec::new()),
         echo: echo_addr,
         gate: Gate::default(),
+        on_dial: Mutex::new(None),
     });
     let interfaces = Arc::new(FakeInterfaces(Mutex::new(Vec::new())));
     let proxy = AllowlistProxy::bind(resolve.clone(), connect.clone(), interfaces.clone())

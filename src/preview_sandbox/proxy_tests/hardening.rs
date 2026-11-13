@@ -242,3 +242,24 @@ async fn m1_a_failed_begin_fetch_still_ends_the_previous_fetch() {
     let refused = super::send(&rig, Entry::Tcp, &bytes).await;
     assert_eq!(status(&refused), 407, "the old credential still works");
 }
+
+/// H6, kills "registration accepts a revoked fetch": the fetch is revoked from
+/// inside the dial, at the moment the dial completes, so the dial itself is not
+/// interrupted and registration alone must refuse. The CONNECT is answered 407
+/// and no tunnel works.
+#[tokio::test]
+async fn h6_a_fetch_revoked_as_the_dial_completes_gets_no_tunnel() {
+    let rig = rig().await;
+    let cred = begin(&rig);
+    let shared = rig.proxy.shared.clone();
+    let revoked = cred.clone();
+    *rig.connect.on_dial.lock().expect("lock") = Some(Box::new(move || shared.revoke(&revoked)));
+    let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
+    let mut client = open(&rig, Entry::Tcp, &bytes).await.expect("connect");
+    assert_eq!(
+        status(&client.head().await),
+        407,
+        "a tunnel was admitted for a fetch revoked at the dial"
+    );
+    assert!(client.closed().await, "a tunnel worked after the revoke");
+}
