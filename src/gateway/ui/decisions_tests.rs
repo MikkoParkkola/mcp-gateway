@@ -656,7 +656,8 @@ async fn two_resolves_do_not_overlap() {
 #[tokio::test]
 async fn one_more_refusal_of_a_listed_capability_is_a_changed_request() {
     let (state, log, id, digest, _keep) = one_request().await;
-    let later = crate::clock::utc_now().expect("a readable clock") + chrono::Duration::seconds(5);
+    let later = crate::clock::utc_now().expect("a readable clock")
+        + crate::duration_bound::delta!(seconds, 5);
     write(&log, note("stripe.charges", later));
     let body = served_when(&state, |body| {
         body["decisions"][0]["refused_calls"] == json!(2)
