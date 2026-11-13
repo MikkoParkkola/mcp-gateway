@@ -50,17 +50,6 @@ fn restart(rig: DrainRig) -> DrainRig {
     } = rig;
     let path = live.path.clone();
     drop(session);
-    // crash_fs models names and bytes, not mode: it restores a file whose unlink was lost with
-    // `fs::write`, at the default mode. On a real disk the lost unlink brings back the same inode,
-    // private as the drain left it, so give the restored file that mode back.
-    let restored = super::super::handover::abandoned_path(&path);
-    if restored.exists() {
-        std::fs::set_permissions(
-            &restored,
-            std::os::unix::fs::PermissionsExt::from_mode(0o600),
-        )
-        .expect("private mode of a restored file");
-    }
     let live = live.reopen_log();
     DrainRig {
         session: reopen(acquire(&path)),

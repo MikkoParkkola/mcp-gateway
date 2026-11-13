@@ -6,7 +6,8 @@
 //! observed directory; `KeepRenameDropData` keeps observed names and synced
 //! data, but tears unsynced tails at `seed % unsynced_len`.
 //!
-//! Only file names and bytes are modelled, not mode or mtime durability.
+//! File names, bytes and, for a restored file, its generation's mode are modelled; mtime is
+//! not.
 //! A file never data-synced or snapshotted is absent under `DropAll`. Arming
 //! treats existing bytes as durable. A new, unhooked file at a directory
 //! snapshot is assumed data-synced, as the crate's other writers are.
@@ -176,9 +177,27 @@ pub(crate) fn cut(dir: &Path, mode: Mode) {
             std::fs::remove_file(dir.join(name)).expect("crash_fs: remove file");
         }
     }
+    // The generation a restored name comes back as: the synced namespace under `DropAll`,
+    // the observed one under the keep modes.
+    let restored_from = if matches!(mode, Mode::DropAll) {
+        &durable.names
+    } else {
+        &durable.current
+    };
     for (name, bytes) in want {
         if observed.get(&name) != Some(&bytes) {
-            std::fs::write(dir.join(name), bytes).expect("crash_fs: restore file");
+            let path = dir.join(&name);
+            std::fs::write(&path, bytes).expect("crash_fs: restore file");
+            // The same inode would come back with the mode it was created with, so a writer
+            // that created it too open is still caught after the cut.
+            let held = restored_from.get(&name).and_then(|g| durable.held.get(g));
+            if let Some(file) = held {
+                let permissions = file
+                    .metadata()
+                    .expect("crash_fs: generation metadata")
+                    .permissions();
+                std::fs::set_permissions(&path, permissions).expect("crash_fs: restore mode");
+            }
         }
     }
 }

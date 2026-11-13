@@ -272,3 +272,27 @@ fn a_dir_sync_leaves_the_config_lock_sidecar_out() {
     crash_fs::cut(dir.path(), Mode::DropAll);
     assert_eq!(std::fs::read(&sidecar).expect("sidecar"), b"later");
 }
+
+/// A file whose unlink was lost comes back with its generation's mode, as the same inode would:
+/// a writer that created a file too open is still caught after a cut.
+#[cfg(unix)]
+#[test]
+fn a_restored_file_keeps_its_generation_mode() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for mode in [0o600, 0o640] {
+        let (dir, path) = config();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("mode");
+        let _armed = crash_fs::arm(dir.path());
+        std::fs::remove_file(&path).expect("an unsynced delete");
+        crash_fs::cut(dir.path(), Mode::DropAll);
+        let restored = std::fs::metadata(&path)
+            .expect("restored")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            restored, mode,
+            "the restored file has its generation's mode {mode:o}"
+        );
+    }
+}
