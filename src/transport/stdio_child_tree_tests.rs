@@ -64,6 +64,15 @@ async fn with_tree<T>(t: &StdioTransport, f: impl FnOnce(&mut ChildTree) -> T) -
     f(t.child.lock().tree.as_mut().expect("a started tree"))
 }
 
+/// Lift `t`'s reap deadline, and its close's wait for the reap, to the hang
+/// bound, for a row whose subject is not that deadline: on a loaded host the
+/// real deadline can give a killed tree up unreaped before its status is
+/// recorded, which reads as a kill that never happened.
+async fn unhurried(t: &StdioTransport) {
+    *t.slow_host_bound.lock() = Some(HANG_BOUND);
+    with_tree(t, |c| c.reap_deadline_for_test = Some(HANG_BOUND)).await;
+}
+
 /// The reaper's record of the tree whose leader was `pid`, once it finished.
 async fn finished(pid: Pid) -> Counts {
     let raw = u32::try_from(pid.as_raw_nonzero().get()).expect("pid fits");
@@ -185,6 +194,7 @@ async fn is_connected_reports_an_exit_without_reaping_it() {
 #[tokio::test]
 async fn close_after_the_exit_signals_each_phase_once_then_reaps() {
     let (w, t) = started(&format!("{DESCENDANT}\nexit 0"), None).await;
+    unhurried(&t).await;
     let child = descendant(w.path()).await;
     let pid = leader_exited(&t).await;
     t.close().await.expect("close");
@@ -197,6 +207,7 @@ async fn close_after_the_exit_signals_each_phase_once_then_reaps() {
 #[tokio::test]
 async fn a_second_close_sends_nothing() {
     let (_w, t) = started("exit 7", None).await;
+    unhurried(&t).await;
     let pid = leader_exited(&t).await;
     t.close().await.expect("close");
     let first = finished(pid).await.status;
@@ -246,6 +257,7 @@ async fn the_probe_reads_a_real_leader() {
 async fn a_reader_error_then_close_adds_only_the_pre_reap_signal() {
     let oversized = "head -c 600 /dev/zero | tr '\\0' x\necho\nwhile IFS= read -r l; do :; done";
     let (w, t) = started(&format!("{DESCENDANT}\n{oversized}"), Some(512)).await;
+    unhurried(&t).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
     let deadline = tokio::time::Instant::now() + ROW_LIMIT;
@@ -268,6 +280,7 @@ async fn a_reader_error_then_close_adds_only_the_pre_reap_signal() {
 #[tokio::test]
 async fn a_cancelled_close_still_ends_the_tree() {
     let (w, t) = started(&format!("{DESCENDANT}\nexit 0"), None).await;
+    unhurried(&t).await;
     let child = descendant(w.path()).await;
     let pid = leader_exited(&t).await;
     let closer = {
@@ -324,6 +337,7 @@ async fn a_foreign_reap_leaks_rather_than_signals() {
 #[tokio::test]
 async fn close_ends_a_group_that_ignores_sigterm() {
     let (w, t) = started(&resists_term(), None).await;
+    unhurried(&t).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
     t.close().await.expect("close");
@@ -341,6 +355,7 @@ async fn close_ends_a_group_that_ignores_sigterm() {
 #[tokio::test]
 async fn a_close_cancelled_while_the_leader_runs_still_ends_the_group() {
     let (w, t) = started(&resists_term(), None).await;
+    unhurried(&t).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
     assert_eq!(
@@ -424,6 +439,7 @@ async fn a_stepped_tree_signals_each_phase_once_then_reaps_natively() {
         None,
     )
     .await;
+    unhurried(&t).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
     let mut tree = t.child.lock().tree.take().expect("a started tree");
@@ -634,6 +650,7 @@ async fn a_tree_installed_after_a_retire_is_refused_and_ended() {
 #[tokio::test]
 async fn a_dropped_transport_hands_its_tree_to_the_reaper() {
     let (w, t) = started(DESCENDANT, None).await;
+    unhurried(&t).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
     drop(Arc::into_inner(t).expect("the only handle"));
