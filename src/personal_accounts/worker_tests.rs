@@ -221,6 +221,18 @@ impl ProviderState {
 
 struct GatedProvider {
     state: Arc<ProviderState>,
+    /// Only the provider the service owns records its drop and stalls in it;
+    /// a clone handed out by `provider()` drops quietly.
+    original: bool,
+}
+
+impl Clone for GatedProvider {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+            original: false,
+        }
+    }
 }
 
 /// How long a stalled release waits for its release before giving up.
@@ -228,6 +240,9 @@ const RELEASE_HANG_GUARD: Duration = Duration::from_secs(20);
 
 impl Drop for GatedProvider {
     fn drop(&mut self) {
+        if !self.original {
+            return;
+        }
         *self
             .state
             .drop_thread
@@ -305,6 +320,7 @@ fn start(root: &std::path::Path, capacity: usize) -> Fixture {
         config(root),
         GatedProvider {
             state: Arc::clone(&provider),
+            original: true,
         },
         CountingObserver {
             calls: Arc::clone(&observer_calls),
@@ -475,6 +491,7 @@ fn a_failed_start_reaches_the_real_lock_boundary_and_yields_no_handle() {
         config(tmp.path()),
         GatedProvider {
             state: Arc::new(ProviderState::default()),
+            original: true,
         },
         CountingObserver {
             calls: Arc::new(AtomicUsize::new(0)),

@@ -722,3 +722,64 @@ fn cancelling_the_shutdown_in_its_drain_takes_nothing() {
         );
     });
 }
+
+/// A call that read the shutdown flag before the release moved the slot is
+/// still refused: the slot, not the flag, is the last word. The race window is
+/// set directly, since the release sets the flag before it moves the slot.
+#[test]
+fn admit_refuses_a_slot_that_moved_before_the_flag_was_seen() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), unexpired())]);
+    current_thread(async {
+        let fx = start(tmp.path(), 2);
+        assert!(
+            !fx.handle.shutting_down.load(Ordering::SeqCst),
+            "premise: no flag yet"
+        );
+        for moved in [Slot::Releasing, Slot::Stuck] {
+            let held = std::mem::replace(&mut *fx.handle.lock_slot(), moved);
+            let refused = fx.handle.admit().err();
+            *fx.handle.lock_slot() = held;
+            assert!(
+                matches!(refused, Some(CustodyError::ShuttingDown)),
+                "{refused:?}"
+            );
+        }
+    });
+}
+
+/// The provider is refused once the slot moved: while a stalled release runs,
+/// and once a failed release spawn left the store stuck.
+#[test]
+fn the_provider_is_refused_while_releasing_and_once_stuck() {
+    let _serial = worker_test_lock();
+    for stuck in [false, true] {
+        let tmp = tempfile::TempDir::new().expect("root");
+        seed(tmp.path(), &[(&alice(), unexpired())]);
+        paused(async {
+            let fx = start(tmp.path(), 2);
+            assert!(
+                fx.handle.provider().is_ok(),
+                "premise: an open slot hands it out"
+            );
+            let stall = stall_release(&fx);
+            if stuck {
+                fx.handle.fail_next_release_spawn();
+            }
+            let given = tokio::time::Instant::now() + Duration::from_secs(2);
+            let end = refuse_scaffold(fx.handle.shutdown_by(given).await, "bounded shutdown");
+            let want = if stuck {
+                ShutdownEnd::Stuck
+            } else {
+                ShutdownEnd::ReleasePending
+            };
+            assert_eq!(end.expect("outcome"), want, "premise: the slot moved");
+            assert!(
+                matches!(fx.handle.provider(), Err(CustodyError::ShuttingDown)),
+                "the provider is refused (stuck: {stuck})"
+            );
+            stall.let_go();
+        });
+    }
+}
