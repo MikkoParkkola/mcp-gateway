@@ -91,12 +91,14 @@ async fn direct_cases(fx: &Fx, backend: &str, failures: &mut Vec<String>) {
         );
         check(&format!("tools/call {effect:?}"), added, want);
     }
-    let (body, added, _) = step(fx, &uri, "tools/list", json!({})).await;
-    assert!(
-        body["result"]["tools"].is_array(),
-        "premise: {backend} tools/list answered: {body}"
+    // A read-listed method that reaches the forward (tools/list does not: the
+    // direct route answers it from its own listing path, before the hook).
+    let (body, added, sent) = step(fx, &uri, "resources/list", json!({})).await;
+    assert_eq!(
+        sent, 1,
+        "premise: {backend} forwarded resources/list: {body}"
     );
-    check("tools/list", added, 0);
+    check("resources/list", added, 0);
     let unlisted = json!({"ref": {"type": "ref/prompt", "name": "p"},
                           "argument": {"name": "a", "value": "b"}});
     let (body, added, sent) = step(fx, &uri, "completion/complete", unlisted).await;
@@ -119,7 +121,7 @@ async fn direct_cases(fx: &Fx, backend: &str, failures: &mut Vec<String>) {
 
 /// R5: hook 2 on both direct forwards, `alpha` (`forward_sanitized`) and
 /// `alpha-pt` (`forward_plain`): a may-write `tools/call` +1, a read-only one
-/// +0, `tools/list` +0, an unlisted method +1, a permit refusal +0. A redeemed
+/// +0, `resources/list` (read list) +0, an unlisted method +1, a permit refusal +0. A redeemed
 /// continuation +1 through `alpha` only: a retry on `alpha-pt` is rerouted to
 /// the sanitized forward (`direct_dispatch.rs:622`). Kills hook 2 dropped on
 /// either forward and the read list ignored.
