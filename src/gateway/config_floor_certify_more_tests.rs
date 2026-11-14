@@ -11,6 +11,7 @@ use super::seams::{CheckHook, CheckStep, LockHook, LockVerdict};
 use super::support::{BASE, BOUND, Booted, sha256_hex};
 use super::{ConfigFloor, FloorAdapter, FloorFault};
 use crate::config::keychain::{FakeKeychain, KeychainError, with_test_keychain};
+#[cfg(unix)]
 use crate::gateway::test_helpers::write_owner_only;
 
 const BEARER: &str = "kc-bearer-0123456789abcdef0123456789abcdef";

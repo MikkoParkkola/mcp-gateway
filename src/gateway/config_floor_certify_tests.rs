@@ -230,6 +230,7 @@ async fn c2_cli_write_between_pause_and_certify_certifies_new_bytes() {
 }
 
 /// C3 refusal contract: `SaveFailed` and no read or validation step after it.
+#[cfg(unix)]
 fn assert_refused(
     row: &str,
     result: Result<(), FloorFault>,
