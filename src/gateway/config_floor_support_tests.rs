@@ -222,6 +222,7 @@ pub(crate) fn reload_values(gate: &ConfigGate, source: super::seams::ReloadSourc
 
 /// A Booted floor over an existing reload context (its own registry's reload
 /// lock) and config `path`, for rows that reuse another fixture's context.
+#[cfg(feature = "webui")]
 pub(crate) fn floor_over(ctx: &crate::config_reload::ReloadContext, path: &Path) -> ConfigFloor {
     booted_floor(&ctx.registry, path)
 }
@@ -326,6 +327,7 @@ pub(crate) struct WatcherFixture {
 }
 
 impl WatcherFixture {
+    #[cfg(feature = "webui")]
     pub(crate) fn over(ctx: &Arc<crate::config_reload::ReloadContext>, path: &Path) -> Self {
         Self {
             gate: ctx.registry.config_gate(),

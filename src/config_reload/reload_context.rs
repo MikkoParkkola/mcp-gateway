@@ -134,6 +134,7 @@ pub(crate) const RELOAD_RESTARTING: &str = "the gateway is restarting";
 pub(crate) const RELOAD_STOPPING: &str = "the gateway is stopping";
 
 /// Whether `error` is one of the restart gate's refusal texts.
+#[cfg(feature = "webui")]
 pub(crate) fn is_gate_refusal(error: &str) -> bool {
     [RELOAD_REPLAY_OWED, RELOAD_RESTARTING, RELOAD_STOPPING].contains(&error)
 }
