@@ -106,16 +106,8 @@ impl Index {
     /// rollback, an older line) retires every row of the name. Unreadable lines,
     /// such as a torn last one, are skipped.
     pub(super) fn live(&self) -> Result<Vec<Live>, StoreError> {
-        let text = match std::fs::read_to_string(&self.path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(failed("cannot read the secrets index", &e)),
-        };
         let mut live: Vec<Live> = Vec::new();
-        for line in text
-            .lines()
-            .filter_map(|l| serde_json::from_str::<Line>(l).ok())
-        {
+        for line in self.lines()? {
             if line.removed_at.is_some() {
                 live.retain(|entry| {
                     entry.name != line.name
@@ -133,6 +125,30 @@ impl Index {
             }
         }
         Ok(live)
+    }
+
+    /// Whether `name` was ever created in `kind`, live or removed since: a
+    /// delete repeated after its removal line finds the entry already gone.
+    pub(super) fn recorded_in(&self, name: &str, kind: StoreKind) -> Result<bool, StoreError> {
+        Ok(self.lines()?.iter().any(|line| {
+            line.name == name
+                && line.removed_at.is_none()
+                && line.store.as_deref() == Some(kind.as_str())
+        }))
+    }
+
+    /// Every readable line, in order. Unreadable lines, such as a torn last
+    /// one, are skipped; a missing index has none.
+    fn lines(&self) -> Result<Vec<Line>, StoreError> {
+        let text = match std::fs::read_to_string(&self.path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(failed("cannot read the secrets index", &e)),
+        };
+        Ok(text
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Line>(l).ok())
+            .collect())
     }
 }
 

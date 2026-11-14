@@ -61,9 +61,13 @@ impl Vault {
         ))
     }
 
+    /// The entry index this vault guards.
+    pub(super) fn index(&self) -> &Index {
+        &self.index
+    }
+
     /// The vault lock's path.
-    #[cfg(test)]
-    pub(crate) fn lock_path(&self) -> &Path {
+    pub(super) fn lock_path(&self) -> &Path {
         &self.lock_path
     }
 
