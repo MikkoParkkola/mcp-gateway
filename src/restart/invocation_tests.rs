@@ -476,6 +476,9 @@ mod unix {
         assert!(calls.get() > 0, "the control never probed");
     }
 
+    /// A serve field's name and the change that makes only that field differ.
+    type FieldChange = (&'static str, fn(&mut Cli));
+
     /// INV-12: a given Cli differing from the reparse in any one serve field is
     /// Embedded; the identical one is Ready (A1).
     #[test]
@@ -484,7 +487,7 @@ mod unix {
         let path_env = found_path(tmp.path());
         // Each row changes exactly one field of the parsed value, so it dies when
         // that field's comparison is dropped, whatever clap's defaults link.
-        let differing: [(&str, fn(&mut Cli)); 7] = [
+        let differing: [FieldChange; 7] = [
             ("config", |c| c.config = Some(PathBuf::from("/other.toml"))),
             ("port", |c| c.port = Some(1)),
             ("host", |c| c.host = Some("192.0.2.1".into())),
