@@ -193,7 +193,7 @@ pub(crate) fn cut(dir: &Path, mode: Mode) {
         // unsynced replacement left equal bytes under another mode: a writer that created a file
         // too open is still caught after the cut.
         let held = restored_from.get(&name).and_then(|g| durable.held.get(g));
-        if let Some(file) = held {
+        if let Some(file) = mutant!("mode_not_restored", None, held) {
             let permissions = file
                 .metadata()
                 .expect("crash_fs: generation metadata")
