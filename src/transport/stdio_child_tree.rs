@@ -420,7 +420,7 @@ impl ChildTree {
                 #[cfg(unix)]
                 if grace.term_sent_at.is_none()
                     && grace.term_at < grace.kill_at
-                    && set_at.is_some_and(|set| grace.term_at <= set)
+                    && grace.term_at <= set_at
                 {
                     grace.term_owed = true;
                 }
