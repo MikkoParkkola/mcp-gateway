@@ -179,7 +179,7 @@ async fn t2_a_head_over_eight_kib_is_refused() {
         .await
         .expect("connect");
     let (mut reader, mut writer) = stream.into_split();
-    let (head, _) = tokio::join!(super::read_head(&mut reader), async {
+    let (head, ()) = tokio::join!(super::read_head(&mut reader), async {
         use tokio::io::AsyncWriteExt as _;
         let _ = writer.write_all(req.as_bytes()).await;
     });

@@ -150,33 +150,33 @@ struct Shared {
     resolve: Arc<dyn Resolve>,
     connect: Arc<dyn Connect>,
     interfaces: Arc<dyn Interfaces>,
-    /// Runs at the start of a fetch's teardown, before its sockets shut.
+    /// Runs as a revoke's teardown starts, before its sockets shut.
     #[cfg(test)]
     on_end: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl Shared {
-    /// End `live`. A test hook, when one is set, runs first.
-    fn finish(&self, live: Live) {
-        #[cfg(test)]
-        {
-            if let Some(hook) = self
-                .on_end
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_ref()
-            {
-                hook();
-            }
-        }
-        drop(live);
-    }
-
     fn revoke(&self, credential: &Credential) {
-        // Finished under the lock: a second revoker waits for this teardown.
+        // Ended under the lock (its Drop shuts the tunnels): a second revoker
+        // waits for this teardown.
         let mut live = lock(&self.live);
         if let Some(old) = live.take_if(|l| l.credential.secret == credential.secret) {
-            self.finish(old);
+            #[cfg(test)]
+            self.before_teardown();
+            drop(old);
+        }
+    }
+
+    /// A row's hook, when one is set.
+    #[cfg(test)]
+    fn before_teardown(&self) {
+        if let Some(hook) = self
+            .on_end
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            hook();
         }
     }
 }
@@ -256,7 +256,7 @@ impl AllowlistProxy {
             .map_or(0, |l| l.tunnels.len())
     }
 
-    /// Install `hook` to run at the start of the next teardown, for the rows.
+    /// Install `hook` to run as each revoke's teardown starts, for the rows.
     #[cfg(test)]
     pub(crate) fn set_on_end(&self, hook: Box<dyn Fn() + Send + Sync>) {
         *self
@@ -302,9 +302,9 @@ impl AllowlistProxy {
                 deadline: timer.abort_handle(),
             });
         }
-        if let Some(old) = old {
-            self.shared.finish(old);
-        }
+        // The old fetch ends with the lock still held; its Drop shuts its
+        // tunnels.
+        drop(old);
         drop(live);
         made.map_err(|e| super::Refusal::Step(format!("generating the fetch credential ({e})")))
     }
@@ -320,9 +320,8 @@ impl Drop for AllowlistProxy {
         self.accept.abort();
         {
             let mut live = lock(&self.shared.live);
-            if let Some(old) = live.take() {
-                self.shared.finish(old);
-            }
+            // Ended under the lock; its Drop shuts the tunnels.
+            drop(live.take());
         }
         if let Some(dir) = self.unix_path.parent() {
             let _ = std::fs::remove_dir_all(dir);
