@@ -24,7 +24,7 @@ fn events(records: &[Value]) -> Vec<&str> {
 fn a_log_deleted_under_a_live_logger_names_its_predecessor() {
     for keep_hwm in [false, true] {
         // GIVEN: a live logger on an unrotated log with records
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
         append(&l, 0);
@@ -106,7 +106,7 @@ fn a_log_deleted_under_a_live_logger_names_its_predecessor() {
 #[test]
 fn a_cold_fresh_log_and_its_reopen_record_no_predecessor() {
     // GIVEN: a fresh log, written and reopened
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&first, 0);
@@ -124,7 +124,7 @@ fn a_cold_fresh_log_and_its_reopen_record_no_predecessor() {
 #[test]
 fn a_caller_cannot_append_an_open_record_naming_a_predecessor() {
     // GIVEN: a log
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let before = lines(&path).len();
@@ -146,7 +146,7 @@ fn a_caller_cannot_append_an_open_record_naming_a_predecessor() {
 #[test]
 fn a_caller_cannot_append_the_retired_predecessor_event() {
     // GIVEN: a log
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let before = lines(&path).len();
@@ -166,7 +166,7 @@ fn a_caller_cannot_append_the_retired_predecessor_event() {
 fn a_continuing_log_whose_active_file_vanished_names_no_predecessor() {
     for live in [false, true] {
         // GIVEN: a rotated log, its id on the sealed segment's open record
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
         let id = l.log_id();
@@ -232,7 +232,7 @@ fn write_lines(path: &std::path::Path, records: &[Value]) {
 fn the_predecessor_warning_shows_the_checked_record_not_a_swapped_one() {
     // GIVEN: the checked genesis open record, and the file's first line then
     // swapped for one naming another id under the same entry_hash string
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (path, old) = replaced_genesis(&dir);
     let mut all = lines(&path);
     let checked = all[0].clone();
@@ -251,7 +251,7 @@ fn the_predecessor_warning_shows_the_checked_record_not_a_swapped_one() {
 fn an_edited_predecessor_field_fails_the_chain_and_reads_unverified() {
     // GIVEN: a genesis open record whose evidence was edited, its entry_hash
     // string kept
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (path, _) = replaced_genesis(&dir);
     let mut all = lines(&path);
     all[0][PREDECESSOR]["previous_log_id"] = "edited".into();
@@ -272,7 +272,7 @@ fn an_edited_predecessor_field_fails_the_chain_and_reads_unverified() {
 #[test]
 fn a_clean_replacing_genesis_warns_verified_with_its_own_evidence() {
     // GIVEN: an untouched replacing genesis
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (path, old) = replaced_genesis(&dir);
 
     // WHEN: it is verified
@@ -287,7 +287,7 @@ fn a_clean_replacing_genesis_warns_verified_with_its_own_evidence() {
 #[test]
 fn an_evidence_object_with_no_parts_reads_as_no_evidence_fields() {
     // GIVEN: a genesis open record whose evidence object names nothing
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (path, _) = replaced_genesis(&dir);
     rewrite_line(&path, 0, |v| v[PREDECESSOR] = serde_json::json!({}));
     let checked = lines(&path).remove(0);
@@ -305,7 +305,7 @@ fn a_first_line_swapped_after_the_chain_check_warns_with_the_checked_record() {
     // GIVEN: an untouched replacing genesis, and its first line swapped for
     // one naming another id (entry_hash string kept) once the chain check
     // has run and before the warning is built
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (path, old) = replaced_genesis(&dir);
     let swapped = path.clone();
     verify::AFTER_STREAM.with(|h| {
