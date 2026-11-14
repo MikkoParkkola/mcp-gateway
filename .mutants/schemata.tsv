@@ -1,0 +1,28 @@
+head_sha	40655f60b9777d52dd72437134ebb0f800bf0271
+#mutant journal_check_skipped
+mcp_gateway	gateway::restart_config_floor::certify_tests::c1_v1_journal_refuses	src/gateway/config_floor_certify_tests.rs:85
+#mutant abandoned_check_skipped
+mcp_gateway	gateway::restart_config_floor::certify_tests::c1_abandoned_file_refuses	src/gateway/config_floor_certify_tests.rs:85
+#mutant abandoned_metadata_error_as_absent
+mcp_gateway	gateway::restart_config_floor::certify_tests::c1_abandoned_metadata_error_refuses	src/gateway/config_floor_certify_tests.rs:85
+#mutant identity_check_skipped
+mcp_gateway	gateway::restart_config_floor::certify_tests::c3_symlink_repointed_and_restored_refuses_at_identity	src/gateway/config_floor_certify_tests.rs:242
+#mutant recheck_skipped
+mcp_gateway	gateway::restart_config_floor::certify_tests::c3_in_place_rewrite_after_validation_refuses	src/gateway/config_floor_certify_tests.rs:336
+mcp_gateway	gateway::restart_config_floor::certify_more_tests::c9_symlink_repointed_after_the_read_refuses	src/gateway/config_floor_certify_more_tests.rs:168
+#mutant validation_skipped
+mcp_gateway	gateway::restart_config_floor::certify_tests::c3_invalid_yaml_refuses	src/gateway/config_floor_certify_tests.rs:258
+#mutant owed_check_skipped
+mcp_gateway	gateway::restart_config_floor::certify_tests::c5_reload_owed_flag_refuses	src/gateway/config_floor_certify_tests.rs:394
+#mutant keychain_check_skipped
+mcp_gateway	gateway::restart_config_floor::certify_more_tests::c6_keychain_read_that_times_out_refuses	src/gateway/config_floor_certify_more_tests.rs:64
+#mutant verbatim_reads_non_secret_fields
+mcp_gateway	gateway::restart_config_floor::certify_more_tests::c6_description_text_naming_a_keychain_reference_certifies	src/gateway/config_floor_certify_more_tests.rs:58
+#mutant defaults_as_booted
+mcp_gateway	gateway::restart_config_floor::source_tests::n1_defaults_with_no_file_is_not_configured	src/gateway/config_floor_source_tests.rs:279
+#mutant booted_missing_certified_absent
+mcp_gateway	gateway::restart_config_floor::source_tests::n2_booted_file_deleted_before_certify_is_save_failed	src/gateway/config_floor_source_tests.rs:376
+#mutant fallback_search_stops_after_first
+mcp_gateway	gateway::restart_config_floor::source_tests::n1_defaults_precedence_certifies_position_two_over_four	src/gateway/config_floor_source_tests.rs:334
+#mutant join_error_as_ok
+mcp_gateway	gateway::restart_config_floor::certify_more_tests::c8_check_hook_panic_is_worker_lost	src/gateway/config_floor_certify_more_tests.rs:133
