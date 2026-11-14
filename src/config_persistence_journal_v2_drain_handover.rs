@@ -5,11 +5,12 @@
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::super::JournalSession;
 use super::super::abandoned::{Placement, against_donor, frames_of, marked};
 use super::super::abandoned::{TornProof, encode_frame};
+use super::super::abandoned_path;
 use super::DrainSession;
 use super::fault::{self, At};
 use crate::config_persistence::sync_dir_of;
@@ -23,13 +24,6 @@ pub(crate) enum HandoverError {
     Sync,
     Finish,
     Foreign,
-}
-
-/// `<config>.abandoned`, beside the resolved config, in the journal's own directory.
-pub(crate) fn abandoned_path(target: &Path) -> PathBuf {
-    let mut name = std::ffi::OsString::from(target.file_name().unwrap_or_default());
-    name.push(".abandoned");
-    target.with_file_name(name)
 }
 
 /// Open an existing abandoned file for the whole call: no symlink follow, no waiting on a

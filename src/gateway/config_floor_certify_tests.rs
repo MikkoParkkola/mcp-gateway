@@ -65,7 +65,7 @@ fn record_steps(floor: &mut ConfigFloor) -> Arc<Mutex<Vec<CheckStep>>> {
     seen
 }
 
-/// The refusal contract of C1: SaveFailed, no read or validation after the
+/// The refusal contract of C1: `SaveFailed`, no read or validation after the
 /// refusal, and the config file untouched. `unsettle` arranges one form.
 async fn refuses_unsettled(
     row: &str,
@@ -110,8 +110,20 @@ async fn refuses_unsettled(
 async fn c1_v1_journal_refuses() {
     const ROW: &str = "c1_v1_journal_refuses";
     refuses_unsettled(ROW, |b, _| {
+        // The on-disk form a writer killed after its rename leaves.
+        let write = crate::gateway::test_helpers::write_owner_only;
+        let target = std::fs::canonicalize(&b.cfg.path).expect("canonical target");
+        let staged = b.cfg.beside(".gateway.yaml.replace-original");
+        write(&staged, BASE).expect("staged original");
         let path = b.cfg.beside(".gateway.yaml.replace-journal");
-        std::fs::write(&path, r#"{"version":1}"#).expect("journal");
+        let body = serde_json::json!({
+            "version": 1,
+            "state": "staged",
+            "target": target,
+            "original": staged,
+            "original_revision": support::sha256_hex(BASE.as_bytes()),
+        });
+        write(&path, body.to_string().as_str()).expect("journal");
         Some(path)
     })
     .await;
@@ -217,7 +229,7 @@ async fn c2_cli_write_between_pause_and_certify_certifies_new_bytes() {
     );
 }
 
-/// C3 refusal contract: SaveFailed and no read or validation step after it.
+/// C3 refusal contract: `SaveFailed` and no read or validation step after it.
 fn assert_refused(
     row: &str,
     result: Result<(), FloorFault>,

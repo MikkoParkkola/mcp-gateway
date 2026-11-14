@@ -147,7 +147,10 @@ async fn write_then_retry(
     untouched(row);
     let written = format!("{BASE}environment: \"{row}\"\n");
     let outcome = support::write_bytes(&booted.gate, Arc::clone(&booted.ctx), &written).await;
-    assert!(outcome.is_ok(), "{row} the UI write is admitted and lands");
+    assert!(
+        outcome.is_ok(),
+        "{row} the UI write is admitted and lands: {outcome:?}"
+    );
     assert_eq!(
         booted.running_environment().as_deref(),
         Some(row),
@@ -164,15 +167,41 @@ async fn write_then_retry(
     assert_certified_retry(row, adapters, floor, &written).await;
 }
 
+/// Plant a real v1 journal as a crashed write leaves it (original `BASE`
+/// staged owner-only, a valid candidate at the config). Returns its path and
+/// the exact body written.
+#[cfg(feature = "webui")]
+fn plant_v1_journal(booted: &Booted, candidate_env: &str) -> (std::path::PathBuf, String) {
+    use crate::gateway::test_helpers::write_owner_only;
+    write_owner_only(
+        &booted.cfg.path,
+        &format!("{BASE}environment: \"{candidate_env}\"\n"),
+    )
+    .expect("candidate in place");
+    let target = std::fs::canonicalize(&booted.cfg.path).expect("canonical target");
+    let staged = target.with_file_name(".gateway.yaml.replace-original");
+    write_owner_only(&staged, BASE).expect("stage original");
+    let journal = target.with_file_name(".gateway.yaml.replace-journal");
+    let body = serde_json::json!({
+        "version": 1,
+        "state": "staged",
+        "target": target,
+        "original": staged,
+        "original_revision": support::sha256_hex(BASE.as_bytes()),
+    })
+    .to_string();
+    write_owner_only(&journal, &body).expect("plant journal");
+    (journal, body)
+}
+
 #[cfg(feature = "webui")]
 #[tokio::test]
 async fn x1_v1_journal_cancels_then_retry_certifies() {
     const ROW: &str = "X1";
-    const JOURNAL: &str = "{\"version\":1}";
-    // GIVEN: a config beside a (v1) journal, which only its presence marks.
+    // GIVEN: the disk a writer killed after its rename leaves: a candidate in
+    // place, the original staged, a real `staged` v1 journal.
     let booted = Booted::new(BASE);
-    let journal = booted.cfg.beside(".gateway.yaml.replace-journal");
-    std::fs::write(&journal, JOURNAL).expect("plant journal");
+    let (journal, journal_body) = plant_v1_journal(&booted, "candidate");
     let (mut adapters, floor) = coordinated(&booted);
     // WHEN: the checkpoint runs.
     let first = run(&mut adapters, in_bound()).await;
@@ -187,7 +216,7 @@ async fn x1_v1_journal_cancels_then_retry_certifies() {
         let kept = std::fs::read(&journal).ok();
         assert_eq!(
             kept.as_deref(),
-            Some(JOURNAL.as_bytes()),
+            Some(journal_body.as_bytes()),
             "{row} journal kept"
         );
     };

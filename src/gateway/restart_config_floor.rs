@@ -15,12 +15,13 @@
     )
 )]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use futures::future::BoxFuture;
 use tokio::time::Instant;
+
+use crate::config_persistence::lock::Locked;
 
 use super::restart_floor::{FloorAdapter, FloorFault, FloorOwner};
 
@@ -32,118 +33,9 @@ pub(crate) enum ConfigSource {
     Defaults,
 }
 
-/// The gate's state word. `Paused` and `Certified` carry the attempt number.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GateState {
-    Open,
-    Paused(u64),
-    Certified(u64),
-    Terminal,
-    Released,
-}
-
-/// Who asks the gate for admission.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AdmitKind {
-    /// The byte writer, every UI write to the config file.
-    Write,
-    /// A manual reload: the UI route or the meta-tool.
-    ManualReload,
-    /// The watcher, before it takes its pending trigger.
-    Watcher,
-}
-
-/// Why the gate refused. The caller maps it to its 409 body.
-#[cfg_attr(
-    test,
-    allow(
-        dead_code,
-        reason = "red-phase: remove when the implementation uses it"
-    )
-)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Refusal {
-    /// Paused or Certified: a UI write is refused, retry later.
-    Busy,
-    /// Paused or Certified: a manual reload folded into the owed replay.
-    ReplayOwed,
-    /// Terminal: "the gateway is restarting".
-    Restarting,
-    /// Released: "the gateway is stopping".
-    Stopping,
-}
-
-/// Counted in flight until dropped. Stub: counts nothing.
-#[derive(Debug)]
-pub(crate) struct AdmissionGuard {
-    _gate: ConfigGate,
-}
-
-#[cfg_attr(
-    test,
-    allow(
-        dead_code,
-        reason = "red-phase: remove when the implementation uses it"
-    )
-)]
-#[derive(Debug, Default)]
-struct GateInner {
-    owed_flags: Vec<Arc<AtomicBool>>,
-}
-
-/// One per gateway, shared by the byte writer, every reload context, the
-/// watcher and the adapter. Cloning shares the same gate.
-#[cfg_attr(
-    test,
-    allow(
-        dead_code,
-        reason = "red-phase: remove when the implementation uses it"
-    )
-)]
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ConfigGate {
-    inner: Arc<parking_lot::Mutex<GateInner>>,
-    #[cfg(test)]
-    seams: seams::GateSeams,
-}
-
-#[cfg_attr(
-    test,
-    allow(
-        dead_code,
-        reason = "red-phase: remove when the implementation uses it"
-    )
-)]
-impl ConfigGate {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
-    /// Ask for admission; the guard is held for the whole operation.
-    pub(crate) fn admit(&self, _kind: AdmitKind) -> Result<AdmissionGuard, Refusal> {
-        Ok(AdmissionGuard {
-            _gate: self.clone(),
-        })
-    }
-
-    /// A reload context or the watcher registers an owed-reload fault flag.
-    pub(crate) fn register_owed(&self, flag: Arc<AtomicBool>) {
-        self.inner.lock().owed_flags.push(flag);
-    }
-
-    /// Whether a manual reload folded into an owed replay (stub: never).
-    pub(crate) fn replay_owed(&self) -> bool {
-        false
-    }
-
-    /// The watcher clears the flag once it holds its admission guard.
-    pub(crate) fn take_replay_owed(&self, _held: &AdmissionGuard) -> bool {
-        false
-    }
-
-    /// resume() turns the owed replay into a watcher trigger. Stub: no poke.
-    pub(crate) fn poke_watcher(&self) {}
-}
+#[path = "restart_config_gate.rs"]
+mod gate;
+pub(crate) use gate::{AdmissionGuard, AdmitKind, ConfigGate, GateState, Refusal};
 
 /// What a checkpoint certified: the sha256 (lower hex) of the config bytes
 /// and a revision. Stub: an empty hash.
@@ -153,19 +45,15 @@ pub(crate) struct Certification {
     pub(crate) revision: u64,
 }
 
-/// The four fallback locations of the startup search, in order. Stub: none.
-pub(crate) fn production_candidates() -> Vec<PathBuf> {
-    Vec::new()
-}
+#[path = "restart_config_certify.rs"]
+mod certify;
+use certify::CheckInput;
+pub(crate) use certify::production_candidates;
+#[path = "restart_config_locks.rs"]
+mod locks;
 
-/// The config owner of the floor. Stub: every call answers Ok and does nothing.
-#[cfg_attr(
-    test,
-    allow(
-        dead_code,
-        reason = "red-phase: remove when the implementation uses it"
-    )
-)]
+/// The config owner of the floor: pause sets the gate at once, checkpoint
+/// settles admitted work, takes both locks and certifies the file read-only.
 pub(crate) struct ConfigFloor {
     gate: ConfigGate,
     reload_lock: Arc<tokio::sync::Mutex<()>>,
@@ -173,17 +61,15 @@ pub(crate) struct ConfigFloor {
     candidates: Vec<PathBuf>,
     attempt: u64,
     certification: Option<Certification>,
+    /// The lock and check tasks, which outlive a dropped checkpoint; `settled`
+    /// is false until each has ended.
+    checks: Vec<locks::Task>,
+    /// The guards a successful checkpoint hands over, until a recovery call.
+    held: locks::Held,
     #[cfg(test)]
     seams: seams::FloorSeams,
 }
 
-#[cfg_attr(
-    test,
-    allow(
-        dead_code,
-        reason = "red-phase: remove when the implementation uses it"
-    )
-)]
 impl ConfigFloor {
     /// `reload_lock` is the registry's reload mutex, `candidates` the four
     /// fallback paths startup's `Config` supplies (see `production_candidates`).
@@ -200,6 +86,8 @@ impl ConfigFloor {
             candidates,
             attempt: 0,
             certification: None,
+            checks: Vec::new(),
+            held: locks::Held::default(),
             #[cfg(test)]
             seams: seams::FloorSeams::default(),
         }
@@ -220,11 +108,111 @@ impl ConfigFloor {
         self.certification.as_ref()
     }
 
-    fn dummy_certification(&mut self) {
-        self.certification = Some(Certification {
-            sha256: String::new(),
-            revision: self.attempt,
+    /// The file to certify: the booted path, or the first fallback that
+    /// exists now (`None`: a fileless run, not configured).
+    fn configured_path(&self) -> Option<PathBuf> {
+        match &self.source {
+            ConfigSource::Booted(path) => Some(path.clone()),
+            ConfigSource::Defaults => certify::first_existing(self.candidates_now()),
+        }
+    }
+
+    fn candidates_now(&self) -> &[PathBuf] {
+        #[cfg(test)]
+        {
+            self.active_candidates()
+        }
+        #[cfg(not(test))]
+        {
+            &self.candidates
+        }
+    }
+
+    /// Terminal and Released are final: recovery calls leave the guards alone.
+    fn is_final(&self) -> bool {
+        let state = self.gate.inner.lock().state;
+        matches!(state, GateState::Terminal | GateState::Released)
+    }
+
+    fn prune_tasks(&mut self) {
+        self.checks.retain(|task| !task.finished());
+    }
+
+    /// Both locks and the read-only checks; every guard is a local of this
+    /// future until it succeeds, so a dropped checkpoint holds nothing.
+    async fn run_checkpoint(&mut self, deadline: Instant) -> Result<(), FloorFault> {
+        self.held.release_all();
+        self.certification = None;
+        let Some(path) = self.configured_path() else {
+            return Ok(());
+        };
+        let attempt = self.attempt;
+        locks::until(deadline, self.gate.settle()).await;
+        let reload = locks::until(deadline, Arc::clone(&self.reload_lock).lock_owned()).await;
+        let locked = self.lock_config(&path, attempt, deadline).await?;
+        let input = self.check_input(path, &locked, attempt);
+        let certified = self.run_check(input, deadline).await?;
+        if !self.gate.certify(attempt) {
+            return Err(FloorFault::Unavailable);
+        }
+        self.held = locks::Held::new(reload, locked);
+        self.certification = Some(certified);
+        Ok(())
+    }
+
+    async fn lock_config(
+        &mut self,
+        path: &Path,
+        attempt: u64,
+        deadline: Instant,
+    ) -> Result<Locked, FloorFault> {
+        let (task, reply) = locks::spawn_lock(
+            &self.gate,
+            path.to_path_buf(),
+            attempt,
+            deadline,
+            #[cfg(test)]
+            self.seams.clone(),
+        );
+        self.checks.push(task);
+        let locked = locks::take_lock(reply, deadline).await?;
+        #[cfg(test)]
+        self.seams.slots.push(seams::SlotEntry {
+            attempt,
+            outcome: seams::SlotOutcome::Handed,
         });
+        Ok(locked)
+    }
+
+    /// Built on the calling thread: the test keychain reader is thread-local.
+    fn check_input(&self, configured: PathBuf, locked: &Locked, attempt: u64) -> CheckInput {
+        let gate = self.gate.clone();
+        CheckInput {
+            attempt,
+            configured,
+            locked_target: locked.target.clone(),
+            owed: Arc::new(move || gate.any_owed()),
+            #[cfg(test)]
+            test_keychain: crate::config::keychain::current_test_keychain(),
+            #[cfg(test)]
+            check_hook: self.seams.check_hook.clone(),
+            #[cfg(test)]
+            meta_hook: self.seams.meta_hook.clone(),
+        }
+    }
+
+    async fn run_check(
+        &mut self,
+        input: CheckInput,
+        deadline: Instant,
+    ) -> Result<Certification, FloorFault> {
+        let (task, reply) = locks::spawn_check(
+            input,
+            #[cfg(test)]
+            self.seams.attempts.clone(),
+        );
+        self.checks.push(task);
+        locks::take_check(reply, deadline).await
     }
 }
 
@@ -234,22 +222,45 @@ impl FloorAdapter for ConfigFloor {
     }
 
     fn pause(&mut self, _deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>> {
-        Box::pin(async { Ok(()) })
+        // The gate is set before the future exists, so a pause future dropped
+        // unpolled has still paused; the adapter, not the future, holds it.
+        self.prune_tasks();
+        self.attempt += 1;
+        let paused = self.gate.pause(self.attempt);
+        Box::pin(async move { paused })
     }
 
-    fn checkpoint(&mut self, _deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>> {
-        self.dummy_certification();
-        Box::pin(async { Ok(()) })
+    fn checkpoint(&mut self, deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>> {
+        self.prune_tasks();
+        Box::pin(self.run_checkpoint(deadline))
     }
 
-    fn resume(&mut self) {}
+    fn resume(&mut self) {
+        self.prune_tasks();
+        if !self.is_final() {
+            self.held.release_all();
+        }
+        self.gate.reopen();
+    }
 
-    fn release_for_stop(&mut self) {}
+    fn release_for_stop(&mut self) {
+        self.prune_tasks();
+        if !self.is_final() {
+            self.held.release_all();
+        }
+        self.gate.finish(GateState::Released);
+    }
 
-    fn commit(&mut self) {}
+    fn commit(&mut self) {
+        self.prune_tasks();
+        if !self.is_final() {
+            self.held.release_reload();
+        }
+        self.gate.finish(GateState::Terminal);
+    }
 
     fn settled(&self) -> bool {
-        true
+        self.checks.iter().all(locks::Task::finished)
     }
 }
 
@@ -323,13 +334,6 @@ pub(crate) mod seams {
     }
 
     /// Who completed a reload.
-    #[cfg_attr(
-        test,
-        allow(
-            dead_code,
-            reason = "red-phase: remove when the implementation uses it"
-        )
-    )]
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum ReloadSource {
         Watcher,
@@ -356,13 +360,6 @@ pub(crate) mod seams {
     }
 
     /// The gate's seams, one set per gate instance.
-    #[cfg_attr(
-        test,
-        allow(
-            dead_code,
-            reason = "red-phase: remove when the implementation uses it"
-        )
-    )]
     #[derive(Clone, Default)]
     pub(crate) struct GateSeams {
         pub(crate) admitted_hook: Arc<Mutex<Option<AdmittedHook>>>,
@@ -372,20 +369,39 @@ pub(crate) mod seams {
         pub(crate) pokes: SeamLog<WatcherPoke>,
     }
 
+    impl GateSeams {
+        /// Appends one admission decision with the state it was decided in;
+        /// the gate calls it under its own mutex, so the log is in decision order.
+        pub(crate) fn record_decision(&self, state: GateState, kind: AdmitKind, admitted: bool) {
+            let seq = self.decisions.snapshot().len() as u64 + 1;
+            self.decisions.push(GateDecision {
+                seq,
+                state,
+                kind,
+                admitted,
+            });
+        }
+
+        /// The settle loop's window: the count read above zero, nothing awaited yet.
+        pub(crate) fn call_settle_window(&self) {
+            let hook = self.settle_window.lock().unwrap().clone();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+
+        pub(crate) fn record_resume_poke(&self) {
+            self.pokes.push(WatcherPoke::Resume);
+        }
+    }
+
     impl std::fmt::Debug for GateSeams {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("GateSeams")
         }
     }
 
-    /// Steps of the check task the CheckHook and the check log name.
-    #[cfg_attr(
-        test,
-        allow(
-            dead_code,
-            reason = "red-phase: remove when the implementation uses it"
-        )
-    )]
+    /// Steps of the check task the `CheckHook` and the check log name.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum CheckStep {
         /// Both locks held, before any read.
@@ -416,7 +432,7 @@ pub(crate) mod seams {
     pub(crate) type LockHook = Arc<dyn Fn(u64) -> LockVerdict + Send + Sync>;
 
     /// Replaces the metadata call for the abandoned path: the row injects a
-    /// real non-NotFound error (PermissionDenied) without arranging the disk.
+    /// real non-`NotFound` error (`PermissionDenied`) without arranging the disk.
     pub(crate) type MetaHook = Arc<dyn Fn(&Path) -> std::io::Result<bool> + Send + Sync>;
 
     /// Outcome of the lock-handoff slot for one attempt's guard.
@@ -434,13 +450,6 @@ pub(crate) mod seams {
     }
 
     /// What an attempt's task recorded.
-    #[cfg_attr(
-        test,
-        allow(
-            dead_code,
-            reason = "red-phase: remove when the implementation uses it"
-        )
-    )]
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum AttemptEvent {
         LockAcquired,
@@ -472,22 +481,15 @@ pub(crate) mod seams {
         pub(crate) attempts: SeamLog<AttemptEntry>,
     }
 
-    #[cfg_attr(
-        test,
-        allow(
-            dead_code,
-            reason = "red-phase: remove when the implementation uses it"
-        )
-    )]
     impl ConfigGate {
-        /// The state word as the gate holds it now. Stub: always Open.
+        /// The state word as the gate holds it now.
         pub(crate) fn state(&self) -> GateState {
-            GateState::Open
+            self.inner.lock().state
         }
 
-        /// Admission guards alive now. Stub: always 0.
+        /// Admission guards alive now.
         pub(crate) fn admissions_in_flight(&self) -> usize {
-            0
+            self.inner.lock().in_flight
         }
 
         pub(crate) fn set_admitted_hook(&self, hook: Option<AdmittedHook>) {
@@ -538,13 +540,6 @@ pub(crate) mod seams {
         }
     }
 
-    #[cfg_attr(
-        test,
-        allow(
-            dead_code,
-            reason = "red-phase: remove when the implementation uses it"
-        )
-    )]
     impl ConfigFloor {
         pub(crate) fn set_check_hook(&mut self, hook: Option<CheckHook>) {
             self.seams.check_hook = hook;

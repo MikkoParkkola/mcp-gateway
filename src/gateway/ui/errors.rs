@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use axum::Json;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header::RETRY_AFTER};
+use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
 use crate::config_reload::FileRevision;
 use crate::gateway::http_error::{flat_error_body, json_body, structured_error_body};
+use crate::gateway::restart_config_floor::Refusal;
 
 pub(super) fn flat_error(
     status: StatusCode,
@@ -20,6 +22,26 @@ pub(super) fn structured_error(
     message: impl Into<String>,
 ) -> (StatusCode, Json<Value>) {
     json_body(status, structured_error_body(code, message))
+}
+
+/// The reason a UI write is told to retry while a restart is being prepared.
+pub(super) const RESTART_BUSY: &str = "a restart is being prepared; retry";
+
+/// The one answer to a config-gate refusal of a UI write, for every write
+/// route: busy is a retryable 503, a restart or stop in progress is a 409.
+pub(super) fn gate_refusal(refusal: Refusal) -> Response {
+    let ending = |code, message| structured_error(StatusCode::CONFLICT, code, message);
+    match refusal {
+        Refusal::Busy | Refusal::ReplayOwed => {
+            let mut busy =
+                flat_error(StatusCode::SERVICE_UNAVAILABLE, RESTART_BUSY).into_response();
+            busy.headers_mut()
+                .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+            busy
+        }
+        Refusal::Restarting => ending("restarting", "the gateway is restarting").into_response(),
+        Refusal::Stopping => ending("stopping", "the gateway is stopping").into_response(),
+    }
 }
 
 /// The 409 of a gateway.yaml revision that moved: the one to retry against.

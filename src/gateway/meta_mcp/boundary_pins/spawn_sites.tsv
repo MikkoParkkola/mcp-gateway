@@ -40,6 +40,8 @@ src/gateway/meta_mcp/first_fill.rs	wait_surfaced_first_fill	spawn	1	no-refusal-i
 src/gateway/meta_mcp/grant_audit.rs	write_owned	spawn	1	raised-at-join	owned append of grant-decision records; a failed append returns through the join and the caller turns it into AuditUnavailable under FailClosed
 src/gateway/meta_mcp/listing_warm.rs	warm_listing_views	spawn	1	no-refusal-inside	fills a caller's listing view during a tools/list warm-up; a listing is not a call, so no call's delivery runs inside
 src/gateway/outbound/audit.rs	submit	spawn	1	no-refusal-inside	audits a tenant_read rejection to the log; the frame is withheld either way
+src/gateway/restart_config_locks.rs	spawn_check	spawn-blocking	1	raised-at-join	the restart checkpoint's read-only config checks; their fault returns through the channel the awaiting checkpoint reads
+src/gateway/restart_config_locks.rs	spawn_lock	spawn-blocking	1	raised-at-join	the restart checkpoint's config-lock wait; the guard or Busy returns through the channel the awaiting checkpoint reads
 src/gateway/router/handlers/sse.rs	mcp_sse_handler	spawn	1	no-refusal-inside	auto-subscribes a new SSE session to configured backends' notifications
 src/gateway/server/background.rs	poll_export_source	spawn-blocking	1	no-refusal-inside	reads the on-disk transparency log tail for SIEM export
 src/gateway/server/background.rs	spawn_export_task	spawn	1	outside-calls	SIEM evidence-export timer loop

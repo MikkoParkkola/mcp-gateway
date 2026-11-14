@@ -55,6 +55,14 @@ fn save_refusal((error, message): (&str, &str)) -> (StatusCode, Value) {
     )
 }
 
+/// Await `work` for at most `BOUND` (real clock: no row pauses it), naming `what` on failure,
+/// so a call stuck on a lock fails its row instead of hanging the run.
+async fn bounded<T>(what: &str, work: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(BOUND, work)
+        .await
+        .unwrap_or_else(|_| panic!("never answered: {what}"))
+}
+
 /// The file as it stands: bytes, mtime and inode.
 type Stat = (Vec<u8>, SystemTime, u64);
 
@@ -112,10 +120,9 @@ impl Fx {
 
     async fn certified() -> Self {
         let mut fx = Self::paused().await;
-        fx.floor
-            .checkpoint(deadline())
-            .await
-            .expect("fixture: checkpoint certifies");
+        let checkpoint = fx.floor.checkpoint(deadline());
+        let certified = bounded("the fixture checkpoint", checkpoint).await;
+        certified.expect("fixture: checkpoint certifies");
         fx
     }
 
@@ -133,10 +140,11 @@ impl Fx {
         let body = self
             .route
             .saved_body(&json!([set("environment", &json!("prod"))]));
-        let response = self
-            .route
-            .response(true, &body.to_string(), client(true))
-            .await;
+        let response = bounded(
+            "the settings save route",
+            self.route.response(true, &body.to_string(), client(true)),
+        )
+        .await;
         let headers = response.headers().clone();
         let (status, body) = decode(response).await;
         (status, headers, body)
@@ -150,32 +158,29 @@ impl Fx {
             Some(client(true)),
         );
         let state: Arc<AppState> = self.route.state.clone();
-        decode(
-            super::super::reload(State(state), guard)
-                .await
-                .into_response(),
-        )
-        .await
+        let reload = super::super::reload(State(state), guard);
+        decode(bounded("the UI reload route", reload).await.into_response()).await
     }
 
     /// A manual reload through the `gateway_reload_config` meta-tool.
     async fn meta_reload_answer(&self) -> Value {
-        let response = self
-            .route
-            .state
-            .meta_mcp
-            .handle_tools_call(
-                crate::protocol::RequestId::Number(1),
-                "gateway_reload_config",
-                json!({}),
-                None,
-                MetaMcpCallerContext {
-                    admin: AdminStanding::Gateway,
-                    ..anonymous_caller()
-                },
-            )
-            .await;
+        let call = self.route.state.meta_mcp.handle_tools_call(
+            crate::protocol::RequestId::Number(1),
+            "gateway_reload_config",
+            json!({}),
+            None,
+            MetaMcpCallerContext {
+                admin: AdminStanding::Gateway,
+                ..anonymous_caller()
+            },
+        );
+        let response = bounded("the gateway_reload_config meta-tool", call).await;
         serde_json::to_value(&response).expect("response is JSON")
+    }
+
+    /// One watcher tick, bounded like every call into production.
+    async fn tick(&self) {
+        bounded("the watcher tick", tick(&self.watcher)).await;
     }
 
     fn running_environment(&self) -> Option<String> {
@@ -241,14 +246,14 @@ async fn p4_paused_save_refused_and_replay_once() {
     fx.route.write(&with_env("a2"));
     // Plays the OS delivering one coalesced notify event for both writes.
     fx.gate.record_file_event();
-    tick(&fx.watcher).await;
+    fx.tick().await;
     assert!(
         fx.gate.reload_log().is_empty(),
         "{ROW}: a tick while paused reloaded"
     );
 
     fx.floor.resume();
-    tick(&fx.watcher).await;
+    fx.tick().await;
     assert_eq!(
         fx.gate.reload_log().len(),
         1,
@@ -300,7 +305,7 @@ async fn p5_case(row: &str, entry: Entry) {
     let mut fx = Fx::paused().await;
     fx.route.write(&with_env("a1"));
     assert_reload_refused(row, &fx, entry, REPLAY_MESSAGE).await;
-    tick(&fx.watcher).await;
+    fx.tick().await;
     assert_eq!(
         fx.running_environment().as_deref(),
         Some("dev"),
@@ -311,7 +316,7 @@ async fn p5_case(row: &str, entry: Entry) {
         "{row}: reload log after the paused tick"
     );
     fx.floor.resume();
-    tick(&fx.watcher).await;
+    fx.tick().await;
     assert_eq!(
         fx.gate.reload_log().len(),
         1,
@@ -352,14 +357,16 @@ async fn p8_replay_and_admitted_write_both_land() {
     let body = fx.route.saved_body(&json!([
         {"field": "backends.owner", "backend": "a", "value": {"set": "b1"}}
     ]));
-    let (status, answer) = fx.route.raw(true, &body.to_string(), client(true)).await;
+    let text = body.to_string();
+    let response = fx.route.response(true, &text, client(true));
+    let (status, answer) = decode(bounded("the settings save route", response).await).await;
     assert_eq!(
         status,
         StatusCode::OK,
         "{ROW}: the write after resume: {answer}"
     );
     for _ in 0..3 {
-        tick(&fx.watcher).await;
+        fx.tick().await;
     }
     // Each entry records the running `environment` after that reload. The write's
     // own reload reads the disk, which already holds the outside edit, so it logs
@@ -465,7 +472,7 @@ async fn p9a_certified_write_refused_without_replay() {
         "{ROW}: config probe"
     );
     fx.floor.resume();
-    tick(&fx.watcher).await;
+    fx.tick().await;
     assert!(
         fx.gate.reload_log().is_empty(),
         "{ROW}: a reload followed the refused write"
@@ -495,7 +502,7 @@ async fn p9b_certified_manual_reload_owes_a_replay() {
         "{ROW}: config probe"
     );
     fx.floor.resume();
-    tick(&fx.watcher).await;
+    fx.tick().await;
     assert_eq!(
         fx.replays(),
         ["dev"],
@@ -512,7 +519,7 @@ async fn p9c_certified_outside_edit_kept_for_replay() {
     fx.route.write(&with_env("a1"));
     // Plays the OS delivering the notify event for the outside edit.
     fx.gate.record_file_event();
-    tick(&fx.watcher).await;
+    fx.tick().await;
     assert!(
         fx.gate.reload_log().is_empty(),
         "{ROW}: reload while certified"
@@ -527,7 +534,7 @@ async fn p9c_certified_outside_edit_kept_for_replay() {
         "{ROW}: gate state after the tick"
     );
     fx.floor.resume();
-    tick(&fx.watcher).await;
+    fx.tick().await;
     assert_eq!(fx.replays(), ["a1"], "{ROW}: replay value");
     assert_eq!(fx.gate.reload_log().len(), 1, "{ROW}: no other reload");
 }
@@ -581,7 +588,7 @@ async fn k8_case(row: &str, end: End) {
     fx.route.write(&with_env("a1"));
     // Plays the OS delivering the notify event for the outside edit.
     fx.gate.record_file_event();
-    tick(&fx.watcher).await;
+    fx.tick().await;
     assert!(
         fx.gate.reload_log().is_empty(),
         "{row}: a watcher tick reloaded"

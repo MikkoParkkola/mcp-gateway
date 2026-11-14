@@ -268,6 +268,7 @@ mod held_write {
         row: &str,
         b: &Booted,
         floor: &mut super::super::ConfigFloor,
+        watcher: &WatcherFixture,
     ) {
         let (release, write) = held_write(row, b).await;
         floor.pause(deadline()).await.expect("pause");
@@ -282,7 +283,7 @@ mod held_write {
         release.send(()).expect("release the write");
         write.await.expect("write task");
         // The tick that sees the event while paused keeps the trigger.
-        support::tick(&WatcherFixture::new(b)).await;
+        support::tick(watcher).await;
         let own = ReloadEntry {
             source: ReloadSource::Write,
             value: "w1".to_owned(),
@@ -299,14 +300,15 @@ mod held_write {
         const ROW: &str = "K1";
         let b = Booted::new(BASE);
         let mut floor = b.floor();
-        drop_settling_checkpoint(ROW, &b, &mut floor).await;
+        let watcher = WatcherFixture::new(&b);
+        drop_settling_checkpoint(ROW, &b, &mut floor, &watcher).await;
         floor.resume();
         assert_eq!(
             b.gate.pending_pokes(),
             vec![WatcherPoke::Resume],
             "{ROW} resume pokes"
         );
-        support::tick(&WatcherFixture::new(&b)).await;
+        support::tick(&watcher).await;
         let replays = support::reload_values(&b.gate, ReloadSource::Replay);
         assert_eq!(replays, vec!["a1".to_owned()], "{ROW} exactly one replay");
         let running = b.running_environment();
@@ -322,12 +324,20 @@ mod held_write {
         const ROW: &str = "K1 twin";
         let b = Booted::new(BASE);
         let mut floor = b.floor();
-        drop_settling_checkpoint(ROW, &b, &mut floor).await;
+        let watcher = WatcherFixture::new(&b);
+        drop_settling_checkpoint(ROW, &b, &mut floor, &watcher).await;
         floor.release_for_stop();
         assert!(b.gate.pending_pokes().is_empty(), "{ROW} no poke recorded");
-        support::tick(&WatcherFixture::new(&b)).await;
-        assert!(
-            b.gate.reload_log().is_empty(),
+        support::tick(&watcher).await;
+        // Only the held write's own reload (checked while paused); release_for_stop
+        // discards the kept trigger, so the tick replays nothing.
+        let own = ReloadEntry {
+            source: ReloadSource::Write,
+            value: "w1".to_owned(),
+        };
+        assert_eq!(
+            b.gate.reload_log(),
+            vec![own],
             "{ROW} no reload after the tick"
         );
         assert_eq!(b.gate.state(), GateState::Released, "{ROW} released");

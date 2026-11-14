@@ -295,7 +295,7 @@ impl MetaMcp {
             )
         })?;
 
-        match ctx.reload_outcome().await {
+        match ctx.manual_reload_outcome().await {
             Ok(outcome) => Ok(json!({
                 "status": "ok",
                 "changes": outcome.changes,

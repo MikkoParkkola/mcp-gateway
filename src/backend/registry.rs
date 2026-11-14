@@ -212,13 +212,6 @@ pub struct BackendRegistry {
     /// The config gate beside the reload lock: every reload context on this
     /// registry, the watcher's included, and the restart floor's config owner
     /// share it.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "red-phase: remove when the writer, reload and watcher wiring reads the gate"
-        )
-    )]
     config_gate: crate::gateway::restart_config_floor::ConfigGate,
     /// One config-reload file read at a time, across every reload context.
     ///
@@ -335,13 +328,6 @@ impl BackendRegistry {
 
     /// The config gate this registry's reload contexts and the restart floor
     /// share; a clone shares the same gate.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "red-phase: remove when the writer, reload and watcher wiring reads the gate"
-        )
-    )]
     pub(crate) fn config_gate(&self) -> crate::gateway::restart_config_floor::ConfigGate {
         self.config_gate.clone()
     }

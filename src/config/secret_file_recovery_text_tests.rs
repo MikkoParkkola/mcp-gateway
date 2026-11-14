@@ -230,6 +230,9 @@ fn the_recovery_and_config_reads_have_their_known_callers() {
             // The settings preview reads gateway.yaml as the writer does,
             // without its lock; it writes nothing.
             "config_reload/ui_diff.rs",
+            // The restart checkpoint reads the file the next boot loads, under
+            // the config lock it holds, and certifies it; it writes nothing.
+            "gateway/restart_config_certify.rs",
         ]
     );
 }

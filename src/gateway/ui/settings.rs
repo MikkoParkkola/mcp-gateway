@@ -66,14 +66,16 @@ fn secret<'de, D: Deserializer<'de>>(deserializer: D) -> Result<WipedBytes, D::E
     String::deserialize(deserializer).map(|s| WipedBytes::new(s.into_bytes()))
 }
 
-use super::errors::{config_refusal, flat_error, no_config_file, stale, structured_error};
+use super::errors::{
+    RESTART_BUSY, config_refusal, flat_error, gate_refusal, no_config_file, stale, structured_error,
+};
 use super::secret_slots::{self, Unopened};
 use crate::config_persistence::keyedit::{FiniteF64, GiveUp, Scalar};
 use crate::config_reload::ui_fields::{FieldId, Param, PreviewEdit, PreviewValue, ValueKind};
 use crate::config_reload::{
-    AuditPosture, FileRevision, GatewayAuth, NO_AUDIT_LOG, Patch, PatchStep, PreviewRefused,
-    RELOAD_LOCK_WAIT, RefusalClass, ReloadOutcome, SaveEdit, SaveValue, SecretTarget, Shown,
-    UiPreview, UiRefused, path_text, ui_diff, ui_save,
+    AuditPosture, BusyReason, FileRevision, GatewayAuth, NO_AUDIT_LOG, Patch, PatchStep,
+    PreviewRefused, RELOAD_LOCK_WAIT, RefusalClass, ReloadOutcome, SaveEdit, SaveValue,
+    SecretTarget, Shown, UiPreview, UiRefused, path_text, ui_diff, ui_save,
 };
 use crate::gateway::auth::{MintingKey, QuotaPrincipal, ResolvedAuthConfig, SessionMintedBy};
 use axum::http::{
@@ -373,7 +375,8 @@ fn answer_for(refusal: UiRefused, fields: &[&str]) -> Response {
         UiRefused::Stale(_) => "stale",
         UiRefused::StaleUnpreviewable(_) => "stale_unpreviewable",
         UiRefused::Preview(_) => "preview",
-        UiRefused::Busy => "busy",
+        UiRefused::Busy(_) => "busy",
+        UiRefused::Down(_) => "down",
         UiRefused::SecretsRefused { .. } => "secrets_refused",
         UiRefused::Failed(_) => "failed",
     };
@@ -430,7 +433,7 @@ fn bad_value(id: FieldId, reason: &str) -> Response {
 fn retryable(refusal: &UiRefused) -> bool {
     matches!(
         refusal,
-        UiRefused::Busy
+        UiRefused::Busy(_)
             | UiRefused::StaleUnpreviewable(_)
             | UiRefused::Preview(PreviewRefused::Recovering)
             | UiRefused::SecretsRefused { timeout: true }
@@ -519,11 +522,15 @@ fn answer(refusal: UiRefused) -> Response {
         UiRefused::Preview(PreviewRefused::Untrusted(_) | PreviewRefused::Unread(_)) => {
             config_refusal().into_response()
         }
-        UiRefused::Busy => flat_error(
+        UiRefused::Busy(reason) => flat_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "the config is being written; retry",
+            match reason {
+                BusyReason::Locked => "the config is being written; retry",
+                BusyReason::Restart => RESTART_BUSY,
+            },
         )
         .into_response(),
+        UiRefused::Down(down) => gate_refusal(down),
         UiRefused::SecretsRefused { timeout: true } => flat_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "the secret store did not answer; retry",

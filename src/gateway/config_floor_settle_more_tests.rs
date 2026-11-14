@@ -152,8 +152,8 @@ async fn p10_pause_after_watcher_admission_waits_and_reload_runs_once() {
         matches!(done, Ok(Ok(()))),
         "{ROW}: checkpoint certifies: {done:?}"
     );
-    let watched = support::reload_values(&booted.gate, ReloadSource::Watcher);
-    assert_eq!(watched, vec!["e1".to_owned()], "{ROW}: the reload ran once");
+    let reloads = support::reload_values(&booted.gate, ReloadSource::Watcher);
+    assert_eq!(reloads, vec!["e1".to_owned()], "{ROW}: the reload ran once");
     assert_eq!(
         booted.running_environment().as_deref(),
         Some("e1"),

@@ -35,6 +35,9 @@ use crate::config_persistence::keyedit::Template;
 use super::ReloadContext;
 pub(crate) use super::replace_refusal::RefusalClass;
 pub(super) use super::replace_refusal::post_write_class;
+#[cfg(test)]
+use crate::gateway::restart_config_floor::seams::{AdmittedPoint, ReloadSource};
+use crate::gateway::restart_config_floor::{AdmissionGuard, AdmitKind, Refusal};
 
 // The revision type lives with the config commit primitive, which every
 // build compiles; the replace path names it from there.
@@ -149,6 +152,9 @@ pub(crate) struct ReplaceOutcome {
 pub(crate) enum ReplaceError {
     /// A lock stayed held past the wait; nothing was read.
     Busy,
+    /// The config gate refused the write before anything was read: a restart
+    /// is being prepared (`Busy`, retry later) or the gateway is going down.
+    Gated(Refusal),
     /// The file changed since the caller's view; its current revision.
     Stale { current: FileRevision },
     /// The compute refused, or produced bytes that are not UTF-8 text. Bytes
@@ -205,13 +211,23 @@ async fn spawn_locked(
     wait: Duration,
     receipt: Option<receipt::RevokeCheck>,
 ) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
-    tokio::spawn(async move { ctx.replace_locked(replace, audit, wait, receipt).await })
-        .await
-        .unwrap_or_else(|e| {
-            Err(ReplaceError::Failed(format!(
-                "the config write task failed: {e}"
-            )))
-        })
+    // The gate admits before the task exists; the guard lives in the task, so a
+    // dead task releases it, and `Entries` keeps a counted clone for its cleanup.
+    let admitted = ctx
+        .registry
+        .config_gate()
+        .admit(AdmitKind::Write)
+        .map_err(ReplaceError::Gated)?;
+    tokio::spawn(async move {
+        ctx.replace_locked(replace, audit, wait, receipt, admitted)
+            .await
+    })
+    .await
+    .unwrap_or_else(|e| {
+        Err(ReplaceError::Failed(format!(
+            "the config write task failed: {e}"
+        )))
+    })
 }
 
 #[cfg(test)]
@@ -290,6 +306,7 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
     match error {
         // Refused before anything was written.
         ReplaceError::Busy
+        | ReplaceError::Gated(_)
         | ReplaceError::Stale { .. }
         | ReplaceError::Refused(_)
         | ReplaceError::NoAuditLog
@@ -322,6 +339,12 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
 struct Entries {
     pending: Option<PendingSecrets>,
     renamed: bool,
+    /// The write's one admission once entries are staged (moved from the
+    /// task): a detached discard holds the gate's in-flight count until the
+    /// store calls are done, even when the write task died.
+    admitted: Option<AdmissionGuard>,
+    #[cfg(test)]
+    gate: crate::gateway::restart_config_floor::ConfigGate,
 }
 
 #[cfg_attr(
@@ -365,7 +388,15 @@ impl Drop for Entries {
         };
         match (how, tokio::runtime::Handle::try_current()) {
             (Settle::Discard, Ok(runtime)) => {
-                drop(runtime.spawn_blocking(move || settle_now(pending, how)));
+                let admitted = self.admitted.take();
+                #[cfg(test)]
+                let gate = self.gate.clone();
+                drop(runtime.spawn_blocking(move || {
+                    #[cfg(test)]
+                    gate.call_admitted(AdmittedPoint::Cleanup);
+                    settle_now(pending, how);
+                    drop(admitted);
+                }));
             }
             _ => settle_now(pending, how),
         }
@@ -464,8 +495,10 @@ impl ReloadContext {
         mut audit: Audit,
         wait: Duration,
         receipt: Option<receipt::RevokeCheck>,
+        admitted: AdmissionGuard,
     ) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
         let deadline = Instant::now() + wait;
+        let mut admitted = Some(admitted);
         // The reload lock, then the config sidecar lock: the order every
         // holder takes them in (module docs).
         let reload_guard = self.lock_reload_within(wait).await.map_err(|e| match e {
@@ -524,6 +557,9 @@ impl ReloadContext {
         let mut entries = Entries {
             pending: None,
             renamed: false,
+            admitted: None,
+            #[cfg(test)]
+            gate: self.registry.config_gate(),
         };
         // The new bytes are computed, and their slots checked against the
         // secrets, before any entry exists: a refusal creates nothing.
@@ -552,8 +588,16 @@ impl ReloadContext {
             None => Ok(template.bytes().to_vec()),
             Some(step) => fill_secrets(template, step, deadline, &mut entries).await,
         };
+        // Staged entries take the task's guard: still exactly one count.
+        if entries.pending.is_some() {
+            entries.admitted = admitted.take();
+        }
         let result = match result {
             Ok(new) => {
+                #[cfg(test)]
+                entries
+                    .gate
+                    .call_admitted(AdmittedPoint::WriterAfterStaging);
                 self.write_computed(
                     &locked,
                     &target,
@@ -583,6 +627,8 @@ impl ReloadContext {
         if recording_receipt {
             order::record(&target, "reload_unlock");
         }
+        #[cfg(test)]
+        entries.gate.call_admitted(AdmittedPoint::WriterAfterLocks);
         entries.settle(how).await;
         result
     }
@@ -629,6 +675,8 @@ impl ReloadContext {
                     class: post_write_class(&refusal),
                     reason: refusal.text,
                 })?;
+            #[cfg(test)]
+            self.record_write_reload();
             return Ok(ReplaceOutcome {
                 revision: None,
                 kept_beside: None,
@@ -708,6 +756,8 @@ impl ReloadContext {
         }
         match reloaded {
             Ok(reload) => {
+                #[cfg(test)]
+                self.record_write_reload();
                 if let Err(e) = journal::mark_all_renamed(target) {
                     return Err(ReplaceError::Unconfirmed {
                         journal: journal::journal_path(target),
@@ -737,6 +787,16 @@ impl ReloadContext {
                 ))
             }
         }
+    }
+
+    /// The reload log's Write entry: the running `environment` after this
+    /// write's own completed reload.
+    #[cfg(test)]
+    fn record_write_reload(&self) {
+        let environment = self.live_config.get().environment.clone();
+        self.registry
+            .config_gate()
+            .record_reload(ReloadSource::Write, &environment.unwrap_or_default());
     }
 
     /// Put the original back, or remove a staged copy no journal names yet

@@ -259,9 +259,14 @@ pub(crate) async fn manual_reload(
     gate: &ConfigGate,
     ctx: &crate::config_reload::ReloadContext,
 ) -> Result<crate::config_reload::ReloadOutcome, String> {
-    // The wiring stage passes the gate to the reload context.
+    // The context reaches the gate through its registry.
     let _ = gate;
-    ctx.reload_outcome().await
+    // Bounded: a reload the gate fails to refuse would wait on a reload lock a
+    // certified adapter holds, and the row must fail, never hang. Not for rows
+    // on a paused clock (the timeout would fire as soon as the runtime idles).
+    tokio::time::timeout(BOUND, ctx.manual_reload_outcome())
+        .await
+        .unwrap_or_else(|_| panic!("never answered: the manual reload"))
 }
 
 /// A CLI-style writer running on its own thread: the real
@@ -283,7 +288,9 @@ pub(crate) fn spawn_cli_writer(gate: &ConfigGate, path: &Path, environment: &str
     let join = std::thread::spawn(move || {
         crate::config_persistence::edit_config(
             &path,
-            crate::config_persistence::CommentLoss::Refuse,
+            // The CLI with `--force`: BASE has no `environment` key, and adding one is
+            // not an in-place edit, so the refusing mode would write nothing.
+            crate::config_persistence::CommentLoss::Rewrite,
             move |config| {
                 config.environment = Some(value);
                 Ok(())
@@ -315,6 +322,8 @@ pub(crate) struct WatcherFixture {
     pub(crate) gate: ConfigGate,
     pub(crate) ctx: Arc<crate::config_reload::ReloadContext>,
     pub(crate) path: PathBuf,
+    /// The watcher's per-tick state, driven by `tick` through the production tick function.
+    hand: crate::config_reload::HandTick,
 }
 
 impl WatcherFixture {
@@ -323,6 +332,7 @@ impl WatcherFixture {
             gate: ctx.registry.config_gate(),
             ctx: watcher_context(ctx, path),
             path: path.to_path_buf(),
+            hand: crate::config_reload::HandTick::new(&ctx.registry),
         }
     }
 
@@ -331,6 +341,7 @@ impl WatcherFixture {
             gate: booted.gate.clone(),
             ctx: watcher_context(&booted.ctx, &booted.cfg.path),
             path: booted.cfg.path.clone(),
+            hand: crate::config_reload::HandTick::new(&booted.ctx.registry),
         }
     }
 }
@@ -353,9 +364,18 @@ pub(crate) fn watcher_context(
     Arc::new(ctx)
 }
 
-/// One hand-driven watcher tick, run to completion.
+/// One hand-driven watcher tick, run to completion through the production tick
+/// function. It runs only after a recorded poke or file event and consumes the
+/// oldest record; a resume poke anywhere in the record makes it a resume tick.
 pub(crate) async fn tick(watcher: &WatcherFixture) {
-    // No hand-driven tick exists in production yet: this runs nothing, so a row
-    // that needs a tick fails at its own assertion on the stub.
-    let _ = (&watcher.gate, &watcher.ctx, &watcher.path);
+    use crate::gateway::restart_config_floor::seams::WatcherPoke;
+    let pokes = watcher.gate.pending_pokes();
+    let Some(&oldest) = pokes.first() else { return };
+    assert!(
+        watcher.gate.consume_poke(),
+        "a recorded poke authorizes the tick"
+    );
+    let resume = pokes.contains(&WatcherPoke::Resume);
+    let event = oldest == WatcherPoke::FileEvent;
+    watcher.hand.run(&watcher.ctx, event, resume).await;
 }
