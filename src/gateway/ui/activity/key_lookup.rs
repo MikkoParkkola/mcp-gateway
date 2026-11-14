@@ -432,8 +432,18 @@ fn check_shape(
 /// `White_Space` list, and control characters taken from the fixed Cc ranges, so
 /// no toolchain Unicode table decides what is refused.
 fn check_first_page(raw: &str, from: Option<&str>, to: Option<&str>) -> Result<(), &'static str> {
-    let email = email_hash::trim_v1(raw);
-    let control = |c: char| matches!(c, '\0'..='\u{1f}' | '\u{7f}'..='\u{9f}');
+    let email = mutant!("M4", raw, email_hash::trim_v1(raw));
+    let control = |c: char| {
+        mutant!(
+            "M5",
+            matches!(c, '\0'..='\u{1f}'),
+            mutant!(
+                "M6",
+                matches!(c, '\u{7f}'..='\u{9f}'),
+                matches!(c, '\0'..='\u{1f}' | '\u{7f}'..='\u{9f}')
+            )
+        )
+    };
     if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(control) {
         return Err("the email is not valid");
     }
@@ -520,7 +530,7 @@ fn resolve(
 ) -> Result<Resolved, Box<Response>> {
     match ask {
         (Some(raw), None) => Ok(Resolved {
-            hash: key.hash(&raw),
+            hash: mutant!("M3", key.hash(""), key.hash(&raw)),
             start: None,
             born: now,
             from: window.0,
