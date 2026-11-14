@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures::future::BoxFuture;
-use tokio::task::JoinHandle;
+use tokio::task::AbortHandle;
 use tokio::time::Instant;
 
 use super::gate::GateState;
@@ -45,7 +45,9 @@ pub(crate) struct TaskFloor {
     /// The attempt a running re-save may still work for; 0 once resumed or
     /// released, so a late re-save stops at its next record.
     current: Arc<AtomicU64>,
-    late: Vec<JoinHandle<Result<(), Resave>>>,
+    /// Every re-save spawned, by its abort handle: it reports whether the
+    /// re-save still runs after a dropped checkpoint gave up its join handle.
+    late: Vec<AbortHandle>,
 }
 
 impl TaskFloor {
@@ -101,17 +103,11 @@ impl FloorAdapter for TaskFloor {
             if gate.failed() {
                 return Err(FloorFault::SaveFailed);
             }
-            if self.current.load(Ordering::SeqCst) != attempt {
-                return Err(FloorFault::Unavailable);
-            }
             let (shared, current) = (Arc::clone(&self.store.0), Arc::clone(&self.current));
-            self.late.push(tokio::task::spawn_blocking(move || {
-                shared.checkpoint_blocking(attempt, &current)
-            }));
-            let Some(handle) = self.late.last_mut() else {
-                return Err(FloorFault::WorkerLost);
-            };
-            match handle.await {
+            let resave =
+                tokio::task::spawn_blocking(move || shared.checkpoint_blocking(attempt, &current));
+            self.late.push(resave.abort_handle());
+            match resave.await {
                 Ok(Ok(())) => {
                     gate.certify(attempt);
                     Ok(())
@@ -143,7 +139,7 @@ impl FloorAdapter for TaskFloor {
     /// an earlier attempt still runs.
     fn settled(&self) -> bool {
         !matches!(self.gate().state(), GateState::Draining { .. })
-            && self.late.iter().all(JoinHandle::is_finished)
+            && self.late.iter().all(AbortHandle::is_finished)
     }
 }
 
