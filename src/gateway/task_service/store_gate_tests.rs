@@ -697,3 +697,69 @@ async fn a_park_that_outlives_one_drain_leads_the_next() {
     let _ = a_finish.send(());
     within("G15 A done", a_task).await.expect("A's task");
 }
+
+/// Cancel `id` at `revision` through the store, the way a route cancel writes.
+async fn cancel_at(
+    store: &TaskStore,
+    id: &str,
+    revision: u64,
+) -> Result<super::CommittedTask, super::StoreError> {
+    let at = chrono::DateTime::parse_from_rfc3339("2026-09-07T00:00:05Z")
+        .expect("a fixed instant")
+        .with_timezone(&chrono::Utc);
+    store
+        .settle_bounded_by(
+            OWNER,
+            id,
+            revision,
+            (
+                crate::protocol::tasks::TaskTransition::Cancel,
+                crate::gateway::task_service::record::Provenance::default(),
+                crate::gateway::gateway_writes::WriteRecord::default(),
+            ),
+            crate::gateway::task_service::record::ErrorAuthor::Gateway,
+            at,
+        )
+        .await
+}
+
+// G11 (revision): writes are revision-checked, so order decides which of two
+// writes on one revision wins. A write parked before resume (A) lands; one
+// that arrives after resume (B) waits behind it and gets the conflict.
+#[tokio::test(flavor = "current_thread")]
+async fn a_parked_write_wins_its_revision_over_a_later_arrival() {
+    let (_dir, store) = store().await;
+    let created = store
+        .create(PreparedTask::for_test(&task(), OWNER, 1))
+        .await
+        .expect("a task to race over");
+    let (id, revision) = (created.task.id().to_owned(), created.revision);
+    let gate = store.gate_for_test();
+    pause(&gate, 1);
+    let hold = GateSeams::arm(&gate.seams().at_decision);
+    let a = tokio::spawn({
+        let (store, id) = (store.clone(), id.clone());
+        async move { cancel_at(&store, &id, revision).await }
+    });
+    within("G11r A parks", hold.reached()).await;
+    hold.release();
+    gate.resume();
+    within("G11r A admitted", hold.reached()).await;
+    let b = tokio::spawn({
+        let (store, id) = (store.clone(), id.clone());
+        async move { cancel_at(&store, &id, revision).await }
+    });
+    within("G11r B parks", hold.reached()).await;
+    hold.release(); // A goes on to its write.
+    hold.release(); // B waits behind the cohort.
+    let a = within("G11r A done", a).await.expect("A's task");
+    within("G11r B admitted", hold.reached()).await;
+    hold.release();
+    let b = within("G11r B done", b).await.expect("B's task");
+    assert!(a.is_ok(), "the parked write lands: {a:?}");
+    assert_eq!(
+        b.map(drop),
+        Err(super::StoreError::RevisionConflict),
+        "the later arrival meets the revision A already moved"
+    );
+}

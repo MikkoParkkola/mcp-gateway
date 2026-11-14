@@ -242,3 +242,7 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     drop(executor.flush_pending_cancels(None));
     outcome
 }
+
+#[cfg(test)]
+#[path = "expiry_gate_tests.rs"]
+mod gate_tests;
