@@ -234,15 +234,24 @@ pub(crate) async fn lookup(
     .await
     .map_err(|error| hide(&error.to_string()))?;
     if !response.status.is_success() {
-        let parsed: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
-        let reason = super::dashboard_link::gateway_reason(&parsed).unwrap_or("no reason given");
-        let wait = response
-            .headers
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .map(|secs| format!(" (retry after {secs} s)"))
-            .unwrap_or_default();
+        // Each part of the message is named when it cannot be read, never
+        // turned into empty text.
+        let parsed = serde_json::from_slice::<serde_json::Value>(&response.body);
+        let reason = match &parsed {
+            Ok(body) => super::dashboard_link::gateway_reason(body).unwrap_or("no reason given"),
+            Err(_) => "its error body is not JSON",
+        };
+        let wait = match response.headers.get(reqwest::header::RETRY_AFTER) {
+            None => String::new(),
+            Some(value) => match value
+                .to_str()
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+            {
+                Some(secs) => format!(" (retry after {secs} s)"),
+                None => " (retry after: unreadable)".to_owned(),
+            },
+        };
         return Err(format!(
             "the gateway answered {}: {}{wait}",
             response.status,
