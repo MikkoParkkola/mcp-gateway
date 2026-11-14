@@ -295,14 +295,16 @@ async fn o1_an_admitted_write_failing_in_the_attempt_is_save_failed() {
     let deadline = deadline();
     assert_eq!(within("O1 pause", floor.pause(deadline)).await, Ok(()));
     drop(held);
+    let written = within("O1 write", write).await.expect("the write task");
+    assert_eq!(written, Err(StoreError::Storage));
+    // The fault is gone before the checkpoint: its own re-save would now
+    // certify, so SaveFailed can only come from the failed admitted write.
+    store.set_hook(None).await;
     assert_eq!(
         within("O1 checkpoint", floor.checkpoint(deadline)).await,
         Err(FloorFault::SaveFailed)
     );
-    let written = within("O1 write", write).await.expect("the write task");
-    assert_eq!(written, Err(StoreError::Storage));
     floor.resume();
-    store.set_hook(None).await;
     assert_eq!(certify("O1 retry", &mut floor).await, Ok(()));
 }
 
