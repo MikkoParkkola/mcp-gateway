@@ -240,7 +240,8 @@ jobs:
   release-test-compile:
     name: Test compile without debug assertions
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # The compile step's 30 min plus 10 for setup and post steps, kept strictly under (scripts/ci/check_swap_jobs.py).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -254,7 +255,10 @@ jobs:
         with:
           shared-key: feature-combos-no-debug-assertions
       - name: Compile every test target with debug assertions off
+        # Healthy compiles take up to 17 min; a stall ends here with its log, and the memory log samples it every
+        # 30 s (scripts/ci/check_swap_jobs.py).
+        timeout-minutes: 30
         run: >-
-          cargo test --all-targets --no-run
+          scripts/ci/with-memory-log.sh cargo test --all-targets --no-run
           --config profile.dev.debug-assertions=false
           --config profile.test.debug-assertions=false

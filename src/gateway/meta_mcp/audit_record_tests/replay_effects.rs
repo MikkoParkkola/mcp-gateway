@@ -139,7 +139,7 @@ fn assert_no_effect(decision: &Value) {
 /// `gateway_invoke`), and says it was replayed, not decided again.
 #[tokio::test]
 async fn an_http_route_stage_replay_records_the_stored_slot_effect() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, calls) = listing(Some(false), &dir);
     let (stored, decision) = replayed(
         &meta,
@@ -172,7 +172,7 @@ async fn an_http_route_stage_replay_records_the_stored_slot_effect() {
 /// The hint removed (the tool still listed) reads undeclared on the replay.
 #[tokio::test]
 async fn an_http_route_stage_replay_of_a_removed_hint_records_undeclared() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = listing(Some(true), &dir);
     let (stored, decision) = replayed(
         &meta,
@@ -200,7 +200,7 @@ async fn an_http_route_stage_replay_of_a_removed_hint_records_undeclared() {
 /// warm and declares `read` read-only: no fallback to it.
 #[tokio::test]
 async fn a_result_stored_with_no_slot_records_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = listing(Some(true), &dir);
     relist(&meta, Some(true));
     let (stored, decision) = replayed(
@@ -224,7 +224,7 @@ async fn a_result_stored_with_no_slot_records_none() {
 /// The backend removed between settle and replay: no effect.
 #[tokio::test]
 async fn a_replay_of_a_removed_backend_records_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = listing(Some(true), &dir);
     let (stored, decision) = replayed(
         &meta,
@@ -247,7 +247,7 @@ async fn a_replay_of_a_removed_backend_records_none() {
 /// The tool no longer listed on the stored slot: no effect.
 #[tokio::test]
 async fn a_replay_of_a_tool_no_longer_listed_records_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = listing(Some(true), &dir);
     let (stored, decision) = replayed(
         &meta,
@@ -312,7 +312,7 @@ fn caps_args() -> Value {
 /// settle and replay), from the definition, with no slot needed.
 #[tokio::test]
 async fn a_capability_replay_records_its_live_definitions_effect() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, caps) = with_caps(&dir, false);
     let (stored, decision) = replayed(
         &meta,
@@ -340,7 +340,7 @@ async fn a_capability_replay_records_its_live_definitions_effect() {
 /// capability replay carries, after the unload.
 #[tokio::test]
 async fn a_capability_replay_of_a_removed_definition_records_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, caps) = with_caps(&dir, true);
     assert!(caps.unload_capability("lookup"), "premise: unloaded");
     replay_caps(&meta).await;
@@ -386,7 +386,7 @@ async fn replay_caps(meta: &MetaMcp) {
 /// visibility refuses a hiding caller before any replay is admitted.
 #[tokio::test]
 async fn a_capability_replay_under_a_hiding_view_records_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _caps) = with_caps(&dir, true);
     crate::gateway::meta_mcp::hiding::with_caller(Arc::new(HidesCaps), replay_caps(&meta)).await;
     replay_caps(&meta).await;
@@ -407,7 +407,7 @@ async fn a_capability_replay_under_a_hiding_view_records_none() {
 /// the stored slot's effect now, flipped from may-write to read-only.
 #[tokio::test]
 async fn a_stdio_replay_records_the_stored_slot_effect() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = listing(Some(false), &dir);
     let (stored, decision) = replayed(
         &meta,
@@ -436,7 +436,7 @@ async fn a_stdio_replay_records_the_stored_slot_effect() {
 /// shared slot warm and declaring `read` read-only.
 #[tokio::test]
 async fn a_stdio_replay_with_no_stored_slot_records_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = listing(Some(true), &dir);
     relist(&meta, Some(true));
     let (stored, decision) = replayed(
@@ -458,7 +458,7 @@ async fn a_stdio_replay_with_no_stored_slot_records_none() {
 /// which does not exist, and records no effect, never the shared slot's.
 #[tokio::test]
 async fn a_replay_after_propagation_is_turned_off_records_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = listing(Some(true), &dir);
     relist(&meta, Some(true));
     let alpha = meta.backends.for_test().get("alpha").expect("alpha");
@@ -498,7 +498,7 @@ async fn a_replay_after_propagation_is_turned_off_records_none() {
 /// understate what the replayed call could have changed.
 #[tokio::test]
 async fn a_replay_after_read_only_turns_may_write_records_may_write() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = listing(Some(true), &dir);
     let (stored, decision) = replayed(
         &meta,

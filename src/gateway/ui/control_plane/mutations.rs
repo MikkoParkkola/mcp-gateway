@@ -55,7 +55,7 @@ pub(super) struct MutationResponse {
 /// always derived its actor: the RBAC check itself stays in
 /// `validate_for_actor`, after the store check. The role is the one the
 /// request's pinned generation maps (ADR-023).
-fn admitted_actor(
+pub(in crate::gateway::ui) fn admitted_actor(
     generation: &Generation,
     guard: &Guard,
 ) -> Result<(crate::control_plane::ControlPlaneActor, ControlPlaneAction), super::super::guard::Early>
@@ -282,6 +282,7 @@ pub(super) fn resolve_decision_core(
     // RBAC's 403 rather than the 409 below.
     let event = ControlPlaneAuditEvent {
         grant_change: None,
+        ui_decision: None,
         event_id: PREFLIGHT_EVENT_ID.to_string(),
         actor_id: actor.actor_id.clone(),
         action,
@@ -388,6 +389,7 @@ pub(super) fn apply_mutation(
 
     let event = ControlPlaneAuditEvent {
         grant_change: None,
+        ui_decision: None,
         event_id: PREFLIGHT_EVENT_ID.to_string(),
         actor_id: actor.actor_id.clone(),
         action,

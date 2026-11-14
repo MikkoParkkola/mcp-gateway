@@ -22,6 +22,8 @@ const ADOPT_ROUTE: &str = "tests/discovery_adopt_route.rs";
 const SETTINGS_ROUTES: &str = "src/gateway/ui/settings_route_tests.rs";
 const KEY_CREATE: &str = "src/gateway/ui/keys_create_tests.rs";
 const DECISIONS_ROUTE: &str = "src/gateway/ui/decisions_tests.rs";
+/// The resolve route's rows, in their own file under the decisions tests.
+const DECISIONS_RESOLVE: &str = "src/gateway/ui/decisions_resolve_tests.rs";
 const SIGN_IN: &str = "src/gateway/ui/backends/signin_tests.rs";
 const DISCOVERY_WIRING: &str = "src/gateway/ui/discovery_wiring_tests.rs";
 const CP_WRITES: &[Citation] = &[(
@@ -100,6 +102,16 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         &[(
             DECISIONS_ROUTE,
             "the_count_is_the_lists_length_and_revision_for_an_admin_only",
+        )],
+    ),
+    // The frame only: the table's fixture never starts the decision set, so
+    // its answers are 503; this test starts it and pins each status.
+    (
+        "/ui/api/decisions/{id}/resolve",
+        Method::POST,
+        &[(
+            DECISIONS_RESOLVE,
+            "resolve_answers_one_status_per_state_and_writes_nothing",
         )],
     ),
     // The table's fixture attaches no discovery cache, so its admin answer

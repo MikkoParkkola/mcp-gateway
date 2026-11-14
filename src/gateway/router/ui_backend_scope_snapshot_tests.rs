@@ -64,6 +64,7 @@ fn seed(state: &AppState, store: bool) {
         store
             .append_audit(&ControlPlaneAuditEvent {
                 grant_change: None,
+                ui_decision: None,
                 event_id: format!("scope-event-{n}"),
                 actor_id: if by_developer {
                     developer.clone()

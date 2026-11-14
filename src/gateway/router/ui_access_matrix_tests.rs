@@ -326,6 +326,7 @@ fn seed_store(state: &AppState) {
         store
             .append_audit(&ControlPlaneAuditEvent {
                 grant_change: None,
+                ui_decision: None,
                 event_id: event_id.to_string(),
                 actor_id: actor.to_string(),
                 action: ControlPlaneAction::MutateGrant,

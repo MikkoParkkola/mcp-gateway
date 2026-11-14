@@ -138,6 +138,11 @@ fn finish(failure: Option<ServiceError>) -> Result<(), ServiceError> {
 /// report success over a directory it could not delete from.
 async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     let service = Arc::clone(&executor.service);
+    // A restart checkpoint holds the store: this tick does nothing, and the
+    // next one sees the same candidates.
+    if !service.store.sweeps_allowed() {
+        return Ok(());
+    }
     // Sealed rows first: a repaired or removed row lifts the seal on new keyed
     // calls without a restart (MIK-8052), and a repaired row is served again
     // (MIK-8121). It never fails the sweep.
@@ -164,10 +169,23 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     for (id, revision, owner_digest, closed) in service.store.expired_input_rounds(now) {
         // #2429: one write that names why the round closed and drops it.
         let cancelled = executor
-            .close_round(&owner_digest, &id, revision, closed.reason(), now)
+            .close_round_as(
+                crate::gateway::task_service::store::gate::Kind::Sweep,
+                &owner_digest,
+                &id,
+                revision,
+                closed.reason(),
+                now,
+            )
             .await;
-        let Err(failure) = cancelled else {
-            continue;
+        let failure = match cancelled {
+            Ok(super::input_round::Closed::Done) => continue,
+            // A checkpoint paused the store after this tick began: the close
+            // was skipped, not refused, and the next tick covers it.
+            Ok(super::input_round::Closed::Skipped) => {
+                return round_failure.map_or(Ok(()), Err);
+            }
+            Err(failure) => failure,
         };
         // A cancel refused because the round moved (answered, cancelled, gone)
         // is benign. The commit reports a refused transition the way it reports
@@ -224,6 +242,9 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
             Err(
                 StoreError::NotFound | StoreError::RevisionConflict | StoreError::InvalidTransition,
             ) => {}
+            // A checkpoint paused the store mid-tick: stop here; the next tick
+            // covers the rest.
+            Err(StoreError::Skipped) => return outcome,
             Err(error) => {
                 tracing::warn!(%error, task_id = %id, "expired task record not deleted");
                 outcome = Err(ServiceError::Unavailable);
@@ -235,3 +256,7 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     drop(executor.flush_pending_cancels(None));
     outcome
 }
+
+#[cfg(test)]
+#[path = "expiry_gate_tests.rs"]
+mod gate_tests;

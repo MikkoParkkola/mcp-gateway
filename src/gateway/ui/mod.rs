@@ -54,6 +54,7 @@ mod policies_test_support;
 mod policies_tests;
 mod preview;
 mod preview_identity;
+mod principal;
 mod refusals;
 mod restart;
 #[cfg(test)]
@@ -778,6 +779,10 @@ mod keys_create_tests;
 #[cfg(test)]
 #[path = "keys_create_refusal_tests.rs"]
 mod keys_create_refusal_tests;
+
+#[cfg(test)]
+#[path = "keys_create_cli_tests.rs"]
+mod keys_create_cli_tests;
 
 #[cfg(test)]
 #[path = "keys_create_writer_tests.rs"]

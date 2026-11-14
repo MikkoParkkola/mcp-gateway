@@ -90,21 +90,53 @@ fn deny(set: &mut DecisionSet, offset: u64, event: &IdentityGrantAuditEvent) {
     set.live(pos(Source::Access, offset), Fold::Denial(event.clone()));
 }
 
-fn decision(capability: &str, minute: i64) -> UiDecision {
+/// A UI decision on `capability` closing the refusals at access-log
+/// offsets `closes`.
+fn decision(capability: &str, closes: &[u64]) -> UiDecision {
     UiDecision {
         authority: "https://idp.example".to_string(),
         subject: "alice".to_string(),
         agent: AGENT.to_string(),
         capability: capability.to_string(),
-        at: at(minute),
+        closes: closes.iter().map(|o| pos(Source::Access, *o)).collect(),
     }
 }
 
-/// Deliver a UI decision live at control-plane offset `offset`.
-fn decide(set: &mut DecisionSet, offset: u64, capability: &str, minute: i64) {
-    set.live(
-        pos(Source::ControlPlane, offset),
-        Fold::Decided(decision(capability, minute)),
+/// Apply a UI decision closing the refusals at access-log offsets `closes`.
+fn decide(set: &mut DecisionSet, capability: &str, closes: &[u64]) {
+    set.apply_decisions(vec![decision(capability, closes)]);
+}
+
+/// The digest names one scope and one position set: the order they come
+/// in and repeats do not change it, any other entry or position does, and
+/// no scope can be dressed up as positions. The last pair shared one
+/// encoding while the entry count came after the entries.
+#[test]
+fn the_scope_digest_has_one_encoding_per_scope_and_positions() {
+    use super::items::scope_digest;
+    use serde_json::json;
+    let entry = |capability: &str, tool: &str| json!({"capability": capability, "tool": tool, "grant_scope": "read"});
+    let (a, b) = (
+        entry("stripe.charges", "pay"),
+        entry("stripe.refunds", "refund"),
+    );
+    let digest = scope_digest(&[a.clone(), b.clone()], &[("h1", 1), ("h2", 2)]);
+    assert_eq!(
+        scope_digest(
+            &[b.clone(), a.clone(), a.clone()],
+            &[("h2", 2), ("h1", 1), ("h1", 1)]
+        ),
+        digest
+    );
+    assert_ne!(
+        scope_digest(std::slice::from_ref(&a), &[("h1", 1), ("h2", 2)]),
+        digest
+    );
+    assert_ne!(scope_digest(&[a, b], &[("h1", 1), ("h2", 3)]), digest);
+    let dressed = json!({"capability": "", "tool": "a", "grant_scope": "\0\0\0\0\0\0\0\u{1}b"});
+    assert_ne!(
+        scope_digest(&[dressed], &[]),
+        scope_digest(&[], &[("a", 9), ("b", 1)])
     );
 }
 
@@ -157,20 +189,20 @@ fn every_a1_exclusion_opens_nothing() {
 }
 
 #[test]
-fn a_newer_ui_decision_closes_and_a_newer_denial_reopens() {
+fn a_ui_decision_closes_its_refusals_and_a_later_denial_reopens() {
     let mut set = ready();
     deny(&mut set, 107, &missing("stripe.charges", 1));
-    decide(&mut set, 121, "stripe.charges", 2);
+    decide(&mut set, "stripe.charges", &[107]);
     assert_eq!(count(&set), 0);
     deny(&mut set, 108, &missing("stripe.charges", 3));
     assert_eq!(count(&set), 1);
 }
 
 #[test]
-fn an_older_ui_decision_leaves_the_item_open() {
+fn a_ui_decision_on_other_refusals_leaves_the_item_open() {
     let mut set = ready();
     deny(&mut set, 109, &missing("stripe.charges", 5));
-    decide(&mut set, 122, "stripe.charges", 4);
+    decide(&mut set, "stripe.charges", &[108]);
     assert_eq!(count(&set), 1);
 }
 
@@ -320,8 +352,8 @@ fn revision_rises_on_open_close_and_field_change_and_not_on_a_no_op() {
     assert!(r2 > r1, "a scope entry added to an open item");
     set.expire(at(3));
     assert_eq!(rev(&set), r2, "nothing changed");
-    decide(&mut set, 123, "stripe.charges", 4);
-    decide(&mut set, 124, "stripe.refunds", 4);
+    decide(&mut set, "stripe.charges", &[113]);
+    decide(&mut set, "stripe.refunds", &[114]);
     assert!(rev(&set) > r2, "close");
 }
 
@@ -334,7 +366,7 @@ fn folding_is_order_free_and_a_repeat_changes_nothing() {
         for step in order {
             match step {
                 1 => deny(&mut set, 115, &denial_1),
-                2 => decide(&mut set, 125, "stripe.charges", 2),
+                2 => decide(&mut set, "stripe.charges", &[115]),
                 _ => deny(&mut set, 116, &denial_3),
             }
         }
@@ -347,8 +379,8 @@ fn folding_is_order_free_and_a_repeat_changes_nothing() {
     }
     let mut once = ready();
     deny(&mut once, 117, &denial_1);
-    decide(&mut once, 126, "stripe.charges", 2);
-    decide(&mut once, 126, "stripe.charges", 2);
+    decide(&mut once, "stripe.charges", &[117]);
+    decide(&mut once, "stripe.charges", &[117]);
     deny(&mut once, 117, &denial_1);
     assert_eq!(
         count(&once),
@@ -377,24 +409,30 @@ fn booting() -> DecisionSet {
     set
 }
 
+/// Replay the access log and read the governance audit, in the order
+/// `logs_first` names: the audit's decision is applied at once either way.
 fn replay_all(set: &mut DecisionSet, logs_first: Source) {
-    let denial = Fold::Denial(missing("stripe.charges", 1));
-    let declined = Fold::Decided(decision("stripe.charges", 2));
-    let later = Fold::Denial(missing("stripe.refunds", 3));
-    let steps = [
-        (Source::Access, vec![(1, denial), (2, later)]),
-        (Source::ControlPlane, vec![(1, declined)]),
-    ];
-    let order: Vec<_> = if logs_first == Source::Access {
-        steps.into_iter().collect()
-    } else {
-        steps.into_iter().rev().collect()
+    let access = |set: &mut DecisionSet| {
+        set.replayed(
+            pos(Source::Access, 1),
+            Fold::Denial(missing("stripe.charges", 1)),
+        );
+        set.replayed(
+            pos(Source::Access, 2),
+            Fold::Denial(missing("stripe.refunds", 3)),
+        );
+        set.replay_done(Source::Access);
     };
-    for (log, events) in order {
-        for (offset, event) in events {
-            set.replayed(pos(log, offset), event);
-        }
-        set.replay_done(log);
+    let audit = |set: &mut DecisionSet| {
+        decide(set, "stripe.charges", &[1]);
+        set.replay_done(Source::ControlPlane);
+    };
+    if logs_first == Source::Access {
+        access(set);
+        audit(set);
+    } else {
+        audit(set);
+        access(set);
     }
 }
 
@@ -713,31 +751,5 @@ fn held_notes_are_bounded_and_a_lost_one_forces_another_replay() {
     assert_eq!(set.list()[0]["scope"].as_array().map(Vec::len), Some(over));
 }
 
-#[test]
-fn a_lost_note_affects_only_its_own_log() {
-    let mut set = booting();
-    // A UI decision held for the control-plane log.
-    set.live(
-        pos(Source::ControlPlane, 1),
-        Fold::Decided(decision("stripe.charges", 9)),
-    );
-    for n in 0..=super::HELD_CAP {
-        let capability = format!("cap.{n}");
-        set.live(
-            pos(Source::Access, n as u64),
-            Fold::Denial(missing(&capability, 1)),
-        );
-    }
-    assert!(
-        !set.replay_done(Source::Access),
-        "the access log lost a note"
-    );
-    assert!(
-        set.held
-            .iter()
-            .any(|(pos, _)| pos.log == Source::ControlPlane),
-        "the other log's held event is kept"
-    );
-}
-
 mod discovery;
+mod positions;

@@ -55,6 +55,10 @@ MCP Gateway implements defense-in-depth across the six attack vectors identified
   cannot tell its operator from a web page that rebound a hostname to loopback.
   A stdio caller is admin: it spawned the process, so it already holds whatever
   the operator holds
+- **Grant rows written by the gateway's OS user**: the identity-grants file
+  is mode 0600, which keeps other local users out, and a row written there by
+  the gateway's own OS user is that same operator, who can equally rewrite
+  `gateway.yaml`
 - **Secrets**: OS keychain integration (macOS Keychain, Linux Secret Service, Windows Credential Manager). `init` stores its generated admin token in the store selected by `secrets.store` and writes only a reference into `auth.bearer_token`; no config or sample file it writes contains the literal token. Secrets saved through the gateway go to a fresh keychain entry or a new owner-only file (`secrets.store`: `auto`, the default, prefers the keychain; `keychain`; `files`); a value never reaches argv, a log or an error. Existing literal credentials still load; they are not migrated automatically. Old entries are never deleted, and `mcp-gateway doctor` counts the unused ones; nothing cleans them up automatically
 - **Circuit breakers**: Per-backend fault isolation prevents cascading failures
 - **Rate limiting**: Token-bucket per-backend rate limiting

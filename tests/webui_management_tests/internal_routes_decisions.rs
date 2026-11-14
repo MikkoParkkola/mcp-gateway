@@ -25,4 +25,19 @@ pub(super) const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 503],
     ),
+    // src/gateway/ui/decisions.rs (resolve_decision; a well-formed body, so
+    // the admin's answer is the 503 of the set this fixture never starts)
+    row(
+        "/ui/api/decisions/{id}/resolve",
+        Method::POST,
+        "/ui/api/decisions/abc/resolve",
+        Payload::Json(RESOLVE_DENY),
+        [401, 403, 403, 503],
+    ),
 ];
+
+const RESOLVE_DENY: &str = concat!(
+    r#"{"action":"deny","reason":"not needed","scope_digest":""#,
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    r#""}"#
+);

@@ -35,7 +35,7 @@ async fn invoke(
 /// not exist records `not_found`, never `default_allow`.
 #[tokio::test]
 async fn a_call_to_a_nonexistent_backend_records_not_found() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (answer, record) = invoke(&dir, "nowhere", &AllowAll).await;
     assert_eq!(
         record["decision"]["kind"], "not_found",
@@ -48,7 +48,7 @@ async fn a_call_to_a_nonexistent_backend_records_not_found() {
 /// with the miss's code, and the answer is the plain miss it always was.
 #[tokio::test]
 async fn a_call_to_a_nonexistent_backend_is_recorded_as_denied() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (answer, record) = invoke(&dir, "nowhere", &AllowAll).await;
     assert!(
         answer.contains("Backend not found: nowhere"),
@@ -62,7 +62,7 @@ async fn a_call_to_a_nonexistent_backend_is_recorded_as_denied() {
 /// allow and its own outcome.
 #[tokio::test]
 async fn a_call_to_a_registered_backend_still_records_default_allow() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (answer, record) = invoke(&dir, "alpha", &AllowAll).await;
     assert_eq!(record["decision"]["kind"], "default_allow", "{record}");
     assert_eq!(record["outcome"], json!("ok"), "answer {answer}; {record}");
@@ -72,7 +72,7 @@ async fn a_call_to_a_registered_backend_still_records_default_allow() {
 /// the policy's refusal: the first decision noted stands.
 #[tokio::test]
 async fn a_policy_refusal_of_an_unregistered_name_keeps_the_policy_kind() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let key = crate::gateway::record_principal::test_record_key().rule_id_key();
     let policy = ToolPolicy::from_config_keyed(
         &ToolPolicyConfig {

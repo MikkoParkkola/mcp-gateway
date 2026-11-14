@@ -122,6 +122,12 @@ impl QuotaPrincipal {
         self.limit.is_some() && self.limit == other.limit
     }
 
+    /// Whether this is an API key's quota identity whose stable principal
+    /// (its limit key) is `key`: what a CLI key's binding names.
+    pub(crate) fn has_limit_key(&self, key: &str) -> bool {
+        self.limit.as_deref() == Some(key)
+    }
+
     pub(crate) fn as_store_key(&self) -> &str {
         &self.store
     }

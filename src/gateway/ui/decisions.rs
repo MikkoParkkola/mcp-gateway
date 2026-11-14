@@ -16,7 +16,7 @@ use std::time::Duration;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use rand::RngExt as _;
 use serde_json::{Map, Value, json};
@@ -24,9 +24,10 @@ use serde_json::{Map, Value, json};
 use super::activity::replay;
 use super::guard::Guard;
 use crate::capability::CapabilityBackend;
+use crate::control_plane::{AuditFilter, ControlPlaneAction, ControlPlaneStore};
 use crate::decisions::{
     CapabilityChange, DecisionSet, Fold, GRANT_DECISION_KIND, Health, LogPos, Shared, Source,
-    denial_from_record,
+    decisions_from_record, denial_from_record,
 };
 use crate::discovery::config_scanner::ConfigScanner;
 use crate::discovery::listing::{CACHE_WINDOW, ClientFiles, DiscoveryCache, Listing, ScanSource};
@@ -34,6 +35,10 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
 use crate::identity_grants::IdentityGrantAuditEvent;
+
+mod resolve;
+
+use resolve::resolve_decision;
 
 /// How often the tick re-checks grants, expiry and capability changes.
 const TICK: Duration = Duration::from_secs(2);
@@ -46,6 +51,7 @@ pub(super) fn decisions_router() -> Router<Arc<AppState>> {
     Router::new()
         .route(routes::UI_DECISIONS, get(list_decisions))
         .route(routes::UI_DECISIONS_COUNT, get(count_decisions))
+        .route(routes::UI_DECISIONS_RESOLVE, post(resolve_decision))
 }
 
 async fn list_decisions(State(state): State<Arc<AppState>>, guard: Guard) -> Response {
@@ -113,14 +119,17 @@ const LIVE_QUEUE: usize = 4096;
 /// Build the decision set for `meta`, start its replay, its tick and the
 /// client-file discovery cache's refresh, and attach both. Each ends on
 /// `shutdown`. `config_path` is the gateway.yaml the discovery route reads,
-/// so the set judges adopt eligibility against the same file.
+/// so the set judges adopt eligibility against the same file. `store` is
+/// the control-plane store whose governance audit holds the UI decisions;
+/// without one no decision can have been recorded.
 pub(in crate::gateway) fn start(
     meta: &Arc<MetaMcp>,
     config_path: Option<PathBuf>,
     shutdown: tokio::sync::broadcast::Receiver<()>,
+    store: Option<Arc<dyn ControlPlaneStore>>,
 ) -> tokio::task::JoinHandle<()> {
     let files: Arc<dyn ScanSource> = Arc::new(ClientFiles(ConfigScanner::new()));
-    start_with(meta, config_path, shutdown, LIVE_QUEUE, files)
+    start_with(meta, config_path, shutdown, LIVE_QUEUE, files, store)
 }
 
 /// [`start`] over a given client-file scan source.
@@ -131,7 +140,7 @@ pub(in crate::gateway) fn start_with_source(
     shutdown: tokio::sync::broadcast::Receiver<()>,
     source: Arc<dyn ScanSource>,
 ) -> tokio::task::JoinHandle<()> {
-    start_with(meta, config_path, shutdown, LIVE_QUEUE, source)
+    start_with(meta, config_path, shutdown, LIVE_QUEUE, source, None)
 }
 
 /// [`start`] with a hand-off queue of `queue` notes, over `files`.
@@ -141,13 +150,17 @@ fn start_with(
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
     queue: usize,
     files: Arc<dyn ScanSource>,
+    store: Option<Arc<dyn ControlPlaneStore>>,
 ) -> tokio::task::JoinHandle<()> {
     let config_path: Option<Arc<Path>> = config_path.map(Arc::from);
     let shared = Arc::new(Shared::with_key(rand::rng().random()));
     meta.set_decisions(Arc::clone(&shared));
-    // UI decisions (a decline, a consumed allow) are first written by the
-    // resolve routes; this build writes none, so there is none to read.
-    shared.update(|set| set.set_health(Source::ControlPlane, Health::Ready));
+    match store {
+        None => shared.update(|set| set.set_health(Source::ControlPlane, Health::Absent)),
+        Some(store) => {
+            tokio::spawn(replay_ui_decisions_until_ready(store, Arc::clone(&shared)));
+        }
+    }
     let latest = start_discovery(
         meta,
         &shared,
@@ -287,6 +300,60 @@ async fn replay_until_ready(replays: Arc<Replays>) {
         }
         tokio::time::sleep(wait).await;
         wait = (wait * 2).min(REPLAY_RETRY_MAX);
+    }
+}
+
+/// Replay the UI decisions until the control-plane source is ready: a read
+/// that fails runs again after a wait that doubles up to
+/// [`REPLAY_RETRY_MAX`]. Until then the set is unreadable, so no resolve can
+/// record a decision this replay misses; every later one the route folds
+/// itself.
+async fn replay_ui_decisions_until_ready(store: Arc<dyn ControlPlaneStore>, shared: Arc<Shared>) {
+    let mut wait = Duration::from_secs(1);
+    loop {
+        let (store, set) = (Arc::clone(&store), Arc::clone(&shared));
+        let read = tokio::task::spawn_blocking(move || replay_ui_decisions(store.as_ref(), &set))
+            .await
+            .unwrap_or(false);
+        if read {
+            shared.update(|set| set.replay_done(Source::ControlPlane));
+            return;
+        }
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(REPLAY_RETRY_MAX);
+    }
+}
+
+/// Page through the governance audit, newest first, folding every UI
+/// decision it holds. Whether the whole audit was read.
+fn replay_ui_decisions(store: &dyn ControlPlaneStore, shared: &Shared) -> bool {
+    let filter = AuditFilter {
+        action: Some(ControlPlaneAction::MutateGrant),
+        ..AuditFilter::new(1000)
+    };
+    let mut page_filter = filter.clone();
+    loop {
+        let page = match store.read_audit(&page_filter) {
+            Ok(page) => page,
+            Err(error) => {
+                tracing::warn!(%error, "decisions: the governance audit could not be read; retrying");
+                return false;
+            }
+        };
+        let decisions: Vec<_> = page
+            .events
+            .iter()
+            .filter_map(|event| event.ui_decision.as_ref())
+            .filter_map(decisions_from_record)
+            .flatten()
+            .collect();
+        if !decisions.is_empty() {
+            shared.update(|set| set.apply_decisions(decisions));
+        }
+        match page.next_cursor {
+            Some(cursor) => page_filter = filter.resume(cursor),
+            None => return true,
+        }
     }
 }
 

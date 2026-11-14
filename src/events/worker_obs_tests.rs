@@ -126,7 +126,7 @@ fn regrant(hub: &EventsHub) {
 /// buried as `observation_changed`, and nothing reaches the callback.
 #[tokio::test]
 async fn a_record_queued_before_a_regrant_is_buried_as_observation_changed() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
@@ -149,7 +149,7 @@ async fn a_record_queued_before_a_regrant_is_buried_as_observation_changed() {
 /// Control: the same record with the row unchanged is sent.
 #[tokio::test]
 async fn a_record_still_observed_as_it_was_is_sent() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
@@ -206,7 +206,7 @@ async fn leased(hub: &EventsHub, services: &Services, exp: u64) -> crate::events
 /// callback: it was never authorized by the new token.
 #[tokio::test]
 async fn a_record_read_under_a_replaced_lease_is_buried_not_sent() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
@@ -232,7 +232,7 @@ async fn a_record_read_under_a_replaced_lease_is_buried_not_sent() {
 /// The same once the lease is past its deadline, before any expiry sweep.
 #[tokio::test]
 async fn a_record_read_under_an_expired_lease_is_buried_before_any_sweep() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
@@ -257,7 +257,7 @@ async fn a_record_read_under_an_expired_lease_is_buried_before_any_sweep() {
 /// and the deadline, not from leased records never being deliverable.
 #[tokio::test]
 async fn a_record_read_under_a_held_lease_is_sent() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
@@ -330,7 +330,7 @@ fn queued_record(dir: &std::path::Path, event_id: &str) -> Option<serde_json::Va
 /// counted, and left for its retry to judge, never buried by the replace.
 #[tokio::test]
 async fn lease_t7_a_handoff_on_the_wire_at_a_replace_completes() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()

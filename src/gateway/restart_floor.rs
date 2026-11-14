@@ -11,7 +11,8 @@
     )
 )]
 
-use std::time::Instant;
+use futures::future::BoxFuture;
+use tokio::time::Instant;
 
 use serde_json::{Map, Value};
 
@@ -54,12 +55,30 @@ pub(crate) struct Cancelled {
     pub(crate) reason: CancelReason,
 }
 
-/// A floor owner as the coordinator drives it. `resume` is idempotent.
-pub(crate) trait FloorAdapter {
+/// A floor owner as the coordinator drives it (restart plan steps 4-6).
+///
+/// Every adapter keeps its pause state itself, never only in a returned
+/// future: `pause` and `checkpoint` return their future at once and never
+/// block a poll, and dropped at any await point the adapter is recovered by
+/// `resume` or `release_for_stop`. The coordinator alone reports an elapsed
+/// deadline. The four synchronous calls never wait and never panic.
+pub(crate) trait FloorAdapter: Send {
     fn owner(&self) -> FloorOwner;
-    fn pause(&mut self) -> Result<(), FloorFault>;
-    fn checkpoint(&mut self) -> Result<(), FloorFault>;
+    /// Gate new submissions, holding no lock an accepted worker needs.
+    fn pause(&mut self, deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>>;
+    /// Settle admitted work and certify the snapshot.
+    fn checkpoint(&mut self, deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>>;
+    /// Cancel recovery: clear any applied or partial gate and enqueue what was
+    /// coalesced, ahead of newly admitted work.
     fn resume(&mut self);
+    /// A stop signal won: clear any gate so parked work completes, cancel
+    /// pending checkpoint admission, replay nothing.
+    fn release_for_stop(&mut self);
+    /// The commit edge: reject new external submissions; work parked before
+    /// the commit and internal completion work proceed.
+    fn commit(&mut self);
+    /// False while late work of an earlier attempt still runs.
+    fn settled(&self) -> bool;
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -67,53 +86,127 @@ pub(crate) enum FloorSetupError {
     NotExactlyThreeOwners,
 }
 
-/// Pauses are held until [`Certified::abort`] (or the later commit slice).
+/// A commit-or-abort decision that came after the checkpoint deadline.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LateDecision;
+
+/// Holds the adapters while a checkpoint or its decision is pending. Dropped
+/// still armed (the run was dropped because a stop signal won, a panic
+/// unwound, or a certified attempt was never decided), it releases every
+/// adapter for the ordinary stop. Every decided exit disarms it first.
+struct StopRelease<'a>(Option<&'a mut [Box<dyn FloorAdapter>]>);
+
+impl<'a> StopRelease<'a> {
+    fn adapters(&mut self) -> &mut [Box<dyn FloorAdapter>] {
+        self.0.as_deref_mut().unwrap_or_default()
+    }
+
+    fn disarm(&mut self) -> &'a mut [Box<dyn FloorAdapter>] {
+        self.0.take().unwrap_or_default()
+    }
+}
+
+impl Drop for StopRelease<'_> {
+    fn drop(&mut self) {
+        for adapter in self.0.take().unwrap_or_default() {
+            adapter.release_for_stop();
+        }
+    }
+}
+
+/// Every pause certified and held until [`Self::commit`] or [`Self::abort`].
+/// The decision is synchronous: nothing awaits between disarming and the end
+/// of the adapter loop.
 pub(crate) struct Certified<'a> {
-    adapters: &'a mut [Box<dyn FloorAdapter>],
+    held: StopRelease<'a>,
+    deadline: Instant,
 }
 
 impl Certified<'_> {
-    pub(crate) fn abort(self) {
-        for adapter in self.adapters.iter_mut() {
+    /// Commit every adapter, unless the deadline has passed: then resume
+    /// every adapter and report the decision late.
+    pub(crate) fn commit(mut self) -> Result<(), LateDecision> {
+        let adapters = self.held.disarm();
+        if Instant::now() >= self.deadline {
+            for adapter in adapters {
+                adapter.resume();
+            }
+            return Err(LateDecision);
+        }
+        for adapter in adapters {
+            adapter.commit();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn abort(mut self) {
+        for adapter in self.held.disarm() {
             adapter.resume();
         }
     }
 }
 
-pub(crate) fn run_checkpoint(
+/// Whether no adapter still runs late work of an earlier attempt. The
+/// coordinator refuses a new attempt (busy) until this is true.
+pub(crate) fn all_settled(adapters: &[Box<dyn FloorAdapter>]) -> bool {
+    adapters.iter().all(|adapter| adapter.settled())
+}
+
+/// Pause every owner, then checkpoint every owner, each call bounded by the
+/// one `deadline`. A failure resumes every owner; a run dropped mid-way
+/// releases every owner for the stop.
+pub(crate) async fn run_checkpoint(
     adapters: &mut [Box<dyn FloorAdapter>],
     deadline: Instant,
 ) -> Result<Certified<'_>, Cancelled> {
-    let outcome = checkpoint_all(adapters, deadline);
-    if outcome.is_err() {
-        for adapter in adapters.iter_mut() {
-            adapter.resume();
+    let mut held = StopRelease(Some(adapters));
+    let outcome = checkpoint_all(held.adapters(), deadline).await;
+    match outcome {
+        Ok(()) => Ok(Certified { held, deadline }),
+        Err(cancel) => {
+            for adapter in held.disarm() {
+                adapter.resume();
+            }
+            Err(cancel)
         }
     }
-    outcome.map(|()| Certified { adapters })
 }
 
-fn checkpoint_all(
+async fn checkpoint_all(
     adapters: &mut [Box<dyn FloorAdapter>],
     deadline: Instant,
 ) -> Result<(), Cancelled> {
-    for adapter in adapters.iter_mut() {
-        let owner = adapter.owner();
-        past_deadline(owner, FloorStage::Pause, deadline)?;
-        adapter
-            .pause()
-            .map_err(|f| cancelled(owner, FloorStage::Pause, f))?;
-    }
-    for adapter in adapters.iter_mut() {
-        let owner = adapter.owner();
-        past_deadline(owner, FloorStage::Checkpoint, deadline)?;
-        adapter
-            .checkpoint()
-            .map_err(|f| cancelled(owner, FloorStage::Checkpoint, f))?;
-        // A save that returned after the deadline still means the window is gone.
-        past_deadline(owner, FloorStage::Checkpoint, deadline)?;
+    for stage in [FloorStage::Pause, FloorStage::Checkpoint] {
+        for adapter in adapters.iter_mut() {
+            bounded(adapter.as_mut(), stage, deadline).await?;
+        }
     }
     Ok(())
+}
+
+/// One call under the deadline: refused if already past it, dropped at it,
+/// and a late success still cancels at this owner and stage. A late fault
+/// keeps its own reason.
+async fn bounded(
+    adapter: &mut (dyn FloorAdapter + 'static),
+    stage: FloorStage,
+    deadline: Instant,
+) -> Result<(), Cancelled> {
+    let owner = adapter.owner();
+    past_deadline(owner, stage, deadline)?;
+    let call = match stage {
+        FloorStage::Pause => adapter.pause(deadline),
+        FloorStage::Checkpoint => adapter.checkpoint(deadline),
+    };
+    match tokio::time::timeout_at(deadline, call).await {
+        Err(_elapsed) => Err(Cancelled {
+            owner,
+            stage,
+            reason: CancelReason::DeadlineExceeded,
+        }),
+        Ok(Err(fault)) => Err(cancelled(owner, stage, fault)),
+        Ok(Ok(())) => past_deadline(owner, stage, deadline),
+    }
 }
 
 fn past_deadline(owner: FloorOwner, stage: FloorStage, deadline: Instant) -> Result<(), Cancelled> {

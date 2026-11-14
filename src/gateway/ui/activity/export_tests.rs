@@ -73,7 +73,7 @@ fn bundle(path: &Path) -> Vec<u8> {
 
 #[test]
 fn e1_a_valid_export_verifies_and_every_edit_fails() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log(&dir, 5);
     let good = bundle(&path);
     let t = trust(&signer());
@@ -175,7 +175,7 @@ fn e3_export_and_receipt_signatures_are_separate_domains() {
 
 #[test]
 fn e4_tampered_rows_are_marked_and_counted() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log(&dir, 3);
     let mut text: Vec<Value> = std::fs::read_to_string(&path)
         .unwrap()
@@ -211,7 +211,7 @@ fn e4_tampered_rows_are_marked_and_counted() {
 
 #[test]
 fn e5_each_cap_cuts_where_it_says_and_names_itself() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log(&dir, 12);
     let tools = |c: &Collected| -> Vec<String> {
         c.rows
@@ -276,7 +276,7 @@ fn e5_each_cap_cuts_where_it_says_and_names_itself() {
 
 #[test]
 fn e6_rows_carry_the_entry_chain_and_hmac_fields_as_recorded() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log(&dir, 2);
     let source: Vec<Value> = std::fs::read_to_string(&path)
         .unwrap()
@@ -301,7 +301,7 @@ fn e6_rows_carry_the_entry_chain_and_hmac_fields_as_recorded() {
 
 #[tokio::test]
 async fn e2_ndjson_without_a_key_is_409_and_csv_still_works() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logs = Logs {
         invocation: log(&dir, 2),
         governance: None,
@@ -339,7 +339,7 @@ async fn e2_ndjson_without_a_key_is_409_and_csv_still_works() {
 
 #[test]
 fn manifest_counters_are_per_source_log() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let inv = log(&dir, 3);
     let gov = dir.path().join("gov.jsonl");
     let mut prev = "genesis".to_string();
@@ -388,7 +388,7 @@ pub(super) fn between_passes() {
 #[test]
 fn a_reset_between_passes_aborts_instead_of_mixing_traversals() {
     // Retention removes the segment the export is in between two passes.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
     let l = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -459,7 +459,7 @@ fn a_reset_between_passes_aborts_instead_of_mixing_traversals() {
 
 #[test]
 fn an_unreadable_line_is_counted_in_the_signed_manifest() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log(&dir, 2);
     let mut text = std::fs::read_to_string(&path).unwrap();
     text.insert_str(0, "{not json\n");
@@ -473,7 +473,7 @@ fn an_unreadable_line_is_counted_in_the_signed_manifest() {
 
 #[test]
 fn the_whole_download_stays_within_the_byte_cap() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log(&dir, 12);
     let cap = 3_000;
     let c = all(
