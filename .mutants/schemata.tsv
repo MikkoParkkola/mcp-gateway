@@ -1,0 +1,3 @@
+head_sha	2820fbceeaa5faf32cffceaeb58b1f58451acf33
+#mutant b11
+mcp_gateway	gateway::task_service::store_tests::floor::o1_an_admitted_write_failing_in_the_attempt_is_save_failed	src/gateway/task_service/store_tests/floor.rs:303
