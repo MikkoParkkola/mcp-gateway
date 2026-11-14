@@ -1,0 +1,27 @@
+head_sha	2d428e6f2224c2d3e56db570d3dc1a639e7dc4e4
+#mutant s9514.m1
+mcp_gateway	gateway::restart_floor_tests::a_pause_that_never_returns_is_dropped_at_the_deadline	src/gateway/restart_floor_tests.rs:175
+#mutant s9514.m2
+mcp_gateway	gateway::restart_floor_tests::a_checkpoint_that_never_returns_is_dropped_at_the_deadline	src/gateway/restart_floor_tests.rs:175
+#mutant s9514.m3
+mcp_gateway	gateway::restart_floor_tests::a_pause_that_returns_at_the_deadline_is_late_at_its_own_stage	src/gateway/restart_floor_tests.rs:221
+#mutant s9514.m4
+mcp_gateway	gateway::restart_floor_tests::a_checkpoint_that_returns_at_the_deadline_cancels	src/gateway/restart_floor_tests.rs:177
+#mutant s9514.m5
+mcp_gateway	gateway::restart_floor_tests::a_run_dropped_mid_checkpoint_releases_every_pause_for_the_stop	src/gateway/restart_floor_tests.rs:340
+#mutant s9514.m6
+mcp_gateway	gateway::restart_floor_tests::a_run_dropped_mid_checkpoint_releases_every_pause_for_the_stop	src/gateway/restart_floor_tests.rs:340
+#mutant s9514.m7
+mcp_gateway	gateway::restart_floor_tests::a_task_store_save_error_cancels_and_resumes_all	src/gateway/restart_floor_tests.rs:473
+#mutant s9514.m8
+mcp_gateway	gateway::restart_floor_tests::commit_reaches_every_adapter_once_and_releases_none	src/gateway/restart_floor_tests.rs:392
+#mutant s9514.m9
+mcp_gateway	gateway::restart_floor_tests::a_commit_after_the_deadline_is_late_and_resumes	src/gateway/restart_floor_tests.rs:419
+#mutant s9514.m10
+mcp_gateway	gateway::restart_floor_tests::every_adapter_gets_the_one_deadline	src/gateway/restart_floor_tests.rs:436
+#mutant s9514.m11
+mcp_gateway	gateway::restart_floor_tests::all_settled_waits_for_late_work	src/gateway/restart_floor_tests.rs:449
+#mutant s9514.m12
+mcp_gateway	gateway::restart_floor_tests::a_late_fault_keeps_its_own_reason	src/gateway/restart_floor_tests.rs:243
+#mutant s9514.m13
+mcp_gateway	gateway::restart_floor_tests::a_deadline_already_past_cancels_before_any_pause	src/gateway/restart_floor_tests.rs:569
