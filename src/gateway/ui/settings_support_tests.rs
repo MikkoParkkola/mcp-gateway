@@ -64,17 +64,22 @@ impl Route {
         }
     }
     /// The same config file on a gateway with no reload context.
-    pub(super) async fn without_reload(mut self) -> Self {
-        let (mut state, store) = crate::gateway::router::tests::audience_state(
+    pub(super) async fn without_reload(self) -> Self {
+        let path = self.path();
+        let (mut state, fixtures) = crate::gateway::router::tests::audience_state(
             &AuthConfig::default(),
             (None, None),
             |m| m,
         )
         .await;
-        Arc::get_mut(&mut state).expect("unique state").config_path = Some(self.path());
-        self.state = state;
-        self._store = store;
-        self
+        Arc::get_mut(&mut state).expect("unique state").config_path = Some(path);
+        Self {
+            dir: self.dir,
+            _store: fixtures,
+            state,
+            ctx: self.ctx,
+            store: self.store,
+        }
     }
     pub(super) fn path(&self) -> std::path::PathBuf {
         self.dir.path().join("gateway.yaml")

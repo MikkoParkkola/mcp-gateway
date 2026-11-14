@@ -20,7 +20,7 @@ use crate::gateway::{auth::AuthenticatedClient, routes};
 use crate::secret_store::DeleteRefused;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header::RETRY_AFTER};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::Ordering};
@@ -397,6 +397,7 @@ fn refusal_statuses() {
         (DeleteRefused::Named, StatusCode::CONFLICT),
         (DeleteRefused::Pending, StatusCode::CONFLICT),
         (DeleteRefused::Busy, StatusCode::CONFLICT),
+        (DeleteRefused::KeychainUnavailable, StatusCode::CONFLICT),
         (DeleteRefused::TimedOut, StatusCode::SERVICE_UNAVAILABLE),
         (
             DeleteRefused::Failed("store-canary".into()),
@@ -513,6 +514,35 @@ async fn delete_route_keychain_refused_here() {
     let (status, body) = decode(delete(&route, SHAPED, "keychain", true).await).await;
     assert_eq!(status, StatusCode::CONFLICT, "{ROW}: {body}");
     assert_eq!(body["error"], "keychain_delete_unavailable", "{ROW}");
+    assert_eq!(route.text(), before, "{ROW}: gateway.yaml unchanged");
+}
+
+/// A delete that finds the config being written answers 409 busy with a Retry-After,
+/// as the save route's busy does: nothing was attempted, and a retry soon may pass.
+/// It waits out the reload lock's own bound, so this row takes that long.
+#[tokio::test]
+async fn delete_busy_says_retry_after() {
+    const ROW: &str = "delete_busy_says_retry_after";
+    let route = Route::new(BASE).await;
+    let before = route.text();
+    let held = route
+        .ctx
+        .hold_config(crate::config_reload::RELOAD_LOCK_WAIT)
+        .await
+        .unwrap_or_else(|_| panic!("{ROW}: hold the config"));
+    let response = delete(&route, SHAPED, "files", true).await;
+    drop(held);
+    assert_eq!(response.status(), StatusCode::CONFLICT, "{ROW}");
+    assert_eq!(
+        response
+            .headers()
+            .get(RETRY_AFTER)
+            .map(|value| value.as_bytes()),
+        Some(&b"1"[..]),
+        "{ROW}: Retry-After"
+    );
+    let (_, body) = decode(response).await;
+    assert_eq!(body["error"], "busy", "{ROW}: {body}");
     assert_eq!(route.text(), before, "{ROW}: gateway.yaml unchanged");
 }
 

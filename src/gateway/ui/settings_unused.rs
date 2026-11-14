@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use axum::Json;
 use axum::extract::{Path, Query, State, rejection::QueryRejection};
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -53,7 +53,8 @@ pub(super) fn refusal_status(refused: &DeleteRefused) -> StatusCode {
         DeleteRefused::StoreMismatch
         | DeleteRefused::Named
         | DeleteRefused::Pending
-        | DeleteRefused::Busy => StatusCode::CONFLICT,
+        | DeleteRefused::Busy
+        | DeleteRefused::KeychainUnavailable => StatusCode::CONFLICT,
         DeleteRefused::TimedOut | DeleteRefused::Failed(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
@@ -193,12 +194,8 @@ pub(super) async fn delete_unused_entry(
         return refusal_response(&DeleteRefused::BadName);
     }
     if cfg!(any(target_os = "macos", windows)) && store == "keychain" {
-        return structured_error(
-            StatusCode::CONFLICT,
-            "keychain_delete_unavailable",
-            KEYCHAIN_GUARDED,
-        )
-        .into_response();
+        // The first of two copies: delete_unused refuses it again for any other caller.
+        return refusal_response(&DeleteRefused::KeychainUnavailable);
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
         return no_reload_write().into_response();
@@ -277,7 +274,14 @@ fn deleted(name: &str, store: &str, already_gone: bool) -> Response {
 /// Refusal JSON, `{"error","message"}`, with no audit detail.
 fn refusal_response(refused: &DeleteRefused) -> Response {
     let (code, message) = refusal_parts(refused);
-    structured_error(refusal_status(refused), code, message).into_response()
+    let mut response = structured_error(refusal_status(refused), code, message).into_response();
+    // Busy attempted nothing and is worth retrying soon, as the save route's busy says.
+    if matches!(refused, DeleteRefused::Busy) {
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+    }
+    response
 }
 
 /// [`refusal_response`] plus the audit detail. Used only after the reload lock is taken.
@@ -308,6 +312,7 @@ fn refusal_parts(refused: &DeleteRefused) -> (&'static str, &str) {
         DeleteRefused::Named => ("named", "a source still names that entry"),
         DeleteRefused::Pending => ("pending", "a config write is still unsettled"),
         DeleteRefused::Busy => ("busy", "a lock this delete needs is held"),
+        DeleteRefused::KeychainUnavailable => ("keychain_delete_unavailable", KEYCHAIN_GUARDED),
         DeleteRefused::TimedOut => ("timed_out", "the secret store did not answer in time"),
         DeleteRefused::Failed(text) => ("failed", text),
     }

@@ -7,7 +7,7 @@ use super::delete_tests::Fault;
 #[cfg(unix)]
 use super::delete_tests::{fault_entry, hold_vault};
 use super::listing;
-use super::seam::{BEFORE_RECHECK, STOP_AFTER_STORE_DELETE};
+use super::seam::{BEFORE_RECHECK, GUARD_KEYCHAIN, STOP_AFTER_STORE_DELETE};
 #[cfg(unix)]
 use super::tests::{index_bytes, saved, scoped_removal, secret_path, soon, sources};
 use super::tests::{quiet, rig, save_field};
@@ -33,6 +33,7 @@ impl SeamGuard {
     fn reset() {
         BEFORE_RECHECK.with(|slot| *slot.borrow_mut() = None);
         STOP_AFTER_STORE_DELETE.with(|cell| cell.set(false));
+        GUARD_KEYCHAIN.with(|cell| cell.set(false));
     }
 }
 
@@ -99,6 +100,28 @@ fn delete_refuses_on_digest_change() {
 #[test]
 fn delete_refuses_on_unnaming_edit() {
     refused_after_config_edit("delete_refuses_on_unnaming_edit", |_| "# edited".to_owned());
+}
+
+/// With the keychain guard on (macOS and Windows; a seam here), a keychain delete is
+/// refused before the vault lock: a lock held elsewhere does not turn it into Busy,
+/// and the entry and the index stay as they were.
+#[cfg(unix)]
+#[test]
+fn guarded_keychain_delete_is_refused_before_the_vault_lock() {
+    const ROW: &str = "guarded_keychain_delete_is_refused_before_the_vault_lock";
+    let _guard = seams();
+    let (dir, vault, store, name, index, sources) = fault_entry();
+    let hold = hold_vault(vault.lock_path().to_path_buf());
+    GUARD_KEYCHAIN.with(|cell| cell.set(true));
+    let got = delete_unused(&vault, &store, &name, &sources, soon());
+    hold.release();
+    assert_eq!(
+        got,
+        Err(DeleteRefused::KeychainUnavailable),
+        "{ROW}: {got:?}"
+    );
+    assert_eq!(index_bytes(dir.path()), index, "{ROW}: index changed");
+    assert_eq!(store.exists(&name), Ok(true), "{ROW}: entry gone");
 }
 
 #[cfg(unix)]
