@@ -74,7 +74,7 @@ fn t11_grant_change_round_trips_through_the_file_store() {
 /// reads a record by its keys, reads the same event it always did.
 #[test]
 fn a_ui_decision_round_trips_and_only_adds_its_own_key() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let s = store(dir.path());
     let decision = UiDecisionRecord {
         authority: "https://idp.example".to_string(),
@@ -158,7 +158,7 @@ fn accept() -> UiDecisionRecord {
 /// newest-first read.
 #[test]
 fn an_accept_record_round_trips_and_a_retry_reads_back_twice() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let s = store(dir.path());
     let mut accepted = event("a1", None);
     accepted.ui_decision = Some(accept());
