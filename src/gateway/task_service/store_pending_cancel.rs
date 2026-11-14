@@ -156,11 +156,11 @@ impl TaskStore {
     ) -> Result<bool, StoreError> {
         let shared = std::sync::Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(super::gate::Kind::Internal, move || {
             shared.record_cancel_attempt_blocking(&owner, &id, attempt)
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 }
 

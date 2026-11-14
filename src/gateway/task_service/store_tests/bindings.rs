@@ -45,7 +45,8 @@ async fn rb_restart_bindings_survive_a_reopen_of_the_store() {
     prepared.record.version = BINDING_VERSION;
     store.create(prepared).await.unwrap();
     store
-        .settle_bounded_by(
+        .settle_bounded_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
             OWNER,
             task.id(),
             1,
@@ -90,7 +91,8 @@ async fn rb_legacy_a_pre_binding_row_reads_unrecorded_and_stays_held() {
     store.create(prepared).await.unwrap();
     // Settled by this gateway, with bindings: it must not become recorded.
     store
-        .settle_bounded_by(
+        .settle_bounded_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
             OWNER,
             task.id(),
             1,
