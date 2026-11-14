@@ -662,15 +662,18 @@ async fn a_cut_during_the_late_sigterm_wait_still_kills_by_its_margin() {
 }
 
 /// Plan the tree (1 s EOF wait, 10 s SIGTERM wait) as started `back` before
-/// `s`, step it once there, make a short cut at `s` (the kill 50 ms after it),
-/// then step at `step_at`: all in one synchronous run, so the cut's set-time
-/// lands within microseconds of `s`. Returns the late step's instant and the
-/// SIGTERMs and group signals sent so far.
+/// `s`, step it once there, cut the stop at `s` (the kill `cut_in` after it),
+/// then step at `s + step_at`: all in one synchronous run, so the cut's
+/// set-time lands within microseconds of `s`. `owed` says which side of that
+/// set-time the plan's SIGTERM fell on, checked here. Returns the late step's
+/// instant and the SIGTERMs and group signals sent so far.
 fn cut_after_a_starved_plan(
     tree: &mut ChildTree,
     deadline: &Arc<super::super::super::reaper::StopDeadline>,
     back: Duration,
+    cut_in: Duration,
     step_at: Duration,
+    owed: bool,
 ) -> (std::time::Instant, usize, usize) {
     use super::super::super::reaper::KILL_RESERVE;
     let s = std::time::Instant::now();
@@ -685,7 +688,19 @@ fn cut_after_a_starved_plan(
         matches!(tree.reap_step(s - back), Reap::Pending),
         "the plan starts"
     );
-    deadline.move_earlier(s + Duration::from_millis(50) + KILL_RESERVE);
+    let term_at = s - back + Duration::from_secs(1);
+    deadline.move_earlier(s + cut_in + KILL_RESERVE);
+    let (cut, set_at) = deadline.get_with_set_at().expect("the cut is set");
+    assert_eq!(
+        cut,
+        s + cut_in + KILL_RESERVE,
+        "the cut lowered the deadline"
+    );
+    assert_eq!(
+        term_at <= set_at,
+        owed,
+        "premise: the SIGTERM fell on the intended side of the cut"
+    );
     let step = s + step_at;
     tree.reap_step(step);
     (step, tree.term_signals_sent, tree.group_signals_sent)
@@ -710,7 +725,9 @@ async fn a_sigterm_due_before_a_short_cut_was_made_is_still_sent() {
             tree,
             &deadline,
             Duration::from_secs(2),
+            Duration::from_millis(50),
             Duration::from_millis(20),
+            true,
         );
         assert_eq!(terms, 1, "the owed SIGTERM went out");
         assert_eq!(kills, 0, "and the kill waits for its minimum phase");
@@ -740,12 +757,14 @@ async fn a_short_cut_made_before_the_sigterm_was_due_still_skips_it() {
     .await;
     let deadline = Arc::clone(end.deadline());
     with_tree(&t, |tree| {
-        // term_at = s + 30 ms: after the cut at s, before the late step at s + 55 ms.
+        // term_at = s + 900 ms: after the cut at s, before the late step at s + 980 ms.
         let (_, terms, kills) = cut_after_a_starved_plan(
             tree,
             &deadline,
-            Duration::from_millis(970),
-            Duration::from_millis(55),
+            Duration::from_millis(100),
+            Duration::from_millis(950),
+            Duration::from_millis(980),
+            false,
         );
         assert_eq!(terms, 0, "no SIGTERM was owed when the cut was made");
         assert!(kills > 0, "killed at once");
