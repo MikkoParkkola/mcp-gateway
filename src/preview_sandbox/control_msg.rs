@@ -5,8 +5,8 @@
 //! encode and parse these, so the two sides cannot drift apart. Every
 //! message refuses unknown keys, and every flag must be `true`.
 #![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the fetch step, a later part, drives it")
+    not(any(test, target_os = "linux")),
+    expect(dead_code, reason = "only the Linux fetch step drives it so far")
 )]
 
 use serde::{Deserialize, Serialize};
