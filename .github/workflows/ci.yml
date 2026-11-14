@@ -1929,6 +1929,20 @@ jobs:
       - name: Run CWE-532 leak lint
         run: python3 scripts/dev/cwe532-leak-lint.py src crates
 
+  unlocked-install-checker:
+    name: Unlocked-install checker refuses what it must
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # unlocked-install.yml (release-line pushes, nightly, and every tag) builds
+    # the packaged crate unlocked and passes it only when it serves with its key
+    # server started. That build is too heavy for every pull request, so the
+    # checker it relies on is tested here instead, against stub binaries, in
+    # seconds: a change that made it pass everything fails the pull request.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the checker refuses what it must
+        run: python3 scripts/dev/test_check_unlocked_install.py
+
   file-size-ceiling:
     name: File-size ceiling (800 lines)
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
