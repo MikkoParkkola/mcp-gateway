@@ -124,8 +124,7 @@ fn delete_crash_between_delete_and_line() {
     let live = Index::at(dir.path()).live();
     assert!(
         live.as_ref()
-            .ok()
-            .is_some_and(|rows| rows.iter().any(|entry| entry.name == name)),
+            .is_ok_and(|rows| rows.iter().any(|entry| entry.name == name)),
         "{ROW}: name is not live: {live:?}"
     );
     assert_eq!(
@@ -144,8 +143,7 @@ fn delete_crash_between_delete_and_line() {
     let live = Index::at(dir.path()).live();
     assert!(
         live.as_ref()
-            .ok()
-            .is_some_and(|rows| rows.iter().all(|entry| entry.name != name)),
+            .is_ok_and(|rows| rows.iter().all(|entry| entry.name != name)),
         "{ROW}: name still live: {live:?}"
     );
 }

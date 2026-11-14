@@ -354,7 +354,7 @@ pub(crate) fn delete_unused(
         _ => refuse("the secret store could not delete the entry"),
     })?;
     #[cfg(test)]
-    if seam::STOP_AFTER_STORE_DELETE.with(|cell| cell.get()) {
+    if seam::STOP_AFTER_STORE_DELETE.with(std::cell::Cell::get) {
         return Err(refuse("stopped at the seam"));
     }
     index.append_removed_in(name, kind).map_err(unrecorded)?;

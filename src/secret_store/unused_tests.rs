@@ -95,11 +95,10 @@ pub(super) fn list(vault: &Vault, stores: &[&dyn SecretStore]) -> Vec<UnusedEntr
 
 /// Each hex digit as a YAML `\x3N` / `\x6N` escape (`0` is `\x30`, `a` is `\x61`).
 fn hex_escapes(suffix: &str) -> String {
-    let mut out = String::with_capacity(suffix.len() * 4);
-    for byte in suffix.bytes() {
-        out.push_str(&format!("\\x{byte:02x}"));
-    }
-    out
+    suffix
+        .bytes()
+        .map(|byte| format!("\\x{byte:02x}"))
+        .collect()
 }
 
 #[cfg(unix)]
