@@ -46,7 +46,7 @@ fn records(path: &Path) -> Vec<Map<String, Value>> {
 #[test]
 fn h1_every_kind_of_record_is_announced_as_it_was_persisted() {
     for signed in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let log = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
         let before = records(&path).len();
@@ -89,7 +89,7 @@ fn h1_every_kind_of_record_is_announced_as_it_was_persisted() {
 
 #[test]
 fn h1_a_failed_write_is_never_announced() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let told = listen(&log);
@@ -118,7 +118,7 @@ fn h1_a_failed_write_is_never_announced() {
 
 #[test]
 fn h1_the_seal_and_the_expiry_record_are_announced() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
     let told = listen(&log);
@@ -159,7 +159,7 @@ fn h1_the_seal_and_the_expiry_record_are_announced() {
 
 #[test]
 fn h2_a_file_shrunk_in_place_raises_the_generation() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let told = listen(&log);
@@ -182,7 +182,7 @@ fn h2_a_file_shrunk_in_place_raises_the_generation() {
 
 #[test]
 fn h2_a_counter_moved_back_raises_the_generation() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let told = listen(&log);
@@ -207,7 +207,7 @@ fn h2_a_counter_moved_back_raises_the_generation() {
 
 #[test]
 fn h2_rotation_and_a_rebuild_that_finds_the_counter_in_place_do_not_raise_it() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let told = listen(&log);
@@ -251,7 +251,7 @@ fn assert_announced_as_persisted(path: &Path, told: &Told) {
 
 #[test]
 fn h1_a_failed_sync_is_never_announced_and_the_next_write_is() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let told = listen(&log);
@@ -285,7 +285,7 @@ fn h1_a_failed_sync_is_never_announced_and_the_next_write_is() {
 
 #[test]
 fn h1_a_disk_full_retry_is_announced_once_behind_its_expiry_record() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&log, &path, 1);
@@ -312,7 +312,7 @@ fn h1_a_disk_full_retry_is_announced_once_behind_its_expiry_record() {
 
 #[test]
 fn h2_a_same_counter_fork_raises_the_generation() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let told = listen(&log);
@@ -320,7 +320,7 @@ fn h2_a_same_counter_fork_raises_the_generation() {
         append(&log, i);
     }
     // Another log of the same length and a different history.
-    let other_dir = tempfile::tempdir().unwrap();
+    let other_dir = crate::test_dir_keep::kept_tempdir();
     let other_path = log_path(&other_dir);
     let other = TransparencyLogger::open(cfg(&other_path, 12, false)).unwrap();
     for i in 10..13 {
@@ -339,7 +339,7 @@ fn h2_a_same_counter_fork_raises_the_generation() {
 
 #[test]
 fn h2_a_new_segment_cut_after_its_first_record_raises_the_generation() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let told = listen(&log);
@@ -358,7 +358,7 @@ fn h2_a_new_segment_cut_after_its_first_record_raises_the_generation() {
 
 #[test]
 fn h2_a_file_cut_after_subscribing_and_before_any_append_raises_it() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     {
         let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
@@ -391,7 +391,7 @@ fn cut_in_half(path: &Path) {
 
 #[test]
 fn h2_a_second_reader_subscribing_after_a_cut_does_not_hide_it() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let first = listen(&log);
@@ -409,7 +409,7 @@ fn h2_a_second_reader_subscribing_after_a_cut_does_not_hide_it() {
 
 #[test]
 fn h2_a_cut_after_a_rebuild_whose_write_failed_raises_it() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let told = listen(&log);
@@ -435,7 +435,7 @@ fn h2_a_cut_after_a_rebuild_whose_write_failed_raises_it() {
 
 #[test]
 fn h2_a_cut_after_a_rotation_whose_write_failed_raises_it() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let told = listen(&log);

@@ -98,7 +98,7 @@ fn ids_parse_and_refuse_malformed_ones() {
 
 #[test]
 fn c3_links_mid_segment_and_across_a_seam_verify() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
     let l = logger(&path);
     for i in 0..60 {
@@ -134,7 +134,7 @@ fn c3_links_mid_segment_and_across_a_seam_verify() {
 
 #[test]
 fn c3_a_broken_link_reads_broken_and_verify_log_agrees() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
     let mut entries: Vec<Value> = (0..5)
         .map(|i| json!({"tool": format!("tool_{i}"), "request_hash": "sha256:aa", "outcome": "ok"}))
@@ -172,7 +172,7 @@ fn c3_a_broken_link_reads_broken_and_verify_log_agrees() {
 
 #[test]
 fn c3_the_genesis_record_is_first_in_kept_log() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
     let mut entries = vec![json!({"tool": "tool_0", "request_hash": "sha256:aa", "outcome": "ok"})];
     write_chained(&path, &mut entries);
@@ -189,7 +189,7 @@ fn c3_the_genesis_record_is_first_in_kept_log() {
 
 #[test]
 fn c2_a_wrong_hash_prefix_or_an_id_not_kept_is_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
     let mut entries: Vec<Value> = (0..3)
         .map(|i| json!({"tool": format!("tool_{i}"), "request_hash": "sha256:aa", "outcome": "ok"}))
@@ -213,7 +213,7 @@ fn c2_a_wrong_hash_prefix_or_an_id_not_kept_is_none() {
 
 #[test]
 fn c5a_c6_a_call_receipt_says_what_is_not_recorded() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
     let mut entries = vec![json!({"tool": "t", "request_hash": "sha256:aa", "outcome": "ok"})];
     write_chained(&path, &mut entries);
@@ -236,7 +236,7 @@ fn c5a_c6_a_call_receipt_says_what_is_not_recorded() {
 
 #[test]
 fn c7_a_governance_receipt_never_serves_reason_or_rollback_text() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gov.jsonl");
     let mut entries = vec![json!({
         "kind": "control_plane_audit", "event_id": "e1", "action": "mutate_grant",
@@ -266,7 +266,7 @@ fn c7_a_governance_receipt_never_serves_reason_or_rollback_text() {
 
 #[test]
 fn l3_a_developer_reads_its_own_receipts_only() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let inv = dir.path().join("inv.jsonl");
     let gov = dir.path().join("gov.jsonl");
     let who = |issuer: &str, subject: &str, principal: &str| json!({"account": "a", "authority": issuer, "subject": subject, "principal": principal});
@@ -300,7 +300,7 @@ fn l3_a_developer_reads_its_own_receipts_only() {
 
 #[test]
 fn an_edited_predecessor_or_a_gap_in_the_middle_reads_broken() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
     let mut entries: Vec<Value> = (0..4)
         .map(|i| json!({"tool": format!("tool_{i}"), "request_hash": "sha256:aa", "outcome": "ok"}))

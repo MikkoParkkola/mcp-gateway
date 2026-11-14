@@ -9,6 +9,8 @@ python3 scripts/ci/check-gateway-spawns.py	0	closed
 python3 scripts/ci/check-gateway-spawns.py --self-test	0	closed
 python3 scripts/ci/check-pick-then-bind.py	13	closed
 python3 scripts/ci/check-pick-then-bind.py --self-test	0	closed
+python3 scripts/ci/check-stop-grace.py	0	closed
+python3 scripts/ci/check-stop-grace.py --self-test	0	closed
 python3 scripts/ci/check-reads-token.py --self-test	0	closed
 python3 scripts/ci/check-pipefail-grep-q.py	0	closed
 "$GATE_PY" scripts/ci/check-request-panics.py	9	closed
@@ -18,6 +20,8 @@ python3 scripts/ci/check_advisory_exceptions.py	0	closed
 python3 scripts/ci/check_advisory_exceptions.py --self-test	0	closed
 python3 scripts/ci/check_needs.py --self-test	0	closed
 python3 scripts/ci/check_per_call_stages.py	0	closed
+python3 scripts/ci/check_shared_lib.py	0	closed
+python3 scripts/ci/check_shared_lib.py --self-test	0	closed
 python3 scripts/ci/check_swap_jobs.py	0	closed
 python3 scripts/ci/check_swap_jobs.py --self-test	0	closed
 python3 scripts/ci/check_teardown_order.py	0	closed
@@ -34,6 +38,9 @@ python3 scripts/ci/shard_tests.py --self-test	0	closed
 python3 scripts/ci/test_check_per_call_stages.py	0	closed
 python3 scripts/ci/test_docker_pr_scope.py	0	closed
 python3 scripts/ci/test_docs_only_gating.py	1	closed
+python3 scripts/ci/test_upgrading_step_bounds.py	0	closed
+python3 scripts/ci/test_upgrading_step_bounds.py --self-test	0	closed
+python3 scripts/ci/test_with_memory_log.py	24	closed
 python3 scripts/ci/test_feature_shards.py	0	closed
 python3 scripts/ci/test_heavy_train_gating.py	1	closed
 python3 scripts/ci/test_os_shards.py	1	closed
@@ -58,6 +65,7 @@ python3 scripts/dev/test_check_control_drift.py	7	closed
 python3 scripts/dev/test_check_doc_backticks.py	1	closed
 python3 scripts/dev/test_check_event_source_scope.py	3	closed
 python3 scripts/dev/test_check_file_size.py	4	closed
+python3 scripts/dev/test_check_unlocked_install.py	27	closed
 python3 scripts/dev/test_check_orphan_test_modules.py	22	closed
 python3 scripts/dev/test_check_cfg_reader_copies.py	3	closed
 python3 scripts/dev/test_check_owasp_citations.py	38	closed

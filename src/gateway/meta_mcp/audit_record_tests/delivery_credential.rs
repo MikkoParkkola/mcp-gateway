@@ -158,7 +158,7 @@ async fn meta_delivery_records_name_the_harness_credentials() {
     let harness = key_server_harness().await;
     // oidc_bearer row: the ID token itself, as a delegated bearer.
     {
-        let dir = tempfile::tempdir().expect("a log directory");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let meta = meta(Ok(ok_result()), &dir);
         let id = id_token(&harness, "c3-oidc");
         let (client, identity) = harness
@@ -175,7 +175,7 @@ async fn meta_delivery_records_name_the_harness_credentials() {
     }
     // key_server_token row: the ID token exchanged at `/auth/token`.
     {
-        let dir = tempfile::tempdir().expect("a log directory");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let meta = meta(Ok(ok_result()), &dir);
         let id = id_token(&harness, "c3-kst");
         let (status, body) = harness.exchange(&id).await;
@@ -198,7 +198,7 @@ async fn meta_delivery_records_name_the_harness_credentials() {
     }
     // dashboard_session row.
     {
-        let dir = tempfile::tempdir().expect("a log directory");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let meta = meta(Ok(ok_result()), &dir);
         // The middleware's own mint (`dashboard_client` in auth_clients.rs)
         // is private to `auth`, so the row carries its exact values.
@@ -242,7 +242,7 @@ async fn two_tokens_for_one_actor_name_different_principals() {
             .await
             .expect("the exchanged token validates");
         let who = caller_of(&client, temp.identity);
-        let dir = tempfile::tempdir().expect("a log directory");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let meta = meta(Ok(ok_result()), &dir);
         meta.invoke_tool(&args(), None, &context(&AllowAll, &who))
             .await
@@ -295,7 +295,7 @@ async fn one_actors_token_refresh_and_bearer_name_one_caller_and_account() {
         assert_eq!(who.account, actor, "premise: one actor");
     }
     for (who, client) in &whos {
-        let dir = tempfile::tempdir().expect("a log directory");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let meta = meta(Ok(ok_result()), &dir);
         meta.invoke_tool(&args(), None, &context(&AllowAll, who))
             .await

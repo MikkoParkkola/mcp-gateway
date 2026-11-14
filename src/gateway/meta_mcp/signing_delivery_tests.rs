@@ -282,9 +282,13 @@ fn independent_attempt_hash(value: &Value) -> String {
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
 
-fn logged_meta() -> (MetaMcp, tempfile::TempDir, std::path::PathBuf) {
+fn logged_meta() -> (
+    MetaMcp,
+    std::sync::Arc<tempfile::TempDir>,
+    std::path::PathBuf,
+) {
     use crate::security::{TransparencyLogConfig, TransparencyLogger};
-    let directory = tempfile::tempdir().unwrap();
+    let directory = crate::test_dir_keep::kept_tempdir();
     let path = directory.path().join("attempts.ndjson");
     let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,

@@ -55,7 +55,7 @@ fn through_proxy(method: &str, body: &str, site: &str, cookie: Option<&str>) -> 
         .expect("request builds")
 }
 
-fn submit(code: &str, cookie: Option<&str>) -> Request<Body> {
+pub(in super::super) fn submit(code: &str, cookie: Option<&str>) -> Request<Body> {
     through_proxy("POST", &format!("code={code}"), "same-origin", cookie)
 }
 
@@ -87,7 +87,7 @@ fn location(reply: &Reply) -> String {
 }
 
 /// Redeem the startup link at the loopback URL and return the code it shows.
-async fn code_from_link(state: &Arc<AppState>) -> (Reply, String) {
+pub(in super::super) async fn code_from_link(state: &Arc<AppState>) -> (Reply, String) {
     let value = state.dashboard_bootstrap.peek().expect("startup value");
     let out = send(state, redeem(&value, None)).await;
     assert_eq!(out.status, StatusCode::OK, "{}", out.body);

@@ -135,7 +135,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `accounts` | 13 |  |  |  |  |
 | `add` | 13 |  |  |  | `mcp-gateway add --config`; `mcp-gateway add -c` |
 | `api` | 13 |  |  |  |  |
-| `audit` | 17 |  |  |  |  |
+| `audit` | 30 |  |  |  |  |
 | `cap` | 73 |  |  |  |  |
 | `dashboard-link` | 8 |  |  |  |  |
 | `doctor` | 12 |  |  |  |  |
@@ -328,7 +328,11 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `auth.api_keys` | KEEP | `Vec::new()` | who may call the gateway | - | src/config/features/auth.rs:25 |
 | `auth.api_keys[].admin` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:98 |
 | `auth.api_keys[].allowed_tools` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:91 |
+| `auth.api_keys[].approved_by` | KEEP | — | ApiKeyBinding records the admin key that approved a CLI key; absent on ordinary keys | - | src/config/features/api_key.rs:126 |
+| `auth.api_keys[].approved_by.digest_tag` | KEEP | — | full tag of the approver digest used to approve the CLI key | - | src/config/features/api_key.rs:142 |
+| `auth.api_keys[].approved_by.quota_principal` | KEEP | — | stable principal of the CLI key approver | - | src/config/features/api_key.rs:140 |
 | `auth.api_keys[].backends` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:87 |
+| `auth.api_keys[].cli_host` | KEEP | — | reported CLI host for the Keys screen; never trusted for authorization | - | src/config/features/api_key.rs:130 |
 | `auth.api_keys[].denied_tools` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:95 |
 | `auth.api_keys[].expires_at` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:77 |
 | `auth.api_keys[].key` | REMOVE | — | legacy plaintext key, parsed only to be refused | refused at load naming `key_sha256`; `upgrade` replaces a literal key with its digest and names an `env:`/`file:`/`${}` value to fix by hand (tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | src/config/features/api_key.rs:70 |
@@ -877,6 +881,19 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway audit --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:587 |
 | `mcp-gateway audit -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:587 |
 | `mcp-gateway audit help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:587 |
+| `mcp-gateway audit lookup-email` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands/trust.rs:297 |
+| `mcp-gateway audit lookup-email --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands/trust.rs:297 |
+| `mcp-gateway audit lookup-email -h` | KEEP | short alias of `--help` | - | src/cli/subcommands/trust.rs:297 |
+| `mcp-gateway audit lookup-email --ca-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CA_CERT) | - | src/cli/dashboard_link.rs:32 |
+| `mcp-gateway audit lookup-email --client-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_CERT) | - | src/cli/dashboard_link.rs:24 |
+| `mcp-gateway audit lookup-email --client-key` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_KEY) | - | src/cli/dashboard_link.rs:27 |
+| `mcp-gateway audit lookup-email --cursor-stdin` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:39 |
+| `mcp-gateway audit lookup-email --email-stdin` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:25 |
+| `mcp-gateway audit lookup-email --from` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:48 |
+| `mcp-gateway audit lookup-email --limit` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:45 |
+| `mcp-gateway audit lookup-email --to` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:51 |
+| `mcp-gateway audit lookup-email --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:42 |
+| `mcp-gateway audit lookup-email -u` | KEEP | short alias of `--url` | - | src/cli/audit_lookup.rs:42 |
 | `mcp-gateway audit show` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:723 |
 | `mcp-gateway audit show --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:723 |
 | `mcp-gateway audit show -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:723 |

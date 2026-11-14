@@ -77,7 +77,7 @@ async fn resume_after_revocation(dir: &Arc<tempfile::TempDir>) -> Value {
 /// listed as the one row of a refused call.
 #[tokio::test]
 async fn a_resume_step_withheld_by_visibility_writes_one_unrecorded_decision() {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
 
     let answer = resume_after_revocation(&dir).await;
 
@@ -137,7 +137,7 @@ fn refusals(held: &[Value]) -> usize {
 /// tool"), and it writes one denied decision and no invocation record.
 #[tokio::test]
 async fn a_resume_step_refused_by_the_grant_check_is_one_unrecorded_decision() {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let endpoint = Endpoint::start(false).await;
     let rows = vec![grant("g-alice", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
@@ -174,7 +174,7 @@ async fn a_resume_step_refused_by_the_grant_check_is_one_unrecorded_decision() {
 /// second is the one Refusal.
 #[tokio::test]
 async fn a_refused_resume_step_is_kept_beside_the_first_steps_traced_decision() {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let endpoint = Endpoint::start(false).await;
     let rows = vec![grant("g-alice", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);

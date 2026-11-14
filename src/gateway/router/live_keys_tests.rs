@@ -83,7 +83,7 @@ async fn reload_keys(state: &Arc<super::AppState>, dir: &std::path::Path, keys: 
 }
 
 /// Reload the config `text` into `state`.
-async fn reload_text(state: &Arc<super::AppState>, dir: &std::path::Path, text: String) {
+pub(super) async fn reload_text(state: &Arc<super::AppState>, dir: &std::path::Path, text: String) {
     let path = dir.join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(&path, text).expect("write");
     reloader(state, &path)
@@ -115,7 +115,7 @@ async fn send(
 
 /// The status `secret` gets on `path` (the body is left unread: an accepted
 /// call may answer with a stream).
-async fn status(state: &Arc<super::AppState>, path: &str, secret: &str) -> StatusCode {
+pub(super) async fn status(state: &Arc<super::AppState>, path: &str, secret: &str) -> StatusCode {
     send(&create_router(Arc::clone(state)), path, secret, &ping())
         .await
         .status()
@@ -605,5 +605,18 @@ async fn a_reload_rotating_a_leaked_key_ends_its_old_watch() {
     assert!(
         !services.admits(Some(&watch), "x"),
         "a leaked rotation by reload left the old secret's watch admitted"
+    );
+}
+
+/// K5 `approved_by`: removing the approver ends a CLI key on the next call.
+#[tokio::test]
+async fn k5_a_reload_removing_a_cli_keys_approver_ends_it_on_the_next_call() {
+    use super::cli_binding_revocation_tests::{CHILD, fixture, remove_root};
+    let (state, _store, dir, keys) = fixture().await;
+    assert_eq!(status(&state, "/mcp", CHILD).await, StatusCode::OK);
+    remove_root(&state, dir.path(), &keys).await;
+    assert_eq!(
+        status(&state, "/mcp", CHILD).await,
+        StatusCode::UNAUTHORIZED
     );
 }

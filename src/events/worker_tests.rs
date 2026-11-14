@@ -139,7 +139,7 @@ fn an_attempt_past_its_bounds_is_overdue_before_it_is_sent() {
 #[tokio::test]
 async fn an_attempt_the_audit_log_refuses_is_not_sent() {
     use std::sync::atomic::Ordering;
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
@@ -218,7 +218,7 @@ async fn a_backend_type_no_source_offers_is_not_sent() {
         ("webhook.c.r.received", true),
         ("backend.b.resource_updated", false),
     ] {
-        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let log = Arc::new(
             crate::security::TransparencyLogger::open(Arc::new(
                 crate::security::TransparencyLogConfig {
@@ -269,7 +269,7 @@ async fn a_backend_type_no_source_offers_is_not_sent() {
 /// log recovers.
 #[tokio::test]
 async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
@@ -349,7 +349,7 @@ async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
 async fn eligibility_lost_after_the_sending_record_is_not_sent_or_charged() {
     use std::sync::atomic::Ordering;
     for (admits, sent) in [(usize::MAX, true), (1, false)] {
-        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let config = crate::config::EventsConfig {
             callback_allow_private: vec!["127.0.0.0/8".into()],
             cost_per_delivery_usd: 0.01,
@@ -408,7 +408,7 @@ async fn a_type_no_source_offers_any_more_is_not_sent_or_charged() {
     use crate::events::types::SourceKind;
     use std::sync::atomic::Ordering;
     for (withdrawn, sent) in [(false, true), (true, false)] {
-        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let config = crate::config::EventsConfig {
             callback_allow_private: vec!["127.0.0.0/8".into()],
             cost_per_delivery_usd: 0.01,

@@ -1476,7 +1476,9 @@ CASES += [
      "    name: Tests build from the packaged crate\n    if: github.event_name == 'push'\n", CAUGHT),
     ("package-tests-build-step-dropped", "ci.yml",
      "      - name: Build the tests from the packaged crate\n"
-     "        run: scripts/ci/packaged-tests.sh build\n", "", CAUGHT),
+     "        # Healthy builds take up to 17 min; a stall ends here with its log (check_swap_jobs.py).\n"
+     "        timeout-minutes: 35\n"
+     "        run: scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh build\n", "", CAUGHT),
     ("docker-build-stops-waiting-for-package-tests", "ci.yml",
      "release-script-tests, package-tests, release-signing-checks]", "release-script-tests, release-signing-checks]", CAUGHT),
     ("packaged-suite-leaves-the-release-line", "packaged-suite.yml",
@@ -1499,8 +1501,8 @@ CASES += [
     # `--skip` written into the shard job instead escapes the packaged-run
     # parity rule, so it is caught.
     ("test-job-gains-a-skip-the-package-lacks", "ci.yml",
-     "        run: python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}\n",
-     "        run: python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }} --skip some_new_skip\n",
+     "        run: scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}\n",
+     "        run: scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }} --skip some_new_skip\n",
      CAUGHT),
 ]
 
@@ -1712,8 +1714,15 @@ CASES += [
 # The full burst every per-PR job skips gates the release (MIK-7534).
 CASES += [
     ("release-verify-drops-the-full-burst", "release.yml",
-     "needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, mrtr7b-full-burst]\n",
-     "needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery]\n", CAUGHT),
+     "needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, mrtr7b-full-burst, unlocked-install]\n",
+     "needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, unlocked-install]\n", CAUGHT),
+    # The unlocked install of the packaged crate gates the release too.
+    ("release-verify-drops-the-unlocked-install", "release.yml",
+     "needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, mrtr7b-full-burst, unlocked-install]\n",
+     "needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, mrtr7b-full-burst]\n", CAUGHT),
+    ("unlocked-install-no-longer-callable", "unlocked-install.yml", "  workflow_call:\n", "", CAUGHT),
+    ("unlocked-install-installs-locked", "unlocked-install.yml",
+     "packaged-tests.sh install-unlocked", "packaged-tests.sh build", CAUGHT),
     ("full-burst-no-longer-callable", "mrtr7b-full-burst.yml", "  workflow_call:\n", "", CAUGHT),
     ("full-burst-runs-another-test", "mrtr7b-full-burst.yml",
      "            mik_7479_full_burst_every_call_reaches_one_terminal_frame --nocapture",
@@ -1824,7 +1833,9 @@ CASES += [
      "      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.\n"
      "      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;\n"
      "      #   release.yml `verify` needs it green on the released revision.\n"
-     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
+     "      - name: Run the tests\n"
+     "        # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.\n"
+     "        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
      "  # Same run on the self-hosted arm64 runner.",
      '          exit 0\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n'
      "      # Restore only: saving from throwaway runs would evict the entries the\n"
@@ -1835,7 +1846,9 @@ CASES += [
      "      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.\n"
      "      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;\n"
      "      #   release.yml `verify` needs it green on the released revision.\n"
-     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
+     "      - name: Run the tests\n"
+     "        # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.\n"
+     "        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
      "  # Same run on the self-hosted arm64 runner.", CAUGHT),
     ("trusted-throwaway-swallows-failures", "ci.yml",
      _TRUSTED_HEAD, "    continue-on-error: true\n" + _TRUSTED_HEAD, CAUGHT),

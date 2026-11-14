@@ -100,15 +100,15 @@ fn check(state: &AppState, handle: &str) -> SessionCheck {
         .check_session(handle, Now::read(), &limits(state), Touch::No)
 }
 
-struct Reply {
-    status: StatusCode,
+pub(super) struct Reply {
+    pub(super) status: StatusCode,
     headers: HeaderMap,
-    body: String,
+    pub(super) body: String,
 }
 
 impl Reply {
     /// Every `Set-Cookie` value, joined.
-    fn set_cookie(&self) -> String {
+    pub(super) fn set_cookie(&self) -> String {
         self.headers
             .get_all(header::SET_COOKIE)
             .iter()
@@ -122,12 +122,12 @@ impl Reply {
         c.contains(&format!("{SESSION_COOKIE}=;")) && c.contains("Max-Age=0")
     }
 
-    fn json(&self) -> Value {
+    pub(super) fn json(&self) -> Value {
         serde_json::from_str(&self.body).unwrap_or(Value::Null)
     }
 }
 
-async fn send(state: &Arc<AppState>, request: Request<Body>) -> Reply {
+pub(super) async fn send(state: &Arc<AppState>, request: Request<Body>) -> Reply {
     send_to(create_router(Arc::clone(state)), request).await
 }
 
@@ -152,7 +152,7 @@ async fn send_to(router: axum::Router, request: Request<Body>) -> Reply {
 
 /// A request from this machine, optionally with a session cookie, a bearer
 /// credential and the poll marker.
-fn request(
+pub(super) fn request(
     method: &str,
     uri: &str,
     cookie: Option<&str>,
@@ -175,7 +175,7 @@ fn request(
     builder.body(Body::empty()).expect("request builds")
 }
 
-fn get(uri: &str, cookie: Option<&str>) -> Request<Body> {
+pub(super) fn get(uri: &str, cookie: Option<&str>) -> Request<Body> {
     request("GET", uri, cookie, None, false)
 }
 
@@ -188,7 +188,7 @@ fn logout(cookie: Option<&str>) -> Request<Body> {
 }
 
 /// Redeem `value` as the startup link would be, from this machine.
-fn redeem(value: &str, cookie: Option<&str>) -> Request<Body> {
+pub(super) fn redeem(value: &str, cookie: Option<&str>) -> Request<Body> {
     get(&format!("/dashboard?bootstrap={value}"), cookie)
 }
 
@@ -210,7 +210,7 @@ fn with_running(mut state: Arc<AppState>, running: crate::config::Config) -> Arc
 }
 
 /// A real audit log on `state`, as the server wires it.
-fn with_audit(
+pub(super) fn with_audit(
     state: &mut Arc<AppState>,
 ) -> (
     Arc<crate::security::TransparencyLogger>,
@@ -641,10 +641,10 @@ async fn reload_changes_limits() {
 }
 
 #[path = "e5_dashboard_session_tests/link.rs"]
-mod link;
+pub(super) mod link;
 
 #[path = "e5_dashboard_session_tests/handoff.rs"]
-mod handoff;
+pub(super) mod handoff;
 
 #[path = "e5_dashboard_session_tests/refused_redirect.rs"]
 mod refused_redirect;

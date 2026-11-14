@@ -45,14 +45,14 @@ fn deny_body(digest: &str) -> Value {
 /// What a test keeps alive beside its state: the temp dir, the fixture's
 /// store dir and the governance log the deny is recorded in.
 type Kept = (
-    tempfile::TempDir,
+    Arc<tempfile::TempDir>,
     crate::gateway::router::tests::FixtureDir,
     Arc<TransparencyLogger>,
 );
 
 /// A started gateway with one open access request; its id and digest.
 async fn one_request() -> (Arc<AppState>, Arc<TransparencyLogger>, String, String, Kept) {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let now = crate::clock::utc_now().expect("a readable clock");
     write(&log, note("stripe.charges", now));
@@ -124,7 +124,7 @@ async fn resolve_answers_one_status_per_state_and_writes_nothing() {
 
 #[tokio::test]
 async fn an_open_item_of_another_kind_is_not_resolvable() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let shared = Arc::new(Shared::with_key([7; 32]));
@@ -153,7 +153,7 @@ async fn an_open_item_of_another_kind_is_not_resolvable() {
 /// naming it, never `not_found` for a request it cannot see yet.
 #[tokio::test]
 async fn a_resolve_while_a_source_replays_is_unavailable() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let shared = Arc::new(Shared::with_key([7; 32]));
@@ -361,7 +361,7 @@ async fn a_reopened_request_can_be_denied_again() {
 
 #[tokio::test]
 async fn a_deny_of_a_two_capability_request_closes_both_in_one_record() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let now = crate::clock::utc_now().expect("a readable clock");
     write(&log, note("stripe.charges", now));
