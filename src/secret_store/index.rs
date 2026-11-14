@@ -60,7 +60,7 @@ impl Index {
     pub(super) fn append_removed_in(&self, name: &str, kind: StoreKind) -> Result<(), StoreError> {
         self.append(&Line {
             name: name.to_owned(),
-            store: Some(kind.as_str().to_owned()),
+            store: mutant!("rollback_blind", None, Some(kind.as_str().to_owned())),
             created_at: None,
             removed_at: Some(now_ms()),
         })
@@ -100,11 +100,15 @@ impl Index {
         for line in self.lines()? {
             if line.removed_at.is_some() {
                 live.retain(|entry| {
-                    entry.name != line.name
-                        || line
-                            .store
-                            .as_ref()
-                            .is_some_and(|store| *store != entry.store)
+                    mutant!(
+                        "removal_store_blind",
+                        entry.name != line.name,
+                        entry.name != line.name
+                            || line
+                                .store
+                                .as_ref()
+                                .is_some_and(|store| *store != entry.store)
+                    )
                 });
             } else if let Some(store) = line.store {
                 live.push(Live {

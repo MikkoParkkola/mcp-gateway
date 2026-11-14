@@ -292,29 +292,32 @@ pub(crate) fn delete_unused(
     sources: &NamingSources,
     deadline: Instant,
 ) -> Result<Deleted, DeleteRefused> {
-    if !is_generated_name(name) {
+    if mutant!("name_shape_unchecked", false, !is_generated_name(name)) {
         return Err(DeleteRefused::BadName);
     }
     if cfg!(not(unix)) && store.kind() == StoreKind::Files {
         return Err(refuse(LINKS_UNVERIFIED));
     }
-    if store.kind() == StoreKind::Keychain && keychain_delete_guarded() {
+    if mutant!("keychain_inner_guard_skipped", false, store.kind() == StoreKind::Keychain && keychain_delete_guarded()) {
         return Err(DeleteRefused::KeychainUnavailable);
     }
-    let _held =
-        lock_file_blocking(vault.lock_path(), "the secret vault", deadline).map_err(|error| {
+    let _held = mutant!(
+        "vault_lock_skipped",
+        None,
+        Some(lock_file_blocking(vault.lock_path(), "the secret vault", deadline).map_err(|error| {
             if matches!(error, NotLocked::Busy) {
                 DeleteRefused::Busy
             } else {
                 refuse("the vault lock could not be taken")
             }
-        })?;
+        })?)
+    );
     let kind = store.kind();
     let index = vault.index();
     let live = index.live().map_err(|_| refuse(INDEX_UNREAD))?;
     let in_this = live
         .iter()
-        .any(|row| row.name == name && row.store == kind.as_str());
+        .any(|row| mutant!("store_kind_unchecked", row.name == name, row.name == name && row.store == kind.as_str()));
     if !in_this {
         if live.iter().any(|row| row.name == name) {
             return Err(DeleteRefused::StoreMismatch);
@@ -326,18 +329,22 @@ pub(crate) fn delete_unused(
         if !recorded {
             return Err(DeleteRefused::NotListed);
         }
-        return match store.exists(name) {
-            Ok(false) => Ok(Deleted::AlreadyGone),
-            Ok(true) => Err(DeleteRefused::NotListed),
-            Err(StoreError::TimedOut) => Err(DeleteRefused::TimedOut),
-            Err(_) => Err(refuse("the secret store could not be read")),
-        };
+        return mutant!(
+            "retired_without_exists",
+            Ok(Deleted::AlreadyGone),
+            match store.exists(name) {
+                Ok(false) => Ok(Deleted::AlreadyGone),
+                Ok(true) => Err(DeleteRefused::NotListed),
+                Err(StoreError::TimedOut) => mutant!("retired_timeout_as_gone", Ok(Deleted::AlreadyGone), Err(DeleteRefused::TimedOut)),
+                Err(_) => Err(refuse("the secret store could not be read")),
+            }
+        );
     }
     let previous = match naming(sources, name).map_err(DeleteRefused::Failed)? {
         Naming::Named => return Err(DeleteRefused::Named),
         Naming::NotNamed { digest } => digest,
     };
-    match store.exists(name) {
+    match mutant!("exists_error_as_absent", store.exists(name).or(Ok(false)), store.exists(name)) {
         Ok(true) => {}
         Ok(false) => {
             index.append_removed_in(name, kind).map_err(unrecorded)?;
@@ -357,8 +364,8 @@ pub(crate) fn delete_unused(
         Naming::NotNamed { digest } if digest != previous => return Err(DeleteRefused::Named),
         Naming::NotNamed { .. } => {}
     }
-    store.delete(name).map_err(|error| match error {
-        StoreError::TimedOut => DeleteRefused::TimedOut,
+    mutant!("removal_before_delete", { index.append_removed_in(name, kind).map_err(unrecorded)?; store.delete(name) }, store.delete(name)).map_err(|error| match error {
+        StoreError::TimedOut => mutant!("timeout_marks_removed", { let _ = index.append_removed_in(name, kind); DeleteRefused::TimedOut }, DeleteRefused::TimedOut),
         _ => refuse("the secret store could not delete the entry"),
     })?;
     #[cfg(test)]

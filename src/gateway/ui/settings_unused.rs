@@ -211,7 +211,7 @@ pub(super) async fn delete_unused_entry(
             );
         }
     };
-    if crate::config_persistence::journal::unsettled(&held.locked.target) {
+    if mutant!("pending_ignored", false, crate::config_persistence::journal::unsettled(&held.locked.target)) {
         return audited(&name, &store, &DeleteRefused::Pending);
     }
     let opened: Opened = if store == "files" {
@@ -276,7 +276,7 @@ fn refusal_response(refused: &DeleteRefused) -> Response {
     let (code, message) = refusal_parts(refused);
     let mut response = structured_error(refusal_status(refused), code, message).into_response();
     // Busy attempted nothing and is worth retrying soon, as the save route's busy says.
-    if matches!(refused, DeleteRefused::Busy) {
+    if mutant!("busy_retry_after_dropped", false, matches!(refused, DeleteRefused::Busy)) {
         response
             .headers_mut()
             .insert(RETRY_AFTER, HeaderValue::from_static("1"));
