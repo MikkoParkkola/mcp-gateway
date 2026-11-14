@@ -2743,7 +2743,7 @@ class WorkflowWiring(unittest.TestCase):
         called = re.findall(r"""(?m)^    uses:\s*["']?\./\.github/workflows/([^"'\s#]+)""", release.read_text(encoding="utf-8"))
         self.assertEqual(
             sorted(called),
-            ["mrtr7b-full-burst.yml", "packaged-suite.yml", "task-sdk-recovery.yml"],
+            ["mrtr7b-full-burst.yml", "packaged-suite.yml", "task-sdk-recovery.yml", "unlocked-install.yml"],
             "the called-workflow inventory changed",
         )
         found = []
@@ -2771,6 +2771,32 @@ class WorkflowWiring(unittest.TestCase):
         release_jobs = jobs("release.yml")
         self.assertIn("uses: ./.github/workflows/mrtr7b-full-burst.yml", release_jobs.get("mrtr7b-full-burst", ""))
         self.assertIn("mrtr7b-full-burst", needs_of(release_jobs["verify"]) or "", "verify must wait for the full burst")
+
+    def test_the_release_installs_the_packaged_crate_unlocked(self):
+        # `cargo install mcp-gateway` ignores Cargo.lock, so the release must
+        # have started an unlocked install of the packaged crate, with the key
+        # server whose startup runs the email-hash self-check, at the tag.
+        on = "\n".join(live_lines("unlocked-install.yml"))
+        trigger = on[on.index("\non:") : on.index("\njobs:")]
+        self.assertRegex(trigger, r"(?m)^  workflow_call:", "the release cannot call the unlocked install")
+        ran = [c for b in steps("unlocked-install.yml", "unlocked-install") for c in joined(b)]
+        self.assertTrue(any("packaged-tests.sh install-unlocked" in c for c in ran), ran)
+        self.assertTrue(any("test_check_unlocked_install.py" in c for c in ran), ran)
+        release_jobs = jobs("release.yml")
+        self.assertIn("uses: ./.github/workflows/unlocked-install.yml", release_jobs.get("unlocked-install", ""))
+        self.assertIn("unlocked-install", needs_of(release_jobs["verify"]) or "", "verify must wait for the unlocked install")
+
+    def test_the_unlocked_install_really_drops_the_lock(self):
+        # The gate exists to differ from the locked builds: the install mode
+        # must delete the packaged lock before it installs, and install
+        # without --locked, or it proves what every other job already does.
+        script = (pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "packaged-tests.sh").read_text(encoding="utf-8")
+        block = script[script.index('if [ "$mode" = install-unlocked ]') : script.index('elif [ "$mode" = build ]')]
+        install = [l for l in block.splitlines() if l.strip().startswith("cargo install ")]
+        self.assertEqual(len(install), 1, install)
+        self.assertNotIn("--locked", install[0])
+        self.assertIn("rm Cargo.lock", block)
+        self.assertLess(block.index("rm Cargo.lock"), block.index(install[0]), "the lock goes before the install")
 
     def test_windows_skips_the_full_burst_and_keeps_its_property(self):
         # MIK-7644: 1,026 calls miss the full burst's deadline on the Windows

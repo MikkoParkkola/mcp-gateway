@@ -592,20 +592,31 @@ fn the_self_check_passes_the_real_normalization_and_fails_a_different_one() {
 
 /// NORM.3: the server's start runs the self-check before it reads or creates
 /// any key, so a build that normalizes differently never writes a key id or a
-/// row.
-/// Mutant: remove the call or move it after the key is resolved.
+/// row. Its error ends the start, and the `Key server enabled` line is logged
+/// only after it: the unlocked-install CI job
+/// (`scripts/ci/check-unlocked-install.sh`) reads that line on an installed
+/// binary as proof that the check ran and passed.
+/// Mutant: remove the call, move it after the key is resolved, ignore its
+/// error, or log the start before it.
 #[test]
 fn the_key_server_start_runs_the_self_check_before_any_key() {
     let source = include_str!("../gateway/server/run_steps.rs");
     let check = source
-        .find("email_hash::self_check()")
-        .expect("the start runs the self-check");
+        .find("email_hash::self_check().map_err(crate::Error::ConfigValidation)?;")
+        .expect("the start runs the self-check and stops on its error");
     let resolve = source
         .find("email_hmac_store::resolve(")
         .expect("the start resolves the key");
     assert!(
         check < resolve,
         "the self-check must come before the key is resolved"
+    );
+    let started = source
+        .find("\"Key server enabled\"")
+        .expect("the start logs that the key server is enabled");
+    assert!(
+        check < started,
+        "the key server must be logged as enabled only after the self-check passed"
     );
 }
 

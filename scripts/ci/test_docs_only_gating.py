@@ -54,6 +54,8 @@ KEPT = {
     "file-size-ceiling", "control-drift-probes", "registry-packages",
     # A few seconds of Python; a docs-only change is simply not judged.
     "event-source-scope", "timing-asserts", "request-panics", "doc-backticks",
+    # The unlocked-install checker's self-test, against stub binaries: seconds, no build.
+    "unlocked-install-checker",
     # Release signing's own unit tests; docker-build waits for them.
     "release-signing-checks",
 }

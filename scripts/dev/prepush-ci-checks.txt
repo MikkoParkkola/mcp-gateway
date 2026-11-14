@@ -58,6 +58,7 @@ python3 scripts/dev/test_check_control_drift.py	7	closed
 python3 scripts/dev/test_check_doc_backticks.py	1	closed
 python3 scripts/dev/test_check_event_source_scope.py	3	closed
 python3 scripts/dev/test_check_file_size.py	4	closed
+python3 scripts/dev/test_check_unlocked_install.py	27	closed
 python3 scripts/dev/test_check_orphan_test_modules.py	22	closed
 python3 scripts/dev/test_check_cfg_reader_copies.py	3	closed
 python3 scripts/dev/test_check_owasp_citations.py	38	closed
