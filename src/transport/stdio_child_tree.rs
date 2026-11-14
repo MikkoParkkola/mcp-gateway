@@ -467,9 +467,10 @@ impl ChildTree {
     #[cfg(unix)]
     fn step_term(&mut self, grace: &mut Grace, now: std::time::Instant) -> std::time::Instant {
         use super::reaper::{KILL_RESERVE, MIN_PHASE};
-        const _: () =
-            assert!(KILL_RESERVE.as_nanos() >= REAP_DEADLINE.as_nanos() + MIN_PHASE.as_nanos());
-        let slack_end = grace.kill_at + KILL_RESERVE.saturating_sub(REAP_DEADLINE);
+        // What the stop keeps past the reap deadline: the kill may move this far.
+        const SLACK: std::time::Duration = KILL_RESERVE.saturating_sub(REAP_DEADLINE);
+        const _: () = assert!(SLACK.as_nanos() >= MIN_PHASE.as_nanos());
+        let slack_end = grace.kill_at + SLACK;
         let planned = grace.term_at < grace.kill_at || grace.term_owed;
         let due = grace.term_owed || now >= grace.term_at;
         let fits = now < grace.kill_at || now + MIN_PHASE <= slack_end;

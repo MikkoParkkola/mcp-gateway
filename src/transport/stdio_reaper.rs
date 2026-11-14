@@ -70,7 +70,8 @@ pub(crate) struct StopDeadline {
     /// The deadline and when it was last moved earlier, as one pair:
     /// nanoseconds after [`STOP_EPOCH`], `u64::MAX` while unset. A SIGTERM a
     /// tree's plan had due before the set-time is still owed, so the two are
-    /// written and read together, never one without the other.
+    /// written and read together, never one without the other. A leaf lock:
+    /// held only to read or write the pair, never while taking another lock.
     cut: parking_lot::Mutex<(u64, u64)>,
     /// Every graceful handover under this deadline, so the stop can wait for
     /// their kills before it returns; finished ones are pruned on each add.
