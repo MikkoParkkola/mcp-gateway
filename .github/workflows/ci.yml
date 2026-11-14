@@ -1088,7 +1088,8 @@ jobs:
         # one that thrashes on memory (scripts/ci/test_upgrading_step_bounds.py).
         timeout-minutes: 25
         run: |
-          echo "phase compile: the lib test binary at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^(Mem|Swap):/ {printf "%s total %s used %s free %s; ", $1, $2, $3, $4}')"
+          echo "CANARY: the shared build fails on purpose; every consumer must end red, never skipped"
+          exit 1
           scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
       - name: Hand the lib test binary to its consumers
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
