@@ -16,6 +16,9 @@ use crate::config_persistence::lock::{NotLocked, lock_file_blocking};
 const CONFIG_UNREAD: &str = "the config could not be read";
 const CONFIG_PARSE: &str = "the config did not parse";
 const CAP_UNREAD: &str = "a capability file could not be read";
+const CAP_TOO_DEEP: &str = "a capability directory is nested deeper than the scan reads";
+/// How deep a capability directory is walked; anything deeper refuses.
+const CAP_DEPTH: usize = 16;
 const FILE_STAT: &str = "a file reference could not be stat'ed";
 const INDEX_UNREAD: &str = "the secrets index could not be read";
 const LINKS_UNVERIFIED: &str =
@@ -32,6 +35,9 @@ pub(crate) struct NamingSources {
     pub(crate) process_env: Vec<OsString>,
     /// Capability directories, walked recursively.
     pub(crate) capability_dirs: Vec<PathBuf>,
+    /// Where the files store keeps its entries: the directory the vault and the
+    /// files store use, which can differ from the config's resolved directory.
+    pub(crate) entries_dir: PathBuf,
 }
 /// Whether an entry is named, with the digest of every source read when it is not.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,7 +99,7 @@ struct Corpus {
     texts: Vec<String>,
     files: BTreeSet<(u64, u64)>,
     digest: String,
-    config_dir: PathBuf,
+    entries_dir: PathBuf,
 }
 impl Corpus {
     fn naming(&self, name: &str) -> Result<Naming, String> {
@@ -103,7 +109,7 @@ impl Corpus {
         if self.texts.iter().any(|text| text.contains(suffix)) {
             return Ok(Naming::Named);
         }
-        let path = self.config_dir.join("secrets").join(name);
+        let path = self.entries_dir.join(name);
         if let Some((id, links)) = entry_identity(&path)?
             && (links > 1 || self.files.contains(&id))
         {
@@ -163,7 +169,7 @@ fn corpus(sources: &NamingSources) -> Result<Corpus, String> {
         texts,
         files,
         digest: hex::encode(hasher.finalize()),
-        config_dir: dir_of(&sources.config).to_path_buf(),
+        entries_dir: sources.entries_dir.clone(),
     })
 }
 fn read_regular(path: &Path, sentence: &str) -> Result<Vec<u8>, String> {
@@ -185,10 +191,15 @@ fn read_caps(
     }
     absorb(hasher, 7, dir.as_os_str().as_encoded_bytes());
     let mut paths = Vec::new();
-    for item in WalkDir::new(dir).follow_links(true).max_depth(16) {
+    // One level past the bound is walked so that reaching it refuses: a loop or a
+    // file left unread may name an entry, so neither is skipped.
+    for item in WalkDir::new(dir)
+        .follow_links(true)
+        .max_depth(CAP_DEPTH + 1)
+    {
         match item {
-            Err(error) if error.loop_ancestor().is_some() => continue,
             Err(_) => return Err(CAP_UNREAD.to_owned()),
+            Ok(entry) if entry.depth() > CAP_DEPTH => return Err(CAP_TOO_DEEP.to_owned()),
             Ok(entry) if entry.depth() == 0 || !entry.file_type().is_file() => continue,
             Ok(entry) => paths.push(entry.path().to_path_buf()),
         }
@@ -213,7 +224,11 @@ fn take_strings(value: &Value, out: &mut Vec<String>) {
         match next {
             Value::String(text) => out.push(text.clone()),
             Value::Array(items) => pending.extend(items),
-            Value::Object(map) => pending.extend(map.values()),
+            Value::Object(map) => {
+                // A key can carry a name too, escaped like any scalar.
+                out.extend(map.keys().cloned());
+                pending.extend(map.values());
+            }
             _ => {}
         }
     }
@@ -261,9 +276,6 @@ fn refuse(sentence: &str) -> DeleteRefused {
 fn unrecorded(_: StoreError) -> DeleteRefused {
     refuse("the removal could not be recorded")
 }
-fn dir_of(path: &Path) -> &Path {
-    path.parent().unwrap_or(Path::new("."))
-}
 /// Delete one unused entry from `store`, re-checking everything under the vault lock.
 pub(crate) fn delete_unused(
     vault: &Vault,
@@ -296,14 +308,18 @@ pub(crate) fn delete_unused(
         if live.iter().any(|row| row.name == name) {
             return Err(DeleteRefused::StoreMismatch);
         }
-        // Retired by an earlier delete's line: the entry is already gone.
+        // Retired by an earlier line: already gone only when the store agrees.
         let recorded = index
             .recorded_in(name, kind)
             .map_err(|_| refuse(INDEX_UNREAD))?;
-        return if recorded {
-            Ok(Deleted::AlreadyGone)
-        } else {
-            Err(DeleteRefused::NotListed)
+        if !recorded {
+            return Err(DeleteRefused::NotListed);
+        }
+        return match store.exists(name) {
+            Ok(false) => Ok(Deleted::AlreadyGone),
+            Ok(true) => Err(DeleteRefused::NotListed),
+            Err(StoreError::TimedOut) => Err(DeleteRefused::TimedOut),
+            Err(_) => Err(refuse("the secret store could not be read")),
         };
     }
     let previous = match naming(sources, name).map_err(DeleteRefused::Failed)? {

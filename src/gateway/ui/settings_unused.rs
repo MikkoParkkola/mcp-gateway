@@ -74,6 +74,11 @@ fn naming_sources(ctx: &ReloadContext, target: &std::path::Path) -> Result<Namin
     );
     Ok(NamingSources {
         config: target.to_path_buf(),
+        // The files store the vault and the delete use: beside the unresolved config
+        // path, which a symlinked config can put in another directory than `target`.
+        entries_dir: FilesStore::new(config_dir(&ctx.config_path))
+            .entries_dir()
+            .to_path_buf(),
         env_files: ctx.env_paths().as_paths().to_vec(),
         env_values: loaded
             .overlay
@@ -214,10 +219,12 @@ pub(super) async fn delete_unused_entry(
         Arc::new(FilesStore::new(config_dir(&ctx.config_path)))
     } else {
         let Some(os) = crate::config::keychain::os_secret_store() else {
-            return audited(
+            // No OS keychain is configured here: a conflict with the request, not an outage.
+            return with_audit(
+                structured_error(StatusCode::CONFLICT, "no_keychain", NO_KEYCHAIN).into_response(),
                 &name,
                 &store,
-                &DeleteRefused::Failed(NO_KEYCHAIN.to_owned()),
+                "no_keychain",
             );
         };
         os

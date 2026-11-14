@@ -31,6 +31,7 @@ pub(super) fn sources(dir: &Path) -> NamingSources {
         env_values: Vec::new(),
         process_env: Vec::new(),
         capability_dirs: Vec::new(),
+        entries_dir: FilesStore::new(dir).entries_dir().to_path_buf(),
     }
 }
 

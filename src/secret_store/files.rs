@@ -25,6 +25,11 @@ impl FilesStore {
         }
     }
 
+    /// The directory holding this store's entries.
+    pub(crate) fn entries_dir(&self) -> &Path {
+        &self.dir
+    }
+
     fn path(&self, name: &str) -> PathBuf {
         self.dir.join(name)
     }

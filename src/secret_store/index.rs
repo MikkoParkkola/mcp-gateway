@@ -66,16 +66,6 @@ impl Index {
         })
     }
 
-    /// Records that this save removed `name` again.
-    pub(super) fn append_removed(&self, name: &str) -> Result<(), StoreError> {
-        self.append(&Line {
-            name: name.to_owned(),
-            store: None,
-            created_at: None,
-            removed_at: Some(now_ms()),
-        })
-    }
-
     fn append(&self, line: &Line) -> Result<(), StoreError> {
         let mut file = match crate::config_persistence::create_new_private(&self.path) {
             Ok(file) => file,
