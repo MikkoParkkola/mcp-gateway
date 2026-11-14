@@ -702,7 +702,10 @@ fn padding_finds_the_plain_address_and_blank_or_control_is_refused() {
     // Not White_Space, so kept: the hash differs and nothing matches.
     let zero_width = format!("\u{200b}{EMAIL}\u{feff}");
     assert!(subjects(&fx.lookup(&zero_width, &json!({}))).is_empty());
-    // Length is judged after the trim: 320 bytes is accepted, padded or not.
+    // Interior White_Space that is not a control character is kept and accepted.
+    assert!(subjects(&fx.lookup("ada@\u{a0}corp.invalid", &json!({}))).is_empty());
+    // Length is judged after the trim: 320 bytes is accepted, padded or not
+    // (`Fx::lookup` asserts a 200 for each).
     let domain = "@corp.invalid";
     let at_limit = format!("{}{domain}", "a".repeat(320 - domain.len()));
     assert_eq!(at_limit.len(), 320);
@@ -715,6 +718,7 @@ fn padding_finds_the_plain_address_and_blank_or_control_is_refused() {
         "ada@\u{1f}corp.test".to_owned(),
         "ada@\u{7f}corp.test".to_owned(),
         "ada@\u{85}corp.test".to_owned(),
+        "ada@\u{9f}corp.test".to_owned(),
     ] {
         fx.state.process.lookup_budget().reset_for_test();
         let body = json!({ "email": refused }).to_string();
