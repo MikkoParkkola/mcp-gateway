@@ -319,8 +319,14 @@ fn f2_counter_and_hook_sites_carry_no_feature_cfg() {
         .iter()
         .position(|l| l.trim() == "mod recent_writes;")
         .expect("gateway/mod.rs declares recent_writes");
-    assert!(
-        !gated(lines[decl.saturating_sub(1)]),
+    // Every attribute line right above the declaration, not only the nearest.
+    let decl_gate = (0..decl)
+        .rev()
+        .take_while(|&j| lines[j].trim_start().starts_with("#["))
+        .find(|&j| gated(lines[j]));
+    assert_eq!(
+        decl_gate.map(|j| j + 1),
+        None,
         "the recent_writes module declaration is feature-gated"
     );
     for (path, want) in HOOK_SITES {
@@ -337,13 +343,19 @@ fn f2_counter_and_hook_sites_carry_no_feature_cfg() {
             "{path} is feature-gated as a whole"
         );
         for site in sites {
-            let gate = enclosing(&lines, site)
-                .into_iter()
+            // The hook statement itself and the attributes right above it,
+            // then every block around it.
+            let own = (0..site)
+                .rev()
+                .take_while(|&j| lines[j].trim_start().starts_with("#["));
+            let gate = std::iter::once(site)
+                .chain(own)
+                .chain(enclosing(&lines, site))
                 .find(|&i| gated(lines[i]));
             assert_eq!(
                 gate.map(|i| i + 1),
                 None,
-                "{path}:{}: a feature cfg on a block around the hook",
+                "{path}:{}: a feature cfg on the hook or a block around it",
                 site + 1
             );
         }
