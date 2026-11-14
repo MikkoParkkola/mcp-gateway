@@ -13,3 +13,5 @@ deploy/prometheus/mcp-gateway-alerts-test.yml	sha256:33749cba7bc7588882ebec733f7
 deploy/prometheus/mcp-gateway-alerts.yml	sha256:f513ecfabe7225bd6710ac43cd656b6253193b780f4a79dc8976f3eb3b1258ae	#4848
 deploy/single-node/docker-compose.yaml	sha256:c4316ae52762af4d914e8dcb3a247a340e701d863b315d174ed05a9bea5129b3	#4923
 deploy/kubernetes/enterprise-alpha/base/deployment.yaml	sha256:118fdf14d4514206e26705e7fe119dcda7d6f401a9b2c5c4581ce5ca51f670b4	#4923
+tests/fixtures/helm-golden/credential.yaml	sha256:df570827693a289f1a043d48733ff69d5ed16981c18d46896b868a8866e7814f	#4923
+tests/fixtures/helm-golden/mesh.yaml	sha256:fca8a5358a22e24e815bc985d4760fb8489e403622e12c7aa40c31f396735eb6	#4923
