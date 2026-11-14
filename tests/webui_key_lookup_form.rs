@@ -24,12 +24,18 @@ fn block() -> &'static str {
 }
 
 /// Whether the page's top-level function `name` has `line` as one whole line
-/// of its body: a commented-out or reworded call does not count.
+/// of its body: a commented-out (line or block comment) or reworded call does
+/// not count.
 fn calls_line(name: &str, line: &str) -> bool {
     let head = format!("\nfunction {name}(");
     let start = INDEX.find(&head).expect("the function exists") + 1;
     let end = INDEX[start..].find("\n}\n").expect("the function ends");
-    INDEX[start..start + end].lines().any(|l| l.trim() == line)
+    let mut body = INDEX[start..start + end].to_owned();
+    while let Some(open) = body.find("/*") {
+        let close = body[open..].find("*/").map_or(body.len(), |c| open + c + 2);
+        body.replace_range(open..close, "");
+    }
+    body.lines().any(|l| l.trim() == line)
 }
 
 /// The stub environment: a tiny DOM keyed by id, a fetch that records each
@@ -75,14 +81,19 @@ globalThis.AuthRefused = class extends Error {};
 globalThis.uiFetch = async (url, opts) => {
   calls.push({ url, opts, emailField: dom['kl-email']?.value });
   const r = replies.shift();
-  // Like a browser: an abort rejects a request that has not answered yet.
-  if (r.gate) await Promise.race([r.gate, new Promise((_, no) => opts.signal?.addEventListener('abort',
-    () => no(new DOMException('aborted', 'AbortError'))))]);
+  // Like a browser: an aborted signal rejects the request, and an abort
+  // rejects whatever has not finished yet, the answer or its body.
+  const abortErr = () => new DOMException('aborted', 'AbortError');
+  const aborted = new Promise((_, no) => opts.signal?.addEventListener('abort', () => no(abortErr())));
+  aborted.catch(() => {});
+  if (opts.signal?.aborted) throw abortErr();
+  if (r.gate) await Promise.race([r.gate, aborted]);
   return { ok: r.status >= 200 && r.status < 300, status: r.status,
     headers: { get: (h) => (r.headers ?? {})[h.toLowerCase()] ?? null },
     json: async () => {
       r.reading?.();
-      if (r.jsonGate) await r.jsonGate;
+      if (r.jsonGate) await Promise.race([r.jsonGate, aborted]);
+      if (opts.signal?.aborted) throw abortErr();
       if (r.bad) throw new Error('not json');
       return r.body;
     } };
@@ -274,7 +285,7 @@ const silly = dom['kl-status'].textContent;
 keyLookupClear();
 replies = [{ status: 429, headers: { 'retry-after': '7' } }];
 await submit('ada@example.org');
-out({ first, kept, silly, firstPage: keyLookupHeld });
+out({ first, kept, silly, firstPage: keyLookupHeld, firstSaid: dom['kl-status'].textContent });
 ");
     assert!(
         got["first"].as_str().unwrap().contains("7 seconds"),
@@ -288,6 +299,10 @@ out({ first, kept, silly, firstPage: keyLookupHeld });
         got["firstPage"],
         serde_json::Value::Null,
         "a throttled first page must keep nothing, least of all the email"
+    );
+    assert!(
+        got["firstSaid"].as_str().unwrap().contains("7 seconds"),
+        "a throttled first page shows the wait too: {got}"
     );
 }
 
@@ -419,6 +434,24 @@ fn the_page_is_hidden_from_everyone_but_an_admin() {
     assert!(
         calls_line("renderAuth", "keyLookupOnAuth(state);"),
         "renderAuth must hand its state to the lookup block"
+    );
+    // The router only moves the `active` class; the hide is an inline
+    // `display: none`, which beats `.page.active` as long as no page rule is
+    // `!important`. That is what keeps a typed `#key-audit` hidden.
+    let page_rules: Vec<&str> = INDEX
+        .lines()
+        .filter(|l| l.contains(".page") || l.contains("#page-key-audit"))
+        .filter(|l| l.contains('{'))
+        .collect();
+    assert!(
+        page_rules
+            .iter()
+            .any(|l| l.trim() == ".page.active { display: block; }"),
+        "the router's rule moved: {page_rules:?}"
+    );
+    assert!(
+        page_rules.iter().all(|l| !l.contains("!important")),
+        "an !important page rule would beat the inline hide: {page_rules:?}"
     );
     let got = run(r"
 const seen = [];
@@ -618,7 +651,8 @@ await keyLookupNext();
 const nNext = calls.length;
 release2();
 await next;
-out({ kept, said, n, rows, nNext });
+out({ kept, said, n, rows, nNext, last: [dom['kl-rows'].children.length, keyLookupHeld,
+  dom['kl-status'].textContent] });
 ");
     assert_eq!(
         got["kept"], "",
@@ -631,6 +665,11 @@ out({ kept, said, n, rows, nNext });
     assert_eq!(got["n"], 1);
     assert_eq!(got["rows"], 1);
     assert_eq!(got["nNext"], 2, "Next pressed twice in flight sent twice");
+    assert_eq!(
+        got["last"],
+        serde_json::json!([1, null, "1 retained issuance(s) on this page."]),
+        "the page in flight must still land whole: {got}"
+    );
 }
 
 /// A request dropped in flight that ends afterwards leaves the request that
