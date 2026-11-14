@@ -234,6 +234,7 @@ fn build_plan(
         env,
         program: utf8(&exec)?,
         target: argv,
+        fetch: None,
     })
 }
 

@@ -55,6 +55,17 @@ pub(crate) struct Plan {
     pub(crate) program: String,
     /// The argv: the name the program was asked for, then its arguments.
     pub(crate) target: Vec<String>,
+    /// The fetch step's control socket, when the preview fetches its package
+    /// first; `None` runs the target at once, as before the fetch step.
+    pub(crate) fetch: Option<FetchPaths>,
+}
+
+/// Where the helper reaches the gateway for the fetch step: host paths, used
+/// before the helper enters its new root.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FetchPaths {
+    /// The gateway's control socket, in the proxy's owner-only directory.
+    pub(crate) control: String,
 }
 
 /// The preview's home inside the new root: a fresh tmpfs, `HOME`, working
