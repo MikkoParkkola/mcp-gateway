@@ -905,6 +905,9 @@ jobs:
             while :; do
               printf '%s swap %s | %s\n' "$(date -u +%H:%M:%S)" "$(sysctl -n vm.swapusage)" \
                 "$(memory_pressure -Q 2>/dev/null | tail -1)" >> "$RUNNER_TEMP/mac-sampler.log"
+              # Which process holds the memory (RSS in MB, command name): rustc's frontend, its codegen, or the linker.
+              printf '%s top %s\n' "$(date -u +%H:%M:%S)" \
+                "$(ps -axo rss=,comm= | sort -nr | head -3 | awk '{n=$2; sub(".*/","",n); printf "%s=%dMB ", n, $1/1024}')" >> "$RUNNER_TEMP/mac-sampler.log"
               sleep 30
             done
           ) &
