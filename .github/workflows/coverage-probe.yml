@@ -163,6 +163,9 @@ jobs:
       - name: Run the part
         env:
           PART: ${{ matrix.part }}
+          # CANARY (do not merge): two build jobs on the library parts only; the integration parts keep 4, the
+          # default on these 4-vCPU, 16 GB runners. Step env, so rust-cache's key is unchanged.
+          CARGO_BUILD_JOBS: ${{ startsWith(matrix.part, 'lib-') && '2' || '4' }}
         # Healthy parts take up to 41 min; a stall ends here with its log, and the memory log samples it every 30 s
         # (scripts/ci/check_swap_jobs.py). Its lines go to stderr, so they are in run.log too, as "memory ..." lines.
         timeout-minutes: 70

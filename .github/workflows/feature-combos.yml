@@ -258,6 +258,9 @@ jobs:
         # Healthy compiles take up to 17 min; a stall ends here with its log, and the memory log samples it every
         # 30 s (scripts/ci/check_swap_jobs.py).
         timeout-minutes: 30
+        # CANARY (do not merge): two build jobs, step env only (rust-cache's key is unchanged).
+        env:
+          CARGO_BUILD_JOBS: 2
         run: >-
           scripts/ci/with-memory-log.sh cargo test --all-targets --no-run
           --config profile.dev.debug-assertions=false

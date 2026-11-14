@@ -1113,6 +1113,10 @@ jobs:
         # (numbers only: the runner user's process count and `free -m` rows) tells a build that waits on a lock from
         # one that thrashes on memory (scripts/ci/test_upgrading_step_bounds.py).
         timeout-minutes: 25
+        # CANARY (do not merge): two build jobs, the one variable under test. Step env, not job env, so
+        # rust-cache's key (it hashes CARGO_* variables) and every other step stay as on the baseline.
+        env:
+          CARGO_BUILD_JOBS: 2
         run: |
           echo "phase compile: the lib test binary at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^(Mem|Swap):/ {printf "%s total %s used %s free %s; ", $1, $2, $3, $4}')"
           scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
@@ -1652,6 +1656,9 @@ jobs:
       - name: Build the tests from the packaged crate
         # Healthy builds take up to 17 min; a stall ends here with its log (check_swap_jobs.py).
         timeout-minutes: 35
+        # CANARY (do not merge): two build jobs, step env only (rust-cache's key is unchanged).
+        env:
+          CARGO_BUILD_JOBS: 2
         run: scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh build
 
   # The post-merge packaged run, on demand: a workflow file that is not on the
