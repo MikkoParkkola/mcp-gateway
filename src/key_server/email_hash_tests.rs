@@ -419,20 +419,36 @@ const NFC_CRATES: [&str; 4] = [
     "icu_properties_data",
 ];
 
+/// Whether `path` (a table name without its brackets) holds dependencies:
+/// `dependencies`, `dev-dependencies` or `build-dependencies`, plain or under
+/// a `target.<spec>` table.
+fn is_dependency_table(path: &str) -> bool {
+    ["dependencies", "dev-dependencies", "build-dependencies"]
+        .iter()
+        .any(|kind| {
+            path == *kind || (path.starts_with("target.") && path.ends_with(&format!(".{kind}")))
+        })
+}
+
 /// Every place `manifest` names `krate` as a dependency, as the text that
-/// carries its version. Two forms: an inline entry (`krate = "=1"` or
-/// `krate = { version = "=1", .. }`), as the source tree writes it, and a
-/// dependency table (`[dependencies.krate]` with its `version` line), as
-/// `cargo package` writes the manifest of the published crate. A table with no
-/// version line comes back as its header alone.
+/// carries its version, comments removed. Two forms: an inline entry in a
+/// dependency table (`krate = "=1"` or `krate = { version = "=1", .. }`), as
+/// the source tree writes it, and a table of its own (`[dependencies.krate]`
+/// with its `version` line), as `cargo package` writes the manifest of the
+/// published crate. A table with no version line comes back as its header.
 fn dependency_entries(manifest: &str, krate: &str) -> Vec<String> {
-    let header = format!("dependencies.{krate}]");
     let mut entries = Vec::new();
+    let mut section = String::new();
     let mut open: Option<String> = None;
-    for line in manifest.lines().map(str::trim) {
-        if line.starts_with('[') {
+    for raw in manifest.lines() {
+        let line = raw.split('#').next().unwrap_or_default().trim();
+        if let Some(path) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
             entries.extend(open.take());
-            if line.ends_with(&header) {
+            section = path.to_owned();
+            if path
+                .strip_suffix(&format!(".{krate}"))
+                .is_some_and(is_dependency_table)
+            {
                 open = Some(line.to_owned());
             }
         } else if let Some(table) = &open {
@@ -440,7 +456,8 @@ fn dependency_entries(manifest: &str, krate: &str) -> Vec<String> {
                 entries.push(format!("{table} {line}"));
                 open = None;
             }
-        } else if line.starts_with(&format!("{krate} =")) || line.starts_with(&format!("{krate}="))
+        } else if is_dependency_table(&section)
+            && (line.starts_with(&format!("{krate} =")) || line.starts_with(&format!("{krate}=")))
         {
             entries.push(line.to_owned());
         }
@@ -527,6 +544,26 @@ fn the_pin_check_reads_both_manifest_forms() {
             pin_problems(&doubled).len(),
             1,
             "{form}: a doubled pin is refused"
+        );
+        let commented = loose.replacen("\"2.3.0\"", "\"2.3.0\" # version = \"=2.3.0\"", 1);
+        assert_eq!(
+            pin_problems(&commented).len(),
+            1,
+            "{form}: a comment is no pin"
+        );
+        let decoy = format!("{exact}[package.metadata.decoy]\nicu_normalizer_data = \"=2.3.0\"\n");
+        assert_eq!(
+            pin_problems(&decoy),
+            Vec::<String>::new(),
+            "{form}: a metadata table names no dependency"
+        );
+        let table = format!(
+            "{exact}[target.'cfg(unix)'.dependencies.icu_properties_data]\nversion = \"=2.3.0\"\n"
+        );
+        assert_eq!(
+            pin_problems(&table).len(),
+            1,
+            "{form}: a target table is a second entry"
         );
     }
 }
