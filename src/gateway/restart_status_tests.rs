@@ -39,8 +39,12 @@ fn b1_restarting_before_commit_is_ignored_and_logged_once() {
     assert_eq!(phase(&board), Some(RestartPhase::Checkpoint));
     assert_eq!(logs.matches("before commit").count(), 1, "{logs}");
     board.commit(STOP_DL);
-    board.restarting();
+    let ((), logs) = crate::test_log_capture::capture_warnings(|| board.restarting());
     assert_eq!(phase(&board), Some(RestartPhase::Restarting));
+    assert!(
+        logs.is_empty(),
+        "the committed transition logs nothing: {logs}"
+    );
 }
 
 #[test]
@@ -318,8 +322,32 @@ fn b3_board_matches_the_model_on_every_short_sequence() {
 #[test]
 fn b4_each_cancel_reason_renders_and_stays_until_the_next_accept() {
     let mut seen = std::collections::BTreeSet::new();
+    // Each floor variant differs from `floor()` in one part, so a text that
+    // drops the owner, the stage or the reason renders two of them alike.
+    let other = |owner, stage, reason| {
+        RestartCancel::Floor(Cancelled {
+            owner,
+            stage,
+            reason,
+        })
+    };
     for reason in [
         floor(),
+        other(
+            FloorOwner::Config,
+            FloorStage::Checkpoint,
+            CancelReason::SaveFailed,
+        ),
+        other(
+            FloorOwner::Health,
+            FloorStage::Pause,
+            CancelReason::SaveFailed,
+        ),
+        other(
+            FloorOwner::Health,
+            FloorStage::Checkpoint,
+            CancelReason::WorkerLost,
+        ),
         RestartCancel::StopSignal,
         RestartCancel::Recheck,
         RestartCancel::AuditRefused,
@@ -342,6 +370,19 @@ fn b4_each_cancel_reason_renders_and_stays_until_the_next_accept() {
 
 #[test]
 fn b5_wire_form_has_the_agreed_keys_and_lowercase_phases() {
+    // Every value, on a record whose id and remaining calls differ.
+    let second = RestartBoard::default();
+    second.accept(CHECKPOINT_DL);
+    second.accept(CHECKPOINT_DL);
+    second.checkpoint();
+    second.commit(STOP_DL);
+    second.set_remaining_calls(7);
+    assert_eq!(
+        second.status().expect("a record").wire(),
+        serde_json::json!({
+            "id": 2, "phase": "checkpoint", "deadline": STOP_DL, "remaining_calls": 7, "reason": null
+        })
+    );
     let board = at_checkpoint(true);
     let wire = board.status().expect("a record").wire();
     let keys: Vec<&str> = wire

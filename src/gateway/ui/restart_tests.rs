@@ -300,6 +300,15 @@ fn b6_restart_body_carries_recent_writes_only_in_the_full_view() {
         taken_at_mono: std::time::Instant::now(),
         writes_total: 99,
     };
+    // The legs that must carry nothing run first.
+    for (view, sample) in [
+        (StatusView::CountsOnly, Some(sample)),
+        (StatusView::CountsOnly, None),
+        (StatusView::Full, None),
+    ] {
+        let body = availability_body(view, sample);
+        assert!(body.get("recent_writes").is_none(), "{body}");
+    }
     let full = availability_body(StatusView::Full, Some(sample));
     assert_eq!(
         full["recent_writes"],
@@ -312,12 +321,4 @@ fn b6_restart_body_carries_recent_writes_only_in_the_full_view() {
         .remove("recent_writes");
     let base = availability_body(StatusView::CountsOnly, None);
     assert_eq!(rest, base, "the sample adds one member and nothing else");
-    for (view, sample) in [
-        (StatusView::CountsOnly, Some(sample)),
-        (StatusView::CountsOnly, None),
-        (StatusView::Full, None),
-    ] {
-        let body = availability_body(view, sample);
-        assert!(body.get("recent_writes").is_none(), "{body}");
-    }
 }

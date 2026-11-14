@@ -401,7 +401,15 @@ async fn s1_only_the_full_status_view_carries_restart() {
             let (code, body) = send(&router, get(who, routes::UI_STATUS)).await;
             assert_eq!(code, StatusCode::OK, "{who:?}");
             let body: Value = serde_json::from_slice(&body).expect("status JSON");
-            let want = match (body.get("servers").is_some(), accepted) {
+            // Fixed by caller, not read back from the answer: only the two
+            // unscoped admin keys get the full view.
+            let full = matches!(who, Who::AdminKey | Who::UiAdminKey);
+            assert_eq!(
+                body.get("servers").is_some(),
+                full,
+                "premise: {who:?}'s view"
+            );
+            let want = match (full, accepted) {
                 (false, _) => None,
                 (true, false) => Some(Value::Null),
                 (true, true) => Some(board.status().expect("a record").wire()),

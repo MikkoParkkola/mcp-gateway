@@ -263,9 +263,24 @@ fn source(path: &str) -> String {
 /// attributes and body above the site carry none either.
 #[test]
 fn f2_counter_and_hook_sites_carry_no_feature_cfg() {
+    // Any feature form: cfg(feature, cfg_attr(feature and cfg!(feature
+    // all read `feature =`. Gating through an enclosing impl or module is
+    // F1's to catch: its no-default-features run executes R1, R5 and R6.
+    let gated = |line: &str| line.contains("feature =");
+    let counter = source("src/gateway/recent_writes.rs");
     assert!(
-        !source("src/gateway/recent_writes.rs").contains("cfg(feature"),
+        !counter.lines().any(gated),
         "recent_writes.rs is feature-gated"
+    );
+    let parent = source("src/gateway/mod.rs");
+    let lines: Vec<&str> = parent.lines().collect();
+    let decl = lines
+        .iter()
+        .position(|l| l.trim() == "mod recent_writes;")
+        .expect("gateway/mod.rs declares recent_writes");
+    assert!(
+        !gated(lines[decl.saturating_sub(1)]),
+        "the recent_writes module declaration is feature-gated"
     );
     for (path, want) in HOOK_SITES {
         let text = source(path);
@@ -293,7 +308,7 @@ fn f2_counter_and_hook_sites_carry_no_feature_cfg() {
                 })
                 .last()
                 .unwrap_or(start);
-            let gated = (attrs..=site).find(|&i| lines[i].contains("cfg(feature"));
+            let gated = (attrs..=site).find(|&i| gated(lines[i]));
             assert_eq!(
                 gated,
                 None,
