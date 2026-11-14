@@ -204,7 +204,11 @@ pub(super) fn graceful_ending(
     stdin_closed: bool,
     deadline: Option<&StopDeadline>,
 ) -> Ending {
-    let waits = budget.saturating_sub(KILL_RESERVE);
+    let waits = mutant!(
+        "m3",
+        budget.saturating_sub(KILL_RESERVE).saturating_sub(KILL_RESERVE),
+        budget.saturating_sub(KILL_RESERVE)
+    );
     let (eof, term) = match (cfg!(unix), stdin_closed) {
         (true, true) => {
             let term = deadline.map_or(waits / 3, |deadline| deadline.term_phase(waits));
@@ -564,7 +568,7 @@ impl super::StdioTransport {
     /// `BackendNotFound` (pre-dispatch) when the transport was retired.
     pub(super) fn install_tree(&self, tree: ChildTree) -> crate::Result<()> {
         let mut slot = self.child.lock();
-        if slot.retired {
+        if mutant!("m7", false, slot.retired) {
             slot.track(tree);
             return Err(crate::Error::BackendNotFound(
                 "stdio backend retired while it started".to_string(),

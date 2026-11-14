@@ -413,7 +413,11 @@ impl ChildTree {
         if let Some(deadline) = self.stop_deadline.as_ref()
             && let Some((cut, set_at)) = deadline.get_with_set_at()
         {
-            let cut = cut.checked_sub(super::reaper::KILL_RESERVE).unwrap_or(now);
+            let cut = mutant!(
+                "m4",
+                cut.checked_sub(super::reaper::KILL_RESERVE * 2).unwrap_or(now),
+                cut.checked_sub(super::reaper::KILL_RESERVE).unwrap_or(now)
+            );
             if cut < grace.kill_at {
                 // A SIGTERM the plan had due before this cut was made is owed,
                 // however little the cut leaves: the reaper missed it, not the stop.
