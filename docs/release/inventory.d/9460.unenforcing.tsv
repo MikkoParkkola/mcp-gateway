@@ -1,0 +1,14 @@
+src/gateway/server/construct.rs	shutdown_account_custody_by	1	Releases account custody at shutdown, bounded by the stop deadline; no access decision
+src/gateway/server/construct.rs	detach_custody_release	1	Hands account custody's store to a release thread at the end of a stop; no access decision
+src/personal_accounts/worker.rs	deref	1	Plain Deref from the held service to the account service; no access decision
+src/personal_accounts/worker.rs	take_open	1	Slot transition helper (Open to Releasing); the refusal is admit's
+src/personal_accounts/worker.rs	report_once	1	Logs a release problem once per handle; no access decision
+src/personal_accounts/worker.rs	drop	1	Sends the done signal when the held service drops; no access decision
+src/personal_accounts/worker.rs	lock_slot	1	Locks the release slot, recovering from a poisoned mutex; no access decision
+src/personal_accounts/worker.rs	spawn_release	1	Starts the detached release thread and returns the reference when the spawn fails; no access decision
+src/personal_accounts/worker.rs	await_done	1	Waits for the done signal up to a deadline; no access decision
+src/personal_accounts/worker.rs	settled_end	1	Reports how a call ends when the release is already running or stuck; no access decision
+src/personal_accounts/worker.rs	release_end	1	Reports Released or ReleasePending from the done signal; no access decision
+src/personal_accounts/worker.rs	stuck_end	1	Reports Stuck to a bounded caller and ReleaseStuck to an unbounded one; no access decision
+src/personal_accounts/worker.rs	detach_on_drop	1	Builds the serve guard; the shutting_down flag it leads to is set by detach_release
+src/personal_accounts/worker.rs	drop	2	Calls detach_release when a serve ends; the refusal is admit's
