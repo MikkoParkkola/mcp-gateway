@@ -364,7 +364,7 @@ async fn delete_is_audited() {
 
 /// After a Pending and then a Named refusal, a plain settings save still
 /// succeeds at once: the reload lock and the config sidecar were released.
-/// (Busy, TimedOut and Failed release the vault lock: store rows.)
+/// (`Busy`, `TimedOut` and `Failed` release the vault lock: store rows.)
 #[cfg(unix)]
 #[tokio::test]
 async fn locks_released_after_refusals() {

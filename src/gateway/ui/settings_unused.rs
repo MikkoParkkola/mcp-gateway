@@ -40,7 +40,8 @@ pub(super) struct StoreQuery {
     pub(super) store: String,
 }
 
-/// BadName 400, NotListed 404, StoreMismatch/Named/Pending 409, Busy/TimedOut/Failed 503.
+/// `BadName` 400, `NotListed` 404, `StoreMismatch`/`Named`/`Pending` 409,
+/// `Busy`/`TimedOut`/`Failed` 503.
 pub(super) fn refusal_status(refused: &DeleteRefused) -> StatusCode {
     match refused {
         DeleteRefused::BadName => StatusCode::BAD_REQUEST,
@@ -290,7 +291,7 @@ fn with_audit(mut response: Response, name: &str, store: &str, result: &str) -> 
     response
 }
 
-/// Snake_case variant name, and the fixed sentence (Failed keeps the store's text).
+/// The refusal's code word and its fixed sentence (`Failed` keeps the store's text).
 fn refusal_parts(refused: &DeleteRefused) -> (&'static str, &str) {
     match refused {
         DeleteRefused::BadName => (
