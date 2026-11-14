@@ -120,5 +120,8 @@ mod seam {
 #[path = "unused_delete_tests.rs"]
 mod delete_tests;
 #[cfg(test)]
+#[path = "unused_seam_tests.rs"]
+mod seam_tests;
+#[cfg(test)]
 #[path = "unused_tests.rs"]
 mod tests;

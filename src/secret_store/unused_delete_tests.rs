@@ -16,7 +16,7 @@ use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 /// In-memory keychain store. `exists` and `delete` can be faulted after a save.
-struct Fault {
+pub(super) struct Fault {
     entries: Mutex<BTreeMap<String, Vec<u8>>>,
     calls: Mutex<Vec<String>>,
     exists_error: Mutex<Option<StoreError>>,
@@ -24,7 +24,7 @@ struct Fault {
 }
 
 impl Fault {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             entries: Mutex::default(),
             calls: Mutex::default(),
@@ -40,7 +40,7 @@ impl Fault {
             .insert(name.to_owned(), b"v".to_vec());
     }
 
-    fn set_exists(&self, error: StoreError) {
+    pub(super) fn set_exists(&self, error: StoreError) {
         *self.exists_error.lock().expect("exists fault") = Some(error);
     }
 
@@ -48,7 +48,7 @@ impl Fault {
         *self.exists_error.lock().expect("exists fault") = None;
     }
 
-    fn set_delete(&self, error: StoreError) {
+    pub(super) fn set_delete(&self, error: StoreError) {
         *self.delete_error.lock().expect("delete fault") = Some(error);
     }
 
@@ -113,7 +113,7 @@ impl SecretStore for Fault {
     }
 }
 
-fn fault_entry() -> (
+pub(super) fn fault_entry() -> (
     tempfile::TempDir,
     Vault,
     Fault,
@@ -148,12 +148,12 @@ fn fault_entry() -> (
 
 /// The vault lock, held on another thread. A same-thread flock does not
 /// exclude the caller that is about to delete.
-struct LockHold {
+pub(super) struct LockHold {
     release: Option<mpsc::Sender<()>>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
-fn hold_vault(lock: PathBuf) -> LockHold {
+pub(super) fn hold_vault(lock: PathBuf) -> LockHold {
     let (held_tx, held_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel::<()>();
     let handle = std::thread::spawn(move || {
@@ -177,7 +177,7 @@ fn hold_vault(lock: PathBuf) -> LockHold {
 }
 
 impl LockHold {
-    fn release(mut self) {
+    pub(super) fn release(mut self) {
         self.join();
     }
 
