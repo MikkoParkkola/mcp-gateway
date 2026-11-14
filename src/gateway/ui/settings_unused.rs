@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, State, rejection::QueryRejection};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
@@ -32,7 +32,7 @@ pub(super) async fn delete_unused_entry(
     State(_state): State<Arc<AppState>>,
     guard: Guard,
     Path(_name): Path<String>,
-    _query: Option<Query<StoreQuery>>,
+    _query: Result<Query<StoreQuery>, QueryRejection>,
 ) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();

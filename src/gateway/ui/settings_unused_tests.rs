@@ -98,7 +98,7 @@ async fn delete(route: &Route, name: &str, store: &str, admin: bool) -> axum::re
             client(admin),
         ),
         Path(name.to_owned()),
-        Some(Query(StoreQuery {
+        Ok(Query(StoreQuery {
             store: store.to_owned(),
         })),
     )
