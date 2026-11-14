@@ -168,7 +168,8 @@ fn a_fifo_candidate_is_refused_without_blocking() {
 }
 
 /// Kills "any lstat error means absent": a candidate the gateway cannot stat
-/// (its directory has no search permission) refuses. Skipped as root.
+/// (its directory has no search permission) refuses, although a valid later
+/// candidate exists. Skipped as root.
 #[test]
 fn an_lstat_error_other_than_absence_refuses() {
     if rustix::process::geteuid().is_root() {
@@ -177,6 +178,8 @@ fn an_lstat_error_other_than_absence_refuses() {
     let root = tempfile::tempdir().expect("root");
     let bundle = under(root.path(), DISTRO_BUNDLES[0]);
     write(&bundle, pem().as_bytes());
+    // A valid second candidate: reading the error as absence would choose it.
+    write(&under(root.path(), DISTRO_BUNDLES[1]), pem().as_bytes());
     let dir = bundle.parent().expect("parent").to_owned();
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).expect("chmod");
     let chosen = HostBundle::choose(None, root.path());
