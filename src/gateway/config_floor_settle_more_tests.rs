@@ -242,6 +242,7 @@ mod disconnect {
         ctx: Arc<crate::config_reload::ReloadContext>,
         dir: &Path,
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
+        // The writer reaches the gate through its context's registry.
         let _ = gate;
         let text = format!("{PREFIX}{}\"\n", Template::placeholder_for(&slot()));
         let template = Template::from_placeholders(text.into_bytes(), &[slot()]).expect("slot");

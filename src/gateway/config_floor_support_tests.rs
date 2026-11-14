@@ -238,7 +238,8 @@ pub(crate) async fn write_bytes(
         AuditPosture, Expected, GatewayAuth, IntentKind, RELOAD_LOCK_WAIT, Replace, Replaced,
         replace_audited,
     };
-    // The wiring stage passes the gate to the writer; the rows never change.
+    // The writer reaches the gate through its context's registry; the parameter
+    // names the gate a row expects it to consult.
     let _ = gate;
     let bytes = text.as_bytes().to_vec();
     let replace = Replace {
@@ -281,7 +282,8 @@ pub(crate) struct CliWriter {
 /// binary's thin wrapper over the `edit_config` it calls.) The lock-wait signal is registered
 /// before the thread starts, so it cannot be missed.
 pub(crate) fn spawn_cli_writer(gate: &ConfigGate, path: &Path, environment: &str) -> CliWriter {
-    // The wiring stage passes the gate; the CLI path stays gate-free by design.
+    // The CLI path takes no gate by design: the gateway sees its write only
+    // through the watcher.
     let _ = gate;
     let waiting = crate::gateway::test_helpers::when_waiting_for_config_lock(path);
     let (path, value) = (path.to_path_buf(), environment.to_owned());
@@ -315,9 +317,8 @@ pub(crate) fn join_bounded<T>(handle: std::thread::JoinHandle<T>, what: &str) ->
 
 /// The watcher as a row drives it: its gate, its OWN reload context and the config
 /// path. Production builds the watcher a separate context over the shared registry
-/// (watcher.rs), with its own owed-reload flag, so the fixture does the same. The
-/// production loop has no hand-driven tick yet; the wiring stage extracts the
-/// per-tick function the spawned loop runs and `tick` calls exactly that.
+/// (watcher.rs), with its own owed-reload flag, so the fixture does the same; `tick`
+/// runs the same per-tick function the spawned loop runs.
 pub(crate) struct WatcherFixture {
     pub(crate) gate: ConfigGate,
     pub(crate) ctx: Arc<crate::config_reload::ReloadContext>,

@@ -4,9 +4,10 @@
 //! operation that can change `gateway.yaml` or the running config, and the
 //! adapter that pauses it, settles admitted work and certifies the file.
 //!
-//! This is the red-first skeleton: the gate admits everything and the adapter
-//! answers Ok and does nothing, so every row fails at its own assertion until
-//! the behaviour lands. Every test seam lives in `seams` under `cfg(test)`.
+//! The gate lives on the backend registry beside the reload lock; the adapter
+//! (built by the restart coordinator) drives it: pause, settle, both locks,
+//! read-only certification, then resume, release for a stop, or commit. Every
+//! test seam lives in `seams` under `cfg(test)`.
 #![cfg_attr(
     not(test),
     expect(
@@ -38,7 +39,7 @@ mod gate;
 pub(crate) use gate::{AdmissionGuard, AdmitKind, ConfigGate, GateState, Refusal};
 
 /// What a checkpoint certified: the sha256 (lower hex) of the config bytes
-/// and a revision. Stub: an empty hash.
+/// and a revision (the attempt that certified it).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Certification {
     pub(crate) sha256: String,
@@ -574,7 +575,7 @@ pub(crate) mod seams {
             self.seams.attempts.snapshot()
         }
 
-        /// The attempt number the last pause started. Stub: 0.
+        /// The attempt number the last pause started (0 before any pause).
         pub(crate) fn attempt(&self) -> u64 {
             self.attempt
         }

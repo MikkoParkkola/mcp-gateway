@@ -616,7 +616,7 @@ mod state_tests;
         reason = "the restart coordinator wiring, a later slice, reaches it through the config floor"
     )
 )]
-pub(crate) fn abandoned_path(target: &Path) -> PathBuf {
+pub(crate) fn abandoned_path(target: &std::path::Path) -> std::path::PathBuf {
     let mut name = std::ffi::OsString::from(target.file_name().unwrap_or_default());
     name.push(".abandoned");
     target.with_file_name(name)
