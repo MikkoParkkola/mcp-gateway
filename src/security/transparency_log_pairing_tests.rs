@@ -57,7 +57,7 @@ pub(super) fn verified(path: &Path) -> VerifyResult {
 
 /// Verify `records` in a fresh log.
 pub(super) fn verify_records(records: Vec<Map<String, Value>>) -> VerifyResult {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     verified(&log_with(&dir, records))
 }
 
@@ -268,7 +268,7 @@ fn delivery_stopped_without_an_outcome_fails() {
 #[tokio::test]
 async fn two_equal_settles_of_one_intent_collapse() {
     use super::settle::{IntentKind, Role};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = std::sync::Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     let own = l.log_id();
@@ -411,7 +411,7 @@ fn both_modes(path: &Path) -> [(VerifyMode, VerifyResult); 2] {
 async fn dependents_below_at_and_above_the_boundary() {
     use super::settle::{IntentKind, Role};
     // Just below the boundary: an expired intent, an info line.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let (l, _, b) = expired_log(&path).await;
     put(&l, "w-x", Role::Outcome, &json!({"intent_counter": b - 1})).await;
@@ -426,7 +426,7 @@ async fn dependents_below_at_and_above_the_boundary() {
         );
     }
     // At the boundary: in range, no intent there, so it fails.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let (l, _, b) = expired_log(&path).await;
     let at = put(&l, "w-x", Role::Outcome, &json!({"intent_counter": b})).await;
@@ -441,7 +441,7 @@ async fn dependents_below_at_and_above_the_boundary() {
         assert_eq!(count(&r.notes, "intent expired"), 0, "{mode:?}");
     }
     // Above it: an intent in range pairs, with no info line.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let (l, _, _) = expired_log(&path).await;
     let i = put(&l, "w-in", Role::Intent(IntentKind::Save), &json!({})).await;
@@ -456,7 +456,7 @@ async fn dependents_below_at_and_above_the_boundary() {
 #[tokio::test]
 async fn settled_by_below_the_boundary_is_expired_not_failed() {
     use super::settle::{IntentKind, Role};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let (l, old, _) = expired_log(&path).await;
     // GIVEN: an outcome whose settled_by names w-old's expired intent
@@ -538,11 +538,11 @@ fn under_a_failed_chain_pairing_findings_are_unverified_warnings() {
         ]
     };
     // A streaming failure: the record at 5 edited after the pairing failure.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let streaming = log_with(&dir, records());
     tamper(&streaming, 5);
     // A tail-only failure: the chain intact, `.hwm` gone.
-    let dir2 = tempfile::tempdir().unwrap();
+    let dir2 = crate::test_dir_keep::kept_tempdir();
     let tail = log_with(&dir2, records());
     std::fs::remove_file(super::segments::sibling(&tail, "hwm")).unwrap();
     for (what, path) in [("streaming", streaming), ("tail", tail)] {
@@ -589,7 +589,7 @@ fn repeats_differing_only_in_time_fields_collapse() {
 #[test]
 fn a_mismatched_record_warning_names_its_file_by_position_not_path() {
     // GIVEN: a log holding one mismatched record
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_with(&dir, vec![rec("config_write_note", "w-2", &json!({}))]);
 
     // WHEN: it is verified
@@ -726,7 +726,7 @@ fn settled_by_pairs_with_any_equal_recovery_repeat_but_not_a_counter_between() {
 fn mismatched_records_warn_once_per_rotated_file_by_position() {
     // GIVEN: two mismatched records in the first file, none in the second,
     // one in the third, written through the live logger
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let raw = |v: Value| {

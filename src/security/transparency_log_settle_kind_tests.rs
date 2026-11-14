@@ -72,7 +72,7 @@ async fn settle_refuses_every_payload_outside_its_namespace_as_invalid() {
     ];
     for (case, given, want) in cases {
         // GIVEN: a live logger, between two prefixed settles that land
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (path, l) = opened(&dir);
         let own = l.log_id();
         assert!(
@@ -108,7 +108,7 @@ async fn settle_refuses_every_payload_outside_its_namespace_as_invalid() {
 async fn a_settle_record_reaches_only_readers_of_its_settle_kind() {
     // GIVEN: readers of a plain kind, of "save", of `settle.save` and of
     // another plain kind
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (_, l) = opened(&dir);
     let told: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
     for kind in ["config_note", "save", SETTLE_SAVE, "restore"] {
@@ -136,7 +136,7 @@ fn no_plain_append_may_write_a_settle_kind() {
     for entry in ["append_event", "append_event_synced", "attributed"] {
         // GIVEN: a log, and a plain-kind append through the same entry
         // before and after
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (path, l) = opened(&dir);
         let append = |kind: &str| {
             let mut fields = Map::new();

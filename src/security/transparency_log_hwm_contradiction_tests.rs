@@ -14,7 +14,7 @@ use super::*;
 /// `.hwm` over the replacement and Live verify passed.
 #[test]
 fn a_replaced_tail_is_not_laundered_by_a_restart_append() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
     (0..5).for_each(|i| append(&l, i));
@@ -37,7 +37,7 @@ fn a_replaced_tail_is_not_laundered_by_a_restart_append() {
 #[test]
 fn a_restored_active_from_an_older_segment_is_not_laundered() {
     for signed in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
         rotate_n(&l, &path, 1);
@@ -71,7 +71,7 @@ fn a_restored_active_from_an_older_segment_is_not_laundered() {
 /// mark's counter is compared as well.
 #[test]
 fn a_replaced_record_at_the_mark_is_found_when_a_torn_suffix_was_repaired() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
     (0..5).for_each(|i| append(&l, i));
@@ -97,7 +97,7 @@ fn a_tail_ahead_of_the_mark_is_checked_against_the_record_at_the_mark() {
     use super::segments::{HighWater, encode_hwm, read_hwm, write_hwm};
     for signed in [false, true] {
         for tamper in [false, true] {
-            let dir = tempfile::tempdir().unwrap();
+            let dir = crate::test_dir_keep::kept_tempdir();
             let path = log_path(&dir);
             let secret = if signed { SECRET.as_bytes() } else { b"" };
             let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
@@ -140,7 +140,7 @@ fn a_tail_ahead_of_the_mark_is_checked_against_the_record_at_the_mark() {
 fn a_mark_naming_a_sealed_segment_is_checked_against_its_seal() {
     use super::segments::{HighWater, encode_hwm, sealed_path, write_hwm};
     for tamper in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
         rotate_n(&l, &path, 1);
@@ -172,7 +172,7 @@ fn a_mark_naming_a_sealed_segment_is_checked_against_its_seal() {
 #[test]
 fn a_mark_whose_record_is_gone_from_the_log_is_a_finding() {
     use super::segments::{HighWater, encode_hwm, write_hwm};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     (0..5).for_each(|i| append(&l, i));
@@ -199,7 +199,7 @@ fn a_mark_whose_record_is_gone_from_the_log_is_a_finding() {
 /// older file takes a counter above the mark, never one already committed.
 #[test]
 fn a_repair_record_on_a_restored_older_file_reuses_no_committed_counter() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
     (0..3).for_each(|i| append(&l, i));
@@ -227,7 +227,7 @@ fn a_repair_record_on_a_restored_older_file_reuses_no_committed_counter() {
 /// restart carries forward must start at it.
 #[test]
 fn a_torn_repair_above_the_mark_records_the_first_dropped_counter() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
     (0..3).for_each(|i| append(&l, i));
@@ -272,7 +272,7 @@ fn a_tail_contradicts_the_mark_when_behind_it_or_replaced_at_it() {
 #[test]
 fn an_honest_restart_records_no_finding() {
     for signed in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
         rotate_n(&l, &path, 2);
@@ -295,7 +295,7 @@ fn an_honest_restart_records_no_finding() {
 fn a_tail_at_the_mark_restored_under_an_older_segment_is_a_finding() {
     use super::segments::sealed_path;
     for signed in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
         rotate_n(&l, &path, 1);
@@ -331,7 +331,7 @@ fn a_tail_at_the_mark_restored_under_an_older_segment_is_a_finding() {
 fn a_copied_seal_of_a_sealed_segment_does_not_replace_it() {
     use super::segments::sealed_path;
     for signed in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
         rotate_n(&l, &path, 2);
@@ -373,7 +373,7 @@ fn a_copied_seal_behind_a_lagging_mark_is_a_finding() {
     use super::segments::{HighWater, encode_hwm, sealed_path, write_hwm};
     for signed in [false, true] {
         let secret = if signed { SECRET.as_bytes() } else { b"" };
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
         rotate_n(&l, &path, 1);
@@ -416,7 +416,7 @@ fn mark_at(path: &std::path::Path, record: &serde_json::Value, segment_seq: u64,
 /// shows the file was rebuilt. Unsigned: the open record is re-hashed.
 #[test]
 fn a_tail_at_the_mark_under_a_newer_segment_than_it_names_is_a_finding() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -435,7 +435,7 @@ fn a_tail_at_the_mark_under_a_newer_segment_than_it_names_is_a_finding() {
 fn a_restored_older_segment_behind_a_lagging_mark_is_a_finding() {
     use super::segments::sealed_path;
     for signed in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
         rotate_n(&l, &path, 1);
@@ -460,7 +460,7 @@ fn a_restored_older_segment_behind_a_lagging_mark_is_a_finding() {
 fn a_file_opening_an_older_segment_than_the_mark_names_is_a_finding() {
     use super::segments::sealed_path;
     for signed in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
         rotate_n(&l, &path, 2);
@@ -486,7 +486,7 @@ fn a_file_opening_an_older_segment_than_the_mark_names_is_a_finding() {
 fn a_sealed_segment_at_the_last_number_is_refused_not_overwritten() {
     use super::segments::sealed_path;
     for keep_active in [true, false] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
         rotate_n(&l, &path, 1);
@@ -540,7 +540,7 @@ fn mark_restart_finds(
 ) -> bool {
     use super::rotation_tests::SECRET;
     use super::segments::{HighWater, encode_hwm, write_hwm};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let secret = if signed { SECRET.as_bytes() } else { b"" };
     let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();

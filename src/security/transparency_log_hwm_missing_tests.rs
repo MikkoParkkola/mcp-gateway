@@ -76,7 +76,7 @@ fn assert_live_fails_on_mark(path: &Path) {
 
 #[test]
 fn a_restart_marks_a_missing_hwm_on_a_never_rotated_log() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     never_rotated_then_tail_cut(&path);
     let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
@@ -89,7 +89,7 @@ fn a_restart_marks_a_missing_hwm_on_a_never_rotated_log() {
 
 #[test]
 fn a_restart_marks_a_missing_hwm_after_the_last_sealed_expired() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     expired_last_sealed_then_tail_cut(&path);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
@@ -101,7 +101,7 @@ fn a_restart_marks_a_missing_hwm_after_the_last_sealed_expired() {
 
 #[test]
 fn a_restart_marks_a_missing_hwm_with_a_sealed_segment() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -117,7 +117,7 @@ fn a_restart_marks_a_missing_hwm_with_a_sealed_segment() {
 
 #[test]
 fn archive_mode_warns_on_the_mark() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     never_rotated_then_tail_cut(&path);
     drop(TransparencyLogger::open(never_rotates(&path)).unwrap());
@@ -132,7 +132,7 @@ fn archive_mode_warns_on_the_mark() {
 
 #[test]
 fn archive_mode_still_fails_a_broken_chain_beside_the_mark() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     never_rotated_then_tail_cut(&path);
     let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
@@ -147,7 +147,7 @@ fn archive_mode_still_fails_a_broken_chain_beside_the_mark() {
 /// last record: the next open re-mints the mark without stacking another.
 #[test]
 fn a_crash_before_the_fresh_hwm_does_not_stack_markers() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     never_rotated_then_tail_cut(&path);
     drop(TransparencyLogger::open(never_rotates(&path)).unwrap());
@@ -163,7 +163,7 @@ fn a_crash_before_the_fresh_hwm_does_not_stack_markers() {
 /// open record carried it: Live verify still fails.
 #[test]
 fn the_mark_outlives_retention() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -191,7 +191,7 @@ fn the_mark_outlives_retention() {
 /// carries the finding, so no raw-text match can be the carry test.
 #[test]
 fn an_escaped_marker_still_outlives_retention() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -227,7 +227,7 @@ fn tamper_then_expire(edit: impl FnOnce(String) -> String) {
 }
 
 fn tamper_then_expire_as(signed: bool, edit: impl FnOnce(&Path, String) -> String) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 1, signed)).unwrap();
     rotate_n(&l, &path, 1);
@@ -304,7 +304,7 @@ fn rotate_retained(l: &TransparencyLogger, path: &Path, n: u64) {
 /// itself a finding.
 #[test]
 fn a_cut_carrying_open_record_is_not_forgotten_at_restart() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
     rotate_n(&l, &path, 1);
@@ -348,7 +348,7 @@ fn rotate_by_open_seq(l: &TransparencyLogger, path: &Path, n: u64) {
 /// headless file, which recovery must count as a finding itself.
 #[test]
 fn a_cut_open_record_with_no_sealed_copy_is_not_forgotten() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 0, true)).unwrap();
     rotate_by_open_seq(&l, &path, 1);
@@ -380,7 +380,7 @@ fn a_cut_open_record_with_no_sealed_copy_is_not_forgotten() {
 /// its drop at restart is recorded again, not replaced by a clean repair.
 #[test]
 fn a_torn_committed_marker_is_not_forgotten_at_restart() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
     rotate_n(&l, &path, 1);
@@ -429,7 +429,7 @@ fn a_deleted_marker_is_not_forgotten_at_restart() {
 /// Disk-full expiry of the segment holding the marker carries the finding.
 #[test]
 fn the_mark_outlives_disk_full_expiry() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     never_rotated_then_tail_cut(&path);
     let l = TransparencyLogger::open(cfg(&path, 12, false))
@@ -453,7 +453,7 @@ fn the_mark_outlives_disk_full_expiry() {
 /// recovery finishes the rotation and still marks the log.
 #[test]
 fn a_crash_between_seal_and_rename_is_marked() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -479,7 +479,7 @@ fn a_crash_between_seal_and_rename_is_marked() {
 fn a_finished_seal_that_contradicts_the_mark_is_marked() {
     use super::segments::{HighWater, encode_hwm, write_hwm};
     for replaced_at_seal in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
         rotate_n(&l, &path, 1);
@@ -513,7 +513,7 @@ fn a_finished_seal_that_contradicts_the_mark_is_marked() {
 /// A pre-D6 log (no open record) keeps its re-minted mark and verifies clean.
 #[test]
 fn a_pre_d6_log_is_not_marked() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
     (0..3).for_each(|i| append(&l, i));
@@ -532,7 +532,7 @@ fn a_pre_d6_log_is_not_marked() {
 /// clean log, not a marked one (#2275).
 #[test]
 fn a_genesis_only_log_is_not_marked() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     drop(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     super::rotation_tests::cut_to_open_record(&path);
@@ -549,7 +549,7 @@ fn a_genesis_only_log_is_not_marked() {
 /// restart records the loss again and the finding outlives retention.
 #[test]
 fn a_whole_line_cut_of_a_committed_marker_is_not_forgotten() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
     rotate_n(&l, &path, 1);
@@ -572,7 +572,7 @@ fn a_whole_line_cut_of_a_committed_marker_is_not_forgotten() {
 /// its marker line is removed. The repair record itself carries the loss.
 #[test]
 fn a_crash_before_the_marker_keeps_a_committed_torn_drop() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
     rotate_n(&l, &path, 1);
@@ -604,7 +604,7 @@ fn a_crash_before_the_marker_keeps_a_committed_torn_drop() {
 /// the hash the mark recorded does not, and Live verify says so.
 #[test]
 fn verify_compares_the_hash_at_the_mark() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
     (0..5).for_each(|i| append(&l, i));
@@ -627,7 +627,7 @@ fn verify_compares_the_hash_at_the_mark() {
 /// it are three distinct values.
 #[test]
 fn a_mark_hash_mismatch_is_reported_at_the_mark_counter() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
     (0..3).for_each(|i| append(&l, i));
@@ -663,7 +663,7 @@ fn a_mark_hash_mismatch_is_reported_at_the_mark_counter() {
 #[test]
 fn an_emptied_active_below_the_mark_is_not_forgotten() {
     for delete in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
         rotate_n(&l, &path, 1);
@@ -693,7 +693,7 @@ fn an_emptied_active_below_the_mark_is_not_forgotten() {
 /// only the open record, which carries the loss itself.
 #[test]
 fn a_crash_after_the_replacement_open_record_keeps_the_loss() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
     rotate_n(&l, &path, 1);

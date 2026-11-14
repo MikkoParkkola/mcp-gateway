@@ -14,7 +14,7 @@ const SECRET: &str = "a-test-secret-that-is-at-least-32-bytes!!";
 
 /// One invocation entry written by the real logger, signed when `signed`.
 fn entry(signed: bool) -> Value {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("transparency.jsonl");
     let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,

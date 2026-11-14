@@ -13,6 +13,8 @@ use crate::security::audit::AuditEnvelope;
 fn kept_log() -> (Arc<TransparencyLogger>, std::path::PathBuf) {
     let dir = Arc::new(tempfile::tempdir().expect("a temp dir"));
     let root = dir.path().to_owned();
+    // Unregistered on purpose: only keep_test_dir may keep this dir alive.
+    let unkept = crate::test_dir_keep::expect_unkept();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -21,6 +23,7 @@ fn kept_log() -> (Arc<TransparencyLogger>, std::path::PathBuf) {
         }))
         .expect("the log opens"),
     );
+    drop(unkept);
     log.keep_test_dir(dir);
     (log, root)
 }

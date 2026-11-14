@@ -8,7 +8,7 @@ use super::*;
 
 #[test]
 fn signed_entry_only_in_sealed_segment_refuses_hash_only_verify() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, true)).unwrap();
     rotate_n(&l, &path, 1);
@@ -27,7 +27,7 @@ fn signed_entry_only_in_sealed_segment_refuses_hash_only_verify() {
 /// than reading the new, unsigned live file and passing a hash-only verify.
 #[test]
 fn a_rotation_during_the_signed_entry_scan_still_finds_the_signature() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, true)).unwrap();
     append(&l, 3);
@@ -48,7 +48,7 @@ fn a_rotation_during_the_signed_entry_scan_still_finds_the_signature() {
 /// and reads what is left, rather than failing `audit verify`.
 #[test]
 fn a_segment_removed_during_the_signed_entry_scan_is_read_again() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, true)).unwrap();
     rotate_n(&l, &path, 1);
@@ -67,7 +67,7 @@ fn a_segment_removed_during_the_signed_entry_scan_is_read_again() {
 /// `Interrupted`, never an answer read from a listing that moved.
 #[test]
 fn a_signed_entry_scan_rotated_twice_is_interrupted() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&l, 3);
@@ -98,7 +98,7 @@ fn keyless(path: &Path) -> VerifyResult {
 /// without the key passes its hash chain and says it saw one.
 #[test]
 fn a_keyless_pass_reports_the_signatures_it_read() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, true)).unwrap();
     append(&l, 0);
@@ -107,7 +107,7 @@ fn a_keyless_pass_reports_the_signatures_it_read() {
     assert!(r.ok, "{:?}", r.error_message);
     assert!(r.signed_entry_seen);
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&l, 0);
@@ -119,7 +119,7 @@ fn a_keyless_pass_reports_the_signatures_it_read() {
 /// that line: a broken chain cannot hide one.
 #[test]
 fn a_failed_pass_still_reports_a_signature() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, true)).unwrap();
     append(&l, 0);
@@ -138,7 +138,7 @@ fn a_failed_pass_still_reports_a_signature() {
 /// A `sig` key with no usable value still claims a signature, so it counts.
 #[test]
 fn an_empty_signature_still_counts_as_signed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&l, 0);
@@ -152,7 +152,7 @@ fn an_empty_signature_still_counts_as_signed() {
 /// signature, because it is noted when the line is parsed.
 #[test]
 fn a_signature_rejected_before_its_checks_is_still_reported() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 1);

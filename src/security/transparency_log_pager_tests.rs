@@ -20,8 +20,8 @@ fn segment(seq: u64, records: usize) -> String {
 
 /// A log whose sealed segments are `sealed` and whose active file, if any,
 /// is segment `active`.
-fn log_with(sealed: &[u64], active: Option<u64>) -> (tempfile::TempDir, PathBuf) {
-    let dir = tempfile::tempdir().unwrap();
+fn log_with(sealed: &[u64], active: Option<u64>) -> (std::sync::Arc<tempfile::TempDir>, PathBuf) {
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("audit.jsonl");
     for &seq in sealed {
         std::fs::write(sealed_path(&log, seq), segment(seq, 2)).unwrap();
@@ -40,7 +40,7 @@ fn len(path: &Path) -> u64 {
 /// active file is numbered by its open record, not by counting siblings.
 #[test]
 fn the_active_segment_is_numbered_by_its_open_record() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("audit.jsonl");
     let opened = serde_json::json!({"event": "audit_segment_opened", "segment_seq": 7});
     std::fs::write(&log, format!("{opened}\n")).unwrap();
@@ -55,7 +55,7 @@ fn the_active_segment_is_numbered_by_its_open_record() {
 /// must not hand back the active file, which is a different segment.
 #[test]
 fn a_segment_removed_after_resolving_is_not_replaced_by_the_active_file() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("audit.jsonl");
     let sealed = sealed_path(&log, 3);
     let opened =
