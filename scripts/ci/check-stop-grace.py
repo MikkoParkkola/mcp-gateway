@@ -556,6 +556,7 @@ PLANTED = {
     "deploy/o/deployment.yaml": DEPLOYMENT + "      terminationGracePeriodSeconds: 31\n---\n" + DEPLOYMENT,
     "docs/run-attached-global.md": fence("docker -Htcp://host run " + IMG),
     "docs/run-global-unreadable.md": fence("docker --made-up-global run " + IMG),
+    "docs/plain-config.md": "## S\n\n" + ENV_NAME + "=50s\n\n" + fence(RUN31),
     "docs/indented-config.md": "Config:\n\n    server:\n      shutdown_timeout: 50s\n\nRun:\n\n    " + RUN31 + "\n",
     "deploy/n/deployment.yaml": DEPLOYMENT + "      terminationGracePeriodSeconds: 31\n---\n"
                                 + DEPLOYMENT + "      terminationGracePeriodSeconds: 10  # short\n",
@@ -586,6 +587,7 @@ CLEAN = {
 
 # Every planted offender's diagnostic, exactly: a fixture flagged for the wrong reason fails.
 EXPECTED = [
+    'docs/plain-config.md:6: serving docker run --stop-timeout is 31; it needs at least 51 s',
     'deploy/o/deployment.yaml:1: kubernetes: terminationGracePeriodSeconds is unset; it needs at least 31 s',
     'docs/run-attached-global.md:2: serving docker run --stop-timeout is unset; it needs at least 31 s',
     'docs/run-global-unreadable.md:2: a docker run of the gateway image the check cannot read (it took None for the image); fix the example or teach check-stop-grace.py the option',
