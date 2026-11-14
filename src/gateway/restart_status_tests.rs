@@ -356,14 +356,14 @@ fn b4_each_cancel_reason_renders_and_stays_until_the_next_accept() {
         board.cancel(reason);
         board.saving();
         board.commit(STOP_DL);
-        let text = board.status().expect("a record").wire()["reason"]
+        let text = board.status().expect("a record").status_json()["reason"]
             .as_str()
             .unwrap_or_default()
             .to_owned();
         assert!(!text.is_empty(), "{reason:?}");
         assert!(seen.insert(text), "{reason:?} renders like another reason");
         board.accept(CHECKPOINT_DL);
-        assert!(board.status().expect("a record").wire()["reason"].is_null());
+        assert!(board.status().expect("a record").status_json()["reason"].is_null());
     }
     assert_eq!(RestartBoard::default().status(), None);
 }
@@ -378,13 +378,13 @@ fn b5_wire_form_has_the_agreed_keys_and_lowercase_phases() {
     second.commit(STOP_DL);
     second.set_remaining_calls(7);
     assert_eq!(
-        second.status().expect("a record").wire(),
+        second.status().expect("a record").status_json(),
         serde_json::json!({
             "id": 2, "phase": "checkpoint", "deadline": STOP_DL, "remaining_calls": 7, "reason": null
         })
     );
     let board = at_checkpoint(true);
-    let wire = board.status().expect("a record").wire();
+    let wire = board.status().expect("a record").status_json();
     let keys: Vec<&str> = wire
         .as_object()
         .expect("an object")
@@ -403,13 +403,16 @@ fn b5_wire_form_has_the_agreed_keys_and_lowercase_phases() {
         RestartBoard::draining,
     ] {
         step(&board);
-        phases.push(board.status().expect("a record").wire()["phase"].clone());
+        phases.push(board.status().expect("a record").status_json()["phase"].clone());
     }
     let early = RestartBoard::default();
     early.accept(CHECKPOINT_DL);
-    phases.insert(0, early.status().expect("a record").wire()["phase"].clone());
+    phases.insert(
+        0,
+        early.status().expect("a record").status_json()["phase"].clone(),
+    );
     early.cancel(RestartCancel::Recheck);
-    phases.push(early.status().expect("a record").wire()["phase"].clone());
+    phases.push(early.status().expect("a record").status_json()["phase"].clone());
     let want = [
         "accepted",
         "checkpoint",

@@ -105,7 +105,7 @@ impl RestartStatus {
     /// The status edge's form: `{id, phase, deadline, remaining_calls,
     /// reason}`, the phase lowercase, the deadline in unix ms, the reason
     /// rendered from the cancel (null without one).
-    pub(crate) fn wire(&self) -> Value {
+    pub(crate) fn status_json(&self) -> Value {
         json!({
             "id": self.id,
             "phase": self.phase.word(),

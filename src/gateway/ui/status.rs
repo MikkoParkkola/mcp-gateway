@@ -188,7 +188,9 @@ pub(super) fn add_restart(body: &mut Value, view: StatusView, record: Option<Res
     {
         members.insert(
             "restart".to_owned(),
-            record.as_ref().map_or(Value::Null, RestartStatus::wire),
+            record
+                .as_ref()
+                .map_or(Value::Null, RestartStatus::status_json),
         );
     }
 }

@@ -412,7 +412,7 @@ async fn s1_only_the_full_status_view_carries_restart() {
             let want = match (full, accepted) {
                 (false, _) => None,
                 (true, false) => Some(Value::Null),
-                (true, true) => Some(board.status().expect("a record").wire()),
+                (true, true) => Some(board.status().expect("a record").status_json()),
             };
             let got = body.get("restart");
             let phase_ok = !(want.is_some() && accepted) || body["restart"]["phase"] == "accepted";
