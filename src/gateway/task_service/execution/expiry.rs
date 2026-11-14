@@ -178,17 +178,15 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
                 now,
             )
             .await;
-        let Err(failure) = cancelled else {
-            continue;
+        let failure = match cancelled {
+            Ok(super::input_round::Closed::Done) => continue,
+            // A checkpoint paused the store after this tick began: the close
+            // was skipped, not refused, and the next tick covers it.
+            Ok(super::input_round::Closed::Skipped) => {
+                return round_failure.map_or(Ok(()), Err);
+            }
+            Err(failure) => failure,
         };
-        // A checkpoint paused the store after this tick began: the close was
-        // skipped, not refused, and the next tick covers it. ponytail: read
-        // after the failure, so a pause and resume both landing inside one
-        // close would count it as failed; carry the skip through the commit
-        // error if that ever shows up.
-        if !service.store.sweeps_allowed() {
-            return round_failure.map_or(Ok(()), Err);
-        }
         // A cancel refused because the round moved (answered, cancelled, gone)
         // is benign. The commit reports a refused transition the way it reports
         // a failed write, so the row itself says which one this was: still an

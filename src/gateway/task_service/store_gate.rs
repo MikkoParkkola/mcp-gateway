@@ -217,8 +217,9 @@ impl Drop for Admitted {
     }
 }
 
-/// A parked submitter's place: counted in `parked` while it lives. If it ends
-/// without being admitted while its drain runs, the drain loses a member.
+/// A parked submitter's place: counted in `parked` until it is admitted or
+/// ends. If it ends without being admitted while its drain runs, the drain
+/// loses a member.
 struct Ticket {
     gate: TaskGate,
     stamp: Stamp,
@@ -227,10 +228,14 @@ struct Ticket {
 
 impl Drop for Ticket {
     fn drop(&mut self) {
-        let (born, admitted) = (self.stamp.born, self.admitted);
+        if self.admitted {
+            // It left `parked` in the step that admitted it.
+            return;
+        }
+        let born = self.stamp.born;
         self.gate.tx.send_modify(|g| {
             g.parked = g.parked.saturating_sub(1);
-            if !admitted && born < g.drain_epoch {
+            if born < g.drain_epoch {
                 cohort_done(g, g.drain_epoch);
             }
         });
@@ -272,12 +277,21 @@ impl TaskGate {
         loop {
             let stamp = ticket.as_ref().map(|t| t.stamp);
             let (mut decision, mut fresh, mut drain) = (Decision::Park, None, 0);
+            // Admitted while the gate is still closed: only the backstop does that.
+            let mut closed = false;
             self.tx.send_if_modified(|g| {
                 decision = decide(g, kind, stamp.as_ref(), expired);
                 drain = g.drain_epoch;
+                closed = matches!(g.state, GateState::Paused(_) | GateState::Certified(_));
                 match decision {
                     Decision::Admit { .. } => {
                         g.in_flight += 1;
+                        // A parked submitter leaves `parked` in the same step,
+                        // so a resume racing its return never counts it in a
+                        // drain it will not report to.
+                        if stamp.is_some() {
+                            g.parked = g.parked.saturating_sub(1);
+                        }
                         true
                     }
                     Decision::Park if stamp.is_none() => {
@@ -293,18 +307,18 @@ impl TaskGate {
                     Decision::Park | Decision::Refuse(_) => false,
                 }
             });
+            if let (Decision::Admit { .. }, Some(ticket)) = (decision, ticket.as_mut()) {
+                ticket.admitted = true;
+            }
             #[cfg(test)]
             seams::GateSeams::pass(&self.seams.at_decision).await;
             match decision {
                 Decision::Admit { cohort } => {
-                    if expired && kind != Kind::External {
+                    if closed {
                         tracing::error!(
                             attempt = stamp.map(|s| s.attempt),
                             "a task-store write proceeded at the restart backstop, outside its attempt's certified image"
                         );
-                    }
-                    if let Some(ticket) = ticket.as_mut() {
-                        ticket.admitted = true;
                     }
                     return Ok(Admitted {
                         gate: self.clone(),
