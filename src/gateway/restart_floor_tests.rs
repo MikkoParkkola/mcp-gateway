@@ -440,7 +440,7 @@ async fn every_adapter_gets_the_one_deadline() {
     );
 }
 
-/// all_settled is false while one owner's late work runs, true after it ends.
+/// `all_settled` is false while one owner's late work runs, true after it ends.
 #[test]
 fn all_settled_waits_for_late_work() {
     let seen = Seen::default();
