@@ -395,7 +395,7 @@ async fn s1_only_the_full_status_view_carries_restart() {
     let mut wrong = Vec::new();
     for accepted in [false, true] {
         if accepted {
-            board.accept(1_000);
+            board.accept();
         }
         for who in WHO {
             let (code, body) = send(&router, get(who, routes::UI_STATUS)).await;

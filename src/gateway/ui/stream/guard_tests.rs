@@ -175,17 +175,17 @@ async fn b7_restart_record_changes_raise_only_the_status_generation() {
     let (mut status, counts) = publish();
     let steps: [Step; 8] = [
         ("null to a record", |b| {
-            b.accept(1_000);
+            b.accept();
         }),
         ("id", |b| {
-            b.accept(1_000);
+            b.accept();
         }),
-        ("phase", RestartBoard::checkpoint),
+        ("phase", |b| b.checkpoint(1_000)),
         ("deadline", |b| b.commit(2_000)),
         ("remaining calls", |b| b.set_remaining_calls(4)),
         ("phase after commit", RestartBoard::restarting),
         ("a fresh attempt", |b| {
-            b.accept(1_000);
+            b.accept();
         }),
         ("reason", |b| b.cancel(RestartCancel::Recheck)),
     ];

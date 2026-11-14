@@ -24,8 +24,8 @@ fn phase(board: &RestartBoard) -> Option<RestartPhase> {
 /// A board at Checkpoint, committed when `commit` is set.
 fn at_checkpoint(commit: bool) -> RestartBoard {
     let board = RestartBoard::default();
-    board.accept(CHECKPOINT_DL);
-    board.checkpoint();
+    board.accept();
+    board.checkpoint(CHECKPOINT_DL);
     if commit {
         board.commit(STOP_DL);
     }
@@ -50,32 +50,32 @@ fn b1_restarting_before_commit_is_ignored_and_logged_once() {
 #[test]
 fn b2_checkpoint_only_from_accepted() {
     let board = RestartBoard::default();
-    board.checkpoint();
+    board.checkpoint(CHECKPOINT_DL);
     assert_eq!(board.status(), None);
-    board.accept(CHECKPOINT_DL);
-    board.checkpoint();
+    board.accept();
+    board.checkpoint(CHECKPOINT_DL);
     assert_eq!(phase(&board), Some(RestartPhase::Checkpoint));
     board.cancel(RestartCancel::Recheck);
-    board.checkpoint();
+    board.checkpoint(CHECKPOINT_DL);
     assert_eq!(phase(&board), Some(RestartPhase::Cancelled));
 }
 
 #[test]
 fn b2_commit_only_from_checkpoint_and_switches_deadline() {
     let board = RestartBoard::default();
-    board.accept(CHECKPOINT_DL);
+    board.accept();
     board.commit(STOP_DL);
     let accepted = board.status().expect("a record");
     assert_eq!(
         (accepted.phase, accepted.deadline_unix_ms),
-        (RestartPhase::Accepted, CHECKPOINT_DL)
+        (RestartPhase::Accepted, None)
     );
-    board.checkpoint();
+    board.checkpoint(CHECKPOINT_DL);
     board.commit(STOP_DL);
     let committed = board.status().expect("a record");
     assert_eq!(
         (committed.phase, committed.deadline_unix_ms),
-        (RestartPhase::Checkpoint, STOP_DL)
+        (RestartPhase::Checkpoint, Some(STOP_DL))
     );
 }
 
@@ -89,7 +89,7 @@ fn b2_cancel_only_before_commit() {
         (RestartPhase::Checkpoint, None)
     );
     let early = RestartBoard::default();
-    early.accept(CHECKPOINT_DL);
+    early.accept();
     early.cancel(RestartCancel::AuditRefused);
     let record = early.status().expect("a record");
     assert_eq!(
@@ -140,7 +140,7 @@ fn b2_forward_by_rank_only() {
 #[test]
 fn b2_nothing_before_accept() {
     let board = RestartBoard::default();
-    board.checkpoint();
+    board.checkpoint(CHECKPOINT_DL);
     board.cancel(RestartCancel::Recheck);
     board.commit(STOP_DL);
     board.restarting();
@@ -157,7 +157,7 @@ fn b2_accept_starts_fresh_even_after_draining() {
     board.set_remaining_calls(4);
     board.draining();
     let first = board.status().expect("a record").id;
-    let second = board.accept(CHECKPOINT_DL);
+    let second = board.accept();
     assert_eq!(second, first + 1);
     let record = board.status().expect("a record");
     assert_eq!(
@@ -168,13 +168,40 @@ fn b2_accept_starts_fresh_even_after_draining() {
             record.remaining_calls,
             record.cancel
         ),
-        (second, RestartPhase::Accepted, CHECKPOINT_DL, 0, None)
+        (second, RestartPhase::Accepted, None, 0, None)
     );
     board.restarting();
     assert_eq!(
         phase(&board),
         Some(RestartPhase::Accepted),
         "the new attempt is not committed"
+    );
+}
+
+/// B8: an accepted attempt has no deadline until the checkpoint move sets
+/// it: the record's deadline is `None` and the wire's is `null`; the
+/// checkpoint sets its own, and a second checkpoint call changes nothing.
+#[test]
+fn b8_an_accepted_attempt_has_no_deadline_until_its_checkpoint() {
+    let board = RestartBoard::default();
+    board.accept();
+    let accepted = board.status().expect("a record");
+    assert_eq!(accepted.deadline_unix_ms, None);
+    assert!(
+        accepted.status_json()["deadline"].is_null(),
+        "{}",
+        accepted.status_json()
+    );
+    board.checkpoint(CHECKPOINT_DL);
+    assert_eq!(phase(&board), Some(RestartPhase::Checkpoint));
+    assert_eq!(
+        board.status().expect("a record").deadline_unix_ms,
+        Some(CHECKPOINT_DL)
+    );
+    board.checkpoint(STOP_DL);
+    assert_eq!(
+        board.status().expect("a record").deadline_unix_ms,
+        Some(CHECKPOINT_DL)
     );
 }
 
@@ -229,7 +256,7 @@ impl Model {
             self.record = Some(RestartStatus {
                 id: self.last_id,
                 phase: RestartPhase::Accepted,
-                deadline_unix_ms: CHECKPOINT_DL,
+                deadline_unix_ms: None,
                 remaining_calls: 0,
                 cancel: None,
             });
@@ -248,6 +275,7 @@ impl Model {
         match call {
             Call::Checkpoint if r.phase == RestartPhase::Accepted => {
                 r.phase = RestartPhase::Checkpoint;
+                r.deadline_unix_ms = Some(CHECKPOINT_DL);
             }
             Call::Cancel if live && !committed => {
                 r.phase = RestartPhase::Cancelled;
@@ -255,7 +283,7 @@ impl Model {
             }
             Call::Commit if r.phase == RestartPhase::Checkpoint && !committed => {
                 self.committed = true;
-                r.deadline_unix_ms = STOP_DL;
+                r.deadline_unix_ms = Some(STOP_DL);
             }
             Call::Restarting if r.phase == RestartPhase::Checkpoint => {
                 forward(r, RestartPhase::Restarting);
@@ -271,9 +299,9 @@ impl Model {
 fn call(board: &RestartBoard, c: Call) {
     match c {
         Call::Accept => {
-            board.accept(CHECKPOINT_DL);
+            board.accept();
         }
-        Call::Checkpoint => board.checkpoint(),
+        Call::Checkpoint => board.checkpoint(CHECKPOINT_DL),
         Call::Cancel => board.cancel(RestartCancel::StopSignal),
         Call::Commit => board.commit(STOP_DL),
         Call::Restarting => board.restarting(),
@@ -362,7 +390,7 @@ fn b4_each_cancel_reason_renders_and_stays_until_the_next_accept() {
             .to_owned();
         assert!(!text.is_empty(), "{reason:?}");
         assert!(seen.insert(text), "{reason:?} renders like another reason");
-        board.accept(CHECKPOINT_DL);
+        board.accept();
         assert!(board.status().expect("a record").status_json()["reason"].is_null());
     }
     assert_eq!(RestartBoard::default().status(), None);
@@ -372,9 +400,9 @@ fn b4_each_cancel_reason_renders_and_stays_until_the_next_accept() {
 fn b5_wire_form_has_the_agreed_keys_and_lowercase_phases() {
     // Every value, on a record whose id and remaining calls differ.
     let second = RestartBoard::default();
-    second.accept(CHECKPOINT_DL);
-    second.accept(CHECKPOINT_DL);
-    second.checkpoint();
+    second.accept();
+    second.accept();
+    second.checkpoint(CHECKPOINT_DL);
     second.commit(STOP_DL);
     second.set_remaining_calls(7);
     assert_eq!(
@@ -406,7 +434,7 @@ fn b5_wire_form_has_the_agreed_keys_and_lowercase_phases() {
         phases.push(board.status().expect("a record").status_json()["phase"].clone());
     }
     let early = RestartBoard::default();
-    early.accept(CHECKPOINT_DL);
+    early.accept();
     phases.insert(
         0,
         early.status().expect("a record").status_json()["phase"].clone(),

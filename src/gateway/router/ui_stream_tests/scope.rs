@@ -377,7 +377,7 @@ async fn s2_a_restart_change_reaches_only_the_full_view() {
         scoped.push((who, s, part(&status, 's')));
     }
     let before = observed(&state);
-    state.meta_mcp.restart_board().accept(1_000);
+    state.meta_mcp.restart_board().accept();
     let next = admin.until("status").await;
     assert_eq!(
         next.json()["restart"]["phase"],
@@ -407,8 +407,8 @@ async fn s2_a_restart_change_reaches_only_the_full_view() {
 async fn s3_a_deadline_only_commit_sends_the_admin_one_frame() {
     let (state, _bearers, _dir) = gateway().await;
     let board = state.meta_mcp.restart_board();
-    board.accept(1_000);
-    board.checkpoint();
+    board.accept();
+    board.checkpoint(1_000);
     let mut admin = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
     let first = admin.until("status").await;
     assert_eq!(

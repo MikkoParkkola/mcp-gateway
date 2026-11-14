@@ -96,7 +96,9 @@ impl RestartCancel {
 pub(crate) struct RestartStatus {
     id: u64,
     phase: RestartPhase,
-    deadline_unix_ms: u64,
+    /// The deadline in force, unix ms: none while accepted, the checkpoint's
+    /// from the checkpoint move, the stop's from the commit.
+    deadline_unix_ms: Option<u64>,
     remaining_calls: u64,
     cancel: Option<RestartCancel>,
 }
@@ -131,22 +133,23 @@ pub(crate) struct RestartBoard {
 
 impl RestartBoard {
     /// Start a new attempt and return its id (a per-boot sequence from 1).
-    pub(crate) fn accept(&self, checkpoint_deadline_unix_ms: u64) -> u64 {
+    pub(crate) fn accept(&self) -> u64 {
         let mut board = self.board.lock();
         board.last_id += 1;
         board.committed = false;
         board.record = Some(RestartStatus {
             id: board.last_id,
             phase: RestartPhase::Accepted,
-            deadline_unix_ms: checkpoint_deadline_unix_ms,
+            // Red stub: a made-up deadline before the checkpoint sets one.
+            deadline_unix_ms: Some(0),
             remaining_calls: 0,
             cancel: None,
         });
         board.last_id
     }
 
-    /// Accepted to Checkpoint.
-    pub(crate) fn checkpoint(&self) {
+    /// Accepted to Checkpoint, setting the checkpoint's deadline.
+    pub(crate) fn checkpoint(&self, _checkpoint_deadline_unix_ms: u64) {
         self.edit(|record, _| {
             if record.phase == RestartPhase::Accepted {
                 record.phase = RestartPhase::Checkpoint;
@@ -169,7 +172,7 @@ impl RestartBoard {
         self.edit(|record, committed| {
             if !*committed && record.phase == RestartPhase::Checkpoint {
                 *committed = true;
-                record.deadline_unix_ms = stop_deadline_unix_ms;
+                record.deadline_unix_ms = Some(stop_deadline_unix_ms);
             }
         });
     }
