@@ -79,7 +79,7 @@ Your agent will install the binary, run the setup wizard, import your existing M
 
 ## What's new in 4.0
 
-4.0 adds a trust layer on top of the same fixed-context gateway. It is in beta (`4.0.0-beta.3`): pin it with `cargo install mcp-gateway --version 4.0.0-beta.3`, and read [docs/UPGRADING-4.0.md](docs/UPGRADING-4.0.md) first, because a 3.x config that 4.0 no longer trusts refuses to start.
+4.0 adds a trust layer on top of the same fixed-context gateway. It is in beta (`4.0.0-beta.3`): pin it with `cargo install --locked mcp-gateway --version 4.0.0-beta.3`, and read [docs/UPGRADING-4.0.md](docs/UPGRADING-4.0.md) first, because a 3.x config that 4.0 no longer trusts refuses to start.
 
 - **The newest MCP revision, with a built-in version bridge.** MCP 2026-07-28 is on by default beside 2025-11-25 and earlier, on the same endpoint, and clients and backends on different revisions make ordinary tool calls to each other. Move your clients to 2026-07-28 before every server does.
 - **Each caller sees and reaches only what it was granted.** Tool lists, search, server lists and the direct per-backend route show a caller only the backends and tools its key or identity may invoke.
@@ -98,11 +98,13 @@ MCP Registry name: `mcp-name: io.github.MikkoParkkola/mcp-gateway`
 | Method | Command |
 |--------|---------|
 | **Homebrew (macOS/Linux, recommended)** | `brew install MikkoParkkola/tap/mcp-gateway` |
-| **Cargo** | `cargo install mcp-gateway` |
+| **Cargo** | `cargo install --locked mcp-gateway` |
 | **cargo-binstall** | `cargo binstall mcp-gateway` |
 | **Direct binary download (Windows x64)** | Download `mcp-gateway-windows-x86_64.exe` from the [latest release](https://github.com/MikkoParkkola/mcp-gateway/releases/latest) |
 | **Docker** | `docker run -p 127.0.0.1:39400:39400 -e MCP_GATEWAY_TOKEN -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish -v $(pwd)/gateway.container.yaml:/config.yaml:ro ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --host 0.0.0.0 --port 39400` |
 | **Docker, `npx`/`uvx` backends** | Same, with `:latest-full` — the default image carries no Node or `uv`, so a stdio backend that shells out to either cannot spawn. See [Docker Deployment](docs/DEPLOYMENT.md#docker-deployment). |
+
+`--locked` builds with the exact dependency versions this release was tested with. Without it Cargo picks the newest compatible versions on the day you install, which can differ from the ones the release was tested with. The release binaries and the container images are already built from the release's own lock file.
 
 Release images are signed with keyless cosign. To check one, use cosign 2.6.5 or later on the 2.x
 line, or 3.1.3 or later on 3.x; earlier versions accept signatures they should refuse (GHSA-fx35-mq7g-6g98, GHSA-whqx-f9j3-ch6m).
