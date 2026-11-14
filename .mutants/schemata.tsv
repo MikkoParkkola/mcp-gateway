@@ -1,0 +1,27 @@
+head_sha	22f777267ad1eab00a82ee81b712b8430e9d7826
+#mutant m01-notserve
+mcp_gateway	restart::invocation_tests::unix::inv11_not_serve_stops_before_the_path_walk	src/restart/invocation_tests.rs:466
+#mutant m02-argv0
+mcp_gateway	restart::invocation_tests::unix::inv7_missing_or_empty_argv0	src/restart/invocation_tests.rs:359
+#mutant m03-mask
+mcp_gateway	restart::invocation_tests::unix::inv10_blocked_stop_signal_disables_restart	src/restart/invocation_tests.rs:154
+#mutant m04-cwd
+mcp_gateway	restart::invocation_tests::unix::inv9_cwd_error_disables_restart	src/restart/invocation_tests.rs:154
+#mutant m05-embedded
+mcp_gateway	restart::invocation_tests::unix::inv12_each_serve_field_difference_is_embedded	src/restart/invocation_tests.rs:154
+#mutant m06-config
+mcp_gateway	restart::invocation_tests::unix::inv12_each_serve_field_difference_is_embedded	src/restart/invocation_tests.rs:154
+#mutant m07-port
+mcp_gateway	restart::invocation_tests::unix::inv12_each_serve_field_difference_is_embedded	src/restart/invocation_tests.rs:154
+#mutant m08-host
+mcp_gateway	restart::invocation_tests::unix::inv12_each_serve_field_difference_is_embedded	src/restart/invocation_tests.rs:154
+#mutant m09-loglevel
+mcp_gateway	restart::invocation_tests::unix::inv12_each_serve_field_difference_is_embedded	src/restart/invocation_tests.rs:154
+#mutant m10-logformat
+mcp_gateway	restart::invocation_tests::unix::inv12_each_serve_field_difference_is_embedded	src/restart/invocation_tests.rs:154
+#mutant m11-nometa
+mcp_gateway	restart::invocation_tests::unix::inv12_each_serve_field_difference_is_embedded	src/restart/invocation_tests.rs:154
+#mutant m12-window
+mcp_gateway	restart::invocation_tests::unix::inv12_each_serve_field_difference_is_embedded	src/restart/invocation_tests.rs:154
+#mutant m13-command
+mcp_gateway	restart::invocation_tests::unix::inv12b_subcommand_on_either_side	src/restart/invocation_tests.rs:154
