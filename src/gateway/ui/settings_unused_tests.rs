@@ -12,6 +12,8 @@ use crate::config::{EnvOverlay, FailsafeConfig, LiveEnv, ResolvedEnvFiles};
 #[cfg(unix)]
 use crate::config_reload::ReloadContext;
 #[cfg(unix)]
+use crate::gateway::test_helpers::write_owner_only;
+#[cfg(unix)]
 use crate::gateway::ui::admin_audit::AuditDetail;
 use crate::gateway::ui::guard::Guard;
 use crate::gateway::{auth::AuthenticatedClient, routes};
@@ -438,7 +440,7 @@ async fn delete_refuses_env_named() {
     const VALUE: &str = "unused-env-canary";
     let (route, name) = unnamed_entry(ROW, VALUE).await;
     let env = route.dir.path().join("gateway.env");
-    std::fs::write(&env, format!("TOKEN=keychain:{name}\n")).expect("env");
+    write_owner_only(&env, format!("TOKEN=keychain:{name}\n")).expect("env");
     let live = Arc::new(LiveEnv::new(
         Arc::new(EnvOverlay::none()),
         ResolvedEnvFiles::new(vec![env], false),
