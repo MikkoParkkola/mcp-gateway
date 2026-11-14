@@ -199,22 +199,27 @@ async fn a_hurried_stop_hands_a_lock_held_backends_live_tree_to_the_reaper_at_on
     let started = tokio::time::Instant::now();
     let cut = started + KILL_RESERVE_FOR_TEST + HURRY_WINDOW;
     registry.stop_deadline().hurry(started.into_std());
-    let observe_at = started + HURRY_WINDOW + Duration::from_millis(200);
-    // Keep stop_all_by polled and the lifecycle lock held. Capture the early
-    // kernel state before its eventual RetireOnDrop sweep can hide the bug.
-    let ((), at_kill_cut) = tokio::time::timeout(Duration::from_secs(10), async {
+    // Keep stop_all_by polled and the lifecycle lock held, and wait for the
+    // tree to leave the running state. Handed over, it is killed about
+    // HURRY_WINDOW after the hurry plus what load adds, seconds before `cut`;
+    // not handed over, only the stop's RetireOnDrop sweep kills it, after `cut`.
+    // So the bug is told by when the tree went relative to `cut`, an event,
+    // not by a sample at a fixed instant (the reap's own timing is pinned by
+    // the transport's clock-free hurry rows).
+    let ((), gone_at) = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::join!(registry.stop_all_by(cut), async {
-            tokio::time::sleep_until(observe_at).await;
-            (kernel_view(pid), started.elapsed())
+            while kernel_view(pid) == Some(false) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            tokio::time::Instant::now()
         })
     })
     .await
     .expect("the hurried stop completes within the watchdog");
-    assert_ne!(
-        at_kill_cut.0,
-        Some(false),
-        "live tree still running at {:?}; a held lifecycle lock delayed handover until the {cut:?} deadline",
-        at_kill_cut.1
+    assert!(
+        gone_at < cut,
+        "live tree still running {:?} after the hurry; a held lifecycle lock delayed handover until the {cut:?} deadline",
+        gone_at.duration_since(started)
     );
 }
 
