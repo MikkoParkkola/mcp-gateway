@@ -16,6 +16,7 @@ use crate::gateway::gateway_writes::WriteRecord;
 use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};
 use crate::gateway::task_service::execution::{CommitFailure, TaskExecutor, TransitionWrite};
 use crate::gateway::task_service::record::{ErrorAuthor, InputRound, Provenance};
+use crate::gateway::task_service::store::gate::seams::GateSeams;
 use crate::gateway::task_service::store::gate::{Kind, TaskGate};
 use crate::gateway::task_service::{
     CreateOutcome, ServiceError, StoreLimits, Task, TaskOptions, TaskService,
@@ -87,6 +88,34 @@ async fn live_row(f: &Fixture, key: &str) -> (String, u64) {
     };
     drop(slot);
     (task.task.id().to_owned(), task.revision)
+}
+
+/// A live task with an open input round whose continuation deadline passed
+/// long ago, so the next sweep closes it. Returns its id.
+async fn expired_round(f: &Fixture, key: &str) -> String {
+    let (id, revision) = live_row(f, key).await;
+    let requested = InputRequired {
+        requests: vec![(
+            "q".to_owned(),
+            json!({ "method": "elicitation/create", "params": {} }),
+        )],
+        request_state: None,
+    };
+    let round = InputRound {
+        request_state: Some("state".to_owned()),
+        tool: "gateway_invoke".to_owned(),
+        arguments: json!({}),
+        accepted_inputs: serde_json::Map::new(),
+        continuation_deadline: Some(1),
+        surfaced_server: None,
+    };
+    let now = crate::clock::utc_now().expect("the clock reads");
+    f.service
+        .store
+        .require_input(&digest(f), &id, revision, requested, round, now)
+        .await
+        .expect("the round opens");
+    id
 }
 
 fn gate(f: &Fixture) -> TaskGate {
@@ -226,28 +255,7 @@ async fn every_shared_method_caller_asks_for_its_class_and_obeys_the_gate() {
 async fn the_sweep_closes_rounds_as_a_sweep_and_skips_after_commit() {
     for terminal in [false, true] {
         let f = fixture().await;
-        let (id, revision) = live_row(&f, if terminal { "g13-sweep-t" } else { "g13-sweep" }).await;
-        let requested = InputRequired {
-            requests: vec![(
-                "q".to_owned(),
-                json!({ "method": "elicitation/create", "params": {} }),
-            )],
-            request_state: None,
-        };
-        let round = InputRound {
-            request_state: Some("state".to_owned()),
-            tool: "gateway_invoke".to_owned(),
-            arguments: json!({}),
-            accepted_inputs: serde_json::Map::new(),
-            continuation_deadline: Some(1),
-            surfaced_server: None,
-        };
-        let now = crate::clock::utc_now().expect("the clock reads");
-        f.service
-            .store
-            .require_input(&digest(&f), &id, revision, requested, round, now)
-            .await
-            .expect("the round opens");
+        let id = expired_round(&f, if terminal { "g13-sweep-t" } else { "g13-sweep" }).await;
         let _ = gate(&f).seams().take_admits();
         if terminal {
             to_terminal(&gate(&f));
@@ -269,6 +277,47 @@ async fn the_sweep_closes_rounds_as_a_sweep_and_skips_after_commit() {
             assert!(open_round.is_none(), "the expired round was closed");
         }
     }
+}
+
+// G12 x G13: a pause that lands between two round closes of one tick stops
+// the tick cleanly. The close before the pause stands; the second is skipped,
+// which is no failure, and waits for the next tick.
+#[tokio::test(flavor = "current_thread")]
+async fn a_pause_between_round_closes_skips_the_rest_cleanly() {
+    async fn within<T>(future: impl std::future::Future<Output = T>) -> T {
+        tokio::time::timeout(std::time::Duration::from_secs(30), future)
+            .await
+            .unwrap_or_else(|elapsed| panic!("G12r: did not finish in time ({elapsed})"))
+    }
+    let f = fixture().await;
+    let ids = [
+        expired_round(&f, "g12r-a").await,
+        expired_round(&f, "g12r-b").await,
+    ];
+    let hold = GateSeams::arm(&gate(&f).seams().at_decision);
+    let tick = tokio::spawn({
+        let executor = Arc::clone(&f.executor);
+        async move { executor.expiry_pass_for_test().await }
+    });
+    within(hold.reached()).await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    gate(&f).pause(1, deadline, deadline + std::time::Duration::from_secs(30));
+    hold.release();
+    within(hold.reached()).await;
+    hold.release();
+    let outcome = within(tick).await.expect("the tick task");
+    assert!(
+        outcome.is_ok(),
+        "a close skipped by a pause is no failure: {outcome:?}"
+    );
+    let open = ids
+        .iter()
+        .filter(|id| f.service.store.input_round_for_test(id).0.is_some())
+        .count();
+    assert_eq!(
+        open, 1,
+        "the close before the pause stands; the other waits"
+    );
 }
 
 // End to end, after the commit edge: the route's own cancel call on a live
