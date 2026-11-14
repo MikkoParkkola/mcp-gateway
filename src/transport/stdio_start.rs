@@ -64,7 +64,7 @@ impl StdioTransport {
         let mut writer = self.writer.lock().await;
         // A start that begins after a retire spawns nothing; one the retire
         // overtakes from here on is refused at install.
-        if self.child.lock().retired {
+        if mutant!("m6", false, self.child.lock().retired) {
             return Err(Error::BackendNotFound(
                 "stdio backend retired before it started".to_string(),
             ));
