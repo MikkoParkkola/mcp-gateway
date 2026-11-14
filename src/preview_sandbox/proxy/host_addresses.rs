@@ -164,3 +164,39 @@ impl super::Interfaces for super::System {
         Ok(networks(v4, v6, local6))
     }
 }
+
+/// `addr` lies in the host network `net/len`. Fail closed across address
+/// forms: it matches when the literal 128-bit comparison holds (IPv4 as
+/// IPv4-mapped IPv6) or the one in [`wide`]'s space does (IPv4-compatible
+/// read as mapped too). So a mapped `/120` and an IPv4 `/24` are one network,
+/// a low native IPv6 network such as `::/88` still holds `::1:0:0`, and a
+/// short native IPv6 network may also cover mapped IPv4 addresses: an
+/// over-denial, never an admission. An IPv4 network's length counts from bit
+/// 96; a length past the family's width means the one address.
+pub(super) fn within(addr: IpAddr, net: IpAddr, len: u8) -> bool {
+    let len = match net {
+        IpAddr::V4(_) => len.min(32) + 96,
+        IpAddr::V6(_) => len.min(128),
+    };
+    let mask = u128::MAX.checked_shl(128 - u32::from(len)).unwrap_or(0);
+    let same = |a: u128, n: u128| a & mask == n & mask;
+    same(literal(addr), literal(net)) || same(wide(addr), wide(net))
+}
+
+/// An address as 128 bits, IPv4 as IPv4-mapped IPv6.
+fn literal(a: IpAddr) -> u128 {
+    match a {
+        IpAddr::V4(v4) => u128::from(v4.to_ipv6_mapped()),
+        IpAddr::V6(v6) => u128::from(v6),
+    }
+}
+
+/// An address with IPv4-compatible IPv6 read as IPv4-mapped too.
+fn wide(a: IpAddr) -> u128 {
+    match a {
+        IpAddr::V6(v6) => v6
+            .to_ipv4()
+            .map_or(u128::from(v6), |v4| literal(IpAddr::V4(v4))),
+        IpAddr::V4(_) => literal(a),
+    }
+}

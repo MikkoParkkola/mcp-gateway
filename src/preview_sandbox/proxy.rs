@@ -711,29 +711,6 @@ fn denied(addr: IpAddr, own: &[Owned]) -> bool {
         || own.iter().any(|&(net, len)| within(addr, net, len))
 }
 
-/// An address in one 128-bit space: IPv4, and IPv4-compatible IPv6, as
-/// IPv4-mapped IPv6, so a network and an address compare across forms.
-fn wide(a: IpAddr) -> u128 {
-    let mapped = |v4: std::net::Ipv4Addr| u128::from(v4.to_ipv6_mapped());
-    match a {
-        IpAddr::V4(v4) => mapped(v4),
-        IpAddr::V6(v6) => v6.to_ipv4().map_or(u128::from(v6), mapped),
-    }
-}
-
-/// `addr` lies in the network `net/len`, compared in the 128-bit space of
-/// [`wide`]: an IPv4 network's length counts from bit 96, so a mapped
-/// `/120` and an IPv4 `/24` are the same network. A length past the
-/// family's width means the one address.
-fn within(addr: IpAddr, net: IpAddr, len: u8) -> bool {
-    let len = match net {
-        IpAddr::V4(_) => len.min(32) + 96,
-        IpAddr::V6(_) => len.min(128),
-    };
-    let mask = u128::MAX.checked_shl(128 - u32::from(len)).unwrap_or(0);
-    wide(addr) & mask == wide(net) & mask
-}
-
 /// The request head up to its blank line, read a byte at a time so no
 /// tunnel bytes are consumed; `None` on EOF, oversize, non-UTF-8 or a
 /// client too slow to send it.
@@ -783,6 +760,7 @@ impl Connect for System {
 }
 
 mod host_addresses;
+use host_addresses::within;
 
 #[cfg(test)]
 #[path = "proxy_tests/mod.rs"]
