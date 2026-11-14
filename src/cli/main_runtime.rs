@@ -112,9 +112,9 @@ pub(crate) fn wait_bound(
     plan: Option<crate::retire::RetirePlan>,
     now: tokio::time::Instant,
 ) -> std::time::Duration {
-    // STUB (red run): the plan does not bound the wait.
-    let _ = (plan, now);
-    timeout
+    plan.map_or(timeout, |plan| {
+        crate::retire::RUNTIME_WAIT_CAP.min(plan.runtime_end().saturating_duration_since(now))
+    })
 }
 
 /// Run `future` to completion on a new multi-thread runtime, then shut the

@@ -692,6 +692,19 @@ impl Gateway {
                 .unwrap_or_else(tokio::time::Instant::now),
             total,
         );
+        // The one store of the boot's retirement plan: from here the runtime
+        // wait, the log writer's stop and the process exit end inside this
+        // total, and the watchdog bounds them all.
+        if let Some(cell) = &self.retire {
+            let plan = crate::retire::RetirePlan::new(
+                budget.end(),
+                budget.runtime_end(),
+                crate::retire::Exit::Plain,
+            );
+            if cell.set(plan).is_ok() {
+                crate::retire::arm(&plan);
+            }
+        }
 
         // Saved under one deadline, off the runtime's threads (MIK-8157).
         #[cfg(feature = "cost-governance")]

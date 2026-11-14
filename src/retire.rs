@@ -72,9 +72,10 @@ impl RetirePlan {
 
     /// Where the logger's terminal stop ends: D, or D - E for a restart.
     pub(crate) fn logger_end(&self) -> Instant {
-        // STUB (red run): the exec share is not taken.
-        let _ = self.exit;
-        self.end()
+        match self.exit {
+            Exit::Plain => self.end,
+            Exit::Restart => self.end.checked_sub(EXEC_SHARE).unwrap_or(self.end),
+        }
     }
 }
 
@@ -96,9 +97,23 @@ pub(crate) fn finish(
     outcome: Option<&StopOutcome>,
     stored: &AtomicI32,
 ) -> ExitCode {
-    // STUB (red run): no overrun status, nothing stored.
-    let _ = (left_running, outcome, stored);
-    code
+    let Some(outcome) = outcome else {
+        return code;
+    };
+    let status = if left_running || !outcome.permits_exec() {
+        EXIT_OVERRUN
+    } else if code == ExitCode::SUCCESS {
+        0
+    } else {
+        // An HTTP serve, the one path with a plan, returns SUCCESS or FAILURE.
+        1
+    };
+    stored.store(i32::from(status), Ordering::SeqCst);
+    if status == EXIT_OVERRUN {
+        ExitCode::from(EXIT_OVERRUN)
+    } else {
+        code
+    }
 }
 
 /// Start the watchdog for a stop ending at `end`: at `end` + [`WATCHDOG_SLACK`]
@@ -110,9 +125,36 @@ pub(crate) fn arm_with(
     stored: &'static AtomicI32,
     exit: impl FnOnce(i32) + Send + 'static,
 ) -> Option<std::thread::JoinHandle<()>> {
-    // STUB (red run): never armed.
-    let _ = (end, stored, exit, Ordering::SeqCst);
-    None
+    let at = end + WATCHDOG_SLACK;
+    std::thread::Builder::new()
+        .name("stop-watchdog".into())
+        .spawn(move || {
+            // Sleeps at least this long; armed late, not at all.
+            std::thread::sleep(at.saturating_duration_since(std::time::Instant::now()));
+            let code = stored.load(Ordering::SeqCst);
+            exit(if code < 0 {
+                i32::from(EXIT_OVERRUN)
+            } else {
+                code
+            });
+        })
+        .inspect_err(|error| {
+            tracing::error!(
+                target: "mcp_gateway::runtime",
+                %error,
+                "cannot start the stop watchdog; the stop goes on without it"
+            );
+        })
+        .ok()
+}
+
+/// Arm the process watchdog for `plan`: the process exits by D + 500 ms with
+/// the code `cli::run` stored, or 75. Never disarmed: a process that already
+/// exited took the thread with it.
+pub(crate) fn arm(plan: &RetirePlan) {
+    let _ = arm_with(plan.end().into_std(), stored_code(), |code| {
+        std::process::exit(code)
+    });
 }
 
 /// `cli::run`'s tail after the runtime retired: with an HTTP stop's `plan`, the
@@ -124,10 +166,28 @@ pub(crate) fn tail(
     plan: Option<RetirePlan>,
     flush: crate::log_writer::LogFlush,
 ) -> ExitCode {
-    // STUB (red run): the plan is ignored; the guard drops as before.
-    let _ = plan;
-    drop(flush);
-    finish(code, left_running, None, stored_code())
+    let Some(plan) = plan else {
+        drop(flush);
+        return code;
+    };
+    if left_running {
+        // Logged before the terminal stop, which then writes it out.
+        tracing::error!(
+            target: "mcp_gateway::runtime",
+            "the stop's runtime wait left blocking work running; exiting 75"
+        );
+    }
+    let bound = std::time::Instant::now() + crate::log_writer::LOG_FLUSH_DEADLINE;
+    let outcome = flush.stop_and_join(bound.min(plan.logger_end().into_std()));
+    if !outcome.permits_exec() {
+        // The logger is closed: one line straight to stderr, best effort.
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stderr(),
+            "mcp-gateway: the log writer did not finish by its deadline ({outcome:?}); exiting 75"
+        );
+    }
+    finish(code, left_running, Some(&outcome), stored_code())
 }
 
 #[cfg(test)]
