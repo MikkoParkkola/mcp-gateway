@@ -38,7 +38,6 @@ pub(crate) struct RecentWrites {
 }
 
 /// Each bucket keeps the whole second (from start) it counts.
-#[derive(Default)]
 struct Ring {
     buckets: [(u64, u64); 61],
     writes_total: u64,
@@ -49,7 +48,10 @@ impl RecentWrites {
     pub(crate) fn new(start: Instant) -> Self {
         Self {
             start,
-            ring: parking_lot::Mutex::new(Ring::default()),
+            ring: parking_lot::Mutex::new(Ring {
+                buckets: [(0, 0); 61],
+                writes_total: 0,
+            }),
         }
     }
 
