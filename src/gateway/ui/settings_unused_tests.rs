@@ -501,3 +501,17 @@ async fn delete_refuses_hard_linked_entry_behind_symlinked_config() {
     assert_eq!(body["error"], "named", "{ROW}: refused as named");
     assert!(entry.is_file(), "{ROW}: file remains");
 }
+
+/// Where the system keychain can finish a timed-out delete after the route has
+/// released its locks, a keychain delete is refused before anything is touched.
+#[cfg(any(target_os = "macos", windows))]
+#[tokio::test]
+async fn delete_route_keychain_refused_here() {
+    const ROW: &str = "delete_route_keychain_refused_here";
+    let route = Route::new(BASE).await;
+    let before = route.text();
+    let (status, body) = decode(delete(&route, SHAPED, "keychain", true).await).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{ROW}: {body}");
+    assert_eq!(body["error"], "keychain_delete_unavailable", "{ROW}");
+    assert_eq!(route.text(), before, "{ROW}: gateway.yaml unchanged");
+}

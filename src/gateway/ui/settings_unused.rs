@@ -31,6 +31,10 @@ const VAULT_FAILED: &str = "the vault could not be opened";
 const LOCK_FAILED: &str = "the config lock could not be taken";
 const DELETE_FAILED: &str = "the delete did not finish";
 const NO_KEYCHAIN: &str = "no keychain on this platform";
+/// Why a keychain delete is refused where the system keychain can finish a
+/// timed-out delete after this route has released its locks.
+const KEYCHAIN_GUARDED: &str = "keychain entries cannot be deleted from Settings on this platform yet: \
+     the system keychain can finish a timed-out delete later, after a config may name the entry again";
 
 type Opened = Arc<dyn SecretStore + Send + Sync>;
 
@@ -198,6 +202,14 @@ pub(super) async fn delete_unused_entry(
     if !is_generated_name(&name) {
         return refusal_response(&DeleteRefused::BadName);
     }
+    if cfg!(any(target_os = "macos", windows)) && store == "keychain" {
+        return structured_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "keychain_delete_unavailable",
+            KEYCHAIN_GUARDED,
+        )
+        .into_response();
+    }
     let Some(ctx) = state.meta_mcp.reload_context() else {
         return no_reload();
     };
@@ -306,11 +318,7 @@ fn refusal_parts(refused: &DeleteRefused) -> (&'static str, &str) {
         DeleteRefused::Named => ("named", "a source still names that entry"),
         DeleteRefused::Pending => ("pending", "a config write is still unsettled"),
         DeleteRefused::Busy => ("busy", "a lock this delete needs is held"),
-        DeleteRefused::TimedOut => (
-            "timed_out",
-            "the secret store did not answer in time; the delete may still complete later, and a config that names \
-             this entry then fails its next load until a new value is saved for that setting",
-        ),
+        DeleteRefused::TimedOut => ("timed_out", "the secret store did not answer in time"),
         DeleteRefused::Failed(text) => ("failed", text),
     }
 }

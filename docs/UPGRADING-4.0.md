@@ -1254,11 +1254,6 @@ An `env:` reference to a variable that was set but empty passed validation, and 
 `server.metrics_token` is unchanged: an unset or empty variable (or an unreadable `file:`, item 44) there still leaves the gateway
 running with `/metrics` closed (item 33). No error prints a secret value.
 
-A keychain entry deleted from Gateway › Settings (unused secret entries) whose delete answered 503 `timed_out` on macOS
-or Windows may still be removed later, when the system keychain finishes the call. A config that names that entry in the
-meantime passes its checks and then fails its next load with the error above until a new value is saved for that
-setting.
-
 ## 41. API keys are configured as sha256 digests, with optional expiry
 
 **Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for an API key configured as plaintext `key`
@@ -4834,7 +4829,7 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `/ui/api/settings` | hidden | admin only; writes gateway.yaml through the audited writer and reloads; a secret goes to the secret store |  |
 | `/ui/api/settings/diff` | hidden | admin only; reads gateway.yaml and returns the masked change, writes nothing |  |
 | `/ui/api/settings/secrets/unused` | hidden | admin only; lists the secret entries the index records that no config, env file or capability file names, by name, store and write time; reads only, never a value |  |
-| `/ui/api/settings/secrets/unused/{name}` | hidden | admin only; deletes one such entry from its store under the reload, config and vault locks after re-checking every naming source; refused while a config write is unsettled; off Unix a files-store entry is refused because its links cannot be checked |  |
+| `/ui/api/settings/secrets/unused/{name}` | hidden | admin only; deletes one such entry from its store under the reload, config and vault locks after re-checking every naming source; refused while a config write is unsettled; off Unix a files-store entry is refused because its links cannot be checked; on macOS and Windows a keychain entry is refused because the system keychain can finish a timed-out delete later |  |
 | `/ui/api/status` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface. Its `access` member reports, per caller, which UI pages and tabs it may open, decided from `src/gateway/ui/access_table.rs`, the table every `/ui/api` route admits its caller through; an auth-on caller with no credential gets none |  |
 | `/ui/api/stream` | hidden | live server-sent events for the bundled UI: `hello`, then `status` for every caller (counts only below admin) and `reload` for admins; never extends a session; capped at 32 streams and 4 per credential; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/tools/call` | hidden | admin-only: runs one tool through the MCP `gateway_invoke` dispatch; 4xx did not run, 200 ran, 5xx may have run |  |
