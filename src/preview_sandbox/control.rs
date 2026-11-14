@@ -171,8 +171,12 @@ pub(crate) async fn accept_helper(
     bounds: ControlBounds,
     deadline: tokio::time::Instant,
 ) -> Result<UnixStream, Refusal> {
-    let _ = deadline;
-    let accepted = tokio::time::timeout(bounds.accept, listener.accept())
+    // The accept ends at its bound or the preview's deadline, whichever is
+    // sooner.
+    let wait = bounds
+        .accept
+        .min(deadline.saturating_duration_since(tokio::time::Instant::now()));
+    let accepted = tokio::time::timeout(wait, listener.accept())
         .await
         .map_err(|_| Refusal::Step("the sandbox never opened its control connection".into()))?;
     let (stream, _) = accepted
@@ -297,10 +301,12 @@ pub(crate) async fn serve_session(
 ) -> Result<(), Refusal> {
     let (read, mut write) = stream.into_split();
     let mut read = tokio::io::BufReader::new(read);
-    let start: FetchStart = parse(
-        &read_line(&mut read, bounds.frame, bounds).await?,
-        "fetch_start",
-    )?;
+    // The helper asks for the fetch after building its root: its first byte
+    // gets the setup bound, cut short by the preview's deadline.
+    let setup = bounds
+        .setup
+        .min(deadline.saturating_duration_since(tokio::time::Instant::now()));
+    let start: FetchStart = parse(&read_line(&mut read, setup, bounds).await?, "fetch_start")?;
     if !start.fetch_start {
         return Err(Refusal::Step("the sandbox sent fetch_start false".into()));
     }
