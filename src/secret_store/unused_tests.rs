@@ -95,10 +95,13 @@ pub(super) fn list(vault: &Vault, stores: &[&dyn SecretStore]) -> Vec<UnusedEntr
 
 /// Each hex digit as a YAML `\x3N` / `\x6N` escape (`0` is `\x30`, `a` is `\x61`).
 fn hex_escapes(suffix: &str) -> String {
-    suffix
-        .bytes()
-        .map(|byte| format!("\\x{byte:02x}"))
-        .collect()
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(suffix.len() * 4);
+    for byte in suffix.bytes() {
+        // Writing into a String cannot fail.
+        let _ = write!(out, "\\x{byte:02x}");
+    }
+    out
 }
 
 #[cfg(unix)]
