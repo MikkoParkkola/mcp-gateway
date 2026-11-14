@@ -214,10 +214,23 @@ pub fn answers_livez(port: u16) -> bool {
 pub struct Reaped {
     child: tokio::process::Child,
     folders: Vec<tempfile::TempDir>,
+    teardown: Teardown,
     /// Set by a reap that saw the gateway exit by itself after its SIGTERM.
     drained: bool,
     /// The first reap's exit status; a later reap returns it unchanged.
     first_exit: Option<std::process::ExitStatus>,
+}
+
+/// What dropping a [`Reaped`] does with its folders.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Teardown {
+    /// Kill the gateway and keep its folders unless an earlier `reap`/`stop` saw it drain (the default; a coverage
+    /// build also drains first so its profile is written).
+    KeepAfterKill,
+    /// For a harness that never calls `stop`: end the gateway with SIGTERM, wait for it to exit by itself, and remove
+    /// the folders then. A gateway that is still running after the bound is killed and its folders are kept, so a
+    /// late write can never meet a half-removed folder. A gateway that already exited by itself counts as drained.
+    DrainThenRemove,
 }
 
 /// How long a gateway may drain after SIGTERM: above its own serial
@@ -231,9 +244,17 @@ impl Reaped {
         Self {
             child,
             folders: Vec::new(),
+            teardown: Teardown::KeepAfterKill,
             drained: false,
             first_exit: None,
         }
+    }
+
+    /// Chooses what dropping does with the folders; see [`Teardown`].
+    #[must_use]
+    pub fn with_teardown(mut self, teardown: Teardown) -> Self {
+        self.teardown = teardown;
+        self
     }
 
     /// Hands `folder` to the gateway's owner, so it is removed after the
@@ -341,11 +362,22 @@ fn exited_by_itself(_status: std::process::ExitStatus) -> bool {
 
 impl Drop for Reaped {
     fn drop(&mut self) {
+        let draining = self.teardown == Teardown::DrainThenRemove;
+        if draining && !self.drained {
+            // Already gone by itself (a harness that waited for its exit): nothing is left to write into the folders.
+            if let Ok(Some(status)) = self.child.try_wait() {
+                self.drained = exited_by_itself(status);
+            }
+        }
         if self.child.id().is_some() {
             // A coverage build writes its profile only on a clean exit, so it
             // gets the drain first; the kill below is the backstop.
-            if std::env::var_os("LLVM_PROFILE_FILE").is_some() && self.terminate() {
+            let coverage = std::env::var_os("LLVM_PROFILE_FILE").is_some();
+            if (draining || coverage) && self.terminate() {
                 wait_blocking(&mut self.child, std::time::Duration::from_secs(10));
+                if draining && let Ok(Some(status)) = self.child.try_wait() {
+                    self.drained = exited_by_itself(status);
+                }
             }
             let _ = self.child.start_kill();
             wait_blocking(&mut self.child, KILL_BOUND);

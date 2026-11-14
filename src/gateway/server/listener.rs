@@ -13,7 +13,8 @@ use crate::config::Config;
 /// Serve `app` on the already bound `listener` until `shutdown` resolves.
 ///
 /// Both transports stop the same way (#2147): after the signal the listener
-/// refuses new connections and gives open requests `server.shutdown_timeout`.
+/// refuses new connections and gives open requests `grace`: the HTTP stop's
+/// budget leaves room after it for the saves and the backend stop.
 /// At the deadline `axum_server` returns and signals every open connection to
 /// drop; each drops its request, and the request's in-flight permit, shortly
 /// after, so the drain that follows in `run` does not wait a second timeout.
@@ -22,11 +23,11 @@ pub(super) async fn serve(
     listener: std::net::TcpListener,
     addr: SocketAddr,
     config: &Config,
+    grace: std::time::Duration,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
     let handle = axum_server::Handle::<SocketAddr>::new();
     let bridge = handle.clone();
-    let grace = config.server.shutdown_timeout;
     tokio::spawn(async move {
         shutdown.await;
         // One call is enough: axum_server keeps the signal as a stored flag

@@ -93,6 +93,7 @@ src/gateway/server/run_steps.rs	start_key_server	Error::Config(..)	1	no-record	s
 src/gateway/server/run_wiring.rs	refuse_or_warn_before_bind	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/start_checks.rs	clock	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/start_checks.rs	http	Error::Config (as value)	1	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/start_checks.rs	http	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/stdio_dispatch.rs	prepare_signing	via refuse (closure)	1	not-a-decision	client-protocol rejection: a bad chain nonce or a refused request sanitize
 src/gateway/server/stdio_dispatch.rs	prepare_signing	via refuse (closure)	2	not-a-decision	client-protocol rejection: a bad chain nonce or a refused request sanitize
 src/gateway/server/stdio_dispatch.rs	prepare_signing	via refuse (closure)	3	not-a-decision	client-protocol rejection: a bad chain nonce or a refused request sanitize
