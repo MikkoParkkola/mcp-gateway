@@ -18,11 +18,54 @@ mod gateway_bin;
 #[path = "common/yaml.rs"]
 mod yaml;
 
-const READY_BOUND: Duration = Duration::from_secs(60);
+/// Hang guard for every wait in this file (test plan H8).
+const BOUND: Duration = Duration::from_secs(30);
 
 /// The first line `tool completions bash` prints: a static string in
 /// `src/cli/completion.rs`, which slice 4a does not touch (test plan ENTRY-2).
 const COMPLETIONS_FIRST_LINE: &str = "# mcp-gateway bash completion";
+
+/// Runs `command` to its end with its output captured; fails the row if it is
+/// still running after [`BOUND`] (test plan H8).
+fn output_within(command: &mut std::process::Command) -> std::process::Output {
+    use std::io::Read as _;
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn() // spawn-check: waits for exit: a completion script, no server; killed at the bound
+        .expect("completions");
+    let (mut out, mut err) = (
+        child.stdout.take().expect("stdout"),
+        child.stderr.take().expect("stderr"),
+    );
+    let out = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        let _ = out.read_to_end(&mut v);
+        v
+    });
+    let err = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        let _ = err.read_to_end(&mut v);
+        v
+    });
+    let deadline = std::time::Instant::now() + BOUND;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll") {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("still running after {BOUND:?}; killed");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    std::process::Output {
+        status,
+        stdout: out.join().expect("stdout"),
+        stderr: err.join().expect("stderr"),
+    }
+}
 
 fn write_config(root: &Path) -> PathBuf {
     let mut config = Config::default();
@@ -71,8 +114,14 @@ async fn entry1_unresolvable_argv0_still_serves() {
     gateway.owning(root);
 
     let client = reqwest::Client::new();
-    let deadline = Instant::now() + READY_BOUND;
+    let deadline = Instant::now() + BOUND;
     loop {
+        if let Some(status) = gateway.child_mut().try_wait().expect("poll the gateway") {
+            panic!(
+                "gateway exited before answering /health: {status:?}\n{}",
+                std::fs::read_to_string(&log_path).unwrap_or_default()
+            );
+        }
         if let Some(port) = gateway_bin::logged_port(&log_path)
             && client
                 .get(format!("http://127.0.0.1:{port}/health"))
@@ -98,10 +147,9 @@ async fn entry1_unresolvable_argv0_still_serves() {
 #[test]
 fn entry2_subcommand_still_runs() {
     let home = tempfile::tempdir().expect("home");
-    let out = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
-        .args(["tool", "completions", "bash"])
-        .output() // spawn-check: waits for exit: a completion script, no server
-        .expect("completions");
+    let mut command = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment);
+    command.args(["tool", "completions", "bash"]);
+    let out = output_within(&mut command);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         out.status.success(),

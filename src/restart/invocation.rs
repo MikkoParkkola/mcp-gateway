@@ -72,7 +72,15 @@ pub(crate) enum InvocationState {
 /// Identity a confirmation binds to (slice 7): fixed for the process lifetime,
 /// never logged, shown or sent.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct InvocationDigest(pub(super) [u8; 32]);
+pub(crate) struct InvocationDigest([u8; 32]);
+
+impl InvocationDigest {
+    /// The raw bytes, for the golden-vector row only: never logged or sent.
+    #[cfg(test)]
+    pub(super) fn bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
 
 impl std::fmt::Debug for InvocationDigest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -99,6 +107,8 @@ pub(crate) struct Invocation {
     pub(super) argv0: OsString,
     pub(super) tail: Vec<OsString>,
     pub(super) cwd: PathBuf,
+    /// The startup PATH is consumed by resolution and not kept: it only chose
+    /// `target`, which is kept (and is what the digest covers).
     pub(super) target: PathBuf,
     pub(super) entry_mask: nix::sys::signal::SigSet,
 }
@@ -316,15 +326,13 @@ fn resolve(
 /// Capture once and install the result; the first call wins.
 #[cfg(unix)]
 pub(crate) fn capture_and_install(inputs: CaptureInputs, given: &Cli) {
-    if INVOCATION.get().is_none() {
-        // A lost race keeps the first value, which is the rule.
-        let _ = INVOCATION.set(capture_from(inputs, given, &is_executable_regular));
-    }
+    // get_or_init: a racing second call neither recomputes nor replaces the first.
+    INVOCATION.get_or_init(|| capture_from(inputs, given, &is_executable_regular));
 }
 
 /// Off unix, restart is guidance-only.
 #[cfg(not(unix))]
 pub(crate) fn capture_and_install(inputs: CaptureInputs, given: &Cli) {
     let _ = (inputs, given);
-    let _ = INVOCATION.set(InvocationState::Unavailable(UnavailableReason::Unsupported));
+    INVOCATION.get_or_init(|| InvocationState::Unavailable(UnavailableReason::Unsupported));
 }

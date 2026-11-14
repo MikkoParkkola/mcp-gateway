@@ -49,9 +49,12 @@ fn inv22_capture_is_the_first_statement_of_cli_run() {
         "first statement: {}",
         &code[at..at + 300_usize.min(code.len() - at)]
     );
+    // Positive control, inside run's body: up to the next function item.
+    let rest = &code[at + want.len()..];
+    let body = rest.find(" fn ").map_or(rest, |end| &rest[..end]);
     assert!(
-        code[at + want.len()..].contains("setup_tracing("),
-        "positive control: setup_tracing after the capture"
+        body.contains("setup_tracing("),
+        "positive control: setup_tracing after the capture, inside cli::run"
     );
 }
 
@@ -77,6 +80,18 @@ fn production_files(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+/// Occurrences of `word` not inside a longer identifier.
+fn word_uses(code: &str, word: &str) -> usize {
+    let b = code.as_bytes();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    code.match_indices(word)
+        .filter(|(i, _)| {
+            i.checked_sub(1).is_none_or(|j| !ident(b[j]))
+                && b.get(i + word.len()).is_none_or(|c| !ident(*c))
+        })
+        .count()
 }
 
 /// Each `pub` token not followed by `(`: a public item.
@@ -108,6 +123,19 @@ fn api1_restart_items_are_crate_private() {
         .collect();
     names.sort();
     assert_eq!(names, ["invocation.rs", "mod.rs"], "inventory");
+    // And the files the scan skipped as tests are exactly the known ones, so a
+    // production module cannot hide behind a test-flavoured name.
+    let mut skipped: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with("_tests.rs") || n.ends_with("_tests"))
+        .collect();
+    skipped.sort();
+    assert_eq!(
+        skipped,
+        ["invocation_scan_tests.rs", "invocation_tests.rs"],
+        "skipped"
+    );
     for file in &files {
         let code = sanitize(&production_text(&std::fs::read_to_string(file).unwrap()));
         assert!(
@@ -157,7 +185,8 @@ fn api2_capture_has_one_production_caller() {
     let mut callers = Vec::new();
     for (file, name) in files.iter().zip(&names) {
         let code = sanitize(&production_text(&std::fs::read_to_string(file).unwrap()));
-        let calls = code.matches("capture_and_install(").count()
+        // Every whole-word use, an `use .. as` alias included, minus definitions.
+        let calls = word_uses(&code, "capture_and_install")
             - code.matches("fn capture_and_install(").count();
         for _ in 0..calls {
             callers.push(name.clone());

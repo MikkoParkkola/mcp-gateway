@@ -15,12 +15,13 @@ mod child {
     pub(super) fn run_child(test_path: &str, case: &str) {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("ran");
-        let out = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", test_path, "--nocapture", "--test-threads=1"])
-            .env(CASE, case)
-            .env(MARKER, &marker)
-            .output()
-            .unwrap();
+        let out = output_within(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", test_path, "--nocapture", "--test-threads=1"])
+                .env(CASE, case)
+                .env(MARKER, &marker),
+            case,
+        );
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(
             out.status.success() && stdout.contains("1 passed"),
@@ -29,6 +30,51 @@ mod child {
             String::from_utf8_lossy(&out.stderr)
         );
         assert_eq!(std::fs::read_to_string(&marker).unwrap(), case);
+    }
+
+    /// Runs `cmd` to its end with stdout and stderr captured, and fails the
+    /// test by name if it is still running after 30 s (test plan H8): a wedged
+    /// child must not hang the whole test job.
+    pub(super) fn output_within(
+        cmd: &mut std::process::Command,
+        case: &str,
+    ) -> std::process::Output {
+        use std::io::Read as _;
+        use std::process::Stdio;
+        use std::time::{Duration, Instant};
+        let mut child = cmd
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let (mut out, mut err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+        let out = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            let _ = out.read_to_end(&mut v);
+            v
+        });
+        let err = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            let _ = err.read_to_end(&mut v);
+            v
+        });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("child {case}: still running after 30 s; killed");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        std::process::Output {
+            status,
+            stdout: out.join().unwrap(),
+            stderr: err.join().unwrap(),
+        }
     }
 
     /// In a child: true when this run is `case`, after writing the marker.
@@ -267,6 +313,23 @@ mod unix {
         assert_eq!(inv.tail[1].as_bytes(), b"/tmp/c\xff.toml");
     }
 
+    /// INV-6 (every unix): a non-UTF-8 absolute argv0 keeps its bytes through
+    /// capture; an always-true probe stands in for the file APFS cannot hold.
+    #[test]
+    fn inv6_non_utf8_argv0_kept_by_capture() {
+        let tmp = tempfile::tempdir().unwrap();
+        let argv0 = OsString::from_vec(b"/w/g\xffw".to_vec());
+        let a = vec![argv0];
+        let given = cli(&a);
+        let inv = ready(capture_from(
+            inputs(a, tmp.path(), None),
+            &given,
+            &|_: &Path| true,
+        ));
+        assert_eq!(inv.argv0.as_bytes(), b"/w/g\xffw");
+        assert_eq!(bytes(&inv.target), b"/w/g\xffw".to_vec());
+    }
+
     /// INV-6 (Linux: APFS refuses non-UTF-8 names): a non-UTF-8 argv0 naming a
     /// real executable is captured byte for byte.
     #[cfg(target_os = "linux")]
@@ -371,6 +434,11 @@ mod unix {
     #[test]
     fn inv10c_current_thread_mask_reads_the_thread() {
         std::thread::spawn(|| {
+            // Set both signals here, so the row does not depend on the mask the
+            // test harness thread happened to pass on.
+            let mut unblock = SigSet::empty();
+            unblock.add(Signal::SIGUSR2);
+            unblock.thread_unblock().unwrap();
             let mut block = SigSet::empty();
             block.add(Signal::SIGUSR1);
             block.thread_block().unwrap();
@@ -414,23 +482,30 @@ mod unix {
     fn inv12_each_serve_field_difference_is_embedded() {
         let tmp = tempfile::tempdir().unwrap();
         let path_env = found_path(tmp.path());
-        let differing: [&[&str]; 7] = [
-            &["gw", "--config", "/other.toml"],
-            &["gw", "--port", "1"],
-            &["gw", "--host", "192.0.2.1"],
-            &["gw", "--log-level", "trace"],
-            &["gw", "--log-format", "json"],
-            &["gw", "--no-meta-mcp"],
-            &["gw", "--protocol-revision-window", "record"],
+        // Each row changes exactly one field of the parsed value, so it dies when
+        // that field's comparison is dropped, whatever clap's defaults link.
+        let differing: [(&str, fn(&mut Cli)); 7] = [
+            ("config", |c| c.config = Some(PathBuf::from("/other.toml"))),
+            ("port", |c| c.port = Some(1)),
+            ("host", |c| c.host = Some("192.0.2.1".into())),
+            ("log_level", |c| c.log_level = "trace".into()),
+            ("log_format", |c| c.log_format = Some("json".into())),
+            ("no_meta_mcp", |c| c.no_meta_mcp = !c.no_meta_mcp),
+            ("protocol_revision_window", |c| {
+                c.protocol_revision_window = Some(crate::config::ProtocolRevisionWindow::Record);
+            }),
         ];
-        for d in differing {
-            let given = cli(&args(d));
+        let base = format!("{:?}", cli(&args(&["gw"])));
+        for (field, change) in differing {
+            let mut given = cli(&args(&["gw"]));
+            change(&mut given);
+            assert_ne!(format!("{given:?}"), base, "premise: {field} changed");
             let state = capture_from(
                 inputs(args(&["gw"]), tmp.path(), path_env.clone()),
                 &given,
                 &is_executable_regular,
             );
-            assert_eq!(reason(state), UnavailableReason::Embedded, "{d:?}");
+            assert_eq!(reason(state), UnavailableReason::Embedded, "{field}");
         }
         let given = cli(&args(&["gw"]));
         ready(capture_from(
@@ -488,7 +563,7 @@ mod unix {
 
     fn hex(d: crate::restart::invocation::InvocationDigest) -> String {
         use std::fmt::Write as _;
-        d.0.iter().fold(String::new(), |mut s, b| {
+        d.bytes().iter().fold(String::new(), |mut s, b| {
             let _ = write!(s, "{b:02x}");
             s
         })
