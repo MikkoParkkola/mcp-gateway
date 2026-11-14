@@ -1,0 +1,71 @@
+head_sha	17ecfd8477fa2efe58fcd0140c754f86dddd2e22
+#mutant nowsec
+mcp_gateway	gateway::recent_writes::tests::w1_note_in_current_second_is_counted	src/gateway/recent_writes_tests.rs:20
+#mutant edge61
+mcp_gateway	gateway::recent_writes::tests::w2_window_edges_keep_sixty_drop_sixty_one	src/gateway/recent_writes_tests.rs:37
+#mutant complete
+mcp_gateway	gateway::recent_writes::tests::w3_complete_secs_counts_whole_seconds_then_caps	src/gateway/recent_writes_tests.rs:52
+#mutant stale
+mcp_gateway	gateway::recent_writes::tests::w4_reused_ring_slot_resets_and_idle_reads_zero	src/gateway/recent_writes_tests.rs:68
+#mutant nototal
+mcp_gateway	gateway::recent_writes::tests::w5_writes_total_moves_by_one_and_samples_are_frozen_copies	src/gateway/recent_writes_tests.rs:86
+#mutant nonefree
+mcp_gateway	gateway::recent_writes::tests::w6_counts_as_write_only_read_only_is_free	src/gateway/recent_writes_tests.rs:106
+#mutant rocount
+mcp_gateway	gateway::recent_writes::tests::w6_counts_as_write_only_read_only_is_free	src/gateway/recent_writes_tests.rs:107
+mcp_gateway	gateway::router::recent_writes_route_tests::r1_meta_invoke_counts_a_may_write_tool	src/gateway/router/recent_writes_route_tests.rs:66
+mcp_gateway	gateway::router::dispatch_parity_tests::watch_poll_parity::r9_a_watch_poll_counts_by_the_executed_definition	src/gateway/router/watch_poll_parity_tests.rs:515
+#mutant readlist
+mcp_gateway	gateway::recent_writes::tests::w8_direct_read_list_is_free_and_the_rest_count	src/gateway/recent_writes_tests.rs:132
+mcp_gateway	gateway::router::recent_writes_route_tests::r5_direct_tools_call_counts_on_both_forwards	src/gateway/router/recent_writes_route_tests.rs:160
+#mutant directeffect
+mcp_gateway	gateway::recent_writes::tests::w8_direct_read_list_is_free_and_the_rest_count	src/gateway/recent_writes_tests.rs:138
+mcp_gateway	gateway::router::recent_writes_route_tests::r5_direct_tools_call_counts_on_both_forwards	src/gateway/router/recent_writes_route_tests.rs:160
+#mutant h1drop
+mcp_gateway	gateway::router::recent_writes_route_tests::r1_meta_invoke_counts_a_may_write_tool	src/gateway/router/recent_writes_route_tests.rs:66
+#mutant h2sdrop
+mcp_gateway	gateway::router::recent_writes_route_tests::r5_direct_tools_call_counts_on_both_forwards	src/gateway/router/recent_writes_route_tests.rs:160
+#mutant h2pdrop
+mcp_gateway	gateway::router::recent_writes_route_tests::r5_direct_tools_call_counts_on_both_forwards	src/gateway/router/recent_writes_route_tests.rs:160
+#mutant z12 multi=2
+mcp_gateway	gateway::router::recent_writes_route_tests::r5_direct_tools_call_counts_on_both_forwards	src/gateway/router/recent_writes_route_tests.rs:160
+#mutant h3drop
+mcp_gateway	gateway::meta_mcp::tests::recent_writes_arms::r6_every_meta_arm_counts_by_its_class	src/gateway/meta_mcp/tests/recent_writes_arms.rs:158
+#mutant z13
+mcp_gateway	gateway::meta_mcp::tests::recent_writes_arms::r6_every_meta_arm_counts_by_its_class	src/gateway/meta_mcp/tests/recent_writes_arms.rs:158
+#mutant leafarm
+mcp_gateway	gateway::meta_mcp::tests::recent_writes_arms::r6_every_meta_arm_counts_by_its_class	src/gateway/meta_mcp/tests/recent_writes_arms.rs:158
+mcp_gateway	gateway::meta_mcp::tests::recent_writes_arms::w7_every_meta_arm_has_its_write_class	src/gateway/meta_mcp/tests/recent_writes_arms.rs:252
+#mutant z2
+mcp_gateway	gateway::router::recent_writes_route_more_tests::r10a_an_idempotency_replay_is_not_counted	src/gateway/router/recent_writes_route_more_tests.rs:104
+#mutant z4
+mcp_gateway	gateway::router::stored_replay_liveness_tests::token_exchange::r10c_a_lifted_stored_replay_is_not_counted	src/gateway/router/stored_replay_liveness_token_exchange_tests.rs:529
+#mutant z5 multi=2
+mcp_gateway	gateway::router::recent_writes_route_more_tests::r10d_a_call_refused_at_admit_send_is_not_counted	src/gateway/router/recent_writes_route_more_tests.rs:169
+#mutant z7
+mcp_gateway	gateway::router::recent_writes_route_more_tests::r10f_the_restart_get_is_not_counted	src/gateway/router/recent_writes_route_more_tests.rs:239
+#mutant z9
+mcp_gateway	gateway::router::recent_writes_route_more_tests::r11b_a_bridged_round_adds_nothing_to_its_call	src/gateway/router/recent_writes_route_more_tests.rs:364
+#mutant b_early
+mcp_gateway	gateway::restart_status::tests::b1_restarting_before_commit_is_ignored_and_logged_once	src/gateway/restart_status_tests.rs:39
+#mutant b_commitany
+mcp_gateway	gateway::restart_status::tests::b2_commit_only_from_checkpoint_and_switches_deadline	src/gateway/restart_status_tests.rs:69
+#mutant b_nodeadline
+mcp_gateway	gateway::restart_status::tests::b2_commit_only_from_checkpoint_and_switches_deadline	src/gateway/restart_status_tests.rs:76
+#mutant b_cancelafter
+mcp_gateway	gateway::restart_status::tests::b2_cancel_only_before_commit	src/gateway/restart_status_tests.rs:87
+#mutant b_recancel
+mcp_gateway	gateway::restart_status::tests::b2_second_cancel_is_a_no_op	src/gateway/restart_status_tests.rs:106
+#mutant b_backwards
+mcp_gateway	gateway::restart_status::tests::b2_forward_by_rank_only	src/gateway/restart_status_tests.rs:134
+#mutant b_noreset
+mcp_gateway	gateway::restart_status::tests::b2_accept_starts_fresh_even_after_draining	src/gateway/restart_status_tests.rs:163
+#mutant zb1
+mcp_gateway	gateway::restart_status::tests::b2_nothing_before_accept	src/gateway/restart_status_tests.rs:150
+#mutant zb2
+mcp_gateway	gateway::restart_status::tests::b2_stop_stages_are_silent_before_commit_and_after_cancel	src/gateway/restart_status_tests.rs:123
+#mutant anyview
+mcp_gateway	gateway::ui::restart_tests::b6_restart_body_carries_recent_writes_only_in_the_full_view	src/gateway/ui/restart_tests.rs:310
+#mutant countsrestart
+mcp_gateway	gateway::ui::stream::guard_tests::b7_restart_record_changes_raise_only_the_status_generation	src/gateway/ui/stream/guard_tests.rs:195
+mcp_gateway	gateway::router::ui_access_matrix_tests::backend_scope::s1_only_the_full_status_view_carries_restart	src/gateway/router/ui_backend_scope_tests.rs:424
