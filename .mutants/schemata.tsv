@@ -1,0 +1,29 @@
+head_sha	0638cfccee1115c4038678bf189324afc33fb0af
+#mutant noauthority
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:77
+#mutant nosubject
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:78
+#mutant noagent
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:79
+#mutant noactor
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:86
+#mutant nodigest
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:92
+#mutant nopositions
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:80
+#mutant nottl
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:97
+#mutant unsorted
+mcp_gateway	decisions::tests::accept::each_accept_input_changes_the_key_and_the_listing_order_does_not	src/decisions/tests/accept.rs:67
+#mutant nolenprefix
+mcp_gateway	decisions::tests::accept::the_accept_key_keeps_its_field_boundaries	src/decisions/tests/accept.rs:118
+#mutant eventnon
+mcp_gateway	decisions::tests::accept::generations_move_only_the_ids_they_belong_to	src/decisions/tests/accept.rs:137
+#mutant rownog
+mcp_gateway	decisions::tests::accept::generations_move_only_the_ids_they_belong_to	src/decisions/tests/accept.rs:142
+#mutant rownocap
+mcp_gateway	decisions::tests::accept::generations_move_only_the_ids_they_belong_to	src/decisions/tests/accept.rs:143
+#mutant rowfromevent
+mcp_gateway	decisions::tests::accept::the_accept_ids_match_their_fixed_vectors	src/decisions/tests/accept.rs:54
+#mutant foldsaccepts
+mcp_gateway	decisions::tests::accept::only_a_decline_record_closes_refusals	src/decisions/tests/accept.rs:170
