@@ -216,7 +216,7 @@ impl StreamHub {
     }
 
     /// This process's random boot id.
-    pub(super) fn boot(&self) -> u64 {
+    pub(in crate::gateway::ui) fn boot(&self) -> u64 {
         self.shared.boot
     }
 
