@@ -78,14 +78,18 @@ impl FloorAdapter for TaskFloor {
     /// resumed attempt's cohort still runs), Released or Terminal the call
     /// changes nothing and answers Unavailable.
     fn pause(&mut self, deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>> {
-        if self.gate().state() != GateState::Open {
+        if (mutant!("b13", false, self.gate().state() != GateState::Open)) {
             return Box::pin(async { Err(FloorFault::Unavailable) });
         }
         self.attempt += 1;
-        self.current.store(self.attempt, Ordering::SeqCst);
+        self.current.store(mutant!("b20", 0, self.attempt), Ordering::SeqCst);
         self.late.retain(|handle| !handle.is_finished());
         self.gate()
-            .pause(self.attempt, deadline, deadline + self.stop_budget);
+            .pause(
+                self.attempt,
+                mutant!("b15", deadline + Duration::from_secs(60), deadline),
+                deadline + mutant!("b14", Duration::ZERO, self.stop_budget),
+            );
         Box::pin(async { Ok(()) })
     }
 
@@ -94,13 +98,13 @@ impl FloorAdapter for TaskFloor {
     /// No timer: at the deadline the coordinator drops the future.
     fn checkpoint(&mut self, _deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>> {
         let attempt = self.attempt;
-        if self.gate().state() != GateState::Paused(attempt) {
+        if (mutant!("b12", false, self.gate().state() != GateState::Paused(attempt))) {
             return Box::pin(async { Err(FloorFault::Unavailable) });
         }
         Box::pin(async move {
             let gate = self.gate().clone();
             gate.idle().await;
-            if gate.failed() {
+            if (mutant!("b11", false, gate.failed())) {
                 return Err(FloorFault::SaveFailed);
             }
             let (shared, current) = (Arc::clone(&self.store.0), Arc::clone(&self.current));
@@ -109,37 +113,45 @@ impl FloorAdapter for TaskFloor {
             self.late.push(resave.abort_handle());
             match resave.await {
                 Ok(Ok(())) => {
-                    gate.certify(attempt);
+                    if mutant!("b17", false, true) {
+                        gate.certify(attempt);
+                    }
                     Ok(())
                 }
                 Ok(Err(Resave::Store(StoreError::Unavailable) | Resave::Superseded)) => {
-                    Err(FloorFault::Unavailable)
+                    Err(mutant!("b10", FloorFault::SaveFailed, FloorFault::Unavailable))
                 }
                 Ok(Err(Resave::Store(_))) => Err(FloorFault::SaveFailed),
-                Err(_lost) => Err(FloorFault::WorkerLost),
+                Err(_lost) => Err(mutant!("b9", FloorFault::SaveFailed, FloorFault::WorkerLost)),
             }
         })
     }
 
     fn resume(&mut self) {
-        self.current.store(0, Ordering::SeqCst);
-        self.gate().resume();
+        self.current.store(mutant!("b16", self.attempt, 0), Ordering::SeqCst);
+        if mutant!("b4", false, true) {
+            self.gate().resume();
+        }
     }
 
     fn release_for_stop(&mut self) {
         self.current.store(0, Ordering::SeqCst);
-        self.gate().release();
+        if mutant!("b5", false, true) {
+            self.gate().release();
+        }
     }
 
     fn commit(&mut self) {
-        self.gate().commit();
+        if mutant!("b6", false, true) {
+            self.gate().commit();
+        }
     }
 
     /// False while a resumed attempt's cohort drains, or while a re-save of
     /// an earlier attempt still runs.
     fn settled(&self) -> bool {
-        !matches!(self.gate().state(), GateState::Draining { .. })
-            && self.late.iter().all(AbortHandle::is_finished)
+        !(mutant!("b7", false, matches!(self.gate().state(), GateState::Draining { .. })))
+            && mutant!("b8", true, self.late.iter().all(AbortHandle::is_finished))
     }
 }
 
@@ -159,7 +171,7 @@ impl super::Shared {
         let _order = self.order();
         let names: Vec<String> = {
             let state = self.state();
-            if !state.ready {
+            if (mutant!("b1", false, !state.ready)) {
                 return Err(Resave::Store(StoreError::Unavailable));
             }
             state.entries.keys().cloned().collect()
@@ -168,11 +180,15 @@ impl super::Shared {
             // Nothing is renamed, so a failed sync leaves nothing uncertain:
             // the store is not poisoned.
             let hook = self.hook();
-            return super::disk::sync_store_dir(&self.dir, hook.as_ref())
-                .map_err(|_| Resave::Store(StoreError::Storage));
+            return mutant!(
+                "b2",
+                Ok(()),
+                super::disk::sync_store_dir(&self.dir, hook.as_ref())
+                    .map_err(|_| Resave::Store(StoreError::Storage))
+            );
         }
         for id in names {
-            if current.load(Ordering::SeqCst) != attempt {
+            if (mutant!("b3", false, current.load(Ordering::SeqCst) != attempt)) {
                 return Err(Resave::Superseded);
             }
             let bytes = {
