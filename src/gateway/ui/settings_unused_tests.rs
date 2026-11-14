@@ -537,7 +537,7 @@ async fn delete_busy_says_retry_after() {
         response
             .headers()
             .get(RETRY_AFTER)
-            .map(|value| value.as_bytes()),
+            .map(axum::http::HeaderValue::as_bytes),
         Some(&b"1"[..]),
         "{ROW}: Retry-After"
     );
