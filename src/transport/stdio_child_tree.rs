@@ -418,9 +418,9 @@ impl ChildTree {
                 // A SIGTERM the plan had due before this cut was made is owed,
                 // however little the cut leaves: the reaper missed it, not the stop.
                 #[cfg(unix)]
-                if grace.term_sent_at.is_none()
+                if mutant!("s9509.m5", false, grace.term_sent_at.is_none()
                     && grace.term_at < grace.kill_at
-                    && grace.term_at <= set_at
+                    && grace.term_at <= mutant!("s9509.m6", now, set_at))
                 {
                     grace.term_owed = true;
                 }
@@ -470,9 +470,10 @@ impl ChildTree {
         const _: () =
             assert!(KILL_RESERVE.as_nanos() >= REAP_DEADLINE.as_nanos() + MIN_PHASE.as_nanos());
         let slack_end = grace.kill_at + KILL_RESERVE.saturating_sub(REAP_DEADLINE);
-        let planned = grace.term_at < grace.kill_at || grace.term_owed;
+        let planned = mutant!("s9509.m7", true, grace.term_at < grace.kill_at || grace.term_owed);
         let due = grace.term_owed || now >= grace.term_at;
-        let fits = now < grace.kill_at || now + MIN_PHASE <= slack_end;
+        let fits = now < grace.kill_at
+            || mutant!("s9509.m1", false, mutant!("s9509.m3", now + MIN_PHASE < slack_end, now + MIN_PHASE <= slack_end));
         if planned && due && fits && grace.term_sent_at.is_none() && self.send_group_term() {
             grace.term_sent_at = Some(now);
             if now >= grace.kill_at {
@@ -489,7 +490,7 @@ impl ChildTree {
             }
         }
         grace.term_sent_at.map_or(grace.kill_at, |sent| {
-            (sent + MIN_PHASE).max(grace.kill_at).min(slack_end)
+            mutant!("s9509.m4", (sent + MIN_PHASE).max(grace.kill_at), mutant!("s9509.m2", grace.kill_at.min(slack_end), (sent + MIN_PHASE).max(grace.kill_at).min(slack_end)))
         })
     }
 
