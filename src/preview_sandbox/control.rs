@@ -20,7 +20,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as
 use tokio::net::{UnixListener, UnixStream};
 
 use super::Refusal;
-use super::proxy::AllowlistProxy;
+use super::proxy::{AllowlistProxy, Credential};
 
 /// The longest control line, its newline included.
 pub(crate) const MAX_LINE: usize = 1024;
@@ -44,8 +44,32 @@ pub(crate) const CONTROL_BOUNDS: ControlBounds = ControlBounds {
 /// launcher spawned, and it runs as the gateway's own uid. `status` is the
 /// text of `/proc/<pid>/status`; anything unreadable refuses.
 pub(crate) fn peer_is_helper(status: &str, unshare_pid: u32, uid: u32) -> Result<(), Refusal> {
-    // Red step: no check yet.
-    let _ = (status, unshare_pid, uid);
+    let refuse = |why: &str| Refusal::Step(format!("the sandbox's control peer {why}"));
+    let field = |name: &str| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .ok_or_else(|| refuse("has no readable parentage"))
+    };
+    let parent: u32 = field("PPid:")?
+        .trim()
+        .parse()
+        .map_err(|_| refuse("has no readable parentage"))?;
+    // Real, effective, saved and filesystem uid: all four are the gateway's.
+    let uids = field("Uid:")?
+        .split_whitespace()
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| refuse("has no readable uid"))?;
+    if uids.len() != 4 {
+        return Err(refuse("has no readable uid"));
+    }
+    if parent != unshare_pid {
+        return Err(refuse("is not the sandbox's helper"));
+    }
+    if uids.iter().any(|u| *u != uid) {
+        return Err(refuse("runs as another user"));
+    }
     Ok(())
 }
 
@@ -57,12 +81,26 @@ pub(crate) async fn accept_helper(
     uid: u32,
     bounds: ControlBounds,
 ) -> Result<UnixStream, Refusal> {
-    // Red step: no bound, no peer check.
-    let _ = (unshare_pid, uid, bounds);
-    let (stream, _) = listener
-        .accept()
+    let accepted = tokio::time::timeout(bounds.accept, listener.accept())
         .await
+        .map_err(|_| Refusal::Step("the sandbox never opened its control connection".into()))?;
+    let (stream, _) = accepted
         .map_err(|e| Refusal::Step(format!("accepting the sandbox's control connection ({e})")))?;
+    let cred = stream
+        .peer_cred()
+        .map_err(|e| Refusal::Step(format!("reading the control peer's credentials ({e})")))?;
+    let pid = cred
+        .pid()
+        .ok_or_else(|| Refusal::Step("the control peer has no process id".into()))?;
+    if cred.uid() != uid {
+        return Err(Refusal::Step(
+            "the sandbox's control peer runs as another user".into(),
+        ));
+    }
+    // An unreadable status (the process is gone, or there is no /proc)
+    // refuses, the same as a wrong parent.
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+    peer_is_helper(&status, unshare_pid, uid)?;
     Ok(stream)
 }
 
@@ -73,14 +111,42 @@ pub(crate) async fn read_line<R: AsyncBufRead + Unpin>(
     first: Duration,
     bounds: ControlBounds,
 ) -> Result<String, Refusal> {
-    // Red step: no cap, no bound.
-    let _ = (first, bounds);
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
+    let refuse = |why: &str| Refusal::Step(format!("the sandbox's control line {why}"));
+    let io_err = |e: io::Error| Refusal::Step(format!("reading the control socket ({e})"));
+    match tokio::time::timeout(first, reader.fill_buf()).await {
+        Err(_) => return Err(refuse("never came")),
+        Ok(Err(e)) => return Err(io_err(e)),
+        Ok(Ok([])) => return Err(refuse("ended with the connection")),
+        Ok(Ok(_)) => {}
+    }
+    let rest = async {
+        let mut line = Vec::new();
+        loop {
+            let buf = reader.fill_buf().await.map_err(io_err)?;
+            if buf.is_empty() {
+                return Err(refuse("was cut off by a close"));
+            }
+            if let Some(end) = buf.iter().position(|b| *b == b'\n') {
+                line.extend_from_slice(&buf[..end]);
+                reader.consume(end + 1);
+                // The newline counts toward the cap.
+                if line.len() >= MAX_LINE {
+                    return Err(refuse("is over 1 KiB"));
+                }
+                return Ok(line);
+            }
+            let taken = buf.len();
+            line.extend_from_slice(buf);
+            reader.consume(taken);
+            if line.len() >= MAX_LINE {
+                return Err(refuse("is over 1 KiB"));
+            }
+        }
+    };
+    let line = tokio::time::timeout(bounds.frame, rest)
         .await
-        .map_err(|e| Refusal::Step(format!("reading the control socket ({e})")))?;
-    Ok(line.trim_end_matches('\n').to_owned())
+        .map_err(|_| refuse("stalled before its end"))??;
+    String::from_utf8(line).map_err(|_| refuse("is not UTF-8"))
 }
 
 /// Write one control line.
@@ -92,12 +158,14 @@ async fn write_line<W: AsyncWrite + Unpin>(writer: &mut W, line: &str) -> io::Re
 
 /// The helper's request for a fetch: `{"fetch_start": true}`.
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FetchStart {
     fetch_start: bool,
 }
 
 /// The helper's report that the fetch ended: `{"fetch_done": true}`.
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FetchDone {
     fetch_done: bool,
 }
@@ -126,14 +194,20 @@ pub(crate) async fn serve_session(
 ) -> Result<(), Refusal> {
     let (read, mut write) = stream.into_split();
     let mut read = tokio::io::BufReader::new(read);
-    // Red step: no order check, no revoke on an early exit, `expired` sent
-    // before the revoke.
     let start: FetchStart = parse(
         &read_line(&mut read, bounds.frame, bounds).await?,
         "fetch_start",
     )?;
-    let _ = start.fetch_start;
+    if !start.fetch_start {
+        return Err(Refusal::Step("the sandbox sent fetch_start false".into()));
+    }
     let credential = proxy.begin_fetch(deadline)?;
+    // Revokes on every way out of here, an error or a dropped future
+    // included, so a helper that dies mid-fetch leaves no live credential.
+    let fetch = Revoking {
+        proxy,
+        credential: credential.clone(),
+    };
     let deadline_ms = deadline
         .saturating_duration_since(tokio::time::Instant::now())
         .as_millis();
@@ -146,12 +220,27 @@ pub(crate) async fn serve_session(
     write_line(&mut write, &issued).await.map_err(lost)?;
     let first = deadline.saturating_duration_since(tokio::time::Instant::now());
     let done: FetchDone = parse(&read_line(&mut read, first, bounds).await?, "fetch_done")?;
-    let _ = done.fetch_done;
+    if !done.fetch_done {
+        return Err(Refusal::Step("the sandbox sent fetch_done false".into()));
+    }
+    // The revoke returns only once every tunnel of the credential is shut.
+    drop(fetch);
     write_line(&mut write, r#"{"expired":true}"#)
         .await
         .map_err(lost)?;
-    proxy.revoke(&credential);
     Ok(())
+}
+
+/// The fetch's credential, revoked when this drops.
+struct Revoking<'a> {
+    proxy: &'a AllowlistProxy,
+    credential: Credential,
+}
+
+impl Drop for Revoking<'_> {
+    fn drop(&mut self) {
+        self.proxy.revoke(&self.credential);
+    }
 }
 
 #[cfg(test)]
