@@ -63,7 +63,7 @@ sed -i 's|^\( *bearer_token: *\).*|\1"env:MCP_GATEWAY_TOKEN"|' gateway.container
 export MCP_GATEWAY_TOKEN="$(cat '/absolute/config-dir/secrets/NAME')"
 sudo chown 1001:1001 gateway.container.yaml
 
-docker run -d --name mcp-gateway \
+docker run -d --name mcp-gateway --stop-timeout 31 \
   -p 127.0.0.1:39400:39400 \
   -e MCP_GATEWAY_TOKEN \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
@@ -101,6 +101,7 @@ services:
     # spawn a runtime this tag does not carry. See below.
     image: ghcr.io/mikkoparkkola/mcp-gateway:latest
     restart: unless-stopped
+    stop_grace_period: 31s  # see Stop grace below
     command: ["--config", "/config.yaml", "--host", "0.0.0.0", "--port", "39400"]
     ports: ["127.0.0.1:39400:39400"]
     volumes:
@@ -138,7 +139,7 @@ without forking the image.
 installs before the gateway starts:
 
 ```bash
-docker run --user root -e EXTRA_APT_PACKAGES="iproute2 net-tools" \
+docker run --user root --stop-timeout 31 -e EXTRA_APT_PACKAGES="iproute2 net-tools" \
   ghcr.io/mikkoparkkola/mcp-gateway:latest-full
 ```
 
@@ -178,7 +179,7 @@ or NAT rules also needs `--cap-add=NET_ADMIN`; root alone does not grant it. Bot
 follow the convention nginx and postgres ship:
 
 ```bash
-docker run --user root -e EXTRA_APT_PACKAGES="iproute2" \
+docker run --user root --stop-timeout 31 -e EXTRA_APT_PACKAGES="iproute2" \
   -v ./startup:/docker-entrypoint.d:ro \
   ghcr.io/mikkoparkkola/mcp-gateway:latest-full
 ```
@@ -272,6 +273,37 @@ mcp-gateway setup export --target all --config gateway.yaml
 ```
 
 Applied exports print any backup file and a rollback command. Use that rollback command before deleting or hand-editing a generated client config.
+
+## Stop grace
+
+On SIGTERM the gateway stops in order. It refuses new connections, lets open
+requests finish, saves its state, closes each stdio backend's stdin and stops
+it, then flushes its log. The whole stop is bounded by the gateway's stop
+timeout, counted from the signal: 30 s by default (an HTTP gateway refuses one
+below 13 s). Whatever sends the signal must wait at least that timeout + 1 s
+before its SIGKILL. A kill that lands sooner cuts the saves or the backend stop
+short.
+
+Every template in this repository gives the gateway 31 s:
+
+| Runner | Its own default | Setting | Where it is set here |
+|---|---|---|---|
+| `docker run` | 10 s | `--stop-timeout 31` | every `docker run` example in these docs |
+| Docker Compose | 10 s | `stop_grace_period: 31s` | deploy/single-node/docker-compose.yaml, the example above |
+| systemd | 90 s | `TimeoutStopSec=31s` | deploy/single-node/mcp-gateway.service, the example below |
+| launchd | 20 s | `ExitTimeOut` 31 | deploy/single-node/com.mikkoparkkola.mcp-gateway.plist |
+| Kubernetes | 30 s | `terminationGracePeriodSeconds: 31` | the Helm chart, deploy/kubernetes/enterprise-alpha/base/deployment.yaml |
+
+The systemd unit also sets `KillMode=mixed`. With the default, `control-group`,
+systemd sends SIGTERM to every process in the unit at once, so the stdio
+backends are signalled before the gateway can close their stdin and stop them
+in order. With `mixed` only the gateway gets the SIGTERM; at the timeout systemd
+still sends SIGKILL to every process left in the unit.
+
+If your configuration raises the gateway's stop timeout (UPGRADING-4.0 item 88),
+raise the grace with it. The Helm chart does this itself from the config it
+renders. A config file you mount, or an environment file the unit reads, is out
+of the templates' sight: set the grace by hand.
 
 ## Replica Count and per-process state
 
@@ -690,7 +722,8 @@ Group=mcp-gateway
 ExecStart=/usr/local/bin/mcp-gateway --config /etc/mcp-gateway/gateway.yaml
 Restart=on-failure
 RestartSec=5s
-TimeoutStopSec=30s
+TimeoutStopSec=31s
+KillMode=mixed
 Environment=MCP_GATEWAY_LOG_LEVEL=info
 Environment=MCP_GATEWAY_LOG_FORMAT=json
 EnvironmentFile=-/etc/mcp-gateway/env

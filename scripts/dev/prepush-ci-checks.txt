@@ -9,6 +9,8 @@ python3 scripts/ci/check-gateway-spawns.py	0	closed
 python3 scripts/ci/check-gateway-spawns.py --self-test	0	closed
 python3 scripts/ci/check-pick-then-bind.py	13	closed
 python3 scripts/ci/check-pick-then-bind.py --self-test	0	closed
+python3 scripts/ci/check-stop-grace.py	0	closed
+python3 scripts/ci/check-stop-grace.py --self-test	0	closed
 python3 scripts/ci/check-reads-token.py --self-test	0	closed
 python3 scripts/ci/check-pipefail-grep-q.py	0	closed
 "$GATE_PY" scripts/ci/check-request-panics.py	9	closed
