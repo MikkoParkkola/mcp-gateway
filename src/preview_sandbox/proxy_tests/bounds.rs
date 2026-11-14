@@ -33,7 +33,9 @@ async fn d1_a_silent_client_is_cut_off_at_the_head_bound() {
     let rig = rig().await;
     rig.proxy.set_bounds(Bounds {
         head: Duration::from_millis(200),
-        admit: Duration::from_secs(10),
+        // Well past GUARD: a head read that waits on the admission bound
+        // instead of the head bound fails at the guard, not with a 400.
+        admit: Duration::from_secs(60),
         ..BOUNDS
     });
     let mut client = tokio::time::timeout(GUARD, UnixStream::connect(rig.proxy.unix_path()))
