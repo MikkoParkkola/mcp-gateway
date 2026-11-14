@@ -27,8 +27,8 @@ use tokio::time::Instant;
 /// timing gate cannot follow a `crate::` import to a const.
 const BOUND: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Design erratum E1; existing `UiRefused::Busy` status, settings.rs:494 (503 with
-/// `Retry-After: 1`), whose flat `{error}` body states the reason.
+/// Design erratum E1, amended: the `UiRefused::Busy` answer (409 with `Retry-After: 1`,
+/// a refusal where nothing was tried), whose flat `{error}` body states the reason.
 const BUSY_TEXT: &str = "a restart is being prepared; retry";
 /// Design table, Paused and Certified, manual reload column; the UI reload route's flat
 /// `{error}` body (ui/mod.rs `reload`) carries it.
@@ -41,10 +41,7 @@ const STOPPING: (&str, &str) = ("stopping", "the gateway is stopping");
 
 /// The busy refusal a paused or certified gate gives a UI write.
 fn busy_refusal() -> (StatusCode, Value) {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        json!({ "error": BUSY_TEXT }),
-    )
+    (StatusCode::CONFLICT, json!({ "error": BUSY_TEXT }))
 }
 
 /// The save route's `{error, message}` refusal for a terminal or released gate.

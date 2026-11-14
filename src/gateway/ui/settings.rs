@@ -422,7 +422,7 @@ fn bad_value(id: FieldId, reason: &str) -> Response {
 }
 
 /// The refusals a client may retry as they are: the design lists Retry-After
-/// for these 503s only; the others need someone to change the config first.
+/// for these only; the others need someone to change the config first.
 fn retryable(refusal: &UiRefused) -> bool {
     matches!(
         refusal,
@@ -517,12 +517,14 @@ fn answer(refusal: UiRefused) -> Response {
         }
         // Refused before anything was attempted: a 4xx (a 5xx means the outcome is
         // not confirmed). Still retryable, so it keeps its Retry-After.
-        UiRefused::Busy(BusyReason::Locked) => {
-            flat_error(StatusCode::CONFLICT, "the config is being written; retry").into_response()
-        }
-        UiRefused::Busy(BusyReason::Restart) => {
-            flat_error(StatusCode::SERVICE_UNAVAILABLE, RESTART_BUSY).into_response()
-        }
+        UiRefused::Busy(reason) => flat_error(
+            StatusCode::CONFLICT,
+            match reason {
+                BusyReason::Locked => "the config is being written; retry",
+                BusyReason::Restart => RESTART_BUSY,
+            },
+        )
+        .into_response(),
         UiRefused::Down(down) => gate_refusal(down),
         UiRefused::SecretsRefused { timeout: true } => flat_error(
             StatusCode::SERVICE_UNAVAILABLE,

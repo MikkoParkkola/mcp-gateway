@@ -28,13 +28,13 @@ pub(super) fn structured_error(
 pub(super) const RESTART_BUSY: &str = "a restart is being prepared; retry";
 
 /// The one answer to a config-gate refusal of a UI write, for every write
-/// route: busy is a retryable 503, a restart or stop in progress is a 409.
+/// route: all are 409s, since nothing was tried; busy alone is retryable and
+/// carries `Retry-After`.
 pub(super) fn gate_refusal(refusal: Refusal) -> Response {
     let ending = |code, message| structured_error(StatusCode::CONFLICT, code, message);
     match refusal {
         Refusal::Busy | Refusal::ReplayOwed => {
-            let mut busy =
-                flat_error(StatusCode::SERVICE_UNAVAILABLE, RESTART_BUSY).into_response();
+            let mut busy = flat_error(StatusCode::CONFLICT, RESTART_BUSY).into_response();
             busy.headers_mut()
                 .insert(RETRY_AFTER, HeaderValue::from_static("1"));
             busy
