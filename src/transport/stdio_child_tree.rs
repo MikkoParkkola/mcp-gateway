@@ -469,7 +469,11 @@ impl ChildTree {
         use super::reaper::{KILL_RESERVE, MIN_PHASE};
         // What the stop keeps past the reap deadline: the kill may move this far.
         const SLACK: std::time::Duration = KILL_RESERVE.saturating_sub(REAP_DEADLINE);
-        const _: () = assert!(SLACK.as_nanos() >= MIN_PHASE.as_nanos());
+        // Block form: a bare `assert!` here, inside a fn body, trips
+        // semicolon_in_expressions_from_non_local_macros under Kani's toolchain.
+        const _: () = {
+            assert!(SLACK.as_nanos() >= MIN_PHASE.as_nanos());
+        };
         let slack_end = grace.kill_at + SLACK;
         let planned = grace.term_at < grace.kill_at || grace.term_owed;
         let due = grace.term_owed || now >= grace.term_at;
