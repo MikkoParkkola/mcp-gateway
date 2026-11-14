@@ -491,11 +491,11 @@ fn answer(refusal: UiRefused) -> Response {
         UiRefused::Preview(PreviewRefused::Untrusted(_) | PreviewRefused::Unread(_)) => {
             config_refusal().into_response()
         }
-        UiRefused::Busy => flat_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the config is being written; retry",
-        )
-        .into_response(),
+        // Refused before anything was attempted: a 4xx (a 5xx means the outcome is
+        // not confirmed). Still retryable, so it keeps its Retry-After.
+        UiRefused::Busy => {
+            flat_error(StatusCode::CONFLICT, "the config is being written; retry").into_response()
+        }
         UiRefused::SecretsRefused { timeout: true } => flat_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "the secret store did not answer; retry",

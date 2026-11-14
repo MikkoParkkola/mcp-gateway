@@ -44,18 +44,17 @@ pub(super) struct StoreQuery {
     pub(super) store: String,
 }
 
-/// `BadName` 400, `NotListed` 404, `StoreMismatch`/`Named`/`Pending` 409,
-/// `Busy`/`TimedOut`/`Failed` 503.
+/// `BadName` 400, `NotListed` 404, `StoreMismatch`/`Named`/`Pending`/`Busy` 409 (refused,
+/// nothing attempted), `TimedOut`/`Failed` 503 (the outcome is not confirmed).
 pub(super) fn refusal_status(refused: &DeleteRefused) -> StatusCode {
     match refused {
         DeleteRefused::BadName => StatusCode::BAD_REQUEST,
         DeleteRefused::NotListed => StatusCode::NOT_FOUND,
-        DeleteRefused::StoreMismatch | DeleteRefused::Named | DeleteRefused::Pending => {
-            StatusCode::CONFLICT
-        }
-        DeleteRefused::Busy | DeleteRefused::TimedOut | DeleteRefused::Failed(_) => {
-            StatusCode::SERVICE_UNAVAILABLE
-        }
+        DeleteRefused::StoreMismatch
+        | DeleteRefused::Named
+        | DeleteRefused::Pending
+        | DeleteRefused::Busy => StatusCode::CONFLICT,
+        DeleteRefused::TimedOut | DeleteRefused::Failed(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
 
@@ -204,7 +203,7 @@ pub(super) async fn delete_unused_entry(
     }
     if cfg!(any(target_os = "macos", windows)) && store == "keychain" {
         return structured_error(
-            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::CONFLICT,
             "keychain_delete_unavailable",
             KEYCHAIN_GUARDED,
         )
