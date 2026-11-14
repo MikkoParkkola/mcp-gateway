@@ -39,6 +39,11 @@ mod disk;
 mod error;
 #[path = "store_expiry.rs"]
 mod expiry;
+#[path = "store_gate.rs"]
+pub(crate) mod gate;
+#[cfg(test)]
+#[path = "store_gate_tests.rs"]
+mod gate_tests;
 #[path = "store_holds.rs"]
 mod holds;
 #[path = "store_input.rs"]
@@ -169,6 +174,8 @@ struct Shared {
     #[cfg(test)]
     seams: input::TestSeams,
     temp: AtomicU64,
+    /// Every mutation's admission (restart slice 5): see `gate`.
+    gate: gate::TaskGate,
     /// Test-only: a share of the temporary directory this store lives in, so it
     /// is removed only after the store's last handle and the test's own drop. Every blocking
     /// write holds an `Arc<Shared>`, so no write can land while it is being
@@ -189,6 +196,12 @@ impl TaskStore {
     #[cfg(test)]
     pub(crate) fn keep_test_dir(&self, dir: Arc<tempfile::TempDir>) {
         self.0.test_dir.keep(dir, &self.0.dir);
+    }
+
+    /// Test-only: the store's gate, so a row can pause it and read its count.
+    #[cfg(test)]
+    pub(crate) fn gate_for_test(&self) -> gate::TaskGate {
+        self.0.gate.clone()
     }
 
     /// Test-only: hold the ownership acquired before this store opened.
@@ -234,6 +247,7 @@ impl TaskStore {
             #[cfg(test)]
             seams: input::TestSeams::default(),
             temp: AtomicU64::new(0),
+            gate: gate::TaskGate::new(),
             #[cfg(test)]
             test_dir: crate::test_dir_keep::TestDirKeep::default(),
         })))
