@@ -25,6 +25,18 @@ use runtime::RuntimeShutdown;
 /// installs tracing globally and creates its own Tokio runtime; never call it
 /// twice or from inside a Tokio runtime.
 pub fn run(args: Cli) -> ExitCode {
+    // First, before tracing or any runtime: the invocation a restart would
+    // re-exec. It never stops startup.
+    crate::restart::invocation::capture_and_install(
+        crate::restart::invocation::CaptureInputs {
+            args: std::env::args_os().collect(),
+            cwd: std::env::current_dir(),
+            path_env: std::env::var_os("PATH"),
+            #[cfg(unix)]
+            mask: crate::restart::invocation::current_thread_mask(),
+        },
+        &args,
+    );
     // Bound outside the runtime, so the log flush runs after the runtime's
     // own shutdown and keeps what that shutdown logs.
     let _flush_logs = match setup_tracing(&args.log_level, args.log_format.as_deref()) {

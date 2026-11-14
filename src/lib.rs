@@ -148,6 +148,8 @@ pub mod provider;
 pub mod ranking;
 #[doc(hidden)]
 pub mod registry;
+// In-place restart's process side; crate-private by design.
+mod restart;
 #[doc(hidden)]
 pub mod routing_profile;
 #[doc(hidden)]
