@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The host's own addresses from `/proc/net/fib_trie` and `/proc/net/if_inet6`.
 
-use super::super::host_addresses::{fib_trie_local, if_inet6, ipv6_tree_present, optional_text};
+use super::super::host_addresses::{
+    fib_trie_local, if_inet6, ipv6_route_local, ipv6_tree_present, networks, optional_text,
+};
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 fn v4(text: &str) -> Ipv4Addr {
     text.parse().expect("address")
@@ -189,4 +191,81 @@ fn t3_only_a_missing_if_inet6_file_reads_as_none() {
     ));
     let denied = optional_text(Err(io::Error::from(io::ErrorKind::PermissionDenied)));
     assert_eq!(denied.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+}
+
+/// One `/proc/net/ipv6_route` line: destination, prefix length and flags; the
+/// other seven fields as the kernel writes them.
+fn route(dest: &str, len: &str, flags: &str) -> String {
+    let zero = "0".repeat(32);
+    format!("{dest} {len} {zero} 00 {zero} 00000000 00000001 00000000 {flags}       lo\n")
+}
+
+/// Kills "local routes are not read, a non-local route is taken, or an
+/// `AnyIP` prefix is shrunk to one address".
+#[test]
+fn t3_ipv6_route_local_routes_are_read_from_a_sample() {
+    assert_eq!(
+        ipv6_route_local(Some(include_str!("ipv6_route_sample.txt")), true).ok(),
+        Some(vec![
+            (v6("::1"), 128),
+            (v6("fe80::a8bb:ccff:fedd:1"), 128),
+            (v6("2606:4700:10::"), 64),
+        ])
+    );
+}
+
+/// Kills "a malformed `ipv6_route` line is skipped": a short or long line,
+/// a destination that is not 32 hex digits, a prefix length over 128, or
+/// flags that are not 8 hex digits.
+#[test]
+fn t3_an_unparsable_ipv6_route_is_refused() {
+    let good = route("00000000000000000000000000000001", "80", "80200001");
+    let dest = "26064700001000000000000000000000";
+    let bad = [
+        good.replacen("       lo", "", 1),
+        good.replacen("lo", "lo extra", 1),
+        route("2606470000100000000000000000000", "40", "80200001"),
+        route("2606470000100000000000000000000g", "40", "80200001"),
+        route(dest, "81", "80200001"),
+        route(dest, "4g", "80200001"),
+        route(dest, "40", "8020000x"),
+        route(dest, "40", "802000010"),
+    ];
+    for text in bad {
+        // A valid local neighbour, so skipping the bad line would be a success.
+        let text = format!("{good}{text}");
+        assert!(ipv6_route_local(Some(&text), true).is_err(), "{text:?}");
+    }
+}
+
+/// Kills "a missing `ipv6_route` is an error when IPv6 was disabled at boot".
+#[test]
+fn t3_missing_ipv6_route_without_ipv6_sysctl_is_empty_and_allowed() {
+    assert_eq!(ipv6_route_local(None, false).ok(), Some(vec![]));
+}
+
+/// Kills "a missing `ipv6_route` is empty success while IPv6 is enabled".
+#[test]
+fn t3_missing_ipv6_route_with_ipv6_sysctl_is_refused() {
+    assert!(ipv6_route_local(None, true).is_err());
+}
+
+/// Kills "a source is left out of the host's networks": the IPv4 LOCAL
+/// routes, each IPv6 address (one address wide) and the IPv6 local routes
+/// all count.
+#[test]
+fn t3_the_host_networks_join_all_three_sources() {
+    let got = networks(
+        vec![(v4("93.184.216.0"), 24)],
+        vec![v6("fd00::1")],
+        vec![(v6("2606:4700:10::"), 64)],
+    );
+    assert_eq!(
+        got,
+        vec![
+            (IpAddr::V4(v4("93.184.216.0")), 24),
+            (IpAddr::V6(v6("fd00::1")), 128),
+            (IpAddr::V6(v6("2606:4700:10::")), 64),
+        ]
+    );
 }

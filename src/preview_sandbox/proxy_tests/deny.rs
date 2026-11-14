@@ -138,3 +138,20 @@ async fn c4i_an_unreadable_interface_set_refuses_with_no_dial() {
     assert_eq!(st, 403);
     assert!(rig.connect.dials().is_empty(), "{:?}", rig.connect.dials());
 }
+
+/// C4i, kills "an IPv6 host-owned prefix compared as one address": an IPv6
+/// local route over a public prefix makes every address in it the host's.
+#[tokio::test]
+async fn c4i_an_address_inside_a_host_owned_ipv6_prefix_is_refused() {
+    let rig = rig().await;
+    let cred = begin(&rig);
+    *rig.interfaces.0.lock().expect("lock") = Some(vec![(ip("2606:4700:10::"), 64)]);
+    rig.resolve.set(NPM, vec![ip("2606:4700:10::1234")]);
+    let st = connect_status(&rig, "registry.npmjs.org:443", &cred).await;
+    assert_eq!(st, 403);
+    assert!(rig.connect.dials().is_empty(), "{:?}", rig.connect.dials());
+    // Just outside the prefix: admitted, so the refusal above is the prefix's.
+    rig.resolve.set(NPM, vec![ip("2606:4700:11::1234")]);
+    let st = connect_status(&rig, "registry.npmjs.org:443", &cred).await;
+    assert_eq!(st, 200);
+}

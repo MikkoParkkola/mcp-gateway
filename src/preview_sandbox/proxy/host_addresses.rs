@@ -4,9 +4,7 @@
 //! dependency: the proxy refuses a registry name that resolves to one of them.
 
 use std::io;
-#[cfg(target_os = "linux")]
-use std::net::IpAddr;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// False only when the lookup failed with `NotFound`; true on success and every other error.
 pub(super) fn ipv6_tree_present(lookup: io::Result<()>) -> bool {
@@ -94,6 +92,32 @@ pub(super) fn if_inet6(text: Option<&str>, ipv6_sysctl_present: bool) -> io::Res
     Ok(addresses)
 }
 
+/// The host's IPv6 local routes from `/proc/net/ipv6_route`, an `AnyIP`
+/// prefix included; a missing file follows the rule of [`if_inet6`].
+pub(super) fn ipv6_route_local(
+    text: Option<&str>,
+    ipv6_sysctl_present: bool,
+) -> io::Result<Vec<(Ipv6Addr, u8)>> {
+    // Red step: the source is not read yet.
+    let _ = (text, ipv6_sysctl_present);
+    Ok(Vec::new())
+}
+
+/// Every network the host answers on: the IPv4 LOCAL routes, each IPv6
+/// address, and the IPv6 local routes.
+pub(super) fn networks(
+    v4: Vec<(Ipv4Addr, u8)>,
+    inet6: Vec<Ipv6Addr>,
+    local6: Vec<(Ipv6Addr, u8)>,
+) -> Vec<super::Owned> {
+    // Red step: the local routes are not joined yet.
+    let _ = local6;
+    v4.into_iter()
+        .map(|(a, len)| (IpAddr::V4(a), len))
+        .chain(inet6.into_iter().map(|a| (IpAddr::V6(a), 128)))
+        .collect()
+}
+
 #[cfg(target_os = "linux")]
 impl super::Interfaces for super::System {
     fn addresses(&self) -> io::Result<Vec<super::Owned>> {
@@ -104,10 +128,8 @@ impl super::Interfaces for super::System {
         let ipv6_sysctl_present =
             ipv6_tree_present(std::fs::symlink_metadata("/proc/sys/net/ipv6").map(|_| ()));
         let v6 = if_inet6(inet6.as_deref(), ipv6_sysctl_present)?;
-        Ok(v4
-            .into_iter()
-            .map(|(a, len)| (IpAddr::V4(a), len))
-            .chain(v6.into_iter().map(|a| (IpAddr::V6(a), 128)))
-            .collect())
+        let routes = optional_text(std::fs::read_to_string("/proc/net/ipv6_route"))?;
+        let local6 = ipv6_route_local(routes.as_deref(), ipv6_sysctl_present)?;
+        Ok(networks(v4, v6, local6))
     }
 }

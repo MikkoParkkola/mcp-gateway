@@ -342,7 +342,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/preview_sandbox/proxy/host_addresses.rs",
-        "the host's own addresses from /proc/net/fib_trie and /proc/net/if_inet6; kernel tables, no secret",
+        "the host's own networks from /proc/net/fib_trie, if_inet6 and ipv6_route; kernel tables, no secret",
     ),
     (
         "src/private_fs.rs",
