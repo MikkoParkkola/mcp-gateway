@@ -13,7 +13,7 @@ use super::*;
 /// before the group is killed.
 #[tokio::test]
 async fn a_shutdown_write_after_stdin_closes_lands_before_close_returns() {
-    let (w, t) = started_unhurried(
+    let (w, t) = started(
         "cat >/dev/null\nsleep 0.3\necho landed > shutdown.mark",
         None,
     )
@@ -55,7 +55,7 @@ async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
     // The fixed plan outside a shutdown (EOF wait, SIGTERM wait, the reap
     // deadline) plus slack for a loaded host.
     const BOUND: Duration = Duration::from_secs(15);
-    let (w, t) = started(&resists_term(), None).await;
+    let (w, t) = started_unhurried(&resists_term(), None).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
     let started_at = std::time::Instant::now();
@@ -141,7 +141,7 @@ const MARKS_TERM: &str = "trap 'echo termed > term.mark' TERM\nwhile :; do sleep
 #[tokio::test]
 async fn a_hurried_tree_keeps_its_term_phase_after_a_reaper_tick() {
     use super::super::super::reaper::{HURRY_WINDOW, KILL_RESERVE};
-    let (w, t) = started_unhurried(
+    let (w, t) = started(
         "trap '' TERM\necho ready > ready.mark\nwhile :; do sleep 0.05; done",
         None,
     )
@@ -214,7 +214,7 @@ async fn cut_close(t: &Arc<StdioTransport>, end: &EndOnDrop, cut_in: Duration) -
 /// plan was, its last third after SIGTERM.
 #[tokio::test]
 async fn a_cut_stop_still_sends_sigterm_before_the_kill() {
-    let (w, t) = started(MARKS_TERM, None).await;
+    let (w, t) = started_unhurried(MARKS_TERM, None).await;
     let end = EndOnDrop::new(&t);
     let pid = cut_close(&t, &end, Duration::from_secs(3)).await;
     assert_killed(pid).await;

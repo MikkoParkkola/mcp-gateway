@@ -164,7 +164,7 @@ fn assert_settled((sent, refused): (usize, usize)) {
 /// stdout open, so the reader never clears `connected` and the probe decides.
 #[tokio::test]
 async fn is_connected_reports_an_exit_without_reaping_it() {
-    let (w, t) = started_unhurried("sleep 60 </dev/null & echo $! > d.pid\nexit 0", None).await;
+    let (w, t) = started("sleep 60 </dev/null & echo $! > d.pid\nexit 0", None).await;
     let child = descendant(w.path()).await;
     let pid = leader_exited(&t).await;
     assert!(
@@ -185,7 +185,7 @@ async fn is_connected_reports_an_exit_without_reaping_it() {
 /// reaps.
 #[tokio::test]
 async fn close_after_the_exit_signals_each_phase_once_then_reaps() {
-    let (w, t) = started(&format!("{DESCENDANT}\nexit 0"), None).await;
+    let (w, t) = started_unhurried(&format!("{DESCENDANT}\nexit 0"), None).await;
     let child = descendant(w.path()).await;
     let pid = leader_exited(&t).await;
     t.close().await.expect("close");
@@ -232,7 +232,7 @@ fn the_probe_maps_each_waitid_result() {
 /// P1 against the platform's waitid: Running, Zombie, then Gone.
 #[tokio::test]
 async fn the_probe_reads_a_real_leader() {
-    let (w, t) = started_unhurried("while [ ! -f go ]; do sleep 0.05; done\nexit 0", None).await;
+    let (w, t) = started("while [ ! -f go ]; do sleep 0.05; done\nexit 0", None).await;
     assert_eq!(with_tree(&t, |c| c.leader_state()).await, Leader::Running);
     std::fs::write(w.path().join("go"), "").expect("release the leader");
     let pid = leader_exited(&t).await;
@@ -246,7 +246,7 @@ async fn the_probe_reads_a_real_leader() {
 #[tokio::test]
 async fn a_reader_error_then_close_adds_only_the_pre_reap_signal() {
     let oversized = "head -c 600 /dev/zero | tr '\\0' x\necho\nwhile IFS= read -r l; do :; done";
-    let (w, t) = started(&format!("{DESCENDANT}\n{oversized}"), Some(512)).await;
+    let (w, t) = started_unhurried(&format!("{DESCENDANT}\n{oversized}"), Some(512)).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
     let deadline = tokio::time::Instant::now() + ROW_LIMIT;
@@ -292,7 +292,7 @@ async fn a_cancelled_close_still_ends_the_tree() {
 async fn a_foreign_reap_leaks_rather_than_signals() {
     use rustix::process::{Signal, kill_process};
     let heartbeat = "(while :; do echo x >> hb; sleep 0.1; done) </dev/null >/dev/null 2>&1 &";
-    let (w, t) = started_unhurried(&format!("{heartbeat} echo $! > d.pid\nexit 0"), None).await;
+    let (w, t) = started(&format!("{heartbeat} echo $! > d.pid\nexit 0"), None).await;
     let child = descendant(w.path()).await;
     let pid = leader_exited(&t).await;
     let mut tree = t.child.lock().tree.take().expect("tree");
@@ -324,7 +324,7 @@ async fn a_foreign_reap_leaks_rather_than_signals() {
 /// (terafin).
 #[tokio::test]
 async fn close_ends_a_group_that_ignores_sigterm() {
-    let (w, t) = started(&resists_term(), None).await;
+    let (w, t) = started_unhurried(&resists_term(), None).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
     t.close().await.expect("close");
@@ -383,7 +383,7 @@ async fn assert_killed(pid: Pid) {
 #[tokio::test]
 async fn close_ends_a_group_that_keeps_forking() {
     let forker = "(while :; do sh -c 'echo $$ >> pids; exec sleep 30' </dev/null >/dev/null 2>&1 & sleep 0.005; done) </dev/null >/dev/null 2>&1 &\necho $! >> pids\nwhile IFS= read -r l; do :; done";
-    let (w, t) = started_unhurried(forker, None).await;
+    let (w, t) = started(forker, None).await;
     let file = w.path().join("pids");
     let registered = || -> Vec<Pid> {
         std::fs::read_to_string(&file)
@@ -420,7 +420,7 @@ async fn close_ends_a_group_that_keeps_forking() {
 /// so tokio recorded the exit and its `kill_on_drop` is disarmed (MIK-7923).
 #[tokio::test]
 async fn a_stepped_tree_signals_each_phase_once_then_reaps_natively() {
-    let (w, t) = started(
+    let (w, t) = started_unhurried(
         &format!("{DESCENDANT}\nwhile IFS= read -r l; do :; done"),
         None,
     )
@@ -518,7 +518,7 @@ async fn a_failed_start_signals_the_group_before_the_reap() {
 /// step is handed a `now` past the deadline.
 #[tokio::test]
 async fn a_reap_step_past_its_deadline_gives_up() {
-    let (w, t) = started_unhurried(
+    let (w, t) = started(
         &format!("{DESCENDANT}\nwhile IFS= read -r l; do :; done"),
         None,
     )
@@ -636,7 +636,7 @@ async fn a_tree_installed_after_a_retire_is_refused_and_ended() {
 /// fallback signal of `ChildTree`'s Drop.
 #[tokio::test]
 async fn a_dropped_transport_hands_its_tree_to_the_reaper() {
-    let (w, t) = started(DESCENDANT, None).await;
+    let (w, t) = started_unhurried(DESCENDANT, None).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
     drop(Arc::into_inner(t).expect("the only handle"));
