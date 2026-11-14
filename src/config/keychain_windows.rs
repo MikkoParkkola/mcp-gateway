@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use super::keychain::{
     BOUND, CONFIRM_ATTEMPTS, CONFIRM_GAP, KeychainError, KeychainRead, WipedBytes, bounded,
-    confirm_absent,
+    delete_confirmed,
 };
 use crate::secret_store::{SecretStore, StoreError, StoreKind};
 use crate::win_cred::{self, CredError};
@@ -18,11 +18,19 @@ const LIMIT: usize = 2_560;
 /// A name no entry is ever created under, for the read-only probe.
 const PROBE_NAME: &str = "mcp-gateway.probe.absent";
 
+/// The Credential Manager delete a store delete makes; rows swap in a fake.
+type CredDelete = fn(&str) -> Result<(), CredError>;
+/// The existence ask a store delete makes after it; rows swap in a fake.
+type CredExists = fn(&str) -> Result<bool, CredError>;
+
 /// Credential Manager's generic credentials.
 pub(crate) struct WindowsKeychain {
     bound: Duration,
     /// Test seam: how long each call waits before it starts.
     delay: Duration,
+    /// Test seam: the delete and the ask behind [`SecretStore::delete`].
+    cred_delete: CredDelete,
+    cred_exists: CredExists,
 }
 
 impl WindowsKeychain {
@@ -30,13 +38,30 @@ impl WindowsKeychain {
         Self {
             bound: BOUND,
             delay: Duration::ZERO,
+            cred_delete: win_cred::delete,
+            cred_exists: win_cred::exists,
         }
     }
 
     /// A bound and a delay before each call, for timeout tests.
     #[cfg(test)]
     pub(crate) fn with_timing(bound: Duration, delay: Duration) -> Self {
-        Self { bound, delay }
+        Self {
+            bound,
+            delay,
+            ..Self::new()
+        }
+    }
+
+    /// Fake Credential Manager calls behind the store's delete, for the rows
+    /// that drive the call site.
+    #[cfg(test)]
+    pub(crate) fn with_cred(cred_delete: CredDelete, cred_exists: CredExists) -> Self {
+        Self {
+            cred_delete,
+            cred_exists,
+            ..Self::new()
+        }
     }
 }
 
@@ -106,15 +131,19 @@ impl SecretStore for WindowsKeychain {
     /// the call's bound. One that is still readable fails the delete.
     fn delete(&self, name: &str) -> Result<(), StoreError> {
         let name = name.to_owned();
+        let (cred_delete, cred_exists) = (self.cred_delete, self.cred_exists);
         bounded(self.bound, self.delay, move || {
-            match win_cred::delete(&name) {
-                // Already gone is durably gone.
-                Ok(()) | Err(CredError::NotFound) => {}
-                Err(other) => return Err(unavailable(&other)),
-            }
-            confirm_absent(CONFIRM_ATTEMPTS, CONFIRM_GAP, || {
-                win_cred::exists(&name).map_err(|e| unavailable(&e))
-            })
+            delete_confirmed(
+                CONFIRM_ATTEMPTS,
+                CONFIRM_GAP,
+                std::thread::sleep,
+                || match cred_delete(&name) {
+                    // Already gone is durably gone.
+                    Ok(()) | Err(CredError::NotFound) => Ok(()),
+                    Err(other) => Err(unavailable(&other)),
+                },
+                || cred_exists(&name).map_err(|e| unavailable(&e)),
+            )
         })
         .map_err(store_error)
     }
