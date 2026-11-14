@@ -78,6 +78,19 @@ async fn t4_a_line_over_one_kib_is_refused() {
     assert!(read_line(&mut reader, B.frame, B).await.is_err());
 }
 
+/// T4, kills "the cap is checked only when a newline arrives": a line read
+/// in small chunks is refused at the cap, not buffered until the peer
+/// closes or the frame bound ends.
+#[tokio::test]
+async fn t4_a_line_read_in_chunks_is_refused_at_the_cap() {
+    let endless = "a".repeat(2 * MAX_LINE);
+    let mut reader = BufReader::with_capacity(16, endless.as_bytes());
+    let refused = read_line(&mut reader, B.frame, B)
+        .await
+        .expect_err("a line with no newline past the cap");
+    assert!(format!("{refused:?}").contains("over 1 KiB"), "{refused:?}");
+}
+
 /// T4, kills "a frame cut off by a close is taken as a line".
 #[tokio::test]
 async fn t4_a_line_cut_off_by_a_close_is_refused() {
