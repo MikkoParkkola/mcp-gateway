@@ -330,7 +330,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/preview_sandbox/control.rs",
-        "the control peer's /proc/<pid>/status (parent pid and uids); the kernel's process table, no secret",
+        "the control peer's /proc/<pid>/stat and status (start time, parent pid, uids) through one directory fd; the kernel's process table, no secret",
     ),
     (
         "src/preview_sandbox/linux/mod.rs",

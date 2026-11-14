@@ -77,7 +77,22 @@ pub(crate) fn peer_is_helper(status: &str, unshare_pid: u32, uid: u32) -> Result
 /// `stat` is the text of `/proc/<pid>/stat`, `accepted` the boot clock in
 /// clock ticks read just after the accept. A later start means the pid
 /// names a newer process than the one that connected.
-pub(crate) fn started_by(_stat: &str, _accepted: u64) -> Result<(), Refusal> {
+pub(crate) fn started_by(stat: &str, accepted: u64) -> Result<(), Refusal> {
+    let refuse = |why: &str| Refusal::Step(format!("the sandbox's control peer {why}"));
+    // The fields after the LAST ')': the process name before it is the
+    // process's own choice and may hold spaces and parentheses.
+    let (_, fields) = stat
+        .rsplit_once(')')
+        .ok_or_else(|| refuse("has no readable start time"))?;
+    // Field 22 of the line; field 3 is the first after the name.
+    let start: u64 = fields
+        .split_whitespace()
+        .nth(22 - 3)
+        .and_then(|field| field.parse().ok())
+        .ok_or_else(|| refuse("has no readable start time"))?;
+    if start > accepted {
+        return Err(refuse("started after its connection was taken"));
+    }
     Ok(())
 }
 
@@ -121,12 +136,28 @@ fn read_peer(dir: &rustix::fd::OwnedFd, name: &str) -> io::Result<String> {
 /// spawned `unshare` and it runs as `uid`. Any unreadable file refuses.
 #[cfg(target_os = "linux")]
 fn judge_dir(
-    _dir: &rustix::fd::OwnedFd,
-    _accepted: u64,
-    _unshare_pid: u32,
-    _uid: u32,
+    dir: &rustix::fd::OwnedFd,
+    accepted: u64,
+    unshare_pid: u32,
+    uid: u32,
 ) -> Result<(), Refusal> {
-    Ok(())
+    let read = |name: &str| {
+        read_peer(dir, name).map_err(|e| {
+            Refusal::Step(format!(
+                "the sandbox's control peer has no readable {name} ({e})"
+            ))
+        })
+    };
+    started_by(&read("stat")?, accepted)?;
+    peer_is_helper(&read("status")?, unshare_pid, uid)
+}
+
+/// Without `/proc` the peer cannot be judged, so it is refused.
+#[cfg(not(target_os = "linux"))]
+fn judge_peer(_pid: i32, _unshare_pid: u32, _uid: u32) -> Result<(), Refusal> {
+    Err(Refusal::Step(
+        "the sandbox's control peer cannot be checked without /proc".into(),
+    ))
 }
 
 /// Accept the helper's one connection within the bound and check its peer.
@@ -142,6 +173,10 @@ pub(crate) async fn accept_helper(
         .map_err(|_| Refusal::Step("the sandbox never opened its control connection".into()))?;
     let (stream, _) = accepted
         .map_err(|e| Refusal::Step(format!("accepting the sandbox's control connection ({e})")))?;
+    // The boot clock as the connection is taken: a process that started
+    // later is not the one that connected, whatever pid it holds.
+    #[cfg(target_os = "linux")]
+    let accepted_at = boot_ticks();
     let cred = stream
         .peer_cred()
         .map_err(|e| Refusal::Step(format!("reading the control peer's credentials ({e})")))?;
@@ -153,10 +188,23 @@ pub(crate) async fn accept_helper(
             "the sandbox's control peer runs as another user".into(),
         ));
     }
-    // An unreadable status (the process is gone, or there is no /proc)
-    // refuses, the same as a wrong parent.
-    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
-    peer_is_helper(&status, unshare_pid, uid)?;
+    // One /proc/<pid> directory for every read, opened now: a process that
+    // took the pid after the accept refuses on its start time, and one that
+    // exits after the open fails the reads. A pid taken before the accept
+    // names no child of the spawned unshare, whose only child is the helper.
+    #[cfg(target_os = "linux")]
+    judge_dir(
+        &open_peer(pid).map_err(|e| {
+            Refusal::Step(format!(
+                "the sandbox's control peer has no /proc entry ({e})"
+            ))
+        })?,
+        accepted_at,
+        unshare_pid,
+        uid,
+    )?;
+    #[cfg(not(target_os = "linux"))]
+    judge_peer(pid, unshare_pid, uid)?;
     Ok(stream)
 }
 
