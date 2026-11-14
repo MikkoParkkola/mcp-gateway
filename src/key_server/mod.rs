@@ -183,7 +183,7 @@ impl KeyServer {
         if first {
             tracing::warn!(
                 issuer = %identity.issuer(),
-                subject_hash = %self.email_key.hash(identity.subject()),
+                subject_hash = %self.email_key.hash_subject(identity.subject()),
                 "this identity provider's subjects are email addresses: the audit log keeps \
                  them as they are, since tokens and revocation key on the subject"
             );
