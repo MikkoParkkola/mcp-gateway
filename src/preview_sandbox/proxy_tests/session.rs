@@ -1,0 +1,321 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! T4: the control session issues the fetch's credential, answers `expired`
+//! only once that credential's tunnels are shut, and revokes on any other
+//! line or a closed socket.
+
+use super::super::super::control::{CONTROL_BOUNDS, ControlBounds, serve_session};
+use super::{Rig, connect_bytes, open, rig, send, status};
+use std::os::fd::AsFd as _;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+use tokio::net::UnixStream;
+
+const NPM: &str = "registry.npmjs.org:443";
+
+/// Over the 10 s hang-guard floor; a session that waits on a line that never
+/// comes fails here instead of hanging the row.
+const GUARD: Duration = Duration::from_secs(15);
+
+fn basic(secret: &str) -> String {
+    use base64::Engine as _;
+    let raw = format!("x:{secret}");
+    format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(raw)
+    )
+}
+
+/// The status a CONNECT under `secret` gets.
+async fn status_under(rig: &Rig, secret: &str) -> u16 {
+    status(&send(rig, &connect_bytes(NPM, Some(&basic(secret)))).await)
+}
+
+fn deadline() -> tokio::time::Instant {
+    tokio::time::Instant::now() + Duration::from_secs(60)
+}
+
+/// The credential out of the gateway's answer to `fetch_start`.
+fn secret_of(line: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(line).expect("credential line");
+    let secret = v["credential"]
+        .as_str()
+        .expect("credential field")
+        .to_owned();
+    assert_eq!(secret.len(), 64, "{line}");
+    assert!(v["deadline_ms"].as_u64().is_some_and(|ms| ms > 0), "{line}");
+    secret
+}
+
+/// T4, kills "expired is sent before the credential's tunnels are shut".
+#[tokio::test(flavor = "current_thread")]
+async fn s1_expired_comes_only_after_the_credentials_tunnels_are_shut() {
+    let rig = rig().await;
+    let (helper, gateway) = UnixStream::pair().expect("pair");
+    // When the revoke starts, nothing may be waiting for the helper yet: the
+    // gateway writes `expired` only after the revoke shut every tunnel.
+    let probe = helper.as_fd().try_clone_to_owned().expect("dup");
+    let waiting = Arc::new(Mutex::new(None));
+    let seen = waiting.clone();
+    rig.proxy.set_on_end(Box::new(move || {
+        let queued = rustix::io::ioctl_fionread(&probe).unwrap_or(u64::MAX);
+        *seen.lock().expect("lock") = Some(queued);
+    }));
+    let session = serve_session(gateway, &rig.proxy, deadline(), CONTROL_BOUNDS);
+    let script = async {
+        let (read, mut write) = helper.into_split();
+        let mut read = BufReader::new(read);
+        write
+            .write_all(b"{\"fetch_start\":true}\n")
+            .await
+            .expect("write");
+        let mut line = String::new();
+        read.read_line(&mut line).await.expect("credential");
+        let secret = secret_of(&line);
+        let mut tunnel = open(&rig, &connect_bytes(NPM, Some(&basic(&secret))))
+            .await
+            .expect("open");
+        assert_eq!(status(&tunnel.head().await), 200);
+        write
+            .write_all(b"{\"fetch_done\":true}\n")
+            .await
+            .expect("write");
+        line.clear();
+        read.read_line(&mut line).await.expect("expired");
+        assert_eq!(line, "{\"expired\":true}\n");
+        assert!(tunnel.closed().await, "the tunnel outlived `expired`");
+        secret
+    };
+    let (served, secret) = tokio::join!(session, script);
+    served.expect("the session");
+    assert_eq!(
+        *waiting.lock().expect("lock"),
+        Some(0),
+        "`expired` was queued before the revoke"
+    );
+    assert_eq!(status_under(&rig, &secret).await, 407);
+}
+
+/// T4, kills "an out-of-order, false or unrecognised line is accepted".
+#[tokio::test(flavor = "current_thread")]
+async fn s2_any_other_line_ends_the_session_and_revokes() {
+    let first = [
+        "{\"fetch_done\":true}",
+        "{\"fetch_start\":false}",
+        "{\"fetch_start\":true,\"extra\":1}",
+        "not json",
+    ];
+    for line in first {
+        let rig = rig().await;
+        let (mut helper, gateway) = UnixStream::pair().expect("pair");
+        helper
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .expect("write");
+        let served = serve_session(gateway, &rig.proxy, deadline(), CONTROL_BOUNDS);
+        let served = tokio::time::timeout(GUARD, served)
+            .await
+            .unwrap_or_else(|_| panic!("{line}: the session did not end within the guard"));
+        assert!(served.is_err(), "{line}");
+    }
+    // After the credential: a second fetch_start, an unknown key, or a false
+    // fetch_done ends the session, and the credential stops working.
+    for line in [
+        "{\"fetch_start\":true}",
+        "{\"fetch_done\":true,\"x\":0}",
+        "{\"fetch_done\":false}",
+    ] {
+        let rig = rig().await;
+        let (helper, gateway) = UnixStream::pair().expect("pair");
+        let session = serve_session(gateway, &rig.proxy, deadline(), CONTROL_BOUNDS);
+        let script = async {
+            let (read, mut write) = helper.into_split();
+            let mut read = BufReader::new(read);
+            write
+                .write_all(b"{\"fetch_start\":true}\n")
+                .await
+                .expect("write");
+            let mut issued = String::new();
+            read.read_line(&mut issued).await.expect("credential");
+            write
+                .write_all(format!("{line}\n").as_bytes())
+                .await
+                .expect("write");
+            // The socket stays open until the session ends, so an error can
+            // only be the session's refusal, never a write to a closed peer.
+            (secret_of(&issued), read, write)
+        };
+        let (served, (secret, _read, _write)) = tokio::join!(session, script);
+        assert!(served.is_err(), "{line}");
+        assert_eq!(status_under(&rig, &secret).await, 407, "{line}");
+    }
+}
+
+/// T4, kills "a helper that dies mid-fetch leaves its credential live".
+#[tokio::test(flavor = "current_thread")]
+async fn s3_a_closed_socket_mid_fetch_revokes_the_credential() {
+    let rig = rig().await;
+    let (helper, gateway) = UnixStream::pair().expect("pair");
+    let session = serve_session(gateway, &rig.proxy, deadline(), CONTROL_BOUNDS);
+    let script = async {
+        let (read, mut write) = helper.into_split();
+        let mut read = BufReader::new(read);
+        write
+            .write_all(b"{\"fetch_start\":true}\n")
+            .await
+            .expect("write");
+        let mut issued = String::new();
+        read.read_line(&mut issued).await.expect("credential");
+        drop((read, write));
+        secret_of(&issued)
+    };
+    let (served, secret) = tokio::join!(session, script);
+    assert!(served.is_err());
+    assert_eq!(status_under(&rig, &secret).await, 407);
+}
+
+/// T4, kills "a dropped session leaves its credential live": the session
+/// future is dropped right after the credential went out.
+#[tokio::test(flavor = "current_thread")]
+async fn s4_a_dropped_session_revokes_the_credential() {
+    let rig = rig().await;
+    let (helper, gateway) = UnixStream::pair().expect("pair");
+    let (read, mut write) = helper.into_split();
+    let mut read = BufReader::new(read);
+    let secret = {
+        let session = serve_session(gateway, &rig.proxy, deadline(), CONTROL_BOUNDS);
+        tokio::pin!(session);
+        write
+            .write_all(b"{\"fetch_start\":true}\n")
+            .await
+            .expect("write");
+        let mut issued = String::new();
+        tokio::select! {
+            _ = &mut session => panic!("the session ended before the credential was read"),
+            read = read.read_line(&mut issued) => { read.expect("credential"); }
+        }
+        secret_of(&issued)
+    };
+    assert_eq!(status_under(&rig, &secret).await, 407);
+}
+
+const SEC: Duration = Duration::from_secs(1);
+
+/// R7a, kills "the setup bound is not applied to `fetch_start`": a silent
+/// helper is cut off at the setup bound (the frame bound here is past the
+/// guard, so only the setup bound can end it in time).
+#[tokio::test(flavor = "current_thread")]
+async fn r7a_a_helper_silent_through_setup_is_refused() {
+    let rig = rig().await;
+    let (_helper, gateway) = UnixStream::pair().expect("pair");
+    let bounds = ControlBounds {
+        setup: SEC,
+        frame: 30 * SEC,
+        ..CONTROL_BOUNDS
+    };
+    let served = tokio::time::timeout(
+        GUARD,
+        serve_session(gateway, &rig.proxy, deadline(), bounds),
+    )
+    .await
+    .expect("the session did not end within the guard");
+    assert!(served.is_err());
+}
+
+/// R7b, kills "`fetch_start` keeps the old 5 s frame bound": a helper whose
+/// setup takes longer than a frame still gets its credential.
+// The paused clock makes the helper's pause and the session's bounds
+// virtual timers, fired in order whatever the load. The only I/O peer is the
+// script future on this same thread, which writes synchronously; and the
+// session's `timeout` polls its read before its timer, so a clock that
+// auto-advances past a ready read still takes the read.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn r7b_a_fetch_start_after_the_frame_bound_but_within_setup_is_served() {
+    let rig = rig().await;
+    let (helper, gateway) = UnixStream::pair().expect("pair");
+    let bounds = ControlBounds {
+        setup: 10 * SEC,
+        frame: SEC,
+        ..CONTROL_BOUNDS
+    };
+    let session = serve_session(gateway, &rig.proxy, deadline(), bounds);
+    let script = async {
+        let (read, mut write) = helper.into_split();
+        let mut read = BufReader::new(read);
+        // The helper's root build, paced: the send comes after a frame bound.
+        tokio::time::sleep(2 * SEC).await;
+        write
+            .write_all(b"{\"fetch_start\":true}\n")
+            .await
+            .expect("write");
+        let mut issued = String::new();
+        read.read_line(&mut issued).await.expect("credential");
+        write
+            .write_all(b"{\"fetch_done\":true}\n")
+            .await
+            .expect("write");
+        let mut expired = String::new();
+        read.read_line(&mut expired).await.expect("expired");
+        (issued, expired)
+    };
+    let (served, (issued, expired)) =
+        tokio::time::timeout(GUARD, async { tokio::join!(session, script) })
+            .await
+            .expect("the session did not end within the guard");
+    assert!(served.is_ok(), "{served:?}");
+    secret_of(&issued);
+    assert_eq!(expired, "{\"expired\":true}\n");
+}
+
+/// R7c, kills "the setup bound outlives the preview's deadline": a helper
+/// that never asks is cut off at the deadline, not at the setup bound (both
+/// bounds here are past the guard, so only the deadline can end it in time),
+/// and gets no credential.
+#[tokio::test(flavor = "current_thread")]
+async fn r7c_the_setup_wait_ends_at_the_preview_deadline() {
+    let rig = rig().await;
+    let (helper, gateway) = UnixStream::pair().expect("pair");
+    let bounds = ControlBounds {
+        setup: 30 * SEC,
+        frame: 30 * SEC,
+        ..CONTROL_BOUNDS
+    };
+    let soon = tokio::time::Instant::now() + SEC;
+    let session = serve_session(gateway, &rig.proxy, soon, bounds);
+    // Event-driven: the helper only waits for the gateway to end the session.
+    let script = async {
+        let mut read = BufReader::new(helper);
+        let mut answer = String::new();
+        let _ = read.read_line(&mut answer).await;
+        answer
+    };
+    let (served, answer) = tokio::time::timeout(GUARD, async { tokio::join!(session, script) })
+        .await
+        .expect("the session did not end within the guard");
+    assert!(served.is_err());
+    assert_eq!(answer, "", "no credential after the deadline");
+}
+
+/// R7d, kills "the setup bound also covers the rest of `fetch_start`": a
+/// partial `fetch_start` is cut off at the frame bound (the setup bound here
+/// is past the guard). Passes on the red commit too: it pins that the new
+/// setup bound is applied to the first byte only.
+#[tokio::test(flavor = "current_thread")]
+async fn r7d_a_partial_fetch_start_is_cut_off_at_the_frame_bound() {
+    let rig = rig().await;
+    let (mut helper, gateway) = UnixStream::pair().expect("pair");
+    helper.write_all(b"{\"fetch").await.expect("write");
+    let bounds = ControlBounds {
+        setup: 30 * SEC,
+        frame: SEC,
+        ..CONTROL_BOUNDS
+    };
+    let served = tokio::time::timeout(
+        GUARD,
+        serve_session(gateway, &rig.proxy, deadline(), bounds),
+    )
+    .await
+    .expect("the session did not end within the guard");
+    assert!(served.is_err());
+}
