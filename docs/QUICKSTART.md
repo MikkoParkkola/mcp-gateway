@@ -43,8 +43,16 @@ mcp-gateway init --profile local
 
 This writes `gateway.yaml` with sensible defaults and two free capability files under `capabilities/knowledge/`.
 
-It also generates an **admin credential** for this install and writes it into
-that file, which is created readable only by you on Unix. Tool calls do not need it —
+It also generates an **admin credential** for this install. `init` stores it in
+the store selected by `secrets.store` and writes only a reference into
+`auth.bearer_token`; neither the config nor its samples contain the literal token.
+The default `auto` prefers the OS keychain and falls back to owner-only files
+under `<config-dir>/secrets` if the keychain probe fails. If the keychain write
+fails after a passing probe, `auto` falls back to those files with a new token and a
+warning naming the reason; an explicit `secrets.store: keychain` refuses instead. It never
+falls back to a literal in the config. `init` also reads `MCP_GATEWAY_SECRETS__STORE`
+(`auto`, `keychain` or `files`) for that run, and prints where the token went.
+Tool calls do not need it —
 `init` lists `/health` and `/mcp` under `auth.public_paths` so the client you
 configure keeps working. Managing the gateway does: the four tools that change
 it for every session, and the operator dashboard.
@@ -58,6 +66,102 @@ session cookie and then spent:
 DASHBOARD (opens once, then remembered in this browser):
   http://127.0.0.1:39400/dashboard?bootstrap=...
 ```
+
+#### Read the admin token for a client
+
+Run `mcp-gateway doctor --no-registry-check` against this config and read its
+`admin-token` line (or inspect `auth.bearer_token` in `gateway.yaml`). Use that
+reference, not the `secret-store` line, which describes the store for future
+writes. For `keychain:NAME`, copy everything after `keychain:` as `NAME` below.
+Init entry names have the form
+`mcp-gateway.auth-bearer-token.<milliseconds>.<16-hex>`; use the actual name,
+not this pattern. Run the matching recipe as the user who ran init:
+
+```bash
+# macOS Keychain: service = NAME, account = mcp-gateway
+export MCP_GATEWAY_TOKEN="$(security find-generic-password -a mcp-gateway -s 'NAME' -w)"
+
+# Linux Secret Service: service attribute = NAME (requires secret-tool)
+export MCP_GATEWAY_TOKEN="$(secret-tool lookup service 'NAME')"
+
+# File store on macOS/Linux: use the exact path after file:
+export MCP_GATEWAY_TOKEN="$(cat '/absolute/config-dir/secrets/NAME')"
+```
+
+The file store uses `<config-dir>/secrets/NAME`. On Windows, read the exact
+path after `file:` with PowerShell:
+
+```powershell
+$env:MCP_GATEWAY_TOKEN = [IO.File]::ReadAllText('C:\config-dir\secrets\NAME').TrimEnd("`r", "`n")
+```
+
+For Windows Credential Manager, read the **generic credential** whose target
+is `NAME` and whose user is `mcp-gateway`. The blob is UTF-8 bytes, not a
+UTF-16 password. This PowerShell recipe calls `CredReadW` with generic type 1
+and flags 0, checks the user, and frees the returned credential:
+
+```powershell
+Add-Type @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class GatewayCredential {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct Credential {
+        public uint Flags, Type;
+        public IntPtr TargetName, Comment;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+        public uint CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public uint Persist, AttributeCount;
+        public IntPtr Attributes, TargetAlias, UserName;
+    }
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    static extern bool CredReadW(string target, uint type, uint flags, out IntPtr credential);
+    [DllImport("advapi32.dll", ExactSpelling = true)]
+    static extern void CredFree(IntPtr credential);
+    public static string Read(string target) {
+        IntPtr pointer;
+        if (!CredReadW(target, 1, 0, out pointer))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        Credential credential = new Credential();
+        byte[] bytes = null;
+        try {
+            credential = (Credential)Marshal.PtrToStructure(pointer, typeof(Credential));
+            if (Marshal.PtrToStringUni(credential.UserName) != "mcp-gateway")
+                throw new InvalidOperationException("Unexpected credential user");
+            bytes = new byte[checked((int)credential.CredentialBlobSize)];
+            Marshal.Copy(credential.CredentialBlob, bytes, 0, bytes.Length);
+            return Encoding.UTF8.GetString(bytes);
+        } finally {
+            if (bytes != null) Array.Clear(bytes, 0, bytes.Length);
+            for (int i = 0; i < credential.CredentialBlobSize; i++)
+                Marshal.WriteByte(credential.CredentialBlob, i, 0);
+            CredFree(pointer);
+        }
+    }
+}
+'@
+$env:MCP_GATEWAY_TOKEN = [GatewayCredential]::Read('NAME')
+```
+
+The Windows recipe is documented but not run in CI. The native-store recipes
+still need end-to-end verification against a real init entry and an admin request.
+Export the retrieved token value, never the `keychain:` or `file:` reference.
+Clients such as `mcp-gateway dashboard-link` and `mcp-gateway api` read
+`MCP_GATEWAY_TOKEN` from their environment.
+
+#### Recover an interrupted init
+
+Init attempts rollback on handled failures and reports recovery required if
+publication or cleanup is uncertain. A crash can leave an orphan store entry
+or a config without its samples. Inspect the config reference and doctor's
+unused-entry report, remove the orphan store entry, delete the partial config,
+and re-run init. Remove any sample files left by that attempt too; preserve
+pre-existing files. Init refuses an existing config, so rerunning it alone
+does not repair a partial install. Do not remove an entry used by a config
+you intend to keep.
 
 Or create the config manually:
 
@@ -273,6 +377,11 @@ scripts/dev/usability-smoke.sh  # repo checkout: no prompts + safe export + rout
 # Container
 # Linux bind mounts: prepare a dedicated owner-only copy for container UID 1001.
 install -m 600 gateway.yaml gateway.container.yaml
+# init wrote a reference to a token stored on this host, which the container
+# cannot read: point the copy at an environment variable and read the token out
+# with the recipe in "Read the admin token for a client" above.
+sed -i 's|^\( *bearer_token: *\).*|\1"env:MCP_GATEWAY_TOKEN"|' gateway.container.yaml
+export MCP_GATEWAY_TOKEN="$(cat '/absolute/config-dir/secrets/NAME')"  # or the recipe for your store
 sudo chown 1001:1001 gateway.container.yaml
 # The container must bind 0.0.0.0 to receive anything, and the config `init`
 # writes keeps /mcp public, so the gateway refuses that pairing unless the
@@ -281,6 +390,7 @@ sudo chown 1001:1001 gateway.container.yaml
 # on may cross the container's 0.0.0.0 in plain HTTP (host_local_publish).
 # Mirrors deploy/single-node/docker-compose.yaml.
 docker run --rm -p 127.0.0.1:39400:39400 \
+  -e MCP_GATEWAY_TOKEN \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
   -v "$PWD/gateway.container.yaml:/config.yaml:ro" \
@@ -316,7 +426,7 @@ For a team-shared gateway, keep auth enabled, bind behind TLS or mTLS, and distr
 - **Find unmanaged MCP servers**: `mcp-gateway cap discover --shadow --format json` emits a passive ShadowRadar report with stable finding IDs, ownership, transport exposure, trust status, data risk, recommended action, confidence, verification, and rollback. It does not invoke discovered tools. Add `--write-config` only after reviewing adoptable local findings.
 - **Inspect the local control plane**: Open `http://127.0.0.1:39400/ui#control-plane` for read-only inventory, runtime health, decision queue, RBAC, and license-boundary status.
 - **Caching**: on already, with nothing to configure. The gateway caches only results of tools whose annotations mark them read-only.
-- **Enable auth**: on a config `init` wrote, it is already on with a generated credential. On a hand-written one, use `auth: { enabled: true, bearer_token: "env:MCP_GATEWAY_TOKEN", public_paths: ["/health", "/mcp"] }` and set that variable to a secret you keep.
+- **Enable auth**: on a config `init` wrote, it is already on with a reference to a stored generated credential; see [Read the admin token for a client](#read-the-admin-token-for-a-client). On a hand-written one, use `auth: { enabled: true, bearer_token: "env:MCP_GATEWAY_TOKEN", public_paths: ["/health", "/mcp"] }` and set that variable to a secret you keep.
 
   Two halves, both load-bearing. `public_paths` is not optional: turning authentication on gates **every** path, so enabling it alone makes the MCP client you already configured start failing. And do not use `bearer_token: "auto"` if anything needs to authenticate — it mints a fresh random token on every start and logs only a fingerprint, never the value, so no client can present it. See [DEPLOYMENT.md](DEPLOYMENT.md#admin-requires-a-credential).
 - **Install from registry**: Run `mcp-gateway cap search finance` and `mcp-gateway cap install stock_quote`.

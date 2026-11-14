@@ -11,3 +11,4 @@ capabilities/automation/bus_pull.yaml	sha256:e73500939acfc6899929e94b8f17bd101b4
 capabilities/automation/bus_subscribe.yaml	sha256:1bcdb0c9380210928dbe89a23945cc16803196d99f2b3d6ae4ee6c2add3f8574	#4168
 deploy/prometheus/mcp-gateway-alerts-test.yml	sha256:33749cba7bc7588882ebec733f7b49debf7b51e8fb390f37a931769bab01d247	#4848
 deploy/prometheus/mcp-gateway-alerts.yml	sha256:f513ecfabe7225bd6710ac43cd656b6253193b780f4a79dc8976f3eb3b1258ae	#4848
+deploy/single-node/docker-compose.yaml	sha256:26bc7c31f969df225a3ecb298a286f027a0f0fc45313f210ceb0836431d2a99c	#4839

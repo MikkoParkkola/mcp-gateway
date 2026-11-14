@@ -45,6 +45,8 @@ mod listener;
 mod persistence;
 mod provenance_signer;
 #[cfg(test)]
+mod real_store_guard_tests;
+#[cfg(test)]
 mod remote_provenance_start_tests;
 #[cfg(test)]
 mod replica_state_tests;
@@ -77,6 +79,8 @@ mod stdio_single;
 mod stdio_startup;
 mod stdio_tasks;
 mod stdio_writer;
+#[cfg(test)]
+mod stop_budget_start_tests;
 mod task_runtime;
 #[cfg(test)]
 mod test_seams;

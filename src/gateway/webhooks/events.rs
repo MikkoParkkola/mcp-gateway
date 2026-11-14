@@ -18,6 +18,14 @@ impl WebhookRegistry {
         self.events = Some(hub);
     }
 
+    /// Let go of the hub. The hub holds this registry and the registry holds
+    /// the hub, so a test that wires both must break the loop to free the
+    /// directory the hub keeps.
+    #[cfg(test)]
+    pub(crate) fn clear_events(&mut self) {
+        self.events = None;
+    }
+
     /// Replace every route with those of `capabilities`, keeping the stats
     /// and the rate-limit bucket of a path that stays, so a reload never
     /// hands a sender a fresh quota. Used by a capability reload while events

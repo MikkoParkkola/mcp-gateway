@@ -3,6 +3,10 @@
 //! Used by the mcp-gateway binary; not part of the library API; no semver
 //! guarantee.
 
+#[path = "cli_support/init.rs"]
+mod init;
+pub(crate) use init::write_init_files;
+
 /// Whether `c` is a Unicode format character (general category Cf): bidi
 /// overrides, zero-width marks and their kin, which reorder or hide the
 /// text around them on a terminal.
@@ -679,3 +683,7 @@ mod shown_tests;
 #[cfg(test)]
 #[path = "cli_support_store_tests.rs"]
 mod store_tests;
+
+#[cfg(test)]
+#[path = "cli_support/init_store_tests.rs"]
+mod init_store_tests;

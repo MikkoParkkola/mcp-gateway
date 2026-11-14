@@ -58,9 +58,10 @@ while IFS= read -r line; do
 done
 "#;
 
+/// The gateway process owns the temp directory it runs in (`gateway_bin::Reaped`): on drop it is ended with SIGTERM
+/// and waited for, and the directory is removed only once the gateway has exited by itself, never under a live writer.
 struct Gateway {
-    _tmp: tempfile::TempDir,
-    child: tokio::process::Child,
+    process: gateway_bin::Reaped,
     log: PathBuf,
     url: String,
 }
@@ -105,9 +106,11 @@ impl Gateway {
             .kill_on_drop(true)
             .spawn()
             .expect("serve spawns");
+        let mut process =
+            gateway_bin::Reaped::new(child).with_teardown(gateway_bin::Teardown::DrainThenRemove);
+        process.owning(tmp);
         let mut gateway = Self {
-            _tmp: tmp,
-            child,
+            process,
             log,
             // Learned from the child's `Listening` line in `wait_ready`.
             url: String::new(),
@@ -124,7 +127,7 @@ impl Gateway {
         let deadline = tokio::time::Instant::now() + READY_BOUND;
         let http = http_client();
         loop {
-            if let Some(status) = self.child.try_wait().expect("child status") {
+            if let Some(status) = self.process.child_mut().try_wait().expect("child status") {
                 panic!("serve exited before ready ({status})\n{}", self.logs());
             }
             if self.url.is_empty()

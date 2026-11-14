@@ -89,7 +89,7 @@ async fn ui_call_status(fx: &Fx) -> StatusCode {
 #[tokio::test]
 async fn k5_a_backend_removed_from_a_key_by_reload_is_refused_on_the_next_call() {
     let fx = fixture().await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     assert!(reached(&fx).await, "premise: the key reaches the backend");
 
     reload(
@@ -115,7 +115,7 @@ async fn k5_a_backend_removed_from_a_key_by_reload_is_refused_on_the_next_call()
 #[tokio::test]
 async fn k5_a_tool_left_out_of_allowed_tools_by_reload_is_refused() {
     let fx = fixture().await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     assert!(reached(&fx).await, "premise: the key reaches the tool");
 
     reload(
@@ -146,7 +146,7 @@ async fn k5_a_tool_left_out_of_allowed_tools_by_reload_is_refused() {
 #[tokio::test]
 async fn k5_a_tool_denied_by_reload_is_refused() {
     let fx = fixture().await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     assert!(reached(&fx).await, "premise: the key reaches the tool");
 
     reload(
@@ -169,7 +169,7 @@ async fn k5_a_tool_denied_by_reload_is_refused() {
 #[tokio::test]
 async fn k5_admin_taken_away_by_reload_closes_the_admin_route() {
     let fx = fixture().await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     assert_eq!(
         ui_call_status(&fx).await,
         StatusCode::OK,
@@ -247,7 +247,7 @@ async fn k5_a_rate_limit_changed_by_reload_applies_and_keeps_its_usage() {
         ..crate::config::AuthConfig::default()
     };
     let (state, _store) = super::tests::test_router_app_state_with_auth(&auth).await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     // The running table as a reload writes it, before the spend.
     reload(&state, dir.path(), entry(1, "")).await;
     assert_eq!(

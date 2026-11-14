@@ -20,7 +20,13 @@ python3 scripts/ci/check_needs.py --self-test	0	closed
 python3 scripts/ci/check_per_call_stages.py	0	closed
 python3 scripts/ci/check_swap_jobs.py	0	closed
 python3 scripts/ci/check_swap_jobs.py --self-test	0	closed
+python3 scripts/ci/check_teardown_order.py	0	closed
+python3 scripts/ci/check_teardown_order.py --self-test	0	closed
+python3 scripts/ci/check_toolchain_pin.py	0	closed
+python3 scripts/ci/check_toolchain_pin.py --self-test	0	closed
 python3 scripts/ci/compare_coverage.py --self-test	0	closed
+python3 scripts/ci/test_coverage_probe_concurrency.py	0	closed
+python3 scripts/ci/test_coverage_probe_concurrency.py --self-test	0	closed
 python3 scripts/ci/coverage_shards.py --self-test	0	closed
 python3 scripts/ci/job_time_watch.py --self-test	0	closed
 python3 scripts/ci/mutants/run_mutants.py --self-test	2	closed
@@ -32,6 +38,7 @@ python3 scripts/ci/test_feature_shards.py	0	closed
 python3 scripts/ci/test_heavy_train_gating.py	1	closed
 python3 scripts/ci/test_os_shards.py	1	closed
 python3 scripts/ci/test_os_label_routing.py	1	closed
+python3 scripts/ci/test_os_sensitive_diff.py	1	closed
 python3 scripts/ci/test_mingw_debs.py	1	closed
 python3 scripts/ci/test_release_features.py	0	closed
 python3 scripts/ci/test_rollup_train_skip.py	1	closed

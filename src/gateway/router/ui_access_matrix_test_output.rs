@@ -137,7 +137,7 @@ mod tests {
         assert!(divergent.is_empty());
         assert!(block.starts_with("# file: ui_access_matrix.d/status.tsv\n#@ scoped\n"));
         assert!(block.contains("401:@refused"));
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::test_dir_keep::kept_tempdir();
         let dir = root.path().join("fragments");
         std::fs::create_dir(&dir).unwrap();
         std::fs::write(dir.join("status.tsv"), block).unwrap();

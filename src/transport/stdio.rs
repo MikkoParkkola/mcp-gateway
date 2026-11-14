@@ -497,6 +497,14 @@ impl Transport for StdioTransport {
 mod child_tree;
 #[path = "stdio_reaper.rs"]
 mod reaper;
+// Wired into the reaper by the change that follows its rows.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "stdio_sweep.rs"]
+mod sweep;
+/// The reaper's SIGTERM floor for the stop-budget rows: an alias that reads the
+/// production constant, which itself stays visible to the transport module only.
+#[cfg(all(test, unix))]
+pub(crate) const NESTED_TERM_NEED_FOR_TEST: std::time::Duration = child_tree::NESTED_TERM_NEED;
 #[cfg(all(test, unix))]
 pub(crate) use reaper::HURRY_WINDOW;
 #[cfg(all(test, unix))]

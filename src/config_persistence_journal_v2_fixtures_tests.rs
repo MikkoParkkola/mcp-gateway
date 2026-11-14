@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use super::{
-    Action, Decision, Fact, FileRevision, FrozenRecord, IntentId, JournalSession, JournalV2,
+    Action, Fact, FileRevision, FrozenRecord, IntentId, JournalDecision, JournalSession, JournalV2,
     Locked, LogId, OpenJournal, ParkReason, Phase, Reason, ResultClass, Role, TerminalRole,
     TokenState, open,
 };
@@ -104,8 +104,8 @@ fn writer() -> TokenState {
     }
 }
 
-pub(super) fn decision(result: ResultClass, reason: Reason) -> Decision {
-    Decision {
+pub(super) fn decision(result: ResultClass, reason: Reason) -> JournalDecision {
+    JournalDecision {
         result,
         reason,
         settled_by: None,
@@ -114,7 +114,7 @@ pub(super) fn decision(result: ResultClass, reason: Reason) -> Decision {
     }
 }
 
-fn decision_wire(decision: &Decision) -> Value {
+fn decision_wire(decision: &JournalDecision) -> Value {
     json!({
         "result": match decision.result {
             ResultClass::Written => "written",

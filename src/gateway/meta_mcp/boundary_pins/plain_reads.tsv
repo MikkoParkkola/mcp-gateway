@@ -81,6 +81,7 @@ src/gateway/task_service/execution/input_round.rs	round_deadline	.open	1	not-a-f
 src/gateway/task_service/store_unix.rs	open_new_private	.open	1	write-only	creates an owner-only task record; reads nothing
 src/gateway/task_service/store_unix.rs	open_record	.open	1	not-config	reads a task record in the task store; no config
 src/gateway/task_service/store_unix.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/gateway/ui/activity/key_lookup.rs	open	.open	1	not-a-file	opens a sealed page token with the continuation keyring; no file is opened
 src/gateway/ui/capabilities.rs	get_capability	fs::read_to_string	1	not-config	capability YAML; public
 src/gateway/ui/capabilities.rs	list_capabilities	fs::read_to_string	1	not-config	capability YAML; public
 src/gateway/ui/capabilities.rs	validate_only	fs::read_to_string	1	not-config	capability YAML; public
@@ -144,8 +145,10 @@ src/skills/registry.rs	load	fs::read	1	not-config	skill registry; public
 src/tool_profiles/persistence.rs	load	fs::read_to_string	1	not-config	tool usage profiles
 src/transition.rs	load	fs::read_to_string	1	not-config	transition state
 src/transport/stdio_cache.rs	writable	.open	1	write-only	writability probe for a backend package cache: creates and removes its own marker; reads nothing
+src/transport/stdio_sweep_linux.rs	read_stat	fs::read_to_string	1	not-config	reads /proc/<pid>/stat for the descendant sweep's process table; never gateway.yaml
 src/trust/claim_capture.rs	open	.open	1	write-only	appends to the claim capture log; reads nothing
 src/trust/export_verify.rs	read_bounded	File::open	1	not-config	an Activity export bundle given to audit verify
 src/trust/provenance_public_cli.rs	run_verify	fs::read_to_string	3	not-config	provenance verify inputs: the public-key trust set, receipt and result
 src/validator/cli_handler.rs	run_validate_command	fs::read_to_string	1	not-config	capability YAML being validated; public
 src/win_acl.rs	create_file_private	.open	1	write-only	Windows: creates an owner-only file; reads nothing
+src/cli_support/init.rs	same_sample	File::open	1	no-content	Windows sample identity check before rolling back this init attempt

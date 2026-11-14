@@ -327,7 +327,8 @@ pub(in crate::gateway::meta_mcp) fn retry_origin_backend(
         ContinuationPurpose::BackendInput => Some(Ok(payload.backend_id)),
         ContinuationPurpose::DestructiveConfirm
         | ContinuationPurpose::ChainResume
-        | ContinuationPurpose::PreviewConfirm => None,
+        | ContinuationPurpose::PreviewConfirm
+        | ContinuationPurpose::LookupPage => None,
     }
 }
 

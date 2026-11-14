@@ -45,11 +45,20 @@ on:
       - ".github/workflows/coverage-probe.yml"
   workflow_dispatch:
 
-# A newer push to a pull request supersedes its older grade. Every other run has a group of
-# its own: a group keeps one pending run and replaces it with the next, so a shared
-# release-line group would drop grades when merges queue.
+# A newer push to a pull request supersedes its older grade. Release-line pushes share one group
+# and never cancel the run in progress: GitHub keeps one running and one pending run per group, and
+# a newer pending run replaces an older one, so a burst of merges grades its first push and its
+# newest (the newest push is always graded once pushes stop; an intermediate one may be replaced,
+# and a replaced run shows as cancelled, superseded rather than red). A push run is a tripwire, not
+# the grade (docs/release/v4.0.0-gate-day-procedure.md, "C5 and COV.3"). Every other run has a group
+# of its own: above all the throwaway/coverage-* push that IS the C5 grade of record, and any
+# workflow_dispatch (even one on the release-line ref), so neither is ever replaced. Pinned by
+# scripts/ci/test_coverage_probe_concurrency.py.
 concurrency:
-  group: coverage-probe-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  group: >-
+    coverage-probe-${{ github.event_name == 'pull_request' && github.ref
+    || (github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && 'release-line'
+    || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -253,6 +262,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: 1.99.1
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install cargo-llvm-cov
