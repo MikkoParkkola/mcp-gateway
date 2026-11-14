@@ -293,6 +293,10 @@ pub enum AuditCommand {
         jwk: Option<PathBuf>,
     },
 
+    /// Look up the key server's retained issuance rows by email (admin)
+    #[command(about = "Look up retained key-server issuance rows by email (admin)")]
+    LookupEmail(crate::cli::audit_lookup::LookupEmailArgs),
+
     /// Show log entries for a specific session
     #[command(about = "Show transparency log entries for a session")]
     Show {
