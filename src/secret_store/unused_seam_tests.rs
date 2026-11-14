@@ -3,18 +3,26 @@
 //! Seam rows: a source edited before the re-check, a stop between the store delete and its
 //! line, a listing that survives one failing store, and the vault lock freed after each refusal.
 
-use super::delete_tests::{Fault, fault_entry, hold_vault};
+use super::delete_tests::Fault;
+#[cfg(unix)]
+use super::delete_tests::{fault_entry, hold_vault};
+use super::listing;
 use super::seam::{BEFORE_RECHECK, STOP_AFTER_STORE_DELETE};
-use super::tests::{
-    index_bytes, quiet, rig, save_field, saved, scoped_removal, secret_path, soon, sources,
-};
-use super::{DeleteRefused, Deleted, delete_unused, listing};
+#[cfg(unix)]
+use super::tests::{index_bytes, saved, scoped_removal, secret_path, soon, sources};
+use super::tests::{quiet, rig, save_field};
+#[cfg(unix)]
+use super::{DeleteRefused, Deleted, delete_unused};
+#[cfg(unix)]
 use crate::gateway::test_helpers::write_owner_only;
+#[cfg(unix)]
 use crate::secret_store::index::Index;
 use crate::secret_store::{
     FilesStore, NewSecret, SecretStore, StoreError, StoreKind, save_secrets,
 };
+#[cfg(unix)]
 use std::io::Write as _;
+#[cfg(unix)]
 use std::time::Instant;
 
 /// Clears both seams on drop, so a failing assertion cannot leak one into the next row.
@@ -39,6 +47,7 @@ fn seams() -> SeamGuard {
     SeamGuard
 }
 
+#[cfg(unix)]
 #[test]
 fn delete_refuses_on_digest_change() {
     const ROW: &str = "delete_refuses_on_digest_change";
@@ -75,6 +84,7 @@ fn delete_refuses_on_digest_change() {
     assert_eq!(index_bytes(dir.path()), index, "{ROW}: index changed");
 }
 
+#[cfg(unix)]
 #[test]
 fn delete_crash_between_delete_and_line() {
     const ROW: &str = "delete_crash_between_delete_and_line";
@@ -167,6 +177,7 @@ fn listing_partial_on_store_error() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn vault_lock_released_after_refusals() {
     const ROW: &str = "vault_lock_released_after_refusals";

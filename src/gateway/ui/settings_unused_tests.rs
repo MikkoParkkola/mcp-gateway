@@ -3,11 +3,15 @@
 //! Rows for listing unused secret entries and deleting one at a time.
 
 use super::super::settings_unused::{StoreQuery, delete_unused_entry, list_unused, refusal_status};
-use super::test_support::{BASE, Route, client, decode, secret, set};
+#[cfg(unix)]
+use super::test_support::set;
+use super::test_support::{BASE, Route, client, decode, secret};
 use super::{SettingsStoreForTest, route_secret_tests::recording};
-use crate::config::FailsafeConfig;
-use crate::config::{EnvOverlay, LiveEnv, ResolvedEnvFiles};
+#[cfg(unix)]
+use crate::config::{EnvOverlay, FailsafeConfig, LiveEnv, ResolvedEnvFiles};
+#[cfg(unix)]
 use crate::config_reload::ReloadContext;
+#[cfg(unix)]
 use crate::gateway::ui::admin_audit::AuditDetail;
 use crate::gateway::ui::guard::Guard;
 use crate::gateway::{auth::AuthenticatedClient, routes};
@@ -18,6 +22,7 @@ use axum::http::{Method, Request, StatusCode};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::Ordering};
+#[cfg(unix)]
 use std::time::Duration;
 
 const SHAPED: &str = "mcp-gateway.x.1.0123456789abcdef";
@@ -195,6 +200,7 @@ async fn failed_commit_entry_listed() {
 }
 
 /// Deleting the unnamed files entry removes the file and the list row.
+#[cfg(unix)]
 #[tokio::test]
 async fn delete_route_removes_entry() {
     const ROW: &str = "delete_route_removes_entry";
@@ -211,6 +217,7 @@ async fn delete_route_removes_entry() {
 
 /// A listed entry that gateway.yaml names after the listing is not deleted.
 /// The file and the list stay.
+#[cfg(unix)]
 #[tokio::test]
 async fn delete_refuses_named_after_listing() {
     const ROW: &str = "delete_refuses_named_after_listing";
@@ -271,6 +278,7 @@ async fn delete_route_bad_name() {
 }
 
 /// A well-shaped name that was never created is 404.
+#[cfg(unix)]
 #[tokio::test]
 async fn delete_route_unlisted() {
     const ROW: &str = "delete_route_unlisted";
@@ -311,6 +319,7 @@ async fn routes_need_admin() {
 
 /// A successful delete's response carries the audit detail: the entry, the
 /// files store, and the result. Not the secret value. A listing carries none.
+#[cfg(unix)]
 #[tokio::test]
 async fn delete_is_audited() {
     const ROW: &str = "delete_is_audited";
@@ -354,6 +363,7 @@ async fn delete_is_audited() {
 /// After a Pending and then a Named refusal, a plain settings save still
 /// succeeds at once: the reload lock and the config sidecar were released.
 /// (Busy, TimedOut and Failed release the vault lock: store rows.)
+#[cfg(unix)]
 #[tokio::test]
 async fn locks_released_after_refusals() {
     const ROW: &str = "locks_released_after_refusals";
@@ -397,6 +407,7 @@ fn refusal_statuses() {
 
 /// Only a capability file under a directory the on-disk config lists names the
 /// entry: the delete is refused and the file stays.
+#[cfg(unix)]
 #[tokio::test]
 async fn delete_refuses_capability_named() {
     const ROW: &str = "delete_refuses_capability_named";
@@ -420,6 +431,7 @@ async fn delete_refuses_capability_named() {
 
 /// Only an env file the running gateway was started with names the entry: the
 /// delete is refused and the file stays.
+#[cfg(unix)]
 #[tokio::test]
 async fn delete_refuses_env_named() {
     const ROW: &str = "delete_refuses_env_named";
@@ -444,4 +456,20 @@ async fn delete_refuses_env_named() {
     let response = delete(&route, &name, "files", true).await;
     assert_eq!(response.status(), StatusCode::CONFLICT, "{ROW} env file");
     assert!(secret_file(&route, &name).is_file(), "{ROW} file remains");
+}
+
+/// Off Unix a files delete is refused before the store is touched: 503, and the file stays.
+#[cfg(not(unix))]
+#[tokio::test]
+async fn delete_route_files_refused_off_unix() {
+    const ROW: &str = "delete_route_files_refused_off_unix";
+    const VALUE: &str = "unused-off-unix-canary";
+    let (route, name) = unnamed_entry(ROW, VALUE).await;
+    let response = delete(&route, &name, "files", true).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{ROW}: delete"
+    );
+    assert!(secret_file(&route, &name).is_file(), "{ROW}: file remains");
 }

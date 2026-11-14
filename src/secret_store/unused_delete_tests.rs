@@ -2,18 +2,26 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Deleting one unused entry: re-checked under the vault lock, one store at a time, no line before the delete.
 
-use super::tests::{
-    index_bytes, list, quiet, rig, save_field, saved, scoped_removal, secret_path, soon, sources,
-};
-use super::{DeleteRefused, Deleted, NamingSources, delete_unused};
+#[cfg(unix)]
+use super::Deleted;
+use super::tests::{index_bytes, list, quiet, rig, saved, secret_path, soon, sources};
+#[cfg(unix)]
+use super::tests::{save_field, scoped_removal};
+use super::{DeleteRefused, NamingSources, delete_unused};
 use crate::gateway::test_helpers::write_owner_only;
+#[cfg(unix)]
+use crate::secret_store::fresh_name;
 use crate::secret_store::index::Index;
 use crate::secret_store::{
-    FilesStore, NewSecret, SecretStore, StoreError, StoreKind, Vault, fresh_name, save_secrets,
+    FilesStore, NewSecret, SecretStore, StoreError, StoreKind, Vault, save_secrets,
 };
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::path::PathBuf;
-use std::sync::{Mutex, mpsc};
+use std::sync::Mutex;
+#[cfg(unix)]
+use std::sync::mpsc;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 /// In-memory keychain store. `exists` and `delete` can be faulted after a save.
@@ -34,6 +42,7 @@ impl Fault {
         }
     }
 
+    #[cfg(unix)]
     fn land(&self, name: &str) {
         self.entries
             .lock()
@@ -149,11 +158,13 @@ pub(super) fn fault_entry() -> (
 
 /// The vault lock, held on another thread. A same-thread flock does not
 /// exclude the caller that is about to delete.
+#[cfg(unix)]
 pub(super) struct LockHold {
     release: Option<mpsc::Sender<()>>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
+#[cfg(unix)]
 pub(super) fn hold_vault(lock: PathBuf) -> LockHold {
     let (held_tx, held_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel::<()>();
@@ -177,6 +188,7 @@ pub(super) fn hold_vault(lock: PathBuf) -> LockHold {
     }
 }
 
+#[cfg(unix)]
 impl LockHold {
     pub(super) fn release(mut self) {
         self.join();
@@ -192,6 +204,7 @@ impl LockHold {
     }
 }
 
+#[cfg(unix)]
 impl Drop for LockHold {
     fn drop(&mut self) {
         if let Some(tx) = self.release.take() {
@@ -203,6 +216,7 @@ impl Drop for LockHold {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn delete_removes_one_entry() {
     const ROW: &str = "delete_removes_one_entry";
@@ -233,6 +247,7 @@ fn delete_removes_one_entry() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn delete_keeps_same_name_in_other_store() {
     const ROW: &str = "delete_keeps_same_name_in_other_store";
@@ -263,6 +278,7 @@ fn delete_keeps_same_name_in_other_store() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn delete_refuses_unlisted_and_mismatch() {
     const ROW: &str = "delete_refuses_unlisted_and_mismatch";
@@ -324,6 +340,7 @@ fn delete_refuses_bad_names() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn delete_refuses_named() {
     const ROW: &str = "delete_refuses_named";
@@ -411,6 +428,7 @@ fn delete_timed_out_keeps_listing() {
     assert_eq!(listed[0].name, name, "{ROW}: dropped");
 }
 
+#[cfg(unix)]
 #[test]
 fn already_gone_writes_the_line() {
     const ROW: &str = "already_gone_writes_the_line";
@@ -433,6 +451,7 @@ fn already_gone_writes_the_line() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn delete_waits_for_the_vault_alone() {
     const ROW: &str = "delete_waits_for_the_vault_alone";
@@ -460,5 +479,31 @@ fn delete_waits_for_the_vault_alone() {
         file,
         "{ROW}: entry changed"
     );
+    assert_eq!(index_bytes(dir.path()), index, "{ROW}: index changed");
+}
+
+/// Off Unix every files-store delete is refused before the lock. The entry and the index stay.
+#[cfg(not(unix))]
+#[test]
+fn files_delete_refused_off_unix() {
+    const ROW: &str = "files_delete_refused_off_unix";
+    let (dir, vault, name) = saved();
+    let path = secret_path(dir.path(), &name);
+    let file = std::fs::read(&path).unwrap_or_else(|error| panic!("{ROW}: entry: {error}"));
+    let index = index_bytes(dir.path());
+    let got = delete_unused(
+        &vault,
+        &FilesStore::new(dir.path()),
+        &name,
+        &quiet(dir.path()),
+        soon(),
+    );
+    let text = match &got {
+        Err(DeleteRefused::Failed(text)) => text.as_str(),
+        other => panic!("{ROW}: {other:?}"),
+    };
+    assert!(text.contains("links"), "{ROW}: {text}");
+    let again = std::fs::read(&path).unwrap_or_else(|error| panic!("{ROW}: entry: {error}"));
+    assert_eq!(again, file, "{ROW}: entry changed");
     assert_eq!(index_bytes(dir.path()), index, "{ROW}: index changed");
 }

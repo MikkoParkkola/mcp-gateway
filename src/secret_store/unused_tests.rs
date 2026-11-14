@@ -101,16 +101,9 @@ fn hex_escapes(suffix: &str) -> String {
     out
 }
 
+#[cfg(unix)]
 fn link_file(target: &Path, link: &Path) {
-    #[cfg(unix)]
     std::os::unix::fs::symlink(target, link).expect("symlink");
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_file(target, link).expect("symlink");
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (target, link);
-        panic!("symlink is unavailable");
-    }
 }
 
 fn deny_read(path: &Path) {
@@ -199,6 +192,7 @@ fn plant_upper(dir: &Path, _name: &str, suffix: &str) -> NamingSources {
     sources(dir)
 }
 
+#[cfg(unix)]
 fn plant_symlink(dir: &Path, name: &str, _suffix: &str) -> NamingSources {
     let link = dir.join("current");
     link_file(&secret_path(dir, name), &link);
@@ -207,6 +201,7 @@ fn plant_symlink(dir: &Path, name: &str, _suffix: &str) -> NamingSources {
     sources(dir)
 }
 
+#[cfg(unix)]
 fn plant_link(dir: &Path, name: &str, _suffix: &str) -> NamingSources {
     std::fs::hard_link(secret_path(dir, name), dir.join("also")).expect("hard link");
     quiet(dir)
@@ -251,6 +246,7 @@ fn plant_env_missing(dir: &Path) -> NamingSources {
     sources
 }
 
+#[cfg(unix)]
 pub(super) fn scoped_removal(text: &str, name: &str) -> bool {
     text.lines().any(|line| {
         line.contains(name) && line.contains("removed_at") && line.contains("\"store\":\"files\"")
@@ -287,7 +283,7 @@ fn generated_name_shape() {
 fn named_by_every_source() {
     const ROW: &str = "named_by_every_source";
     let mut bad = Vec::new();
-    for (case, plant) in [
+    let cases = vec![
         (
             "env file",
             plant_env as fn(&Path, &str, &str) -> NamingSources,
@@ -298,9 +294,16 @@ fn named_by_every_source() {
         ("nested capability", plant_nested),
         ("yaml escape", plant_escape),
         ("upper case", plant_upper),
-        ("symlink", plant_symlink),
-        ("hard link", plant_link),
-    ] {
+    ];
+    // Same-file identity is readable only on Unix, so these two name a file there alone.
+    #[cfg(unix)]
+    let cases = {
+        let mut cases = cases;
+        cases.push(("symlink", plant_symlink));
+        cases.push(("hard link", plant_link));
+        cases
+    };
+    for (case, plant) in cases {
         collect_case(&mut bad, ROW, case, || {
             let (dir, _vault, name) = one_entry();
             let suffix = name.rsplit('.').next().expect("suffix");
