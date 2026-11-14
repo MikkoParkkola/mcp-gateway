@@ -4,5 +4,6 @@ src/preview_sandbox/control.rs	the macOS fetch step (live on Linux since the hel
 src/preview_sandbox/control_msg.rs	the macOS fetch step (live on Linux since the helper's handshake)
 src/preview_sandbox/fetch.rs	the fetch session and helper fetch step (the sandbox fetch part)
 src/preview_sandbox/fetch_output.rs	the fetch session and helper fetch step (the sandbox fetch part)
+src/preview_sandbox/linux/ca_bundle.rs	the helper's fetch step (the sandbox fetch part)
 src/preview_sandbox/install.rs	the fetch session and helper fetch step (the sandbox fetch part)
 src/preview_sandbox/proxy.rs	the fetch session (the sandbox fetch part)
