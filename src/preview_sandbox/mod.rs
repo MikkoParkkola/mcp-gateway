@@ -228,7 +228,8 @@ pub async fn start_fetching(
 ) -> Result<Started, Refusal> {
     let gateway = std::env::current_exe()
         .map_err(|e| Refusal::Step(format!("finding the gateway binary ({e})")))?;
-    let ca_bundle = ambient_ca_bundle(std::env::var_os);
+    // A closure: `var_os` is generic, so its path alone is not a `Fn(&str)`.
+    let ca_bundle = ambient_ca_bundle(|name| std::env::var_os(name));
     os::start_fetching(&gateway, target, protected, deadline, ca_bundle).await
 }
 
