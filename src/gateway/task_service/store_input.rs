@@ -424,7 +424,7 @@ impl TaskStore {
     ) -> Result<ProvideOutcome, StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        self.admitted(super::gate::Kind::External, move || {
+        self.admitted(mutant!("m13", super::gate::Kind::Internal, super::gate::Kind::External), move || {
             shared.provide_input_blocking(&owner, &id, answers, reserve, at)
         })
         .await
