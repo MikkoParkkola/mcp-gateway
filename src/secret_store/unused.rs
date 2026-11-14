@@ -52,6 +52,8 @@ pub(crate) enum DeleteRefused {
     NotListed,
     StoreMismatch,
     Named,
+    /// A config write is unsettled; only the admin route checks for one.
+    #[cfg(feature = "webui")]
     Pending,
     Busy,
     TimedOut,

@@ -68,6 +68,7 @@ impl ReloadContext {
     /// journal stays where it is), each within `wait`: the order every holder
     /// takes them in, for a caller that changes something beside the config,
     /// such as a secret entry, and must not race a config write.
+    #[cfg(feature = "webui")]
     pub(crate) async fn hold_config(
         &self,
         wait: Duration,
@@ -211,6 +212,7 @@ impl ReloadContext {
 }
 
 /// The reload lock and the config sidecar, held until dropped.
+#[cfg(feature = "webui")]
 pub(crate) struct ConfigHeld<'a> {
     _reload: tokio::sync::MutexGuard<'a, ()>,
     /// The sidecar, with the target it resolved.

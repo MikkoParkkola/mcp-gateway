@@ -374,6 +374,7 @@ impl EnvOverlay {
 
     /// Every value this overlay's own env files assign: a scan for a name that
     /// a `${VAR}` could carry into the config must see each one as parsed.
+    #[cfg(feature = "webui")]
     pub(crate) fn assigned_values(&self) -> impl Iterator<Item = &str> {
         self.vars.values().map(String::as_str)
     }

@@ -27,6 +27,8 @@ pub(crate) use save::{
     LOCK_WAIT, NewSecret, SaveError, UnusedEntry, Vault, save_secrets, unused_entries,
     unused_entries_until,
 };
+// The unused-entry delete and listing are reached only through the admin UI routes.
+#[cfg(feature = "webui")]
 pub(crate) use unused::{
     DeleteRefused, Deleted, Listing, NamingSources, delete_unused, is_generated_name, listing,
 };
