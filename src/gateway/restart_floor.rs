@@ -11,7 +11,8 @@
     )
 )]
 
-use std::time::Instant;
+use futures::future::BoxFuture;
+use tokio::time::Instant;
 
 use serde_json::{Map, Value};
 
@@ -54,12 +55,15 @@ pub(crate) struct Cancelled {
     pub(crate) reason: CancelReason,
 }
 
-/// A floor owner as the coordinator drives it. `resume` is idempotent.
-pub(crate) trait FloorAdapter {
+/// A floor owner as the coordinator drives it (restart plan steps 4-6).
+pub(crate) trait FloorAdapter: Send {
     fn owner(&self) -> FloorOwner;
-    fn pause(&mut self) -> Result<(), FloorFault>;
-    fn checkpoint(&mut self) -> Result<(), FloorFault>;
+    fn pause(&mut self, deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>>;
+    fn checkpoint(&mut self, deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>>;
     fn resume(&mut self);
+    fn release_for_stop(&mut self);
+    fn commit(&mut self);
+    fn settled(&self) -> bool;
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -67,12 +71,20 @@ pub(crate) enum FloorSetupError {
     NotExactlyThreeOwners,
 }
 
-/// Pauses are held until [`Certified::abort`] (or the later commit slice).
+/// A commit-or-abort decision that came after the checkpoint deadline.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LateDecision;
+
+/// RED STUB: the contract's rows are written against this before the code.
 pub(crate) struct Certified<'a> {
     adapters: &'a mut [Box<dyn FloorAdapter>],
 }
 
 impl Certified<'_> {
+    pub(crate) fn commit(self) -> Result<(), LateDecision> {
+        Ok(())
+    }
+
     pub(crate) fn abort(self) {
         for adapter in self.adapters.iter_mut() {
             adapter.resume();
@@ -80,51 +92,41 @@ impl Certified<'_> {
     }
 }
 
-pub(crate) fn run_checkpoint(
+pub(crate) fn all_settled(_adapters: &[Box<dyn FloorAdapter>]) -> bool {
+    true
+}
+
+pub(crate) async fn run_checkpoint(
     adapters: &mut [Box<dyn FloorAdapter>],
-    deadline: Instant,
+    _deadline: Instant,
 ) -> Result<Certified<'_>, Cancelled> {
-    let outcome = checkpoint_all(adapters, deadline);
-    if outcome.is_err() {
-        for adapter in adapters.iter_mut() {
-            adapter.resume();
+    let fresh = Instant::now() + std::time::Duration::from_secs(10);
+    let mut outcome = Ok(());
+    for adapter in adapters.iter_mut() {
+        let owner = adapter.owner();
+        if let Err(f) = adapter.pause(fresh).await {
+            outcome = Err(cancelled(owner, FloorStage::Pause, f));
+            break;
         }
     }
-    outcome.map(|()| Certified { adapters })
-}
-
-fn checkpoint_all(
-    adapters: &mut [Box<dyn FloorAdapter>],
-    deadline: Instant,
-) -> Result<(), Cancelled> {
-    for adapter in adapters.iter_mut() {
-        let owner = adapter.owner();
-        past_deadline(owner, FloorStage::Pause, deadline)?;
-        adapter
-            .pause()
-            .map_err(|f| cancelled(owner, FloorStage::Pause, f))?;
+    if outcome.is_ok() {
+        for adapter in adapters.iter_mut() {
+            let owner = adapter.owner();
+            if let Err(f) = adapter.checkpoint(fresh).await {
+                outcome = Err(cancelled(owner, FloorStage::Checkpoint, f));
+                break;
+            }
+        }
     }
-    for adapter in adapters.iter_mut() {
-        let owner = adapter.owner();
-        past_deadline(owner, FloorStage::Checkpoint, deadline)?;
-        adapter
-            .checkpoint()
-            .map_err(|f| cancelled(owner, FloorStage::Checkpoint, f))?;
-        // A save that returned after the deadline still means the window is gone.
-        past_deadline(owner, FloorStage::Checkpoint, deadline)?;
+    match outcome {
+        Ok(()) => Ok(Certified { adapters }),
+        Err(c) => {
+            for adapter in adapters.iter_mut() {
+                adapter.resume();
+            }
+            Err(c)
+        }
     }
-    Ok(())
-}
-
-fn past_deadline(owner: FloorOwner, stage: FloorStage, deadline: Instant) -> Result<(), Cancelled> {
-    if Instant::now() >= deadline {
-        return Err(Cancelled {
-            owner,
-            stage,
-            reason: CancelReason::DeadlineExceeded,
-        });
-    }
-    Ok(())
 }
 
 fn cancelled(owner: FloorOwner, stage: FloorStage, fault: FloorFault) -> Cancelled {
