@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! ADR-016: `unsafe` lives in exactly the scoped modules named here. A new
 //! site fails this test until an ADR names it (ADR-028 rule 10 added the
-//! Windows credential module).
+//! Windows credential module, ADR-030 the macOS process table).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 const ALLOWED: &[&str] = &[
     "src/win_acl.rs",
     "src/win_cred.rs",
+    "src/transport/stdio_sweep_macos.rs",
     "src/gateway/server/tests/alloc_meter.rs",
 ];
 
@@ -207,8 +208,17 @@ fn the_scan_sees_every_form_of_unsafe() {
 
 #[test]
 fn a11_every_unsafe_block_in_win_cred_names_its_contract() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/win_cred.rs");
-    let text = std::fs::read_to_string(&path).expect("read src/win_cred.rs");
+    every_unsafe_block_names_its_contract("src/win_cred.rs");
+}
+
+#[test]
+fn every_unsafe_block_in_the_macos_process_table_names_its_contract() {
+    every_unsafe_block_names_its_contract("src/transport/stdio_sweep_macos.rs");
+}
+
+fn every_unsafe_block_names_its_contract(file: &str) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {file}"));
     let lines: Vec<&str> = text.lines().collect();
     let mut blocks = 0;
     for (index, line) in lines.iter().enumerate() {
@@ -224,7 +234,7 @@ fn a11_every_unsafe_block_in_win_cred_names_its_contract() {
             .any(|above| above.trim_start().starts_with("// SAFETY:"));
         assert!(
             named,
-            "src/win_cred.rs:{}: unsafe block without a // SAFETY: comment",
+            "{file}:{}: unsafe block without a // SAFETY: comment",
             index + 1
         );
     }

@@ -157,17 +157,22 @@ async fn add_url_reaches_a_streamable_http_server() {
     let log = root.join("serve.log");
     let out = std::fs::File::create(&log).expect("serve log");
     let err = out.try_clone().expect("log handle");
-    let mut child = tokio::process::Command::from(gateway_command(&root))
+    let child = tokio::process::Command::from(gateway_command(&root))
         .args(["-c", "gateway.yaml", "-p", "0", "serve"])
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err))
         .kill_on_drop(true)
         .spawn()
         .expect("serve spawns");
+    // The gateway owns the temp directory: on drop it is ended with SIGTERM and waited for, and the directory is
+    // removed only once the gateway has exited by itself.
+    let mut process =
+        gateway_bin::Reaped::new(child).with_teardown(gateway_bin::Teardown::DrainThenRemove);
+    process.owning(tmp);
     let logs = || std::fs::read_to_string(&log).unwrap_or_default();
 
     let http = http_client();
-    let base = wait_ready(&http, &mut child, &log).await;
+    let base = wait_ready(&http, process.child_mut(), &log).await;
 
     let mcp_url = format!("{base}/mcp");
     let init = post(
