@@ -425,6 +425,13 @@ async fn park_held(
     let hold = GateSeams::arm(&gate.seams().before_wait);
     let parts = held_submitter(gate, kind, name, log);
     within(name, hold.reached()).await;
+    // Disarmed before release: a later park (this one's or another's) must
+    // wait on the gate, never on a barrier left armed.
+    *gate
+        .seams()
+        .before_wait
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     hold.release();
     tokio::task::yield_now().await;
     parts
