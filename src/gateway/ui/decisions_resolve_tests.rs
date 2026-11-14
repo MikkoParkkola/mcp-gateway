@@ -45,7 +45,7 @@ fn deny_body(digest: &str) -> Value {
 /// What a test keeps alive beside its state: the temp dir, the fixture's
 /// store dir and the governance log the deny is recorded in.
 type Kept = (
-    tempfile::TempDir,
+    Arc<tempfile::TempDir>,
     crate::gateway::router::tests::FixtureDir,
     Arc<TransparencyLogger>,
 );
