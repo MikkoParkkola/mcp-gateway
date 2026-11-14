@@ -1,0 +1,5 @@
+src/gateway/task_service/store_gate.rs	state	1	Reads the gate's state word for the adapter and rows; decides nothing
+src/gateway/task_service/store_gate.rs	in_flight	1	Reads the count of admitted work; decides nothing
+src/gateway/task_service/store_gate.rs	parked	1	Reads the count of parked submitters; decides nothing
+src/gateway/task_service/store_gate.rs	failed	1	Reads whether admitted work failed during the attempt; the adapter's checkpoint decides on it
+src/gateway/task_service/store_gate.rs	idle	1	Waits until no admitted work is in flight; decides nothing

@@ -1,0 +1,9 @@
+src/gateway/task_service/store_gate.rs	admit	1	critical	d	TaskGate::admit	Decides whether a task-store mutation runs now, parks or is refused ("restarting") while a restart checkpoint holds the store; the one admission every mutation passes
+src/gateway/task_service/store_gate.rs	sweeps_allowed	1	critical	d	TaskGate::sweeps_allowed	Decides whether an expiry sweep tick may start while the store is paused, draining or terminal
+src/gateway/task_service/store_gate.rs	new	1	standard	borderline	TaskGate::new	Builds the store's gate open, with the receiver it keeps for its lifetime; a wrong start state would let writes through a checkpoint
+src/gateway/task_service/store_gate.rs	record	1	standard	borderline	Admitted::record	Records a storage failure of admitted work during an attempt, which fails that attempt's checkpoint
+src/gateway/task_service/store_gate.rs	pause	1	standard	borderline	TaskGate::pause	Closes the gate for an attempt and stores its deadline and backstop, the bounds every park uses
+src/gateway/task_service/store_gate.rs	certify	1	standard	borderline	TaskGate::certify	Moves the gate to certified after the attempt's checkpoint; parks stay parked
+src/gateway/task_service/store_gate.rs	resume	1	standard	borderline	TaskGate::resume	Cancel recovery: drains parked submitters before newer arrivals, then opens the gate
+src/gateway/task_service/store_gate.rs	release	1	standard	borderline	TaskGate::release	A stop signal won: admits parked work and everything after it, no ordering
+src/gateway/task_service/store_gate.rs	commit	1	standard	borderline	TaskGate::commit	The commit edge: refuses new external submissions, admits work parked before it and internal completion work
