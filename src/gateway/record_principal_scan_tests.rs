@@ -414,6 +414,8 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/gateway/router/handlers/tasks/owner.rs", "principal.storage_form()", 1, Store, "task owner key: keyed by record_owner where recorded"),
     ("src/gateway/router/handlers/owner.rs", "match client.and_then(|c| c.credential_principal())", 1, Decl, "feeds the session owner below"),
     ("src/gateway/ui/preview.rs", ".and_then(|c| c.credential_principal())", 1, Decl, "feeds the preview confirmation owner below"),
+    ("src/gateway/ui/activity/key_lookup.rs", "let principal = client.credential_principal()?;", 1, Decl, "feeds the page token binding digest below (censused)"),
+    ("src/gateway/ui/activity/key_lookup.rs", "principal.storage_form()", 1, Store, "hashed into the page token binding; the digest is sealed in the token and never reaches a record, log, span or audit field"),
     ("src/gateway/ui/preview.rs", "crate::hashing::sha256_hex(p.storage_form().as_bytes())", 1, Store, "preview confirmation owner: a digest sealed in the token, compared on redeem"),
     ("src/gateway/ui/tool_call.rs", ".map(|c| c.principal.storage_form().to_owned())", 1, Store, "the principal a web UI call must dispatch as, compared by the call gate; never recorded"),
     ("src/gateway/router/handlers/owner.rs", "SessionOwner::Credential(principal.storage_form().to_owned())", 1, Store, "session owner: an in-process lookup key"),

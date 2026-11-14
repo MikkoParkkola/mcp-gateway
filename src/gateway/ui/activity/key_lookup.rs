@@ -6,9 +6,16 @@
 //! is hashed with the installation key for the one request and never stored,
 //! logged or echoed.
 //!
-//! Order matters: admission (gateway-wide admin only) first, then the shared
-//! budget, then the body is parsed, then the email is hashed, then the
-//! blocking scan. Nothing before admission reads the body's content.
+//! The next page is asked for with a sealed token alone: the token carries the
+//! keyed hash, the window and the log position, sealed by the continuation
+//! keyring and bound to the credential principal that got it, so the email is
+//! sent once and never again.
+//!
+//! Order matters: admission (gateway-wide admin only), the shared budget, the
+//! bounded body, the request's shape, the limit, the key server and log, and
+//! only then the email is hashed or the token opened, then the blocking scan.
+//! Every refusal that is not about the token comes before the token is
+//! opened, so no other answer tells a holder whether a token is genuine.
 
 use std::sync::Arc;
 
@@ -20,20 +27,23 @@ use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, FixedOffset};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::reader::{Cursor, Limits, Line, read_page};
-use super::{DEFAULT_LIMIT, MAX_LIMIT, PAGE_SCAN_BYTES, blocking, cursor};
+use super::{DEFAULT_LIMIT, MAX_LIMIT, PAGE_SCAN_BYTES, blocking};
+use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::Charge;
 use crate::gateway::ui::AppState;
 use crate::gateway::ui::admin_audit::attach_lookup;
 use crate::gateway::ui::errors::flat_error;
 use crate::gateway::ui::guard::Guard;
 use crate::key_server::email_hash::{self, EmailHashKey};
+use crate::protocol::continuation::Payload;
 
 /// The most bytes of request body read; a lookup carries an email, a cursor
 /// and two timestamps.
 const MAX_BODY: usize = 8 * 1024;
+/// The longest `from` or `to` accepted: an RFC 3339 time is far shorter.
+const MAX_TIME: usize = 64;
 /// The longest email accepted, as in RFC 5321.
 const MAX_EMAIL: usize = 320;
 
@@ -41,7 +51,7 @@ const MAX_EMAIL: usize = 320;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
-    email: String,
+    email: Option<String>,
     limit: Option<usize>,
     cursor: Option<String>,
     from: Option<String>,
@@ -71,21 +81,141 @@ fn parse_time(text: &str) -> Option<DateTime<FixedOffset>> {
     DateTime::parse_from_rfc3339(text).ok()
 }
 
-/// The digest a page token is bound to: the keyed hash, its version and key,
-/// and the time window. Not the email.
-fn bind_of(hash: &str, key: &EmailHashKey, from: Option<&str>, to: Option<&str>) -> String {
-    let mut sha = Sha256::new();
-    for part in [
-        hash,
-        &email_hash::VERSION.to_string(),
-        &key.key_id(),
-        from.unwrap_or(""),
-        to.unwrap_or(""),
-    ] {
-        sha.update(part.as_bytes());
-        sha.update([0]);
+/// A sealed page token lives this long, and a chain of pages from the first
+/// one no longer than the ceiling.
+const CHAIN_CEILING_SECS: u64 = 900;
+/// A token longer than this is refused before anything is decoded.
+const PAGE_TOKEN_MAX_LEN: usize = 2048;
+
+/// Everything the next page needs, sealed in the token. No email. No `Debug`:
+/// the keyed hash of a person's email is not for a log.
+#[derive(serde::Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PageScope {
+    pub(super) hash: String,
+    pub(super) version: u64,
+    pub(super) key_id: String,
+    pub(super) from: Option<String>,
+    pub(super) to: Option<String>,
+    pub(super) pos: Cursor,
+    /// When the first page of this search was answered.
+    pub(super) born: u64,
+}
+
+/// A scope that opened, and what spending its token needs.
+pub(super) struct Opened {
+    pub(super) scope: PageScope,
+    jti: String,
+    expires_at: u64,
+}
+
+impl Opened {
+    /// Whether the token is still inside its own expiry and its chain's
+    /// ceiling at `now`. Opening judged this at the start of the request; a
+    /// page that waited for a reader slot and a scan is judged again at the
+    /// moment it would be delivered.
+    pub(super) fn alive_at(&self, now: u64) -> bool {
+        now <= self.expires_at && now <= self.scope.born.saturating_add(CHAIN_CEILING_SECS)
     }
-    hex::encode(&sha.finalize()[..16])
+}
+
+/// The digest a token binds to; `None` when the caller has nothing to bind to,
+/// in which case no token is minted or opened. One function for both, so they
+/// cannot disagree.
+///
+/// A bearer or API key binds to its credential principal. Every dashboard
+/// session carries the same constant principal, so a session binds to its own
+/// cookie handle instead (hashed, never sent anywhere): two browser sessions
+/// cannot open each other's tokens.
+pub(super) fn cursor_principal(
+    client: Option<&AuthenticatedClient>,
+    headers: &axum::http::HeaderMap,
+) -> Option<String> {
+    use crate::security::audit::CredentialKind;
+    let client = client?;
+    let principal = client.credential_principal()?;
+    let digest = |tag: &str, material: &str| {
+        crate::hashing::sha256_hex(format!("{tag}\0{material}").as_bytes())
+    };
+    match client.credential_kind {
+        // Every dashboard session carries the same principal: its own cookie
+        // handle is what tells two sessions apart. An empty handle is no
+        // session.
+        CredentialKind::DashboardSession => {
+            let handle = crate::gateway::auth::session_cookie_value(headers)?;
+            (!handle.is_empty()).then(|| digest("dashboard-session", &handle))
+        }
+        // A digest of the one secret the caller presented.
+        CredentialKind::StaticBearer
+        | CredentialKind::ApiKey
+        | CredentialKind::KeyServerToken
+        | CredentialKind::OidcBearer => {
+            Some(digest("credential-principal", principal.storage_form()))
+        }
+        // Nothing to bind a token to: no token is minted or opened.
+        CredentialKind::None | CredentialKind::LocalTransport => None,
+    }
+}
+
+/// Seal `scope` for `principal`, valid from `now`; `None` when it cannot be
+/// sealed (no principal, or the keyring refuses).
+pub(super) fn seal(
+    state: &AppState,
+    principal: &str,
+    scope: &PageScope,
+    now: u64,
+) -> Option<String> {
+    if principal.is_empty() {
+        return None;
+    }
+    let json = serde_json::to_string(scope).ok()?;
+    let payload = Payload::mint_lookup(principal.to_owned(), json, now);
+    let token = state.continuation.keyring().mint(&payload).ok()?;
+    // A token `open` would refuse for its length is not issued.
+    (token.len() <= PAGE_TOKEN_MAX_LEN).then_some(token)
+}
+
+/// Open `token` for `principal`, or `None`: one answer for every reason it
+/// would not open (malformed, tampered, another process or principal, another
+/// purpose, expired, past the chain ceiling, a hash key or version that is no
+/// longer current). No reason is logged or counted.
+pub(super) fn open(
+    state: &AppState,
+    principal: &str,
+    token: &str,
+    now: u64,
+    key: &EmailHashKey,
+) -> Option<Opened> {
+    if principal.is_empty() || token.is_empty() || token.len() > PAGE_TOKEN_MAX_LEN {
+        return None;
+    }
+    let payload = state.continuation.keyring().open(token, now).ok()?;
+    let scope: PageScope = serde_json::from_str(payload.lookup_scope_for(principal).ok()?).ok()?;
+    let shaped =
+        scope.hash.len() == key.hash("").len() && scope.hash.bytes().all(|b| b.is_ascii_hexdigit());
+    let from = scope.from.as_deref().map(parse_time);
+    let to = scope.to.as_deref().map(parse_time);
+    let window_ok = match (from, to) {
+        (Some(None), _) | (_, Some(None)) => false,
+        (Some(Some(f)), Some(Some(t))) => f <= t,
+        _ => true,
+    };
+    let current = scope.version == u64::from(email_hash::VERSION) && scope.key_id == key.key_id();
+    let young = scope.born <= now && now <= scope.born.saturating_add(CHAIN_CEILING_SECS);
+    (shaped && window_ok && current && young).then(|| Opened {
+        jti: payload.jti.clone(),
+        expires_at: payload.expires_at,
+        scope,
+    })
+}
+
+/// Spend the token of `opened`: true once, false for every later try.
+async fn spend(state: &AppState, opened: &Opened, now: u64) -> bool {
+    state
+        .continuation
+        .ledger()
+        .consume(&opened.jti, opened.expires_at, now)
+        .await
 }
 
 /// Whether `entry` is an issuance row of this hash, key and version, inside
@@ -140,33 +270,38 @@ fn row_of(line: &Line) -> Value {
 
 /// Everything a scan needs, owned so it can move onto the blocking pool.
 struct Scan {
+    state: Arc<AppState>,
+    /// The caller's principal digest; `None` mints no token.
+    principal: Option<String>,
     log: std::path::PathBuf,
     hash: String,
     key_id: String,
-    bind: String,
+    from: Option<String>,
+    to: Option<String>,
+    /// Where the first page of this search began, carried forward.
+    born: u64,
+    /// `None` on a first page.
+    start: Option<Cursor>,
     limit: usize,
-    window: (Option<DateTime<FixedOffset>>, Option<DateTime<FixedOffset>>),
-    token: Option<String>,
 }
 
 /// Read one page of retained rows. A read that fails is an error answer, never
 /// an empty result: an empty result must mean no retained row matched.
 fn scan(s: &Scan) -> Response {
-    let given = s.token.is_some();
-    let decoded: Option<Cursor> = s
-        .token
-        .as_deref()
-        .and_then(|t| cursor::decode_bound(t, &s.bind));
     let version = u64::from(email_hash::VERSION);
+    let window = (
+        s.from.as_deref().and_then(parse_time),
+        s.to.as_deref().and_then(parse_time),
+    );
     let page = read_page(
         &s.log,
         None,
-        decoded.as_ref(),
+        s.start.as_ref(),
         Limits {
             matches: s.limit,
             bytes: PAGE_SCAN_BYTES,
         },
-        |line| matches(line, &s.hash, version, &s.key_id, s.window),
+        |line| matches(line, &s.hash, version, &s.key_id, window),
     );
     let Ok(page) = page else {
         return finish(
@@ -180,12 +315,42 @@ fn scan(s: &Scan) -> Response {
         );
     };
     let rows: Vec<Value> = page.lines.iter().map(row_of).collect();
-    let next = page.next.as_ref().map(|c| cursor::encode_bound(c, &s.bind));
+    let next = match page.next {
+        None => None,
+        Some(pos) => {
+            let scope = PageScope {
+                hash: s.hash.clone(),
+                version,
+                key_id: s.key_id.clone(),
+                from: s.from.clone(),
+                to: s.to.clone(),
+                pos,
+                born: s.born,
+            };
+            let token = s
+                .principal
+                .as_deref()
+                .zip(crate::clock::unix_secs().ok())
+                .and_then(|(p, minted)| seal(&s.state, p, &scope, minted));
+            let Some(token) = token else {
+                return finish(
+                    refuse(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "a page token cannot be issued now",
+                    ),
+                    "unavailable",
+                    0,
+                    0,
+                );
+            };
+            Some(token)
+        }
+    };
     let body = json!({
         "rows": rows,
         "next_cursor": next,
         "scan_exhausted": page.scan_exhausted,
-        "cursor_reset": page.cursor_reset || (given && decoded.is_none()),
+        "cursor_reset": page.cursor_reset,
         "unreadable": page.unreadable.len(),
         "scope": "retained",
     });
@@ -246,6 +411,135 @@ pub(super) async fn read_body(request: axum::extract::Request) -> Result<Bytes, 
     }
 }
 
+/// A request is an email or a cursor, never both and never neither, and a
+/// next page takes its window from the cursor.
+fn check_shape(
+    email: Option<&str>,
+    cursor: Option<&str>,
+    window: (&Option<String>, &Option<String>),
+) -> Result<(), &'static str> {
+    if email.is_some() == cursor.is_some() {
+        return Err("send an email, or the cursor of the previous page, not both");
+    }
+    if cursor.is_some() && (window.0.is_some() || window.1.is_some()) {
+        return Err("a next page takes its window from the cursor");
+    }
+    Ok(())
+}
+
+/// What only a first page is judged on: the email and its window.
+fn check_first_page(raw: &str, from: Option<&str>, to: Option<&str>) -> Result<(), &'static str> {
+    let email = raw.trim();
+    if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(char::is_control) {
+        return Err("the email is not valid");
+    }
+    if from.is_some_and(|t| t.len() > MAX_TIME) || to.is_some_and(|t| t.len() > MAX_TIME) {
+        return Err("from and to must be RFC 3339 times");
+    }
+    let (Some(window_from), Some(window_to)) = (
+        from.map_or(Some(None), |t| parse_time(t).map(Some)),
+        to.map_or(Some(None), |t| parse_time(t).map(Some)),
+    ) else {
+        return Err("from and to must be RFC 3339 times");
+    };
+    match (window_from, window_to) {
+        (Some(f), Some(t)) if f > t => Err("from must not be after to"),
+        _ => Ok(()),
+    }
+}
+
+fn bad_token() -> Response {
+    finish(
+        refuse(
+            StatusCode::BAD_REQUEST,
+            "the page token is not valid; run the lookup again",
+        ),
+        "bad_request",
+        0,
+        0,
+    )
+}
+
+/// What a lookup cannot run without: the key server, its log's path and the
+/// clock. Each is its own refusal, and none is about a token.
+fn what_it_needs(
+    state: &AppState,
+) -> Result<(Arc<crate::key_server::KeyServer>, std::path::PathBuf, u64), Box<Response>> {
+    let refused =
+        |status, message, outcome| Box::new(finish(refuse(status, message), outcome, 0, 0));
+    let ks = state.key_server.clone().ok_or_else(|| {
+        refused(
+            StatusCode::NOT_FOUND,
+            "no key server is running",
+            "not_found",
+        )
+    })?;
+    let log = state.transparency_log.as_ref().ok_or_else(|| {
+        refused(
+            StatusCode::NOT_FOUND,
+            "no transparency log is configured",
+            "not_found",
+        )
+    })?;
+    let now = crate::clock::unix_secs().map_err(|_| {
+        refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the clock cannot be read",
+            "unavailable",
+        )
+    })?;
+    Ok((ks, log.path(), now))
+}
+
+/// What a request resolves to once it is judged: the search it runs.
+struct Resolved {
+    hash: String,
+    /// `None` on a first page.
+    start: Option<Cursor>,
+    born: u64,
+    from: Option<String>,
+    to: Option<String>,
+    /// The token to spend once its page is read; `None` on a first page.
+    opened: Option<Opened>,
+}
+
+/// A first page hashes the email, which goes no further: the suspended handler
+/// owns only the hash while it waits for a reader slot. A next page opens its
+/// token, last of all the checks. Both or neither of email and token was
+/// refused earlier.
+fn resolve(
+    ask: (Option<String>, Option<String>),
+    window: (Option<String>, Option<String>),
+    (state, key): (&AppState, &EmailHashKey),
+    principal: Option<&str>,
+    now: u64,
+) -> Result<Resolved, Box<Response>> {
+    match ask {
+        (Some(raw), None) => Ok(Resolved {
+            hash: key.hash(raw.trim()),
+            start: None,
+            born: now,
+            from: window.0,
+            to: window.1,
+            opened: None,
+        }),
+        (None, Some(token)) => {
+            let opened = principal
+                .and_then(|p| open(state, p, &token, now, key))
+                .ok_or_else(|| Box::new(bad_token()))?;
+            Ok(Resolved {
+                hash: opened.scope.hash.clone(),
+                start: Some(opened.scope.pos.clone()),
+                born: opened.scope.born,
+                from: opened.scope.from.clone(),
+                to: opened.scope.to.clone(),
+                opened: Some(opened),
+            })
+        }
+        _ => Err(Box::new(bad_token())),
+    }
+}
+
 pub(super) async fn lookup(
     State(state): State<Arc<AppState>>,
     guard: Guard,
@@ -254,6 +548,7 @@ pub(super) async fn lookup(
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
+    let principal = cursor_principal(guard.client.as_ref(), request.headers());
     telemetry_metrics::counter!("mcp_key_server_lookup_attempts_total").increment(1);
     if let Charge::Throttled { retry_after_secs } = state.process.lookup_budget().charge() {
         telemetry_metrics::counter!("mcp_key_server_lookup_throttled_total").increment(1);
@@ -276,61 +571,69 @@ pub(super) async fn lookup(
     let Ok(Request {
         email: raw,
         limit,
-        cursor,
+        cursor: token,
         from,
         to,
     }) = parsed
     else {
-        return bad("the body must be a JSON object with an email");
+        return bad("the body must be a JSON object with an email or a cursor");
     };
-    let email = raw.trim();
-    if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(char::is_control) {
-        return bad("the email is not valid");
+    if let Err(message) = check_shape(raw.as_deref(), token.as_deref(), (&from, &to)) {
+        return bad(message);
     }
     let (from, to) = (from.as_deref(), to.as_deref());
-    let (Some(window_from), Some(window_to)) = (
-        from.map_or(Some(None), |t| parse_time(t).map(Some)),
-        to.map_or(Some(None), |t| parse_time(t).map(Some)),
-    ) else {
-        return bad("from and to must be RFC 3339 times");
-    };
-    if let (Some(f), Some(t)) = (window_from, window_to)
-        && f > t
+    if let Some(raw) = raw.as_deref()
+        && let Err(message) = check_first_page(raw, from, to)
     {
-        return bad("from must not be after to");
+        return bad(message);
     }
     let limit = limit.unwrap_or(DEFAULT_LIMIT);
     if limit == 0 || limit > MAX_LIMIT {
         return bad("limit is out of range");
     }
-    let Some(ks) = state.key_server.clone() else {
-        return finish(
-            refuse(StatusCode::NOT_FOUND, "no key server is running"),
-            "not_found",
-            0,
-            0,
-        );
+    let (ks, log_path, now) = match what_it_needs(&state) {
+        Ok(found) => found,
+        Err(refusal) => return *refusal,
     };
-    let Some(log) = state.transparency_log.as_ref() else {
-        return finish(
-            refuse(StatusCode::NOT_FOUND, "no transparency log is configured"),
-            "not_found",
-            0,
-            0,
-        );
+    let Resolved {
+        hash,
+        start,
+        born,
+        from,
+        to,
+        opened,
+    } = match resolve(
+        (raw, token),
+        (from.map(str::to_owned), to.map(str::to_owned)),
+        (&state, &ks.email_key),
+        principal.as_deref(),
+        now,
+    ) {
+        Ok(resolved) => resolved,
+        Err(refusal) => return *refusal,
     };
-    // The email is hashed here and goes no further: the suspended handler
-    // owns only the hash while it waits for a reader slot.
-    let hash = ks.email_key.hash(email);
-    drop(raw);
-    let scan_job = Scan {
-        log: log.path(),
-        bind: bind_of(&hash, &ks.email_key, from, to),
+    let job = Scan {
+        state: Arc::clone(&state),
+        principal,
+        log: log_path,
         key_id: ks.email_key.key_id(),
         hash,
+        from,
+        to,
+        born,
+        start,
         limit,
-        window: (window_from, window_to),
-        token: cursor,
     };
-    blocking(state.process.activity_reads(), move || scan(&scan_job)).await
+    let response = blocking(state.process.activity_reads(), move || scan(&job)).await;
+    // The token is spent by the page it served, after that page was read: a
+    // throttle, a failed read or a body that never arrived left it intact.
+    if let Some(opened) = opened
+        && response.status() == StatusCode::OK
+    {
+        let delivered = crate::clock::unix_secs().unwrap_or(u64::MAX);
+        if !opened.alive_at(delivered) || !spend(&state, &opened, delivered).await {
+            return bad_token();
+        }
+    }
+    response
 }
