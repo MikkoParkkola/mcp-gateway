@@ -282,12 +282,12 @@ fn alive_pids(pids: &[u32]) -> Vec<u32> {
         .collect()
 }
 
-/// Sends the SIGTERM, with `started` taken just before it and nothing between: every pid of the
-/// chain dies within `STOP_BOUND`, and a plain stop ends inside the stop budget: the sweep adds no time of its own beyond the
-/// backend stage.
-async fn stop_and_wait_chain_gone(root: &Path, pid: u32, leaves: &[u32], total: Duration) {
+/// Sends the SIGTERM, with `sent` taken just before it and nothing between, and waits until
+/// every pid of the chain is gone, within `STOP_BOUND`. Returns when the signal went and when the
+/// chain was gone; each row bounds that span against its own stop total.
+async fn stop_and_wait_chain_gone(root: &Path, pid: u32, leaves: &[u32]) -> (Instant, Instant) {
     let deadline = Instant::now() + STOP_BOUND;
-    let started = Instant::now();
+    let sent = Instant::now();
     sigterm(pid);
     while leaves.iter().any(|pid| pids::alive(*pid)) {
         assert!(
@@ -298,16 +298,18 @@ async fn stop_and_wait_chain_gone(root: &Path, pid: u32, leaves: &[u32], total: 
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let gone = started.elapsed();
-    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
-    assert!(
-        gone <= total + BUDGET_SLACK,
-        "the chain outlived the stop budget: {gone:?} against {total:?}\n{}",
-        logs(root)
-    );
+    (sent, Instant::now())
 }
 
-async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) {
+/// A plain stop of the chain: when the SIGTERM went, when the last pid was gone, and both
+/// gateways' logs as they stood then (the temp root goes with `run`).
+struct Stopped {
+    sent: Instant,
+    gone_at: Instant,
+    logs: String,
+}
+
+async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) -> Stopped {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path().to_path_buf();
     let root = root.as_path();
@@ -387,7 +389,12 @@ async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) {
         "inner and leaves must be live at stop"
     );
     let deadline = Instant::now() + STOP_BOUND;
-    stop_and_wait_chain_gone(root, pid, &leaves, total).await;
+    let (sent, gone_at) = stop_and_wait_chain_gone(root, pid, &leaves).await;
+    let stopped = Stopped {
+        sent,
+        gone_at,
+        logs: logs(root),
+    };
     tokio::time::timeout_at(deadline, reaped.child_mut().wait())
         .await
         .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
@@ -396,32 +403,68 @@ async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) {
     reaped.reap().await;
     std::mem::forget(cleanup);
     drop(stdin);
+    stopped
 }
+
+/// The parent stop total of the 30 s row.
+const PARENT_30S: Duration = Duration::from_secs(30);
 
 /// A busy inner stops its leaf within the minimum parent budget plus slack.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
-    run(HTTP_MINIMUM, Duration::from_secs(8), &["leaf"]).await;
+    let stop = run(HTTP_MINIMUM, Duration::from_secs(8), &["leaf"]).await;
+    let gone = stop.gone_at.duration_since(stop.sent);
+    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
+    assert!(
+        gone <= HTTP_MINIMUM + BUDGET_SLACK,
+        "the chain outlived the stop budget: {gone:?} against {:?}\n{}",
+        HTTP_MINIMUM + BUDGET_SLACK,
+        stop.logs
+    );
 }
 /// The same ownership claim holds with a 30 s parent budget.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it_30s() {
-    run(Duration::from_secs(30), Duration::from_secs(8), &["leaf"]).await;
+    let stop = run(PARENT_30S, Duration::from_secs(8), &["leaf"]).await;
+    let gone = stop.gone_at.duration_since(stop.sent);
+    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
+    assert!(
+        gone <= PARENT_30S + BUDGET_SLACK,
+        "the chain outlived the stop budget: {gone:?} against {:?}\n{}",
+        PARENT_30S + BUDGET_SLACK,
+        stop.logs
+    );
 }
 /// Both busy leaves stop within one minimum parent budget plus 15 s slack.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_two_leaves_within_one_deadline() {
-    run(HTTP_MINIMUM, Duration::from_secs(8), &["leaf_a", "leaf_b"]).await;
+    let stop = run(HTTP_MINIMUM, Duration::from_secs(8), &["leaf_a", "leaf_b"]).await;
+    let gone = stop.gone_at.duration_since(stop.sent);
+    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
+    assert!(
+        gone <= HTTP_MINIMUM + BUDGET_SLACK,
+        "the chain outlived the stop budget: {gone:?} against {:?}\n{}",
+        HTTP_MINIMUM + BUDGET_SLACK,
+        stop.logs
+    );
 }
 
 /// A nested gateway whose own stop outlasts its parent's plan leaves no leaf or grandchild alive.
 /// Red if a stopping stdio gateway ignores its parent's SIGTERM and lets its leaves' waits run past its own kill.
 #[tokio::test]
 async fn a_nested_gateway_whose_own_stop_outlasts_its_parents_plan_leaves_no_leaf() {
-    run(HTTP_MINIMUM, Duration::from_secs(30), &["leaf_a", "leaf_b"]).await;
+    let stop = run(HTTP_MINIMUM, Duration::from_secs(30), &["leaf_a", "leaf_b"]).await;
+    let gone = stop.gone_at.duration_since(stop.sent);
+    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
+    assert!(
+        gone <= HTTP_MINIMUM + BUDGET_SLACK,
+        "the chain outlived the stop budget: {gone:?} against {:?}\n{}",
+        HTTP_MINIMUM + BUDGET_SLACK,
+        stop.logs
+    );
 }
 
 /// Each nested hurry must fit its parent's remaining kill window, rather than
