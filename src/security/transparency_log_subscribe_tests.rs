@@ -20,7 +20,7 @@ fn record(kind: &str, n: u64) -> Map<String, Value> {
 
 #[test]
 fn a_reader_sees_each_written_record_of_its_kind_once() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = TransparencyLogger::open(cfg(&log_path(&dir), 12, false)).unwrap();
     let seen: Arc<Mutex<Vec<(u64, String)>>> = Arc::default();
     let sink = Arc::clone(&seen);

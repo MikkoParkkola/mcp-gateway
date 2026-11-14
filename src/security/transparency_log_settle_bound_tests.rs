@@ -111,7 +111,7 @@ fn tasks(l: &TransparencyLogger) -> usize {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn a_settle_that_cannot_take_the_permit_is_refused_at_the_bound_with_no_task() {
     // GIVEN: the one append permit held by another append
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (path, l) = opened(&dir);
     *l.bound.limit.lock().unwrap() = LIMIT;
     let held = l.hold_append_permit_for_test().await;
@@ -141,7 +141,7 @@ async fn a_settle_that_cannot_take_the_permit_is_refused_at_the_bound_with_no_ta
 async fn a_settle_with_the_permit_closed_or_the_log_stalled_is_refused_at_once() {
     for refusal in ["closed", "stalled"] {
         // GIVEN: the permit closed, or a write stalled past its bound
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (path, l) = opened(&dir);
         let own = l.log_id();
         assert!(
@@ -186,7 +186,7 @@ async fn a_settle_with_the_permit_closed_or_the_log_stalled_is_refused_at_once()
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn a_settle_task_held_past_the_bound_is_unconfirmed_and_lands_once() {
     // GIVEN: settle's task held before it starts any work
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (path, l) = opened(&dir);
     *l.bound.limit.lock().unwrap() = LIMIT;
     let gate = l.hold_settle_task_for_test();
@@ -211,7 +211,7 @@ async fn a_settle_task_held_past_the_bound_is_unconfirmed_and_lands_once() {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn a_settle_answers_within_twice_the_bound() {
     // GIVEN: the permit held for most of its bound, then a write that stalls
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (_, l) = opened(&dir);
     let stall = l.stall_next_write_for_test(LIMIT);
     *l.bound.limit.lock().unwrap() = LIMIT;
@@ -246,7 +246,7 @@ type Told = Arc<std::sync::Mutex<Vec<(String, Map<String, Value>)>>>;
 async fn a_stalled_write_is_unconfirmed_and_its_retry_is_delivered_twice() {
     // GIVEN: readers of `settle.save` and of plain `save`, and the next write
     // stalled past a short bound
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (path, l) = opened(&dir);
     let told: Told = Arc::default();
     for kind in ["save", "settle.save"] {
@@ -296,7 +296,7 @@ async fn a_stalled_write_is_unconfirmed_and_its_retry_is_delivered_twice() {
 async fn a_failed_or_partial_write_or_sync_or_a_panic_is_unconfirmed() {
     for fault in ["sync", "partial", "panic"] {
         // GIVEN: a sync that fails, a write cut short, or a task that panics
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (path, l) = opened(&dir);
         assert!(
             settle_watched(&l, "w-0", "the settle before the fault")
@@ -331,7 +331,7 @@ async fn a_failed_or_partial_write_or_sync_or_a_panic_is_unconfirmed() {
 #[tokio::test]
 async fn a_refresh_failure_is_refused_and_counted_like_a_failed_append() {
     // GIVEN: the active file replaced by one recovery cannot read
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (path, l) = opened(&dir);
     assert!(
         settle_watched(&l, "w-0", "the settle before the refresh failure")

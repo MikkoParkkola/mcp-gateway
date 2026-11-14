@@ -45,7 +45,7 @@ fn assert_refused(path: &std::path::Path) {
 /// T1: the lease holds from open to drop, across every kind of write.
 #[test]
 fn a_second_logger_is_refused_for_the_whole_life_of_the_first() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
     assert_refused(&path);
@@ -66,7 +66,7 @@ fn a_second_logger_is_refused_for_the_whole_life_of_the_first() {
 /// chain.
 #[test]
 fn dropping_the_logger_releases_the_lease() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
     append(&l, 0);
@@ -98,7 +98,7 @@ fn lease_child_process() {
 /// processes), after every kind of write.
 #[test]
 fn another_process_is_refused_for_the_whole_life_of_the_logger() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let child = || {
         std::process::Command::new(std::env::current_exe().unwrap())
@@ -108,6 +108,7 @@ fn another_process_is_refused_for_the_whole_life_of_the_logger() {
                 "--test-threads=1",
             ])
             .env(CHILD, &path)
+            .env("MCP_GATEWAY_TEST_KEPT_DIRS", dir.path())
             .status()
             .unwrap()
             .code()
@@ -125,7 +126,7 @@ fn another_process_is_refused_for_the_whole_life_of_the_logger() {
 /// the first sleep.
 #[test]
 fn a_restart_overlap_inside_the_window_starts() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let holder = std::cell::RefCell::new(Some(
         TransparencyLogger::open(cfg(&path, 2, false)).unwrap(),
@@ -152,7 +153,7 @@ fn a_restart_overlap_inside_the_window_starts() {
 /// T4: a holder that keeps the lease past the window: refused after it.
 #[test]
 fn a_holder_past_the_window_is_refused_after_the_wait() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let _l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
     let t = Instant::now();
@@ -170,7 +171,7 @@ fn a_holder_past_the_window_is_refused_after_the_wait() {
 /// T5: a zero wait refuses at once: it never sleeps.
 #[test]
 fn a_zero_wait_refuses_at_once() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let _l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
     // On its own thread: a lease taken as a blocking lock would wait
@@ -194,7 +195,7 @@ fn a_zero_wait_refuses_at_once() {
 /// once, never reported as another process holding the log.
 #[test]
 fn an_unopenable_lease_file_fails_at_once_and_is_not_lease_held() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     std::fs::create_dir(sibling(&path, "lock")).unwrap();
     // A non-contention error never sleeps, whatever the window.
@@ -223,7 +224,7 @@ fn an_unopenable_lease_file_fails_at_once_and_is_not_lease_held() {
 /// attempts and gives up at the window.
 #[test]
 fn the_wait_retries_every_100_ms_until_the_window() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let _l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
     let start = Instant::now();
@@ -253,7 +254,7 @@ fn the_wait_retries_every_100_ms_until_the_window() {
 #[cfg(unix)]
 #[test]
 fn a_non_contention_error_mid_wait_returns_unchanged() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let holder = std::cell::RefCell::new(Some(
         TransparencyLogger::open(cfg(&path, 2, false)).unwrap(),
@@ -287,7 +288,7 @@ fn the_default_wait_is_ten_seconds() {
 /// recovery.
 #[test]
 fn appends_take_no_file_lock_once_the_lease_is_held() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let lock = sibling(&path, "lock");
     let l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
@@ -303,7 +304,7 @@ fn appends_take_no_file_lock_once_the_lease_is_held() {
 /// appends across rotations must finish.
 #[test]
 fn appends_across_rotations_do_not_deadlock_on_the_lease() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let p = path.clone();
     with_progress(move |step| {
@@ -333,7 +334,7 @@ fn appends_across_rotations_do_not_deadlock_on_the_lease() {
 #[cfg(windows)]
 #[test]
 fn a_refused_lease_sidecar_reports_the_refusal_not_a_held_lease() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let lock = sibling(&path, "lock");
     std::fs::write(&lock, b"").unwrap();
