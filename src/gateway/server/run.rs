@@ -38,11 +38,6 @@ use crate::security::firewall::Firewall;
 use crate::{Error, Result};
 
 impl Gateway {
-    /// Hand the HTTP stop the boot's retirement plan cell (see `crate::retire`).
-    pub(crate) fn set_retire_cell(&mut self, cell: crate::retire::RetireCell) {
-        self.retire = Some(cell);
-    }
-
     /// Run the gateway.
     ///
     /// # Errors
@@ -692,9 +687,8 @@ impl Gateway {
                 .unwrap_or_else(tokio::time::Instant::now),
             total,
         );
-        // The one store of the boot's retirement plan: from here the runtime
-        // wait, the log writer's stop and the process exit end inside this
-        // total, and the watchdog bounds them all.
+        // The one store of the boot's retirement plan: retirement and the
+        // process exit end inside this total, under the watchdog.
         if let Some(cell) = &self.retire {
             let plan = crate::retire::RetirePlan::new(
                 budget.end(),

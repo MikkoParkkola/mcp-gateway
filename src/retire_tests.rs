@@ -307,3 +307,26 @@ fn the_plan_is_stored_once_after_the_stop_fixes_its_budget() {
         "the start checks touch the plan"
     );
 }
+
+/// RETIRE.4, the watchdog's exit: `std::process::exit` flushes stdout under
+/// its lock, so a stdout write on the watchdog's path could hold the exit it
+/// exists to force. Nothing in this module, the whole watchdog path, writes
+/// to stdout; the tail's one diagnostic goes to stderr.
+#[test]
+fn the_watchdog_path_writes_nothing_to_stdout() {
+    use crate::test_source_text::{production_text, sanitize};
+    let code = sanitize(&production_text(include_str!("retire.rs")));
+    assert!(
+        !code.contains("stdout"),
+        "the watchdog's module reaches stdout"
+    );
+    // `print!` and `println!`, but not their stderr twins `eprint!`/`eprintln!`.
+    for (at, _) in code.match_indices("print") {
+        let stderr_twin = code[..at].ends_with('e');
+        let is_macro = code[at..].starts_with("print!(") || code[at..].starts_with("println!(");
+        assert!(
+            stderr_twin || !is_macro,
+            "the watchdog's module prints to stdout"
+        );
+    }
+}

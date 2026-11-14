@@ -186,6 +186,11 @@ impl Gateway {
         })
     }
 
+    /// Hand the HTTP stop the boot's retirement plan cell (see `crate::retire`).
+    pub(crate) fn set_retire_cell(&mut self, cell: crate::retire::RetireCell) {
+        self.retire = Some(cell);
+    }
+
     /// Resolve env-file-supplied values through `env`.
     ///
     /// Set from the startup evaluation. Without it the gateway falls back to
