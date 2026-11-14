@@ -4,10 +4,6 @@
 //! helper has no async runtime, so this is blocking: every read has one
 //! absolute deadline per frame, the socket timeout set to the time left
 //! before each read, and the same 1 KiB cap as the gateway's reader.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the helper's fetch step wires it")
-)]
 
 use std::io::{ErrorKind, Read as _, Write as _};
 use std::os::unix::net::UnixStream;

@@ -208,3 +208,14 @@ fn r4b_a_withheld_or_false_expired_refuses() {
     seen.join().expect("gateway");
     assert!(got.is_err());
 }
+
+/// R2, kills "a spent deadline starts a fetch": `deadline_ms` of 0 refuses.
+#[test]
+fn r2_a_spent_deadline_is_refused() {
+    let (mut helper, gateway) = UnixStream::pair().expect("pair");
+    let line = format!("{{\"credential\":\"{SECRET}\",\"deadline_ms\":0}}\n");
+    let seen = gateway_once(gateway, Some(line));
+    let got = within_guard(move || start_fetch(&mut helper, HELPER_BOUNDS));
+    seen.join().expect("gateway");
+    assert!(got.is_err());
+}

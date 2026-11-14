@@ -11,29 +11,62 @@
 
 use std::fs;
 use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::net::UnixStream;
 use std::process::{Command, ExitCode};
 
 use rustix::process::{DumpableBehavior, WaitOptions, set_dumpable_behavior};
 
+use super::control_client::{self, HELPER_BOUNDS};
 use super::plan::{self, HostNamespaces, Plan};
 
 pub(super) fn run(plan: &Plan) -> ExitCode {
-    if let Err(step) = setup(plan) {
-        eprintln!("preview-sandbox: refused at {step}");
-        return ExitCode::from(super::REFUSED);
+    let control = match setup(plan) {
+        Ok(control) => control,
+        Err(step) => {
+            eprintln!("preview-sandbox: refused at {step}");
+            return ExitCode::from(super::REFUSED);
+        }
+    };
+    if let Some(mut control) = control {
+        let fetched = fetch(&mut control);
+        // Dropped before any child exists, so no preview process can inherit
+        // or reach the control connection.
+        drop(control);
+        if let Err(step) = fetched {
+            eprintln!("preview-sandbox: refused at {step}");
+            return ExitCode::from(super::REFUSED);
+        }
     }
     supervise(plan)
 }
 
-fn setup(plan: &Plan) -> Result<(), String> {
+fn setup(plan: &Plan) -> Result<Option<UnixStream>, String> {
     check_namespaces(plan.host)?;
     check_descriptors()?;
+    // After the descriptor check, on the host path, before the new root
+    // hides it; std sockets are close-on-exec.
+    let control = plan
+        .fetch
+        .as_ref()
+        .map(|paths| {
+            UnixStream::connect(&paths.control)
+                .map_err(|e| format!("connecting the control socket ({e})"))
+        })
+        .transpose()?;
     // A capability-less process in the namespace then cannot read this
     // process's environ, fd table or memory through /proc/1.
     set_dumpable_behavior(DumpableBehavior::NotDumpable)
         .map_err(|e| format!("making the helper non-dumpable ({e})"))?;
     super::mounts::build_root(plan)?;
-    super::mounts::enter_root()
+    super::mounts::enter_root()?;
+    Ok(control)
+}
+
+/// The fetch step's handshake: the credential, then `fetch_done` and the wait
+/// for `expired`. The fetch command itself runs between them (the next part).
+fn fetch(control: &mut UnixStream) -> Result<(), String> {
+    let _issued = control_client::start_fetch(control, HELPER_BOUNDS)?;
+    control_client::finish_fetch(control, HELPER_BOUNDS)
 }
 
 /// Refuse unless every namespace differs from the gateway's.
