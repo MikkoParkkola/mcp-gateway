@@ -1,0 +1,15 @@
+head_sha	ccb05f86e0747498fc20e275a28c6b710f4d7a95
+#mutant s9509.m1
+mcp_gateway	transport::stdio::child_tree::tests::stop::a_step_landing_past_the_kill_still_sends_the_planned_sigterm_first	src/transport/stdio_child_tree_stop_tests.rs:541
+#mutant s9509.m2
+mcp_gateway	transport::stdio::child_tree::tests::stop::a_sigterm_sent_just_before_the_kill_still_gets_the_minimum_phase	src/transport/stdio_child_tree_stop_tests.rs:574
+#mutant s9509.m3
+mcp_gateway	transport::stdio::child_tree::tests::stop::the_last_late_step_with_room_for_the_minimum_phase_still_sends_sigterm	src/transport/stdio_child_tree_stop_tests.rs:603
+#mutant s9509.m4
+mcp_gateway	transport::stdio::child_tree::tests::stop::a_cut_during_the_late_sigterm_wait_still_kills_by_its_margin	src/transport/stdio_child_tree_stop_tests.rs:656
+#mutant s9509.m5
+mcp_gateway	transport::stdio::child_tree::tests::stop::a_sigterm_due_before_a_short_cut_was_made_is_still_sent	src/transport/stdio_child_tree_stop_tests.rs:732
+#mutant s9509.m6
+mcp_gateway	transport::stdio::child_tree::tests::stop::a_short_cut_made_before_the_sigterm_was_due_still_skips_it	src/transport/stdio_child_tree_stop_tests.rs:769
+#mutant s9509.m7
+mcp_gateway	transport::stdio::child_tree::tests::stop::a_short_cut_made_before_the_sigterm_was_due_still_skips_it	src/transport/stdio_child_tree_stop_tests.rs:769
