@@ -397,24 +397,28 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
         };
-        #[cfg(test)]
-        if self.fail_next_spawn.swap(false, Ordering::SeqCst) {
-            return Err(recover(&cell).expect("the reference is still in the cell"));
-        }
         let (thread_cell, reported) = (Arc::clone(&cell), Arc::clone(&self.reported));
-        let spawned = std::thread::Builder::new()
-            .name("shutdown: custody release".to_owned())
-            .spawn(move || {
-                let held = thread_cell
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take();
-                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(held)))
-                    .is_err()
-                {
-                    report_once(&reported, "the store release panicked");
-                }
-            });
+        let release = move || {
+            let held = thread_cell
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(held))).is_err() {
+                report_once(&reported, "the store release panicked");
+            }
+        };
+        let builder = std::thread::Builder::new().name("shutdown: custody release".to_owned());
+        // The seam fails the spawn itself, so a row drives the real failure
+        // arm below: the closure is dropped unrun, as a failed spawn drops it.
+        #[cfg(test)]
+        let spawned = if self.fail_next_spawn.swap(false, Ordering::SeqCst) {
+            drop(release);
+            Err(std::io::Error::other("injected spawn failure"))
+        } else {
+            builder.spawn(release)
+        };
+        #[cfg(not(test))]
+        let spawned = builder.spawn(release);
         match spawned {
             Ok(_) => Ok(()),
             // A failed spawn drops its closure unrun, so the reference is still

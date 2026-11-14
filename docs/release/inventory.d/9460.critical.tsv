@@ -1,3 +1,3 @@
-src/personal_accounts/worker.rs	release_by	1	standard	borderline	CustodyHandle::release_by	Sets the shutting_down flag that admit enforces and drains permits before taking the store; the one release path behind shutdown and shutdown_by
+src/personal_accounts/worker.rs	release_by	1	standard	borderline	CustodyHandle::release_by	Sets the shutting_down flag that admit enforces and drains permits before taking the store; the one release path behind shutdown_by and the test-only shutdown
 src/personal_accounts/worker.rs	shutdown_by	1	standard	borderline	CustodyHandle::shutdown_by	Bounded form of shutdown: through release_by it sets the shutting_down flag admit enforces and drains permits up to the stop deadline
 src/personal_accounts/worker.rs	detach_release	1	standard	borderline	CustodyHandle::detach_release	Sets the shutting_down flag that admit enforces and hands the store to a release thread without waiting
