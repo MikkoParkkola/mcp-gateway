@@ -513,7 +513,7 @@ reason = "fires only when the audit append fails or stalls; a live probe cannot 
 
 [[control]]
 id = "key-server-email-lookup"
-description = "the admin email lookup (POST /ui/api/key-server/audit/lookup-email) admits only gateway-wide admin standing before it hashes the email or reads a byte, charges every authorized attempt, malformed ones included, to one process-wide budget (two at once, then one every six seconds, 429 with Retry-After), keeps no copy of the email and answers retained issuance rows only. Covered by the lookup rows (key_lookup_route_tests) and the budget rows (lookup_budget tests)"
+description = "the admin email lookup (POST /ui/api/key-server/audit/lookup-email) admits only gateway-wide admin standing before it hashes the email or reads a byte, charges every authorized attempt, malformed ones included, to one process-wide budget (two at once, then one every six seconds, 429 with Retry-After), keeps no copy of the email and answers retained issuance rows only; a next page carries a sealed, principal-bound, single-use token instead of the email, and every token that fails to open gets one fixed answer. Covered by the lookup rows (key_lookup_route_tests) and the budget rows (lookup_budget tests)"
 source = "src/gateway/ui/activity/key_lookup.rs"
 probe = "none"
 reason = "needs an admin credential and a retained issuance row to answer anything; a live probe holds neither"
