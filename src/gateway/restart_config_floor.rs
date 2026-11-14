@@ -49,7 +49,6 @@ pub(crate) struct Certification {
 #[path = "restart_config_certify.rs"]
 mod certify;
 use certify::CheckInput;
-pub(crate) use certify::production_candidates;
 #[path = "restart_config_locks.rs"]
 mod locks;
 
@@ -92,16 +91,6 @@ impl ConfigFloor {
             #[cfg(test)]
             seams: seams::FloorSeams::default(),
         }
-    }
-
-    /// The gate this adapter drives.
-    pub(crate) fn gate(&self) -> &ConfigGate {
-        &self.gate
-    }
-
-    /// The source startup resolved.
-    pub(crate) fn source(&self) -> &ConfigSource {
-        &self.source
     }
 
     /// The certification the last successful checkpoint produced, if any.
@@ -457,10 +446,6 @@ pub(crate) mod seams {
         LockBusy,
         /// The check task ended: certified (true) or faulted (false).
         CheckDone(bool),
-        /// A trusted read happened.
-        Read,
-        /// Validation ran.
-        Validated,
     }
 
     /// Attempt log entry: which attempt did what.

@@ -7,8 +7,9 @@ use std::path::Path;
 
 use tokio::time::Instant;
 
+use super::ConfigFloor;
+use super::certify::production_candidates;
 use super::support::{self, Probe};
-use super::{ConfigFloor, production_candidates};
 use crate::backend::BackendRegistry;
 use crate::gateway::restart_floor::{FloorAdapter, FloorFault};
 use crate::test_source_text::production_text;

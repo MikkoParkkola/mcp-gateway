@@ -5,7 +5,7 @@
 #[cfg(test)]
 use std::io::Write as _;
 #[cfg(test)]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
