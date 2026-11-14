@@ -16,8 +16,8 @@
 )]
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
 
 use futures::future::BoxFuture;
 use tokio::time::Instant;
@@ -102,7 +102,7 @@ struct GateInner {
 )]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ConfigGate {
-    inner: Arc<Mutex<GateInner>>,
+    inner: Arc<parking_lot::Mutex<GateInner>>,
     #[cfg(test)]
     seams: seams::GateSeams,
 }
@@ -128,7 +128,7 @@ impl ConfigGate {
 
     /// A reload context or the watcher registers an owed-reload fault flag.
     pub(crate) fn register_owed(&self, flag: Arc<AtomicBool>) {
-        self.inner.lock().unwrap().owed_flags.push(flag);
+        self.inner.lock().owed_flags.push(flag);
     }
 
     /// Whether a manual reload folded into an owed replay (stub: never).
