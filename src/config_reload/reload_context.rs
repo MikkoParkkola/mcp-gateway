@@ -185,9 +185,7 @@ impl ReloadContext {
         )?;
         let trusted_config = crate::identity_grants::journal::resolved(&config_path);
         let reload_owed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        registry
-            .config_gate()
-            .register_owed(Arc::clone(&reload_owed));
+        registry.config_gate().register_owed(&reload_owed);
         Ok(Self {
             config_path,
             trusted_config,

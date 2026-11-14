@@ -432,25 +432,7 @@ impl ReloadContext {
         let target = locked.target.clone();
         let (locked, recovery_intent_id) = self.recover_before_write(&mut audit, locked).await?;
 
-        if target != self.trusted_config {
-            return Err(ReplaceError::Unsupported(format!(
-                "{} now resolves to {}, not to {}, the file this gateway started on; nothing was written",
-                self.config_path.display(),
-                target.display(),
-                self.trusted_config.display()
-            )));
-        }
-        // The read every loader uses, mode and owner judged on the handle read:
-        // a file another account can change is refused before any intent,
-        // entry or write, so its edit is never rewritten owner-only.
-        let current = match crate::config::read_config_text(&target) {
-            Ok(Some(text)) => text.into_bytes(),
-            Ok(None) => return Err(ReplaceError::NoConfigFile),
-            Err(UnreadConfig::Refused(why)) => return Err(ReplaceError::ConfigRefused(why)),
-            Err(UnreadConfig::Failed(why) | UnreadConfig::NotTheConfig(why)) => {
-                return Err(ReplaceError::Failed(why));
-            }
-        };
+        let current = self.read_trusted(&target)?;
         if let Expected::Revision(seen) = &replace.expected {
             let now = FileRevision::of(&current);
             if &now != seen {
@@ -688,6 +670,29 @@ impl ReloadContext {
                         reason: refusal.text,
                     },
                 ))
+            }
+        }
+    }
+
+    /// The locked target's bytes, once it is still the file this gateway
+    /// started on. The read every loader uses, mode and owner judged on the
+    /// handle read: a file another account can change is refused before any
+    /// intent, entry or write, so its edit is never rewritten owner-only.
+    fn read_trusted(&self, target: &std::path::Path) -> Result<Vec<u8>, ReplaceError> {
+        if target != self.trusted_config.as_path() {
+            return Err(ReplaceError::Unsupported(format!(
+                "{} now resolves to {}, not to {}, the file this gateway started on; nothing was written",
+                self.config_path.display(),
+                target.display(),
+                self.trusted_config.display()
+            )));
+        }
+        match crate::config::read_config_text(target) {
+            Ok(Some(text)) => Ok(text.into_bytes()),
+            Ok(None) => Err(ReplaceError::NoConfigFile),
+            Err(UnreadConfig::Refused(why)) => Err(ReplaceError::ConfigRefused(why)),
+            Err(UnreadConfig::Failed(why) | UnreadConfig::NotTheConfig(why)) => {
+                Err(ReplaceError::Failed(why))
             }
         }
     }

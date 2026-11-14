@@ -146,10 +146,10 @@ impl ConfigGate {
     }
 
     /// A reload context or the watcher registers an owed-reload fault flag.
-    pub(crate) fn register_owed(&self, flag: Arc<AtomicBool>) {
+    pub(crate) fn register_owed(&self, flag: &Arc<AtomicBool>) {
         let mut inner = self.inner.lock();
         inner.owed_flags.retain(|f| f.strong_count() > 0);
-        inner.owed_flags.push(Arc::downgrade(&flag));
+        inner.owed_flags.push(Arc::downgrade(flag));
     }
 
     /// Whether any registered owed-reload flag is set (certify step 7).

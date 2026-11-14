@@ -655,7 +655,7 @@ impl Config {
                 self.auth
                     .api_keys
                     .iter_mut()
-                    .flat_map(|key| key.digest_specs_mut()),
+                    .flat_map(ApiKeyConfig::digest_specs_mut),
             )
             .chain(
                 self.agent_auth

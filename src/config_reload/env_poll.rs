@@ -306,7 +306,7 @@ impl EnvReloadCounts {
     /// refuses while a failed reload is still being retried. The gate keeps a
     /// weak reference: this struct (held by the watcher task) owns the flag.
     pub(super) fn register_with(&self, gate: &crate::gateway::restart_config_floor::ConfigGate) {
-        gate.register_owed(Arc::clone(&self.failed));
+        gate.register_owed(&self.failed);
     }
 
     /// Whether the last reload failed.

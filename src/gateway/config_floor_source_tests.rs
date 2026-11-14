@@ -55,7 +55,6 @@ const DEFINITIONS: &[&str] = &[
     "fn admissions_in_flight(&self) -> usize",
     "fn decisions(&self) -> Vec<GateDecision>",
     "fn attempt(&self) -> u64",
-    "fn reload_lock(&self) -> Arc<tokio::sync::Mutex<()>>",
     "fn set_admitted_hook(&",
     "fn set_settle_window(&",
     "fn call_admitted(&",
@@ -69,8 +68,6 @@ const DEFINITIONS: &[&str] = &[
     "fn set_meta_hook(&",
     "fn override_candidates(&",
     "fn active_candidates(&",
-    "fn slot_log(&",
-    "fn attempt_log(&",
 ];
 
 /// Seam names distinctive enough that production text must never mention one.
@@ -109,8 +106,6 @@ const NAMES: &[&str] = &[
     "set_meta_hook",
     "override_candidates",
     "active_candidates",
-    "slot_log",
-    "attempt_log",
     "admitted_hook",
     "settle_window",
     "check_hook",

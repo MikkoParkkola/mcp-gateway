@@ -552,22 +552,9 @@ pub(crate) mod seams {
                 .unwrap_or(&self.candidates)
         }
 
-        pub(crate) fn slot_log(&self) -> Vec<SlotEntry> {
-            self.seams.slots.snapshot()
-        }
-
-        pub(crate) fn attempt_log(&self) -> Vec<AttemptEntry> {
-            self.seams.attempts.snapshot()
-        }
-
         /// The attempt number the last pause started (0 before any pause).
         pub(crate) fn attempt(&self) -> u64 {
             self.attempt
-        }
-
-        /// The registry's reload mutex the adapter takes, for lock probes.
-        pub(crate) fn reload_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
-            Arc::clone(&self.reload_lock)
         }
     }
 }
