@@ -751,5 +751,7 @@ fn held_notes_are_bounded_and_a_lost_one_forces_another_replay() {
     assert_eq!(set.list()[0]["scope"].as_array().map(Vec::len), Some(over));
 }
 
+mod accept;
 mod discovery;
 mod positions;
+mod staged;

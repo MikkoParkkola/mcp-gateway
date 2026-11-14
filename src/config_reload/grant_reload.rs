@@ -262,12 +262,20 @@ impl ReloadContext {
 
 /// Append a prepared plan and say how it went, for the reload outcome.
 fn audit_clause(auditor: Option<&GrantAuditor>, prepared: Option<Prepared>) -> String {
-    match (auditor, prepared) {
-        (Some(auditor), Some(prepared)) => match auditor.record(prepared) {
-            Recorded::All(n) => format!("; grant records: {n} written"),
-            Recorded::Unrecorded(reason) => format!("; grant change UNRECORDED: {reason}"),
-        },
-        _ => String::new(),
+    let (Some(auditor), Some(prepared)) = (auditor, prepared) else {
+        return String::new();
+    };
+    // Rows changed outside the gateway are counted in the answer: their
+    // records name no actor, so this is where an operator sees them.
+    let outside = prepared.outside_rows();
+    let outside = if outside == 0 {
+        String::new()
+    } else {
+        format!("; {outside} changed outside the gateway")
+    };
+    match auditor.record(prepared) {
+        Recorded::All(n) => format!("; grant records: {n} written{outside}"),
+        Recorded::Unrecorded(reason) => format!("; grant change UNRECORDED: {reason}{outside}"),
     }
 }
 

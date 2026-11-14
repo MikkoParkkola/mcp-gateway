@@ -388,6 +388,8 @@ mod grant_audit_crash_tests;
 #[cfg(test)]
 mod grant_audit_journal_tests;
 #[cfg(test)]
+mod grant_audit_plan_tests;
+#[cfg(test)]
 mod grant_audit_reload_tests;
 #[cfg(test)]
 pub(crate) mod grant_audit_tests;

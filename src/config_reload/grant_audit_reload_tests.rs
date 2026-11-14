@@ -76,6 +76,16 @@ impl Reload {
         apply_change(&self.grants, true, change).await.unwrap();
     }
 
+    /// A change written straight to the grant file, with no journal entry.
+    async fn edit(&self, rows: Vec<crate::identity_grants::IdentityGrant>) {
+        crate::identity_grants::write_identity_grants_file(
+            &self.grants,
+            &crate::identity_grants::IdentityGrantFile::new(rows),
+        )
+        .await
+        .unwrap();
+    }
+
     fn verbs(&self) -> Vec<(V, String)> {
         self.store
             .events()
@@ -287,5 +297,59 @@ async fn torn_multibyte_line_does_not_block_later_entries() {
         got.iter()
             .any(|v| v.0 == V::Indeterminate && v.1 == "journal-torn-line"),
         "{got:?}"
+    );
+}
+
+/// JRN.3: the reload counts the rows changed outside the gateway in its
+/// answer, and records them with no actor.
+#[tokio::test]
+async fn a_reload_counts_rows_changed_outside_the_gateway() {
+    let r = Reload::new();
+    r.cli(add(row("g1", "r"))).await;
+    let first = r.reload().await.unwrap();
+    assert!(!first.contains("outside the gateway"), "control: {first}");
+    r.edit(vec![row("g1", "edited")]).await;
+    let outcome = r.reload().await.unwrap();
+    assert!(
+        outcome.contains("1 changed outside the gateway"),
+        "{outcome}"
+    );
+    assert_eq!(r.verbs().last(), Some(&(V::OutOfBand, "g1".into())));
+}
+
+/// JRN.3: the answer counts rows, not records: a row changed outside the
+/// gateway both before and after a CLI change has two records and is
+/// counted once.
+#[tokio::test]
+async fn a_row_changed_outside_twice_is_counted_once() {
+    let r = Reload::new();
+    r.cli(add(row("g1", "r"))).await;
+    r.reload().await.unwrap();
+    r.edit(vec![row("g1", "edited")]).await;
+    r.cli(upsert(row("g1", "cli"), true)).await;
+    r.edit(vec![row("g1", "edited again")]).await;
+    let outcome = r.reload().await.unwrap();
+    let outside = r.verbs().iter().filter(|v| v.0 == V::OutOfBand).count();
+    assert_eq!(outside, 2, "control: two records");
+    assert!(
+        outcome.contains("; 1 changed outside the gateway"),
+        "{outcome}"
+    );
+}
+
+/// JRN.3: an answer that says UNRECORDED still counts the rows changed
+/// outside the gateway.
+#[tokio::test]
+async fn an_unrecorded_answer_still_counts_outside_rows() {
+    let r = Reload::new();
+    r.cli(add(row("g1", "r"))).await;
+    r.reload().await.unwrap();
+    r.edit(vec![row("g1", "edited")]).await;
+    r.store.fail_from.store(1, Ordering::SeqCst);
+    let outcome = r.reload().await.unwrap();
+    assert!(outcome.contains("UNRECORDED"), "{outcome}");
+    assert!(
+        outcome.contains("; 1 changed outside the gateway"),
+        "{outcome}"
     );
 }
