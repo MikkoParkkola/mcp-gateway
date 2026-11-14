@@ -26,10 +26,11 @@ src/config/server_config.rs. The duration grammar is the gateway's
 this check, the Helm chart and the gateway's own parser share. The Helm chart is
 checked by scripts/dev/helm-chart-smoke.sh, which reads --print-default.
 
-Limits, not mitigated here: a deploy artifact's timeout is read from its own folder only, so
-a timeout kept elsewhere (a config outside the folder, a Kustomize overlay) is not seen and
-the artifact is checked against the default; Setext headings are not sections (none in
-tracked Markdown). SHIPPED and FLOORS only prove each artifact was found and checked.
+Limits: a deploy artifact's timeout is read from its own folder only. A timeout set under
+deploy/ in a folder with no artifact fails the check (the chart, which derives its own grace,
+aside), but one kept outside deploy/ or behind a Kustomize overlay is not seen. Setext
+headings are not sections (none in tracked Markdown). SHIPPED and FLOORS prove each artifact
+was found and checked.
 
 usage: check-stop-grace.py [ROOT] | --self-test | --print-default
 """
@@ -57,7 +58,7 @@ ONE_SHOT_COMMANDS = frozenset({
 LONG_RUNNING_COMMANDS = frozenset({"serve", "kubernetes"})
 # clap's own: the help subcommand and the help and version flags print and exit.
 ONE_SHOT = tuple(sorted(ONE_SHOT_COMMANDS)) + ("help", "--help", "-h", "--version", "-V")
-GATEWAY_IMAGE = re.compile(r"(?:^|/)mcp-gateway(?::[\w.-]+)?(?:@sha256:[0-9a-f]+)?$")
+GATEWAY_IMAGE = re.compile(r"(?:^|/)mcp-gateway(?:[:@]\S*)?$")
 GRAMMAR = re.compile(r"\+?([0-9]+)(ms|s|m|h)?", re.ASCII)  # after a Unicode trim, as str::trim
 SCALE = {"s": 1, "m": 60, "h": 3600}
 ENV_NAME = "MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT"
@@ -120,7 +121,8 @@ HEADING = re.compile(r"^(#{1,6})\s")
 SPAN = re.compile(r"`([^`]+)`")
 # An indented code line, or a line that starts with a docker command (after a prompt, sudo or
 # variable assignments); prose that mentions docker is neither.
-COMMAND_LINE = re.compile(r"(?:\s{4,}|\t)\S|\s*(?:\$\s+)?(?:sudo\s+)?(?:\w+=\S*\s+)*docker\b")
+COMMAND_LINE = re.compile(
+    r"(?:\s{4,}|\t)\S|\s*(?:(?:[-*+]|\d+\.)\s+|>\s*)?(?:\$\s+)?(?:sudo\s+)?(?:\w+=\S*\s+)*docker\b")
 
 
 def markdown_units(text):
@@ -352,7 +354,7 @@ def check_plist(body, need):
 def check_k8s(body, need):
     """Each YAML document that is a gateway Deployment needs its own enough grace."""
     problems = []
-    for doc in re.split(r"^---[ \t]*$", body, flags=re.M):
+    for doc in re.split(r"^---(?:[ \t]+#.*)?[ \t]*$", body, flags=re.M):
         if "kubernetes" not in kinds_of(doc):
             continue
         values = re.findall(r"^\s*terminationGracePeriodSeconds:\s*([^\s#]+)", doc, re.M) or [None]
@@ -395,7 +397,7 @@ def kinds_of(body):
     if "<plist" in body and re.search(r"<string>[^<]*mcp-gateway[^<]*</string>", body):
         kinds.append("launchd")
     images = re.findall(r"""^\s*(?:-\s+)?image:\s*["']?([^"'\s#]+)""", body, re.M)
-    if re.search(r"^\s*kind:\s*Deployment\s*$", body, re.M) and any(GATEWAY_IMAGE.search(i) for i in images):
+    if re.search(r"^\s*kind:\s*Deployment\s*(?:#.*)?$", body, re.M) and any(GATEWAY_IMAGE.search(i) for i in images):
         kinds.append("kubernetes")
     return kinds
 
@@ -467,6 +469,10 @@ def violations(root, shipped=None, floors=None):
                 found.append(f"{rel}:1: its folder sets a stop timeout the gateway refuses")
             else:
                 check_text(rel, 1, read(rel), need, counts, found, seen)
+            if timeouts_in(read(rel)) and not rel.startswith("deploy/helm/") and not any(
+                    kinds_of(read(f)) for f in siblings):
+                found.append(f"{rel}:1: sets a stop timeout no artifact in its folder reads; the check cannot "
+                             f"tell which grace needs it (keep it beside its artifact)")
     shipped = SHIPPED if shipped is None else shipped
     floors = FLOORS if floors is None else floors
     found += [f"{path}: the shipped {kind} artifact was not checked as one (moved, renamed or no longer "
@@ -556,6 +562,13 @@ PLANTED = {
     "deploy/o/deployment.yaml": DEPLOYMENT + "      terminationGracePeriodSeconds: 31\n---\n" + DEPLOYMENT,
     "docs/run-attached-global.md": fence("docker -Htcp://host run " + IMG),
     "docs/run-global-unreadable.md": fence("docker --made-up-global run " + IMG),
+    "deploy/p/deployment.yaml": DEPLOYMENT + "      terminationGracePeriodSeconds: 31\n--- # the second\n" + DEPLOYMENT,
+    "deploy/q/docker-compose.yaml": COMPOSE + "    stop_grace_period: 31s\n    stop_grace_period: 10s\n",
+    "deploy/r/deployment.yaml": DEPLOYMENT + "      terminationGracePeriodSeconds: 31\n---\n"
+                                + DEPLOYMENT.replace("kind: Deployment", "kind: Deployment  # the second"),
+    "deploy/s/docker-compose.yaml": "services:\n  app:\n    image: ghcr.io/mikkoparkkola/mcp-gateway:${TAG:-latest}\n",
+    "deploy/t/overlay/config.yaml": "server:\n  shutdown_timeout: 60s\n",
+    "docs/run-list.md": "1. Start it:\n\n- docker run " + IMG + "\n",
     "docs/plain-config.md": "## S\n\n" + ENV_NAME + "=50s\n\n" + fence(RUN31),
     "docs/indented-config.md": "Config:\n\n    server:\n      shutdown_timeout: 50s\n\nRun:\n\n    " + RUN31 + "\n",
     "deploy/n/deployment.yaml": DEPLOYMENT + "      terminationGracePeriodSeconds: 31\n---\n"
@@ -587,6 +600,12 @@ CLEAN = {
 
 # Every planted offender's diagnostic, exactly: a fixture flagged for the wrong reason fails.
 EXPECTED = [
+    'deploy/r/deployment.yaml:1: kubernetes: terminationGracePeriodSeconds is unset; it needs at least 31 s',
+    'deploy/s/docker-compose.yaml:1: compose: service app stop_grace_period is unset; it needs at least 31 s',
+    'deploy/t/overlay/config.yaml:1: sets a stop timeout no artifact in its folder reads; the check cannot tell which grace needs it (keep it beside its artifact)',
+    'docs/run-list.md:3: serving docker run --stop-timeout is unset; it needs at least 31 s',
+    'deploy/p/deployment.yaml:1: kubernetes: terminationGracePeriodSeconds is unset; it needs at least 31 s',
+    'deploy/q/docker-compose.yaml:1: compose: service gw stop_grace_period is 10s; it needs at least 31 s',
     'docs/plain-config.md:6: serving docker run --stop-timeout is 31; it needs at least 51 s',
     'deploy/o/deployment.yaml:1: kubernetes: terminationGracePeriodSeconds is unset; it needs at least 31 s',
     'docs/run-attached-global.md:2: serving docker run --stop-timeout is unset; it needs at least 31 s',
