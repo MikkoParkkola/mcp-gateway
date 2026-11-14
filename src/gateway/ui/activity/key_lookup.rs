@@ -427,10 +427,14 @@ fn check_shape(
     Ok(())
 }
 
-/// What only a first page is judged on: the email and its window.
+/// What only a first page is judged on: the email and its window. The email is
+/// judged as the hash will see it: trimmed with the hash's own frozen
+/// White_Space list, and control characters taken from the fixed Cc ranges, so
+/// no toolchain Unicode table decides what is refused.
 fn check_first_page(raw: &str, from: Option<&str>, to: Option<&str>) -> Result<(), &'static str> {
-    let email = raw.trim();
-    if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(char::is_control) {
+    let email = email_hash::trim_v1(raw);
+    let control = |c: char| matches!(c, '\0'..='\u{1f}' | '\u{7f}'..='\u{9f}');
+    if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(control) {
         return Err("the email is not valid");
     }
     if from.is_some_and(|t| t.len() > MAX_TIME) || to.is_some_and(|t| t.len() > MAX_TIME) {
@@ -516,7 +520,7 @@ fn resolve(
 ) -> Result<Resolved, Box<Response>> {
     match ask {
         (Some(raw), None) => Ok(Resolved {
-            hash: key.hash(raw.trim()),
+            hash: key.hash(&raw),
             start: None,
             born: now,
             from: window.0,
