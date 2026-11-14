@@ -306,9 +306,11 @@ pub(crate) fn join_bounded<T>(handle: std::thread::JoinHandle<T>, what: &str) ->
     handle.join().unwrap_or_else(|_| panic!("panicked: {what}"))
 }
 
-/// The watcher as a row drives it: its gate, reload context and config path.
-/// The production loop has no hand-driven tick yet, so this holds only what the
-/// wiring stage will pass to it.
+/// The watcher as a row drives it: its gate, its OWN reload context and the config
+/// path. Production builds the watcher a separate context over the shared registry
+/// (watcher.rs), with its own owed-reload flag, so the fixture does the same. The
+/// production loop has no hand-driven tick yet; the wiring stage extracts the
+/// per-tick function the spawned loop runs and `tick` calls exactly that.
 pub(crate) struct WatcherFixture {
     pub(crate) gate: ConfigGate,
     pub(crate) ctx: Arc<crate::config_reload::ReloadContext>,
@@ -319,7 +321,7 @@ impl WatcherFixture {
     pub(crate) fn over(ctx: &Arc<crate::config_reload::ReloadContext>, path: &Path) -> Self {
         Self {
             gate: ctx.registry.config_gate(),
-            ctx: Arc::clone(ctx),
+            ctx: watcher_context(ctx, path),
             path: path.to_path_buf(),
         }
     }
@@ -327,10 +329,28 @@ impl WatcherFixture {
     pub(crate) fn new(booted: &Booted) -> Self {
         Self {
             gate: booted.gate.clone(),
-            ctx: Arc::clone(&booted.ctx),
+            ctx: watcher_context(&booted.ctx, &booted.cfg.path),
             path: booted.cfg.path.clone(),
         }
     }
+}
+
+/// The watcher's own reload context, as watcher.rs builds it: the main context's
+/// running config and registry (so its reloads are the running config's, and its
+/// gate and reload lock are the shared ones), with its own owed-reload flag.
+pub(crate) fn watcher_context(
+    main: &crate::config_reload::ReloadContext,
+    path: &Path,
+) -> Arc<crate::config_reload::ReloadContext> {
+    let ctx = crate::config_reload::ReloadContext::new(
+        path.to_path_buf(),
+        Arc::clone(&main.live_config),
+        Arc::clone(&main.registry),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("the watcher's context pairs with the running config");
+    Arc::new(ctx)
 }
 
 /// One hand-driven watcher tick, run to completion.

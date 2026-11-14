@@ -67,12 +67,18 @@ fn record_steps(floor: &mut ConfigFloor) -> Arc<Mutex<Vec<CheckStep>>> {
 
 /// The refusal contract of C1: SaveFailed, no read or validation after the
 /// refusal, and the config file untouched. `unsettle` arranges one form.
-async fn refuses_unsettled(row: &str, unsettle: impl FnOnce(&Booted, &mut ConfigFloor)) {
+async fn refuses_unsettled(
+    row: &str,
+    unsettle: impl FnOnce(&Booted, &mut ConfigFloor) -> Option<std::path::PathBuf>,
+) {
     let booted = Booted::new(BASE);
     let mut floor = booted.floor();
     let steps = record_steps(&mut floor);
-    unsettle(&booted, &mut floor);
+    let sidecar = unsettle(&booted, &mut floor);
     let before = file_state(&booted.cfg.path);
+    let sidecar_before = sidecar
+        .as_ref()
+        .map(|p| std::fs::read(p).expect("sidecar bytes"));
 
     let result = certify(&mut floor).await;
 
@@ -91,17 +97,22 @@ async fn refuses_unsettled(row: &str, unsettle: impl FnOnce(&Booted, &mut Config
         before,
         "{row} config file untouched"
     );
+    if let (Some(path), Some(bytes)) = (sidecar, sidecar_before) {
+        assert_eq!(
+            std::fs::read(&path).ok(),
+            Some(bytes),
+            "{row} the evidence file still exists, unchanged"
+        );
+    }
 }
 
 #[tokio::test]
 async fn c1_v1_journal_refuses() {
     const ROW: &str = "c1_v1_journal_refuses";
     refuses_unsettled(ROW, |b, _| {
-        std::fs::write(
-            b.cfg.beside(".gateway.yaml.replace-journal"),
-            r#"{"version":1}"#,
-        )
-        .expect("journal");
+        let path = b.cfg.beside(".gateway.yaml.replace-journal");
+        std::fs::write(&path, r#"{"version":1}"#).expect("journal");
+        Some(path)
     })
     .await;
 }
@@ -110,11 +121,20 @@ async fn c1_v1_journal_refuses() {
 async fn c1_v2_journal_refuses() {
     const ROW: &str = "c1_v2_journal_refuses";
     refuses_unsettled(ROW, |b, _| {
-        std::fs::write(
-            b.cfg.beside(".gateway.yaml.replace-journal"),
-            r#"{"version":2}"#,
-        )
-        .expect("journal");
+        let path = b.cfg.beside(".gateway.yaml.replace-journal");
+        std::fs::write(&path, r#"{"version":2}"#).expect("journal");
+        Some(path)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn c1_malformed_journal_refuses() {
+    const ROW: &str = "c1_malformed_journal_refuses";
+    refuses_unsettled(ROW, |b, _| {
+        let path = b.cfg.beside(".gateway.yaml.replace-journal");
+        std::fs::write(&path, b"not json at all {").expect("journal");
+        Some(path)
     })
     .await;
 }
@@ -123,7 +143,9 @@ async fn c1_v2_journal_refuses() {
 async fn c1_abandoned_file_refuses() {
     const ROW: &str = "c1_abandoned_file_refuses";
     refuses_unsettled(ROW, |b, _| {
-        std::fs::write(b.cfg.beside("gateway.yaml.abandoned"), b"left behind").expect("abandoned");
+        let path = b.cfg.beside("gateway.yaml.abandoned");
+        std::fs::write(&path, b"left behind").expect("abandoned");
+        Some(path)
     })
     .await;
 }
@@ -135,6 +157,7 @@ async fn c1_abandoned_metadata_error_refuses() {
         floor.set_meta_hook(Some(Arc::new(|_| {
             Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
         })));
+        None
     })
     .await;
 }
@@ -214,11 +237,17 @@ async fn c3_invalid_yaml_refuses() {
     const ROW: &str = "c3_invalid_yaml_refuses";
     let booted = Booted::new(BASE);
     booted.cfg.rewrite("backends: [unclosed\n");
+    let before = file_state(&booted.cfg.path);
     let mut floor = booted.floor();
 
     let result = certify(&mut floor).await;
 
     assert_eq!(result, Err(FloorFault::SaveFailed), "{ROW} invalid yaml");
+    assert_eq!(
+        file_state(&booted.cfg.path),
+        before,
+        "{ROW} bytes, mtime and inode unchanged"
+    );
 }
 
 #[cfg(unix)]
@@ -243,8 +272,9 @@ async fn c3_symlink_repointed_and_restored_refuses_at_identity() {
     let booted = Booted::new(BASE);
     let dir = booted.cfg.dir.path().to_path_buf();
     let (real, other) = (dir.join("real.yaml"), dir.join("other.yaml"));
-    std::fs::write(&real, BASE).expect("real target");
-    std::fs::write(&other, BASE.replace("  a:", "  b:")).expect("other target");
+    crate::gateway::test_helpers::write_owner_only(&real, BASE).expect("real target");
+    crate::gateway::test_helpers::write_owner_only(&other, BASE.replace("  a:", "  b:"))
+        .expect("other target");
     let link = booted.cfg.path.clone();
     std::fs::remove_file(&link).expect("remove file");
     std::os::unix::fs::symlink(&real, &link).expect("link to real");

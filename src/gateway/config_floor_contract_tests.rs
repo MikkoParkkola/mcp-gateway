@@ -12,7 +12,7 @@ use futures::future::BoxFuture;
 use tokio::time::Instant;
 
 use super::GateState;
-use super::seams::{CheckHook, CheckStep, LockVerdict, SlotEntry, SlotOutcome};
+use super::seams::{AttemptEvent, CheckHook, CheckStep, LockVerdict, SlotEntry, SlotOutcome};
 use super::support::{self, BASE, BOUND, Booted, Probe, sha256_hex};
 use crate::gateway::restart_floor::{FloorAdapter, FloorFault};
 
@@ -91,7 +91,14 @@ async fn k2_dropped_checkpoint_holds_nothing() {
     assert_probes(ROW, &b, Probe::Free, "free after the drop");
     assert!(!floor.settled(), "{ROW} the blocked check is late work");
     held.release.send(()).expect("release the hook");
-    support::wait_until("K2 check task ended", || floor.settled());
+    let log = floor.seams.attempts.clone();
+    support::wait_until("K2 check task done", || {
+        log.snapshot()
+            .iter()
+            .any(|e| e.attempt == 1 && matches!(e.event, AttemptEvent::CheckDone(_)))
+    });
+    assert_probes(ROW, &b, Probe::Free, "free after the check task ended");
+    assert!(floor.settled(), "{ROW} settled once the check ended");
     assert_eq!(b.gate.state(), GateState::Paused(1), "{ROW} still paused");
     floor.commit();
     assert_eq!(b.config_probe(), Probe::Free, "{ROW} no certification held");
@@ -217,7 +224,9 @@ async fn k6_cli_writer_waits_behind_commit() {
 #[cfg(feature = "webui")]
 mod held_write {
     use super::*;
-    use crate::gateway::restart_config_floor::seams::{AdmittedPoint, ReloadSource, WatcherPoke};
+    use crate::gateway::restart_config_floor::seams::{
+        AdmittedPoint, ReloadEntry, ReloadSource, WatcherPoke,
+    };
     use support::WatcherFixture;
 
     /// Hold a UI write at `WriterAfterLocks`, then plant the trigger "a1" on
@@ -274,9 +283,14 @@ mod held_write {
         write.await.expect("write task");
         // The tick that sees the event while paused keeps the trigger.
         support::tick(&WatcherFixture::new(b)).await;
-        assert!(
-            b.gate.reload_log().is_empty(),
-            "{row} paused tick reloads nothing"
+        let own = ReloadEntry {
+            source: ReloadSource::Write,
+            value: "w1".to_owned(),
+        };
+        assert_eq!(
+            b.gate.reload_log(),
+            vec![own],
+            "{row} only the write reloaded"
         );
     }
 
@@ -295,6 +309,12 @@ mod held_write {
         support::tick(&WatcherFixture::new(&b)).await;
         let replays = support::reload_values(&b.gate, ReloadSource::Replay);
         assert_eq!(replays, vec!["a1".to_owned()], "{ROW} exactly one replay");
+        let running = b.running_environment();
+        assert_eq!(
+            running.as_deref(),
+            Some("a1"),
+            "{ROW} replayed value installed"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

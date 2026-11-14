@@ -11,6 +11,7 @@ use super::seams::{CheckHook, CheckStep, LockHook, LockVerdict};
 use super::support::{BASE, BOUND, Booted, sha256_hex};
 use super::{ConfigFloor, FloorAdapter, FloorFault};
 use crate::config::keychain::{FakeKeychain, KeychainError, with_test_keychain};
+use crate::gateway::test_helpers::write_owner_only;
 
 const BEARER: &str = "kc-bearer-0123456789abcdef0123456789abcdef";
 
@@ -150,8 +151,8 @@ async fn c9_symlink_repointed_after_the_read_refuses() {
     const ROW: &str = "C9 symlink repointed";
     let booted = Booted::new(BASE);
     let (link, dir) = (booted.cfg.path.clone(), booted.cfg.dir.path().to_path_buf());
-    std::fs::write(dir.join("real.yaml"), BASE).expect("real target");
-    std::fs::write(dir.join("other.yaml"), format!("{BASE}environment: x\n")).expect("other");
+    write_owner_only(&dir.join("real.yaml"), BASE).expect("real target");
+    write_owner_only(&dir.join("other.yaml"), format!("{BASE}environment: x\n")).expect("other");
     std::fs::remove_file(&link).expect("unlink");
     std::os::unix::fs::symlink(dir.join("real.yaml"), &link).expect("link");
     let mut floor = booted.floor();

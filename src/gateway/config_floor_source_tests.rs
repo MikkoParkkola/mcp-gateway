@@ -77,6 +77,8 @@ const NAMES: &[&str] = &[
     "SeamLog",
     "AdmittedPoint",
     "WriterAfterStaging",
+    "GateDecision",
+    "admissions_in_flight",
     "AdmittedHook",
     "SettleWindow",
     "ReloadSource",
@@ -280,6 +282,7 @@ async fn n1_defaults_with_no_file_is_not_configured() {
     let result = certify(ROW, &mut floor).await;
     assert_eq!(result, Ok(()), "{ROW}: no file anywhere is not-configured");
     assert_eq!(certified_hash(&floor), None, "{ROW}: nothing is certified");
+    assert!(floor.settled(), "{ROW}: not-configured stays settled");
     assert_eq!(
         probes(&candidates.paths),
         free,
@@ -395,6 +398,7 @@ async fn n2_defaults_file_deleted_before_certify_is_not_configured() {
         None,
         "{ROW}: not-configured certifies nothing"
     );
+    assert!(floor.settled(), "{ROW}: not-configured stays settled");
 }
 
 /// A Booted floor with no reload context: only a registry and the file.

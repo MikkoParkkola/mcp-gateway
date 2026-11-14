@@ -12,7 +12,7 @@ use tokio::time::Instant;
 
 use super::seams::{AttemptEvent, LockVerdict, ReloadSource};
 use super::support::{self, Booted};
-use super::{AdmitKind, GateState, Refusal};
+use super::{AdmitKind, GateState};
 use crate::gateway::restart_floor::{CancelReason, FloorAdapter, FloorStage, run_checkpoint};
 
 /// Polls a checkpoint future once: true when it is still pending.
@@ -159,6 +159,11 @@ async fn k9_dropped_unpolled_pause_leaves_gate_paused_and_resume_replays() {
         vec!["a1".to_owned()],
         "{ROW}: the replay after resume"
     );
+    assert_eq!(
+        booted.running_environment().as_deref(),
+        Some("a1"),
+        "{ROW}: the running config holds the replayed value"
+    );
 }
 
 #[tokio::test]
@@ -187,6 +192,9 @@ async fn k9_dropped_unpolled_pause_then_stop_replays_nothing() {
 }
 
 const ITERATIONS: usize = 1_000;
+
+/// The 409 answer of a manual reload refused while a restart is being prepared.
+const PREPARING: &str = "a restart is being prepared; the reload runs when it is decided";
 
 /// Runs `submit` and `other` on their own threads, each released by a message;
 /// the two releases are sent in order (`submit` first in the first half of the
@@ -274,27 +282,32 @@ async fn k10_manual_reload_racing_commit_matches_its_recorded_state() {
             .checkpoint(deadline)
             .await
             .expect("checkpoint certifies");
-        let gate = booted.gate.clone();
-        // WHEN: a manual reload (a direct gate client here) races commit()
+        let (gate, ctx) = (booted.gate.clone(), Arc::clone(&booted.ctx));
+        let rt = tokio::runtime::Handle::current();
+        // WHEN: a manual reload through its real entry races commit()
         let got = race_ordered(
             i,
-            move || gate.admit(AdmitKind::ManualReload).err(),
+            move || rt.block_on(support::manual_reload(&gate, &ctx)).map(drop),
             move || floor.commit(),
         );
-        // THEN: the refusal and replay_owed match the state at the decision
+        // THEN: the answer matches the state at its own decision; replay_owed
+        // is never read, commit discards the owed replay
         let log = booted.gate.decisions();
         assert_eq!(log.len(), 1, "{ROW}: iteration {i}: one decision recorded");
-        let want = match log[0].state {
-            GateState::Certified(_) => (Some(Refusal::ReplayOwed), true),
-            GateState::Terminal => (Some(Refusal::Restarting), false),
-            other => panic!("{ROW}: iteration {i}: unexpected state {other:?}"),
+        let d = log[0];
+        let want = match (d.admitted, d.state) {
+            (true, _) => Ok(()),
+            (false, GateState::Paused(_) | GateState::Certified(_)) => {
+                owed += 1;
+                Err(PREPARING.to_owned())
+            }
+            (false, GateState::Terminal) => {
+                restarting += 1;
+                Err("the gateway is restarting".to_owned())
+            }
+            (false, other) => panic!("{ROW}: iteration {i}: unexpected state {other:?}"),
         };
-        assert_eq!(
-            (got, booted.gate.replay_owed()),
-            want,
-            "{ROW}: iteration {i}"
-        );
-        if want.1 { owed += 1 } else { restarting += 1 }
+        assert_eq!(got, want, "{ROW}: iteration {i}: answer vs {d:?}");
     }
     assert!(
         owed > 0 && restarting > 0,

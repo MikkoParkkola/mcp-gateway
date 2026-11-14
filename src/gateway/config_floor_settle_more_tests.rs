@@ -4,6 +4,7 @@
 //! settled before the checkpoint certifies, only `replay_owed` can cause a
 //! replay, and a pause landing around the watcher's admission loses no trigger.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
@@ -26,8 +27,10 @@ fn hold_at(gate: &ConfigGate, at: AdmittedPoint) -> Hold {
     let (reached_tx, reached) = channel();
     let (release, release_rx) = channel::<()>();
     let release_rx = Mutex::new(release_rx);
+    // Only the first invocation is held, so a later tick passes through.
+    let spent = AtomicBool::new(false);
     gate.set_admitted_hook(Some(Arc::new(move |point| {
-        if point == at {
+        if point == at && !spent.swap(true, Ordering::SeqCst) {
             let _ = reached_tx.send(());
             let _ = release_rx.lock().unwrap().recv_timeout(BOUND);
         }
@@ -104,6 +107,11 @@ async fn p7_replay_owed_survives_a_refused_watcher_admission() {
     support::tick(&watcher).await;
     let replays = support::reload_values(&booted.gate, ReloadSource::Replay);
     assert_eq!(replays, vec!["e1".to_owned()], "{ROW}: exactly one replay");
+    assert_eq!(
+        booted.running_environment().as_deref(),
+        Some("e1"),
+        "{ROW}: the running config holds the replayed literal"
+    );
 }
 
 /// P10 case A: a pause landing between the watcher's admission and its trigger
@@ -146,6 +154,11 @@ async fn p10_pause_after_watcher_admission_waits_and_reload_runs_once() {
     );
     let watched = support::reload_values(&booted.gate, ReloadSource::Watcher);
     assert_eq!(watched, vec!["e1".to_owned()], "{ROW}: the reload ran once");
+    assert_eq!(
+        booted.running_environment().as_deref(),
+        Some("e1"),
+        "{ROW}: the running config holds the replayed literal"
+    );
 }
 
 /// P10 twin: a pause landing before admission refuses it; the trigger stays
@@ -177,6 +190,11 @@ async fn p10_pause_before_watcher_admission_keeps_trigger_for_one_replay() {
         replays,
         vec!["e1".to_owned()],
         "{ROW}: the trigger replays once"
+    );
+    assert_eq!(
+        booted.running_environment().as_deref(),
+        Some("e1"),
+        "{ROW}: the running config holds the replayed literal"
     );
 }
 

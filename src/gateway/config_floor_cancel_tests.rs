@@ -118,13 +118,33 @@ fn config_cancel(reason: CancelReason) -> Cancelled {
 /// After the cancel: a real UI write sets `environment` to a literal (its lock
 /// recovers any journal first), the premise that no journal remains holds, and
 /// the second checkpoint certifies the hash of the bytes the write produced.
+/// A file's bytes, mtime and (on unix) inode, for "a refusal touches nothing".
+#[derive(Debug, PartialEq, Eq)]
+struct Snap(Vec<u8>, Option<std::time::SystemTime>, Option<u64>);
+
+fn snap(path: &std::path::Path) -> Snap {
+    let meta = std::fs::metadata(path).expect("metadata");
+    #[cfg(unix)]
+    let ino = Some(std::os::unix::fs::MetadataExt::ino(&meta));
+    #[cfg(not(unix))]
+    let ino = None;
+    Snap(
+        std::fs::read(path).expect("read"),
+        meta.modified().ok(),
+        ino,
+    )
+}
+
 #[cfg(feature = "webui")]
 async fn write_then_retry(
     row: &str,
     booted: &Booted,
     adapters: &mut [Box<dyn FloorAdapter>],
     floor: &tokio::sync::Mutex<ConfigFloor>,
+    untouched: &dyn Fn(&str),
 ) {
+    // The refusal touched nothing: the repair below comes from the write alone.
+    untouched(row);
     let written = format!("{BASE}environment: \"{row}\"\n");
     let outcome = support::write_bytes(&booted.gate, Arc::clone(&booted.ctx), &written).await;
     assert!(outcome.is_ok(), "{row} the UI write is admitted and lands");
@@ -148,10 +168,11 @@ async fn write_then_retry(
 #[tokio::test]
 async fn x1_v1_journal_cancels_then_retry_certifies() {
     const ROW: &str = "X1";
+    const JOURNAL: &str = "{\"version\":1}";
     // GIVEN: a config beside a (v1) journal, which only its presence marks.
     let booted = Booted::new(BASE);
     let journal = booted.cfg.beside(".gateway.yaml.replace-journal");
-    std::fs::write(&journal, "{\"version\":1}").expect("plant journal");
+    std::fs::write(&journal, JOURNAL).expect("plant journal");
     let (mut adapters, floor) = coordinated(&booted);
     // WHEN: the checkpoint runs.
     let first = run(&mut adapters, in_bound()).await;
@@ -162,7 +183,16 @@ async fn x1_v1_journal_cancels_then_retry_certifies() {
         "{ROW} first run"
     );
     assert_recovered(ROW, &booted);
-    write_then_retry(ROW, &booted, &mut adapters, &floor).await;
+    let planted = |row: &str| {
+        let kept = std::fs::read(&journal).ok();
+        assert_eq!(
+            kept.as_deref(),
+            Some(JOURNAL.as_bytes()),
+            "{row} journal kept"
+        );
+    };
+    planted(ROW);
+    write_then_retry(ROW, &booted, &mut adapters, &floor, &planted).await;
 }
 
 #[cfg(feature = "webui")]
@@ -172,6 +202,7 @@ async fn x2_invalid_file_cancels_then_fixed_file_certifies() {
     // GIVEN: a booted config that an outside edit then breaks (invalid YAML).
     let booted = Booted::new(BASE);
     booted.cfg.rewrite("backends: [unclosed\n");
+    let before = snap(&booted.cfg.path);
     let (mut adapters, floor) = coordinated(&booted);
     // WHEN: the checkpoint runs.
     let first = run(&mut adapters, in_bound()).await;
@@ -182,7 +213,15 @@ async fn x2_invalid_file_cancels_then_fixed_file_certifies() {
         "{ROW} first run"
     );
     assert_recovered(ROW, &booted);
-    write_then_retry(ROW, &booted, &mut adapters, &floor).await;
+    let untouched = |row: &str| {
+        assert_eq!(
+            snap(&booted.cfg.path),
+            before,
+            "{row} invalid file untouched"
+        );
+    };
+    untouched(ROW);
+    write_then_retry(ROW, &booted, &mut adapters, &floor, &untouched).await;
 }
 
 /// Hold the byte writer at `WriterAfterLocks` until the returned sender fires;

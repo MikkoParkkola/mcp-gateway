@@ -259,6 +259,11 @@ async fn p4_paused_save_refused_and_replay_once() {
         ["a2"],
         "{ROW}: the replay carries the last edit"
     );
+    assert_eq!(
+        fx.running_environment().as_deref(),
+        Some("a2"),
+        "{ROW}: running value after the replay"
+    );
 }
 
 /// Which manual reload entry a row drives.
@@ -378,6 +383,8 @@ async fn p8_held_replay_blocks_the_next_checkpoint() {
     const ROW: &str = "p8 held";
     let mut fx = Fx::paused().await;
     fx.route.write(&with_env("a1"));
+    // Plays the OS delivering the notify event for the outside edit.
+    fx.gate.record_file_event();
     let (reached_tx, reached) = mpsc::channel();
     let (release, release_rx) = mpsc::channel::<()>();
     let (reached_tx, release_rx) = (Mutex::new(reached_tx), Mutex::new(release_rx));

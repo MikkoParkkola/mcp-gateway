@@ -4,7 +4,7 @@
 //! hook point keeps the checkpoint Pending on the settle wait alone, and the
 //! checkpoint certifies the literal bytes once the work is released.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Barrier, Mutex};
 
@@ -130,6 +130,29 @@ async fn p1_held_write_keeps_checkpoint_pending_then_certifies() {
     certified_hash(ROW, &floor, text.as_bytes());
 }
 
+/// P1 subcase: the last guard drops inside the settle window, after the count
+/// read above zero and before the await; a lost wakeup hangs the checkpoint and
+/// the bound fails the row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p1_settle_wakes_when_the_last_guard_drops_inside_the_window() {
+    const ROW: &str = "P1 window";
+    let booted = Booted::new(BASE);
+    // This row plays a direct gate client: it owns the admission guard.
+    let guard = booted.gate.admit(AdmitKind::Write).expect("admitted");
+    let slot = Mutex::new(Some(guard));
+    let seen = Arc::new(AtomicUsize::new(usize::MAX));
+    let (gate, seen_in) = (booted.gate.clone(), Arc::clone(&seen));
+    booted.gate.set_settle_window(Some(Arc::new(move || {
+        drop(slot.lock().unwrap().take());
+        seen_in.store(gate.admissions_in_flight(), Ordering::SeqCst);
+    })));
+    let mut floor = booted.floor();
+    floor.pause(deadline()).await.expect("pause");
+    finish(floor.checkpoint(deadline()), ROW).await;
+    assert_eq!(seen.load(Ordering::SeqCst), 0, "{ROW}: window ran, count 0");
+    certified_hash(ROW, &floor, BASE.as_bytes());
+}
+
 /// A save that stages one secret entry; the row's hook kills the write task
 /// after staging, so the entry is discarded by detached cleanup.
 #[cfg(feature = "webui")]
@@ -173,6 +196,19 @@ async fn failing_secret_save(
     replace_audited(ctx, replace, audit, RELOAD_LOCK_WAIT).await
 }
 
+/// The live secret entries no config names, in the store at `dir`.
+#[cfg(feature = "webui")]
+fn live_entries(dir: &std::path::Path) -> Vec<String> {
+    use crate::secret_store::{FilesStore, Vault, unused_entries};
+    let vault = Vault::with_lock(dir, dir.join("vault.lock"));
+    let store = FilesStore::new(dir);
+    unused_entries(&vault, &[&store], &std::collections::BTreeSet::new())
+        .expect("list entries")
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect()
+}
+
 /// P2: a write task that dies after staging ends first; its detached cleanup
 /// alone holds the settle. (No cancellation variant: the writer has no await
 /// between staging and the rename, and the hook is synchronous.)
@@ -210,6 +246,12 @@ async fn p2_dead_write_cleanup_alone_keeps_checkpoint_pending() {
     );
     hold.release();
     finish(fut, ROW).await;
+    let live = live_entries(store_dir.path());
+    assert_eq!(
+        live,
+        Vec::<String>::new(),
+        "{ROW}: the staged entry was discarded"
+    );
     certified_hash(ROW, &floor, BASE.as_bytes());
 }
 
@@ -310,4 +352,29 @@ async fn p3_manual_reload_queued_behind_outside_reload_lock() {
     })
     .await;
     assert!(reload.await.expect("join").is_ok(), "{ROW}: reload ran");
+}
+
+/// P3 case 4: a watcher reload queued on the reload lock behind an outside
+/// holder, released before the checkpoint's own take.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p3_watcher_reload_queued_behind_outside_reload_lock() {
+    const ROW: &str = "P3 watcher queued";
+    let booted = edited_booted("p3wq");
+    let outside = booted.registry.reload_lock_handle().lock_owned().await;
+    // Plays the OS delivering the notify event for the outside edit.
+    booted.gate.record_file_event();
+    let watcher = super::support::WatcherFixture::new(&booted);
+    let ticking = tokio::spawn(async move { tick(&watcher).await });
+    wait_until("P3 watcher queued: the watcher was admitted", || {
+        booted
+            .gate
+            .decisions()
+            .iter()
+            .any(|d| d.kind == AdmitKind::Watcher && d.admitted)
+    });
+    p3_case(ROW, &booted, AdmitKind::Watcher, Probe::Busy, || {
+        drop(outside)
+    })
+    .await;
+    ticking.await.expect("tick joined");
 }
