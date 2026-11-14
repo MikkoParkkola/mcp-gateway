@@ -632,7 +632,6 @@ const authDot = document.getElementById('auth-dot');
 const authLabel = document.getElementById('auth-label');
 const authBtn = document.getElementById('auth-btn');
 const authBanner = document.getElementById('auth-banner');
-const navKeyAudit = document.getElementById('nav-key-audit');
 
 // MIK-8786: the page's auth state comes from the facts /ui/api/status
 // states, never from a 200 alone. "off" needs an explicit enabled === false;
@@ -667,8 +666,7 @@ function renderAuth(state) {
   if (view[2]) { authBtn.textContent = view[2]; authBtn.style.display = ''; } else { authBtn.style.display = 'none'; }
   authBanner.textContent = view[3];
   authBanner.style.display = view[3] ? '' : 'none';
-  navKeyAudit.style.display = state === 'admin' ? '' : 'none';
-  if (state !== 'admin') keyLookupClear();
+  keyLookupOnAuth(state);
 }
 
 // The plain line a refused call shows, chosen from the current state.
@@ -764,8 +762,9 @@ async function apiFetch(url, opts = {}, poll = false) {
 
 // KEY-LOOKUP BEGIN
 // Key audit: the admin email lookup. The email is typed, sent once and
-// cleared from the field before the request leaves; the page never holds it
-// again. The next page is asked for with the server's sealed token alone, which
+// cleared from the field before the request leaves; after that only the one
+// request in flight carries it, and nothing on the page keeps it. The next page
+// is asked for with the server's sealed token alone, which
 // is held in this variable only (never in storage, the URL or a log) while a
 // next page exists. It is dropped on the last page, on any failure but a
 // throttle, on Clear, on leaving the page and when the caller stops being an
@@ -814,7 +813,7 @@ function keyLookupDecode(body) {
     && body.rows.length <= KEY_LOOKUP_MAX_ROWS && body.rows.every(keyLookupRowOk)
     && (body.next_cursor === null || typeof body.next_cursor === 'string')
     && typeof body.scan_exhausted === 'boolean' && typeof body.cursor_reset === 'boolean'
-    && Number.isInteger(body.unreadable) && body.unreadable >= 0;
+    && Number.isInteger(body.unreadable) && body.unreadable >= 0 && body.scope === 'retained';
   return ok ? body : null;
 }
 
@@ -894,10 +893,10 @@ async function keyLookupRun(query) {
 
 async function submitKeyLookup(event) {
   event.preventDefault();
-  if (keyLookupBusy) { keyLookupSay('A lookup is still running: wait for it, or press Clear.'); return false; }
   const field = document.getElementById('kl-email');
   const email = field.value.trim();
   field.value = '';
+  if (keyLookupBusy) { keyLookupSay('A lookup is still running: wait for it, or press Clear, then type the email again.'); return false; }
   keyLookupHeld = null;
   keyLookupReset();
   if (email === '') { keyLookupSay('Type an email first.'); return false; }
@@ -907,6 +906,21 @@ async function submitKeyLookup(event) {
 
 async function keyLookupNext() {
   if (keyLookupHeld !== null) await keyLookupRun(keyLookupHeld);
+}
+
+// renderAuth hands every state here: the page and its link exist for an admin
+// only, so typing #key-audit shows anyone else nothing, and losing admin drops
+// everything.
+function keyLookupOnAuth(state) {
+  const shown = state === 'admin' ? '' : 'none';
+  document.getElementById('nav-key-audit').style.display = shown;
+  document.getElementById('page-key-audit').style.display = shown;
+  if (state !== 'admin') keyLookupClear();
+}
+
+// onHash hands every page here: leaving this one drops everything.
+function keyLookupOnPage(hash) {
+  if (hash !== 'key-audit') keyLookupClear();
 }
 // A page restored from the back/forward cache must not bring a query back.
 window.addEventListener('pagehide', keyLookupClear);
@@ -928,7 +942,7 @@ function showPage(name) {
 function onHash() {
   const hash = location.hash.replace('#', '') || 'dashboard';
   showPage(hash);
-  if (hash !== 'key-audit') keyLookupClear();
+  keyLookupOnPage(hash);
   if (hash === 'tools') refreshTools();
   if (hash === 'control-plane') refreshControlPlane();
   if (hash === 'capabilities') refreshCapabilities();
