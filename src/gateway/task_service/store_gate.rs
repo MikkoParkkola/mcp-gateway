@@ -120,13 +120,13 @@ fn decide(g: &Gate, kind: Kind, stamp: Option<&Stamp>, expired: bool) -> Decisio
     let born_before = |epoch: u64| stamp.is_some_and(|s| s.born < epoch);
     match (g.state, kind) {
         (GateState::Open | GateState::Released, _) => Decision::Admit { cohort: false },
-        (_, Kind::Sweep) => Decision::Refuse(Refused::Skipped),
+        (_, Kind::Sweep) => mutant!("m12", Decision::Admit { cohort: false }, Decision::Refuse(Refused::Skipped)),
         (GateState::Paused(attempt) | GateState::Certified(attempt), _) => {
             let own = stamp.is_some_and(|s| s.attempt == attempt);
             match (expired && own, kind) {
                 (true, Kind::External) => Decision::Refuse(Refused::Restarting),
-                (true, _) => Decision::Admit { cohort: false },
-                (false, _) => Decision::Park,
+                (true, _) => mutant!("m11", Decision::Refuse(Refused::Restarting), Decision::Admit { cohort: false }),
+                (false, _) => mutant!("m2", Decision::Admit { cohort: false }, Decision::Park),
             }
         }
         (GateState::Draining { .. }, _) if born_before(g.drain_epoch) => {
@@ -136,7 +136,7 @@ fn decide(g: &Gate, kind: Kind, stamp: Option<&Stamp>, expired: bool) -> Decisio
         (GateState::Terminal, Kind::External) if born_before(g.epoch) => {
             Decision::Admit { cohort: false }
         }
-        (GateState::Terminal, Kind::External) => Decision::Refuse(Refused::Restarting),
+        (GateState::Terminal, Kind::External) => mutant!("m3", Decision::Admit { cohort: false }, Decision::Refuse(Refused::Restarting)),
         (GateState::Terminal, _) => Decision::Admit { cohort: false },
     }
 }
@@ -168,7 +168,7 @@ impl Admitted {
     /// during an attempt fails that attempt's checkpoint.
     pub(crate) fn record(&self, storage_failed: bool) {
         self.recorded.store(true, Ordering::Relaxed);
-        if storage_failed {
+        if (mutant!("m6", false, storage_failed)) {
             self.gate.tx.send_if_modified(mark_failed);
         }
     }
@@ -202,7 +202,7 @@ fn cohort_done(g: &mut Gate, epoch: u64) -> bool {
 
 impl Drop for Admitted {
     fn drop(&mut self) {
-        let unreported = !self.recorded.load(Ordering::Relaxed);
+        let unreported = mutant!("m16", false, !self.recorded.load(Ordering::Relaxed));
         let cohort = self.cohort;
         self.gate.tx.send_modify(|g| {
             g.in_flight = g.in_flight.saturating_sub(1);
@@ -235,7 +235,7 @@ impl Drop for Ticket {
         let born = self.stamp.born;
         self.gate.tx.send_modify(|g| {
             g.parked = g.parked.saturating_sub(1);
-            if born < g.drain_epoch {
+            if (mutant!("m8", born <= g.drain_epoch, born < g.drain_epoch)) {
                 cohort_done(g, g.drain_epoch);
             }
         });
@@ -248,10 +248,10 @@ impl Drop for Ticket {
 fn bound(state: GateState, kind: Kind, stamp: &Stamp) -> Option<Instant> {
     match (state, kind) {
         (GateState::Paused(_) | GateState::Certified(_), Kind::External) => {
-            stamp.deadline.map(|d| d + EXTERNAL_GRACE)
+            stamp.deadline.map(|d| d + mutant!("m10", Duration::ZERO, EXTERNAL_GRACE))
         }
-        (GateState::Paused(_) | GateState::Certified(_), _) => stamp.backstop,
-        _ => None,
+        (GateState::Paused(_) | GateState::Certified(_), _) => mutant!("m11", stamp.deadline, stamp.backstop),
+        _ => mutant!("m15", stamp.backstop, None),
     }
 }
 
@@ -285,14 +285,23 @@ impl TaskGate {
                 closed = matches!(g.state, GateState::Paused(_) | GateState::Certified(_));
                 match decision {
                     Decision::Admit { .. } => {
-                        g.in_flight += 1;
+                        g.in_flight += mutant!("m1", 0, 1);
                         // A parked submitter leaves `parked` in the same step,
                         // so a resume racing its return never counts it in a
                         // drain it will not report to.
-                        if stamp.is_some() {
+                        if (mutant!("m20", false, stamp.is_some())) {
                             g.parked = g.parked.saturating_sub(1);
                         }
-                        true
+                        mutant!(
+                            "m7",
+                            {
+                                if matches!(decision, Decision::Admit { cohort: true }) {
+                                    cohort_done(g, g.drain_epoch);
+                                }
+                                true
+                            },
+                            true
+                        )
                     }
                     Decision::Park if stamp.is_none() => {
                         g.parked += 1;
@@ -317,7 +326,7 @@ impl TaskGate {
                     }
                     Some(Admitted {
                         gate: self.clone(),
-                        cohort: cohort.then_some(drain),
+                        cohort: mutant!("m7", None, cohort.then_some(drain)),
                         recorded: AtomicBool::new(false),
                     })
                 }
@@ -333,7 +342,14 @@ impl TaskGate {
             #[cfg(test)]
             seams::GateSeams::pass(&self.seams.at_decision).await;
             if let Some(admitted) = admitted {
-                if closed {
+                if mutant!(
+                    "m1",
+                    {
+                        self.tx.send_modify(|g| g.in_flight += 1);
+                        closed
+                    },
+                    closed
+                ) {
                     tracing::error!(
                         attempt = stamp.map(|s| s.attempt),
                         "a task-store write proceeded at the restart backstop, outside its attempt's certified image"
@@ -358,7 +374,7 @@ impl TaskGate {
             // opening (the next attempt pauses first) must take that attempt's
             // deadline, not keep waiting with no timer.
             let woken = |g: &Gate| {
-                g.state != state || decide(g, kind, Some(&stamp), false) != Decision::Park
+                mutant!("m19", false, g.state != state) || decide(g, kind, Some(&stamp), false) != Decision::Park
             };
             match bound(state, kind, &stamp) {
                 Some(until) => {
@@ -378,7 +394,7 @@ impl TaskGate {
     fn restamp(&self, stamp: &mut Stamp) -> GateState {
         let g = self.tx.borrow();
         if let GateState::Paused(attempt) | GateState::Certified(attempt) = g.state
-            && attempt != stamp.attempt
+            && (mutant!("m14", false, attempt != stamp.attempt))
         {
             stamp.attempt = attempt;
             stamp.deadline = g.deadline;
@@ -422,7 +438,7 @@ impl TaskGate {
             if !matches!(g.state, GateState::Paused(_) | GateState::Certified(_)) {
                 return false;
             }
-            g.epoch += 1;
+            g.epoch += mutant!("m9", 0, 1);
             g.drain_epoch = g.epoch;
             g.state = match g.parked {
                 0 => GateState::Open,
@@ -436,7 +452,7 @@ impl TaskGate {
     pub(crate) fn release(&self) {
         self.tx.send_if_modified(|g| {
             let live = g.state != GateState::Terminal && g.state != GateState::Released;
-            if live {
+            if (mutant!("m17", false, live)) {
                 g.state = GateState::Released;
             }
             live
@@ -450,7 +466,7 @@ impl TaskGate {
             let certified = matches!(g.state, GateState::Certified(_));
             if certified {
                 g.state = GateState::Terminal;
-                g.epoch += 1;
+                g.epoch += mutant!("m4", 0, 1);
             }
             certified
         });
@@ -648,10 +664,13 @@ impl super::TaskStore {
         // spawn, stay off every store future (one allocation per write).
         Box::pin(async move {
             let admission = gate.admit(kind).await.map_err(Gated::Refused)?;
+            let held = mutant!("m5", { drop(admission); None }, Some(admission));
             tokio::task::spawn_blocking(move || {
                 let output = work();
-                admission.record(output.storage_failed());
-                drop(admission);
+                if let Some(admission) = held {
+                    admission.record(output.storage_failed());
+                    drop(admission);
+                }
                 output
             })
             .await

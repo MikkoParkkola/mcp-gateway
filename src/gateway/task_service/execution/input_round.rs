@@ -651,7 +651,13 @@ impl TaskExecutor {
                 self.notify_observer(CommitStage::Transitioned, id).await;
                 Ok(Closed::Done)
             }
-            Err(StoreError::Skipped) => Ok(Closed::Skipped),
+            Err(StoreError::Skipped) => mutant!(
+                "m21",
+                Err(super::CommitFailure::Service(
+                    crate::gateway::task_service::ServiceError::Unavailable
+                )),
+                Ok(Closed::Skipped)
+            ),
             Err(StoreError::RevisionConflict) => Err(super::CommitFailure::RevisionConflict),
             Err(StoreError::NotFound) => Err(super::CommitFailure::Service(
                 crate::gateway::task_service::ServiceError::NotFound,
