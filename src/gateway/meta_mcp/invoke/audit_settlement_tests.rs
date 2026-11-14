@@ -20,7 +20,7 @@ use crate::security::transparency_log::TransparencyLogConfig;
 #[cfg(feature = "metrics")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_best_effort_settlement_write_is_counted() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,
         path: dir
@@ -91,7 +91,7 @@ fn meta_logging_to(dir: &tempfile::TempDir) -> MetaMcp {
 /// gives it (`denied`), with the code the task commits.
 #[tokio::test]
 async fn a_refused_settlement_keeps_the_refusal_class() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta_logging_to(&dir);
     let notes = DispatchNotes {
         refusal: Some(AuditOutcome::Denied(-32001)),
@@ -158,7 +158,7 @@ async fn recover_task_result_notes_its_refusal() {
 /// gateway noted keeps `denied` (`a_refused_settlement_keeps_the_refusal_class`).
 #[tokio::test]
 async fn a_peer_failure_code_settles_as_error_not_denied() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta_logging_to(&dir);
     let proposed = TaskTransition::Fail(crate::protocol::JsonRpcError {
         code: -32001,
@@ -188,7 +188,7 @@ async fn a_peer_failure_code_settles_as_error_not_denied() {
 /// `denied`: the refusal is noted by the gate, whatever code it carries.
 #[tokio::test]
 async fn a_gateway_refusal_with_code_32001_still_settles_denied() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta_logging_to(&dir);
     let notes = DispatchNotes {
         refusal: Some(AuditOutcome::Denied(-32001)),
@@ -220,7 +220,7 @@ async fn a_gateway_refusal_with_code_32001_still_settles_denied() {
 /// with the gateway's own refusal, which is never the peer's error.
 #[tokio::test]
 async fn a_fail_closed_replacement_is_reported_as_not_kept() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,
         path: dir
@@ -304,7 +304,7 @@ async fn a_firewall_withheld_invalid_params_failure_settles_denied() {
 
 /// Settle a recovered task that failed with `code` and return its record.
 async fn settle_failure(code: i32, notes: &DispatchNotes) -> serde_json::Value {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta_logging_to(&dir);
     let proposed = TaskTransition::Fail(crate::protocol::JsonRpcError {
         code,
@@ -331,7 +331,7 @@ async fn settle_failure(code: i32, notes: &DispatchNotes) -> serde_json::Value {
 #[tokio::test]
 #[should_panic(expected = "the record key is installed by build_meta_mcp")]
 async fn g_panic_a_settlement_without_the_record_key_writes_nothing_unkeyed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut meta = meta_logging_to(&dir);
     meta.record_key = None;
     let task = SettledTask {

@@ -417,7 +417,7 @@ async fn a_non_message_event_is_judged_with_its_wrapper_fields() {
 #[cfg(feature = "firewall")]
 #[allow(clippy::type_complexity)]
 fn judged_sse() -> (
-    tempfile::TempDir,
+    std::sync::Arc<tempfile::TempDir>,
     Arc<crate::security::TransparencyLogger>,
     Arc<NotificationMultiplexer>,
     String,
@@ -431,7 +431,7 @@ fn judged_sse() -> (
     use crate::security::transparency_log::TransparencyLogConfig;
     use axum::response::IntoResponse;
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,

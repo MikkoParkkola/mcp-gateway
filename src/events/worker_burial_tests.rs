@@ -10,7 +10,7 @@ use super::*;
 /// from a later read of the store.
 #[tokio::test]
 async fn a_burial_the_caps_evict_at_once_still_leaves_its_record() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         dead_letter_max_records: 0,
         ..crate::config::EventsConfig::default()

@@ -85,7 +85,7 @@ async fn a_replayed_chain_refusal_keeps_its_uninspected_attribution() {
     // With no tenant named first (GH2555.2), so that case fails on its own,
     // then with one.
     for arguments in [json!({}), json!({"customer_id": "cust-1"})] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let meta = chained_meta(&dir);
         let who = api_key_caller();
         let retry = RetryFields {
@@ -127,7 +127,7 @@ async fn a_replayed_chain_refusal_keeps_its_uninspected_attribution() {
 /// replay.
 #[tokio::test]
 async fn a_replayed_stored_failure_is_noted_as_served() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = chained_meta(&dir);
     let who = api_key_caller();
     let retry = RetryFields {
@@ -175,7 +175,7 @@ async fn a_replayed_stored_failure_is_noted_as_served() {
 /// that check before PR2, so its record reads `unrecorded`, never an allow.
 #[tokio::test]
 async fn a_chain_refusal_records_unrecorded() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = chained_meta(&dir);
     let who = api_key_caller();
     let caller = context(&AllowAll, &who);
@@ -199,7 +199,7 @@ async fn a_chain_refusal_records_unrecorded() {
 /// replayed stored answer does.
 #[tokio::test]
 async fn a_replayed_stored_failure_records_replayed_with_the_live_effect() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = chained_meta(&dir);
     let who = api_key_caller();
     let retry = RetryFields {

@@ -408,7 +408,7 @@ async fn r4_a_lifted_surfaced_replay_records_the_admitted_server() {
     use crate::gateway::meta_mcp::visible::deferred::{DeferredReplay, deferred_replay_key};
     use crate::gateway::meta_mcp::visible::memo::record_deferred_replay;
     use std::ops::ControlFlow;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (_gateway, meta) = connected();
     let mut meta = meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
         server: BACKEND.to_string(),
@@ -502,7 +502,7 @@ async fn r7b_a_lifted_continuation_origin_replay_writes_no_record() {
     use crate::gateway::meta_mcp::visible::deferred::{DeferredReplay, deferred_replay_key};
     use crate::gateway::meta_mcp::visible::memo::record_deferred_replay;
     use std::ops::ControlFlow;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (_gateway, meta) = connected();
     let mut meta = meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
         server: BACKEND.to_string(),

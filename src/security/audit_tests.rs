@@ -48,7 +48,7 @@ fn entries(path: &Path) -> Vec<Value> {
 /// D1-T9. The envelope keys are reserved like the chain keys.
 #[test]
 fn caller_cannot_forge_envelope_fields() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = logger(&dir.path().join("a.jsonl"));
     for key in ["schema_version", "trace_id", "outcome", "error_code", "who"] {
         let result = append(
@@ -66,7 +66,7 @@ fn caller_cannot_forge_envelope_fields() {
 /// (v2) verify in one file.
 #[test]
 fn v1_and_v2_entries_verify_in_one_chain() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("a.jsonl");
     // Written the way a 3.x gateway wrote them: no envelope keys at all,
     // chained by hand with the published hash rule.
@@ -103,7 +103,7 @@ fn governance_event_carries_envelope() {
         ControlPlaneAction, ControlPlaneAuditEvent, ControlPlaneRollbackPlan, ControlPlaneStore,
         FileControlPlaneStore,
     };
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let store =
         FileControlPlaneStore::open(dir.path().join("store"), Arc::new(logger(&path))).unwrap();
@@ -225,7 +225,7 @@ fn outcome_mapping_covers_every_row() {
 /// D1-T19. A writer with no trace id gets the scope's, or a minted one.
 #[tokio::test]
 async fn non_invoke_writer_gets_trace_id() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("a.jsonl");
     let log = Arc::new(logger(&path));
     let inner = Arc::clone(&log);
