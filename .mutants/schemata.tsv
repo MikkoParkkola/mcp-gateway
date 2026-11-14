@@ -1,0 +1,21 @@
+head_sha	9440d8fff4c285e838115b84f378c13f8ff668f7
+#mutant f1-uid-count
+mcp_gateway	preview_sandbox::control::tests::t8_unreadable_parentage_is_refused	src/preview_sandbox/control_tests.rs:58
+#mutant f1-parent
+mcp_gateway	preview_sandbox::control::tests::t8_a_peer_under_another_parent_is_refused	src/preview_sandbox/control_tests.rs:25
+#mutant f1-uid-one
+mcp_gateway	preview_sandbox::control::tests::t8_a_peer_with_another_uid_is_refused	src/preview_sandbox/control_tests.rs:37
+#mutant f1-accept-bound
+mcp_gateway	preview_sandbox::control::tests::t8_no_connection_within_the_bound_is_refused	src/preview_sandbox/control_tests.rs:165
+#mutant f1-first-bound
+mcp_gateway	preview_sandbox::control::tests::t4_a_stalled_frame_and_a_silent_peer_are_cut_off	src/preview_sandbox/control_tests.rs:112
+#mutant f1-cap
+mcp_gateway	preview_sandbox::control::tests::t4_a_line_over_one_kib_is_refused	src/preview_sandbox/control_tests.rs:78
+#mutant f1-frame-bound
+mcp_gateway	preview_sandbox::control::tests::t4_a_stalled_frame_and_a_silent_peer_are_cut_off	src/preview_sandbox/control_tests.rs:103
+#mutant f1-start-false
+mcp_gateway	preview_sandbox::proxy::tests::session::s2_any_other_line_ends_the_session_and_revokes	src/preview_sandbox/proxy_tests/session.rs:120
+#mutant f1-done-false
+mcp_gateway	preview_sandbox::proxy::tests::session::s2_any_other_line_ends_the_session_and_revokes	src/preview_sandbox/proxy_tests/session.rs:148
+#mutant f1-no-revoke
+mcp_gateway	preview_sandbox::proxy::tests::session::s3_a_closed_socket_mid_fetch_revokes_the_credential	src/preview_sandbox/proxy_tests/session.rs:173
