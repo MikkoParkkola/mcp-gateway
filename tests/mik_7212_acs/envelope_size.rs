@@ -22,6 +22,7 @@ fn payload_with_state(state: String) -> Payload {
         hold_key: "exchange-1".into(),
         next_step: None,
         rounds_used: 0,
+        lookup_scope: None,
         // A backend `input_required` continuation, the domain every case
         // in this module mints and redeems in.
         purpose: ContinuationPurpose::BackendInput,
