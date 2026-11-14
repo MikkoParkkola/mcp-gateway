@@ -264,19 +264,14 @@ async fn g2_a_saver_delayed_past_the_cut_skips_and_marks() {
     wait_until("the adapter never settled", || adapter.settled());
 }
 
-/// G3 (HEALTH.1): (a) a sample before the pause is in the cut; (b) a sampler
-/// that reached the history lock while Open but takes it after the cut sees
-/// Paused under the lock and changes nothing; (c) the sample and the tick
-/// share one history lock, and a checkpoint started meanwhile includes it.
+/// G3 (HEALTH.1): (a) a sample before the pause is in the cut; (c) the sample
+/// and the tick share one history lock, and a checkpoint started while a
+/// sampler holds it includes that sample.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g3_the_sample_cut_runs_under_one_history_lock() {
     let _serial = file::saves_test_lock();
     let rig = Rig::new();
-    rig.set_replay_inputs(m2);
     (rig.sampler(m1))();
-    let mut delayed = arm(Point::SamplerBeforeLock, &rig.hkey(), 1);
-    let late = on_thread(rig.sampler(m2));
-    delayed.reached("the sampler never reached the history lock");
     let mut adapter = rig.adapter();
     pause(&mut adapter, &rig).await;
     let before = rig.writes();
@@ -286,18 +281,6 @@ async fn g3_the_sample_cut_runs_under_one_history_lock() {
         max_of(&rig.on_disk(), "memory_max"),
         Some(M1),
         "(a) the earlier sample is not in the cut"
-    );
-    let at_cut = rig.encoded();
-    delayed.release();
-    late.join().expect("the sampler ends");
-    assert_eq!(
-        rig.encoded(),
-        at_cut,
-        "(b) a sampler admitted after the cut changed the history"
-    );
-    assert!(
-        rig.marked(Closure::Sample),
-        "(b) the delayed sampler did not mark"
     );
     adapter.resume();
     wait_until("the adapter never settled after resume", || {
@@ -319,6 +302,38 @@ async fn g3_the_sample_cut_runs_under_one_history_lock() {
         max_of(&rig.on_disk(), "memory_max"),
         Some(M3),
         "(c) the parked sample is not in the cut"
+    );
+    adapter.resume();
+    wait_until("the adapter never settled", || adapter.settled());
+}
+
+/// G3(b) (HEALTH.1; the round-3 HIGH, closed by functional proof): a sampler
+/// that reached the history lock while Open but takes it after the cut sees
+/// Paused under the lock and changes nothing. The encode assert comes first,
+/// so the red run fails here, and the "admission read before the history lock"
+/// mutant (it read Open at entry) fails here too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn g3b_a_sampler_delayed_past_the_cut_changes_nothing() {
+    let _serial = file::saves_test_lock();
+    let rig = Rig::new();
+    let mut delayed = arm(Point::SamplerBeforeLock, &rig.hkey(), 1);
+    let late = on_thread(rig.sampler(m2));
+    delayed.reached("the sampler never reached the history lock");
+    let mut adapter = rig.adapter();
+    let _ = adapter.pause(deadline()).await;
+    let _ = adapter.checkpoint(deadline()).await;
+    let at_cut = rig.encoded();
+    delayed.release();
+    late.join().expect("the sampler ends");
+    assert_eq!(
+        rig.encoded(),
+        at_cut,
+        "a sampler admitted after the cut changed the history"
+    );
+    assert_eq!(rig.gate(), GateState::Paused, "premise: the gate is Paused");
+    assert!(
+        rig.marked(Closure::Sample),
+        "the delayed sampler did not mark"
     );
     adapter.resume();
     wait_until("the adapter never settled", || adapter.settled());
