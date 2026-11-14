@@ -78,7 +78,7 @@ async fn call(meta: &MetaMcp, retry: &crate::protocol::mrtr::RetryFields) {
 
 /// The decision of the one record a call to `read` writes.
 async fn decision_after(hint: Option<bool>) -> Value {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = listing(hint, &dir);
     call(&meta, &crate::protocol::mrtr::NO_RETRY).await;
     let all = records(&dir);
@@ -108,7 +108,7 @@ async fn a_tool_with_no_hint_records_undeclared() {
 
 #[tokio::test]
 async fn a_response_cache_hit_records_its_admissions_effect() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (mut meta, calls) = listing(Some(true), &dir);
     meta.cache = Some(Arc::new(crate::cache::ResponseCache::new()));
     meta.default_cache_ttl = Duration::from_secs(300);
@@ -132,7 +132,7 @@ async fn a_response_cache_hit_records_its_admissions_effect() {
 /// declares now: read-only once relisted so, nothing once the list is gone.
 #[tokio::test]
 async fn an_idempotency_replay_takes_the_live_lookup() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (mut meta, calls) = listing(Some(false), &dir);
     meta.enable_idempotency(
         Arc::new(crate::idempotency::IdempotencyCache::new()),
@@ -183,7 +183,7 @@ async fn an_idempotency_replay_takes_the_live_lookup() {
 #[tokio::test]
 async fn a_capability_tool_records_its_definitions_effect() {
     for (read_only, effect) in [(true, "read_only"), (false, "may_write")] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let meta = meta(Ok(ok_result()), &dir);
         let definition = crate::capability::parse_capability(&format!(
             "name: lookup\n\
@@ -256,7 +256,7 @@ async fn a_capability_cache_hit_records_its_definitions_effect() {
         Arc::new(crate::capability::CapabilityExecutor::new().with_test_http_client(client));
     let caps = Arc::new(crate::capability::CapabilityBackend::new("caps", executor));
     caps.register_capability(definition).expect("registers");
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut meta = meta(Ok(ok_result()), &dir);
     meta.set_capabilities(caps);
     meta.cache = Some(Arc::new(crate::cache::ResponseCache::new()));
@@ -290,7 +290,7 @@ async fn a_capability_cache_hit_records_its_definitions_effect() {
 /// The replays that carry both are pinned in `replay_effects`.
 #[tokio::test]
 async fn a_replay_with_no_stored_facts_records_no_declared_effect() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = listing(Some(true), &dir);
     call(&meta, &crate::protocol::mrtr::NO_RETRY).await;
     let alpha = meta.backends.for_test().get("alpha").expect("alpha");

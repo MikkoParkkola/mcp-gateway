@@ -97,7 +97,7 @@ fn keyed(idempotency_key: &str) -> crate::protocol::mrtr::RetryFields {
 fn canary_meta_paths_never_print_the_stored_principal() {
     let who = api_key_caller();
     let stored = who.principal.clone();
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut answers = Vec::new();
     let logs: String = crate::test_log_capture::records(|| {
         let runtime = tokio::runtime::Builder::new_current_thread()

@@ -163,7 +163,7 @@ fn buried_as(hub: &EventsHub, event_id: &str) -> Option<String> {
 #[tokio::test]
 async fn iso_t2_a_rotation_buries_only_the_rotated_users_queued_record() {
     use std::sync::atomic::Ordering;
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let events = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
@@ -220,7 +220,7 @@ async fn iso_t2_a_rotation_buries_only_the_rotated_users_queued_record() {
 #[tokio::test]
 async fn iso_t2_an_old_run_emission_after_the_rotation_is_buried() {
     use std::sync::atomic::Ordering;
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let events = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
@@ -257,7 +257,7 @@ async fn iso_t2_an_old_run_emission_after_the_rotation_is_buried() {
 #[tokio::test]
 async fn iso_t2_a_record_under_the_new_grant_is_delivered() {
     use std::sync::atomic::Ordering;
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let events = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
@@ -325,7 +325,7 @@ fn outcomes(dir: &std::path::Path) -> Vec<String> {
 #[tokio::test]
 async fn a_busy_custody_defers_the_record_unsent() {
     use std::sync::atomic::Ordering;
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (port, posts) = counting_callback().await;
     {
         let (hub, services, config, fence) = fenced(dir.path(), &["u1"]);
@@ -354,7 +354,7 @@ async fn a_busy_custody_defers_the_record_unsent() {
 #[tokio::test]
 async fn an_overdue_record_is_buried_before_the_fence_is_read() {
     use std::sync::atomic::Ordering;
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (hub, services, config, fence) = fenced(dir.path(), &["u1"]);
     hub.keep_test_dir(Arc::clone(&dir));
     *fence.refuse.lock().expect("fence") = Some(FenceRead::Busy);
@@ -378,7 +378,7 @@ async fn an_overdue_record_is_buried_before_the_fence_is_read() {
 #[tokio::test]
 async fn no_view_of_the_grant_buries_the_record() {
     use std::sync::atomic::Ordering;
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (hub, services, config, fence) = fenced(dir.path(), &["u1"]);
     hub.keep_test_dir(Arc::clone(&dir));
     let (port, posts) = counting_callback().await;
@@ -398,7 +398,7 @@ async fn no_view_of_the_grant_buries_the_record() {
 #[tokio::test(start_paused = true)]
 async fn a_send_past_the_fence_window_is_not_made() {
     use std::sync::atomic::Ordering;
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (hub, services, config, fence) = fenced(dir.path(), &["u1"]);
     hub.keep_test_dir(Arc::clone(&dir));
     let (port, posts) = counting_callback().await;
@@ -421,7 +421,7 @@ async fn a_send_past_the_fence_window_is_not_made() {
 #[tokio::test]
 async fn an_unsubscribe_during_the_fence_read_cancels_the_record() {
     use std::sync::atomic::Ordering;
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (hub, services, config, fence) = fenced(dir.path(), &["u1"]);
     hub.keep_test_dir(Arc::clone(&dir));
     let (port, posts) = counting_callback().await;

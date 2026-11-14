@@ -34,7 +34,7 @@ fn page_all(store: &FileControlPlaneStore) -> Vec<(String, String)> {
 /// read normally.
 #[test]
 fn a_record_between_the_scan_window_and_the_cap_reads_back_with_its_neighbours() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logger = governance_logger(dir.path());
     let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     let three_mib = 3 * 1024 * 1024;
@@ -73,12 +73,12 @@ fn cap() -> usize {
 /// A log holding one real record, and that record's line as a template for
 /// raw lines: only parsing and paging are under test, not the hash chain.
 fn store_with_template() -> (
-    tempfile::TempDir,
+    std::sync::Arc<tempfile::TempDir>,
     FileControlPlaneStore,
     std::path::PathBuf,
     String,
 ) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logger = governance_logger(dir.path());
     let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     store
@@ -213,7 +213,7 @@ fn the_cap_counts_the_newline() {
 #[test]
 fn an_over_cap_first_line_is_reported_at_offset_zero() {
     let (_dir, _store, path, template) = store_with_template();
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logger = governance_logger(dir.path());
     let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     std::fs::write(

@@ -30,7 +30,7 @@ impl Route {
         Self::with_reload(text, false).await
     }
     pub(super) async fn with_reload(text: &str, refusing: bool) -> Self {
-        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("gateway.yaml");
         write_owner_only(&path, text).expect("config");
         let running = Config::load(Some(&path)).expect("fixture loads");

@@ -63,7 +63,7 @@ async fn clock_fails_at(
 /// from 1970.
 #[tokio::test]
 async fn a_withdrawal_on_an_unreadable_clock_removes_without_stamping_the_tail() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
@@ -99,7 +99,7 @@ async fn a_withdrawal_on_an_unreadable_clock_removes_without_stamping_the_tail()
 /// in-flight record recovered at open keeps its own date, not 1970.
 #[tokio::test]
 async fn a_store_opened_on_an_unreadable_clock_keeps_its_dates() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
@@ -132,7 +132,7 @@ async fn a_store_opened_on_an_unreadable_clock_keeps_its_dates() {
 #[tokio::test]
 async fn a_hold_pass_on_an_unreadable_clock_changes_nothing() {
     use crate::events::store::{Held, Judged};
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     queued(&hub, 9, "evt_b");
@@ -173,7 +173,7 @@ async fn a_hold_pass_on_an_unreadable_clock_changes_nothing() {
 #[tokio::test]
 async fn a_lapsed_hold_is_not_revived_on_an_unreadable_clock() {
     use crate::events::store::{Held, Judged};
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     queued(&hub, 9, "evt_l");
@@ -212,7 +212,7 @@ async fn a_lapsed_hold_is_not_revived_on_an_unreadable_clock() {
 /// evicted. Recovery: the next attempt on a readable clock buries it, dated.
 #[tokio::test]
 async fn a_burial_on_an_unreadable_clock_waits_for_a_readable_one() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     let services = Arc::new(logged_services(dir.path()));
@@ -297,7 +297,7 @@ fn outcomes(dir: &std::path::Path, event_id: &str) -> Vec<serde_json::Value> {
 /// judged. The overdue record is neither sent nor buried.
 #[tokio::test]
 async fn an_overdue_record_is_neither_sent_nor_buried_when_the_clock_fails_after_the_claim() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
@@ -321,7 +321,7 @@ async fn an_overdue_record_is_neither_sent_nor_buried_when_the_clock_fails_after
 /// undated.
 #[tokio::test]
 async fn a_clock_that_fails_at_the_last_window_read_sends_and_buries_nothing() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         cost_per_delivery_usd: 0.01,
         ..private_callbacks()
@@ -363,7 +363,7 @@ async fn a_clock_that_fails_at_the_last_window_read_sends_and_buries_nothing() {
 /// send count, and its subscription's failure window does not move.
 #[tokio::test]
 async fn a_signer_that_cannot_read_the_clock_sends_nothing_and_counts_nothing() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     // One counted failure would suspend the row, so a refusal that moved
     // the failure window fails this row.
     let config = crate::config::EventsConfig {
@@ -404,7 +404,7 @@ async fn a_signer_that_cannot_read_the_clock_sends_nothing_and_counts_nothing() 
 /// clock the same revocation deletes them.
 #[tokio::test]
 async fn a_revocation_on_an_unreadable_clock_keeps_the_row() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     queued(&hub, 9, "evt_r");
@@ -427,7 +427,7 @@ async fn a_revocation_on_an_unreadable_clock_keeps_the_row() {
 /// set to 1970, so the next readable tick rescanned every deadline).
 #[tokio::test]
 async fn the_expiry_watermark_holds_on_an_unreadable_clock() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     queued(&hub, 9, "evt_w");
@@ -470,7 +470,7 @@ fn keyed(secret: &str, expires_at: chrono::DateTime<Utc>) -> crate::config::Conf
 #[tokio::test]
 async fn an_expiring_key_refused_by_an_unreadable_clock_keeps_its_subscription() {
     const SECRET: &str = "clock-revoke-secret";
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
@@ -533,7 +533,7 @@ async fn an_expiring_key_refused_by_an_unreadable_clock_keeps_its_subscription()
 /// date, the row kept, and nothing sent.
 #[tokio::test]
 async fn an_undated_recheck_after_the_attempt_is_on_record_keeps_everything() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
@@ -561,7 +561,7 @@ async fn an_undated_recheck_after_the_attempt_is_on_record_keeps_everything() {
 #[tokio::test]
 async fn a_replay_the_clock_cannot_judge_is_unavailable_not_revoked() {
     use crate::events::admin::ReplayRefusal;
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     let services = Arc::new(logged_services(dir.path()));
@@ -602,7 +602,7 @@ async fn a_replay_the_clock_cannot_judge_is_unavailable_not_revoked() {
 #[tokio::test]
 async fn the_outbox_takes_a_record_on_its_fan_out_reading() {
     use crate::events::outbox::{Enqueued, OutboxCaps};
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     queued(&hub, 9, "evt_q1");
@@ -683,7 +683,7 @@ impl crate::events::EventSource for ClockBlind {
 #[tokio::test]
 async fn a_source_that_cannot_judge_on_the_clock_sends_and_revokes_nothing() {
     for admits in [0, 1] {
-        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
         hub.keep_test_dir(Arc::clone(&dir));
         let services = logged_services(dir.path());
@@ -706,7 +706,7 @@ async fn a_source_that_cannot_judge_on_the_clock_sends_and_revokes_nothing() {
 /// back to pending unsent and uncounted, since nothing was sent.
 #[tokio::test]
 async fn a_refusal_whose_revocation_cannot_read_the_clock_counts_no_send() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
@@ -746,7 +746,7 @@ async fn a_refusal_whose_revocation_cannot_read_the_clock_counts_no_send() {
 #[tokio::test]
 async fn a_source_error_delivers_nothing_and_settles_unsent() {
     for admits in [0, 1] {
-        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
         hub.keep_test_dir(Arc::clone(&dir));
         let services = logged_services(dir.path());
@@ -781,7 +781,7 @@ async fn a_source_error_delivers_nothing_and_settles_unsent() {
 /// never kept pending for as long as the source fails (MIK-8202 A6).
 #[tokio::test]
 async fn a_source_error_does_not_keep_an_overdue_record() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());

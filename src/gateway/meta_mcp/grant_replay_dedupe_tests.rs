@@ -5,8 +5,6 @@
 //! again writes no new record within the window; a changed decision, such as
 //! a revoked grant, is written at once.
 
-use std::sync::Arc;
-
 use serde_json::json;
 
 use super::grant_audit::with_grant_slot;
@@ -75,7 +73,7 @@ async fn poll_as(
 async fn polling_a_finished_task_records_an_unchanged_decision_once() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,
@@ -156,7 +154,7 @@ fn an_unchanged_decision_is_written_again_after_the_window() {
 async fn a_relabelled_subject_is_the_same_caller() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,
@@ -186,7 +184,7 @@ async fn a_relabelled_subject_is_the_same_caller() {
 async fn each_caller_field_keeps_callers_apart() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,
@@ -239,7 +237,7 @@ async fn a_suppressed_repeat_note_is_not_published() {
 
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,

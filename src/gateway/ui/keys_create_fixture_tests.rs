@@ -200,7 +200,7 @@ impl Fixture {
                 .finish(),
         );
         let rt = capturing_runtime(&dispatch);
-        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("gateway.yaml");
         if setup.file {
             write_owner_only(&path, &setup.text).expect("write config");
