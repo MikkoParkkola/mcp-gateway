@@ -20,7 +20,7 @@ use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
 use super::super::{PROTOCOL_VERSION, StdioTransport};
 use super::{
     ChildTree, Counts, Ending, Leader, NESTED_TERM_MARGIN, NESTED_TERM_NEED, PRE_REAP_GRACE,
-    PRE_REAP_SETTLE, REAP_DEADLINE, Reap, native_child,
+    PRE_REAP_SETTLE, Reap, native_child,
 };
 use crate::transport::Transport;
 
@@ -468,9 +468,11 @@ async fn a_stepped_tree_signals_each_phase_once_then_reaps_natively() {
 /// A5's wait ends when the killed leader exits, not after its grace: ten
 /// live backends closed one after another each settle on the exit.
 ///
-/// Each tree's grace is stretched past `REAP_DEADLINE`, so a wait that sat
+/// Each tree's grace is stretched past its reap deadline, so a wait that sat
 /// out the grace instead of ending on the exit reaches the deadline, sends no
 /// A5 signal and is dropped unreaped: `assert_settled` refuses it at once.
+/// The deadline is lifted to half the hang bound, so a loaded host still
+/// reaps in time, and the grace to the whole of it.
 /// The oracle is that outcome, not ten closes against a stopwatch (MIK-8222).
 #[tokio::test]
 async fn closing_ten_live_backends_does_not_add_a_grace_each() {
@@ -480,7 +482,11 @@ async fn closing_ten_live_backends_does_not_add_a_grace_each() {
     }
     let mut pids = Vec::new();
     for (_w, t) in &started_ones {
-        with_tree(t, |c| c.grace_for_test = Some(REAP_DEADLINE * 4)).await;
+        with_tree(t, |c| {
+            c.reap_deadline_for_test = Some(HANG_BOUND / 2);
+            c.grace_for_test = Some(HANG_BOUND);
+        })
+        .await;
         pids.push(leader(t).await);
     }
     for ((_w, t), pid) in started_ones.iter().zip(&pids) {
