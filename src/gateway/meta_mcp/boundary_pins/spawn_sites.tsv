@@ -69,9 +69,10 @@ src/gateway/ui/activity/mod.rs	stream_read	spawn-blocking	1	outside-calls	reads 
 src/gateway/ui/admin_audit.rs	recorded	spawn	1	no-refusal-inside	runs an admin UI handler and writes its admin audit record; no tool call's delivery runs inside
 src/gateway/ui/backends/signin_flow.rs	start	spawn	1	outside-calls	runs a web UI backend sign-in; it serves the sign-in page, not a tool call
 src/gateway/ui/backends/slotting.rs	read_expecting	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before a backend write stores a secret; a read failure returns as the config refusal
+src/gateway/ui/decisions.rs	replay_ui_decisions_until_ready	spawn-blocking	1	outside-calls	reads the governance audit's UI decision records into the decision set at start-up, retrying until the store answers
 src/gateway/ui/decisions.rs	replay_until_ready	spawn-blocking	1	outside-calls	replays the decision log into the web UI's decision source at start-up
 src/gateway/ui/decisions.rs	start_discovery	spawn	1	outside-calls	keeps the web UI's client-file discovery cache current in the background
-src/gateway/ui/decisions.rs	start_with	spawn	3	outside-calls	the web UI decision source's background readers and hand-off queue
+src/gateway/ui/decisions.rs	start_with	spawn	4	outside-calls	the web UI decision source's background readers (the access log and the governance audit's decision records) and hand-off queue
 src/gateway/ui/decisions.rs	start_with	spawn-blocking	1	outside-calls	the web UI decision source's blocking log reader
 src/gateway/ui/discovery.rs	list_discovery	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers for the discovery list; a read failure returns as a 503
 src/gateway/ui/discovery_adopt.rs	adopt_discovery	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before an adopt; a read failure returns as a 503
@@ -97,6 +98,7 @@ src/personal_accounts/mod.rs	start_custody_with_http	spawn-blocking	1	outside-ca
 src/personal_accounts/worker.rs	offload	spawn-blocking	1	raised-at-join	personal-account store operation on the blocking pool; a refusal (e.g. scope broadening) returns as AccountServiceError through the join
 src/personal_accounts/worker.rs	refresh_after_rejection	spawn-blocking	1	raised-at-join	refreshes a personal-account credential lease; a refusal returns as AccountServiceError through the join
 src/personal_accounts/worker.rs	refresh_if_expired	spawn-blocking	1	raised-at-join	refreshes a credential lease if expired; a refusal returns as AccountServiceError through the join
+src/personal_accounts/worker.rs	release_by	spawn-blocking	1	no-refusal-inside	standalone custody shutdown whose release thread could not start: drops the account store on the blocking pool, and the call waits for its done signal
 src/security/message_signing.rs	spawn_nonce_cleanup_task	spawn	1	outside-calls	nonce cache cleanup timer
 src/security/transparency_log_bounded.rs	dispatch_bounded	spawn-blocking	1	raised-at-join	bounded transparency-log append; the joined result, a join failure or a timeout returns as a dispatch phase: append_bounded raises it as an io error the caller refuses with AuditUnavailable under FailClosed, settle as Refused or Unconfirmed
 src/skills/watcher.rs	spawn_regen_task	spawn	1	outside-calls	skills directory watcher that regenerates skill output on changes

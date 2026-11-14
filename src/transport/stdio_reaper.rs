@@ -67,8 +67,12 @@ pub(crate) fn within_stop_deadline<F: std::future::Future>(
 pub(crate) struct StopDeadline {
     /// Keep a useful SIGTERM phase even after hurry setup consumes a few ms.
     hurried: std::sync::atomic::AtomicBool,
-    /// Nanoseconds after [`STOP_EPOCH`]; `u64::MAX` while unset.
-    at: std::sync::atomic::AtomicU64,
+    /// The deadline and when it was last moved earlier, as one pair:
+    /// nanoseconds after [`STOP_EPOCH`], `u64::MAX` while unset. A SIGTERM a
+    /// tree's plan had due before the set-time is still owed, so the two are
+    /// written and read together, never one without the other. A leaf lock:
+    /// held only to read or write the pair, never while taking another lock.
+    cut: parking_lot::Mutex<(u64, u64)>,
     /// Every graceful handover under this deadline, so the stop can wait for
     /// their kills before it returns; finished ones are pruned on each add.
     handed: parking_lot::Mutex<Vec<watch::Receiver<Reaped>>>,
@@ -81,7 +85,7 @@ impl Default for StopDeadline {
     fn default() -> Self {
         Self {
             hurried: std::sync::atomic::AtomicBool::new(false),
-            at: std::sync::atomic::AtomicU64::new(u64::MAX),
+            cut: parking_lot::Mutex::new((u64::MAX, u64::MAX)),
             handed: parking_lot::Mutex::default(),
         }
     }
@@ -117,8 +121,13 @@ impl StopDeadline {
     pub(crate) fn move_earlier(&self, deadline: Instant) {
         let nanos = deadline.saturating_duration_since(*STOP_EPOCH).as_nanos();
         let nanos = u64::try_from(nanos).unwrap_or(u64::MAX - 1);
-        self.at
-            .fetch_min(nanos, std::sync::atomic::Ordering::SeqCst);
+        let mut cut = self.cut.lock();
+        if nanos < cut.0 {
+            let set = Instant::now()
+                .saturating_duration_since(*STOP_EPOCH)
+                .as_nanos();
+            *cut = (nanos, u64::try_from(set).unwrap_or(u64::MAX - 1));
+        }
     }
 
     /// Track a graceful handover, so [`Self::wait_handed`] covers it.
@@ -144,9 +153,17 @@ impl StopDeadline {
 
     /// The deadline, once set.
     pub(crate) fn get(&self) -> Option<Instant> {
-        match self.at.load(std::sync::atomic::Ordering::SeqCst) {
-            u64::MAX => None,
-            nanos => Some(*STOP_EPOCH + Duration::from_nanos(nanos)),
+        self.get_with_set_at().map(|(at, _)| at)
+    }
+
+    /// The deadline, once set, and when it was last moved earlier.
+    pub(super) fn get_with_set_at(&self) -> Option<(Instant, Instant)> {
+        match *self.cut.lock() {
+            (u64::MAX, _) => None,
+            (at, set) => Some((
+                *STOP_EPOCH + Duration::from_nanos(at),
+                *STOP_EPOCH + Duration::from_nanos(set),
+            )),
         }
     }
 }
