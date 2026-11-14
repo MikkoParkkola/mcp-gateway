@@ -63,11 +63,15 @@ impl Prepared {
     /// How many rows, not records, changed outside the gateway: one row can
     /// differ both before and after a journalled change.
     pub(super) fn outside_rows(&self) -> usize {
-        self.outside
-            .iter()
-            .map(|row| row.id.as_str())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len()
+        mutant!(
+            "countrecords",
+            self.outside.len(),
+            self.outside
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+        )
     }
 }
 
@@ -322,7 +326,7 @@ impl GrantAuditor {
     pub(crate) fn record(&self, prepared: Prepared) -> Recorded {
         // The change is published whether or not its records land.
         for row in &prepared.outside {
-            row.warn(&self.grants_path);
+            mutant!("nowarn", (), row.warn(&self.grants_path));
         }
         let total = prepared.records.len();
         if total == 0 {
