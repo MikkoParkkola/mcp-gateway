@@ -73,6 +73,62 @@ pub(crate) fn peer_is_helper(status: &str, unshare_pid: u32, uid: u32) -> Result
     Ok(())
 }
 
+/// The connecting process started no later than its connection was taken:
+/// `stat` is the text of `/proc/<pid>/stat`, `accepted` the boot clock in
+/// clock ticks read just after the accept. A later start means the pid
+/// names a newer process than the one that connected.
+pub(crate) fn started_by(_stat: &str, _accepted: u64) -> Result<(), Refusal> {
+    Ok(())
+}
+
+/// The boot clock now, in the clock ticks `/proc/<pid>/stat` counts in.
+#[cfg(target_os = "linux")]
+fn boot_ticks() -> u64 {
+    let now = rustix::time::clock_gettime(rustix::time::ClockId::Boottime);
+    let hz = rustix::param::clock_ticks_per_second();
+    let secs = u64::try_from(now.tv_sec).unwrap_or(0);
+    let nanos = u64::try_from(now.tv_nsec).unwrap_or(0);
+    secs.saturating_mul(hz)
+        .saturating_add(nanos.saturating_mul(hz) / 1_000_000_000)
+}
+
+/// The peer's `/proc/<pid>` directory, opened once. Every later read goes
+/// through it, and it stays bound to the process it named when it opened:
+/// once that process is gone its reads fail, even if the pid is reused.
+#[cfg(target_os = "linux")]
+fn open_peer(pid: i32) -> io::Result<rustix::fd::OwnedFd> {
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    Ok(rustix::fs::open(
+        format!("/proc/{pid}"),
+        flags,
+        Mode::empty(),
+    )?)
+}
+
+/// One file of the peer's `/proc` directory, read through `dir`.
+#[cfg(target_os = "linux")]
+fn read_peer(dir: &rustix::fd::OwnedFd, name: &str) -> io::Result<String> {
+    use rustix::fs::{Mode, OFlags};
+    use std::io::Read as _;
+    let file = rustix::fs::openat(dir, name, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())?;
+    let mut text = String::new();
+    std::fs::File::from(file).read_to_string(&mut text)?;
+    Ok(text)
+}
+
+/// Judge the peer behind `dir`: it started by `accepted`, its parent is the
+/// spawned `unshare` and it runs as `uid`. Any unreadable file refuses.
+#[cfg(target_os = "linux")]
+fn judge_dir(
+    _dir: &rustix::fd::OwnedFd,
+    _accepted: u64,
+    _unshare_pid: u32,
+    _uid: u32,
+) -> Result<(), Refusal> {
+    Ok(())
+}
+
 /// Accept the helper's one connection within the bound and check its peer.
 /// The listener is consumed, so no second connection is ever taken.
 pub(crate) async fn accept_helper(

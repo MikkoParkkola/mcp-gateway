@@ -287,7 +287,7 @@ security-framework = { version = "3.7", default-features = false }
 # at =0.5.0). libc is already in the lock file; only its syscall numbers and
 # errno constants are used.
 [target.'cfg(target_os = "linux")'.dependencies]
-rustix = { version = "1.1", features = ["fs", "process", "mount", "thread"] }
+rustix = { version = "1.1", features = ["fs", "process", "mount", "thread", "time"] }
 seccompiler = "=0.5.0"
 libc = "0.2"
 

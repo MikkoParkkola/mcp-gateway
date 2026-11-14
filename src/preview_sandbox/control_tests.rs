@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! T8 (the peer is the helper) and T4 (framing) for the control socket.
 
-use super::{CONTROL_BOUNDS, ControlBounds, MAX_LINE, peer_is_helper, read_line};
+use super::{CONTROL_BOUNDS, ControlBounds, MAX_LINE, peer_is_helper, read_line, started_by};
 use std::time::Duration;
 use tokio::io::{AsyncWriteExt as _, BufReader};
 
@@ -192,4 +192,80 @@ async fn t8_no_second_connection_is_served() {
     drop(accepted);
     let _first = first.await.expect("join");
     assert!(tokio::net::UnixStream::connect(&path).await.is_err());
+}
+
+/// A `/proc/<pid>/stat` line: field 22, the start time, is `start`.
+fn stat(name: &str, start: u64) -> String {
+    format!("4242 ({name}) S 1 4242 4242 0 -1 4194560 10 0 0 0 0 0 0 0 20 0 1 0 {start} 1000 10")
+}
+
+/// T8, kills "the start time is not checked" and "a start in the accept's
+/// own tick refuses": the pid must name a process no newer than the accept.
+#[test]
+fn t8_a_peer_started_after_the_accept_is_refused() {
+    assert!(started_by(&stat("x", 101), 100).is_err(), "a later start");
+    assert!(started_by(&stat("x", 100), 100).is_ok(), "the same tick");
+    assert!(started_by(&stat("x", 99), 100).is_ok(), "an earlier start");
+}
+
+/// T8, kills "the fields are counted from the first ')'": a process name
+/// holding ') 1 2' would otherwise shift the start time to a forged field.
+#[test]
+fn t8_a_crafted_process_name_cannot_shift_the_start_time() {
+    assert!(started_by(&stat("a) 1 2", 500), 100).is_err());
+}
+
+/// T8, kills "an unreadable start time reads as early".
+#[test]
+fn t8_an_unreadable_start_time_is_refused() {
+    let not_a_number = stat("x", 1).replace(" 1 1000", " y 1000");
+    assert_ne!(not_a_number, stat("x", 1), "the start field was replaced");
+    for text in [
+        "",
+        "4242 (x S 1 2",
+        "4242 (x) S 1 2 3",
+        not_a_number.as_str(),
+    ] {
+        assert!(started_by(text, u64::MAX).is_err(), "{text:?}");
+    }
+}
+
+/// T8 on a real process, the kernel row (also run on the 5.4 target): a
+/// `/proc/<pid>` directory opened while the child lived never reads its pid
+/// again once the child is reaped, so a reused pid cannot be judged.
+#[cfg(target_os = "linux")]
+#[test]
+fn t8_a_proc_directory_never_follows_a_reaped_pid() {
+    use super::{boot_ticks, judge_dir, open_peer, read_peer};
+    let uid = rustix::process::getuid().as_raw();
+    let me = std::process::id();
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn");
+    let pid = i32::try_from(child.id()).expect("pid");
+    let dir = open_peer(pid).expect("the live child's /proc directory");
+    assert!(
+        judge_dir(&dir, boot_ticks(), me, uid).is_ok(),
+        "the live child"
+    );
+    assert!(
+        judge_dir(&dir, 0, me, uid).is_err(),
+        "a start after the accept"
+    );
+    assert!(
+        judge_dir(&dir, boot_ticks(), me.wrapping_add(1), uid).is_err(),
+        "another parent"
+    );
+    child.kill().expect("kill");
+    child.wait().expect("reap");
+    assert!(
+        read_peer(&dir, "status").is_err(),
+        "status of the reaped child"
+    );
+    assert!(read_peer(&dir, "stat").is_err(), "stat of the reaped child");
+    assert!(
+        judge_dir(&dir, u64::MAX, me, uid).is_err(),
+        "the reaped child"
+    );
 }
