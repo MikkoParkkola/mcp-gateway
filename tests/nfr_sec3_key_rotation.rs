@@ -39,6 +39,7 @@ fn payload(now: u64) -> Payload {
         hold_key: "hold".to_string(),
         next_step: None,
         rounds_used: 0,
+        lookup_scope: None,
     }
 }
 
