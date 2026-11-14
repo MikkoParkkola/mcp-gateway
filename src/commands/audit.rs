@@ -182,6 +182,13 @@ pub fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path
             None => run_audit_verify(&resolve_path(path), archive, anchor.as_deref(), config_path),
         },
 
+        // Dispatched before this function (it needs the async runtime and
+        // the gateway's address), so it never arrives here.
+        AuditCommand::LookupEmail(_) => {
+            eprintln!("audit lookup-email must be run through the command entry");
+            ExitCode::FAILURE
+        }
+
         AuditCommand::Show { session, path } => {
             let log_path = resolve_path(path);
             match show_session_entries(&log_path, &session) {

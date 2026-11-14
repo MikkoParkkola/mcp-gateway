@@ -108,3 +108,139 @@ fn backend_inspection_commands_never_print_config_secrets() {
         "the path must not survive: {combined}"
     );
 }
+
+/// An email and a live page token as `audit lookup-email` would see them
+/// typed by mistake as arguments.
+const TYPED_EMAIL: &str = "Planted.Person@corp.invalid";
+const TYPED_TOKEN: &str = "AQEBsealedPageTokenSENTINEL_c41a";
+
+fn run_bare(args: &[&str]) -> Output {
+    let home = tempfile::tempdir().expect("create an isolated home");
+    gateway_bin::command(home.path(), gateway_bin::Inherit::Nothing)
+        .args(args)
+        .output()
+        .expect("run mcp-gateway")
+}
+
+/// MIK-9456.CLI.1: `audit lookup-email` reads the email and the page token
+/// from stdin only. A value typed as an argument anyway (positional, after
+/// `--`, attached to a flag, given to another flag, or as a flag name) is
+/// refused with a fixed message that never repeats it, in the parse phase and
+/// the validation phase alike, so it cannot reach stderr or a log that
+/// captures it.
+/// Mutant: let the parser's own error through for this command.
+#[test]
+fn audit_lookup_email_never_repeats_a_value_typed_as_an_argument() {
+    let email_attached = format!("--email-stdin={TYPED_EMAIL}");
+    let token_attached = format!("--cursor-stdin={TYPED_TOKEN}");
+    let old_cursor_attached = format!("--cursor={TYPED_TOKEN}");
+    let limit_attached = format!("--limit={TYPED_TOKEN}");
+    let token_as_flag = format!("--{TYPED_TOKEN}");
+    for (shape, typed) in [
+        (vec!["--email-stdin", TYPED_EMAIL], TYPED_EMAIL),
+        (vec!["--cursor-stdin", TYPED_TOKEN], TYPED_TOKEN),
+        (vec![TYPED_EMAIL], TYPED_EMAIL),
+        (vec!["--cursor-stdin", "--", TYPED_TOKEN], TYPED_TOKEN),
+        (vec![email_attached.as_str()], TYPED_EMAIL),
+        (vec![token_attached.as_str()], TYPED_TOKEN),
+        (vec![old_cursor_attached.as_str()], TYPED_TOKEN),
+        (vec!["--cursor-stdin", limit_attached.as_str()], TYPED_TOKEN),
+        (vec!["--cursor-stdin", "--limit", TYPED_TOKEN], TYPED_TOKEN),
+        (vec!["--email-stdin", "--limit", "7777777"], "7777777"),
+        (vec!["--cursor-stdin", token_as_flag.as_str()], TYPED_TOKEN),
+        // Accepted by the parser as the URL, then refused in validation: no
+        // source flag was given.
+        (vec!["--url", TYPED_TOKEN], TYPED_TOKEN),
+    ] {
+        let mut argv = vec!["audit", "lookup-email"];
+        argv.extend(&shape);
+        let output = run_bare(&argv);
+        let text = combined_output(&output);
+        assert_eq!(output.status.code(), Some(2), "{shape:?}: {text}");
+        assert!(!text.contains(typed), "{shape:?} repeated: {text}");
+        assert!(text.contains("is not repeated"), "{shape:?}: {text}");
+        assert!(text.contains("--email-stdin"), "{shape:?}: {text}");
+    }
+    // Typed before the command name: the parse stops before it reaches
+    // `lookup-email`, and the names that follow still select the fixed message.
+    for (argv, typed) in [
+        (vec!["audit", TYPED_EMAIL, "lookup-email"], TYPED_EMAIL),
+        (vec![TYPED_TOKEN, "audit", "lookup-email"], TYPED_TOKEN),
+    ] {
+        let output = run_bare(&argv);
+        let text = combined_output(&output);
+        assert_eq!(output.status.code(), Some(2), "{argv:?}: {text}");
+        assert!(!text.contains(typed), "{argv:?} repeated: {text}");
+        assert!(text.contains("is not repeated"), "{argv:?}: {text}");
+    }
+}
+
+/// `hash-key` reads the API key from stdin only; a key typed as an argument,
+/// after the command name or before it, is refused without being repeated.
+/// Mutant: drop `hash-key` from the stdin-secret commands, or match only the
+/// path the parse recorded.
+#[test]
+fn hash_key_never_repeats_a_key_typed_as_an_argument() {
+    const TYPED_KEY: &str = "sk-live-SENTINEL_9d3e";
+    for argv in [
+        vec!["hash-key", TYPED_KEY],
+        vec!["hash-key", "--", TYPED_KEY],
+        vec![TYPED_KEY, "hash-key"],
+    ] {
+        let output = run_bare(&argv);
+        let text = combined_output(&output);
+        assert_eq!(output.status.code(), Some(2), "{argv:?}: {text}");
+        assert!(!text.contains(TYPED_KEY), "{argv:?} repeated: {text}");
+        assert!(
+            text.contains("The API key is read from stdin only"),
+            "{text}"
+        );
+    }
+}
+
+/// MIK-9456.CLI.1: only the commands that read a secret from stdin get the
+/// fixed message: a typo anywhere else still names what was typed, a
+/// `--help` after a failing argument does not change that, and help itself
+/// still prints.
+/// Mutant: give every command the fixed message, match the path by prefix,
+/// let a later `--help` decide the path, read only the first level of the
+/// path, or replace help.
+#[test]
+fn other_parse_errors_and_help_keep_the_parsers_own_output() {
+    for argv in [
+        vec!["--no-such-root-flag-77c2"],
+        vec!["no-such-command-77c2"],
+        vec!["list", "--no-such-flag-77c2"],
+        vec!["audit", "show", "--no-such-flag-77c2"],
+        vec!["audit", "verify", "--no-such-flag-77c2", "--help"],
+        // The parse recorded `audit verify`, so a later value spelled like a
+        // secret command does not select the fixed message.
+        vec![
+            "audit",
+            "verify",
+            "--no-such-flag-77c2",
+            "--path",
+            "lookup-email",
+        ],
+    ] {
+        let output = run_bare(&argv);
+        let text = combined_output(&output);
+        assert_eq!(output.status.code(), Some(2), "{argv:?}: {text}");
+        assert!(text.contains("77c2"), "{argv:?}: {text}");
+        assert!(!text.contains("is not repeated"), "{argv:?}: {text}");
+    }
+    // `--path` takes a value and gets none: the parser's own message names it.
+    let missing = run_bare(&["audit", "verify", "--path", "--help"]);
+    let text = combined_output(&missing);
+    assert_eq!(missing.status.code(), Some(2), "{text}");
+    assert!(text.contains("--path"), "{text}");
+    assert!(!text.contains("is not repeated"), "{text}");
+    // Real help: the usage line and the credential's variable, which the
+    // fixed message does not carry.
+    let help = run_bare(&["audit", "lookup-email", "--help"]);
+    assert_eq!(help.status.code(), Some(0), "{}", combined_output(&help));
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(stdout.contains("Usage:"), "{stdout}");
+    assert!(stdout.contains("MCP_GATEWAY_TOKEN"), "{stdout}");
+    assert!(!stdout.contains("is not repeated"), "{stdout}");
+}
