@@ -6,8 +6,11 @@
 //! I/O while it is held; every method is infallible and returns at once.
 #![allow(
     dead_code,
+    reason = "the restart coordinator, a later slice, drives the transitions"
+)]
+#![allow(
     clippy::unused_self,
-    reason = "red stubs; the restart coordinator, a later slice, drives the transitions"
+    reason = "red-phase: remove when the board's transitions land"
 )]
 
 use serde_json::Value;

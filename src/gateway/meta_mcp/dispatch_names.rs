@@ -87,7 +87,7 @@ impl MetaArm {
 /// How a meta-tool counts toward the recent-write sample.
 #[cfg_attr(
     not(test),
-    allow(dead_code, reason = "red stub: the arm hook reads it next")
+    allow(dead_code, reason = "red-phase: remove when the counting points land")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ArmWrites {
@@ -104,7 +104,7 @@ impl MetaArm {
     /// compile until it is classed.
     #[cfg_attr(
         not(test),
-        allow(dead_code, reason = "red stub: the arm hook reads it next")
+        allow(dead_code, reason = "red-phase: remove when the counting points land")
     )]
     pub(super) const fn writes(self) -> ArmWrites {
         match self {

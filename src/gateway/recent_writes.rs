@@ -7,7 +7,7 @@
 #![allow(
     dead_code,
     clippy::unused_self,
-    reason = "red stubs: the hooks and the restart GET read it in the implementation"
+    reason = "red-phase: remove when the counting points land"
 )]
 
 use std::time::Instant;

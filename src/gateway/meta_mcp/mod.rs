@@ -504,10 +504,7 @@ pub struct MetaMcp {
     /// This boot's recent-write counter and restart status board.
     #[cfg_attr(
         not(feature = "webui"),
-        allow(
-            dead_code,
-            reason = "red stub: the dispatch hooks read it in every build next"
-        )
+        allow(dead_code, reason = "red-phase: remove when the counting points land")
     )]
     pub(super) recent_writes: Arc<crate::gateway::recent_writes::RecentWrites>,
     #[cfg_attr(
