@@ -127,6 +127,9 @@ pub(super) fn start_fetch(stream: &mut UnixStream, bounds: HelperBounds) -> Resu
     if issued.credential.len() != 64 || !issued.credential.bytes().all(hex) {
         return Err("the gateway's credential is malformed".into());
     }
+    if issued.deadline_ms == 0 {
+        return Err("the fetch's deadline has already passed".into());
+    }
     Ok(issued)
 }
 
