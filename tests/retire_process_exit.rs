@@ -56,13 +56,16 @@ fn write_config(root: &Path, total: Duration, tls: Option<&Path>) -> PathBuf {
     );
     if let Some(dir) = tls {
         let path = |name: &str| dir.join(name).display().to_string();
-        yaml.push_str(&format!(
+        use std::fmt::Write as _;
+        write!(
+            yaml,
             "mtls:\n  enabled: true\n  server_cert: {}\n  server_key: {}\n  ca_cert: {}\n  \
              require_client_cert: true\n",
             path("server.crt"),
             path("server.key"),
             path("ca.crt"),
-        ));
+        )
+        .expect("a String takes the write");
     }
     let config = root.join("gateway.yaml");
     // The gateway refuses a config other users can read.
