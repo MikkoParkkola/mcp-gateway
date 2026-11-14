@@ -21,7 +21,7 @@ mod yaml;
 const READY_BOUND: Duration = Duration::from_secs(60);
 
 /// The first line `tool completions bash` prints: a static string in
-/// src/cli/completion.rs, which slice 4a does not touch (test plan ENTRY-2).
+/// `src/cli/completion.rs`, which slice 4a does not touch (test plan ENTRY-2).
 const COMPLETIONS_FIRST_LINE: &str = "# mcp-gateway bash completion";
 
 fn write_config(root: &Path) -> PathBuf {
@@ -94,7 +94,7 @@ async fn entry1_unresolvable_argv0_still_serves() {
     assert!(status.success(), "stopped by its normal path: {status:?}");
 }
 
-/// ENTRY-2: a subcommand (restart NotServe) still runs and prints as before.
+/// ENTRY-2: a subcommand (restart `NotServe`) still runs and prints as before.
 #[test]
 fn entry2_subcommand_still_runs() {
     let home = tempfile::tempdir().expect("home");
