@@ -14,6 +14,7 @@ use super::{
     TaskExecutor, TaskIntent, TaskService, TaskTransition, TransitionWrite, UpstreamRecovery,
     commit_and_run, commit_to_service, is_terminal, json, oneshot, upstream,
 };
+use crate::gateway::task_service::store::gate::Kind;
 
 // Used only by `observe_commits`, which is compiled out of release builds.
 #[cfg(any(test, debug_assertions))]
@@ -458,7 +459,7 @@ impl TaskExecutor {
                 writes,
             } => {
                 let outcome = (event, targets, writes);
-                self.transition_write(principal, id, revision, outcome, author, at)
+                self.transition_write(principal, id, revision, outcome, author, at, Kind::Internal)
                     .await?
             }
             // Its own arm, never merged with `Settle`: the two carry the same
@@ -494,6 +495,7 @@ impl TaskExecutor {
                     ),
                     author,
                     Some(now),
+                    Kind::Internal,
                 )
                 .await?
             }
@@ -501,49 +503,7 @@ impl TaskExecutor {
                 principal,
                 id,
                 revision,
-            } => {
-                let cancel = || {
-                    (
-                        TaskTransition::Cancel,
-                        crate::gateway::task_service::record::Provenance::default(),
-                        crate::gateway::gateway_writes::WriteRecord::default(),
-                    )
-                };
-                match self
-                    .transition_write(
-                        principal,
-                        id,
-                        revision,
-                        cancel(),
-                        ErrorAuthor::Gateway,
-                        None,
-                    )
-                    .await
-                {
-                    // An owner can always cancel (MIK-8202 P4a, lead ruling): on a
-                    // clock before 1970 the cancel neither waits nor refuses. It is
-                    // dated at the record's own last change, a real time the record
-                    // already carries, never 1969 or 0.
-                    Err(CommitFailure::ClockUnreadable) => {
-                        let dated = self
-                            .service
-                            .get(principal, id)
-                            .map_err(CommitFailure::Service)?
-                            .task
-                            .last_updated_at();
-                        self.transition_write(
-                            principal,
-                            id,
-                            revision,
-                            cancel(),
-                            ErrorAuthor::Gateway,
-                            Some(dated),
-                        )
-                        .await?
-                    }
-                    other => other?,
-                }
-            }
+            } => self.cancel_write(principal, id, revision).await?,
         };
         if changed {
             self.published(&committed, &id);
@@ -552,10 +512,45 @@ impl TaskExecutor {
         Ok(committed)
     }
 
+    /// The route's cancel, an external write. An owner can always cancel
+    /// (MIK-8202 P4a, lead ruling): on a clock before 1970 the cancel neither
+    /// waits nor refuses. It is dated at the record's own last change, a real
+    /// time the record already carries, never 1969 or 0.
+    async fn cancel_write(
+        &self,
+        principal: &str,
+        id: &str,
+        revision: u64,
+    ) -> Result<(CommittedTask, bool, String), CommitFailure> {
+        let cancel = || {
+            (
+                TaskTransition::Cancel,
+                crate::gateway::task_service::record::Provenance::default(),
+                crate::gateway::gateway_writes::WriteRecord::default(),
+            )
+        };
+        let (author, kind) = (ErrorAuthor::Gateway, Kind::External);
+        let first = self
+            .transition_write(principal, id, revision, cancel(), author, None, kind)
+            .await;
+        let Err(CommitFailure::ClockUnreadable) = first else {
+            return first;
+        };
+        let dated = self
+            .service
+            .get(principal, id)
+            .map_err(CommitFailure::Service)?
+            .task
+            .last_updated_at();
+        self.transition_write(principal, id, revision, cancel(), author, Some(dated), kind)
+            .await
+    }
+
     /// The request-side adapter: a caller-supplied principal becomes an owner
     /// through admission's one hasher, and only then a transition. Ordinary auth
     /// is unchanged by recovery — the digest form lives below this, in
     /// `recovery::transition_digest_write`, and no request path reaches it.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn transition_write(
         &self,
         principal: &str,
@@ -568,12 +563,13 @@ impl TaskExecutor {
         ),
         author: ErrorAuthor,
         at: Option<chrono::DateTime<chrono::Utc>>,
+        kind: Kind,
     ) -> Result<(CommittedTask, bool, String), CommitFailure> {
         let owner = self
             .service
             .owner(principal)
             .map_err(CommitFailure::Service)?;
-        self.transition_digest_write(owner.as_digest(), id, revision, outcome, author, at)
+        self.transition_digest_write(owner.as_digest(), id, revision, outcome, author, at, kind)
             .await
     }
 

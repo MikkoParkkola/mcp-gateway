@@ -82,6 +82,7 @@ impl TaskExecutor {
             ),
             ErrorAuthor::Gateway,
             None,
+            crate::gateway::task_service::store::gate::Kind::Internal,
         )
         .await
         .expect("the cancel commits");

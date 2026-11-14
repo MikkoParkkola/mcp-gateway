@@ -282,10 +282,10 @@ async fn proxy_world(grants: LocalIdentityGrantStore) -> World {
         authority: PROXY_AUTHORITY.to_string(),
         ..CallerIdentityConfig::default()
     };
-    World::start_with(move |meta| {
+    Box::pin(World::start_with(move |meta| {
         meta.with_caller_identity(identity)
             .with_identity_grants(grants)
-    })
+    }))
     .await
 }
 
