@@ -40,4 +40,13 @@ pub(crate) enum StoreError {
     /// it in memory.
     #[error("task store clock unreadable")]
     ClockUnreadable,
+    /// The restart gate refused a new external write after the commit edge,
+    /// or one still parked past its deadline. Answered like any other store
+    /// refusal; nothing was written.
+    #[error("the gateway is restarting")]
+    Restarting,
+    /// A sweep reached the gate while a restart checkpoint holds the store; the
+    /// next tick covers it. Nothing was written.
+    #[error("task sweep skipped during a restart checkpoint")]
+    Skipped,
 }

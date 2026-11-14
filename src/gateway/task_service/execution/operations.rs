@@ -458,8 +458,16 @@ impl TaskExecutor {
                 writes,
             } => {
                 let outcome = (event, targets, writes);
-                self.transition_write(principal, id, revision, outcome, author, at)
-                    .await?
+                self.transition_write(
+                    principal,
+                    id,
+                    revision,
+                    outcome,
+                    author,
+                    at,
+                    crate::gateway::task_service::store::gate::Kind::Internal,
+                )
+                .await?
             }
             // Its own arm, never merged with `Settle`: the two carry the same
             // field types and merging them would hand a stored digest to the
@@ -494,6 +502,7 @@ impl TaskExecutor {
                     ),
                     author,
                     Some(now),
+                    crate::gateway::task_service::store::gate::Kind::Internal,
                 )
                 .await?
             }
@@ -517,6 +526,7 @@ impl TaskExecutor {
                         cancel(),
                         ErrorAuthor::Gateway,
                         None,
+                        crate::gateway::task_service::store::gate::Kind::External,
                     )
                     .await
                 {
@@ -538,6 +548,7 @@ impl TaskExecutor {
                             cancel(),
                             ErrorAuthor::Gateway,
                             Some(dated),
+                            crate::gateway::task_service::store::gate::Kind::External,
                         )
                         .await?
                     }
@@ -556,6 +567,7 @@ impl TaskExecutor {
     /// through admission's one hasher, and only then a transition. Ordinary auth
     /// is unchanged by recovery — the digest form lives below this, in
     /// `recovery::transition_digest_write`, and no request path reaches it.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn transition_write(
         &self,
         principal: &str,
@@ -568,12 +580,13 @@ impl TaskExecutor {
         ),
         author: ErrorAuthor,
         at: Option<chrono::DateTime<chrono::Utc>>,
+        kind: crate::gateway::task_service::store::gate::Kind,
     ) -> Result<(CommittedTask, bool, String), CommitFailure> {
         let owner = self
             .service
             .owner(principal)
             .map_err(CommitFailure::Service)?;
-        self.transition_digest_write(owner.as_digest(), id, revision, outcome, author, at)
+        self.transition_digest_write(owner.as_digest(), id, revision, outcome, author, at, kind)
             .await
     }
 

@@ -164,7 +164,14 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     for (id, revision, owner_digest, closed) in service.store.expired_input_rounds(now) {
         // #2429: one write that names why the round closed and drops it.
         let cancelled = executor
-            .close_round(&owner_digest, &id, revision, closed.reason(), now)
+            .close_round_as(
+                crate::gateway::task_service::store::gate::Kind::Sweep,
+                &owner_digest,
+                &id,
+                revision,
+                closed.reason(),
+                now,
+            )
             .await;
         let Err(failure) = cancelled else {
             continue;

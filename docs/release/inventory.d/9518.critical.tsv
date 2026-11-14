@@ -7,3 +7,5 @@ src/gateway/task_service/store_gate.rs	certify	1	standard	borderline	TaskGate::c
 src/gateway/task_service/store_gate.rs	resume	1	standard	borderline	TaskGate::resume	Cancel recovery: drains parked submitters before newer arrivals, then opens the gate
 src/gateway/task_service/store_gate.rs	release	1	standard	borderline	TaskGate::release	A stop signal won: admits parked work and everything after it, no ordering
 src/gateway/task_service/store_gate.rs	commit	1	standard	borderline	TaskGate::commit	The commit edge: refuses new external submissions, admits work parked before it and internal completion work
+src/gateway/task_service/store_gate.rs	admitted	1	critical	d	TaskStore::admitted	Admits each task-store mutation through TaskGate::admit before its blocking work is spawned, and moves the admission into that work so it stays counted; a refusal returns before anything runs
+src/gateway/task_service/store_gate.rs	storage_failed	2	standard	borderline	Outcome::storage_failed	Marks a storage error from admitted work as a failure, which fails the attempt's checkpoint

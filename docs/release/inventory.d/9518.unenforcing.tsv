@@ -3,3 +3,8 @@ src/gateway/task_service/store_gate.rs	in_flight	1	Reads the count of admitted w
 src/gateway/task_service/store_gate.rs	parked	1	Reads the count of parked submitters; decides nothing
 src/gateway/task_service/store_gate.rs	failed	1	Reads whether admitted work failed during the attempt; the adapter's checkpoint decides on it
 src/gateway/task_service/store_gate.rs	idle	1	Waits until no admitted work is in flight; decides nothing
+src/gateway/task_service/store_gate.rs	from	1	Maps a gate refusal or a lost blocking task to the store's own error; decides nothing
+src/gateway/task_service/store_gate.rs	storage_failed	3	A list output is never a storage failure; decides nothing
+src/gateway/task_service/store_targets.rs	settle_bounded_as	1	Async hop to settle_bounded_blocking through TaskStore::admitted with its caller's class; ownership and revision are checked in the blocking body
+src/gateway/task_service/store_input.rs	close_round_as	1	Async hop to close_round_blocking through TaskStore::admitted with its caller's class; ownership is checked in the blocking body
+src/gateway/task_service/execution/input_round.rs	close_round_as	1	Forwards to the store's close_round_as with the caller's class and publishes; the ownership check is in the store

@@ -615,10 +615,25 @@ impl TaskExecutor {
         reason: String,
         at: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), super::CommitFailure> {
+        let kind = crate::gateway::task_service::store::gate::Kind::Internal;
+        self.close_round_as(kind, owner_digest, id, revision, reason, at)
+            .await
+    }
+
+    /// `close_round` for a caller of class `kind`: the expiry sweep is Sweep.
+    pub(super) async fn close_round_as(
+        &self,
+        kind: crate::gateway::task_service::store::gate::Kind,
+        owner_digest: &str,
+        id: &str,
+        revision: u64,
+        reason: String,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), super::CommitFailure> {
         match self
             .service
             .store
-            .close_round(owner_digest, id, revision, reason, at)
+            .close_round_as(kind, owner_digest, id, revision, reason, at)
             .await
         {
             Ok(committed) => {

@@ -79,6 +79,7 @@ impl TaskExecutor {
     /// its principal first, while recovery reaches it with the digest the record
     /// itself persisted — never hashed a second time. The store still checks
     /// exactly that owner, id and revision.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn transition_digest_write(
         &self,
         owner_digest: &str,
@@ -91,6 +92,7 @@ impl TaskExecutor {
         ),
         author: ErrorAuthor,
         at: Option<DateTime<Utc>>,
+        kind: crate::gateway::task_service::store::gate::Kind,
     ) -> Result<(CommittedTask, bool, String), CommitFailure> {
         // A caller that already holds a time passes it (`Some`): startup
         // recovery, and a worker settle after its clock wait. `None` reads the
@@ -109,7 +111,7 @@ impl TaskExecutor {
         match self
             .service
             .store
-            .settle_bounded_by(owner_digest, id, revision, settlement, author, now)
+            .settle_bounded_as(kind, owner_digest, id, revision, settlement, author, now)
             .await
         {
             Ok(committed) => {

@@ -92,7 +92,7 @@ pub(crate) struct Admitted {
 impl Admitted {
     /// Note the closure's outcome before the admission drops: a storage failure
     /// during an attempt fails that attempt's checkpoint. Stub: notes nothing.
-    pub(crate) fn record<T>(&self, _result: &Result<T, super::StoreError>) {}
+    pub(crate) fn record(&self, _storage_failed: bool) {}
 }
 
 impl TaskGate {
@@ -229,5 +229,63 @@ pub(crate) mod seams {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&hold));
             hold
         }
+    }
+}
+
+/// Why a gated blocking job never ran, or never reported back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Gated {
+    Refused(Refused),
+    /// The blocking task was lost: it panicked, or the runtime is going away.
+    Lost,
+}
+
+impl From<Gated> for super::StoreError {
+    fn from(gated: Gated) -> Self {
+        match gated {
+            Gated::Refused(Refused::Restarting) => Self::Restarting,
+            Gated::Refused(Refused::Skipped) => Self::Skipped,
+            Gated::Lost => Self::Storage,
+        }
+    }
+}
+
+/// Whether a gated job's output is a storage failure the checkpoint must see.
+pub(crate) trait Outcome {
+    fn storage_failed(&self) -> bool;
+}
+
+impl<T> Outcome for Result<T, super::StoreError> {
+    fn storage_failed(&self) -> bool {
+        matches!(self, Err(super::StoreError::Storage))
+    }
+}
+
+impl<T> Outcome for Vec<T> {
+    fn storage_failed(&self) -> bool {
+        false
+    }
+}
+
+impl super::TaskStore {
+    /// Admit one mutation of class `kind`, then run `work` on the blocking pool
+    /// with the admission moved into it: the work stays counted until it ends,
+    /// even if this future is dropped, and its failure is noted before the
+    /// count drops. The only place the store spawns blocking work for a
+    /// mutation.
+    pub(super) async fn admitted<R: Outcome + Send + 'static>(
+        &self,
+        kind: Kind,
+        work: impl FnOnce() -> R + Send + 'static,
+    ) -> Result<R, Gated> {
+        let admission = self.0.gate.admit(kind).await.map_err(Gated::Refused)?;
+        tokio::task::spawn_blocking(move || {
+            let output = work();
+            admission.record(output.storage_failed());
+            drop(admission);
+            output
+        })
+        .await
+        .map_err(|_| Gated::Lost)
     }
 }

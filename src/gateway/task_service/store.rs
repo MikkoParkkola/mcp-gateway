@@ -256,9 +256,11 @@ impl TaskStore {
     pub(super) async fn create(&self, task: PreparedTask) -> Result<CommittedTask, StoreError> {
         let shared = Arc::clone(&self.0);
         let (record, publication) = (task.record, task.publication);
-        tokio::task::spawn_blocking(move || shared.create_blocking(record, publication))
-            .await
-            .map_err(|_| StoreError::Storage)?
+        self.admitted(gate::Kind::External, move || {
+            shared.create_blocking(record, publication)
+        })
+        .await
+        .map_err(StoreError::from)?
     }
 
     pub(crate) fn get(&self, owner: &str, id: &str) -> Result<CommittedTask, StoreError> {
@@ -281,11 +283,11 @@ impl TaskStore {
     ) -> Result<CommittedTask, StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(gate::Kind::Internal, move || {
             shared.transition_blocking(&owner, &id, revision, event, at)
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 
     /// Durably set the dispatch marker at `expected_revision`. The public
@@ -299,11 +301,11 @@ impl TaskStore {
     ) -> Result<(), StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(gate::Kind::Internal, move || {
             shared.mark_dispatched_blocking(&owner, &id, expected_revision)
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 
     /// Durably attach `upstream` to a non-terminal row at `expected_revision`.
@@ -328,11 +330,11 @@ impl TaskStore {
     ) -> Result<(), StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(gate::Kind::Internal, move || {
             shared.mark_upstream_blocking(&owner, &id, expected_revision, (upstream, bindings))
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 
     #[cfg(test)]
