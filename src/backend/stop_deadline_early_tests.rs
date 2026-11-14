@@ -205,7 +205,7 @@ fn recording(
 
 /// R3 (HANDOVER.3): the early handover gets the whole backend stage, the
 /// deadline less the entry instant, with no reserve taken off here (the only
-/// one is graceful_ending's), and the stage's deadline is the registry's.
+/// one is `graceful_ending`'s), and the stage's deadline is the registry's.
 #[tokio::test(start_paused = true)]
 async fn the_early_handover_gets_the_whole_backend_stage() {
     let dir = tempfile::tempdir().expect("temp dir");

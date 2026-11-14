@@ -218,10 +218,12 @@ async fn a_handed_trees_grace_is_cut_once_at_the_stage_deadline() {
             panic!("premise: a graceful plan, got {ending:?}");
         };
         tree.set_ending(ending, Some(Arc::clone(end.deadline())));
-        let kill = stage_end - KILL_RESERVE;
+        let kill = stage_end
+            .checked_sub(KILL_RESERVE)
+            .expect("the stage keeps its kill reserve");
         let ms = Duration::from_millis(1);
         assert!(matches!(tree.reap_step(entry), Reap::Pending));
-        tree.reap_step(entry + eof - ms);
+        tree.reap_step((entry + eof).checked_sub(ms).expect("after entry"));
         assert_eq!(
             tree.term_signals_sent, 0,
             "SIGTERM before its EOF wait ended"
@@ -231,7 +233,7 @@ async fn a_handed_trees_grace_is_cut_once_at_the_stage_deadline() {
             tree.term_signals_sent, 1,
             "SIGTERM did not go out at entry + its EOF wait"
         );
-        tree.reap_step(kill - ms);
+        tree.reap_step(kill.checked_sub(ms).expect("after entry"));
         assert_eq!(
             tree.group_signals_sent, 0,
             "killed before the stage deadline less one reserve"
