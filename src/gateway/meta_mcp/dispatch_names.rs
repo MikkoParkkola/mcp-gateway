@@ -85,10 +85,6 @@ impl MetaArm {
 }
 
 /// How a meta-tool counts toward the recent-write sample.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "red-phase: remove when the counting points land")
-)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ArmWrites {
     /// Counted per leaf dispatch it makes, never at the arm.
@@ -102,31 +98,25 @@ pub(super) enum ArmWrites {
 impl MetaArm {
     /// How this meta-tool counts. Exhaustive, so a new meta-tool does not
     /// compile until it is classed.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "red-phase: remove when the counting points land")
-    )]
     pub(super) const fn writes(self) -> ArmWrites {
         match self {
+            Self::Invoke | Self::Execute | Self::RunPlaybook => ArmWrites::Leaves,
             Self::Search
-            | Self::Execute
             | Self::ListServers
             | Self::ListTools
             | Self::SearchTools
-            | Self::Invoke
             | Self::GetStats
             | Self::CostReport
             | Self::WebhookStatus
-            | Self::RunPlaybook
-            | Self::KillServer
-            | Self::ReviveServer
             | Self::ListDisabledCapabilities
-            | Self::SetProfile
             | Self::GetProfile
-            | Self::ListProfiles
+            | Self::ListProfiles => ArmWrites::Read,
+            Self::KillServer
+            | Self::ReviveServer
+            | Self::SetProfile
             | Self::SetState
             | Self::ReloadConfig
-            | Self::ReloadCapabilities => ArmWrites::Read,
+            | Self::ReloadCapabilities => ArmWrites::Write,
         }
     }
 }

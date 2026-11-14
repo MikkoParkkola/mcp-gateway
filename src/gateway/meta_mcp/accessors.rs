@@ -15,10 +15,6 @@ use super::{debug, session_fp};
 
 impl MetaMcp {
     /// This boot's recent-write counter, fed by the dispatch hooks.
-    #[cfg_attr(
-        not(feature = "webui"),
-        allow(dead_code, reason = "red-phase: remove when the counting points land")
-    )]
     pub(in crate::gateway) fn recent_writes(
         &self,
     ) -> &Arc<crate::gateway::recent_writes::RecentWrites> {

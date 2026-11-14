@@ -3,6 +3,8 @@
 //! The direct route's two forwarding arms: the sanitized call, sent the
 //! params the gate returned, and the plain pass-through call.
 
+use std::time::Instant;
+
 use super::{
     Admission, Admitted, DirectRouteGuards, Egressed, Envelope, JsonRpcResponse, Preflight,
     Propagation, RefundWitness, Rejection, Scope, StatusCode, Value, answer_failure,
@@ -70,6 +72,9 @@ pub(super) async fn forward_sanitized(
     #[cfg(test)]
     direct_idempotency::seams::before_mark().await;
     direct_idempotency::mark(admitted.lease.as_ref());
+    if is_recent_write(scope, envelope, propagation, admitted.call.tool) {
+        state.meta_mcp.recent_writes().note(Instant::now());
+    }
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(dispatch_armed(
         admitted.idem_reservation.as_mut(),
@@ -194,6 +199,9 @@ pub(super) async fn forward_plain(
     #[cfg(test)]
     direct_idempotency::seams::before_mark().await;
     direct_idempotency::mark(admitted.lease.as_ref());
+    if is_recent_write(scope, envelope, propagation, admitted.call.tool) {
+        state.meta_mcp.recent_writes().note(Instant::now());
+    }
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(dispatch_armed(
         admitted.idem_reservation.as_mut(),
@@ -236,4 +244,24 @@ pub(super) async fn forward_plain(
     // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
     Ok(answered)
+}
+
+/// Whether this forward is a recent write for the restart warning: a
+/// `tools/call` by what the caller's own slot declares for the tool, any other
+/// method unless it is on the read list.
+fn is_recent_write(
+    scope: Scope<'_>,
+    envelope: &Envelope,
+    propagation: &Propagation,
+    tool: &str,
+) -> bool {
+    let effect = (envelope.method == "tools/call")
+        .then(|| {
+            scope
+                .route
+                .backend
+                .declared_effect_for(propagation.identity_key.as_deref(), tool)
+        })
+        .flatten();
+    crate::gateway::recent_writes::direct_method_counts(&envelope.method, effect)
 }

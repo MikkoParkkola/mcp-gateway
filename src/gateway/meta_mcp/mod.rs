@@ -502,10 +502,6 @@ pub struct MetaMcp {
     #[cfg(feature = "webui")]
     pub(super) ui_calls: Arc<tokio::sync::Semaphore>,
     /// This boot's recent-write counter and restart status board.
-    #[cfg_attr(
-        not(feature = "webui"),
-        allow(dead_code, reason = "red-phase: remove when the counting points land")
-    )]
     pub(super) recent_writes: Arc<crate::gateway::recent_writes::RecentWrites>,
     #[cfg_attr(
         not(feature = "webui"),

@@ -293,6 +293,19 @@ impl MetaMcp {
         // Dispatch: the witness goes with the send (the nonce stays spent).
         witness.spend();
         nonce_settle::mark_dispatched(caller, (server, tool));
+        // A recent write for the restart warning: every send but one its tool
+        // declared read-only. Here, not in `mark_dispatched`, which a stored
+        // replay reaches without sending.
+        let effect = self
+            .declared_effect(
+                (server, tool),
+                backend.as_deref(),
+                dispatch_binding.as_deref(),
+            )
+            .map(|(effect, _)| effect);
+        if crate::gateway::recent_writes::counts_as_write(effect) {
+            self.recent_writes.note(std::time::Instant::now());
+        }
         let lent = caller_credential.lent();
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over

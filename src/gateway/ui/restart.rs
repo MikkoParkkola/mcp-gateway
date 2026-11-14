@@ -54,8 +54,17 @@ async fn availability(State(state): State<Arc<AppState>>, guard: Guard) -> Respo
 /// The restart GET body for a caller shown `view`, with the recent-write
 /// sample when one was taken: only `count` and `complete_secs` of it, and
 /// only in the full view.
-pub(super) fn availability_body(_view: StatusView, _sample: Option<WriteSample>) -> Value {
-    json!({"available": false, "reason": REASON, "recovery": RECOVERY})
+pub(super) fn availability_body(view: StatusView, sample: Option<WriteSample>) -> Value {
+    let mut body = json!({"available": false, "reason": REASON, "recovery": RECOVERY});
+    if view == StatusView::Full
+        && let Some(sample) = sample
+    {
+        body["recent_writes"] = json!({
+            "count": sample.count,
+            "complete_secs": sample.complete_secs,
+        });
+    }
+    body
 }
 
 async fn refuse(guard: Guard, body: Result<Json<Body>, JsonRejection>) -> Response {

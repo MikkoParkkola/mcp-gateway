@@ -182,7 +182,16 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
 /// or null before any accept, in the full view only. The counts-only view
 /// (which scoped callers get too) never carries it, so a change of the record
 /// raises the stream's status generation and never its counts generation.
-pub(super) fn add_restart(_body: &mut Value, _view: StatusView, _record: Option<RestartStatus>) {}
+pub(super) fn add_restart(body: &mut Value, view: StatusView, record: Option<RestartStatus>) {
+    if view == StatusView::Full
+        && let Some(members) = body.as_object_mut()
+    {
+        members.insert(
+            "restart".to_owned(),
+            record.as_ref().map_or(Value::Null, RestartStatus::wire),
+        );
+    }
+}
 
 #[expect(
     clippy::struct_excessive_bools,
