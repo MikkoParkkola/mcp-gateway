@@ -123,12 +123,16 @@ pub(super) fn build_root(plan: &Plan, ca: Option<&rustix::fd::OwnedFd>) -> Step 
 /// their type; `ca.pem` the snapshot itself, by the device and inode the
 /// helper read from the descriptor it bound.
 pub(super) fn check_preview_config(snapshot: (u64, u64)) -> Step {
+    check_config_dir(&staged(PREVIEW_CONFIG), snapshot)
+}
+
+/// [`check_preview_config`] over any directory, so rows can build one.
+fn check_config_dir(dir: &Path, snapshot: (u64, u64)) -> Step {
     use std::os::unix::fs::MetadataExt as _;
-    let dir = staged(PREVIEW_CONFIG);
     let fail = |why: &str| Err(format!("checking {} ({why})", dir.display()));
     let mut names = Vec::new();
-    for entry in fs::read_dir(&dir).map_err(at("listing", &dir))? {
-        let entry = entry.map_err(at("listing", &dir))?;
+    for entry in fs::read_dir(dir).map_err(at("listing", dir))? {
+        let entry = entry.map_err(at("listing", dir))?;
         names.push(entry.file_name().to_string_lossy().into_owned());
     }
     names.sort();
@@ -646,6 +650,87 @@ mod tests {
             rows.push(row(13, 11, config_dir.join("empty-certs"), true));
         }
         rows
+    }
+
+    /// The preview config as `preview_config` leaves it, under `root/cfg`,
+    /// with `root/outside` (an empty file) and `root/outside-dir` (an empty
+    /// directory) for symlinks to point at; returns `ca.pem`'s identity.
+    fn config_dir(root: &Path) -> (u64, u64) {
+        use std::os::unix::fs::MetadataExt as _;
+        let dir = root.join("cfg");
+        fs::create_dir_all(dir.join("empty-certs")).expect("empty-certs");
+        fs::write(dir.join("ca.pem"), b"pem").expect("ca.pem");
+        fs::write(dir.join("empty.npmrc"), b"").expect("empty.npmrc");
+        fs::write(root.join("outside"), b"").expect("outside");
+        fs::create_dir(root.join("outside-dir")).expect("outside-dir");
+        let meta = fs::metadata(dir.join("ca.pem")).expect("ca.pem metadata");
+        (meta.dev(), meta.ino())
+    }
+
+    /// Replaces `cfg/name` with a symlink to `target`.
+    fn relink(root: &Path, name: &str, target: &Path) {
+        let path = root.join("cfg").join(name);
+        if path.is_dir() {
+            fs::remove_dir(&path).expect("remove dir");
+        } else {
+            fs::remove_file(&path).expect("remove file");
+        }
+        symlink(target, &path).expect("symlink");
+    }
+
+    /// Kills each dropped or weakened direct check: the layout `preview_config`
+    /// makes passes; an extra entry, a non-empty `empty-certs` or `empty.npmrc`,
+    /// a FIFO `empty.npmrc`, a symlink in place of any of the three, and a
+    /// `ca.pem` with another inode each refuse.
+    #[test]
+    fn the_preview_config_check_refuses_every_deviation() {
+        type Spoil = fn(&Path);
+        let cases: [(&str, Spoil); 8] = [
+            ("as made", |_| {}),
+            ("extra entry", |r| {
+                fs::write(r.join("cfg/extra"), b"").expect("extra")
+            }),
+            ("certs not empty", |r| {
+                fs::write(r.join("cfg/empty-certs/x.pem"), b"").expect("x.pem");
+            }),
+            ("certs a symlink", |r| {
+                relink(r, "empty-certs", &r.join("outside-dir"))
+            }),
+            ("npmrc not empty", |r| {
+                fs::write(r.join("cfg/empty.npmrc"), b"registry=x").expect("npmrc");
+            }),
+            ("npmrc a fifo", |r| {
+                let path = r.join("cfg/empty.npmrc");
+                fs::remove_file(&path).expect("remove npmrc");
+                let (fifo, mode) = (rustix::fs::FileType::Fifo, rustix::fs::Mode::RUSR);
+                rustix::fs::mknodat(rustix::fs::CWD, path.as_path(), fifo, mode, 0).expect("fifo");
+            }),
+            ("npmrc a symlink", |r| {
+                relink(r, "empty.npmrc", &r.join("outside"))
+            }),
+            ("ca another inode", |r| {
+                // Made before the old one goes, so its inode cannot be reused.
+                fs::write(r.join("cfg/ca.new"), b"pem").expect("new ca.pem");
+                fs::rename(r.join("cfg/ca.new"), r.join("cfg/ca.pem")).expect("replace");
+            }),
+        ];
+        for (name, spoil) in cases {
+            let root = tempfile::tempdir().expect("root");
+            let identity = config_dir(root.path());
+            spoil(root.path());
+            let checked = check_config_dir(&root.path().join("cfg"), identity);
+            assert_eq!(checked.is_ok(), name == "as made", "{name}: {checked:?}");
+        }
+        // The symlink to the snapshot itself, so following it would match.
+        let root = tempfile::tempdir().expect("root");
+        let identity = config_dir(root.path());
+        fs::rename(root.path().join("cfg/ca.pem"), root.path().join("snapshot")).expect("move");
+        symlink(root.path().join("snapshot"), root.path().join("cfg/ca.pem")).expect("symlink");
+        let checked = check_config_dir(&root.path().join("cfg"), identity);
+        assert!(
+            checked.is_err(),
+            "ca.pem a symlink to the snapshot: {checked:?}"
+        );
     }
 
     /// 2b-1, kills "verify accepts a missing, extra or writable preview
