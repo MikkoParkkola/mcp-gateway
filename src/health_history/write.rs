@@ -268,6 +268,50 @@ impl HealthHistory {
         self.0.lock().tick(now);
     }
 
+    /// The periodic sampler's step behind the health floor's gate: admission,
+    /// the sample and the tick under one history lock.
+    // red-phase: stub: today's sample and tick (two locks), no admission.
+    pub(crate) fn sample_and_tick_gated(
+        &self,
+        gate: &super::gate::HealthGate,
+        memory: Option<u64>,
+        sessions: u64,
+        now: u64,
+    ) -> super::gate::Admit {
+        let _ = gate;
+        #[cfg(test)]
+        super::pause_points::at(super::pause_points::Point::SamplerBeforeLock, &self.key());
+        self.sample(memory, sessions, now);
+        #[cfg(test)]
+        count_sample(&self.key());
+        #[cfg(test)]
+        super::pause_points::at(super::pause_points::Point::SampleBeforeTick, &self.key());
+        self.tick(now);
+        super::gate::Admit::Run
+    }
+
+    /// This history's key for the pause points and the sample count.
+    #[cfg(test)]
+    pub(crate) fn key(&self) -> String {
+        format!("{:p}", std::ptr::from_ref(self))
+    }
+
+    /// Samples applied through the gated step (a test probe; rows assert deltas).
+    #[cfg(test)]
+    pub(crate) fn sample_count(&self) -> u64 {
+        samples()
+            .lock()
+            .get(&self.key())
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Whether the history lock is free right now (a test probe).
+    #[cfg(test)]
+    pub(crate) fn lock_is_free(&self) -> bool {
+        self.0.try_lock().is_some()
+    }
+
     /// Mark whether this run's history is saved; the saver sets it.
     pub(crate) fn set_incomplete(&self, incomplete: bool) {
         self.0.lock().incomplete = incomplete;
@@ -289,4 +333,17 @@ impl HealthHistory {
         inner.saved_at = inner.last_tick;
         serde_json::to_vec(&*inner).ok()
     }
+}
+
+#[cfg(test)]
+fn samples() -> &'static parking_lot::Mutex<std::collections::HashMap<String, u64>> {
+    static SAMPLES: std::sync::OnceLock<
+        parking_lot::Mutex<std::collections::HashMap<String, u64>>,
+    > = std::sync::OnceLock::new();
+    SAMPLES.get_or_init(Default::default)
+}
+
+#[cfg(test)]
+fn count_sample(key: &str) {
+    *samples().lock().entry(key.to_owned()).or_default() += 1;
 }

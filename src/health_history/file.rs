@@ -75,27 +75,94 @@ pub(crate) enum Wait {
     SkipIfBusy,
 }
 
+/// What one call to the save core did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveOutcome {
+    /// The snapshot was written; the incomplete flag is cleared.
+    Saved,
+    /// Another save held SAVES (a [`Wait::SkipIfBusy`] save); nothing changed.
+    Busy,
+    /// The health floor's gate turned the periodic save away; nothing changed.
+    GateSkipped,
+    /// The checkpoint attempt this save belonged to ended first; nothing changed.
+    Superseded,
+    /// Encoding, the directory or the write failed; the flag is set, the cause logged.
+    Failed,
+}
+
+/// The check a save runs under SAVES, before it snapshots.
+#[derive(Clone, Copy)]
+pub(crate) enum Check<'a> {
+    /// The startup and shutdown saves: no check.
+    None,
+    /// The periodic save: the health floor's gate.
+    Gate(&'a super::gate::HealthGate),
+    /// The checkpoint worker: its attempt is still live.
+    Live(&'a std::sync::atomic::AtomicBool),
+}
+
 /// Save `history` to `path` at `now`: a temporary file, flushed, renamed over
 /// the old one. Returns whether the rename completed (false for a
 /// [`Wait::SkipIfBusy`] save that skipped, which leaves the flag alone); a failure marks the
 /// run's history incomplete until a later save succeeds. The snapshot through
 /// the rename runs under [`SAVES`]; the outcome is logged after it is released.
 pub(crate) fn save(history: &HealthHistory, path: &Path, now: u64, wait: Wait) -> bool {
+    save_with(history, path, now, wait, Check::None) == SaveOutcome::Saved
+}
+
+/// The periodic save behind the health floor's gate.
+pub(crate) fn save_gated(
+    history: &HealthHistory,
+    path: &Path,
+    now: u64,
+    gate: &super::gate::HealthGate,
+) -> SaveOutcome {
+    #[cfg(test)]
+    super::pause_points::at(super::pause_points::Point::SaverBeforeLock, &path_key(path));
+    save_with(history, path, now, Wait::SkipIfBusy, Check::Gate(gate))
+}
+
+/// The checkpoint worker's save: it waits for SAVES, then writes only while
+/// its attempt is live.
+pub(crate) fn checkpoint_save(
+    history: &HealthHistory,
+    path: &Path,
+    now: u64,
+    live: &std::sync::atomic::AtomicBool,
+) -> SaveOutcome {
+    save_with(history, path, now, Wait::Block, Check::Live(live))
+}
+
+/// The one save core: SAVES per `wait`, `check` under it, then the snapshot
+/// and the write. Only a write attempt sets the incomplete flag (under SAVES,
+/// so two saves set it in the order they wrote); a skip never touches it.
+fn save_with(
+    history: &HealthHistory,
+    path: &Path,
+    now: u64,
+    wait: Wait,
+    check: Check<'_>,
+) -> SaveOutcome {
     let outcome = {
         let _one_at_a_time = match wait {
             Wait::Block => SAVES.lock(),
             Wait::SkipIfBusy => match SAVES.try_lock() {
                 Some(guard) => guard,
-                None => return false,
+                None => return SaveOutcome::Busy,
             },
         };
+        // red-phase: the check is not applied yet.
+        let _ = check;
+        #[cfg(test)]
+        super::pause_points::at(super::pause_points::Point::AfterLiveCheck, &path_key(path));
         let outcome = snapshot_and_write(history, path, now);
-        // Under the lock, so two saves set the flag in the order they wrote.
         history.set_incomplete(outcome.is_err());
         outcome
     };
     let Err(why) = outcome else {
-        return true;
+        #[cfg(test)]
+        count_write(path);
+        return SaveOutcome::Saved;
     };
     match why {
         Unsaved::Encode => warn!(
@@ -107,12 +174,14 @@ pub(crate) fn save(history: &HealthHistory, path: &Path, now: u64, wait: Wait) -
             "Failed to save the health history; this run's history is incomplete until a save succeeds"
         ),
     }
-    false
+    SaveOutcome::Failed
 }
 
 /// The snapshot and its atomic write; the caller holds [`SAVES`].
 fn snapshot_and_write(history: &HealthHistory, path: &Path, now: u64) -> Result<(), Unsaved> {
     let bytes = history.encode(now).ok_or(Unsaved::Encode)?;
+    #[cfg(test)]
+    super::pause_points::at(super::pause_points::Point::AfterSnapshot, &path_key(path));
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(Unsaved::Dir)?;
     }
@@ -123,4 +192,40 @@ fn snapshot_and_write(history: &HealthHistory, path: &Path, now: u64) -> Result<
         crate::config_persistence::Symlink::Replace,
     )
     .map_err(Unsaved::Write)
+}
+
+/// The key the pause points and the write count use for `path`.
+#[cfg(test)]
+pub(crate) fn path_key(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
+fn writes() -> &'static parking_lot::Mutex<std::collections::HashMap<String, u64>> {
+    static WRITES: OnceLock<parking_lot::Mutex<std::collections::HashMap<String, u64>>> =
+        OnceLock::new();
+    WRITES.get_or_init(Default::default)
+}
+
+#[cfg(test)]
+fn count_write(path: &Path) {
+    *writes().lock().entry(path_key(path)).or_default() += 1;
+}
+
+/// Completed writes to `path` in this process (a test probe; rows assert deltas).
+#[cfg(test)]
+pub(crate) fn write_count(path: &Path) -> u64 {
+    writes()
+        .lock()
+        .get(&path_key(path))
+        .copied()
+        .unwrap_or_default()
+}
+
+/// Serialises the rows that hold SAVES or count writes, so they never see
+/// each other's saves (legacy saves elsewhere can still hold SAVES briefly).
+#[cfg(test)]
+pub(crate) fn saves_test_lock() -> parking_lot::MutexGuard<'static, ()> {
+    static LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+    LOCK.lock()
 }
