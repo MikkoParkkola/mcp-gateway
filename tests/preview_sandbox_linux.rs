@@ -576,6 +576,7 @@ async fn fetching(script: &str) -> Option<Started> {
             &[],
             far(),
             None,
+            None,
         ),
     )
     .await
@@ -634,7 +635,14 @@ async fn r1_a_fetching_preview_runs_its_target_after_the_handshake() {
 async fn r6b_a_helper_that_never_connects_is_refused() {
     let started = tokio::time::timeout(
         FETCH_GUARD,
-        start_fetching_with_helper(Path::new("/bin/true"), &shell("true"), &[], far(), None),
+        start_fetching_with_helper(
+            Path::new("/bin/true"),
+            &shell("true"),
+            &[],
+            far(),
+            None,
+            None,
+        ),
     )
     .await
     .expect("the refusal came within the guard");
@@ -685,6 +693,7 @@ async fn r6b_a_dropped_start_leaves_no_sandbox_running() {
         &target,
         &[],
         far(),
+        None,
         None,
     ));
     let first = std::future::poll_fn(|cx| Poll::Ready(start.as_mut().poll(cx))).await;
@@ -778,9 +787,9 @@ async fn ca_files_are_read_only_from_the_run_child() {
 }
 
 /// 2b-1: the CA snapshot (in the proxy's private directory) sits under host
-/// `/tmp` here, which the staging tmpfs covers; that is what makes "bind by
-/// pathname after staging" fail on this host. Fails loudly if the host puts
-/// the private directory elsewhere (then the design's fallback applies).
+/// `/tmp`, which the staging tmpfs covers; that is what makes "bind by
+/// pathname after staging" fail. The rows pass no `XDG_RUNTIME_DIR`, so the
+/// directory goes to the temp dir; this fails loudly if that is not `/tmp`.
 #[tokio::test]
 async fn the_ca_snapshot_sits_under_tmp_on_this_host() {
     let Some(Started { mut child, .. }) = fetching("sleep 30").await else {

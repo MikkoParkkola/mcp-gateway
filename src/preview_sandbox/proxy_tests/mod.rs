@@ -173,8 +173,13 @@ async fn rig() -> Rig {
         target: Mutex::new(None),
     });
     let interfaces = Arc::new(FakeInterfaces(Mutex::new(Some(Vec::new()))));
-    let proxy = AllowlistProxy::bind(resolve.clone(), connect.clone(), interfaces.clone())
-        .expect("proxy bind");
+    let proxy = AllowlistProxy::bind(
+        std::env::var_os("XDG_RUNTIME_DIR"),
+        resolve.clone(),
+        connect.clone(),
+        interfaces.clone(),
+    )
+    .expect("proxy bind");
     Rig {
         proxy,
         resolve,

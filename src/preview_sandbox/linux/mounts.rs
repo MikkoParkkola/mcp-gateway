@@ -688,13 +688,13 @@ mod tests {
         let cases: [(&str, Spoil); 8] = [
             ("as made", |_| {}),
             ("extra entry", |r| {
-                fs::write(r.join("cfg/extra"), b"").expect("extra")
+                fs::write(r.join("cfg/extra"), b"").expect("extra");
             }),
             ("certs not empty", |r| {
                 fs::write(r.join("cfg/empty-certs/x.pem"), b"").expect("x.pem");
             }),
             ("certs a symlink", |r| {
-                relink(r, "empty-certs", &r.join("outside-dir"))
+                relink(r, "empty-certs", &r.join("outside-dir"));
             }),
             ("npmrc not empty", |r| {
                 fs::write(r.join("cfg/empty.npmrc"), b"registry=x").expect("npmrc");
@@ -706,7 +706,7 @@ mod tests {
                 rustix::fs::mknodat(rustix::fs::CWD, path.as_path(), fifo, mode, 0).expect("fifo");
             }),
             ("npmrc a symlink", |r| {
-                relink(r, "empty.npmrc", &r.join("outside"))
+                relink(r, "empty.npmrc", &r.join("outside"));
             }),
             ("ca another inode", |r| {
                 // Made before the old one goes, so its inode cannot be reused.
