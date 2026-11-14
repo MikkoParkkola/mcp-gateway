@@ -249,7 +249,7 @@ pub(crate) async fn lookup(
                 .and_then(|v| v.trim().parse::<u64>().ok())
             {
                 Some(secs) => format!(" (retry after {secs} s)"),
-                None => " (retry after: unreadable)".to_owned(),
+                None => mutant!("R1", String::new(), " (retry after: unreadable)".to_owned()),
             },
         };
         return Err(format!(

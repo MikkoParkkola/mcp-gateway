@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MCP Gateway - Universal Model Context Protocol Gateway
 
+#[macro_use]
+mod mutant_macro;
 mod allocator;
 mod main_stack;
+mod mutant;
 mod parse_errors;
 
 use std::process::ExitCode;
