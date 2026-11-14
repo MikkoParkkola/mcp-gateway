@@ -519,9 +519,16 @@ async fn planned_tree(
 const IGNORES_TERM_READY: &str =
     "trap '' TERM\necho ready > ready.mark\nwhile :; do sleep 0.05; done";
 
+/// `at` moved back by `by`: the instants these rows drive are well after boot.
+fn before(at: std::time::Instant, by: Duration) -> std::time::Instant {
+    at.checked_sub(by)
+        .expect("an instant after the host's boot")
+}
+
 /// The plan's kill instant, and the slack the stop keeps past the reap deadline.
 fn kill_and_margin(t0: std::time::Instant) -> (std::time::Instant, Duration) {
-    let margin = super::super::super::reaper::KILL_RESERVE - super::super::REAP_DEADLINE;
+    let margin =
+        super::super::super::reaper::KILL_RESERVE.saturating_sub(super::super::REAP_DEADLINE);
     (t0 + Duration::from_secs(2), margin)
 }
 
@@ -543,7 +550,7 @@ async fn a_step_landing_past_the_kill_still_sends_the_planned_sigterm_first() {
             "the late step sent the planned SIGTERM"
         );
         assert_eq!(tree.group_signals_sent, 0, "and did not kill with it");
-        tree.reap_step(late + MIN_PHASE - Duration::from_millis(1));
+        tree.reap_step(before(late + MIN_PHASE, Duration::from_millis(1)));
         assert_eq!(
             tree.group_signals_sent, 0,
             "the SIGTERM keeps its minimum phase"
@@ -567,7 +574,7 @@ async fn a_sigterm_sent_just_before_the_kill_still_gets_the_minimum_phase() {
     let t0 = planned_tree(&t, &w, &end).await;
     let (kill_at, _) = kill_and_margin(t0);
     with_tree(&t, |tree| {
-        let sent = kill_at - Duration::from_millis(5);
+        let sent = before(kill_at, Duration::from_millis(5));
         tree.reap_step(sent);
         assert_eq!(tree.term_signals_sent, 1, "SIGTERM inside its window");
         tree.reap_step(kill_at);
@@ -575,7 +582,7 @@ async fn a_sigterm_sent_just_before_the_kill_still_gets_the_minimum_phase() {
             tree.group_signals_sent, 0,
             "not killed 5 ms after its SIGTERM"
         );
-        tree.reap_step(sent + MIN_PHASE - Duration::from_millis(1));
+        tree.reap_step(before(sent + MIN_PHASE, Duration::from_millis(1)));
         assert_eq!(
             tree.group_signals_sent, 0,
             "the SIGTERM keeps its minimum phase"
@@ -599,10 +606,10 @@ async fn the_last_late_step_with_room_for_the_minimum_phase_still_sends_sigterm(
     let t0 = planned_tree(&t, &w, &end).await;
     let (kill_at, margin) = kill_and_margin(t0);
     with_tree(&t, |tree| {
-        tree.reap_step(kill_at + margin - MIN_PHASE);
+        tree.reap_step(before(kill_at + margin, MIN_PHASE));
         assert_eq!(tree.term_signals_sent, 1, "the minimum phase fits exactly");
         assert_eq!(tree.group_signals_sent, 0, "and is not cut short");
-        tree.reap_step(kill_at + margin - Duration::from_millis(1));
+        tree.reap_step(before(kill_at + margin, Duration::from_millis(1)));
         assert_eq!(tree.group_signals_sent, 0, "the kill waits for the limit");
         tree.reap_step(kill_at + margin);
         assert!(tree.group_signals_sent > 0, "the kill lands at the limit");
@@ -620,7 +627,7 @@ async fn a_step_past_the_margin_kills_at_once_without_sigterm() {
     let t0 = planned_tree(&t, &w, &end).await;
     let (kill_at, margin) = kill_and_margin(t0);
     with_tree(&t, |tree| {
-        tree.reap_step(kill_at + margin - MIN_PHASE + Duration::from_millis(1));
+        tree.reap_step(before(kill_at + margin, MIN_PHASE) + Duration::from_millis(1));
         assert_eq!(tree.term_signals_sent, 0, "no room for a SIGTERM wait");
         assert!(tree.group_signals_sent > 0, "killed at once");
     })
@@ -646,8 +653,9 @@ async fn a_cut_during_the_late_sigterm_wait_still_kills_by_its_margin() {
         );
         // The new kill instant plus the slack lands 20 ms after the late step.
         let limit = late + Duration::from_millis(20);
-        end.deadline().move_earlier(limit - margin + KILL_RESERVE);
-        tree.reap_step(limit - Duration::from_millis(1));
+        end.deadline()
+            .move_earlier(before(limit, margin) + KILL_RESERVE);
+        tree.reap_step(before(limit, Duration::from_millis(1)));
         assert_eq!(
             tree.group_signals_sent, 0,
             "the kill waits for the new limit"
@@ -685,10 +693,10 @@ fn cut_after_a_starved_plan(
         Some(Arc::clone(deadline)),
     );
     assert!(
-        matches!(tree.reap_step(s - back), Reap::Pending),
+        matches!(tree.reap_step(before(s, back)), Reap::Pending),
         "the plan starts"
     );
-    let term_at = s - back + Duration::from_secs(1);
+    let term_at = before(s, back) + Duration::from_secs(1);
     deadline.move_earlier(s + cut_in + KILL_RESERVE);
     let (cut, set_at) = deadline.get_with_set_at().expect("the cut is set");
     assert_eq!(
@@ -731,7 +739,7 @@ async fn a_sigterm_due_before_a_short_cut_was_made_is_still_sent() {
         );
         assert_eq!(terms, 1, "the owed SIGTERM went out");
         assert_eq!(kills, 0, "and the kill waits for its minimum phase");
-        tree.reap_step(step + MIN_PHASE - Duration::from_millis(1));
+        tree.reap_step(before(step + MIN_PHASE, Duration::from_millis(1)));
         assert_eq!(
             tree.group_signals_sent, 0,
             "the SIGTERM keeps its minimum phase"
