@@ -165,6 +165,13 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         Method::POST,
         &[(SETTINGS_ROUTES, "s1_budget_diff")],
     ),
+    // The table's gateway has no reload context, so its admin answer is 503;
+    // this test lists from a gateway with one and pins the served listing.
+    (
+        "/ui/api/settings/secrets/unused",
+        Method::GET,
+        &[(UNUSED_ROUTES, "unused_listed_with_write_time")],
+    ),
     // The table sends no `store` query, so its admin answer is 400; this test
     // names an unused files entry and pins the served delete.
     (

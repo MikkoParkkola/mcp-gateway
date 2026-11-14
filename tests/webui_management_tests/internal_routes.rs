@@ -521,13 +521,14 @@ const ROWS: &[Row] = &[
         Payload::Json("{}"),
         [401, 403, 403, 422],
     ),
-    // src/gateway/ui/settings_unused.rs (list_unused; reads only)
+    // src/gateway/ui/settings_unused.rs (list_unused; this gateway has no reload
+    // context, so the admin's answer is the fixed reload-not-enabled 503)
     row(
         "/ui/api/settings/secrets/unused",
         Method::GET,
         "/ui/api/settings/secrets/unused",
         Payload::None,
-        [401, 403, 403, 200],
+        [401, 403, 403, 503],
     ),
     // src/gateway/ui/settings_unused.rs (delete_unused_entry; no `store` query,
     // so the admin's answer is the bad-name refusal before any lock or file)
