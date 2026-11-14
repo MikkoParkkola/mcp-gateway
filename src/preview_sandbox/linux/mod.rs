@@ -147,6 +147,7 @@ pub(super) async fn start_fetching(
     protected: &[PathBuf],
     deadline: tokio::time::Instant,
     ca_bundle: Option<OsString>,
+    runtime_dir: Option<OsString>,
 ) -> Result<Started, Refusal> {
     use super::control::{CONTROL_BOUNDS, accept_helper, serve_session};
     use super::proxy::{AllowlistProxy, System};
@@ -155,8 +156,13 @@ pub(super) async fn start_fetching(
     let begun = tokio::time::Instant::now();
     let unshare = find_unshare()?;
     let mut plan = build_plan(target, protected, std::env::var_os("PATH").as_deref())?;
-    let proxy = AllowlistProxy::bind(Arc::new(System), Arc::new(System), Arc::new(System))
-        .map_err(|e| Refusal::Step(format!("starting the fetch proxy ({e})")))?;
+    let proxy = AllowlistProxy::bind(
+        runtime_dir,
+        Arc::new(System),
+        Arc::new(System),
+        Arc::new(System),
+    )
+    .map_err(|e| Refusal::Step(format!("starting the fetch proxy ({e})")))?;
     // Beside the proxy socket, in the proxy's owner-only directory, removed
     // with it when the proxy drops.
     let control = proxy.unix_path().with_file_name("control.sock");

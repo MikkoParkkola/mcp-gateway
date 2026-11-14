@@ -193,13 +193,15 @@ pub(crate) struct AllowlistProxy {
 
 impl AllowlistProxy {
     /// Bind one Unix socket in a fresh owner-only directory, one proxy per
-    /// preview. The listener stays bound for the proxy's life; outside a
+    /// preview, under `runtime_dir` (the `XDG_RUNTIME_DIR` value) when it is
+    /// absolute, else the temp dir. The listener stays bound for the proxy's life; outside a
     /// fetch it answers 407 to everything.
     ///
     /// Synchronous on purpose: the sockets are bound with `std` and handed to
     /// tokio, so a preview's proxy needs no `await` to exist. The
     /// accept task is spawned, so a runtime context must be current.
     pub(crate) fn bind(
+        runtime_dir: Option<std::ffi::OsString>,
         resolve: Arc<dyn Resolve>,
         connect: Arc<dyn Connect>,
         interfaces: Arc<dyn Interfaces>,
@@ -217,7 +219,7 @@ impl AllowlistProxy {
         });
         // Every fallible step comes first, so a failure leaves no task or
         // directory behind; the task is spawned only once all is bound.
-        let dir = private_dir()?;
+        let dir = private_dir(&runtime_base(runtime_dir))?;
         let unix_path = dir.join("proxy.sock");
         let unix = std::os::unix::net::UnixListener::bind(&unix_path)
             .and_then(|l| l.set_nonblocking(true).map(|()| l))
@@ -420,19 +422,17 @@ fn runtime_base(xdg: Option<std::ffi::OsString>) -> PathBuf {
     }
 }
 
-/// A fresh owner-only directory under `$XDG_RUNTIME_DIR` when absolute, else
-/// the temp dir, with a random name so another local user cannot pre-create
+/// A fresh owner-only directory under `base`, with a random name so another local user cannot pre-create
 /// it; made exclusively, so an existing path is an error and a new name is
 /// tried.
-fn private_dir() -> io::Result<PathBuf> {
+fn private_dir(base: &Path) -> io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt as _;
     let mut last = io::Error::other("no private directory name was free");
     for _ in 0..8 {
         let mut bytes = [0u8; 8];
         os_random(&mut bytes)?;
         let name = hex::encode(bytes);
-        let dir =
-            runtime_base(std::env::var_os("XDG_RUNTIME_DIR")).join(format!("mcp-gw-proxy-{name}"));
+        let dir = base.join(format!("mcp-gw-proxy-{name}"));
         match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = e,
