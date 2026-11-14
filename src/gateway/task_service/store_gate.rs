@@ -246,7 +246,7 @@ fn bound(state: GateState, kind: Kind, stamp: &Stamp) -> Option<Instant> {
             stamp.deadline.map(|d| d + EXTERNAL_GRACE)
         }
         (GateState::Paused(_) | GateState::Certified(_), _) => stamp.backstop,
-        _ => None,
+        _ => mutant!("m15", stamp.backstop, None),
     }
 }
 
@@ -350,7 +350,7 @@ impl TaskGate {
     fn restamp(&self, stamp: &mut Stamp) -> GateState {
         let g = self.tx.borrow();
         if let GateState::Paused(attempt) | GateState::Certified(attempt) = g.state
-            && attempt != stamp.attempt
+            && (mutant!("m14", false, attempt != stamp.attempt))
         {
             stamp.attempt = attempt;
             stamp.deadline = g.deadline;
