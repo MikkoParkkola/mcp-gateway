@@ -190,3 +190,30 @@ async fn x1_the_dispatched_call_carries_the_callers_own_arguments() {
          reconstruction of them: {seen:?}"
     );
 }
+
+/// R7 (recent writes): a task-augmented call with exactly one dispatched
+/// round counts one recent write, as the synchronous call it stands for does.
+/// The mock lists no annotations, so its tool counts as a write.
+#[tokio::test]
+async fn r7_a_task_augmented_call_counts_one_write() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let total = || {
+        state
+            .meta_mcp
+            .recent_writes()
+            .sample(std::time::Instant::now())
+            .writes_total
+    };
+    let before = total();
+    let created = post(
+        &state,
+        "key-a",
+        task_invoke(11, "r7-key", json!({ "q": 1 })),
+    )
+    .await;
+    let fetched = poll_until_terminal(&state, "key-a", &task_id(&created)).await;
+    assert_carries_the_backend_result(&fetched);
+    std::assert_eq!(mock.calls(), 1, "premise: one dispatched round: {fetched}");
+    std::assert_eq!(total() - before, 1, "{fetched}");
+}
