@@ -23,6 +23,15 @@ fn block() -> &'static str {
     &INDEX[start..start + end]
 }
 
+/// Whether the page's top-level function `name` has `line` as one whole line
+/// of its body: a commented-out or reworded call does not count.
+fn calls_line(name: &str, line: &str) -> bool {
+    let head = format!("\nfunction {name}(");
+    let start = INDEX.find(&head).expect("the function exists") + 1;
+    let end = INDEX[start..].find("\n}\n").expect("the function ends");
+    INDEX[start..start + end].lines().any(|l| l.trim() == line)
+}
+
 /// The stub environment: a tiny DOM keyed by id, a fetch that records each
 /// call and answers from `replies`, and traps on every storage-like sink.
 const STUB: &str = r"
@@ -267,7 +276,8 @@ out({ first, kept, silly: dom['kl-status'].textContent });
 
 /// UIFORM.2: anything but a well-formed answer shows one fixed line, renders
 /// no row and drops the held query: a failed status, a body that is not JSON,
-/// rows that are not an array, a row field that is not text, too many rows.
+/// rows that are not an array, a row field that is not text, too many rows,
+/// a scope other than the retained rows the page says it searched.
 /// Mutant: `unwrap_or_default` style leniency, render what parses.
 #[test]
 fn a_bad_answer_shows_a_fixed_line_and_renders_no_rows() {
@@ -276,6 +286,7 @@ const bad = [
   { status: 500 }, { status: 200, bad: true }, { status: 200, body: { rows: 'x' } },
   page([{ ...row('s'), subject: { a: 1 } }]),
   page(Array.from({ length: 201 }, (_, i) => row('s' + i))),
+  page([row('s')], { scope: 'all' }),
 ];
 const seen = [];
 for (const r of bad) {
@@ -363,9 +374,12 @@ out({ n1, said, n2: calls.length });
     assert_eq!(got["n2"], 0);
 }
 
-/// UIFORM.3: the nav link and the page exist but the link starts hidden, and
-/// the page's own `renderAuth` shows it for an admin state only.
-/// Mutant: a link that is visible by default, or shown for signed-in users.
+/// UIFORM.3: the page and its nav link exist for an admin only. The link starts
+/// hidden; `renderAuth` hands every state to the block's `keyLookupOnAuth`,
+/// which shows the link and the page for an admin and hides both for any
+/// other state, so typing `#key-audit` shows a non-admin nothing.
+/// Mutant: hide only the link, show either for a signed-in user, or drop the
+/// call from `renderAuth`.
 #[test]
 fn the_page_is_hidden_from_everyone_but_an_admin() {
     let link = INDEX
@@ -379,37 +393,68 @@ fn the_page_is_hidden_from_everyone_but_an_admin() {
     );
     assert!(INDEX.contains(r#"id="page-key-audit""#), "the page exists");
     assert!(
-        INDEX.contains("navKeyAudit.style.display = state === 'admin' ? '' : 'none'"),
-        "renderAuth must show the link for an admin state only"
+        calls_line("renderAuth", "keyLookupOnAuth(state);"),
+        "renderAuth must hand its state to the lookup block"
     );
+    let got = run(r"
+const seen = [];
+for (const s of ['off', 'admin', 'signed_out', 'admin', 'signed_in']) {
+  keyLookupOnAuth(s);
+  seen.push([s, dom['nav-key-audit'].style.display, dom['page-key-audit'].style.display]);
+}
+out(seen);
+");
+    for case in got.as_array().unwrap() {
+        let want = if case[0] == "admin" { "" } else { "none" };
+        assert_eq!(case[1], want, "the link: {case}");
+        assert_eq!(case[2], want, "the page: {case}");
+    }
 }
 
-/// UIFORM.1: Clear, leaving the page and losing admin standing all drop the
-/// held query, the field and the rows. Mutant: skip the clear in `onHash` or
-/// in `renderAuth`, or leave the held query set.
+/// UIFORM.1: Clear, leaving the page and losing admin standing each drop the
+/// held token, the field and the rows; staying on the page keeps them.
+/// `onHash` and `renderAuth` hand their page and state to the block.
+/// Mutant: skip the drop in either hook, drop the call from either, or leave
+/// the held token set.
 #[test]
 fn clear_leaving_and_losing_admin_drop_everything() {
+    assert!(
+        calls_line("onHash", "keyLookupOnPage(hash);"),
+        "onHash must hand its page to the lookup block"
+    );
     let got = run(r"
-replies = [page([row('s1')], { next_cursor: 'c1' })];
-await submit('ada@corp.test');
-const before = keyLookupHeld !== null;
-keyLookupClear();
-out({ before, held: keyLookupHeld, field: dom['kl-email'].value,
+replies = [1, 2, 3].map((n) => page([row('s' + n)], { next_cursor: 'c' + n }));
+const look = () => ({ held: keyLookupHeld, field: dom['kl-email'].value,
   rows: dom['kl-rows'].children.length, next: dom['kl-next'].hidden });
+const seen = {};
+await submit('ada@corp.test');
+dom['kl-email'].value = 'half typed';
+keyLookupClear();
+seen.clear = look();
+await submit('ada@corp.test');
+dom['kl-email'].value = 'half typed';
+keyLookupOnPage('key-audit');
+seen.stay = look();
+keyLookupOnPage('dashboard');
+seen.leave = look();
+await submit('ada@corp.test');
+dom['kl-email'].value = 'half typed';
+keyLookupOnAuth('signed_in');
+seen.lose = look();
+out(seen);
 ");
-    assert_eq!(got["before"], true);
-    assert_eq!(got["held"], serde_json::Value::Null);
-    assert_eq!(got["field"], "");
-    assert_eq!(got["rows"], 0);
-    assert_eq!(got["next"], true);
-    assert!(
-        INDEX.contains("if (hash !== 'key-audit') keyLookupClear();"),
-        "leaving the page must drop the query"
+    assert_eq!(
+        got["stay"]["held"]["cursor"], "c2",
+        "staying keeps the token: {got}"
     );
-    assert!(
-        INDEX.contains("if (state !== 'admin') keyLookupClear();"),
-        "losing admin standing must drop the query"
-    );
+    assert_eq!(got["stay"]["rows"], 1, "staying keeps the rows: {got}");
+    for how in ["clear", "leave", "lose"] {
+        let after = &got[how];
+        assert_eq!(after["held"], serde_json::Value::Null, "{how}: {got}");
+        assert_eq!(after["field"], "", "{how}: {got}");
+        assert_eq!(after["rows"], 0, "{how}: {got}");
+        assert_eq!(after["next"], true, "{how}: {got}");
+    }
 }
 
 /// Ruling row: the email is in the POST body and in no other part of the
@@ -510,9 +555,10 @@ out(results);
     }
 }
 
-/// A second submit while a lookup is running changes nothing: the new email
-/// stays in its field, no second request goes out, and the first answer is
-/// the one shown. Mutant: clear the field or the page before the busy check.
+/// A second submit while a lookup is running sends nothing: the new email is
+/// still emptied from its field (pressing Look up always empties it), the page
+/// says a lookup is running, no second request goes out, and the first answer
+/// is the one shown. Mutant: keep the field, or skip the busy check.
 #[test]
 fn a_second_submit_while_busy_changes_nothing() {
     let got = run(r"
@@ -525,11 +571,19 @@ await Promise.resolve();
 document.getElementById('kl-email').value = 'bob@corp.test';
 await submitKeyLookup({ preventDefault() {} });
 const kept = dom['kl-email'].value;
+const said = dom['kl-status'].textContent;
 release();
 await pending;
-out({ kept, n: calls.length, rows: dom['kl-rows'].children.length });
+out({ kept, said, n: calls.length, rows: dom['kl-rows'].children.length });
 ");
-    assert_eq!(got["kept"], "bob@corp.test");
+    assert_eq!(
+        got["kept"], "",
+        "a refused submit must still empty the field"
+    );
+    assert!(
+        got["said"].as_str().unwrap().contains("still running"),
+        "the refusal says why: {got}"
+    );
     assert_eq!(got["n"], 1);
     assert_eq!(got["rows"], 1);
 }
