@@ -6,6 +6,7 @@
 //! the total + 1 s (the reap below kills it there and fails the row).
 #![cfg(unix)]
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -56,7 +57,6 @@ fn write_config(root: &Path, total: Duration, tls: Option<&Path>) -> PathBuf {
     );
     if let Some(dir) = tls {
         let path = |name: &str| dir.join(name).display().to_string();
-        use std::fmt::Write as _;
         write!(
             yaml,
             "mtls:\n  enabled: true\n  server_cert: {}\n  server_key: {}\n  ca_cert: {}\n  \
