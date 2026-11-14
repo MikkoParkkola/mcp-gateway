@@ -44,6 +44,7 @@ mod os {
         _: &[std::path::PathBuf],
         _: tokio::time::Instant,
         _: Option<std::ffi::OsString>,
+        _: Option<std::ffi::OsString>,
     ) -> Result<Started, Refusal> {
         Err(Refusal::Unsupported)
     }
@@ -230,7 +231,16 @@ pub async fn start_fetching(
         .map_err(|e| Refusal::Step(format!("finding the gateway binary ({e})")))?;
     // A closure: `var_os` is generic, so its path alone is not a `Fn(&str)`.
     let ca_bundle = ambient_ca_bundle(|name| std::env::var_os(name));
-    os::start_fetching(&gateway, target, protected, deadline, ca_bundle).await
+    let runtime_dir = ambient_runtime_dir(|name| std::env::var_os(name));
+    os::start_fetching(
+        &gateway,
+        target,
+        protected,
+        deadline,
+        ca_bundle,
+        runtime_dir,
+    )
+    .await
 }
 
 /// The `SSL_CERT_FILE` value `lookup` gives, passed on as given (a value that
@@ -240,9 +250,16 @@ fn ambient_ca_bundle(lookup: impl Fn(&str) -> Option<OsString>) -> Option<OsStri
     lookup("SSL_CERT_FILE")
 }
 
+/// The `XDG_RUNTIME_DIR` value `lookup` gives, passed on as given: where the
+/// fetch proxy's private directory goes when it is absolute.
+fn ambient_runtime_dir(lookup: impl Fn(&str) -> Option<OsString>) -> Option<OsString> {
+    lookup("XDG_RUNTIME_DIR")
+}
+
 /// [`start_fetching`] with the gateway binary named, for integration tests,
-/// as [`start_with_helper`] is for [`start`]; `ca_bundle` stands for the
-/// `SSL_CERT_FILE` value, so no test changes the process environment.
+/// as [`start_with_helper`] is for [`start`]; `ca_bundle` and `runtime_dir`
+/// stand for the `SSL_CERT_FILE` and `XDG_RUNTIME_DIR` values, so no test
+/// changes the process environment.
 ///
 /// # Errors
 ///
@@ -254,8 +271,9 @@ pub async fn start_fetching_with_helper(
     protected: &[PathBuf],
     deadline: tokio::time::Instant,
     ca_bundle: Option<OsString>,
+    runtime_dir: Option<OsString>,
 ) -> Result<Started, Refusal> {
-    os::start_fetching(gateway, target, protected, deadline, ca_bundle).await
+    os::start_fetching(gateway, target, protected, deadline, ca_bundle, runtime_dir).await
 }
 
 /// How long the probe's `/bin/true` may take through the whole setup.
@@ -319,7 +337,8 @@ async fn start_fetching_is_unsupported_off_linux() {
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let started =
-        start_fetching_with_helper(Path::new("/bin/true"), &target, &[], deadline, None).await;
+        start_fetching_with_helper(Path::new("/bin/true"), &target, &[], deadline, None, None)
+            .await;
     assert!(matches!(started, Err(Refusal::Unsupported)));
 }
 
@@ -334,4 +353,17 @@ fn ambient_ca_bundle_passes_the_value_through() {
     let lookup = move |name: &str| (name == "SSL_CERT_FILE").then(|| given.clone());
     assert_eq!(ambient_ca_bundle(lookup), Some(odd));
     assert_eq!(ambient_ca_bundle(|_| None), None);
+}
+
+/// Kills "the gateway's `XDG_RUNTIME_DIR` is dropped", which would move the
+/// proxy's private directory to the temp dir.
+#[cfg(all(test, unix))]
+#[test]
+fn ambient_runtime_dir_passes_the_value_through() {
+    let lookup = |name: &str| (name == "XDG_RUNTIME_DIR").then(|| OsString::from("/run/user/7"));
+    assert_eq!(
+        ambient_runtime_dir(lookup),
+        Some(OsString::from("/run/user/7"))
+    );
+    assert_eq!(ambient_runtime_dir(|_| None), None);
 }
