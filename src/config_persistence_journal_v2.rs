@@ -196,7 +196,19 @@ pub(crate) fn create_intended(
     Ok(JournalSession {
         target: locked.target.clone(),
         state,
+        backing: Backing::Journal,
     })
+}
+
+/// Which file a session's state lives in. The delivery core is shared; only `persist` and
+/// `finish` look at this.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Backing {
+    /// The config's write journal.
+    Journal,
+    /// The framed abandoned file: rewritten whole, never finished as a journal.
+    Abandoned,
 }
 
 #[cfg(test)]
@@ -204,11 +216,44 @@ pub(crate) fn create_intended(
 pub(crate) struct JournalSession {
     target: PathBuf,
     state: JournalV2,
+    backing: Backing,
 }
 
 #[cfg(test)]
 impl JournalSession {
+    /// The abandoned file's persist: the whole state rewritten atomically, then its directory
+    /// synced, never above the file cap and never at the journal's path.
+    fn persist_abandoned(&mut self) -> Result<(), JournalError> {
+        let bytes = abandoned::frames_of(&self.state)
+            .ok_or(JournalError::Persist)?
+            .iter()
+            .map(abandoned::encode_frame)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| JournalError::Persist)?
+            .concat();
+        if bytes.len() > abandoned::MAX_ABANDONED_BYTES {
+            return Err(JournalError::Persist);
+        }
+        let path = drain::handover::abandoned_path(&self.target);
+        write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)
+            .map_err(|_| JournalError::Persist)?;
+        drain::fault::file_rewritten(&self.target)?;
+        sync_dir_of(&path).map_err(|_| JournalError::Persist)
+    }
+
+    /// A session over the abandoned file's tokens, for the file drain.
+    pub(crate) fn over_abandoned(target: PathBuf, state: JournalV2) -> Self {
+        Self {
+            target,
+            state,
+            backing: Backing::Abandoned,
+        }
+    }
+
     pub(crate) fn persist(&mut self) -> Result<(), JournalError> {
+        if self.backing == Backing::Abandoned {
+            return self.persist_abandoned();
+        }
         #[cfg(test)]
         observe::plan_tokens(&self.target, &self.state);
         let bytes = self.state.encode()?;
@@ -321,6 +366,11 @@ impl JournalSession {
     }
 
     pub(crate) fn finish(&mut self) -> Result<(), JournalError> {
+        // The abandoned file is removed whole by its drain, never finished as a journal: this
+        // must not unlink the staged original or a journal it does not own.
+        if self.backing == Backing::Abandoned {
+            return Err(JournalError::Finish);
+        }
         self.state.finish_ready()?;
         super::remove_if_present(&super::original_path(&self.target))
             .map_err(|_| JournalError::Finish)?;
@@ -480,13 +530,38 @@ impl JournalDecision {
 
 #[cfg(test)]
 impl TokenState {
+    /// Done for its journal: never while parked; a handed-over token is the file's to settle.
     fn finished(&self, attempts: &[TokenState]) -> bool {
-        if self.intent.parked.is_some() || self.records.iter().any(|r| r.parked.is_some()) {
+        !self.parked() && (self.handed_over || self.settled(attempts))
+    }
+
+    fn parked(&self) -> bool {
+        self.intent.parked.is_some() || self.records.iter().any(|r| r.parked.is_some())
+    }
+
+    /// Every record delivered and exactly one terminal content matching the decision: the
+    /// check `finished` makes without its handed-over shortcut, and the one a file drain uses.
+    fn settled(&self, attempts: &[TokenState]) -> bool {
+        if self.parked() {
             return false;
         }
-        if self.handed_over {
-            return true;
-        }
+        let Some(decision) = &self.decision else {
+            return false;
+        };
+        self.records
+            .iter()
+            .any(|r| matches!(r.role, Role::Outcome | Role::Abandoned))
+            && self.terminals_agree(attempts)
+            && self.intent.delivered
+            && self.intent_counter.is_some()
+            && self.records.iter().all(|r| r.delivered)
+            && (!decision.delivery_stopped
+                || self.records.iter().any(|r| r.role == Role::DeliveryStopped))
+    }
+
+    /// No terminal frozen yet, or every frozen terminal is the one content the decision calls
+    /// for. Retries collapse by frozen content, never by delivery state or digest alone.
+    fn terminals_agree(&self, attempts: &[TokenState]) -> bool {
         let Some(decision) = &self.decision else {
             return false;
         };
@@ -499,20 +574,11 @@ impl TokenState {
             .iter()
             .filter(|r| matches!(r.role, Role::Outcome | Role::Abandoned));
         let Some(first) = terminals.next() else {
-            return false;
+            return true;
         };
-        // Retries collapse by frozen content, never by delivery state or digest alone.
-        if first.role != terminal
-            || !codec::terminal_matches(first, decision, self, attempts)
-            || !terminals.all(|r| r.role == terminal && r.same_content(first))
-        {
-            return false;
-        }
-        self.intent.delivered
-            && self.intent_counter.is_some()
-            && self.records.iter().all(|r| r.delivered)
-            && (!decision.delivery_stopped
-                || self.records.iter().any(|r| r.role == Role::DeliveryStopped))
+        first.role == terminal
+            && codec::terminal_matches(first, decision, self, attempts)
+            && terminals.all(|r| r.role == terminal && r.same_content(first))
     }
 }
 

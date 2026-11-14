@@ -55,7 +55,7 @@ async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
     // The fixed plan outside a shutdown (EOF wait, SIGTERM wait, the reap
     // deadline) plus slack for a loaded host.
     const BOUND: Duration = Duration::from_secs(15);
-    let (w, t) = started(&resists_term(), None).await;
+    let (w, t) = started_unhurried(&resists_term(), None).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
     let started_at = std::time::Instant::now();
@@ -78,7 +78,7 @@ async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
 /// own plan would have ended.
 #[tokio::test]
 async fn a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline() {
-    let (w, t) = started(&resists_term(), None).await;
+    let (w, t) = started_unhurried(&resists_term(), None).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
     let deadline = Arc::new(super::super::super::reaper::StopDeadline::default());
@@ -214,7 +214,7 @@ async fn cut_close(t: &Arc<StdioTransport>, end: &EndOnDrop, cut_in: Duration) -
 /// plan was, its last third after SIGTERM.
 #[tokio::test]
 async fn a_cut_stop_still_sends_sigterm_before_the_kill() {
-    let (w, t) = started(MARKS_TERM, None).await;
+    let (w, t) = started_unhurried(MARKS_TERM, None).await;
     let end = EndOnDrop::new(&t);
     let pid = cut_close(&t, &end, Duration::from_secs(3)).await;
     assert_killed(pid).await;
@@ -231,7 +231,7 @@ async fn a_cut_stop_still_sends_sigterm_before_the_kill() {
 /// at the cut, with nothing sent for a wait too short to use.
 #[tokio::test]
 async fn a_cut_under_the_minimum_phase_skips_sigterm() {
-    let (w, t) = started(MARKS_TERM, None).await;
+    let (w, t) = started_unhurried(MARKS_TERM, None).await;
     let end = EndOnDrop::new(&t);
     let pid = cut_close(&t, &end, Duration::from_millis(50)).await;
     assert_killed(pid).await;
@@ -248,7 +248,7 @@ async fn a_cut_under_the_minimum_phase_skips_sigterm() {
 /// 220 ms (the old `min` with the uncut time sent one there).
 #[tokio::test]
 async fn a_short_cut_drops_an_earlier_uncut_sigterm() {
-    let (w, t) = started(MARKS_TERM, None).await;
+    let (w, t) = started_unhurried(MARKS_TERM, None).await;
     let end = EndOnDrop::new(&t);
     let pid = leader(&t).await;
     let reserve = super::super::super::reaper::KILL_RESERVE;
@@ -290,7 +290,7 @@ fn hand_over_gracefully(
 /// miss a handover that is already in its waits.
 #[tokio::test]
 async fn a_graceful_handover_joins_its_stop_deadline_in_the_handover() {
-    let (_w, t) = started(&resists_term(), None).await;
+    let (_w, t) = started_unhurried(&resists_term(), None).await;
     let end = EndOnDrop::new(&t);
     let pid = leader(&t).await;
     assert_eq!(
@@ -306,7 +306,7 @@ async fn a_graceful_handover_joins_its_stop_deadline_in_the_handover() {
 /// tracked too, so a stop's wait sees it, whichever reaper step ends it.
 #[tokio::test]
 async fn a_handover_whose_deadline_already_passed_is_tracked() {
-    let (_w, t) = started(&resists_term(), None).await;
+    let (_w, t) = started_unhurried(&resists_term(), None).await;
     let end = EndOnDrop::new(&t);
     let pid = leader(&t).await;
     end.deadline().move_earlier(std::time::Instant::now());
@@ -483,4 +483,17 @@ if os.fork() == 0:
     os._exit(0)
 os.wait()";
     a_detached_survivor_outlives_the_stop(helper, "a double-forked daemon").await;
+}
+
+/// [`started`] with the reap deadline, and the close's wait for the reap,
+/// lifted to the hang bound, for a row whose subject is not that deadline: on a
+/// loaded host the real one can give a killed tree up before its kill is recorded.
+pub(super) async fn started_unhurried(
+    after: &str,
+    max_frame: Option<usize>,
+) -> (tempfile::TempDir, Arc<StdioTransport>) {
+    let (w, t) = started(after, max_frame).await;
+    *t.slow_host_bound.lock() = Some(HANG_BOUND);
+    with_tree(&t, |c| c.reap_deadline_for_test = Some(HANG_BOUND)).await;
+    (w, t)
 }

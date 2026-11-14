@@ -53,6 +53,7 @@ function el(id) {{
     els[id] = {{ id, textContent: '', innerHTML: '', className: '', style: {{ display: '' }},
       dataset: {{}}, value: '', listeners: {{}},
       classList: {{ add() {{}}, remove() {{}}, contains() {{ return false; }} }},
+      replaceChildren() {{}},
       addEventListener(t, f) {{ this.listeners[t] = f; }} }};
   }}
   return els[id];
@@ -63,6 +64,10 @@ el('auth-btn').textContent = 'Set API Key';
 el('servers-tbody').innerHTML = '<tr><td>Loading...</td></tr>';
 globalThis.document = {{ getElementById: el, querySelectorAll: () => [], querySelector: () => null }};
 globalThis.location = {{ hash: '' }};
+// The auth block holds the page's key-lookup code: it registers a `pagehide`
+// drop on `window` as the page loads, and `renderAuth` empties the lookup's
+// rows (`replaceChildren`) for every state that is not admin.
+globalThis.window = {{ addEventListener() {{}} }};
 globalThis.prompt = () => null;
 globalThis.fmtUptime = (s) => String(s);
 globalThis.esc = (s) => String(s);
