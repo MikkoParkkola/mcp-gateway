@@ -74,19 +74,19 @@ fn sidecar_exists(input: &CheckInput) -> io::Result<bool> {
 
 /// Step 3: no unsettled write beside the target.
 fn settled_write(input: &CheckInput) -> Result<(), FloorFault> {
-    if journal_pending(&input.locked_target) {
+    if mutant!("journal_check_skipped", false, journal_pending(&input.locked_target)) {
         return Err(refuse(input, "a replace journal is pending"));
     }
     match sidecar_exists(input) {
         Ok(false) => Ok(()),
-        Ok(true) => Err(refuse(input, "an abandoned journal is present")),
-        Err(_) => Err(refuse(input, "the abandoned sidecar cannot be examined")),
+        Ok(true) => mutant!("abandoned_check_skipped", Ok(()), Err(refuse(input, "an abandoned journal is present"))),
+        Err(_) => mutant!("abandoned_metadata_error_as_absent", Ok(()), Err(refuse(input, "the abandoned sidecar cannot be examined"))),
     }
 }
 
 /// Steps 4 and 8: the configured path still resolves to the locked target.
 fn still_named(input: &CheckInput) -> Result<(), FloorFault> {
-    if resolved(&input.configured) == input.locked_target {
+    if mutant!("identity_check_skipped", true, resolved(&input.configured) == input.locked_target) {
         Ok(())
     } else {
         Err(refuse(
@@ -114,11 +114,26 @@ fn is_unresolved(slot: &str) -> bool {
 /// slot the loader substitutes that still reads as a reference was not
 /// resolved. The metrics token is excluded: its spelling stays by design.
 fn has_unresolved_keychain(mut config: Config) -> bool {
-    config.secret_slots_mut().any(|slot| is_unresolved(slot))
+    mutant!(
+        "verbatim_reads_non_secret_fields",
+        {
+            fn mentions(value: &serde_json::Value) -> bool {
+                match value {
+                    serde_json::Value::String(text) => is_unresolved(text),
+                    serde_json::Value::Array(items) => items.iter().any(mentions),
+                    serde_json::Value::Object(map) => map.values().any(mentions),
+                    _ => false,
+                }
+            }
+            serde_json::to_value(&config).is_ok_and(|value| mentions(&value))
+        },
+        config.secret_slots_mut().any(|slot| is_unresolved(slot))
+    )
 }
 
 /// Step 6: the startup-equivalent evaluation, then the unresolved-reference check.
 fn validate(input: &CheckInput, target: &Path, text: &str) -> Result<(), FloorFault> {
+    mutant!("validation_skipped", Ok(()), {
     let evaluate = || Config::load_evaluated_text(target, text);
     #[cfg(test)]
     let evaluated = match input.test_keychain.clone() {
@@ -131,14 +146,16 @@ fn validate(input: &CheckInput, target: &Path, text: &str) -> Result<(), FloorFa
         evaluate()
     };
     let evaluated = evaluated.map_err(|_| refuse(input, "the config file is invalid"))?;
-    if has_unresolved_keychain(evaluated.config) {
+    if mutant!("keychain_check_skipped", false, has_unresolved_keychain(evaluated.config)) {
         return Err(refuse(input, "a keychain reference did not resolve"));
     }
     Ok(())
+    })
 }
 
 /// Step 8: nothing moved and no byte changed while the file was validated.
 fn recheck(input: &CheckInput, sha256: &str) -> Result<(), FloorFault> {
+    mutant!("recheck_skipped", Ok(()), {
     still_named(input)?;
     let again = read_target(input)?;
     if sha256_hex(again.as_bytes()) == sha256 {
@@ -146,6 +163,7 @@ fn recheck(input: &CheckInput, sha256: &str) -> Result<(), FloorFault> {
     } else {
         Err(refuse(input, "the config file changed during validation"))
     }
+    })
 }
 
 /// Steps 3-9 of the checkpoint, synchronous (runs on the attempt's `spawn_blocking`). Calls
@@ -170,7 +188,7 @@ pub(super) fn check(input: &CheckInput) -> Result<Certification, FloorFault> {
     validate(input, &input.locked_target, &text)?;
     #[cfg(test)]
     at(input, seams::CheckStep::AfterValidation);
-    if (input.owed)() {
+    if mutant!("owed_check_skipped", false, (input.owed)()) {
         return Err(refuse(input, "a reload is owed"));
     }
     let sha256 = sha256_hex(text.as_bytes());
@@ -183,12 +201,11 @@ pub(super) fn check(input: &CheckInput) -> Result<Certification, FloorFault> {
 
 /// The Defaults search: the first candidate that exists, in order, as startup selects it.
 pub(super) fn first_existing(candidates: &[PathBuf]) -> Option<PathBuf> {
-    candidates
-        .iter()
-        // `exists` follows a link, as startup's own search does: a dangling link
-        // is skipped there, so it is skipped here.
-        .find(|p| p.exists())
-        .cloned()
+    mutant!(
+        "fallback_search_stops_after_first",
+        candidates.first().filter(|p| p.exists()).cloned(),
+        candidates.iter().find(|p| p.exists()).cloned()
+    )
 }
 
 /// The four startup fallback paths in order, from startup's own search list.
