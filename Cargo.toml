@@ -291,6 +291,14 @@ rustix = { version = "1.1", features = ["fs", "process", "mount", "thread"] }
 seccompiler = "=0.5.0"
 libc = "0.2"
 
+# Restart slice 4: the process invocation a restart re-execs. nix is
+# already in the lock file (0.31, through other crates); promoted to direct only
+# for what rustix offers as `unsafe fn`: reading the thread's signal mask
+# (`signal`, slice 4a) and, in slice 4b, `execve` (`process`). Every other call
+# in `src/restart/` uses rustix.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["signal"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
