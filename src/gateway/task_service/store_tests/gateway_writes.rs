@@ -48,7 +48,8 @@ async fn settled(root: &Path, limits: StoreLimits, notes: usize) -> (std::path::
         .await
         .expect("the task is created");
     store
-        .settle_bounded_by(
+        .settle_bounded_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
             OWNER,
             one.id(),
             created.revision,
@@ -128,7 +129,8 @@ async fn settled_with(
         .await
         .expect("the task is created");
     store
-        .settle_bounded_by(
+        .settle_bounded_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
             OWNER,
             one.id(),
             created.revision,

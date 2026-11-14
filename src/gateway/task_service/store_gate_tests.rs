@@ -698,7 +698,7 @@ async fn a_park_that_outlives_one_drain_leads_the_next() {
     within("G15 A done", a_task).await.expect("A's task");
 }
 
-/// Cancel `id` at `revision` through the store, the way a route cancel writes.
+/// Cancel `id` at `revision` through the store, as an internal settle.
 async fn cancel_at(
     store: &TaskStore,
     id: &str,
@@ -708,7 +708,8 @@ async fn cancel_at(
         .expect("a fixed instant")
         .with_timezone(&chrono::Utc);
     store
-        .settle_bounded_by(
+        .settle_bounded_as(
+            super::gate::Kind::Internal,
             OWNER,
             id,
             revision,

@@ -54,7 +54,8 @@ async fn settle(
         .await
         .expect("the task is created");
     let settled = store
-        .settle_bounded_by(
+        .settle_bounded_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
             OWNER,
             one.id(),
             created.revision + stale,

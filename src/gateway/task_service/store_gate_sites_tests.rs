@@ -62,8 +62,8 @@ fn round() -> InputRound {
     }
 }
 
-/// Every single-class site, and the store's internal delegates of the two
-/// shared ones, with the class it must ask for.
+/// Every single-class site, with the class it must ask for. The two shared
+/// methods take their class from the caller: their rows are the executor's.
 fn sites() -> Vec<(&'static str, Kind, Call)> {
     let mut sites: Vec<(&'static str, Kind, Call)> = Vec::new();
     sites.push(("create", Kind::External, |s| -> Out {
@@ -123,39 +123,6 @@ fn sites() -> Vec<(&'static str, Kind, Call)> {
     sites.push(("record_cancel_attempt", Kind::Internal, |s| -> Out {
         Box::pin(async move { s.record_cancel_attempt(OWNER, ABSENT, None).await.map(drop) })
     }));
-    sites.push((
-        "close_round (internal delegate)",
-        Kind::Internal,
-        |s| -> Out {
-            Box::pin(async move {
-                s.close_round(OWNER, ABSENT, 1, "closed".to_owned(), at())
-                    .await
-                    .map(drop)
-            })
-        },
-    ));
-    sites.push((
-        "settle_bounded_by (internal delegate)",
-        Kind::Internal,
-        |s| -> Out {
-            Box::pin(async move {
-                s.settle_bounded_by(
-                    OWNER,
-                    ABSENT,
-                    1,
-                    (
-                        TaskTransition::Cancel,
-                        crate::gateway::task_service::record::Provenance::default(),
-                        crate::gateway::gateway_writes::WriteRecord::default(),
-                    ),
-                    crate::gateway::task_service::record::ErrorAuthor::Gateway,
-                    at(),
-                )
-                .await
-                .map(drop)
-            })
-        },
-    ));
     sites.push(("transition (test-only)", Kind::Internal, |s| -> Out {
         Box::pin(async move {
             s.transition(OWNER, ABSENT, 1, TaskTransition::Cancel, at())

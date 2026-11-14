@@ -355,23 +355,8 @@ impl TaskStore {
     /// # Errors
     /// `RevisionConflict` when the row moved; `InvalidTransition` when no
     /// round is open.
-    /// Test rows call the shared method with the internal class; production
-    /// names its class through the `_as` form.
-    #[cfg(test)]
-    pub(crate) async fn close_round(
-        &self,
-        owner: &str,
-        id: &str,
-        revision: u64,
-        reason: String,
-        at: DateTime<Utc>,
-    ) -> Result<CommittedTask, StoreError> {
-        let kind = super::gate::Kind::Internal;
-        self.close_round_as(kind, owner, id, revision, reason, at)
-            .await
-    }
-
-    /// `close_round` for a caller of class `kind`: the expiry sweep is Sweep.
+    /// The caller names its class: the expiry sweep is Sweep, the input-round
+    /// paths Internal.
     pub(crate) async fn close_round_as(
         &self,
         kind: super::gate::Kind,

@@ -50,8 +50,8 @@ impl TaskStore {
         .map_err(StoreError::from)?
     }
 
-    /// [`Self::settle_bounded_by`] with the gateway as the author: the tests'
-    /// shorthand.
+    /// [`Self::settle_bounded_as`] for the internal class with the gateway as the
+    /// author: the tests' shorthand.
     #[cfg(test)]
     pub(crate) async fn settle_bounded(
         &self,
@@ -61,7 +61,8 @@ impl TaskStore {
         (event, targets): (TaskTransition, Option<Vec<Target>>),
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
-        self.settle_bounded_by(
+        self.settle_bounded_as(
+            Kind::Internal,
             owner,
             id,
             revision,
@@ -88,23 +89,8 @@ impl TaskStore {
     /// the bounded fallback is always the gateway's. `writes` names the
     /// members of a `Complete` result the gateway wrote (MIK-7993); it is
     /// stored only with that result, and never costs the result its room.
-    /// Test rows call the shared method with the internal class; production
-    /// names its class through the `_as` form.
-    #[cfg(test)]
-    pub(crate) async fn settle_bounded_by(
-        &self,
-        owner: &str,
-        id: &str,
-        revision: u64,
-        outcome: (TaskTransition, Provenance, WriteRecord),
-        author: ErrorAuthor,
-        at: DateTime<Utc>,
-    ) -> Result<CommittedTask, StoreError> {
-        self.settle_bounded_as(Kind::Internal, owner, id, revision, outcome, author, at)
-            .await
-    }
-
-    /// `settle_bounded_by` for a caller of class `kind` (the route's cancel: External).
+    /// The caller names its class: the route's cancel is External, a worker's
+    /// settle and recovery Internal.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn settle_bounded_as(
         &self,

@@ -150,7 +150,14 @@ async fn closing_a_round_at_a_stale_revision_writes_nothing() {
     let (_dir, store, task) = opened().await;
     let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
     let stale = store
-        .close_round(OWNER, task.id(), revision - 1, "closed".to_owned(), at(31))
+        .close_round_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
+            OWNER,
+            task.id(),
+            revision - 1,
+            "closed".to_owned(),
+            at(31),
+        )
         .await;
     assert!(
         matches!(stale, Err(StoreError::RevisionConflict)),
@@ -167,7 +174,14 @@ async fn closing_a_round_cancels_it_with_the_reason_in_one_write() {
     let (_dir, store, task) = opened().await;
     let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
     let closed = store
-        .close_round(OWNER, task.id(), revision, "the reason".to_owned(), at(31))
+        .close_round_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
+            OWNER,
+            task.id(),
+            revision,
+            "the reason".to_owned(),
+            at(31),
+        )
         .await
         .expect("an open round closes");
     assert_eq!(closed.revision, revision + 1);
@@ -189,7 +203,14 @@ async fn a_close_is_stamped_at_its_callers_time() {
         chrono::DateTime::<chrono::Utc>::from_timestamp(-1, 0).expect("one second before 1970"),
     ));
     let closed = store
-        .close_round(OWNER, task.id(), revision, "expired".to_owned(), at(31))
+        .close_round_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
+            OWNER,
+            task.id(),
+            revision,
+            "expired".to_owned(),
+            at(31),
+        )
         .await
         .expect("closed at the caller's time");
     assert_eq!(closed.task.status(), TaskStatus::Cancelled);
@@ -204,7 +225,14 @@ async fn a_close_ignores_a_readable_store_clock_that_disagrees() {
     let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
     store.set_clock_for_test(Some(at(40)));
     let closed = store
-        .close_round(OWNER, task.id(), revision, "expired".to_owned(), at(31))
+        .close_round_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
+            OWNER,
+            task.id(),
+            revision,
+            "expired".to_owned(),
+            at(31),
+        )
         .await
         .expect("an open round closes");
     assert_eq!(closed.task.last_updated_at(), at(31));
@@ -216,11 +244,19 @@ async fn closing_an_already_settled_round_writes_nothing() {
     let (_dir, store, task) = opened().await;
     let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
     let closed = store
-        .close_round(OWNER, task.id(), revision, "first".to_owned(), at(31))
+        .close_round_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
+            OWNER,
+            task.id(),
+            revision,
+            "first".to_owned(),
+            at(31),
+        )
         .await
         .expect("an open round closes");
     let again = store
-        .close_round(
+        .close_round_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
             OWNER,
             task.id(),
             closed.revision,
