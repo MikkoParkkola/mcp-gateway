@@ -50,11 +50,12 @@ pub(super) fn payload(bytes: &[u8]) -> Map<String, Value> {
     serde_json::from_slice(bytes).expect("literal object fixture")
 }
 
-/// What the log holds for an intent the journal says it already delivered. A journal copy that
-/// no longer parses (rotted after delivery) seeds an empty payload: the drain parks such a record
-/// before it reaches the log, so its rows need the counter, not the delivered bytes.
+/// What the log holds for a writer intent the journal says it already delivered. A journal copy
+/// that no longer parses (rotted after delivery) seeds the save payload the writer delivered
+/// before it rotted: the drain parks such a record before it reaches the log, so its rows need
+/// the counter, not these bytes.
 fn delivered_payload(bytes: &[u8]) -> Map<String, Value> {
-    serde_json::from_slice(bytes).unwrap_or_default()
+    serde_json::from_slice(bytes).unwrap_or_else(|_| payload(SAVE))
 }
 
 pub(super) fn actor() -> AuditWho {
@@ -234,7 +235,7 @@ impl Live {
                     &self.log.log_id(),
                     &attempt.intent_id.0,
                     attempt.intent.role,
-                    delivered_payload(&attempt.intent.payload_json),
+                    payload(&attempt.intent.payload_json),
                 ))
                 .expect("seed surviving attempt");
                 assert_eq!(
