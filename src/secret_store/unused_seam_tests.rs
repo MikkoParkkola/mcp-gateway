@@ -33,7 +33,7 @@ impl SeamGuard {
     fn reset() {
         BEFORE_RECHECK.with(|slot| *slot.borrow_mut() = None);
         STOP_AFTER_STORE_DELETE.with(|cell| cell.set(false));
-        GUARD_KEYCHAIN.with(|cell| cell.set(false));
+        GUARD_KEYCHAIN.with(|cell| cell.set(None));
     }
 }
 
@@ -112,7 +112,7 @@ fn guarded_keychain_delete_is_refused_before_the_vault_lock() {
     let _guard = seams();
     let (dir, vault, store, name, index, sources) = fault_entry();
     let hold = hold_vault(vault.lock_path().to_path_buf());
-    GUARD_KEYCHAIN.with(|cell| cell.set(true));
+    GUARD_KEYCHAIN.with(|cell| cell.set(Some(true)));
     let got = delete_unused(&vault, &store, &name, &sources, soon());
     hold.release();
     assert_eq!(

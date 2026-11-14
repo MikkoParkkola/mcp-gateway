@@ -414,8 +414,8 @@ pub(crate) fn listing(
 /// the guard means removing both.
 fn keychain_delete_guarded() -> bool {
     #[cfg(test)]
-    if seam::GUARD_KEYCHAIN.with(std::cell::Cell::get) {
-        return true;
+    if let Some(forced) = seam::GUARD_KEYCHAIN.with(std::cell::Cell::get) {
+        return forced;
     }
     cfg!(any(target_os = "macos", windows))
 }
@@ -427,7 +427,8 @@ mod seam {
         pub(super) static BEFORE_RECHECK: RefCell<Option<Box<dyn FnOnce()>>> =
             const { RefCell::new(None) };
         pub(super) static STOP_AFTER_STORE_DELETE: Cell<bool> = const { Cell::new(false) };
-        pub(super) static GUARD_KEYCHAIN: Cell<bool> = const { Cell::new(false) };
+        /// `Some` forces the keychain guard on or off for this thread; `None` follows the platform.
+        pub(super) static GUARD_KEYCHAIN: Cell<Option<bool>> = const { Cell::new(None) };
     }
 }
 #[cfg(test)]

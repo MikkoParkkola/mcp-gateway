@@ -233,6 +233,7 @@ fn plant_env_mode(dir: &Path) -> NamingSources {
     sources
 }
 
+#[cfg(unix)]
 fn plant_cap_mode(dir: &Path) -> NamingSources {
     let cap = dir.join("caps");
     std::fs::create_dir_all(&cap).expect("caps");
@@ -341,6 +342,9 @@ fn unreadable_source_refuses() {
     for (case, plant) in [
         ("env directory", plant_env_dir as fn(&Path) -> NamingSources),
         ("env mode", plant_env_mode),
+        // Unix only: off Unix the unreadable stand-in is a directory, which the capability
+        // walk skips as not a file, so the case would not reach an unreadable read.
+        #[cfg(unix)]
         ("capability mode", plant_cap_mode),
         ("bad yaml", plant_bad_yaml),
         ("env missing", plant_env_missing),

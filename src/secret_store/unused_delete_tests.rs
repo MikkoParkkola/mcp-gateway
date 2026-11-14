@@ -132,6 +132,9 @@ pub(super) fn fault_entry() -> (
     NamingSources,
 ) {
     let (dir, vault) = rig();
+    // The fault store reports the keychain kind; these rows test the delete's own checks,
+    // which the macOS and Windows keychain guard would refuse before reaching.
+    super::seam::GUARD_KEYCHAIN.with(|cell| cell.set(Some(false)));
     let store = Fault::new();
     save_secrets(
         &vault,
