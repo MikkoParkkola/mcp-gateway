@@ -615,17 +615,20 @@ impl super::TaskStore {
         kind: Kind,
         work: impl FnOnce() -> R + Send + 'static,
     ) -> Result<R, Gated> {
-        // Boxed: the admission's wait state stays off every store future.
-        let admission = Box::pin(self.0.gate.admit(kind))
+        let gate = self.0.gate.clone();
+        // Boxed whole: the admission's wait, and the work it carries until the
+        // spawn, stay off every store future (one allocation per write).
+        Box::pin(async move {
+            let admission = gate.admit(kind).await.map_err(Gated::Refused)?;
+            tokio::task::spawn_blocking(move || {
+                let output = work();
+                admission.record(output.storage_failed());
+                drop(admission);
+                output
+            })
             .await
-            .map_err(Gated::Refused)?;
-        tokio::task::spawn_blocking(move || {
-            let output = work();
-            admission.record(output.storage_failed());
-            drop(admission);
-            output
+            .map_err(|_| Gated::Lost)
         })
         .await
-        .map_err(|_| Gated::Lost)
     }
 }
