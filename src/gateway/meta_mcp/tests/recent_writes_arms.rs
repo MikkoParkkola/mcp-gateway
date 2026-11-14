@@ -47,13 +47,15 @@ const fn class(arm: MetaArm) -> Class {
     }
 }
 
-/// The arguments each arm is called with. Every target names something that
-/// does not exist, so a composite dispatches no leaf and a write handler
-/// refuses: what is left to count is the arm itself.
+/// The arguments each arm is called with. No leaf is ever sent: invoke names
+/// no target (refused before the send), execute runs an empty chain, the
+/// playbook does not exist, and each write handler refuses its missing
+/// target. What is left to count is the arm itself. (A call to a server that
+/// does not exist does reach the send step, and counts there.)
 fn arguments(arm: MetaArm) -> Value {
     match arm {
-        MetaArm::Invoke => json!({"server": "nowhere", "tool": "write", "arguments": {}}),
-        MetaArm::Execute => json!({"tool": "nowhere:write", "arguments": {}}),
+        MetaArm::Invoke => json!({}),
+        MetaArm::Execute => json!({"chain": []}),
         MetaArm::RunPlaybook => json!({"name": "nowhere"}),
         MetaArm::Search | MetaArm::SearchTools => json!({"query": "nowhere"}),
         MetaArm::ListTools | MetaArm::KillServer | MetaArm::ReviveServer => {

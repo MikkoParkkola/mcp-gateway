@@ -258,14 +258,55 @@ fn source(path: &str) -> String {
     std::fs::read_to_string(&full).unwrap_or_else(|e| panic!("{full}: {e}"))
 }
 
+/// The braces `line` opens, net, outside string literals and comments.
+fn opens(line: &str) -> i64 {
+    let (mut net, mut in_str, mut prev) = (0, false, ' ');
+    for c in line.chars() {
+        if in_str {
+            in_str = !(c == '"' && prev != '\\');
+        } else if c == '"' {
+            in_str = true;
+        } else if c == '/' && prev == '/' {
+            break;
+        } else if c == '{' {
+            net += 1;
+        } else if c == '}' {
+            net -= 1;
+        }
+        prev = c;
+    }
+    net
+}
+
+/// Every line that opens a block enclosing line `site` (an `if`, the fn, its
+/// impl or module), nearest first, each with the attribute and signature
+/// lines above it up to a blank line or the end of the previous item.
+fn enclosing(lines: &[&str], site: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut depth = 0;
+    for i in (0..site).rev() {
+        depth += opens(lines[i]);
+        if depth > 0 {
+            depth = 0;
+            out.push(i);
+            out.extend((0..i).rev().take_while(|&j| {
+                let l = lines[j].trim();
+                !l.is_empty() && !l.ends_with(['}', ';', '{'])
+            }));
+        }
+    }
+    out
+}
+
 /// F2: the counter and every hook site build in every feature set. The
-/// counter file has no feature cfg; each hook site sits in a function whose
-/// attributes and body above the site carry none either.
+/// counter file and its module declaration carry no feature cfg, and no
+/// block enclosing a hook site (nor that block's attributes, nor the file)
+/// does either; a cfg on a sibling statement is not the hook's.
 #[test]
 fn f2_counter_and_hook_sites_carry_no_feature_cfg() {
     // Any feature form: cfg(feature, cfg_attr(feature and cfg!(feature
-    // all read `feature =`. Gating through an enclosing impl or module is
-    // F1's to catch: its no-default-features run executes R1, R5 and R6.
+    // all read `feature =`. A hook file's own module declaration is F1's to
+    // catch: its no-default-features run executes R1, R5 and R6.
     let gated = |line: &str| line.contains("feature =");
     let counter = source("src/gateway/recent_writes.rs");
     assert!(
@@ -289,30 +330,20 @@ fn f2_counter_and_hook_sites_carry_no_feature_cfg() {
             .filter(|&i| lines[i].contains("recent_writes") && lines[i].contains(".note("))
             .collect();
         assert_eq!(sites.len(), want, "{path}: hook sites {sites:?}");
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.trim_start().starts_with("#![") && gated(l)),
+            "{path} is feature-gated as a whole"
+        );
         for site in sites {
-            let is_fn = |l: &str| {
-                let l = l.trim_start();
-                l.starts_with("fn ") || l.starts_with("async fn ") || l.contains(" fn ")
-            };
-            let start = (0..=site)
-                .rev()
-                .find(|&i| is_fn(lines[i]))
-                .unwrap_or_else(|| panic!("{path}:{}: no enclosing fn", site + 1));
-            let attrs = (0..start)
-                .rev()
-                // Attributes and doc lines, multi-line ones too: up to the
-                // blank line or the end of the previous item.
-                .take_while(|&i| {
-                    let l = lines[i].trim();
-                    !l.is_empty() && !l.ends_with(['}', ';', '{'])
-                })
-                .last()
-                .unwrap_or(start);
-            let gated = (attrs..=site).find(|&i| gated(lines[i]));
+            let gate = enclosing(&lines, site)
+                .into_iter()
+                .find(|&i| gated(lines[i]));
             assert_eq!(
-                gated,
+                gate.map(|i| i + 1),
                 None,
-                "{path}:{}: a feature cfg above the hook",
+                "{path}:{}: a feature cfg on a block around the hook",
                 site + 1
             );
         }
