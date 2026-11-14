@@ -7,10 +7,7 @@
 //! answers `expired` only once every tunnel of that credential is shut.
 #![cfg_attr(
     not(test),
-    expect(
-        dead_code,
-        reason = "the helper's fetch step, a later part, drives the session"
-    )
+    expect(dead_code, reason = "the fetch step, a later part, drives it")
 )]
 
 use std::io;
