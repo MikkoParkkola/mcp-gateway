@@ -63,6 +63,9 @@ el('auth-btn').textContent = 'Set API Key';
 el('servers-tbody').innerHTML = '<tr><td>Loading...</td></tr>';
 globalThis.document = {{ getElementById: el, querySelectorAll: () => [], querySelector: () => null }};
 globalThis.location = {{ hash: '' }};
+// The auth block holds the page's key-lookup code, which registers a
+// `pagehide` drop on `window` as the page loads.
+globalThis.window = {{ addEventListener() {{}} }};
 globalThis.prompt = () => null;
 globalThis.fmtUptime = (s) => String(s);
 globalThis.esc = (s) => String(s);
