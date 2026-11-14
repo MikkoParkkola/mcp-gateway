@@ -34,10 +34,14 @@ pub(crate) trait Connect: Send + Sync {
     async fn connect(&self, addr: SocketAddr) -> io::Result<TcpStream>;
 }
 
-/// The host's own interface addresses, read on every call (never cached). A
-/// failed read refuses the CONNECT: an empty list would admit the host.
+/// A network the host answers on: an address and its prefix length (32 or
+/// 128 for a single address).
+pub(crate) type Owned = (IpAddr, u8);
+
+/// The host's own networks, read on every call (never cached). A failed
+/// read refuses the CONNECT: an empty list would admit the host.
 pub(crate) trait Interfaces: Send + Sync {
-    fn addresses(&self) -> io::Result<Vec<IpAddr>>;
+    fn addresses(&self) -> io::Result<Vec<Owned>>;
 }
 
 /// Fills a buffer from the OS random source; injectable so a row can make it
@@ -702,13 +706,13 @@ fn authorized(auth: &[&str], shared: &Shared) -> Option<Fetch> {
 /// The SSRF deny list, or one of the host's own addresses. Mapped and
 /// compatible IPv6 forms are unwrapped first (`is_private_or_reserved`
 /// already unwraps them for its own ranges).
-fn denied(addr: IpAddr, own: &[IpAddr]) -> bool {
+fn denied(addr: IpAddr, own: &[Owned]) -> bool {
     let plain = |a: IpAddr| match a {
         IpAddr::V6(v6) => v6.to_ipv4().map_or(a, IpAddr::V4),
         IpAddr::V4(_) => a,
     };
     crate::security::ssrf::is_private_or_reserved(addr)
-        || own.iter().any(|o| plain(*o) == plain(addr))
+        || own.iter().any(|&(o, _)| plain(o) == plain(addr))
 }
 
 /// The request head up to its blank line, read a byte at a time so no

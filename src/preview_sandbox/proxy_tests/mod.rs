@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream, UnixStream};
 
-use super::{AllowlistProxy, Connect, Credential, Interfaces, Resolve};
+use super::{AllowlistProxy, Connect, Credential, Interfaces, Owned, Resolve};
 
 mod allowlist;
 mod bounds;
@@ -123,11 +123,16 @@ impl Connect for FakeConnect {
     }
 }
 
-struct FakeInterfaces(Mutex<Vec<IpAddr>>);
+/// The host's networks; `None` makes the read fail.
+struct FakeInterfaces(Mutex<Option<Vec<Owned>>>);
 
 impl Interfaces for FakeInterfaces {
-    fn addresses(&self) -> io::Result<Vec<IpAddr>> {
-        Ok(self.0.lock().expect("lock").clone())
+    fn addresses(&self) -> io::Result<Vec<Owned>> {
+        self.0
+            .lock()
+            .expect("lock")
+            .clone()
+            .ok_or_else(|| io::Error::other("the interface read failed"))
     }
 }
 
@@ -166,7 +171,7 @@ async fn rig() -> Rig {
         hang: Mutex::new(None),
         target: Mutex::new(None),
     });
-    let interfaces = Arc::new(FakeInterfaces(Mutex::new(Vec::new())));
+    let interfaces = Arc::new(FakeInterfaces(Mutex::new(Some(Vec::new()))));
     let proxy = AllowlistProxy::bind(resolve.clone(), connect.clone(), interfaces.clone())
         .expect("proxy bind");
     Rig {
@@ -304,7 +309,7 @@ fn ip(s: &str) -> IpAddr {
 fn s8_the_system_interfaces_include_loopback() {
     let own = super::System.addresses().expect("getifaddrs answers");
     assert!(
-        own.contains(&IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        own.contains(&(IpAddr::V4(Ipv4Addr::LOCALHOST), 32)),
         "the host's own addresses lack loopback: {own:?}"
     );
 }

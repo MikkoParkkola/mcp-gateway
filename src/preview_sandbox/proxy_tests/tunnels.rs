@@ -4,7 +4,8 @@
 //! a CONNECT suspended in resolution or in the dial.
 
 use super::{
-    Credential, Opened, Rig, begin, connect_bytes, open, read_head, rig, status, tunnel_echoes,
+    Credential, Opened, Plain, Rig, begin, connect_bytes, open, read_head, rig, status,
+    tunnel_echoes,
 };
 use std::time::Duration;
 use tokio::io::AsyncWriteExt as _;
@@ -17,6 +18,18 @@ async fn open_tunnel(rig: &Rig, cred: &Credential) -> Opened {
     assert_eq!(status(&t.head().await), 200);
     assert!(t.echoes().await, "tunnel does not echo before expiry");
     t
+}
+
+/// True once the peer sees the tunnel shut, spinning briefly with no await,
+/// so no task can have run: only a synchronous shutdown passes.
+fn shut_by_now(tunnel: &mut Plain) -> bool {
+    (0..1_000).any(|_| {
+        let shut = tunnel.peer_has_shut_down();
+        if !shut {
+            std::thread::yield_now();
+        }
+        shut
+    })
 }
 
 /// R3, kills "tunnels kept on expiry" on the Unix socket.
@@ -88,15 +101,10 @@ async fn revoke_closes_the_tunnel_at_once() {
     let mut tunnel = open_tunnel(&rig, &cred).await.into_plain();
     assert!(!tunnel.peer_has_shut_down(), "closed before the revoke");
     rig.proxy.revoke(&cred);
-    let mut shut = false;
-    for _ in 0..1_000 {
-        if tunnel.peer_has_shut_down() {
-            shut = true;
-            break;
-        }
-        std::thread::yield_now();
-    }
-    assert!(shut, "revoke returned with the tunnel still open");
+    assert!(
+        shut_by_now(&mut tunnel),
+        "revoke returned with the tunnel still open"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -112,15 +120,10 @@ async fn m1_a_new_fetch_shuts_the_previous_tunnels_before_any_task_runs() {
     let old = begin(&rig);
     let mut tunnel = open_tunnel(&rig, &old).await.into_plain();
     let _new = begin(&rig);
-    let mut shut = false;
-    for _ in 0..1_000 {
-        if tunnel.peer_has_shut_down() {
-            shut = true;
-            break;
-        }
-        std::thread::yield_now();
-    }
-    assert!(shut, "begin_fetch returned with the old tunnel still open");
+    assert!(
+        shut_by_now(&mut tunnel),
+        "begin_fetch returned with the old tunnel still open"
+    );
 }
 
 /// M-1: a tunnel that ends on its own leaves the registry, so a long fetch
@@ -148,4 +151,57 @@ async fn reached(gate: &super::Gate, step: &str) {
     tokio::time::timeout(Duration::from_secs(30), gate.entered.notified())
         .await
         .unwrap_or_else(|_| panic!("the CONNECT never reached {step}"));
+}
+
+/// M-1, kills "revoke shuts only one tunnel": every open tunnel of the fetch
+/// is shut by the revoke itself.
+#[tokio::test(flavor = "current_thread")]
+async fn m1_revoke_shuts_every_open_tunnel() {
+    let rig = rig().await;
+    let cred = begin(&rig);
+    let mut first = open_tunnel(&rig, &cred).await.into_plain();
+    let mut second = open_tunnel(&rig, &cred).await.into_plain();
+    rig.proxy.revoke(&cred);
+    assert!(shut_by_now(&mut first), "revoke left the first tunnel open");
+    assert!(
+        shut_by_now(&mut second),
+        "revoke left the second tunnel open"
+    );
+}
+
+/// M-1, kills "dropping the proxy leaves a live fetch's tunnels open": the
+/// drop shuts them itself and removes the socket.
+#[tokio::test(flavor = "current_thread")]
+async fn m1_dropping_the_proxy_shuts_its_tunnels_and_its_socket() {
+    let rig = rig().await;
+    let cred = begin(&rig);
+    let mut tunnel = open_tunnel(&rig, &cred).await.into_plain();
+    let path = rig.proxy.unix_path().to_owned();
+    drop(rig.proxy);
+    assert!(shut_by_now(&mut tunnel), "the drop left the tunnel open");
+    assert!(
+        UnixStream::connect(&path).await.is_err(),
+        "the socket outlived the proxy"
+    );
+}
+
+/// M-1, kills "a `begin_fetch` that panics drops the old fetch unshut": with no
+/// runtime, spawning the deadline timer panics after the old fetch was taken
+/// out; its tunnels are shut anyway.
+#[tokio::test(flavor = "current_thread")]
+async fn m1_a_begin_fetch_that_panics_still_shuts_the_old_tunnels() {
+    let rig = rig().await;
+    let cred = begin(&rig);
+    let mut tunnel = open_tunnel(&rig, &cred).await.into_plain();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let proxy = &rig.proxy;
+    let outcome = std::thread::scope(|s| s.spawn(|| proxy.begin_fetch(deadline)).join());
+    assert!(
+        outcome.is_err(),
+        "begin_fetch outside a runtime did not panic"
+    );
+    assert!(
+        shut_by_now(&mut tunnel),
+        "the panic left the old fetch's tunnel open"
+    );
 }

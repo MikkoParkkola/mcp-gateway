@@ -14,16 +14,17 @@ fn v6(text: &str) -> Ipv6Addr {
     text.parse().expect("address")
 }
 
-/// Kills "BROADCAST and UNICAST are taken, and a /8 LOCAL route is dropped".
+/// Kills "BROADCAST and UNICAST are taken, and a /8 LOCAL route is dropped
+/// or shrunk to its leaf address".
 #[test]
 fn t3_fib_trie_local_entries_are_read_from_a_sample() {
     let mut want = vec![
-        v4("10.0.7.1"),
-        v4("10.0.62.1"),
-        v4("203.0.113.30"),
-        v4("127.0.0.0"),
-        v4("127.0.0.1"),
-        v4("172.17.0.1"),
+        (v4("10.0.7.1"), 32),
+        (v4("10.0.62.1"), 32),
+        (v4("203.0.113.30"), 32),
+        (v4("127.0.0.0"), 8),
+        (v4("127.0.0.1"), 32),
+        (v4("172.17.0.1"), 32),
     ];
     want.sort();
     let got = fib_trie_local(include_str!("fib_trie_sample.txt")).map(|mut addrs| {
@@ -45,7 +46,24 @@ Local:
      |-- 10.1.2.4
         /32 link BROADCAST
 ";
-    assert_eq!(fib_trie_local(text).ok(), Some(vec![v4("10.1.2.3")]));
+    assert_eq!(fib_trie_local(text).ok(), Some(vec![(v4("10.1.2.3"), 32)]));
+}
+
+/// Kills "a LOCAL route over a prefix is kept as its leaf address alone": an
+/// `AnyIP` route (`ip route add local 93.184.216.0/24 dev lo`) makes the host
+/// answer on every address in it.
+#[test]
+fn t3_a_local_prefix_keeps_its_length() {
+    let text = "\
+Local:
+  +-- 93.184.216.0/24 2 0 2
+     |-- 93.184.216.0
+        /24 host LOCAL
+";
+    assert_eq!(
+        fib_trie_local(text).ok(),
+        Some(vec![(v4("93.184.216.0"), 24)])
+    );
 }
 
 /// Kills "a trie with no LOCAL entry is an empty success".
@@ -60,7 +78,8 @@ Main:
     assert!(fib_trie_local(text).is_err());
 }
 
-/// Kills "a bad address, a stray line, or an info line before a leaf is skipped".
+/// Kills "a bad address, a stray line, an info line before a leaf, or a bad
+/// prefix length is skipped".
 #[test]
 fn t3_an_unparsable_fib_trie_is_an_error() {
     // A valid LOCAL neighbour, so skipping the bad leaf would be a success.
@@ -84,12 +103,31 @@ Local:
 Local:
         /32 host LOCAL
 ";
-    for text in [bad_address, stray, info_before_leaf] {
+    // A prefix length that is not a number from 0 to 32.
+    let long_prefix = "\
+Local:
+  +-- 10.0.0.0/8 2 0 2
+     |-- 10.1.2.3
+        /33 host LOCAL
+";
+    let bad_prefix = "\
+Local:
+  +-- 10.0.0.0/8 2 0 2
+     |-- 10.1.2.3
+        /x host LOCAL
+";
+    for text in [
+        bad_address,
+        stray,
+        info_before_leaf,
+        long_prefix,
+        bad_prefix,
+    ] {
         assert!(fib_trie_local(text).is_err(), "{text:?}");
     }
 }
 
-/// Kills "if_inet6 addresses are dropped or returned out of file order".
+/// Kills "`if_inet6` addresses are dropped or returned out of file order".
 #[test]
 fn t3_if_inet6_addresses_are_read_from_a_sample() {
     assert_eq!(
@@ -116,13 +154,13 @@ fn t3_an_unparsable_if_inet6_is_refused() {
     }
 }
 
-/// Kills "a missing if_inet6 is an error when IPv6 was disabled at boot".
+/// Kills "a missing `if_inet6` is an error when IPv6 was disabled at boot".
 #[test]
 fn t3_missing_if_inet6_without_ipv6_sysctl_is_empty_and_allowed() {
     assert_eq!(if_inet6(None, false).ok(), Some(vec![]));
 }
 
-/// Kills "a missing if_inet6 is empty success while IPv6 is enabled".
+/// Kills "a missing `if_inet6` is empty success while IPv6 is enabled".
 #[test]
 fn t3_missing_if_inet6_with_ipv6_sysctl_is_refused() {
     assert!(if_inet6(None, true).is_err());
@@ -141,7 +179,7 @@ fn t3_only_a_missing_ipv6_tree_reads_as_absent() {
     assert!(ipv6_tree_present(Err(io::Error::other("unreadable"))));
 }
 
-/// Kills "NotFound is an error, not None".
+/// Kills "`NotFound` is an error, not `None`".
 #[test]
 fn t3_only_a_missing_if_inet6_file_reads_as_none() {
     assert!(matches!(optional_text(Ok("x".into())), Ok(Some(text)) if text == "x"));

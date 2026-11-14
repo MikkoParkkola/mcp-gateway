@@ -275,7 +275,7 @@ async fn h6_a_fetch_revoked_as_the_dial_completes_gets_no_tunnel() {
     assert!(client.closed().await, "a tunnel worked after the revoke");
 }
 
-/// Kills "XDG_RUNTIME_DIR is ignored when absolute, or used when it is not".
+/// Kills "`XDG_RUNTIME_DIR` is ignored when absolute, or used when it is not".
 #[test]
 fn x1_the_runtime_base_is_xdg_when_absolute_else_the_temp_dir() {
     assert_eq!(

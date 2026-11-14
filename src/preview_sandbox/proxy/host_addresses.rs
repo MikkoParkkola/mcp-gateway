@@ -22,9 +22,9 @@ pub(super) fn optional_text(read: io::Result<String>) -> io::Result<Option<Strin
     }
 }
 
-/// The host's IPv4 addresses from `/proc/net/fib_trie`: every leaf with a
-/// LOCAL route, in every table.
-pub(super) fn fib_trie_local(text: &str) -> io::Result<Vec<Ipv4Addr>> {
+/// The host's IPv4 networks from `/proc/net/fib_trie`: every leaf with a
+/// LOCAL route, in every table, with that route's prefix length.
+pub(super) fn fib_trie_local(text: &str) -> io::Result<Vec<(Ipv4Addr, u8)>> {
     let mut addresses = Vec::new();
     let mut current: Option<Ipv4Addr> = None;
     for line in text.lines() {
@@ -43,8 +43,10 @@ pub(super) fn fib_trie_local(text: &str) -> io::Result<Vec<Ipv4Addr>> {
         } else if line.starts_with('/') {
             let leaf =
                 current.ok_or_else(|| io::Error::other(format!("bad fib_trie line: {line}")))?;
-            if line.split_whitespace().next_back() == Some("LOCAL") && !addresses.contains(&leaf) {
-                addresses.push(leaf);
+            if line.split_whitespace().next_back() == Some("LOCAL")
+                && !addresses.contains(&(leaf, 32))
+            {
+                addresses.push((leaf, 32));
             }
         } else {
             return Err(io::Error::other(format!("bad fib_trie line: {line}")));
@@ -88,7 +90,7 @@ pub(super) fn if_inet6(text: Option<&str>, ipv6_sysctl_present: bool) -> io::Res
 
 #[cfg(target_os = "linux")]
 impl super::Interfaces for super::System {
-    fn addresses(&self) -> io::Result<Vec<IpAddr>> {
+    fn addresses(&self) -> io::Result<Vec<super::Owned>> {
         let v4 = fib_trie_local(&std::fs::read_to_string("/proc/net/fib_trie")?)?;
         let inet6 = optional_text(std::fs::read_to_string("/proc/net/if_inet6"))?;
         // Any error but a missing tree counts as present, so an unreadable
@@ -98,8 +100,8 @@ impl super::Interfaces for super::System {
         let v6 = if_inet6(inet6.as_deref(), ipv6_sysctl_present)?;
         Ok(v4
             .into_iter()
-            .map(IpAddr::V4)
-            .chain(v6.into_iter().map(IpAddr::V6))
+            .map(|(a, len)| (IpAddr::V4(a), len))
+            .chain(v6.into_iter().map(|a| (IpAddr::V6(a), 128)))
             .collect())
     }
 }
