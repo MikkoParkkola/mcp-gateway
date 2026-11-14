@@ -1,0 +1,12 @@
+head_sha	ad20873640357c0fb9c137f3b3fb68ca1e427b3d
+#mutant m1
+mcp_gateway	backend::stop_deadline_tests::early::the_early_stop_hands_a_lock_held_backends_tree_over_at_its_first_step	src/backend/stop_deadline_early_tests.rs:101
+mcp_gateway	backend::stop_deadline_tests::early::an_early_stop_dropped_after_its_first_step_still_ends_its_trees	src/backend/stop_deadline_early_tests.rs:54
+mcp_gateway	backend::stop_deadline_tests::early::a_start_after_the_early_stops_first_step_spawns_nothing	src/backend/stop_deadline_early_tests.rs:157
+mcp_gateway	backend::stop_deadline_tests::early::the_early_handover_gets_the_whole_backend_stage	src/backend/stop_deadline_early_tests.rs:238
+#mutant m7
+mcp_gateway	transport::stdio::child_tree::tests::a_graceful_handover_between_spawn_and_install_refuses_the_start	src/transport/stdio_child_tree_tests.rs:787
+#mutant m7b
+mcp_gateway	backend::stop_deadline_tests::early::each_backend_reads_its_own_budget_at_its_handover	src/backend/stop_deadline_early_tests.rs:289
+#mutant m8
+mcp_gateway	backend::stop_deadline_tests::early::each_tree_of_a_backend_reads_its_own_budget_at_its_handover	src/backend/stop_deadline_early_tests.rs:327
