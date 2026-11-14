@@ -484,3 +484,179 @@ if os.fork() == 0:
 os.wait()";
     a_detached_survivor_outlives_the_stop(helper, "a double-forked daemon").await;
 }
+
+/// A backend that ignores SIGTERM (only the kill ends it), its trap set, under
+/// a plan of a 1 s EOF wait and a 1 s SIGTERM wait from `t0`, on the stop
+/// deadline `end` holds: the rows below drive its steps on given instants.
+async fn planned_tree(
+    t: &Arc<StdioTransport>,
+    w: &tempfile::TempDir,
+    end: &EndOnDrop,
+) -> std::time::Instant {
+    poll_until("the TERM handler is installed", || {
+        w.path().join("ready.mark").exists()
+    })
+    .await;
+    let deadline = Arc::clone(end.deadline());
+    with_tree(t, |tree| {
+        let t0 = std::time::Instant::now();
+        tree.set_ending(
+            Ending::Graceful {
+                eof: Duration::from_secs(1),
+                term: Duration::from_secs(1),
+            },
+            Some(deadline),
+        );
+        assert!(
+            matches!(tree.reap_step(t0), Reap::Pending),
+            "the plan starts"
+        );
+        t0
+    })
+    .await
+}
+
+const IGNORES_TERM_READY: &str =
+    "trap '' TERM\necho ready > ready.mark\nwhile :; do sleep 0.05; done";
+
+/// The plan's kill instant, and the slack the stop keeps past the reap deadline.
+fn kill_and_margin(t0: std::time::Instant) -> (std::time::Instant, Duration) {
+    let margin = super::super::super::reaper::KILL_RESERVE - super::super::REAP_DEADLINE;
+    (t0 + Duration::from_secs(2), margin)
+}
+
+/// A reaper step that first lands past the kill (a thread woken late) with the
+/// planned SIGTERM unsent still sends it, and kills a minimum phase later: a
+/// late tick never costs a backend its SIGTERM wait.
+#[tokio::test]
+async fn a_step_landing_past_the_kill_still_sends_the_planned_sigterm_first() {
+    use super::super::super::reaper::MIN_PHASE;
+    let (w, t) = started(IGNORES_TERM_READY, None).await;
+    let end = EndOnDrop::new(&t);
+    let t0 = planned_tree(&t, &w, &end).await;
+    let (kill_at, _) = kill_and_margin(t0);
+    with_tree(&t, |tree| {
+        let late = kill_at + Duration::from_millis(50);
+        tree.reap_step(late);
+        assert_eq!(
+            tree.term_signals_sent, 1,
+            "the late step sent the planned SIGTERM"
+        );
+        assert_eq!(tree.group_signals_sent, 0, "and did not kill with it");
+        tree.reap_step(late + MIN_PHASE - Duration::from_millis(1));
+        assert_eq!(
+            tree.group_signals_sent, 0,
+            "the SIGTERM keeps its minimum phase"
+        );
+        tree.reap_step(late + MIN_PHASE);
+        assert!(
+            tree.group_signals_sent > 0,
+            "the kill lands a minimum phase later"
+        );
+    })
+    .await;
+}
+
+/// A SIGTERM sent just before the kill instant (a late tick inside the window)
+/// still gets its minimum phase before the kill.
+#[tokio::test]
+async fn a_sigterm_sent_just_before_the_kill_still_gets_the_minimum_phase() {
+    use super::super::super::reaper::MIN_PHASE;
+    let (w, t) = started(IGNORES_TERM_READY, None).await;
+    let end = EndOnDrop::new(&t);
+    let t0 = planned_tree(&t, &w, &end).await;
+    let (kill_at, _) = kill_and_margin(t0);
+    with_tree(&t, |tree| {
+        let sent = kill_at - Duration::from_millis(5);
+        tree.reap_step(sent);
+        assert_eq!(tree.term_signals_sent, 1, "SIGTERM inside its window");
+        tree.reap_step(kill_at);
+        assert_eq!(
+            tree.group_signals_sent, 0,
+            "not killed 5 ms after its SIGTERM"
+        );
+        tree.reap_step(sent + MIN_PHASE - Duration::from_millis(1));
+        assert_eq!(
+            tree.group_signals_sent, 0,
+            "the SIGTERM keeps its minimum phase"
+        );
+        tree.reap_step(sent + MIN_PHASE);
+        assert!(
+            tree.group_signals_sent > 0,
+            "the kill lands a minimum phase after it"
+        );
+    })
+    .await;
+}
+
+/// The last late step whose minimum phase still fits before the reserve's slack
+/// runs out sends the SIGTERM, and the kill lands exactly at that limit.
+#[tokio::test]
+async fn the_last_late_step_with_room_for_the_minimum_phase_still_sends_sigterm() {
+    use super::super::super::reaper::MIN_PHASE;
+    let (w, t) = started(IGNORES_TERM_READY, None).await;
+    let end = EndOnDrop::new(&t);
+    let t0 = planned_tree(&t, &w, &end).await;
+    let (kill_at, margin) = kill_and_margin(t0);
+    with_tree(&t, |tree| {
+        tree.reap_step(kill_at + margin - MIN_PHASE);
+        assert_eq!(tree.term_signals_sent, 1, "the minimum phase fits exactly");
+        assert_eq!(tree.group_signals_sent, 0, "and is not cut short");
+        tree.reap_step(kill_at + margin - Duration::from_millis(1));
+        assert_eq!(tree.group_signals_sent, 0, "the kill waits for the limit");
+        tree.reap_step(kill_at + margin);
+        assert!(tree.group_signals_sent > 0, "the kill lands at the limit");
+    })
+    .await;
+}
+
+/// One millisecond later the minimum phase no longer fits: the stop's deadline
+/// wins, the tree is killed at once and no SIGTERM goes out.
+#[tokio::test]
+async fn a_step_past_the_margin_kills_at_once_without_sigterm() {
+    use super::super::super::reaper::MIN_PHASE;
+    let (w, t) = started(IGNORES_TERM_READY, None).await;
+    let end = EndOnDrop::new(&t);
+    let t0 = planned_tree(&t, &w, &end).await;
+    let (kill_at, margin) = kill_and_margin(t0);
+    with_tree(&t, |tree| {
+        tree.reap_step(kill_at + margin - MIN_PHASE + Duration::from_millis(1));
+        assert_eq!(tree.term_signals_sent, 0, "no room for a SIGTERM wait");
+        assert!(tree.group_signals_sent > 0, "killed at once");
+    })
+    .await;
+}
+
+/// A stop deadline that moves earlier while a late SIGTERM waits out its
+/// minimum phase still bounds the kill: it lands by the new kill instant plus
+/// the reserve's slack, before the minimum phase would have ended.
+#[tokio::test]
+async fn a_cut_during_the_late_sigterm_wait_still_kills_by_its_margin() {
+    use super::super::super::reaper::KILL_RESERVE;
+    let (w, t) = started(IGNORES_TERM_READY, None).await;
+    let end = EndOnDrop::new(&t);
+    let t0 = planned_tree(&t, &w, &end).await;
+    let (kill_at, margin) = kill_and_margin(t0);
+    with_tree(&t, |tree| {
+        let late = kill_at + Duration::from_millis(50);
+        tree.reap_step(late);
+        assert_eq!(
+            tree.term_signals_sent, 1,
+            "the late step sent the planned SIGTERM"
+        );
+        // The new kill instant plus the slack lands 20 ms after the late step.
+        let limit = late + Duration::from_millis(20);
+        end.deadline().move_earlier(limit - margin + KILL_RESERVE);
+        tree.reap_step(limit - Duration::from_millis(1));
+        assert_eq!(
+            tree.group_signals_sent, 0,
+            "the kill waits for the new limit"
+        );
+        tree.reap_step(limit);
+        assert!(
+            tree.group_signals_sent > 0,
+            "the kill lands by the new limit"
+        );
+    })
+    .await;
+}
