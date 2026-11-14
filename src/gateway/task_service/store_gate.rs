@@ -331,7 +331,13 @@ impl TaskGate {
             #[cfg(test)]
             seams::GateSeams::pass(&self.seams.before_wait).await;
             let stamp = ticket.stamp;
-            let woken = |g: &Gate| decide(g, kind, Some(&stamp), false) != Decision::Park;
+            // Every change of state wakes the parker, not only one that admits
+            // it: its bound is the state's. A drain parker that misses the
+            // opening (the next attempt pauses first) must take that attempt's
+            // deadline, not keep waiting with no timer.
+            let woken = |g: &Gate| {
+                g.state != state || decide(g, kind, Some(&stamp), false) != Decision::Park
+            };
             match bound(state, kind, &stamp) {
                 Some(until) => {
                     expired = tokio::time::timeout_at(until, rx.wait_for(woken))
