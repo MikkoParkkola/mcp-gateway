@@ -77,9 +77,13 @@ async fn c2_a_checkpoint_held_past_the_deadline_is_dropped_without_a_fault() {
     let resumes = Arc::new(AtomicUsize::new(0));
     let mut adapters = three(&store, &resumes);
     let held = store.hold_order_for_test();
-    let outcome = within("C2", run_checkpoint(&mut adapters, deadline()))
-        .await
-        .map(drop);
+    // The paused clock does not move on its own while the held re-save's
+    // blocking task runs, so the row moves it past the deadline itself.
+    let (outcome, ()) = tokio::join!(
+        within("C2", run_checkpoint(&mut adapters, deadline())),
+        tokio::time::advance(std::time::Duration::from_secs(11)),
+    );
+    let outcome = outcome.map(drop);
     assert_eq!(
         outcome,
         Err(task_save_cancel(CancelReason::DeadlineExceeded))
@@ -316,8 +320,7 @@ async fn c3e_checkpoint_outside_its_paused_attempt_is_unavailable() {
 // and whose attempt is resumed, stops at its next record and sets no gate;
 // settled() is false while it runs and true after; then a new attempt
 // certifies.
-#[tokio::test]
-async fn c4_a_superseded_resave_stops_at_its_next_record_and_a_new_attempt_certifies() {
+async fn superseded(recover_by_release: bool) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks");
     let (store, _) = seeded(&path, 3).await;
@@ -350,7 +353,11 @@ async fn c4_a_superseded_resave_stops_at_its_next_record_and_a_new_attempt_certi
         })
         .await;
     }
-    floor.resume();
+    if recover_by_release {
+        floor.release_for_stop();
+    } else {
+        floor.resume();
+    }
     assert!(!floor.settled(), "the superseded re-save still runs");
     let _ = release.send(());
     within("C4 settles", async {
@@ -364,13 +371,28 @@ async fn c4_a_superseded_resave_stops_at_its_next_record_and_a_new_attempt_certi
         2,
         "stopped at its next record"
     );
-    assert_eq!(
-        store.gate_for_test().state(),
-        GateState::Open,
-        "no gate set"
-    );
-    store.set_hook(None).await;
-    assert_eq!(certify("C10", &mut floor).await, Ok(()));
+    let recovered = if recover_by_release {
+        GateState::Released
+    } else {
+        GateState::Open
+    };
+    assert_eq!(store.gate_for_test().state(), recovered, "no gate set");
+    if !recover_by_release {
+        store.set_hook(None).await;
+        assert_eq!(certify("C10", &mut floor).await, Ok(()));
+    }
+}
+
+#[tokio::test]
+async fn c4_a_superseded_resave_stops_at_its_next_record_and_a_new_attempt_certifies() {
+    superseded(false).await;
+}
+
+// C4 through a stop instead of a resume: the late re-save stops the same way
+// and leaves the gate Released.
+#[tokio::test]
+async fn c4r_a_resave_superseded_by_a_stop_stops_at_its_next_record() {
+    superseded(true).await;
 }
 
 // C5: commit from Certified makes the gate Terminal: an External create parked
@@ -471,4 +493,46 @@ async fn c8_the_sync_calls_never_wait_on_the_ordering_lock() {
     }
     drop(held);
     assert!(calls.join().is_ok(), "C8: no sync call panicked");
+}
+
+// C12: the adapter gives the gate its own deadline and stop budget. With a
+// 5 s budget, an External parker is refused just past the deadline + 1 s and
+// an Internal parker proceeds just past the deadline + 5 s, not before.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn c12_the_gate_takes_the_adapters_deadline_and_stop_budget() {
+    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let (store, ids) = seeded(&path, 1).await;
+    let revision = store.get(OWNER, &ids[0]).unwrap().revision;
+    let mut floor = super::super::store::floor::TaskFloor::new(&store, Duration::from_secs(5));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    assert_eq!(within("C12", floor.pause(deadline)).await, Ok(()));
+    let external = spawn_create(&store, 41);
+    let internal = tokio::spawn({
+        let (store, id) = (store.clone(), ids[0].clone());
+        async move { store.mark_dispatched(OWNER, &id, revision).await }
+    });
+    parked("C12", &store, 2).await;
+    tokio::time::advance(Duration::from_millis(10_500)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        store.gate_for_test().parked(),
+        2,
+        "both wait before deadline + 1 s"
+    );
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let refused = within("C12 external", external).await.unwrap();
+    assert_eq!(refused, Err(StoreError::Restarting), "External: refused");
+    tokio::time::advance(Duration::from_secs(3)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        store.gate_for_test().parked(),
+        1,
+        "Internal waits for the backstop"
+    );
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::time::resume();
+    let landed = within("C12 internal", internal).await.unwrap();
+    assert_eq!(landed, Ok(()), "Internal: proceeds at the backstop");
 }

@@ -445,12 +445,13 @@ async fn t1_a_task_save_fault_cancels_the_run_and_a_retry_certifies() {
         GateState::Open,
         "the store resumed"
     );
+    // The fault cleared, the store was never poisoned: it serves on.
+    store.set_hook(None).await;
     store.get(OWNER, &ids[0]).expect("a read is still served");
     store
         .create(PreparedTask::for_test(&task(), OWNER, 7))
         .await
         .expect("a create is still served");
-    store.set_hook(None).await;
     let retry = within("T1 retry", run_checkpoint(&mut adapters, deadline())).await;
     assert!(retry.is_ok(), "the retry certifies");
 }

@@ -181,8 +181,10 @@ impl super::Shared {
             }
             let bytes = {
                 let state = self.state();
+                // Under the ordering lock nothing removes a record; one gone
+                // anyway means the image is not the one snapshotted.
                 let Some(entry) = state.entries.get(&id) else {
-                    continue;
+                    return Err(Resave::Store(StoreError::Unavailable));
                 };
                 super::serialize(&entry.record).map_err(Resave::Store)?
             };
