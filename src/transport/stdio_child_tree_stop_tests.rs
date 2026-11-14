@@ -792,3 +792,6 @@ pub(super) async fn started_unhurried(
     with_tree(&t, |c| c.reap_deadline_for_test = Some(HANG_BOUND)).await;
     (w, t)
 }
+
+#[path = "stdio_child_tree_stage_tests.rs"]
+mod stage;

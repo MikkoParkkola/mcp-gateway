@@ -739,6 +739,7 @@ impl Destinations {
 
 #[path = "registry_stop.rs"]
 mod stop;
+pub(crate) use stop::Handover;
 #[cfg(all(test, unix))]
 pub(in crate::backend) use stop::seam as stop_seam;
 
