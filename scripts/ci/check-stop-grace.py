@@ -39,10 +39,19 @@ TABLE = "tests/fixtures/stop_grace_cases.txt"
 DEFAULT_SRC = "src/config/server_config.rs"
 CAP_SRC = "src/duration_bound.rs"
 CLI_SRC = "src/cli/mod.rs"
-# One-shot first arguments after the image: they exit without serving, so the
-# stop grace does not apply. Each word is checked against the CLI's Command enum
-# by the self-test (the flags are clap's own). Anything else serves.
-ONE_SHOT = ("doctor", "help", "--help", "-h", "--version", "-V")
+# Every CLI subcommand is classified here, and the self-test fails until a new one
+# is: a run whose first argument after the image is one of ONE_SHOT_COMMANDS exits
+# without serving, so no stop grace applies. LONG_RUNNING_COMMANDS serve or loop
+# (`kubernetes controller` runs a reconcile loop) and need the grace. A first word
+# in neither set needs it too: a longer grace never cuts a stop short.
+ONE_SHOT_COMMANDS = frozenset({
+    "accounts", "add", "api", "audit", "cap", "dashboard-link", "doctor", "events", "get", "hash-key",
+    "identity", "import", "init", "list", "provenance", "ranking", "remove", "runtime", "setup", "skills",
+    "stats", "tls", "tool", "trust", "upgrade", "validate",
+})
+LONG_RUNNING_COMMANDS = frozenset({"serve", "kubernetes"})
+# clap's own: the help subcommand and the help and version flags print and exit.
+ONE_SHOT = tuple(sorted(ONE_SHOT_COMMANDS)) + ("help", "--help", "-h", "--version", "-V")
 GATEWAY_IMAGE = re.compile(r"(?:^|/)mcp-gateway(?::[\w.-]+)?(?:@sha256:[0-9a-f]+)?$")
 GRAMMAR = re.compile(r"\s*\+?([0-9]+)(ms|s|m|h)?\s*", re.ASCII)
 SCALE = {"s": 1, "m": 60, "h": 3600}
@@ -433,6 +442,7 @@ PLANTED = {
     "docs/sec-config.md": section("## S", "server:\n  shutdown_timeout: 45s", RUN31),
     "docs/parent.md": section("## Parent", "server:\n  shutdown_timeout: 50s") + section("### Child", RUN31),
     "docs/refused.md": section("## S", "server:\n  shutdown_timeout: 1d", RUN31),
+    "docs/long-running.md": fence("docker run " + IMG + " kubernetes controller --file r.yaml"),
 }
 # Files a planted artifact reads, never flagged themselves.
 SUPPORT = {
@@ -472,10 +482,11 @@ def self_test():
         got = "refused" if secs is None else str(secs + 1)
         assert got == want, f"{value!r}: grace {got}, the table says {want}"
     words = command_words(here)
-    assert "serve" in words and "doctor" in words, words
-    for word in ONE_SHOT:
-        assert word.startswith("-") or word == "help" or word in words, f"{word} is not a CLI subcommand"
-    assert "serve" not in ONE_SHOT
+    assert len(words) >= 20, f"the Command enum read as {sorted(words)}"
+    classified = ONE_SHOT_COMMANDS | LONG_RUNNING_COMMANDS
+    assert not ONE_SHOT_COMMANDS & LONG_RUNNING_COMMANDS, ONE_SHOT_COMMANDS & LONG_RUNNING_COMMANDS
+    assert words <= classified, f"classify subcommands {sorted(words - classified)} in check-stop-grace.py"
+    assert classified <= words, f"{sorted(classified - words)} are no longer subcommands; remove them"
     assert systemd_seconds("1min 30s") == 90 and systemd_seconds("31") == 31 and systemd_seconds("x") is None
     assert go_seconds("1m30s") == 90 and go_seconds("31") is None
     with tempfile.TemporaryDirectory() as tmp:
