@@ -144,7 +144,7 @@ impl ConfigFloor {
         let attempt = self.attempt;
         // Admitted work settles before the candidate search, so a fallback file
         // that appears while it runs is seen, and a fileless run is still gated.
-        locks::until(deadline, self.gate.settle()).await;
+        mutant!("settle_skipped", (), { locks::until(deadline, self.gate.settle()).await; });
         let Some(path) = self.configured_path() else {
             return self.certify_gate(attempt);
         };

@@ -78,7 +78,11 @@ impl Drop for Entries {
         };
         match (how, tokio::runtime::Handle::try_current()) {
             (Settle::Discard, Ok(runtime)) => {
-                let admitted = self.admitted.take();
+                let admitted = mutant!(
+                    "entries_cleanup_handle_dropped_early",
+                    { drop(self.admitted.take()); None },
+                    self.admitted.take()
+                );
                 #[cfg(test)]
                 let gate = self.gate.clone();
                 drop(runtime.spawn_blocking(move || {

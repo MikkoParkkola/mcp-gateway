@@ -96,7 +96,10 @@ impl Drop for AdmissionGuard {
 fn decide(state: GateState, kind: AdmitKind) -> Option<Refusal> {
     match (state, kind) {
         (GateState::Open, _) => None,
-        (GateState::Paused(_) | GateState::Certified(_), AdmitKind::Write) => Some(Refusal::Busy),
+        (GateState::Paused(_), AdmitKind::Write) => Some(Refusal::Busy),
+        (GateState::Certified(_), AdmitKind::Write) => {
+            mutant!("certified_admits_writes", None, Some(Refusal::Busy))
+        }
         (GateState::Paused(_) | GateState::Certified(_), _) => Some(Refusal::ReplayOwed),
         (GateState::Terminal, _) => Some(Refusal::Restarting),
         (GateState::Released, _) => Some(Refusal::Stopping),
@@ -113,7 +116,7 @@ impl ConfigGate {
     pub(crate) fn admit(&self, kind: AdmitKind) -> Result<AdmissionGuard, Refusal> {
         let mut inner = self.inner.lock();
         let refusal = decide(inner.state, kind);
-        if refusal == Some(Refusal::ReplayOwed) && kind == AdmitKind::ManualReload {
+        if mutant!("replay_owed_ignored", false, mutant!("certified_drops_manual_reload", refusal == Some(Refusal::ReplayOwed) && kind == AdmitKind::ManualReload && !matches!(inner.state, GateState::Certified(_)), refusal == Some(Refusal::ReplayOwed) && kind == AdmitKind::ManualReload)) {
             inner.replay_owed = true;
         }
         #[cfg(test)]
@@ -130,18 +133,20 @@ impl ConfigGate {
     /// between the count read and the await is never missed.
     pub(crate) async fn settle(&self) {
         loop {
-            let notified = self.settled.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
             if self.inner.lock().in_flight == 0 {
                 return;
             }
             #[cfg(test)]
             self.seams.call_settle_window();
-            if self.inner.lock().in_flight == 0 {
-                return;
-            }
-            notified.await;
+            mutant!("lost_wakeup", self.settled.notified().await, {
+                let notified = self.settled.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.inner.lock().in_flight == 0 {
+                    return;
+                }
+                notified.await;
+            });
         }
     }
 
@@ -192,7 +197,7 @@ impl ConfigGate {
         match inner.state {
             GateState::Terminal | GateState::Released => Err(FloorFault::Unavailable),
             _ => {
-                inner.state = GateState::Paused(attempt);
+                inner.state = mutant!("pause_skipped", inner.state, GateState::Paused(attempt));
                 Ok(())
             }
         }
