@@ -342,12 +342,12 @@ async fn k12_sync_calls_never_take_a_certification_lock() {
     const ROW: &str = "K12";
     // WHEN each of the four calls runs against held locks, THEN it returns and
     // leaves the state its duty names
-    let ((), state) = sync_call_under_held_locks("resume", |f| f.resume()).await;
+    let ((), state) = sync_call_under_held_locks("resume", FloorAdapter::resume).await;
     assert_eq!(state, GateState::Open, "{ROW}: resume");
     let ((), state) =
-        sync_call_under_held_locks("release_for_stop", |f| f.release_for_stop()).await;
+        sync_call_under_held_locks("release_for_stop", FloorAdapter::release_for_stop).await;
     assert_eq!(state, GateState::Released, "{ROW}: release_for_stop");
-    let ((), state) = sync_call_under_held_locks("commit", |f| f.commit()).await;
+    let ((), state) = sync_call_under_held_locks("commit", FloorAdapter::commit).await;
     assert_eq!(state, GateState::Terminal, "{ROW}: commit");
     let (settled, _) = sync_call_under_held_locks("settled", |f| f.settled()).await;
     assert!(settled, "{ROW}: settled with no late work");

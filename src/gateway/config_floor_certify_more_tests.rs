@@ -151,8 +151,8 @@ async fn c9_symlink_repointed_after_the_read_refuses() {
     const ROW: &str = "C9 symlink repointed";
     let booted = Booted::new(BASE);
     let (link, dir) = (booted.cfg.path.clone(), booted.cfg.dir.path().to_path_buf());
-    write_owner_only(&dir.join("real.yaml"), BASE).expect("real target");
-    write_owner_only(&dir.join("other.yaml"), format!("{BASE}environment: x\n")).expect("other");
+    write_owner_only(dir.join("real.yaml"), BASE).expect("real target");
+    write_owner_only(dir.join("other.yaml"), format!("{BASE}environment: x\n")).expect("other");
     std::fs::remove_file(&link).expect("unlink");
     std::os::unix::fs::symlink(dir.join("real.yaml"), &link).expect("link");
     let mut floor = booted.floor();

@@ -39,9 +39,11 @@ fn hold_with_panic(
     let (gate_release, taken) = (Arc::clone(&release), AtomicBool::new(false));
     let died = AtomicBool::new(false);
     gate.set_admitted_hook(Some(Arc::new(move |at| {
-        if Some(at) == panic_at && !died.swap(true, Ordering::SeqCst) {
-            panic!("the write task dies after staging its secret entries");
-        }
+        let dies = Some(at) == panic_at && !died.swap(true, Ordering::SeqCst);
+        assert!(
+            !dies,
+            "the write task dies after staging its secret entries"
+        );
         if at == point && !taken.swap(true, Ordering::SeqCst) {
             tx.lock().unwrap().send(()).ok();
             gate_release.wait();
@@ -304,7 +306,7 @@ async fn p3_watcher_reload_held_after_admission() {
     let ticking = tokio::spawn(async move { tick(&watcher).await });
     hold.wait_reached(ROW, "the watcher after admission");
     p3_case(ROW, &booted, AdmitKind::Watcher, Probe::Free, || {
-        hold.release()
+        hold.release();
     })
     .await;
     ticking.await.expect("tick joined");
@@ -322,7 +324,7 @@ async fn p3_manual_reload_held_after_admission() {
     });
     hold.wait_reached(ROW, "the manual reload after admission");
     p3_case(ROW, &booted, AdmitKind::ManualReload, Probe::Free, || {
-        hold.release()
+        hold.release();
     })
     .await;
     assert!(reload.await.expect("join").is_ok(), "{ROW}: reload ran");
@@ -348,7 +350,7 @@ async fn p3_manual_reload_queued_behind_outside_reload_lock() {
             .any(|d| d.kind == AdmitKind::ManualReload && d.admitted)
     });
     p3_case(ROW, &booted, AdmitKind::ManualReload, Probe::Busy, || {
-        drop(outside)
+        drop(outside);
     })
     .await;
     assert!(reload.await.expect("join").is_ok(), "{ROW}: reload ran");
@@ -373,7 +375,7 @@ async fn p3_watcher_reload_queued_behind_outside_reload_lock() {
             .any(|d| d.kind == AdmitKind::Watcher && d.admitted)
     });
     p3_case(ROW, &booted, AdmitKind::Watcher, Probe::Busy, || {
-        drop(outside)
+        drop(outside);
     })
     .await;
     ticking.await.expect("tick joined");

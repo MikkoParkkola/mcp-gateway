@@ -121,7 +121,7 @@ impl Fx {
     async fn certified() -> Self {
         let mut fx = Self::paused().await;
         let checkpoint = fx.floor.checkpoint(deadline());
-        let certified = bounded("the fixture checkpoint", checkpoint).await;
+        let certified = bounded("the fixture checkpoint", Box::pin(checkpoint)).await;
         certified.expect("fixture: checkpoint certifies");
         fx
     }
@@ -142,7 +142,7 @@ impl Fx {
             .saved_body(&json!([set("environment", &json!("prod"))]));
         let response = bounded(
             "the settings save route",
-            self.route.response(true, &body.to_string(), client(true)),
+            Box::pin(self.route.response(true, &body.to_string(), client(true))),
         )
         .await;
         let headers = response.headers().clone();
@@ -159,7 +159,12 @@ impl Fx {
         );
         let state: Arc<AppState> = self.route.state.clone();
         let reload = super::super::reload(State(state), guard);
-        decode(bounded("the UI reload route", reload).await.into_response()).await
+        decode(
+            bounded("the UI reload route", Box::pin(reload))
+                .await
+                .into_response(),
+        )
+        .await
     }
 
     /// A manual reload through the `gateway_reload_config` meta-tool.
@@ -174,13 +179,13 @@ impl Fx {
                 ..anonymous_caller()
             },
         );
-        let response = bounded("the gateway_reload_config meta-tool", call).await;
+        let response = bounded("the gateway_reload_config meta-tool", Box::pin(call)).await;
         serde_json::to_value(&response).expect("response is JSON")
     }
 
     /// One watcher tick, bounded like every call into production.
     async fn tick(&self) {
-        bounded("the watcher tick", tick(&self.watcher)).await;
+        bounded("the watcher tick", Box::pin(tick(&self.watcher))).await;
     }
 
     fn running_environment(&self) -> Option<String> {
@@ -207,7 +212,7 @@ fn assert_refused(
 }
 
 /// A manual reload that ran nothing: 409 with the flat `{error: message}` body.
-fn assert_ran_nothing(row: &str, answer: (StatusCode, Value), message: &str) {
+fn assert_ran_nothing(row: &str, answer: &(StatusCode, Value), message: &str) {
     assert_eq!(
         answer.0,
         StatusCode::CONFLICT,
@@ -231,7 +236,7 @@ fn assert_unchanged(row: &str, fx: &Fx, before: &Stat) {
 }
 
 /// P4: while paused a save is refused with the exact body, an outside edit
-/// pair is held back by the tick, and resume() replays only the last value.
+/// pair is held back by the tick, and `resume()` replays only the last value.
 #[tokio::test]
 async fn p4_paused_save_refused_and_replay_once() {
     const ROW: &str = "p4";
@@ -281,13 +286,13 @@ enum Entry {
 /// A manual reload through `entry` that must answer "ran nothing" with `message`.
 async fn assert_reload_refused(row: &str, fx: &Fx, entry: Entry, message: &str) {
     match entry {
-        Entry::UiRoute => assert_ran_nothing(row, fx.reload_answer().await, message),
+        Entry::UiRoute => assert_ran_nothing(row, &fx.reload_answer().await, message),
         Entry::MetaTool => assert_meta_ran_nothing(row, &fx.meta_reload_answer().await, message),
     }
 }
 
 /// P5 body: an edit with no watcher event, a manual reload refused while
-/// paused, nothing running until resume() and one tick replay it once.
+/// paused, nothing running until `resume()` and one tick replay it once.
 async fn p5_case(row: &str, entry: Entry) {
     if matches!(entry, Entry::MetaTool) {
         // Premise: on an Open gate this caller reaches reload_config and it succeeds,
@@ -345,7 +350,7 @@ fn owner_of_a(fx: &Fx) -> Option<String> {
     fx.route.ctx.live_config.get().backends["a"].owner.clone()
 }
 
-/// P8: a replay and an admitted write racing after resume() both land, by source.
+/// P8: a replay and an admitted write racing after `resume()` both land, by source.
 #[tokio::test]
 async fn p8_replay_and_admitted_write_both_land() {
     const ROW: &str = "p8";
@@ -359,7 +364,8 @@ async fn p8_replay_and_admitted_write_both_land() {
     ]));
     let text = body.to_string();
     let response = fx.route.response(true, &text, client(true));
-    let (status, answer) = decode(bounded("the settings save route", response).await).await;
+    let (status, answer) =
+        decode(bounded("the settings save route", Box::pin(response)).await).await;
     assert_eq!(
         status,
         StatusCode::OK,
@@ -490,7 +496,7 @@ async fn p9a_certified_write_refused_without_replay() {
 async fn p9b_certified_manual_reload_owes_a_replay() {
     const ROW: &str = "p9b";
     let mut fx = Fx::certified().await;
-    assert_ran_nothing(ROW, fx.reload_answer().await, REPLAY_MESSAGE);
+    assert_ran_nothing(ROW, &fx.reload_answer().await, REPLAY_MESSAGE);
     assert_refused_in_certified(ROW, &fx, AdmitKind::ManualReload);
     assert!(
         fx.gate.replay_owed(),
@@ -539,7 +545,7 @@ async fn p9c_certified_outside_edit_kept_for_replay() {
     assert_eq!(fx.gate.reload_log().len(), 1, "{ROW}: no other reload");
 }
 
-/// K5: after commit() the reload lock is free, the config lock stays held, and
+/// K5: after `commit()` the reload lock is free, the config lock stays held, and
 /// a UI write is refused as restarting.
 #[tokio::test]
 async fn k5_committed_write_refused_restarting() {
@@ -584,7 +590,7 @@ async fn k8_case(row: &str, end: End) {
         save_refusal((error, message)),
         None,
     );
-    assert_ran_nothing(row, fx.reload_answer().await, message);
+    assert_ran_nothing(row, &fx.reload_answer().await, message);
     fx.route.write(&with_env("a1"));
     // Plays the OS delivering the notify event for the outside edit.
     fx.gate.record_file_event();
