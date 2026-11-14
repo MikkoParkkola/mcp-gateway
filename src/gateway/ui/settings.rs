@@ -561,6 +561,9 @@ fn secret_target(
 #[path = "settings_answer_tests.rs"]
 mod answer_tests;
 #[cfg(test)]
+#[path = "settings_floor_tests.rs"]
+mod floor_tests;
+#[cfg(test)]
 #[path = "settings_route_secret_tests.rs"]
 mod route_secret_tests;
 #[cfg(test)]

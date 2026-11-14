@@ -256,6 +256,15 @@ impl ReloadContext {
         self
     }
 
+    /// Mark a reload as owed, as a journal recovery that rolled the file back
+    /// does, so a restart checkpoint row can stage that one condition without
+    /// arranging a recovery on disk.
+    #[cfg(test)]
+    pub(crate) fn owe_reload_for_test(&self) {
+        self.reload_owed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Test-only: a context whose every reload after a write refuses the new
     /// bytes, so a route's answer to a refused reload can be driven end to end.
     /// Its only caller is the web UI's backend rows.

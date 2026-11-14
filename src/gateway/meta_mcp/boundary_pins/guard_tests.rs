@@ -237,6 +237,9 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         "subscribe_started",
         "reload_read_slot",
         "lock_reload",
+        // The reload lock itself, for the restart floor's config owner to hold
+        // as an owned guard; it reads and hands out no backend.
+        "reload_lock_handle",
         "register",
         "observe_breakers",
         "enforce_destinations",

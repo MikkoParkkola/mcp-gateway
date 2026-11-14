@@ -206,8 +206,9 @@ pub struct BackendRegistry {
     /// both would still register.
     ///
     /// A `tokio` mutex, not `parking_lot`: the critical section awaits
-    /// `Backend::stop`.
-    reload: tokio::sync::Mutex<()>,
+    /// `Backend::stop`. Shared (`Arc`) so the restart floor's config owner can
+    /// hold it across a checkpoint as an owned guard.
+    reload: Arc<tokio::sync::Mutex<()>>,
     /// One config-reload file read at a time, across every reload context.
     ///
     /// Beside `reload` because every reload context shares this registry: the
@@ -255,7 +256,7 @@ impl BackendRegistry {
             membership: std::sync::atomic::AtomicU64::new(0),
             change_feed: std::sync::OnceLock::new(),
             stopping: parking_lot::RwLock::new(false),
-            reload: tokio::sync::Mutex::new(()),
+            reload: Arc::new(tokio::sync::Mutex::new(())),
             reload_read: Arc::new(tokio::sync::Semaphore::new(1)),
             breaker_observer: crate::observer::Observer::default(),
             destination: std::sync::OnceLock::new(),
@@ -305,6 +306,19 @@ impl BackendRegistry {
     /// transaction (stop-then-register) must take it; single operations do not.
     pub async fn lock_reload(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.reload.lock().await
+    }
+
+    /// The reload lock itself, for the restart floor's config owner: it holds
+    /// the lock from its checkpoint to the restart decision, past any borrow.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the restart coordinator wiring, a later slice, builds the config floor from it"
+        )
+    )]
+    pub(crate) fn reload_lock_handle(&self) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(&self.reload)
     }
 
     /// Register a backend
