@@ -5,7 +5,7 @@ use axum::http::{HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
-use crate::config_reload::FileRevision;
+use crate::config_reload::{FileRevision, RELOAD_RESTARTING, RELOAD_STOPPING};
 use crate::gateway::http_error::{flat_error_body, json_body, structured_error_body};
 use crate::gateway::restart_config_floor::Refusal;
 
@@ -39,8 +39,8 @@ pub(super) fn gate_refusal(refusal: Refusal) -> Response {
                 .insert(RETRY_AFTER, HeaderValue::from_static("1"));
             busy
         }
-        Refusal::Restarting => ending("restarting", "the gateway is restarting").into_response(),
-        Refusal::Stopping => ending("stopping", "the gateway is stopping").into_response(),
+        Refusal::Restarting => ending("restarting", RELOAD_RESTARTING).into_response(),
+        Refusal::Stopping => ending("stopping", RELOAD_STOPPING).into_response(),
     }
 }
 

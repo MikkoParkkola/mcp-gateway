@@ -27,7 +27,7 @@ fn hold_at(gate: &ConfigGate, point: AdmittedPoint) -> Hold {
     hold_with_panic(gate, point, None)
 }
 
-/// Like [`hold_at`], and the first call at `panic_at` panics (the holder panic_now).
+/// Like [`hold_at`], and the first call at `panic_at` panics (the holder dies).
 fn hold_with_panic(
     gate: &ConfigGate,
     point: AdmittedPoint,
@@ -211,7 +211,7 @@ fn live_entries(dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
-/// P2: a write task that panic_now after staging ends first; its detached cleanup
+/// P2: a write task that dies after staging ends first; its detached cleanup
 /// alone holds the settle. (No cancellation variant: the writer has no await
 /// between staging and the rename, and the hook is synchronous.)
 #[cfg(feature = "webui")]

@@ -39,9 +39,15 @@ pub(super) struct CheckInput {
     pub(super) meta_hook: Option<seams::MetaHook>,
 }
 
-/// A refusal; the reason is logged, never returned, and names no secret.
-fn refuse(why: &str) -> FloorFault {
-    tracing::warn!(reason = why, "config checkpoint refused");
+/// A refusal; the attempt, the configured path and the reason are logged,
+/// never returned, and none of them is a secret.
+fn refuse(input: &CheckInput, why: &str) -> FloorFault {
+    tracing::warn!(
+        attempt = input.attempt,
+        path = %input.configured.display(),
+        reason = why,
+        "config checkpoint refused"
+    );
     FloorFault::SaveFailed
 }
 
@@ -69,12 +75,12 @@ fn sidecar_exists(input: &CheckInput) -> io::Result<bool> {
 /// Step 3: no unsettled write beside the target.
 fn settled_write(input: &CheckInput) -> Result<(), FloorFault> {
     if journal_pending(&input.locked_target) {
-        return Err(refuse("a replace journal is pending"));
+        return Err(refuse(input, "a replace journal is pending"));
     }
     match sidecar_exists(input) {
         Ok(false) => Ok(()),
-        Ok(true) => Err(refuse("an abandoned journal is present")),
-        Err(_) => Err(refuse("the abandoned sidecar cannot be examined")),
+        Ok(true) => Err(refuse(input, "an abandoned journal is present")),
+        Err(_) => Err(refuse(input, "the abandoned sidecar cannot be examined")),
     }
 }
 
@@ -84,17 +90,18 @@ fn still_named(input: &CheckInput) -> Result<(), FloorFault> {
         Ok(())
     } else {
         Err(refuse(
+            input,
             "the configured path no longer names the locked file",
         ))
     }
 }
 
 /// The trusted read of the target; a missing, refused or failed read is a refusal.
-fn read_target(target: &Path) -> Result<String, FloorFault> {
-    match crate::config::read_config_text(target) {
+fn read_target(input: &CheckInput) -> Result<String, FloorFault> {
+    match crate::config::read_config_text(&input.locked_target) {
         Ok(Some(text)) => Ok(text),
-        Ok(None) => Err(refuse("the config file is missing")),
-        Err(_) => Err(refuse("the config file cannot be read")),
+        Ok(None) => Err(refuse(input, "the config file is missing")),
+        Err(_) => Err(refuse(input, "the config file cannot be read")),
     }
 }
 
@@ -123,9 +130,9 @@ fn validate(input: &CheckInput, target: &Path, text: &str) -> Result<(), FloorFa
         let _ = input;
         evaluate()
     };
-    let evaluated = evaluated.map_err(|_| refuse("the config file is invalid"))?;
+    let evaluated = evaluated.map_err(|_| refuse(input, "the config file is invalid"))?;
     if has_unresolved_keychain(evaluated.config) {
-        return Err(refuse("a keychain reference did not resolve"));
+        return Err(refuse(input, "a keychain reference did not resolve"));
     }
     Ok(())
 }
@@ -133,11 +140,11 @@ fn validate(input: &CheckInput, target: &Path, text: &str) -> Result<(), FloorFa
 /// Step 8: nothing moved and no byte changed while the file was validated.
 fn recheck(input: &CheckInput, sha256: &str) -> Result<(), FloorFault> {
     still_named(input)?;
-    let again = read_target(&input.locked_target)?;
+    let again = read_target(input)?;
     if sha256_hex(again.as_bytes()) == sha256 {
         Ok(())
     } else {
-        Err(refuse("the config file changed during validation"))
+        Err(refuse(input, "the config file changed during validation"))
     }
 }
 
@@ -157,14 +164,14 @@ pub(super) fn check(input: &CheckInput) -> Result<Certification, FloorFault> {
     #[cfg(test)]
     at(input, seams::CheckStep::BeforeRead);
     still_named(input)?;
-    let text = read_target(&input.locked_target)?;
+    let text = read_target(input)?;
     #[cfg(test)]
     at(input, seams::CheckStep::AfterRead);
     validate(input, &input.locked_target, &text)?;
     #[cfg(test)]
     at(input, seams::CheckStep::AfterValidation);
     if (input.owed)() {
-        return Err(refuse("a reload is owed"));
+        return Err(refuse(input, "a reload is owed"));
     }
     let sha256 = sha256_hex(text.as_bytes());
     recheck(input, &sha256)?;
@@ -174,11 +181,13 @@ pub(super) fn check(input: &CheckInput) -> Result<Certification, FloorFault> {
     })
 }
 
-/// The Defaults search: the first candidate that exists (`symlink_metadata` Ok) in order.
+/// The Defaults search: the first candidate that exists, in order, as startup selects it.
 pub(super) fn first_existing(candidates: &[PathBuf]) -> Option<PathBuf> {
     candidates
         .iter()
-        .find(|p| std::fs::symlink_metadata(p).is_ok())
+        // `exists` follows a link, as startup's own search does: a dangling link
+        // is skipped there, so it is skipped here.
+        .find(|p| p.exists())
         .cloned()
 }
 

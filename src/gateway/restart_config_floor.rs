@@ -70,6 +70,10 @@ pub(crate) struct ConfigFloor {
     seams: seams::FloorSeams,
 }
 
+/// The calling thread's test keychain reader, if a row installed one.
+#[cfg(test)]
+type TestKeychain = Option<Arc<dyn crate::config::keychain::KeychainRead>>;
+
 impl ConfigFloor {
     /// `reload_lock` is the registry's reload mutex, `candidates` the four
     /// fallback paths startup's `Config` supplies (see `production_candidates`).
@@ -130,24 +134,43 @@ impl ConfigFloor {
 
     /// Both locks and the read-only checks; every guard is a local of this
     /// future until it succeeds, so a dropped checkpoint holds nothing.
-    async fn run_checkpoint(&mut self, deadline: Instant) -> Result<(), FloorFault> {
+    async fn run_checkpoint(
+        &mut self,
+        deadline: Instant,
+        #[cfg(test)] test_keychain: TestKeychain,
+    ) -> Result<(), FloorFault> {
         self.held.release_all();
         self.certification = None;
-        let Some(path) = self.configured_path() else {
-            return Ok(());
-        };
         let attempt = self.attempt;
+        // Admitted work settles before the candidate search, so a fallback file
+        // that appears while it runs is seen, and a fileless run is still gated.
         locks::until(deadline, self.gate.settle()).await;
+        let Some(path) = self.configured_path() else {
+            return self.certify_gate(attempt);
+        };
         let reload = locks::until(deadline, Arc::clone(&self.reload_lock).lock_owned()).await;
         let locked = self.lock_config(&path, attempt, deadline).await?;
-        let input = self.check_input(path, &locked, attempt);
+        let input = self.check_input(
+            path,
+            &locked,
+            attempt,
+            #[cfg(test)]
+            test_keychain,
+        );
         let certified = self.run_check(input, deadline).await?;
-        if !self.gate.certify(attempt) {
-            return Err(FloorFault::Unavailable);
-        }
+        self.certify_gate(attempt)?;
         self.held = locks::Held::new(reload, locked);
         self.certification = Some(certified);
         Ok(())
+    }
+
+    /// Moves the gate to Certified for this attempt; a gate that moved on refuses.
+    fn certify_gate(&self, attempt: u64) -> Result<(), FloorFault> {
+        if self.gate.certify(attempt) {
+            Ok(())
+        } else {
+            Err(FloorFault::Unavailable)
+        }
     }
 
     async fn lock_config(
@@ -174,8 +197,15 @@ impl ConfigFloor {
         Ok(locked)
     }
 
-    /// Built on the calling thread: the test keychain reader is thread-local.
-    fn check_input(&self, configured: PathBuf, locked: &Locked, attempt: u64) -> CheckInput {
+    /// The test keychain reader is thread-local, so `checkpoint` captured it
+    /// on the calling thread and it arrives here by value.
+    fn check_input(
+        &self,
+        configured: PathBuf,
+        locked: &Locked,
+        attempt: u64,
+        #[cfg(test)] test_keychain: TestKeychain,
+    ) -> CheckInput {
         let gate = self.gate.clone();
         CheckInput {
             attempt,
@@ -183,7 +213,7 @@ impl ConfigFloor {
             locked_target: locked.target.clone(),
             owed: Arc::new(move || gate.any_owed()),
             #[cfg(test)]
-            test_keychain: crate::config::keychain::current_test_keychain(),
+            test_keychain,
             #[cfg(test)]
             check_hook: self.seams.check_hook.clone(),
             #[cfg(test)]
@@ -222,7 +252,14 @@ impl FloorAdapter for ConfigFloor {
 
     fn checkpoint(&mut self, deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>> {
         self.prune_tasks();
-        Box::pin(self.run_checkpoint(deadline))
+        // Captured before the future's first await: the reader is thread-local.
+        #[cfg(test)]
+        let test_keychain = crate::config::keychain::current_test_keychain();
+        Box::pin(self.run_checkpoint(
+            deadline,
+            #[cfg(test)]
+            test_keychain,
+        ))
     }
 
     fn resume(&mut self) {

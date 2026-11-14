@@ -14,6 +14,7 @@ use tracing::{info, warn};
 use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::{Config, LiveEnv};
+use crate::gateway::restart_config_floor::Refusal;
 use crate::security::ssrf::DestinationPolicy;
 
 use super::{
@@ -413,8 +414,16 @@ pub(super) async fn run_tick(ctx: &ReloadContext, state: &mut TickState, wake: W
     gate.call_admitted(
         crate::gateway::restart_config_floor::seams::AdmittedPoint::WatcherBeforeAdmission,
     );
-    let Ok(guard) = gate.admit(crate::gateway::restart_config_floor::AdmitKind::Watcher) else {
-        return;
+    let guard = match gate.admit(crate::gateway::restart_config_floor::AdmitKind::Watcher) {
+        Ok(guard) => guard,
+        Err(refusal) => {
+            // Restarting and Stopping are final: the trigger is dropped with the
+            // gateway. A pause keeps it for the tick that follows the resume.
+            if matches!(refusal, Refusal::Restarting | Refusal::Stopping) {
+                state.pending_trigger = None;
+            }
+            return;
+        }
     };
     #[cfg(test)]
     gate.call_admitted(
@@ -428,10 +437,11 @@ pub(super) async fn run_tick(ctx: &ReloadContext, state: &mut TickState, wake: W
         )
     )]
     let replay = gate.take_replay_owed(&guard);
+    // Whatever its debounce state: the reload re-reads everything, and the
+    // trigger it reports should be the one that was waiting.
     let trigger = state
         .pending_trigger
         .take()
-        .filter(|_| due)
         .unwrap_or(ReloadTrigger::ConfigFile);
     state.last_event = None;
     env_poll::log_trigger(&trigger);

@@ -272,7 +272,9 @@ use diff::tracked_sections;
 pub use diff::{ConfigPatch, compute_diff};
 pub use reload_context::ReloadContext;
 use reload_context::replace::startup_recovery_intent;
-pub(crate) use reload_context::{SurfacedHook, is_gate_refusal};
+pub(crate) use reload_context::{
+    RELOAD_RESTARTING, RELOAD_STOPPING, SurfacedHook, is_gate_refusal,
+};
 
 /// Recover a byte write a crash left behind, before a serving gateway first
 /// loads `config`, recording the recovery in the audit log of the config it
