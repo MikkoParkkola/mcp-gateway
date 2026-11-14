@@ -100,7 +100,7 @@ impl FloorAdapter for TaskFloor {
         Box::pin(async move {
             let gate = self.gate().clone();
             gate.idle().await;
-            if gate.failed() {
+            if (mutant!("b11", false, gate.failed())) {
                 return Err(FloorFault::SaveFailed);
             }
             let (shared, current) = (Arc::clone(&self.store.0), Arc::clone(&self.current));
