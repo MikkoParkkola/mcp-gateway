@@ -329,6 +329,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "own stricter check: O_NOFOLLOW, fstat, no group or world bits (R4)",
     ),
     (
+        "src/preview_sandbox/linux/ca_bundle.rs",
+        "the preview fetch's CA bundle: public CA certificates read from one descriptor, and their snapshot written 0444; no secret",
+    ),
+    (
         "src/preview_sandbox/control.rs",
         "the control peer's /proc/<pid>/stat and status (start time, parent pid, uids) through one directory fd; the kernel's process table, no secret",
     ),
