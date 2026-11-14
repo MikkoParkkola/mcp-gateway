@@ -234,7 +234,7 @@ pub(super) async fn delete_unused_entry(
             );
         }
     };
-    if crate::config_persistence::journal::unsettled(&held.locked.target) {
+    if mutant!("pending_ignored", false, crate::config_persistence::journal::unsettled(&held.locked.target)) {
         return audited(&name, &store, &DeleteRefused::Pending);
     }
     let opened: Opened = if store == "files" {
