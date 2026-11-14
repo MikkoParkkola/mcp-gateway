@@ -95,10 +95,12 @@ fn a_stalled_release_ends_the_bounded_shutdown_at_its_deadline() {
             ShutdownEnd::ReleasePending,
             "the release is still running"
         );
-        assert_eq!(
-            began.elapsed(),
-            given,
-            "the stop ended at the given deadline"
+        // The timer wheel ticks in whole milliseconds from the runtime's
+        // start, so a deadline from an unaligned `began` fires up to 1 ms late.
+        let ended = began.elapsed();
+        assert!(
+            ended >= given && ended <= given + Duration::from_millis(1),
+            "the stop ended at the given deadline: {ended:?} for {given:?}"
         );
         stall.wait_entered();
         stall.let_go();
