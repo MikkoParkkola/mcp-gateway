@@ -13,9 +13,9 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use super::restart_floor::{
-    CancelReason, Cancelled, FloorAdapter, FloorFault, FloorOwner, FloorSetupError, FloorStage,
-    LateDecision, StopSaveOutcome, StopSaveOwner, all_settled, run_checkpoint, settle_stop_save,
-    validate_owners,
+    CancelReason, Cancelled, Certified, FloorAdapter, FloorFault, FloorOwner, FloorSetupError,
+    FloorStage, LateDecision, StopSaveOutcome, StopSaveOwner, all_settled, run_checkpoint,
+    settle_stop_save, validate_owners,
 };
 
 /// The checkpoint deadline every row gives, and the watchdog past it.
@@ -322,11 +322,16 @@ async fn a_checkpoint_that_returns_at_the_deadline_cancels() {
 async fn drop_once_entered(adapters: &mut [Box<dyn FloorAdapter>], seen: &Seen) {
     let run = run_checkpoint(adapters, deadline());
     tokio::pin!(run);
-    tokio::select! {
+    let entered = tokio::time::timeout(WATCHDOG, async {
+        tokio::select! {
         biased;
         () = seen.entered.notified() => {}
         r = &mut run => panic!("the run ended before the call was entered (certified: {})", r.is_ok()),
-    }
+        }
+    });
+    entered
+        .await
+        .expect("row watchdog: the call was never entered");
 }
 
 /// A run dropped mid-checkpoint (a stop signal won)
@@ -419,6 +424,7 @@ async fn a_commit_after_the_deadline_is_late_and_resumes() {
     assert_eq!(certified.commit(), Err(LateDecision));
     assert_eq!(calls(&seen, "commit"), [0, 0, 0]);
     assert_eq!(calls(&seen, "resume"), [1, 1, 1]);
+    assert_eq!(calls(&seen, "release"), [0, 0, 0]);
 }
 
 /// Every adapter gets the one deadline it was given.
@@ -444,13 +450,18 @@ async fn every_adapter_gets_the_one_deadline() {
 #[test]
 fn all_settled_waits_for_late_work() {
     let seen = Seen::default();
-    let a = three(&seen, None);
-    seen.late_work.store(true, Ordering::SeqCst);
+    let late = Seen::default();
+    let a = vec![
+        fake(&seen, FloorOwner::TaskStore, Step::Ok, Step::Ok),
+        fake(&late, FloorOwner::Config, Step::Ok, Step::Ok),
+        fake(&seen, FloorOwner::Health, Step::Ok, Step::Ok),
+    ];
+    late.late_work.store(true, Ordering::SeqCst);
     assert!(
         !all_settled(&a),
-        "late work of an earlier attempt still runs"
+        "one owner's late work keeps the floor unsettled"
     );
-    seen.late_work.store(false, Ordering::SeqCst);
+    late.late_work.store(false, Ordering::SeqCst);
     assert!(all_settled(&a));
 }
 
@@ -656,4 +667,15 @@ fn a_counters_save_error_and_a_later_floor_save_error_log_and_proceed() {
             StopSaveOutcome::Saved
         );
     }
+}
+
+/// The coordinator spawns the run, so it and its result must be `Send`.
+#[test]
+fn the_checkpoint_run_and_its_certified_result_are_send() {
+    fn send<T: Send>(_: &T) {}
+    fn send_type<T: Send>() {}
+    let seen = Seen::default();
+    let mut a = three(&seen, None);
+    send(&run_checkpoint(&mut a, Instant::now()));
+    send_type::<Certified<'static>>();
 }
