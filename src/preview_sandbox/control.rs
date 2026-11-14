@@ -344,7 +344,7 @@ pub(crate) async fn serve_session(
         &read_line(&mut read, bounds.frame, bounds).await?,
         "fetch_start",
     )?;
-    if !start.fetch_start {
+    if mutant!("f1-start-false", false, !start.fetch_start) {
         return Err(Refusal::Step("the sandbox sent fetch_start false".into()));
     }
     let credential = proxy.begin_fetch(deadline)?;
@@ -365,7 +365,7 @@ pub(crate) async fn serve_session(
     write_line(&mut write, &issued, bounds).await?;
     let first = deadline.saturating_duration_since(tokio::time::Instant::now());
     let done: FetchDone = parse(&read_line(&mut read, first, bounds).await?, "fetch_done")?;
-    if !done.fetch_done {
+    if mutant!("f1-done-false", false, !done.fetch_done) {
         return Err(Refusal::Step("the sandbox sent fetch_done false".into()));
     }
     // The revoke returns only once every tunnel of the credential is shut.
