@@ -148,8 +148,15 @@ async fn a_park_carried_into_a_later_attempt_takes_its_deadline() {
         futures::poll!(p.as_mut()).is_pending(),
         "attempt 1's deadline does not refuse a ticket now in attempt 2"
     );
-    gate.resume();
-    assert!(within("G7t P admitted", p).await.is_ok());
+    // Past attempt 2's own deadline + 1 s the carried ticket refuses itself.
+    tokio::time::advance(DEADLINE * 2).await;
+    assert!(
+        matches!(
+            futures::poll!(p.as_mut()),
+            std::task::Poll::Ready(Err(Refused::Restarting))
+        ),
+        "past attempt 2's deadline + 1 s the carried ticket refuses itself"
+    );
 }
 
 // G7 timer ownership: while draining a parker has no timer, so an Internal
@@ -166,11 +173,21 @@ async fn a_drain_parker_has_no_timer_to_jump_the_cohort() {
         futures::poll!(p.as_mut()).is_pending(),
         "P parks behind the drain"
     );
+    let decision = GateSeams::arm(&gate.seams().at_decision);
     tokio::time::advance(DEADLINE + BUDGET + Duration::from_secs(5)).await;
     assert!(
         futures::poll!(p.as_mut()).is_pending(),
         "past the old backstop P still waits for the cohort"
     );
+    assert!(
+        decision.reached().now_or_never().is_none(),
+        "no timer woke P to decide again while draining"
+    );
+    *gate
+        .seams()
+        .at_decision
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     assert_eq!(gate.state(), GateState::Draining { left: 1 });
     let _ = c_finish.send(());
     within("G7d C done", c_task).await.expect("C's task");
