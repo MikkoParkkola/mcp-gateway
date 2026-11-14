@@ -88,13 +88,12 @@ impl ExtensionSet {
         let supported = capabilities
             .get("extensions")
             .and_then(Value::as_object)
-            .map(|map| {
+            .map_or_default(|map| {
                 map.iter()
                     .filter(|(_, settings)| settings.is_object())
                     .filter_map(|(id, _)| Extension::from_id(id))
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         Self { supported }
     }
 

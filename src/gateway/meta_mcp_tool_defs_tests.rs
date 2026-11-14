@@ -685,8 +685,7 @@ fn native_tool_argument_names_are_pinned_for_the_folder_exemption() {
         .flat_map(|tool| {
             tool.input_schema["properties"]
                 .as_object()
-                .map(|props| props.keys().cloned().collect::<Vec<_>>())
-                .unwrap_or_default()
+                .map_or_default(|props| props.keys().cloned().collect::<Vec<_>>())
         })
         .collect();
     names.sort();

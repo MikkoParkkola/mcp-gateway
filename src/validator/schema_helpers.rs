@@ -26,9 +26,7 @@ pub(crate) fn input_properties(schema: &Value) -> Option<&Map<String, Value>> {
 /// Returns an empty set when `schema.properties` is absent or is not a JSON
 /// object.
 pub(crate) fn input_property_names(schema: &Value) -> HashSet<String> {
-    input_properties(schema)
-        .map(|props| props.keys().cloned().collect())
-        .unwrap_or_default()
+    input_properties(schema).map_or_default(|props| props.keys().cloned().collect())
 }
 
 /// Return `true` if the JSON Schema has a non-empty `required` array.

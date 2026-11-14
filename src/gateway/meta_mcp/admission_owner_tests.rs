@@ -158,8 +158,7 @@ fn adm_sweep(sources: &[(String, String)]) -> Vec<String> {
                 let owner = text[at..]
                     .split(',')
                     .next()
-                    .map(|first| first.trim_start_matches(entry).trim().to_owned())
-                    .unwrap_or_default();
+                    .map_or_default(|first| first.trim_start_matches(entry).trim().to_owned());
                 sync_sites.insert(rel.clone(), owner);
             }
         }

@@ -356,8 +356,7 @@ impl Noted {
             config_revision,
             running_revision,
             pending_restart: applied
-                .map(|a| a.pending_restart.iter().map(|f| (*f).to_owned()).collect())
-                .unwrap_or_default(),
+                .map_or_default(|a| a.pending_restart.iter().map(|f| (*f).to_owned()).collect()),
             kind,
             rule_id: rule_id.map(|id| id.as_str().to_owned()),
             grant_id,

@@ -58,7 +58,7 @@ impl CollusionDetector {
     ) {
         // `MIK-8066.EXCUSE.1`: what a cut or truncation drops is still the
         // caller's own copy, so it is sketched, one sketch per delivery.
-        let mut sketched: Vec<u64> = cut.as_deref().map(<[u64]>::to_vec).unwrap_or_default();
+        let mut sketched: Vec<u64> = cut.as_deref().map_or_default(<[u64]>::to_vec);
         if fps.len() > MAX_SOURCE_FINGERPRINTS {
             let cut_off = count(fps.len() - MAX_SOURCE_FINGERPRINTS);
             self.source_truncated.fetch_add(cut_off, Ordering::Relaxed);

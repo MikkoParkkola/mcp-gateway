@@ -69,9 +69,8 @@ impl Found {
 
 /// Look up registered dirs and the parent's current kept-dir declaration.
 pub(crate) fn registered_for(path: &Path) -> Found {
-    let external = std::env::var_os("MCP_GATEWAY_TEST_KEPT_DIRS")
-        .map(|list| parse_external(&list))
-        .unwrap_or_default();
+    let external =
+        std::env::var_os("MCP_GATEWAY_TEST_KEPT_DIRS").map_or_default(|list| parse_external(&list));
     registered_for_in(path, &external)
 }
 
@@ -264,9 +263,7 @@ pub(crate) fn is_external_in(external: &[std::path::PathBuf], path: &Path) -> bo
 fn is_external(path: &Path) -> bool {
     static EXTERNAL: OnceLock<Vec<std::path::PathBuf>> = OnceLock::new();
     let external = EXTERNAL.get_or_init(|| {
-        std::env::var_os("MCP_GATEWAY_TEST_KEPT_DIRS")
-            .map(|list| parse_external(&list))
-            .unwrap_or_default()
+        std::env::var_os("MCP_GATEWAY_TEST_KEPT_DIRS").map_or_default(|list| parse_external(&list))
     });
     is_external_in(external, path)
 }

@@ -196,13 +196,12 @@ pub(crate) fn required_params(schema: &Value) -> Vec<String> {
     schema
         .get("required")
         .and_then(Value::as_array)
-        .map(|arr| {
+        .map_or_default(|arr| {
             arr.iter()
                 .filter_map(Value::as_str)
                 .map(ToString::to_string)
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// Compact param list: `name: type` required, `name?: type` optional.

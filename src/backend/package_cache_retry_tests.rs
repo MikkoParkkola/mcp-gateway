@@ -106,9 +106,7 @@ fn write_stub(workspace: &Path, script: &str) -> PathBuf {
 
 /// One line per spawn of the inner start; the length is the retry count.
 fn spawns(log: &Path) -> Vec<String> {
-    std::fs::read_to_string(log)
-        .map(|text| text.lines().map(str::to_string).collect())
-        .unwrap_or_default()
+    std::fs::read_to_string(log).map_or_default(|text| text.lines().map(str::to_string).collect())
 }
 
 fn stub_env(log: &Path, mode: &str, failure: &str) -> HashMap<String, String> {

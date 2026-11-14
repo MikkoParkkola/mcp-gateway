@@ -26,16 +26,13 @@ fn held_needles(panel: &Panel, name: &str) -> Vec<String> {
         &mut configured,
     );
     assert!(unresolved.is_empty(), "{unresolved:?}");
-    configured
-        .get(name)
-        .map(|secrets| {
-            secrets
-                .iter()
-                .filter(|s| crate::security::needles::holds(s))
-                .map(|s| s.value.clone())
-                .collect()
-        })
-        .unwrap_or_default()
+    configured.get(name).map_or_default(|secrets| {
+        secrets
+            .iter()
+            .filter(|s| crate::security::needles::holds(s))
+            .map(|s| s.value.clone())
+            .collect()
+    })
 }
 
 /// T16 (regression): an ordinary setting typed into the panel is written as

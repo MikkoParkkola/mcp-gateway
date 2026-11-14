@@ -22,7 +22,7 @@ The wizard scans Claude Desktop, Claude Code, Cursor, Windsurf, Zed, Continue.de
 
 ### Prerequisites
 
-- **Rust toolchain** (1.95+): [rustup.rs](https://rustup.rs), or use Homebrew
+- **Rust toolchain** (1.100+): [rustup.rs](https://rustup.rs), or use Homebrew
 - **Node.js with `npx`**, for the manual config's example backend. Its first start downloads the package, so it needs network access once. The built-in filesystem, memory and sequential-thinking servers (2.0.0) recommend Node.js 24 or later; they run on Node 22 too.
 
 ### 1. Install

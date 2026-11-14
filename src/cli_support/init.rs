@@ -69,11 +69,7 @@ pub(crate) fn write_init_files_with(
             }
         }
         undo.pending = Some(create_init_secrets(choice, dir, os, &slot.display())?);
-        let refs = undo
-            .pending
-            .as_ref()
-            .map(PendingSecrets::refs)
-            .unwrap_or_default();
+        let refs = undo.pending.as_ref().map_or_default(PendingSecrets::refs);
         if refs.len() != 1 || refs[0].len() > crate::secret_store::MAX_REFERENCE_LEN {
             return Err("init store returned invalid references".into());
         }

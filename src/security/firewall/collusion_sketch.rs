@@ -448,23 +448,19 @@ impl SketchStore {
     /// The pair's live and pending positions (tests only, `MIK-8066.BIG.3`).
     #[cfg(test)]
     pub(super) fn positions_with_pending(&self, pair: Pair) -> Vec<usize> {
-        self.by_pair
-            .get(&pair)
-            .map(|s| {
-                s.live
-                    .iter()
-                    .map(|l| l.position)
-                    .chain(s.pending.iter().copied())
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.by_pair.get(&pair).map_or_default(|s| {
+            s.live
+                .iter()
+                .map(|l| l.position)
+                .chain(s.pending.iter().copied())
+                .collect()
+        })
     }
 
     pub(super) fn positions_of(&self, pair: Pair) -> Vec<usize> {
         self.by_pair
             .get(&pair)
-            .map(|s| s.live.iter().map(|l| l.position).collect())
-            .unwrap_or_default()
+            .map_or_default(|s| s.live.iter().map(|l| l.position).collect())
     }
 
     /// Drop sketches older than `window` at `now`.

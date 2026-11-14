@@ -234,8 +234,7 @@ fn an_outstanding_environment_change_is_pending_restart() {
         .with_applied(RawInputs::default());
     let pending = |live: &LiveConfig| {
         live.applied_now()
-            .map(|a| a.pending_restart.clone())
-            .unwrap_or_default()
+            .map_or_default(|a| a.pending_restart.clone())
     };
     live.set_inputs(RawInputs::default(), &["GW_SECRET_NAME".to_owned()]);
     assert_eq!(pending(&live), vec![crate::config_reload::ENV_RESTART]);

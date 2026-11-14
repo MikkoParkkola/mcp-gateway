@@ -282,8 +282,7 @@ pub(crate) mod witness {
         pub(crate) fn since(&self, mark: usize) -> Vec<(Phase, u64)> {
             state()
                 .as_ref()
-                .map(|state| state.log[mark.min(state.log.len())..].to_vec())
-                .unwrap_or_default()
+                .map_or_default(|state| state.log[mark.min(state.log.len())..].to_vec())
         }
 
         /// Arm the in-lock park for the next acquisition of the watched store.

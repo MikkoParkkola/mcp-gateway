@@ -48,8 +48,7 @@ fn wt10d_remediation_removes_a_user_deny() {
     icacls("W-T10d", &path, &["/deny", &format!("*{user}:(WD)")]);
     let text = read_legacy_source(&path)
         .err()
-        .map(|r| r.to_string())
-        .unwrap_or_default();
+        .map_or_default(|r| r.to_string());
     assert!(
         text.contains("NoReadWrite"),
         "WT-FIXTURE W-T10d: the planted deny did not fail P3: {text}"
@@ -72,8 +71,7 @@ fn wt10e_remediation_removes_an_unsupported_ace() {
     let back = crate::private_fs::test_support::plant_any("W-T10e", &path, &sddl);
     let text = read_legacy_source(&path)
         .err()
-        .map(|r| r.to_string())
-        .unwrap_or_default();
+        .map_or_default(|r| r.to_string());
     if !text.contains("OtherAceType") {
         fixture_fail("W-T10e", &format!("planted {back}; refusal was {text}"));
     }
@@ -107,8 +105,7 @@ fn wt10f_unsafe_path_gets_instructions_only() {
     std::fs::write(&path, LEGACY).unwrap();
     let text = read_legacy_source(&path)
         .err()
-        .map(|r| r.to_string())
-        .unwrap_or_default();
+        .map_or_default(|r| r.to_string());
     if !text.contains("S-1-5-32-545") {
         fixture_fail(
             "W-T10f",
@@ -141,8 +138,7 @@ fn wt10h_allowed_path_gets_a_working_runnable_repair() {
     std::fs::write(&path, LEGACY).unwrap();
     let text = read_legacy_source(&path)
         .err()
-        .map(|r| r.to_string())
-        .unwrap_or_default();
+        .map_or_default(|r| r.to_string());
     assert!(
         text.contains("run these lines"),
         "WT-ASSERT W-T10h: no runnable line for an allowed path: {text}"
@@ -167,8 +163,7 @@ fn wt10g_null_dacl_and_foreign_owner_repaired_in_one_pass() {
         crate::private_fs::test_support::plant_any("W-T10g", &path, "O:BAD:NO_ACCESS_CONTROL");
     let text = read_legacy_source(&path)
         .err()
-        .map(|r| r.to_string())
-        .unwrap_or_default();
+        .map_or_default(|r| r.to_string());
     if !text.contains("NullDacl") {
         fixture_fail("W-T10g", &format!("planted {back}; refusal was {text}"));
     }

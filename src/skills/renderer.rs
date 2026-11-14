@@ -136,8 +136,7 @@ fn render_parameters_section(schema: &serde_json::Value) -> String {
     let required_set: std::collections::HashSet<&str> = schema
         .get("required")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
+        .map_or_default(|arr| arr.iter().filter_map(|v| v.as_str()).collect());
 
     let mut table = String::from(
         "## Parameters\n\

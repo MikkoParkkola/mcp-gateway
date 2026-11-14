@@ -220,8 +220,7 @@ fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> 
     let mut literals = Literals {
         dir: Path::new(rel_file)
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_default(),
+            .map_or_default(Path::to_path_buf),
         ..Default::default()
     };
     literals.visit_file(&parsed);

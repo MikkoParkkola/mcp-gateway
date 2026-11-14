@@ -430,8 +430,7 @@ fn tool_preview_from_cap(cap: &GeneratedCapability) -> ToolPreview {
         .lines()
         .find(|l| l.trim_start().starts_with("description:"))
         .and_then(|l| l.trim_start().strip_prefix("description:"))
-        .map(|d| d.trim().trim_matches('\'').trim_matches('"').to_string())
-        .unwrap_or_default();
+        .map_or_default(|d| d.trim().trim_matches('\'').trim_matches('"').to_string());
 
     ToolPreview {
         name: cap.name.clone(),

@@ -50,16 +50,12 @@ pub(crate) fn descriptor_revision(descriptor: &AccountDescriptor) -> Result<Stri
     // on reordering would ask every user to reconnect over a cosmetic config
     // edit. This is also the order §7.2a(b) puts scopes into the record, so the
     // two agree by construction.
-    let scopes = descriptor
-        .scopes
-        .as_ref()
-        .map(|scopes| {
-            let mut sorted: Vec<&str> = scopes.iter().map(String::as_str).collect();
-            sorted.sort_unstable();
-            sorted.dedup();
-            sorted.join(" ")
-        })
-        .unwrap_or_default();
+    let scopes = descriptor.scopes.as_ref().map_or_default(|scopes| {
+        let mut sorted: Vec<&str> = scopes.iter().map(String::as_str).collect();
+        sorted.sort_unstable();
+        sorted.dedup();
+        sorted.join(" ")
+    });
     let send_resource = match descriptor.send_resource_parameter {
         Some(true) => "true",
         Some(false) => "false",
@@ -68,8 +64,7 @@ pub(crate) fn descriptor_revision(descriptor: &AccountDescriptor) -> Result<Stri
     let external = descriptor
         .external_strategy
         .as_ref()
-        .map(|strategy| format!("{strategy:?}"))
-        .unwrap_or_default();
+        .map_or_default(|strategy| format!("{strategy:?}"));
     let fields = [
         // Excluded on purpose: `resource` and `issuer`. Both are in the key.
         descriptor.provider.as_str(),

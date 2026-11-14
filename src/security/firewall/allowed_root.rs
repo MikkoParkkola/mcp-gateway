@@ -314,8 +314,7 @@ pub(crate) fn suggest_path_args(input_schema: &Value) -> Vec<String> {
     };
     let required: Vec<&str> = input_schema["required"]
         .as_array()
-        .map(|r| r.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
+        .map_or_default(|r| r.iter().filter_map(Value::as_str).collect());
     let mut suggested: Vec<String> = properties
         .iter()
         .filter(|(name, _)| {

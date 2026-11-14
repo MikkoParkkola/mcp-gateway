@@ -736,8 +736,7 @@ async fn stdio_replay_leaves_the_cost_suggestion_out_of_the_receipt() {
         let served = frame
             .response()
             .and_then(|response| response.result.as_ref())
-            .map(Value::to_string)
-            .unwrap_or_default();
+            .map_or_default(Value::to_string);
         assert!(
             frame.delivers_result() && served.contains(CATEGORY) && served.contains("late pears"),
             "base: both runs deliver the first answer and its suggestion: {served}"

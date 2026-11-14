@@ -124,15 +124,12 @@ impl World {
             .as_str()
             .unwrap_or_else(|| panic!("gateway_list_tools failed: {reply}"));
         let parsed: Value = serde_json::from_str(text).unwrap_or(Value::Null);
-        let mut names: Vec<String> = parsed["tools"]
-            .as_array()
-            .map(|tools| {
-                tools
-                    .iter()
-                    .filter_map(|t| t["name"].as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut names: Vec<String> = parsed["tools"].as_array().map_or_default(|tools| {
+            tools
+                .iter()
+                .filter_map(|t| t["name"].as_str().map(str::to_owned))
+                .collect()
+        });
         names.sort();
         names
     }

@@ -404,8 +404,7 @@ fn settle_now(pending: PendingSecrets, how: Settle) {
     )
 )]
 fn step_fields(step: Option<&SecretStep>) -> Vec<String> {
-    step.map(|step| step.values.iter().map(|v| v.field.clone()).collect())
-        .unwrap_or_default()
+    step.map_or_default(|step| step.values.iter().map(|v| v.field.clone()).collect())
 }
 
 /// `outcome` with the references this write filled, by field, read before the

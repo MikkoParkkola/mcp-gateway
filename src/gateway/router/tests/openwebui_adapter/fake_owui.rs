@@ -71,8 +71,7 @@ fn session(script: &Script, headers: &HeaderMap) -> Response {
 async fn answer(script: Script, headers: HeaderMap) -> Response {
     let authorization = headers
         .get(header::AUTHORIZATION)
-        .map(|value| value.to_str().unwrap_or("<non-ascii>").to_owned())
-        .unwrap_or_default();
+        .map_or_default(|value| value.to_str().unwrap_or("<non-ascii>").to_owned());
     script.seen.lock().unwrap().push(authorization);
     let current = script.answer.lock().unwrap().clone();
     match current {

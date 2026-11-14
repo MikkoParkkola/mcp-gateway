@@ -383,7 +383,7 @@ async fn p8_9b_a_replay_staged_and_redacted_while_off_is_held_after_activation()
     lm.rig.lapse(Duration::from_secs(2));
     let entry = lm.firewall().replay_digests(&sync_key());
     assert!(entry.is_some(), "P8.9b: no snapshot was stored");
-    let digests = entry.map(|(digests, _)| digests).unwrap_or_default();
+    let digests = entry.map_or_default(|(digests, _)| digests);
     assert!(!digests.is_empty(), "P8.9b: the snapshot holds no digests");
     // The original delivery has lapsed: only the replay can hold it again.
     assert!(

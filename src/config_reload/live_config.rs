@@ -262,9 +262,7 @@ impl LiveConfig {
         let _gate = self.admission.write();
         let mut inner = self.inner.write();
         let current = inner.applied.as_deref();
-        let pending = current
-            .map(|a| a.pending_restart.clone())
-            .unwrap_or_default();
+        let pending = current.map_or_default(|a| a.pending_restart.clone());
         let inputs = self.digest_over(raw, current);
         let pending = with_env_restart(pending, env_restart);
         inner.applied = inputs.and_then(|i| self.applied(i, pending));

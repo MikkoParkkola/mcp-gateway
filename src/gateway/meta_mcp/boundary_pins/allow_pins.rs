@@ -315,8 +315,7 @@ impl Sink for Ops {
                             .path
                             .segments
                             .last()
-                            .map(|s| s.ident.to_string())
-                            .unwrap_or_default(),
+                            .map_or_default(|s| s.ident.to_string()),
                         _ => {
                             self.bad.push(format!(
                                 "{}::{func}: {op} with a non-literal class",

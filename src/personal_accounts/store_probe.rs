@@ -105,10 +105,7 @@ impl Recording {
         reason = "self is the recording's exclusivity guard, not a data source; the entries live in the global state() singleton by design"
     )]
     pub(crate) fn entries(&self) -> Vec<Entry> {
-        state()
-            .as_ref()
-            .map(|s| s.entered.clone())
-            .unwrap_or_default()
+        state().as_ref().map_or_default(|s| s.entered.clone())
     }
 
     pub(crate) fn ops(&self) -> Vec<StoreOp> {

@@ -95,9 +95,9 @@ fn hints(body: &Value) -> String {
             })
             .collect(),
         Value::Array(items) => items.iter().map(hints).collect(),
-        Value::String(text) => serde_json::from_str::<Value>(text)
-            .map(|inner| hints(&inner))
-            .unwrap_or_default(),
+        Value::String(text) => {
+            serde_json::from_str::<Value>(text).map_or_default(|inner| hints(&inner))
+        }
         _ => String::new(),
     }
 }

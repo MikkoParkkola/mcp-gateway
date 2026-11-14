@@ -58,8 +58,7 @@ async fn peer_cert_identity_service_inserts_identity_extension() {
     let echo = axum::Router::new().route(
         "/",
         axum::routing::get(|cert: Option<axum::Extension<CertIdentity>>| async move {
-            cert.map(|axum::Extension(cert)| cert.display_name().to_owned())
-                .unwrap_or_default()
+            cert.map_or_default(|axum::Extension(cert)| cert.display_name().to_owned())
         }),
     );
     let app = PeerCertIdentityLayer::new(PeerCert::Named(identity.clone())).layer(echo);

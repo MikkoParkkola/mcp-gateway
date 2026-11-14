@@ -257,8 +257,7 @@ impl WarmerGuard {
         Arc::new(move |change: &RegisteredChange, config: &Config| {
             warmer
                 .upgrade()
-                .map(|warmer| warmer.apply(change, config))
-                .unwrap_or_default()
+                .map_or_default(|warmer| warmer.apply(change, config))
         })
     }
 

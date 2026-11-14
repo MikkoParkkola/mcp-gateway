@@ -131,8 +131,7 @@ pub(crate) fn payload_fields(
 ) -> Vec<String> {
     shapes(registry.read().event_routes().into_iter())
         .remove(name)
-        .map(|s| s.fields.into_iter().collect())
-        .unwrap_or_default()
+        .map_or_default(|s| s.fields.into_iter().collect())
 }
 
 #[cfg(test)]

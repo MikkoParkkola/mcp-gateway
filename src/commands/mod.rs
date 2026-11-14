@@ -477,7 +477,7 @@ fn tls_issue_client(
         Ok(pair) => pair,
         Err(code) => return code,
     };
-    let san_uris = spiffe_uri.map(|u| vec![u]).unwrap_or_default();
+    let san_uris = spiffe_uri.map_or_default(|u| vec![u]);
     let params = LeafCertParams {
         cn,
         ou,

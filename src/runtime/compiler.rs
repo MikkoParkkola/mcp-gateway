@@ -664,8 +664,7 @@ impl Compiler {
             .process
             .capabilities
             .as_ref()
-            .map(OciCapabilities::granted)
-            .unwrap_or_default();
+            .map_or_default(OciCapabilities::granted);
         let apple_caps: BTreeSet<String> = apple.entitlements.iter().cloned().collect();
         if gvisor_caps != apple_caps {
             divergences.push(format!(

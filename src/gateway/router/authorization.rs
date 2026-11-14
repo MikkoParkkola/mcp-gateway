@@ -568,8 +568,7 @@ fn backend_tool_names(
         .meta_mcp
         .get_capabilities()
         .filter(|cap| cap.name == server)
-        .map(|cap| cap.get_tools().into_iter().map(|t| t.name).collect())
-        .unwrap_or_default()
+        .map_or_default(|cap| cap.get_tools().into_iter().map(|t| t.name).collect())
 }
 
 fn target_from_invoke_arguments(arguments: &Value) -> Option<CallTarget<'_>> {

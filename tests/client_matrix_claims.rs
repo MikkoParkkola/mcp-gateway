@@ -560,8 +560,7 @@ fn verified_rows_agree_with_the_supported_matrix() {
             let commit = here_commits
                 .iter()
                 .find(|(k, _)| *k == label_of(&c[0]))
-                .map(|(_, v)| v.clone())
-                .unwrap_or_default();
+                .map_or_default(|(_, v)| v.clone());
             assert!(
                 has_token(&c[4], &commit),
                 "supported matrix row {} does not name gateway commit `{commit}`",

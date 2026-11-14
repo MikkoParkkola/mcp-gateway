@@ -206,8 +206,7 @@ fn key_violations(faults: &[closed_keys::KeyFault], schema: &Value) -> Vec<Valid
     let known: Vec<&str> = schema
         .get("properties")
         .and_then(Value::as_object)
-        .map(|p| p.keys().map(String::as_str).collect())
-        .unwrap_or_default();
+        .map_or_default(|p| p.keys().map(String::as_str).collect());
     let shown = |path: &str| -> String {
         let cut: String = path.chars().take(MAX_KEY_PATH_CHARS).collect();
         cut.escape_debug().to_string()
@@ -282,8 +281,7 @@ fn validate_object(
     let required: Vec<&str> = input_schema
         .get("required")
         .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
+        .map_or_default(|arr| arr.iter().filter_map(Value::as_str).collect());
 
     // Normalise arguments to an object; null / missing → treat as empty object.
     let arg_map = match arguments {
@@ -702,8 +700,7 @@ fn collect_valid_params(schema: &Value) -> Vec<(String, String)> {
     let required: std::collections::HashSet<&str> = schema
         .get("required")
         .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
+        .map_or_default(|arr| arr.iter().filter_map(Value::as_str).collect());
 
     props
         .iter()
@@ -721,11 +718,10 @@ fn collect_valid_params(schema: &Value) -> Vec<(String, String)> {
             let enum_hint = prop
                 .get("enum")
                 .and_then(Value::as_array)
-                .map(|arr| {
+                .map_or_default(|arr| {
                     let opts: Vec<String> = arr.iter().map(value_to_display_string).collect();
                     format!(" — one of: {}", opts.join(", "))
-                })
-                .unwrap_or_default();
+                });
 
             let info = format!(
                 "({ty}{req}){enum_hint}{}",

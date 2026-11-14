@@ -143,8 +143,7 @@ fn write_config(text: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 fn names(answer: &Value) -> Vec<Value> {
     answer["keys"]
         .as_array()
-        .map(|a| a.iter().map(|k| k["name"].clone()).collect())
-        .unwrap_or_default()
+        .map_or_default(|a| a.iter().map(|k| k["name"].clone()).collect())
 }
 
 fn entry<'a>(answer: &'a Value, name: &str) -> &'a Value {

@@ -48,14 +48,13 @@ impl MetaMcp {
             backend,
         ) {
             self.listing_snapshot(&b, scope)
-                .map(|(tools, _)| {
+                .map_or_default(|(tools, _)| {
                     tools
                         .iter()
                         .filter(|t| self.shows_tool(backend, t, scope, session_id))
                         .cloned()
                         .collect()
                 })
-                .unwrap_or_default()
         } else {
             self.capability_tools(backend)
                 .unwrap_or_default()

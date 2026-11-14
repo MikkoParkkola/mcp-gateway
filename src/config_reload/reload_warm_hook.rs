@@ -51,8 +51,7 @@ impl ReloadContext {
         let warmed = self
             .on_registered
             .as_ref()
-            .map(|hook| hook(change, config))
-            .unwrap_or_default();
+            .map_or_default(|hook| hook(change, config));
         for name in change
             .registered
             .iter()

@@ -41,9 +41,7 @@ pub(super) fn reaches_tasks_extension(method: &str, params: Option<&Value>) -> b
 /// The task ids a `subscriptions/listen` names, if it names any, in either
 /// placement.
 pub(super) fn listened_task_ids(params: Option<&Value>) -> Vec<String> {
-    params
-        .map(crate::protocol::subscriptions::named_task_ids)
-        .unwrap_or_default()
+    params.map_or_default(crate::protocol::subscriptions::named_task_ids)
 }
 
 /// The caller a `prompts/get` or `resources/read` runs for, keyed as the same

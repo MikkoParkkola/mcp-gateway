@@ -206,7 +206,7 @@ pub(super) fn walk(
     let mut visited = std::collections::HashSet::new();
     for root in roots {
         let path = crate_root.join(root);
-        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let dir = path.parent().map_or_default(Path::to_path_buf);
         let mut walker = Walker {
             crate_root,
             child_dir: dir.clone(),
@@ -302,7 +302,7 @@ impl Walker<'_> {
         } else {
             (self.child_dir.join(name).join("mod.rs"), true)
         };
-        let parent = target.parent().map(Path::to_path_buf).unwrap_or_default();
+        let parent = target.parent().map_or_default(Path::to_path_buf);
         // A `mod.rs` or `#[path]` file owns its directory; `x.rs` owns `x/`.
         let child_dir = if owns_dir || target.file_name().is_some_and(|f| f == "mod.rs") {
             parent.clone()

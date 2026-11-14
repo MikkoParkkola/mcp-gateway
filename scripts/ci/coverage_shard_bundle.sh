@@ -19,12 +19,23 @@ for f in "$t"/*.profraw; do
   n=$((n + 1))
 done
 [ "$n" -gt 0 ] || { echo "::error::shard $shard: no profiles in $t"; exit 1; }
-# The executables report reads: regular files with an execute bit, outside build-script,
-# incremental and fingerprint output, which report skips too.
+# The executables report reads: regular files with an execute bit, except build scripts and incremental and
+# fingerprint output, which report skips too. Build scripts are named, not found by folder: cargo 1.100 builds
+# every crate's outputs, test binaries included, under build/<package>/<hash>/out/, so a `*/build/*` filter
+# (right for the old layout, where build/ held only build scripts) dropped every test binary.
 (cd "$t" && find . -type f -perm -u+x \
-    -not -path '*/build/*' -not -path '*/incremental/*' -not -path '*/.fingerprint/*' \
+    -not -name 'build_script_build*' -not -name 'build-script-build*' \
+    -not -path '*/incremental/*' -not -path '*/.fingerprint/*' \
     -print0 | sort -z) > bundle/executables.list
+# Fail closed: a part with profiles but no executables cannot be graded (it graded every function at 0%).
+[ -s bundle/executables.list ] || { echo "::error::shard $shard: no instrumented executables under $t"; exit 1; }
 tar -C "$t" --null -T bundle/executables.list -cf bundle/files.tar
+# cargo-llvm-cov's report tells cargo 1.100's layout from a `fingerprint` folder beside each `out`; without it it
+# reads build/<package>/<hash>/out as build-script output and skips every test binary there (it passed only the two
+# uplifted bins). Carry those folders, empty: the marker is all the report needs.
+(cd "$t" && find . -type d -path '*/build/*/fingerprint' -print0 | sort -z) > bundle/fingerprints.list
+[ ! -s bundle/fingerprints.list ] || tar -C "$t" --null --no-recursion -T bundle/fingerprints.list -rf bundle/files.tar
+rm bundle/fingerprints.list
 tar -C bundle -rf bundle/files.tar profraw
 rm -rf bundle/profraw
 cp run.log bundle/run.log

@@ -194,24 +194,21 @@ const UNKNOWN_SERVER: &str = "<unknown>";
 /// in a building that grew.
 #[must_use]
 pub fn destructive_tools_from_annotations(tools: &serde_json::Value) -> HashSet<String> {
-    tools
-        .as_array()
-        .map(|list| {
-            list.iter()
-                .filter(|tool| {
-                    tool.get("annotations")
-                        .and_then(|a| a.get("destructiveHint"))
-                        .and_then(serde_json::Value::as_bool)
-                        == Some(true)
-                })
-                .filter_map(|tool| {
-                    tool.get("name")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    tools.as_array().map_or_default(|list| {
+        list.iter()
+            .filter(|tool| {
+                tool.get("annotations")
+                    .and_then(|a| a.get("destructiveHint"))
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+            })
+            .filter_map(|tool| {
+                tool.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect()
+    })
 }
 
 /// The floor: kept governed regardless of what the annotations say, so an

@@ -131,9 +131,7 @@ pub(crate) fn drop_removed_keys(text: &str) -> (Option<String>, Vec<Removal>) {
     let mut current = text.to_owned();
     let mut report = Vec::new();
     for (pattern, on_load) in REMOVED {
-        let paths = loose(&current)
-            .map(|doc| concrete(&doc, pattern))
-            .unwrap_or_default();
+        let paths = loose(&current).map_or_default(|doc| concrete(&doc, pattern));
         for path in paths {
             if loose(&current).is_some_and(|doc| empties_a_switch(&doc, &path)) {
                 report.push(Removal {

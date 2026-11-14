@@ -151,8 +151,7 @@ impl Fixture {
     pub(super) async fn rows(&self) -> Vec<IdentityGrant> {
         read_identity_grants_file(&self.grants)
             .await
-            .map(|f| f.grants)
-            .unwrap_or_default()
+            .map_or_default(|f| f.grants)
     }
 
     pub(super) fn journal(&self) -> JournalRead {

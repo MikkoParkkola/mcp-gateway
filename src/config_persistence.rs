@@ -416,8 +416,7 @@ pub(crate) fn comments_a_write_drops(path: &Path, config: &Config) -> Vec<String
         return Vec::new();
     };
     splice::with_backends_edited(&text, &before, config, Splice::One)
-        .map(|after| comments::dropped_comment_lines(&text, &after))
-        .unwrap_or_default()
+        .map_or_default(|after| comments::dropped_comment_lines(&text, &after))
 }
 
 /// Load `path`, apply `edit`, and write the result, keeping the file's
@@ -666,9 +665,7 @@ fn render(
     }
     let commented = text.filter(|t| t.contains('#'));
     let yaml = url_spelling::render(config, text)?;
-    let dropped = commented
-        .map(|text| comments::dropped_comment_lines(text, &yaml))
-        .unwrap_or_default();
+    let dropped = commented.map_or_default(|text| comments::dropped_comment_lines(text, &yaml));
     Ok(Some((yaml, dropped)))
 }
 

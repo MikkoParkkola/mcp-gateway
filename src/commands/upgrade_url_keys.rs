@@ -111,9 +111,9 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
                 let section = key.rsplit_once('.').map_or("", |(parent, _)| {
                     parent.rsplit_once('.').map_or(parent, |(_, name)| name)
                 });
-                let block = block
-                    .map(|h| format!(" and the `{section}:` (line {h}) it was alone under"))
-                    .unwrap_or_default();
+                let block = block.map_or_default(|h| {
+                    format!(" and the `{section}:` (line {h}) it was alone under")
+                });
                 // A refused key never did anything; a retired setting did, and
                 // its load warning (gone with the line) named the hatch, so
                 // the report points to the UPGRADING entry that keeps it.

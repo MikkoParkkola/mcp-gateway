@@ -6,7 +6,8 @@
 rustc 1.100.0 moved the Unicode tables from 17 to 18 and failed key_server::email_hash's pinned-table test on every runner
 that picked it up (2026-11-12); `dtolnay/rust-toolchain` with no `toolchain:` installs whatever `stable` is that day.
 Each workflow step that uses the action must name PINNED, as a literal or as `${{ env.NAME }}` where every definition of NAME
-in that file equals it. To move the compiler, change PINNED and every step in one deliberate change. If a rust-toolchain.toml
+in that file equals it. To move the compiler, change PINNED and every step in one deliberate change. The Dockerfile's builder image
+(`FROM .../rust:X.Y[.Z]-...`) must be the same major.minor, so the image cannot drift from CI. If a rust-toolchain.toml
 exists it must pin the same version and the Docker build context must leave it out (a commented line does not count), so
 the image's own compiler is not overridden.
 Workflows and local composite actions are scanned: a toolchain step the line scan does not recognise (a flow-style mapping),
@@ -22,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PINNED = "1.99.1"
+PINNED = "1.100.0"
 USES = re.compile(r"^(\s*)(- )?uses:\s*[\"']?dtolnay/rust-toolchain@", re.I)
 
 
@@ -97,6 +98,15 @@ def check_components(text: str) -> list[tuple[int, str]]:
     return bad
 
 
+def check_dockerfile(text: str, want: str) -> list[str]:
+    """Problems with the Dockerfile's rust builder images: each must be the pin's major.minor (a tag may also carry the patch)."""
+    minor = ".".join(want.split(".")[:2])
+    tags = re.findall(r"^\s*FROM\s+\S*/?rust:([0-9][0-9.]*)(?:-\S+)?(?:\s|$)", text, re.M | re.I)
+    if not tags:
+        return ["Dockerfile has no rust builder image: the compiler of the image is unchecked"]
+    return [f"Dockerfile builds on rust:{t}, the pin is {want}" for t in tags if t != minor and t != want]
+
+
 OVERRIDE = re.compile(r"RUSTUP_TOOLCHAIN|\brustup\s+(?:default|override\s+set)\b|\bcargo\s+\+([^\s]+)")
 
 
@@ -127,6 +137,8 @@ def main(argv: list[str]) -> int:
         problems += [f"{wf.relative_to(root)}:{n}: {why}" for n, why in check_workflow(text, want) + check_overrides(text, want) + check_components(text)]
     if steps == 0:
         problems.append("no dtolnay/rust-toolchain step found in any workflow: the scan checked nothing")
+    dockerfile = root / "Dockerfile"
+    problems += [f"Dockerfile: {p}" for p in check_dockerfile(dockerfile.read_text(), want)] if dockerfile.is_file() else []
     ignore = root / ".dockerignore"
     ignored = False  # the last rule naming the file wins; `!` re-includes it
     for r in (ignore.read_text().splitlines() if ignore.is_file() else []):
@@ -178,6 +190,18 @@ def self_test() -> int:
         ("a comment naming them", "      # cargo +stable and RUSTUP_TOOLCHAIN are banned\n", 0),
         ("a trailing comment after a clean command", "      - run: cargo test # not cargo +stable\n", 0),
     ]
+    dock = [
+        ("an image on the pin's minor", "FROM mirror.gcr.io/library/rust:1.99-slim AS builder\n", 0),
+        ("an image on the full pin", "FROM rust:1.99.1-slim\n", 0),
+        ("an image on an older minor", "FROM mirror.gcr.io/library/rust:1.98-slim AS builder\nFROM debian:trixie-slim\n", 1),
+        ("no rust image", "FROM debian:trixie-slim\n", 1),
+        ("a second rust stage that differs", "FROM rust:1.99-slim AS a\nFROM rust:1.100-slim AS b\n", 1),
+    ]
+    for label, text, n in dock:
+        got = len(check_dockerfile(text, want))
+        ok = got == n
+        wrong += not ok
+        print(f"{'ok   ' if ok else 'WRONG'} dockerfile check, {label}: {got} problem(s), want {n}")
     comp = [
         ("clippy run without the component", "jobs:\n  a:\n    steps:\n      - uses: dtolnay/rust-toolchain@x\n        with:\n          toolchain: 1.99.1\n      - run: cargo clippy -- -D warnings\n", 1),
         ("clippy run with the component", "jobs:\n  a:\n    steps:\n      - uses: dtolnay/rust-toolchain@x\n        with:\n          toolchain: 1.99.1\n          components: clippy\n      - run: cargo clippy\n", 0),
@@ -200,7 +224,7 @@ def self_test() -> int:
         ok = got == n
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} {label}: {got} problem(s), want {n}")
-    print(f"self-test: {len(cases) + len(over) + len(comp) - wrong} ok, {wrong} wrong")
+    print(f"self-test: {len(cases) + len(over) + len(comp) + len(dock) - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 

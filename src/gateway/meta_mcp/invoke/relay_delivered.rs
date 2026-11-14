@@ -291,8 +291,7 @@ fn keep_plan_receipts(
         Vec::new()
     } else {
         super::seams::answer_parts(answer)
-            .map(|parts| parts.into_iter().map(|(_, label)| label).collect())
-            .unwrap_or_default()
+            .map_or_default(|parts| parts.into_iter().map(|(_, label)| label).collect())
     };
     let delivered = delivered.with_labels(labels);
     for r in receipts.iter_mut().filter(|r| r.in_plan) {

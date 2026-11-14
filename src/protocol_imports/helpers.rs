@@ -415,14 +415,13 @@ pub(super) fn collect_postman_requests(value: &Value, requests: &mut Vec<Postman
     let query_params = request
         .pointer("/url/query")
         .and_then(Value::as_array)
-        .map(|params| {
+        .map_or_default(|params| {
             params
                 .iter()
                 .filter_map(|param| param.get("key").and_then(Value::as_str))
                 .map(ToString::to_string)
                 .collect()
-        })
-        .unwrap_or_default();
+        });
 
     requests.push(PostmanRequest {
         name: name.to_string(),

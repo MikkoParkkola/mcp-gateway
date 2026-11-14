@@ -470,8 +470,7 @@ impl Firewall {
         parts: &[(&str, Option<u32>)],
     ) -> Vec<super::collusion::SeamFingerprint> {
         self.relay_detector()
-            .map(|detector| detector.seam_fingerprints(parts))
-            .unwrap_or_default()
+            .map_or_default(|detector| detector.seam_fingerprints(parts))
     }
 
     /// `MIK-8209` K6: the seam fingerprints of each key-path join of a

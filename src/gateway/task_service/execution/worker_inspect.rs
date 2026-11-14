@@ -289,10 +289,7 @@ fn inspect_settled_pinned(
     let rewritten = !refused && *result != before;
     let decided = (refused || rewritten).then(|| Decided {
         refused,
-        server: targets
-            .first()
-            .map(|t| t.server.clone())
-            .unwrap_or_default(),
+        server: targets.first().map_or_default(|t| t.server.clone()),
         tool: targets
             .first()
             .map_or_else(|| call.tool.clone(), |t| t.tool.clone()),

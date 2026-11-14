@@ -129,15 +129,13 @@ fn state_name(state: TaskState) -> &'static str {
 }
 
 pub(crate) fn status_text(message: Option<&Message>) -> String {
-    let text: Vec<&str> = message
-        .map(|message| {
-            message
-                .parts
-                .iter()
-                .filter_map(|part| part.text.as_deref())
-                .collect()
-        })
-        .unwrap_or_default();
+    let text: Vec<&str> = message.map_or_default(|message| {
+        message
+            .parts
+            .iter()
+            .filter_map(|part| part.text.as_deref())
+            .collect()
+    });
     if text.is_empty() {
         "no details".to_owned()
     } else {

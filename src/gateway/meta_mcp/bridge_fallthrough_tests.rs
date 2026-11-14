@@ -336,7 +336,7 @@ async fn t3_an_exhausted_exchange_resumes_from_its_last_round() {
         .await
         .expect("redeeming the envelope resumes the exchange");
     let calls = calls.lock().clone();
-    let resumed = calls.get(last).map(Value::to_string).unwrap_or_default();
+    let resumed = calls.get(last).map_or_default(Value::to_string);
     assert!(
         resumed.contains(&format!("\"round-{last}\"")),
         "the resume must carry the last round's state: {resumed}"

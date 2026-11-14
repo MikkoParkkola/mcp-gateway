@@ -11,8 +11,7 @@ use serde_json::{Value, json};
 fn keys_of(value: &Value) -> Vec<String> {
     value
         .as_object()
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default()
+        .map_or_default(|m| m.keys().cloned().collect())
 }
 
 fn fat_linear_schema() -> Value {

@@ -404,7 +404,7 @@ fn wt10_legacy_token_inherited_acl_refuses() {
         matches!(refusal, Some(SourceRefusal::NotPrivate { .. })),
         "WT-ASSERT W-T10: {refusal:?}"
     );
-    let text = refusal.map(|r| r.to_string()).unwrap_or_default();
+    let text = refusal.map_or_default(|r| r.to_string());
     assert!(
         text.contains("S-1-5-32-545"),
         "WT-ASSERT W-T10/message: {text}"
@@ -420,8 +420,7 @@ fn wt10b_legacy_token_remediation_works() {
     icacls("W-T10b", &path, &["/setowner", "*S-1-5-32-544"]);
     let text = read_legacy_source(&path)
         .err()
-        .map(|r| r.to_string())
-        .unwrap_or_default();
+        .map_or_default(|r| r.to_string());
     assert!(
         text.contains("S-1-1-0") && text.contains("S-1-5-32-544"),
         "WT-ASSERT W-T10b/message: {text}"
@@ -528,12 +527,10 @@ foreach ($pair in @({list})) {{
             .output();
         let text = exit
             .as_ref()
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-            .unwrap_or_default();
+            .map_or_default(|o| String::from_utf8_lossy(&o.stdout).into_owned());
         let stderr = exit
             .as_ref()
-            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
-            .unwrap_or_default();
+            .map_or_default(|o| String::from_utf8_lossy(&o.stderr).into_owned());
         if !exit.as_ref().is_ok_and(|o| o.status.success()) {
             fixture_fail(
                 row,

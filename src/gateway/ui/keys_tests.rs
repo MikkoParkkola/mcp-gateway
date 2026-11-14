@@ -291,8 +291,7 @@ async fn t7b_the_answer_reads_the_pinned_table() {
     let names = |v: &Value| {
         v["keys"]
             .as_array()
-            .map(|a| a.iter().map(|k| k["name"].clone()).collect::<Vec<_>>())
-            .unwrap_or_default()
+            .map_or_default(|a| a.iter().map(|k| k["name"].clone()).collect::<Vec<_>>())
     };
     assert_eq!(
         names(&first),

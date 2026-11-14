@@ -68,10 +68,7 @@ fn modern_keyed(id: u64, tool: &str, arguments: &Value, key: &str) -> Value {
 }
 
 fn error_text(response: &Value) -> String {
-    response
-        .get("error")
-        .map(Value::to_string)
-        .unwrap_or_default()
+    response.get("error").map_or_default(Value::to_string)
 }
 
 /// The JSON a successful meta-tool call returned as its text content.

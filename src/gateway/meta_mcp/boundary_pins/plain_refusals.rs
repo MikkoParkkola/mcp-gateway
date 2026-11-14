@@ -394,10 +394,7 @@ impl Collect {
             let text = format!(
                 "use {}{}",
                 path.join("::"),
-                rename
-                    .as_ref()
-                    .map(|r| format!(" as {r}"))
-                    .unwrap_or_default()
+                rename.as_ref().map_or_default(|r| format!(" as {r}"))
             );
             let error_variant = parent.is_some_and(|p| p == "Error")
                 && (last == "*" || TWELVE.contains(&last.as_str()));
@@ -480,11 +477,7 @@ impl Sink for Collect {
             syn::Item::Macro(mac) => {
                 let tokens = mac.mac.tokens.to_string();
                 if mac.mac.path.is_ident("macro_rules") {
-                    let name = mac
-                        .ident
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_default();
+                    let name = mac.ident.as_ref().map_or_default(ToString::to_string);
                     self.macro_defs.push((at.file.clone(), name, tokens));
                 } else {
                     self.push(at, Kind::InMacro(tokens));

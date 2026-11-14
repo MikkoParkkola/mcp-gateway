@@ -271,7 +271,7 @@ fn assert_retryable(reply: &Value, row: &str) {
 /// placeholder, as the order twins mask it: two calls never share one.
 fn error_masked(body: &Value) -> String {
     const UUID_LEN: usize = 36;
-    let text = body.get("error").map(Value::to_string).unwrap_or_default();
+    let text = body.get("error").map_or_default(Value::to_string);
     let mut out = String::with_capacity(text.len());
     let mut rest = text.as_str();
     while let Some(at) = rest.find("gw-") {

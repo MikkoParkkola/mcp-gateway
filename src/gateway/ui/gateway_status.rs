@@ -100,8 +100,7 @@ pub(super) async fn gateway_status(
     let reloads = state
         .meta_mcp
         .reload_context()
-        .map(|context| context.reload_tally().snapshot())
-        .unwrap_or_default();
+        .map_or_default(|context| context.reload_tally().snapshot());
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "started_at": state.process.started_at(),

@@ -560,8 +560,7 @@ impl Shared {
             HoldUpdate::Carry => state
                 .entries
                 .get(task.id())
-                .map(|entry| entry.holds.clone())
-                .unwrap_or_default(),
+                .map_or_default(|entry| entry.holds.clone()),
             HoldUpdate::Drop => crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
         };
         state.entries.insert(
@@ -718,13 +717,11 @@ pub(crate) mod publish_log {
     /// `(completed, carried a snapshot)` for each publication of task `id`.
     #[cfg(feature = "firewall")]
     pub(crate) fn of(id: &str) -> Vec<(bool, bool)> {
-        LOG.lock()
-            .map(|log| {
-                log.iter()
-                    .filter(|(task, ..)| task == id)
-                    .map(|(_, completed, snapshot)| (*completed, *snapshot))
-                    .collect()
-            })
-            .unwrap_or_default()
+        LOG.lock().map_or_default(|log| {
+            log.iter()
+                .filter(|(task, ..)| task == id)
+                .map(|(_, completed, snapshot)| (*completed, *snapshot))
+                .collect()
+        })
     }
 }

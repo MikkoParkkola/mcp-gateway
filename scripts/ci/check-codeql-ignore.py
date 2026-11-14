@@ -136,16 +136,18 @@ def product_sources(cargo, root):
             if not set(msg["target"]["kind"]) & {"lib", "bin"}:
                 continue
             for artifact in msg["filenames"]:
-                deps = os.path.dirname(artifact)
-                if not deps.endswith("deps"):
-                    deps = os.path.join(deps, "deps")
                 stem = os.path.basename(artifact).split(".")[0]
                 stem = stem[3:] if stem.startswith("lib") else stem
-                dep_info = os.path.join(deps, stem + ".d")
-                if not os.path.exists(dep_info):
+                # rustc writes the dep-info beside its own output: in cargo
+                # 1.100's build-dir layout that is the artifact's directory
+                # (build/<pkg>/<hash>/out); in the older layout, target/<profile>/deps.
+                here = os.path.dirname(artifact)
+                candidates = [os.path.join(here, stem + ".d"), os.path.join(here, "deps", stem + ".d")]
+                dep_info = next((c for c in candidates if os.path.exists(c)), None)
+                if dep_info is None:
                     # Fail closed: an artifact whose sources cannot be read
                     # would otherwise drop out of the comparison unseen.
-                    sys.exit(f"check-codeql-ignore: no dep-info {dep_info} for {artifact}")
+                    sys.exit(f"check-codeql-ignore: no dep-info {' or '.join(candidates)} for {artifact}")
                 artifacts += 1
                 with open(dep_info, encoding="utf-8") as handle:
                     text = handle.read()

@@ -96,8 +96,7 @@ pub(crate) fn ingress_notification(
     let removed = notification
         .params
         .as_mut()
-        .map(|params| strip(rule, params))
-        .unwrap_or_default();
+        .map_or_default(|params| strip(rule, params));
     if matches!(origin, Origin::Missing) {
         tracing::warn!(
             method,

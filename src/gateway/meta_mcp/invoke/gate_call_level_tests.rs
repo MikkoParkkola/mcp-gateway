@@ -69,8 +69,8 @@ async fn a_hidden_malformed_name_is_refused_and_audited_as_the_authorizer_refuse
         format!("{by_policy:?}"),
         "the same refusal, code, status and message"
     );
-    let logged = String::from_utf8(buffer.0.lock().map(|b| b.clone()).unwrap_or_default())
-        .unwrap_or_default();
+    let logged =
+        String::from_utf8(buffer.0.lock().map_or_default(|b| b.clone())).unwrap_or_default();
     let line = logged
         .lines()
         .find(|l| l.contains("Tool invocation refused by authorization"))

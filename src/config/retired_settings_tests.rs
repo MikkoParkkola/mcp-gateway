@@ -109,7 +109,7 @@ fn a_misspelled_signature_chain_key_is_still_refused() {
         "security:\n  signature_chain:\n    signing_key: {SEED}\n    key_id: gw-a\n    key_idd: x\n"
     );
     let (_, loaded) = load_logs(&typo);
-    let refusal = loaded.err().map(|e| e.to_string()).unwrap_or_default();
+    let refusal = loaded.err().map_or_default(|e| e.to_string());
     assert!(
         refusal.contains("security.signature_chain.key_idd"),
         "the refusal must name the misspelt key's path: {refusal:?}"

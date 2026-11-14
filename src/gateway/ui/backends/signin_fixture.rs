@@ -334,7 +334,7 @@ impl Gw {
         .expect("a callback URL");
         // Never resolve a name: connect to the literal address and send the
         // configured name as `Host`.
-        let named = callback.host_str().map(str::to_owned).unwrap_or_default();
+        let named = callback.host_str().map_or_default(str::to_owned);
         if named == "localhost" {
             callback
                 .set_host(Some("127.0.0.1"))

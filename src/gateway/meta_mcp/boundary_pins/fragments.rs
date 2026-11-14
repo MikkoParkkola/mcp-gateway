@@ -95,8 +95,7 @@ fn fragment_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
             .path();
         let name = path
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .map_or_default(|n| n.to_string_lossy().into_owned());
         // Any letter case of `tsv` marks a fragment candidate, so `1.TSV` fails
         // the name rule below instead of being skipped and never loaded.
         if path
@@ -142,8 +141,7 @@ fn fragment_name_ok(name: &str) -> bool {
 pub(super) fn shown(path: &Path) -> String {
     let file = path
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     match path.parent().and_then(Path::file_name) {
         Some(parent) if parent.to_string_lossy().ends_with(".d") => {
             format!("{}/{file}", parent.to_string_lossy())

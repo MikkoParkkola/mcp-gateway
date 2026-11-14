@@ -232,24 +232,22 @@ fn notice_sources() -> (String, Vec<(String, String)>) {
         return (guide.replace("\r\n", "\n"), Vec::new());
     }
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("upgrading.d");
-    let mut fragments: Vec<(String, String)> = std::fs::read_dir(&dir)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|name| {
-                    std::path::Path::new(name)
-                        .extension()
-                        .is_some_and(|e| e == "md")
-                })
-                .map(|name| {
-                    let text = std::fs::read_to_string(dir.join(&name))
-                        .unwrap_or_else(|e| panic!("upgrading.d/{name}: {e}"));
-                    (name, text.replace("\r\n", "\n"))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut fragments: Vec<(String, String)> = std::fs::read_dir(&dir).map_or_default(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| {
+                std::path::Path::new(name)
+                    .extension()
+                    .is_some_and(|e| e == "md")
+            })
+            .map(|name| {
+                let text = std::fs::read_to_string(dir.join(&name))
+                    .unwrap_or_else(|e| panic!("upgrading.d/{name}: {e}"));
+                (name, text.replace("\r\n", "\n"))
+            })
+            .collect()
+    });
     fragments.sort();
     (
         include_str!("../../docs/UPGRADING-4.0.md").replace("\r\n", "\n"),

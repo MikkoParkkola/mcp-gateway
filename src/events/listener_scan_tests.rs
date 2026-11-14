@@ -82,10 +82,7 @@ fn macro_text(mac: &syn::Macro) -> String {
 }
 
 fn last_ident(path: &syn::Path) -> String {
-    path.segments
-        .last()
-        .map(|s| s.ident.to_string())
-        .unwrap_or_default()
+    path.segments.last().map_or_default(|s| s.ident.to_string())
 }
 
 fn parse(file: &str, text: &str) -> syn::File {

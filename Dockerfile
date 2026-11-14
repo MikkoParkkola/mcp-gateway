@@ -14,7 +14,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Build
 # ---------------------------------------------------------------------------
-FROM mirror.gcr.io/library/rust:1.98-slim AS builder
+FROM mirror.gcr.io/library/rust:1.100-slim AS builder
 
 WORKDIR /app
 

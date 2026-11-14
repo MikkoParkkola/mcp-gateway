@@ -177,7 +177,6 @@ impl EventsHub {
     pub(super) fn payload_fields(&self, name: &str) -> Vec<String> {
         self.webhook_registry
             .get()
-            .map(|registry| crate::events::reload::payload_fields(registry, name))
-            .unwrap_or_default()
+            .map_or_default(|registry| crate::events::reload::payload_fields(registry, name))
     }
 }
