@@ -137,6 +137,22 @@ pub(crate) fn exists(config: &Path) -> bool {
     std::fs::symlink_metadata(journal_path(config)).is_ok()
 }
 
+/// `<name>.abandoned` beside the config's resolved target: a write's audit records wait
+/// there when no log could take them.
+#[cfg(feature = "webui")]
+pub(crate) fn abandoned_path(target: &Path) -> PathBuf {
+    let mut name = std::ffi::OsString::from(target.file_name().unwrap_or_default());
+    name.push(".abandoned");
+    target.with_file_name(name)
+}
+
+/// Whether a config write at `target` is unsettled: its journal or its abandoned
+/// file is still there.
+#[cfg(feature = "webui")]
+pub(crate) fn unsettled(target: &Path) -> bool {
+    exists(target) || std::fs::symlink_metadata(abandoned_path(target)).is_ok()
+}
+
 /// Stage `bytes` (the file's current content) as the private original. A
 /// copy left by a crash before its journal existed is debris, removed first;
 /// the caller holds the config lock, so no other replacement owns it.
