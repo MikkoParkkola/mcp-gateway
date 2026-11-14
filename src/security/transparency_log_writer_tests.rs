@@ -17,7 +17,7 @@ use super::*;
 /// the seam. Two live writers on one path are refused (`lease_tests`).
 #[test]
 fn a_reopened_writer_follows_the_previous_writers_rotation() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let a = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&a, 0);
@@ -37,7 +37,7 @@ fn a_reopened_writer_follows_the_previous_writers_rotation() {
 /// before its first append when that append would pass the limit.
 #[test]
 fn a_reopened_writer_rotates_on_the_size_it_inherits() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let b = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&b, &path, 1);
@@ -60,7 +60,7 @@ fn a_reopened_writer_rotates_on_the_size_it_inherits() {
 
 #[test]
 fn synced_append_rotates_without_deadlock() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let p = path.clone();
     with_progress(move |step| {
@@ -80,7 +80,7 @@ fn synced_append_rotates_without_deadlock() {
 
 #[test]
 fn size_rotation_happens_before_the_write() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 2);
@@ -96,7 +96,7 @@ fn size_rotation_happens_before_the_write() {
 
 #[test]
 fn age_rotation_survives_restart() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let mut c = (*cfg(&path, 12, false)).clone();
     c.rotation.max_segment_bytes = 64 * 1024 * 1024;
@@ -119,7 +119,7 @@ fn age_rotation_survives_restart() {
 
 #[test]
 fn session_lookup_spans_segments() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     l.log_invocation("wanted", "c", "srv", "first", "a", "b")
@@ -134,7 +134,7 @@ fn session_lookup_spans_segments() {
 
 #[test]
 fn verify_rejects_expiry_counter_mismatch() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -181,7 +181,7 @@ fn verify_rejects_expiry_counter_mismatch() {
 
 #[test]
 fn forged_expiry_fails_signed_verify() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
     rotate_n(&l, &path, 1);
@@ -226,7 +226,7 @@ fn forged_expiry_fails_signed_verify() {
 
 #[test]
 fn unrotated_v1_log_verifies_as_segment_zero() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     // A pre-D6 log: written with rotation effectively off, then reopened.
     let mut c = (*cfg(&path, 12, false)).clone();
@@ -251,7 +251,7 @@ fn unrotated_v1_log_verifies_as_segment_zero() {
 #[test]
 fn verify_passes_after_disk_full_drains_every_sealed_segment() {
     use super::rotation::WriteFault;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false))
         .unwrap()
@@ -276,7 +276,7 @@ fn verify_passes_after_disk_full_drains_every_sealed_segment() {
 /// still names the old seal. Only the seam rule can see that.
 #[test]
 fn verify_fails_on_altered_middle_seal() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 3);
@@ -314,7 +314,7 @@ fn verify_fails_on_altered_middle_seal() {
 /// with every hash re-chained.
 #[test]
 fn verify_checks_prev_segment_final_hash_at_every_seam() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 3);
@@ -352,7 +352,7 @@ fn verify_checks_prev_segment_final_hash_at_every_seam() {
 /// A log opened over its retention limit is trimmed on its first append.
 #[test]
 fn retention_runs_at_the_start_of_an_append() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 4);
@@ -395,7 +395,7 @@ fn arm(l: Arc<TransparencyLogger>, path: std::path::PathBuf, left: u32) {
 /// not as tampered.
 #[test]
 fn verify_reports_a_log_changing_under_it() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     rotate_n(&l, &path, 1);
@@ -409,7 +409,7 @@ fn verify_reports_a_log_changing_under_it() {
 /// live rotation) is a retry, not a failed chain.
 #[test]
 fn verify_retries_when_a_listed_file_vanishes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -434,7 +434,7 @@ fn verify_retries_when_a_listed_file_vanishes() {
 /// open record now names its own segment.
 #[test]
 fn verify_fails_when_every_sealed_segment_is_deleted_by_hand() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 2);
@@ -454,7 +454,7 @@ fn verify_fails_when_every_sealed_segment_is_deleted_by_hand() {
 #[test]
 fn start_of_append_retention_on_a_full_disk_frees_space() {
     use super::rotation::WriteFault;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 4);

@@ -320,6 +320,18 @@ async fn dispatch(cli: Cli) -> ExitCode {
             data_dir.as_deref(),
             cli.config.as_deref(),
         ),
+        #[cfg(feature = "webui")]
+        Some(Command::Audit(mcp_gateway::cli::AuditCommand::LookupEmail(args))) => {
+            let load = || Config::load(config_path.as_deref()).map_err(|e| e.to_string());
+            commands::run_audit_lookup_command(args, load, port_override, host_override.as_deref())
+                .await
+        }
+        // The route it calls exists only with the web UI.
+        #[cfg(not(feature = "webui"))]
+        Some(Command::Audit(mcp_gateway::cli::AuditCommand::LookupEmail(_))) => {
+            eprintln!("audit lookup-email: this build has no web UI (cargo feature `webui`)");
+            ExitCode::FAILURE
+        }
         Some(Command::Audit(audit_cmd)) => {
             commands::run_audit_command(audit_cmd, cli.config.as_deref())
         }

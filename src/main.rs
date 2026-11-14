@@ -4,6 +4,7 @@
 
 mod allocator;
 mod main_stack;
+mod parse_errors;
 
 use std::process::ExitCode;
 
@@ -20,9 +21,10 @@ fn main() -> ExitCode {
     if let Some(code) = mcp_gateway::preview_sandbox::dispatch_helper(&args) {
         return code;
     }
-    on_main_stack(|| {
+    on_main_stack(move || {
         // Parsing needs the main stack, especially on Windows debug builds.
-        let cli = Cli::parse();
+        let cli = Cli::try_parse_from(&args)
+            .unwrap_or_else(|error| parse_errors::quiet_for_secret_commands(&args, error).exit());
         cli::run(cli)
     })
 }

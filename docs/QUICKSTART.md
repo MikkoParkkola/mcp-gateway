@@ -32,8 +32,10 @@ The wizard scans Claude Desktop, Claude Code, Cursor, Windsurf, Zed, Continue.de
 brew install MikkoParkkola/tap/mcp-gateway
 
 # Or from crates.io
-cargo install mcp-gateway
+cargo install --locked mcp-gateway
 ```
+
+`--locked` builds with the exact dependency versions this release was tested with. Without it Cargo picks the newest compatible versions on the day you install, which can differ from the ones the release was tested with. The release binaries and the container images are already built from the release's own lock file.
 
 ### 2. Create a Config
 
@@ -389,7 +391,7 @@ sudo chown 1001:1001 gateway.container.yaml
 # off this host reaches the port. The same publish is why the auth `init` turns
 # on may cross the container's 0.0.0.0 in plain HTTP (host_local_publish).
 # Mirrors deploy/single-node/docker-compose.yaml.
-docker run --rm -p 127.0.0.1:39400:39400 \
+docker run --rm --stop-timeout 31 -p 127.0.0.1:39400:39400 \
   -e MCP_GATEWAY_TOKEN \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
