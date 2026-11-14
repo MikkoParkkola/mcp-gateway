@@ -53,13 +53,13 @@ fn bearer_yaml(enabled: bool, reference: &str) -> String {
     format!("{BASE}auth:\n  enabled: {enabled}\n  bearer_token: {reference}\n")
 }
 
-fn assert_certified(row: &str, got: (Result<(), FloorFault>, Option<String>), text: &str) {
+fn assert_certified(row: &str, got: &(Result<(), FloorFault>, Option<String>), text: &str) {
     assert_eq!(got.0, Ok(()), "{row} the file certifies");
     let want = sha256_hex(text.as_bytes());
     assert_eq!(got.1.as_deref(), Some(want.as_str()), "{row} literal hash");
 }
 
-fn assert_refused(row: &str, got: (Result<(), FloorFault>, Option<String>)) {
+fn assert_refused(row: &str, got: &(Result<(), FloorFault>, Option<String>)) {
     assert_eq!(got.0, Err(FloorFault::SaveFailed), "{row} refuses");
     assert_eq!(got.1, None, "{row} no certification recorded");
 }
@@ -70,7 +70,7 @@ fn c6_keychain_read_that_times_out_refuses() {
     let fake = Arc::new(FakeKeychain::default());
     fake.fail("gw.bearer", KeychainError::Timeout);
     let text = bearer_yaml(false, "keychain:gw.bearer");
-    assert_refused(ROW, certify_text(ROW, &text, fake));
+    assert_refused(ROW, &certify_text(ROW, &text, fake));
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn c6_keychain_reference_that_resolves_certifies() {
     let fake = Arc::new(FakeKeychain::default());
     fake.insert("gw.bearer", BEARER.as_bytes());
     let text = bearer_yaml(false, "keychain:gw.bearer");
-    assert_certified(ROW, certify_text(ROW, &text, fake), &text);
+    assert_certified(ROW, &certify_text(ROW, &text, fake), &text);
 }
 
 #[test]
@@ -87,21 +87,21 @@ fn c6_description_text_naming_a_keychain_reference_certifies() {
     const ROW: &str = "C6 description holding keychain:x";
     let text = "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    description: \"keychain:x\"\n";
     let got = certify_text(ROW, text, Arc::new(FakeKeychain::default()));
-    assert_certified(ROW, got, text);
+    assert_certified(ROW, &got, text);
 }
 
 #[test]
 fn c6_failing_env_reference_refuses() {
     const ROW: &str = "C6 failing env reference";
     let text = bearer_yaml(true, "env:CFG_FLOOR_C6_NEVER_SET_VARIABLE");
-    assert_refused(ROW, certify_text(ROW, &text, Arc::default()));
+    assert_refused(ROW, &certify_text(ROW, &text, Arc::default()));
 }
 
 #[test]
 fn c6_failing_file_reference_refuses() {
     const ROW: &str = "C6 failing file reference";
     let text = bearer_yaml(true, "file:/nonexistent-cfg-floor-c6/secret");
-    assert_refused(ROW, certify_text(ROW, &text, Arc::default()));
+    assert_refused(ROW, &certify_text(ROW, &text, Arc::default()));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

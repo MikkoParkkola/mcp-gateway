@@ -315,14 +315,12 @@ pub(crate) fn join_bounded<T>(handle: std::thread::JoinHandle<T>, what: &str) ->
     handle.join().unwrap_or_else(|_| panic!("panicked: {what}"))
 }
 
-/// The watcher as a row drives it: its gate, its OWN reload context and the config
-/// path. Production builds the watcher a separate context over the shared registry
+/// The watcher as a row drives it: its gate and its OWN reload context. Production builds the watcher a separate context over the shared registry
 /// (watcher.rs), with its own owed-reload flag, so the fixture does the same; `tick`
 /// runs the same per-tick function the spawned loop runs.
 pub(crate) struct WatcherFixture {
     pub(crate) gate: ConfigGate,
     pub(crate) ctx: Arc<crate::config_reload::ReloadContext>,
-    pub(crate) path: PathBuf,
     /// The watcher's per-tick state, driven by `tick` through the production tick function.
     hand: crate::config_reload::HandTick,
 }
@@ -332,7 +330,6 @@ impl WatcherFixture {
         Self {
             gate: ctx.registry.config_gate(),
             ctx: watcher_context(ctx, path),
-            path: path.to_path_buf(),
             hand: crate::config_reload::HandTick::new(&ctx.registry),
         }
     }
@@ -341,7 +338,6 @@ impl WatcherFixture {
         Self {
             gate: booted.gate.clone(),
             ctx: watcher_context(&booted.ctx, &booted.cfg.path),
-            path: booted.cfg.path.clone(),
             hand: crate::config_reload::HandTick::new(&booted.ctx.registry),
         }
     }

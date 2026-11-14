@@ -175,7 +175,7 @@ fn plant_v1_journal(booted: &Booted, candidate_env: &str) -> (std::path::PathBuf
     use crate::gateway::test_helpers::write_owner_only;
     write_owner_only(
         &booted.cfg.path,
-        &format!("{BASE}environment: \"{candidate_env}\"\n"),
+        format!("{BASE}environment: \"{candidate_env}\"\n"),
     )
     .expect("candidate in place");
     let target = std::fs::canonicalize(&booted.cfg.path).expect("canonical target");
