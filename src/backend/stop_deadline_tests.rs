@@ -204,14 +204,12 @@ async fn a_hurried_stop_hands_a_lock_held_backends_live_tree_to_the_reaper_at_on
     let started = tokio::time::Instant::now();
     let cut = started + KILL_RESERVE_FOR_TEST + HURRY_WINDOW;
     registry.stop_deadline().hurry(started.into_std());
-    // Keep stop_all_by polled and the lifecycle lock held, and wait for the
-    // tree to leave the running state. Handed over, it is killed about
-    // HURRY_WINDOW after the hurry plus what load adds, seconds before `cut`;
-    // not handed over, only the stop's RetireOnDrop sweep kills it, after `cut`.
-    // So the bug is told by when the tree went relative to `cut`, an event,
-    // not by a sample at a fixed instant (the reap's own timing is pinned by
-    // the transport's clock-free hurry rows).
-    let ((), (handed, gone_at)) = tokio::time::timeout(Duration::from_secs(30), async {
+    // Keep stop_all_by polled and the lifecycle lock held. The handover is
+    // read at the stop's first step, an event, not sampled at a fixed instant:
+    // a stop that waits on the lock first hands nothing over, and only its
+    // RetireOnDrop sweep after `cut` kills the tree. It must go within the watchdog
+    // (how fast the reaper kills it is the transport's hurry rows' to pin).
+    let ((), handed) = tokio::time::timeout(Duration::from_secs(30), async {
         tokio::join!(registry.stop_all_by(cut), async {
             // One yield lets the stop take its first step, where a hurried
             // stop hands every live tree over before it waits on the lock.
@@ -220,19 +218,14 @@ async fn a_hurried_stop_hands_a_lock_held_backends_live_tree_to_the_reaper_at_on
             while kernel_view(pid) == Some(false) {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            (handed, tokio::time::Instant::now())
+            handed
         })
     })
     .await
-    .expect("the hurried stop completes within the watchdog");
+    .expect("the hurried stop completes and its tree goes within the watchdog");
     assert_eq!(
         handed, 1,
         "the hurried stop did not hand the live tree over before waiting on the held lifecycle lock"
-    );
-    assert!(
-        gone_at < cut,
-        "live tree still running {:?} after the hurry; a held lifecycle lock delayed handover until the {cut:?} deadline",
-        gone_at.duration_since(started)
     );
 }
 
