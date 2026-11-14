@@ -6,7 +6,9 @@
 rustc 1.100.0 moved the Unicode tables from 17 to 18 and failed key_server::email_hash's pinned-table test on every runner
 that picked it up (2026-11-12); `dtolnay/rust-toolchain` with no `toolchain:` installs whatever `stable` is that day.
 Each workflow step that uses the action must name PINNED, as a literal or as `${{ env.NAME }}` where every definition of NAME
-in that file equals it. To move the compiler, change PINNED and every step in one deliberate change. If a rust-toolchain.toml
+in that file equals it. To move the compiler, change PINNED, every step and the Dockerfile's builder in one deliberate change.
+The Dockerfile's Rust builder image must carry PINNED exactly (`rust:<pin>[-variant]`), so the published image is compiled by
+the compiler CI tests with; the builder had drifted a minor version behind CI with nothing turning red. If a rust-toolchain.toml
 exists it must pin the same version and the Docker build context must leave it out (a commented line does not count), so
 the image's own compiler is not overridden.
 Workflows and local composite actions are scanned: a toolchain step the line scan does not recognise (a flow-style mapping),
@@ -100,6 +102,28 @@ def check_components(text: str) -> list[tuple[int, str]]:
 OVERRIDE = re.compile(r"RUSTUP_TOOLCHAIN|\brustup\s+(?:default|override\s+set)\b|\bcargo\s+\+([^\s]+)")
 
 
+def check_dockerfile(text: str, want: str) -> list[str]:
+    """Problems with the Dockerfile's Rust builder images. Each must carry the pin exactly (`rust:<pin>[-variant]`), so the
+    published image is compiled by the compiler CI tests with; a minor-only tag such as `rust:1.99-slim` moves with every
+    patch release, and an untagged `rust` with every release. No Rust image at all is a problem too (nothing checked)."""
+    found, bad = 0, []
+    for n, line in enumerate(text.split("\n"), 1):
+        m = re.match(r"^\s*FROM\s+(?:--\S+\s+)*(\S+)", line, re.I)
+        if not m:
+            continue
+        image = m.group(1).split("@", 1)[0]  # a digest after the tag does not change the tag
+        # The tag follows the last `:` of the last path part; a registry port (`host:5000/...`) is not a tag.
+        name, _, tag = image.rpartition(":") if ":" in image.rsplit("/", 1)[-1] else (image, "", "")
+        if name.rsplit("/", 1)[-1].lower() != "rust":
+            continue
+        found += 1
+        if tag.split("-", 1)[0] != want:
+            bad.append(f"line {n}: the builder image is {image}; the pin is {want} (use rust:{want}-<variant>)")
+    if not found:
+        bad.append("no rust builder image: the compiler of the image is unchecked")
+    return bad
+
+
 def check_overrides(text: str, want: str) -> list[tuple[int, str]]:
     """(line, problem) for each place a run step or env var picks a compiler other than `want`."""
     bad = []
@@ -127,6 +151,11 @@ def main(argv: list[str]) -> int:
         problems += [f"{wf.relative_to(root)}:{n}: {why}" for n, why in check_workflow(text, want) + check_overrides(text, want) + check_components(text)]
     if steps == 0:
         problems.append("no dtolnay/rust-toolchain step found in any workflow: the scan checked nothing")
+    dockerfile = root / "Dockerfile"
+    if dockerfile.is_file():
+        problems += [f"Dockerfile: {p}" for p in check_dockerfile(dockerfile.read_text(), want)]
+    else:
+        problems.append("Dockerfile is missing: the image's compiler is unchecked")
     ignore = root / ".dockerignore"
     ignored = False  # the last rule naming the file wins; `!` re-includes it
     for r in (ignore.read_text().splitlines() if ignore.is_file() else []):
@@ -200,7 +229,29 @@ def self_test() -> int:
         ok = got == n
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} {label}: {got} problem(s), want {n}")
-    print(f"self-test: {len(cases) + len(over) + len(comp) - wrong} ok, {wrong} wrong")
+    dock = [
+        ("the mirrored builder on the pin", "FROM mirror.gcr.io/library/rust:1.99.1-slim AS builder\nFROM debian:trixie-slim\n", 0),
+        ("a plain image on the pin", "FROM rust:1.99.1\n", 0),
+        ("a digest after the pinned tag", "FROM rust:1.99.1-slim@sha256:0123abcd AS b\n", 0),
+        ("a platform flag before the pinned image", "FROM --platform=$BUILDPLATFORM rust:1.99.1-slim AS b\n", 0),
+        ("a registry port, the pinned tag", "FROM localhost:5000/library/rust:1.99.1-slim\n", 0),
+        ("a commented-out older image", "# FROM rust:1.98-slim\nFROM rust:1.99.1-slim\n", 0),
+        ("stage references only beside the pinned image", "FROM rust:1.99.1-slim AS builder\nFROM builder AS test\n", 0),
+        ("an older minor (today's drift)", "FROM mirror.gcr.io/library/rust:1.98-slim AS builder\nFROM debian:trixie-slim\n", 1),
+        ("the pin's minor only, a floating tag", "FROM rust:1.99-slim AS builder\n", 1),
+        ("another patch of the pinned minor", "FROM rust:1.99.2-slim\n", 1),
+        ("an untagged rust image", "FROM rust AS builder\n", 1),
+        ("rust:latest", "FROM rust:latest\n", 1),
+        ("lowercase from on an older image", "from rust:1.98-slim\n", 1),
+        ("a second rust stage that differs", "FROM rust:1.99.1-slim AS a\nFROM rust:1.100.0-slim AS b\n", 1),
+        ("no rust image", "FROM debian:trixie-slim\n", 1),
+    ]
+    for label, text, n in dock:
+        got = len(check_dockerfile(text, want))
+        ok = got == n
+        wrong += not ok
+        print(f"{'ok   ' if ok else 'WRONG'} dockerfile, {label}: {got} problem(s), want {n}")
+    print(f"self-test: {len(cases) + len(over) + len(comp) + len(dock) - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 
