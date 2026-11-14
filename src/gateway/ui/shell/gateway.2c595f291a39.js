@@ -8,7 +8,7 @@
 // and the list is read again, so a kept entry stays listed. Status and Actions
 // come with the rest of this page; until then they are not drawn. Every
 // server-supplied string goes in with textContent.
-import { register, render } from '/ui/assets/shell.260480aea22f.js';
+import { register, render } from '/ui/assets/shell.32ab4f0a1da5.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
 function h(tag, attrs = {}, ...children) {
