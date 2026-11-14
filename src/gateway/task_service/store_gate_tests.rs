@@ -376,6 +376,14 @@ async fn nothing_runs_between_quiescence_and_resume() {
     assert_eq!(gate.in_flight(), 0, "the checkpoint's view stays true");
 }
 
+/// A held submitter: its task, the signal of its admission, and the trigger
+/// that ends its admission.
+type Held = (
+    tokio::task::JoinHandle<()>,
+    std::sync::Arc<tokio::sync::Notify>,
+    tokio::sync::oneshot::Sender<()>,
+);
+
 /// Spawn a submitter that records its admission in `log`, signals `admitted`,
 /// and keeps its admission (its "write") until `finish` fires.
 fn held_submitter(
@@ -383,11 +391,7 @@ fn held_submitter(
     kind: Kind,
     name: &'static str,
     log: &std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
-) -> (
-    tokio::task::JoinHandle<()>,
-    std::sync::Arc<tokio::sync::Notify>,
-    tokio::sync::oneshot::Sender<()>,
-) {
+) -> Held {
     let admitted = std::sync::Arc::new(tokio::sync::Notify::new());
     let (finish, finished) = tokio::sync::oneshot::channel::<()>();
     let task = tokio::spawn({
@@ -417,11 +421,7 @@ async fn park_held(
     kind: Kind,
     name: &'static str,
     log: &std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
-) -> (
-    tokio::task::JoinHandle<()>,
-    std::sync::Arc<tokio::sync::Notify>,
-    tokio::sync::oneshot::Sender<()>,
-) {
+) -> Held {
     let hold = GateSeams::arm(&gate.seams().before_wait);
     let parts = held_submitter(gate, kind, name, log);
     within(name, hold.reached()).await;
@@ -519,4 +519,181 @@ async fn the_drain_survives_a_vanished_member_and_skips_sweeps() {
         GateState::Open,
         "nothing parked: open at once"
     );
+}
+
+// G7: every exit wakes every parked submitter. resume and release_for_stop
+// run it; commit runs work parked before it and refuses only new external
+// arrivals.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn every_exit_wakes_a_parked_submitter() {
+    for exit in ["resume", "release", "commit"] {
+        let gate = certified();
+        let log = std::sync::Arc::default();
+        let (task, admitted, finish) = park_held(&gate, Kind::External, "P", &log).await;
+        match exit {
+            "resume" => gate.resume(),
+            "release" => gate.release(),
+            _ => gate.commit(),
+        }
+        within(exit, admitted.notified()).await;
+        if exit == "commit" {
+            assert_eq!(
+                try_admit(&gate, Kind::External),
+                Outcome::Refused(Refused::Restarting),
+                "after commit only a new External arrival is refused"
+            );
+        }
+        let _ = finish.send(());
+        within(exit, task).await.expect("the parked task");
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["P"],
+            "{exit} ran the parked submitter"
+        );
+    }
+}
+
+// G7: an External submitter still parked on its own attempt at deadline + 1 s
+// refuses itself, whether the gate is Paused or Certified.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn an_external_park_ends_one_second_past_the_deadline() {
+    for gate in [paused(), certified()] {
+        let refused = within("G7 refusal", gate.admit(Kind::External)).await;
+        assert_eq!(
+            refused.map(drop),
+            Err(Refused::Restarting),
+            "{:?}",
+            gate.state()
+        );
+    }
+}
+
+// G7: the coordinator's own exit at the deadline wins every tie with the
+// parker's timer: polled first, resumed first, or left unpolled past its
+// timer, the parker is admitted, never told "restarting".
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn a_resume_at_the_deadline_always_beats_the_parker_timer() {
+    // (a) the parker is polled at the deadline, then the gate resumes.
+    let gate = paused();
+    let mut parker = std::pin::pin!(gate.admit(Kind::External));
+    assert!(futures::poll!(parker.as_mut()).is_pending(), "(a) parked");
+    tokio::time::advance(DEADLINE).await;
+    assert!(
+        futures::poll!(parker.as_mut()).is_pending(),
+        "(a) still parked at the deadline"
+    );
+    gate.resume();
+    assert!(within("G7 (a)", parker).await.is_ok(), "(a) admitted");
+
+    // (b) the gate resumes at the deadline before the parker is polled again.
+    let gate = paused();
+    let mut parker = std::pin::pin!(gate.admit(Kind::External));
+    assert!(futures::poll!(parker.as_mut()).is_pending(), "(b) parked");
+    tokio::time::advance(DEADLINE).await;
+    gate.resume();
+    assert!(within("G7 (b)", parker).await.is_ok(), "(b) admitted");
+
+    // (c) resumed at the deadline, the parker is not polled again until its
+    // own timer has fired: the timer's re-decision sees the resume.
+    let gate = paused();
+    let mut parker = std::pin::pin!(gate.admit(Kind::External));
+    assert!(futures::poll!(parker.as_mut()).is_pending(), "(c) parked");
+    tokio::time::advance(DEADLINE).await;
+    gate.resume();
+    tokio::time::advance(Duration::from_secs(2)).await;
+    assert!(
+        within("G7 (c)", parker).await.is_ok(),
+        "(c) admitted after its timer"
+    );
+}
+
+// G7: an Internal submitter is never refused by a timer: past the deadline it
+// still waits for the coordinator's exit, and lands after resume.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn an_internal_park_outlasts_the_deadline_until_resume() {
+    let gate = paused();
+    let mut parker = std::pin::pin!(gate.admit(Kind::Internal));
+    assert!(futures::poll!(parker.as_mut()).is_pending(), "parked");
+    tokio::time::advance(DEADLINE + Duration::from_secs(2)).await;
+    assert!(
+        futures::poll!(parker.as_mut()).is_pending(),
+        "not refused past the deadline"
+    );
+    gate.resume();
+    assert!(
+        within("G7 internal", parker).await.is_ok(),
+        "admitted after resume"
+    );
+}
+
+// G7: with the coordinator's exit withheld, an Internal submitter proceeds at
+// the backstop (deadline + stop budget) while the gate is still paused.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn an_internal_park_proceeds_at_the_backstop() {
+    let gate = paused();
+    let mut parker = std::pin::pin!(gate.admit(Kind::Internal));
+    assert!(futures::poll!(parker.as_mut()).is_pending(), "parked");
+    tokio::time::advance(DEADLINE + BUDGET - Duration::from_secs(1)).await;
+    assert!(
+        futures::poll!(parker.as_mut()).is_pending(),
+        "still parked before the backstop"
+    );
+    let admitted = within("G7 backstop", parker).await;
+    assert!(admitted.is_ok(), "proceeds at the backstop, never refused");
+    assert_eq!(
+        gate.state(),
+        GateState::Paused(1),
+        "no exit came: the gate never opened"
+    );
+}
+
+// G15: a submitter that parked while Draining, and is still parked when a
+// later pause begins, belongs to the next resume's cohort: an arrival after
+// that resume waits until its admission ends.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn a_park_that_outlives_one_drain_leads_the_next() {
+    let gate = paused();
+    let log = std::sync::Arc::default();
+    let (c_task, c_admitted, c_finish) = park_held(&gate, Kind::Internal, "C", &log).await;
+    gate.resume();
+    within("G15 C admitted", c_admitted.notified()).await;
+
+    // P arrives while draining: a new arrival, not counted.
+    let mut p = std::pin::pin!(gate.admit(Kind::External));
+    assert!(
+        futures::poll!(p.as_mut()).is_pending(),
+        "P parks behind the cohort"
+    );
+    assert_eq!(gate.state(), GateState::Draining { left: 1 });
+
+    // The drain ends and a second attempt pauses before P is polled again.
+    let _ = c_finish.send(());
+    within("G15 C done", c_task).await.expect("C's task");
+    assert_eq!(gate.state(), GateState::Open);
+    pause(&gate, 2);
+    assert!(
+        futures::poll!(p.as_mut()).is_pending(),
+        "P re-parks in attempt 2"
+    );
+
+    // The second resume counts P; P's admission is held open.
+    gate.resume();
+    assert_eq!(
+        gate.state(),
+        GateState::Draining { left: 1 },
+        "P is the cohort"
+    );
+    let p_admission = within("G15 P admitted", p).await;
+    assert!(p_admission.is_ok());
+    let (a_task, a_admitted, a_finish) = park_held(&gate, Kind::External, "A", &log).await;
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec!["C"],
+        "A waits while P's admission is out"
+    );
+    drop(p_admission);
+    within("G15 A admitted", a_admitted.notified()).await;
+    assert_eq!(*log.lock().unwrap(), vec!["C", "A"]);
+    let _ = a_finish.send(());
+    within("G15 A done", a_task).await.expect("A's task");
 }

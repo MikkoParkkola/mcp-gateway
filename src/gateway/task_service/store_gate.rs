@@ -174,10 +174,19 @@ pub(crate) mod seams {
     use tokio::sync::Semaphore;
 
     /// A rendezvous: the gate signals `reached` and waits for `release`.
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     pub(crate) struct Hold {
         reached: Semaphore,
         release: Semaphore,
+    }
+
+    impl Default for Hold {
+        fn default() -> Self {
+            Self {
+                reached: Semaphore::new(0),
+                release: Semaphore::new(0),
+            }
+        }
     }
 
     impl Hold {
