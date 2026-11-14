@@ -4,15 +4,8 @@
 //! ADR-027's fetch step): chosen on the gateway's side, read once from one
 //! descriptor, and snapshotted by its bytes into the preview's private
 //! directory, which the helper binds read-only into the sandbox root.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the helper's fetch step binds it (the sandbox fetch part)"
-    )
-)]
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -27,12 +20,6 @@ pub(super) const DISTRO_BUNDLES: [&str; 3] = [
     "/etc/pki/tls/certs/ca-bundle.crt",
     "/etc/ssl/ca-bundle.pem",
 ];
-
-/// The `SSL_CERT_FILE` value `lookup` gives, passed on as given (a value that
-/// is not UTF-8 included): production calls it with `std::env::var_os`.
-pub(super) fn ambient_ca_bundle(lookup: impl Fn(&str) -> Option<OsString>) -> Option<OsString> {
-    lookup("SSL_CERT_FILE")
-}
 
 /// The chosen bundle: the bytes read and validated, and where they came from.
 #[derive(Debug)]

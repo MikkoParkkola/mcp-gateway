@@ -570,7 +570,13 @@ fn shell(script: &str) -> Target {
 async fn fetching(script: &str) -> Option<Started> {
     let started = tokio::time::timeout(
         FETCH_GUARD,
-        start_fetching_with_helper(Path::new(gateway_bin::path()), &shell(script), &[], far()),
+        start_fetching_with_helper(
+            Path::new(gateway_bin::path()),
+            &shell(script),
+            &[],
+            far(),
+            None,
+        ),
     )
     .await
     .expect("the fetch step ended within the guard");
@@ -628,7 +634,7 @@ async fn r1_a_fetching_preview_runs_its_target_after_the_handshake() {
 async fn r6b_a_helper_that_never_connects_is_refused() {
     let started = tokio::time::timeout(
         FETCH_GUARD,
-        start_fetching_with_helper(Path::new("/bin/true"), &shell("true"), &[], far()),
+        start_fetching_with_helper(Path::new("/bin/true"), &shell("true"), &[], far(), None),
     )
     .await
     .expect("the refusal came within the guard");
@@ -679,6 +685,7 @@ async fn r6b_a_dropped_start_leaves_no_sandbox_running() {
         &target,
         &[],
         far(),
+        None,
     ));
     let first = std::future::poll_fn(|cx| Poll::Ready(start.as_mut().poll(cx))).await;
     assert!(first.is_pending(), "the fetch step waits for the helper");
