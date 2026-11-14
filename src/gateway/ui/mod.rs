@@ -54,6 +54,7 @@ mod policies_test_support;
 mod policies_tests;
 mod preview;
 mod preview_identity;
+mod principal;
 mod refusals;
 mod restart;
 #[cfg(test)]
