@@ -37,9 +37,10 @@ JOBS = {  # os: (shard job, aggregate job, aggregate name, shard name prefix)
     "macos": ("macos-shards", "macos-check", "macOS check", "macOS shard "),
 }
 EXTRA_NEEDS = {"windows-check": ["windows-clippy"], "test": ["test-shards-lib", "linux-lib-build"]}
-# An OS whose lib legs run from one shared lib test binary: (their job, the build job, the legs). The legs keep the
-# shard job's name, so the check names stay; the build job's own wiring is check_shared_lib.py's.
-SHARED_LIB = {"linux": ("test-shards-lib", "linux-lib-build", ["lib-a", "lib-b"])}
+# An OS whose lib legs run from one shared lib test binary: (their job, the build job). The legs are the runner's
+# SHARED_BUILD; they keep the shard job's name, so the check names stay; the build job's own wiring is
+# check_shared_lib.py's.
+SHARED_LIB = {"linux": ("test-shards-lib", "linux-lib-build")}
 # Every aggregate skips on a same-repo merge-train PR into the release line: merge-train judges its needs
 # itself from the base copy of this workflow (the ROLLUP_EXPECTS ids below).
 TRAIN_SKIP = ("!(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
@@ -164,7 +165,10 @@ def workflow_problems(jobs: dict, st) -> list[str]:
             continue
         value = shard.get("strategy", {}).get("matrix", {}).get("shard")
         legs, labelled_legs = matrix_lists(value)
-        shared_key, build_key, shared_legs = SHARED_LIB.get(os_kind, (None, None, []))
+        shared_key, build_key = SHARED_LIB.get(os_kind, (None, None))
+        shared_legs = list(getattr(st, "SHARED_BUILD", {}).get(os_kind, ()))
+        if bool(shared_key) != bool(shared_legs):
+            out.append(f"{os_kind}: the runner's SHARED_BUILD legs {shared_legs} and the workflow job {shared_key} must come together")
         if sorted(legs or []) != sorted(set(legs_of(st, os_kind)) - set(shared_legs)):
             out.append(f"{shard_key}: matrix {value} is not the runner's {legs_of(st, os_kind)}"
                        + (f" less the shared-binary legs {shared_legs}" if shared_legs else ""))
