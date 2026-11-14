@@ -182,6 +182,7 @@ impl Gateway {
             // Attached by `start_account_custody`, so this constructor stays
             // exactly what it was for a caller building a Config in memory.
             custody: None,
+            retire: None,
         })
     }
 

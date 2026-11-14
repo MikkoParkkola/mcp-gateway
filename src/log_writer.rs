@@ -37,7 +37,6 @@ enum Msg {
     Line(Vec<u8>),
     Flush(SyncSender<()>),
     /// The terminal stop's wake for an idle writer.
-    #[cfg(test)]
     Stop,
 }
 
@@ -79,7 +78,6 @@ pub(crate) struct LossyStderr {
 /// Flushes the queue when dropped, within [`LOG_FLUSH_DEADLINE`].
 pub(crate) struct LogFlush {
     tx: SyncSender<Msg>,
-    #[cfg(test)]
     shared: Arc<Shared>,
     /// Taken by the terminal stop, which then owns the join.
     worker: Option<thread::JoinHandle<FlushEnd>>,
@@ -127,7 +125,6 @@ pub(crate) fn spawn(
         },
         LogFlush {
             tx,
-            #[cfg(test)]
             shared,
             worker: Some(worker),
         },
@@ -280,11 +277,7 @@ pub(crate) enum FlushEnd {
 
 /// How a terminal stop ended. Only a confirmed stop and join lets the process
 /// exec; a joined sink error alone does not forbid it.
-///
-/// The terminal stop is test-only until the restart slice calls it; that slice
-/// drops the `cfg(test)` gates on it, on `Msg::Stop` and on `LogFlush::shared`.
 #[derive(Debug)]
-#[cfg(test)]
 pub(crate) enum StopOutcome {
     Joined(FlushEnd),
     WorkerFailed,
@@ -292,14 +285,12 @@ pub(crate) enum StopOutcome {
     NotJoined(thread::JoinHandle<FlushEnd>),
 }
 
-#[cfg(test)]
 impl StopOutcome {
     pub(crate) fn permits_exec(&self) -> bool {
         matches!(self, Self::Joined(_))
     }
 }
 
-#[cfg(test)]
 impl LogFlush {
     /// Terminal stop: close enqueue admission on every clone, drain what was
     /// accepted, flush, and join the writer, all by `deadline`.
@@ -404,7 +395,6 @@ fn run(
         #[cfg(test)]
         shared.idle_polls.fetch_add(1, Ordering::SeqCst);
         match rx.recv() {
-            #[cfg(test)]
             Ok(Msg::Stop) => break,
             Ok(msg) => {
                 reported = serve(msg, &mut out, shared, reported, format);
@@ -469,7 +459,6 @@ fn serve(
             let _ = out.sink.flush();
             let _ = ack.try_send(());
         }
-        #[cfg(test)]
         Msg::Stop => {}
     }
     reported

@@ -211,6 +211,10 @@ pub struct Gateway {
     /// account shutdown releases the store and its two file locks while this
     /// handle stays here to refuse everything that arrives afterwards.
     custody: Option<Arc<crate::personal_accounts::GatewayCustody>>,
+    /// The boot's retirement plan cell, from `cli::run`: the HTTP stop stores
+    /// its plan here once it fixes its budget. `None` for a gateway built in
+    /// memory, whose stop then leaves the process exit to its caller.
+    retire: Option<crate::retire::RetireCell>,
     /// In-process test settings: data directory and bound-port channel.
     #[cfg(test)]
     test_seams: test_seams::TestSeams,

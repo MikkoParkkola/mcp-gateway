@@ -52,24 +52,39 @@ impl RuntimeShutdown {
 struct ShutdownGuard {
     runtime: Option<tokio::runtime::Runtime>,
     mode: RuntimeShutdown,
+    /// The HTTP stop's plan, once stored: its runtime deadline bounds the wait.
+    plan: crate::retire::RetireCell,
+}
+
+impl ShutdownGuard {
+    /// Shut the runtime down now; whether work was left running.
+    fn shut_down(&mut self) -> bool {
+        self.runtime
+            .take()
+            .is_some_and(|runtime| shut_down(runtime, self.mode, self.plan.get().copied()))
+    }
 }
 
 impl Drop for ShutdownGuard {
     fn drop(&mut self) {
-        if let Some(runtime) = self.runtime.take() {
-            shut_down(runtime, self.mode);
-        }
+        self.shut_down();
     }
 }
 
-/// Shut `runtime` down by `mode`. Returns whether a bounded wait ran out with
-/// blocking work still running, which it also logs at ERROR so an operator
-/// can tell a stalled disk or mount from a clean exit.
-pub(crate) fn shut_down(runtime: tokio::runtime::Runtime, mode: RuntimeShutdown) -> bool {
+/// Shut `runtime` down by `mode`. With an HTTP stop's `plan`, a bounded wait
+/// also ends by the plan's runtime deadline. Returns whether a bounded wait ran
+/// out with blocking work still running, which it also logs at ERROR so an
+/// operator can tell a stalled disk or mount from a clean exit.
+pub(crate) fn shut_down(
+    runtime: tokio::runtime::Runtime,
+    mode: RuntimeShutdown,
+    plan: Option<crate::retire::RetirePlan>,
+) -> bool {
     let RuntimeShutdown::Bounded(timeout) = mode else {
         drop(runtime);
         return false;
     };
+    let timeout = wait_bound(timeout, plan, tokio::time::Instant::now());
     let started = std::time::Instant::now();
     runtime.shutdown_timeout(timeout);
     // `shutdown_timeout` returns as soon as the blocking pool is idle, so a
@@ -89,10 +104,29 @@ pub(crate) fn shut_down(runtime: tokio::runtime::Runtime, mode: RuntimeShutdown)
     left_running
 }
 
+/// The runtime's wait for blocking work: `timeout`, or under an HTTP stop's
+/// plan the lesser of [`crate::retire::RUNTIME_WAIT_CAP`] and what is left to
+/// the plan's runtime deadline at `now` (none once it has passed).
+pub(crate) fn wait_bound(
+    timeout: std::time::Duration,
+    plan: Option<crate::retire::RetirePlan>,
+    now: tokio::time::Instant,
+) -> std::time::Duration {
+    // STUB (red run): the plan does not bound the wait.
+    let _ = (plan, now);
+    timeout
+}
+
 /// Run `future` to completion on a new multi-thread runtime, then shut the
-/// runtime down by `mode`, on the normal path and on a panic alike.
-pub(crate) fn block_on<F: std::future::Future>(mode: RuntimeShutdown, future: F) -> F::Output {
-    let guard = ShutdownGuard {
+/// runtime down by `mode` (bounded by the plan in `plan`, once stored), on the
+/// normal path and on a panic alike. Returns the output and whether the
+/// shutdown left blocking work running.
+pub(crate) fn block_on<F: std::future::Future>(
+    mode: RuntimeShutdown,
+    plan: &crate::retire::RetireCell,
+    future: F,
+) -> (F::Output, bool) {
+    let mut guard = ShutdownGuard {
         runtime: Some(
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -100,12 +134,15 @@ pub(crate) fn block_on<F: std::future::Future>(mode: RuntimeShutdown, future: F)
                 .expect("build the tokio runtime"),
         ),
         mode,
+        plan: std::sync::Arc::clone(plan),
     };
-    guard
+    let output = guard
         .runtime
         .as_ref()
-        .expect("the guard holds the runtime until it drops")
-        .block_on(future)
+        .expect("the guard holds the runtime until it shuts down")
+        .block_on(future);
+    let left_running = guard.shut_down();
+    (output, left_running)
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use crate::{
     commands,
     config::{Config, EnvOverlay},
     gateway::Gateway,
-    setup_tracing,
+    setup_tracing_flush,
     trust::run_provenance_command,
     validator::ValidateConfig,
 };
@@ -27,18 +27,25 @@ use runtime::RuntimeShutdown;
 pub fn run(args: Cli) -> ExitCode {
     // Bound outside the runtime, so the log flush runs after the runtime's
     // own shutdown and keeps what that shutdown logs.
-    let _flush_logs = match setup_tracing(&args.log_level, args.log_format.as_deref()) {
+    let flush_logs = match setup_tracing_flush(&args.log_level, args.log_format.as_deref()) {
         Ok(flush) => flush,
         Err(e) => {
             eprintln!("Failed to setup tracing: {e}");
             return ExitCode::FAILURE;
         }
     };
-    runtime::block_on(RuntimeShutdown::of(args.command.as_ref()), dispatch(args))
+    // The boot's retirement plan cell: an HTTP stop stores its plan here, and
+    // the runtime wait, the log writer's stop and the exit then end inside
+    // that stop's total. Empty for every other command and for stdio.
+    let plan = crate::retire::RetireCell::default();
+    let mode = RuntimeShutdown::of(args.command.as_ref());
+    let (code, left_running) =
+        runtime::block_on(mode, &plan, dispatch(args, std::sync::Arc::clone(&plan)));
+    crate::retire::tail(code, left_running, plan.get().copied(), flush_logs)
 }
 
 #[allow(clippy::too_many_lines)] // Feature-gated fallback arms inflate line count
-async fn dispatch(cli: Cli) -> ExitCode {
+async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
     // Capture config path (and the port/host overrides `stats` also needs)
     // before consuming `cli` in the match below.
     let config_path = cli.config.clone();
@@ -338,7 +345,7 @@ async fn dispatch(cli: Cli) -> ExitCode {
         #[cfg(feature = "runtime-substrate")]
         Some(Command::Runtime(rt_cmd)) => run_runtime_command(rt_cmd),
         Some(Command::Serve { stdio: true }) => Box::pin(run_stdio_server(cli)).await,
-        Some(Command::Serve { stdio: false }) | None => Box::pin(run_server(cli)).await,
+        Some(Command::Serve { stdio: false }) | None => Box::pin(run_server(cli, plan)).await,
     }
 }
 
@@ -548,7 +555,7 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
 }
 
 /// Run the gateway server.
-async fn run_server(cli: Cli) -> ExitCode {
+async fn run_server(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
     // Run post-upgrade migrations before anything else.  Non-fatal: a stamp
     // write failure must not prevent the gateway from starting.
     if let Err(e) = commands::check_upgrade(&commands::upgrade_data_dir()) {
@@ -590,13 +597,14 @@ async fn run_server(cli: Cli) -> ExitCode {
     let config_path = cli.config.as_deref().map(std::path::Path::to_path_buf);
     // See `run_stdio_server`: the constructor owns validation-against-overlay
     // and the custody bring-up, and both must complete before `run` serves.
-    let gateway = match Gateway::new_evaluated(config, env, config_path).await {
+    let mut gateway = match Gateway::new_evaluated(config, env, config_path).await {
         Ok(g) => discovered_config::watch(g, discovered),
         Err(e) => {
             error!(target: "mcp_gateway", "Failed to create gateway: {e}");
             return ExitCode::FAILURE;
         }
     };
+    gateway.set_retire_cell(plan);
 
     if let Err(e) = gateway.run().await {
         error!(target: "mcp_gateway", "Gateway error: {e}");

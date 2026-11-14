@@ -38,6 +38,11 @@ use crate::security::firewall::Firewall;
 use crate::{Error, Result};
 
 impl Gateway {
+    /// Hand the HTTP stop the boot's retirement plan cell (see `crate::retire`).
+    pub(crate) fn set_retire_cell(&mut self, cell: crate::retire::RetireCell) {
+        self.retire = Some(cell);
+    }
+
     /// Run the gateway.
     ///
     /// # Errors
