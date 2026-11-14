@@ -33,7 +33,7 @@ impl BackendRegistry {
     /// handed over is in the reaper's hands, cut to `deadline`.
     pub(crate) async fn stop_all_by(&self, deadline: tokio::time::Instant) {
         self.stop_deadline.move_earlier(deadline.into_std());
-        if self.stop_deadline.is_hurried() {
+        if mutant!("s9507.h1", false, self.stop_deadline.is_hurried()) {
             self.hand_over_now(deadline.saturating_duration_since(tokio::time::Instant::now()));
         }
         // The backends to retire are the ones the stop latched and took, in
