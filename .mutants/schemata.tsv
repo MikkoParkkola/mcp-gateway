@@ -1,0 +1,33 @@
+head_sha	07d340b56975491734353b369dd188066a299825
+#mutant defaultflip
+mcp_gateway	decisions::tests::accept::only_a_decline_record_closes_refusals	src/decisions/tests/accept.rs:162
+#mutant norows
+mcp_gateway	decisions::tests::accept::only_a_decline_record_closes_refusals	src/decisions/tests/accept.rs:174
+#mutant noexpiry
+mcp_gateway	decisions::tests::accept::only_a_decline_record_closes_refusals	src/decisions/tests/accept.rs:180
+#mutant idonly
+mcp_gateway	config_reload::grant_audit_plan_tests::a_claim_must_match_both_the_row_id_and_its_digest	src/config_reload/grant_audit_plan_tests.rs:72
+#mutant digestonly
+mcp_gateway	config_reload::grant_audit_plan_tests::a_claim_must_match_both_the_row_id_and_its_digest	src/config_reload/grant_audit_plan_tests.rs:77
+#mutant firstwins
+mcp_gateway	config_reload::grant_audit_plan_tests::disagreeing_claims_explain_nothing	src/config_reload/grant_audit_plan_tests.rs:125
+#mutant noexpected
+mcp_gateway	config_reload::grant_audit_plan_tests::the_journal_decides_a_row_it_touched	src/config_reload/grant_audit_plan_tests.rs:190
+mcp_gateway	config_reload::grant_audit_plan_tests::a_stale_claim_does_not_explain_a_revert_of_a_known_row	src/config_reload/grant_audit_plan_tests.rs:259
+#mutant nogap
+mcp_gateway	config_reload::grant_audit_plan_tests::a_claim_does_not_apply_under_a_gap	src/config_reload/grant_audit_plan_tests.rs:159
+#mutant noaccount
+mcp_gateway	config_reload::grant_audit_plan_tests::a_matching_claim_accounts_for_its_row	src/config_reload/grant_audit_plan_tests.rs:100
+#mutant unserved
+mcp_gateway	config_reload::grant_audit_plan_tests::a_claim_for_a_row_not_served_adds_nothing	src/config_reload/grant_audit_plan_tests.rs:141
+#mutant planwarn
+mcp_gateway	config_reload::grant_audit_tests::only_a_recorded_plan_warns_about_an_outside_change	src/config_reload/grant_audit_tests.rs:450
+mcp_gateway	config_reload::grant_audit_plan_tests::a_row_changed_outside_the_gateway_is_returned_with_both_digests	src/config_reload/grant_audit_plan_tests.rs:237
+#mutant nowarn
+mcp_gateway	config_reload::grant_audit_tests::only_a_recorded_plan_warns_about_an_outside_change	src/config_reload/grant_audit_tests.rs:457
+mcp_gateway	config_reload::grant_audit_tests::a_failed_append_still_warns_about_an_outside_change	src/config_reload/grant_audit_tests.rs:487
+#mutant countrecords
+mcp_gateway	config_reload::grant_audit_reload_tests::a_row_changed_outside_twice_is_counted_once	src/config_reload/grant_audit_reload_tests.rs:334
+#mutant nocount
+mcp_gateway	config_reload::grant_audit_reload_tests::a_reload_counts_rows_changed_outside_the_gateway	src/config_reload/grant_audit_reload_tests.rs:313
+mcp_gateway	config_reload::grant_audit_reload_tests::an_unrecorded_answer_still_counts_outside_rows	src/config_reload/grant_audit_reload_tests.rs:351
