@@ -183,7 +183,7 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
 /// (which scoped callers get too) never carries it, so a change of the record
 /// raises the stream's status generation and never its counts generation.
 pub(super) fn add_restart(body: &mut Value, view: StatusView, record: Option<RestartStatus>) {
-    if view == StatusView::Full
+    if mutant!("countsrestart", true, view == StatusView::Full)
         && let Some(members) = body.as_object_mut()
     {
         members.insert(

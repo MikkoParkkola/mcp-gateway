@@ -56,7 +56,7 @@ async fn availability(State(state): State<Arc<AppState>>, guard: Guard) -> Respo
 /// only in the full view.
 pub(super) fn availability_body(view: StatusView, sample: Option<WriteSample>) -> Value {
     let mut body = json!({"available": false, "reason": REASON, "recovery": RECOVERY});
-    if view == StatusView::Full
+    if mutant!("anyview", true, view == StatusView::Full)
         && let Some(sample) = sample
     {
         body["recent_writes"] = json!({
