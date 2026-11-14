@@ -187,8 +187,10 @@ fn b8_an_accepted_attempt_has_no_deadline_until_its_checkpoint() {
     board.accept();
     let accepted = board.status().expect("a record");
     assert_eq!(accepted.deadline_unix_ms, None);
-    assert!(
-        accepted.status_json()["deadline"].is_null(),
+    // Present and null: indexing a missing key would also read null.
+    assert_eq!(
+        accepted.status_json().get("deadline"),
+        Some(&serde_json::Value::Null),
         "{}",
         accepted.status_json()
     );

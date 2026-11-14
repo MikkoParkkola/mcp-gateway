@@ -105,7 +105,8 @@ pub(crate) struct RestartStatus {
 
 impl RestartStatus {
     /// The status edge's form: `{id, phase, deadline, remaining_calls,
-    /// reason}`, the phase lowercase, the deadline in unix ms, the reason
+    /// reason}`, the phase lowercase, the deadline in unix ms (null while the
+    /// attempt is accepted, before its checkpoint sets one), the reason
     /// rendered from the cancel (null without one).
     pub(crate) fn status_json(&self) -> Value {
         json!({
