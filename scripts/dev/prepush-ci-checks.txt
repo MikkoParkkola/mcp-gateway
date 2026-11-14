@@ -9,6 +9,8 @@ python3 scripts/ci/check-gateway-spawns.py	0	closed
 python3 scripts/ci/check-gateway-spawns.py --self-test	0	closed
 python3 scripts/ci/check-pick-then-bind.py	13	closed
 python3 scripts/ci/check-pick-then-bind.py --self-test	0	closed
+python3 scripts/ci/check-stop-grace.py	0	closed
+python3 scripts/ci/check-stop-grace.py --self-test	0	closed
 python3 scripts/ci/check-reads-token.py --self-test	0	closed
 python3 scripts/ci/check-pipefail-grep-q.py	0	closed
 "$GATE_PY" scripts/ci/check-request-panics.py	9	closed
@@ -63,6 +65,7 @@ python3 scripts/dev/test_check_control_drift.py	7	closed
 python3 scripts/dev/test_check_doc_backticks.py	1	closed
 python3 scripts/dev/test_check_event_source_scope.py	3	closed
 python3 scripts/dev/test_check_file_size.py	4	closed
+python3 scripts/dev/test_check_unlocked_install.py	27	closed
 python3 scripts/dev/test_check_orphan_test_modules.py	22	closed
 python3 scripts/dev/test_check_cfg_reader_copies.py	3	closed
 python3 scripts/dev/test_check_owasp_citations.py	38	closed

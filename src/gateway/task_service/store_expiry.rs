@@ -115,17 +115,22 @@ impl TaskStore {
             return (0, Vec::new());
         }
         let shared = Arc::clone(&self.0);
-        let settled = tokio::task::spawn_blocking(move || {
-            let mut settled = Vec::new();
-            for name in names {
-                let outcome =
-                    super::disk::reread_record(&shared.dir, &name, shared.limits, shared.dir_id);
-                shared.apply_reread(&name, outcome, &import, &recover, &mut settled);
-            }
-            settled
-        })
-        .await
-        .unwrap_or_default();
+        let settled = self
+            .admitted(super::gate::Kind::Sweep, move || {
+                let mut settled = Vec::new();
+                for name in names {
+                    let outcome = super::disk::reread_record(
+                        &shared.dir,
+                        &name,
+                        shared.limits,
+                        shared.dir_id,
+                    );
+                    shared.apply_reread(&name, outcome, &import, &recover, &mut settled);
+                }
+                settled
+            })
+            .await
+            .unwrap_or_default();
         let (sealed, reserved, sealed_names) = {
             let state = self.0.state();
             // Copied out, so the line below is written after the guard is released.
@@ -267,9 +272,11 @@ impl TaskStore {
         let shared = Arc::clone(&self.0);
         let id = id.to_owned();
         let admission = Arc::clone(admission);
-        tokio::task::spawn_blocking(move || shared.expire_blocking(&id, revision, &admission, hold))
-            .await
-            .map_err(|_| StoreError::Storage)?
+        self.admitted(super::gate::Kind::Sweep, move || {
+            shared.expire_blocking(&id, revision, &admission, hold)
+        })
+        .await
+        .map_err(StoreError::from)?
     }
 }
 

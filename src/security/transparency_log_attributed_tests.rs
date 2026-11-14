@@ -62,7 +62,7 @@ fn with_tenants(tenants: &[String]) -> Map<String, Value> {
 /// records verify.
 #[test]
 fn tenant_list_is_capped_with_an_overflow_marker() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (logger, path) = open(&dir);
     write(&logger, with_tenants(&hashes(MAX_RECORDED_TENANTS + 1))).unwrap();
     write(&logger, with_tenants(&hashes(MAX_RECORDED_TENANTS))).unwrap();
@@ -92,7 +92,7 @@ const _: () = assert!(MAX_RECORDED_TENANTS * 19 < super::rotation::MAX_RECORD_BY
 /// appended.
 #[test]
 fn extra_fields_cannot_collide_with_record_fields() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (logger, path) = open(&dir);
     for key in [
         "route",
@@ -116,7 +116,7 @@ fn extra_fields_cannot_collide_with_record_fields() {
 /// verifies, and editing one character of `tenants` breaks verification.
 #[test]
 fn attribution_fields_are_inside_the_hash_chain() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (logger, path) = open(&dir);
     let tenant = "0123456789abcdef".to_string();
     write(&logger, with_tenants(std::slice::from_ref(&tenant))).unwrap();
@@ -135,7 +135,7 @@ fn attribution_fields_are_inside_the_hash_chain() {
 /// stamp. On a readable clock the row carries a time and no marker.
 #[test]
 fn an_invocation_on_an_unreadable_clock_is_recorded_undated() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (logger, path) = open(&dir);
     write(&logger, Map::new()).expect("dated row");
     {
@@ -172,7 +172,7 @@ fn decided() -> crate::security::decision_record::Decision {
 /// field, inside the hashed and signed entry, and reads back exactly.
 #[test]
 fn api2a_3_the_decision_is_written_by_the_writer_and_reads_back() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (logger, path) = open(&dir);
     let decision = decided();
     logger
@@ -208,7 +208,7 @@ fn api2a_3_the_decision_is_written_by_the_writer_and_reads_back() {
 /// A caller's attribution can never supply or overwrite the decision.
 #[test]
 fn api2a_3_attribution_naming_the_decision_field_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (logger, path) = open(&dir);
     let mut extra = Map::new();
     extra.insert(

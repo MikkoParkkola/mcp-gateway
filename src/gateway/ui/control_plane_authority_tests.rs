@@ -131,6 +131,7 @@ fn store_audit_events_still_reach_the_view() {
     store
         .append_audit(&ControlPlaneAuditEvent {
             grant_change: None,
+            ui_decision: None,
             event_id: "e1".to_string(),
             actor_id: "alice".to_string(),
             action: ControlPlaneAction::MutateGrant,

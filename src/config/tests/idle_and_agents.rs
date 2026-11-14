@@ -114,6 +114,41 @@ fn duration_parser_handles_milliseconds() {
     );
 }
 
+/// The table the Helm chart and the shipped-artifact check use to size a stop
+/// grace is read here by the gateway's own parser, so neither can accept or
+/// size a `server.shutdown_timeout` differently from the gateway.
+#[test]
+fn the_stop_grace_table_matches_the_duration_grammar() {
+    let table = include_str!("../../../tests/fixtures/stop_grace_cases.txt");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let mut rows = 0;
+    for line in table
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
+        let (input, want) = line.split_once('\t').expect("two TAB-separated columns");
+        write_owner_only(&path, format!("server:\n  shutdown_timeout: \"{input}\"\n"))
+            .expect("write");
+        match Config::load(Some(&path)) {
+            Ok(cfg) => {
+                let timeout = cfg.server.shutdown_timeout;
+                let grace = timeout.as_secs() + u64::from(timeout.subsec_nanos() > 0) + 1;
+                assert_eq!(grace.to_string(), want, "{input:?} loads as {timeout:?}");
+            }
+            Err(err) => {
+                assert_eq!(want, "refused", "{input:?} was refused: {err:#}");
+                assert!(
+                    format!("{err:#}").contains("duration"),
+                    "{input:?}: {err:#}"
+                );
+            }
+        }
+        rows += 1;
+    }
+    assert!(rows >= 20, "the table lost its rows: {rows}");
+}
+
 /// The key's NAME inside a value is not a use of the key: a description
 /// quoting `idle_timeout:` must not make the config refuse to load.
 #[test]

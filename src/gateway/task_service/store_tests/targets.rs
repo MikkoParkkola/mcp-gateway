@@ -328,7 +328,8 @@ async fn a_peer_failure_on_a_row_with_calls_is_version_6() {
         .await
         .unwrap();
     let settled = store
-        .settle_bounded_by(
+        .settle_bounded_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
             OWNER,
             task.id(),
             1,
@@ -363,7 +364,8 @@ async fn a_legacy_row_without_calls_records_no_peer_authorship() {
     set_version(&path.join(format!("{id}.json")), 3);
     let store = open(&path).await;
     let settled = store
-        .settle_bounded_by(
+        .settle_bounded_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
             OWNER,
             &id,
             1,
@@ -406,7 +408,8 @@ async fn a_refused_round_on_a_row_with_calls_is_version_6() {
         .await
         .unwrap();
     let settled = store
-        .settle_bounded_by(
+        .settle_bounded_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
             OWNER,
             task.id(),
             1,
@@ -447,7 +450,8 @@ async fn a_legacy_row_without_calls_records_no_gateway_authorship() {
     set_version(&path.join(format!("{id}.json")), 3);
     let store = open(&path).await;
     let settled = store
-        .settle_bounded_by(
+        .settle_bounded_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
             OWNER,
             &id,
             1,

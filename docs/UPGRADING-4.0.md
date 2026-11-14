@@ -2766,8 +2766,9 @@ In 4.0 both listeners stop the same way (#2147):
   work the cut released, before it stops its backends.
 
 **Action:** if some requests run longer than `server.shutdown_timeout`, raise it. Keep the
-orchestrator's kill timeout (for example Kubernetes `terminationGracePeriodSeconds`) above
-twice `server.shutdown_timeout`, so the gateway can finish its own shutdown.
+orchestrator's kill timeout (for example Kubernetes `terminationGracePeriodSeconds`) at
+least `server.shutdown_timeout` + 1 s, so the gateway can finish its own shutdown; the
+shipped templates give 31 s (docs/DEPLOYMENT.md, Stop grace).
 
 ## 89. Remote backends without signed provenance are named at startup and in `doctor`
 

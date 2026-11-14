@@ -142,7 +142,7 @@ fn passes_without_anchor(path: &Path, mode: VerifyMode) {
 #[test]
 fn an_emptied_log_fails_against_its_anchor() {
     for mode in MODES {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         fresh(&path, 5);
         let anchor = copy_anchor(&path, "anchor.hwm");
@@ -158,7 +158,7 @@ fn an_emptied_log_fails_against_its_anchor() {
 #[test]
 fn a_replaced_log_fails_against_its_anchor() {
     for mode in MODES {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         fresh(&path, 5);
         let anchor = copy_anchor(&path, "anchor.hwm");
@@ -177,7 +177,7 @@ fn a_replaced_log_fails_against_its_anchor() {
 #[test]
 fn a_rolled_back_log_fails_against_its_anchor() {
     for mode in MODES {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         fresh(&path, 5);
         let anchor = copy_anchor(&path, "anchor.hwm");
@@ -198,7 +198,7 @@ fn a_rolled_back_log_fails_against_its_anchor() {
 #[test]
 fn a_wiped_log_fails_at_its_anchor() {
     for mode in MODES {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         fresh(&path, 5);
         let anchor = copy_anchor(&path, "anchor.hwm");
@@ -216,7 +216,7 @@ fn a_wiped_log_fails_at_its_anchor() {
 #[test]
 fn an_intact_log_passes_its_anchors() {
     for mode in MODES {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = logger(&path, 12, false);
         for i in 0..3 {
@@ -276,7 +276,7 @@ fn boundary_anchor(path: &Path, secret: &str) -> PathBuf {
 fn an_anchor_in_an_expired_range_fails_and_the_boundary_needs_a_signed_log() {
     for (signed, secret) in [(false, ""), (true, SECRET)] {
         for mode in MODES {
-            let dir = tempfile::tempdir().unwrap();
+            let dir = crate::test_dir_keep::kept_tempdir();
             let path = log_path(&dir);
             let early = expired_log(&path, signed);
             let config = cfg(&path, 12, signed);
@@ -300,7 +300,7 @@ fn an_anchor_in_an_expired_range_fails_and_the_boundary_needs_a_signed_log() {
 #[test]
 fn an_oldest_survivor_split_from_its_link_fails() {
     for mode in MODES {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         expired_log(&path, false);
         let boundary = boundary_anchor(&path, "");
@@ -329,7 +329,7 @@ fn refused(path: &Path, anchor: &Path, mode: VerifyMode, signed: bool) -> io::Er
 #[test]
 fn a_bad_anchor_file_is_refused() {
     for mode in MODES {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = logger(&path, 12, true);
         for i in 0..3 {
@@ -371,7 +371,7 @@ fn a_bad_anchor_file_is_refused() {
 #[test]
 fn a_signed_anchor_refuses_a_hash_only_verify() {
     for mode in MODES {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = logger(&path, 12, true);
         for i in 0..3 {
@@ -397,7 +397,7 @@ fn a_signed_anchor_refuses_a_hash_only_verify() {
 #[test]
 fn a_forged_expiry_boundary_does_not_satisfy_an_unsigned_anchor() {
     for mode in MODES {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         fresh(&path, 5);
         let anchor = copy_anchor(&path, "anchor.hwm");

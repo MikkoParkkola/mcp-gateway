@@ -271,17 +271,22 @@ impl Gateway {
             )
             .await;
         }
-        // Release the custody store before the backends go. Reached on the EOF
-        // path only: a cancelled `run_stdio` releases it by dropping the Gateway.
+        // Release the custody store before the backends go, bounded like the
+        // HTTP stop: a release thread that cannot start leaks the store to exit
+        // instead of parking its drop on the blocking pool. A cancelled or
+        // failed serve detaches it through its serve guard instead.
         if let Some(Err(e)) = bounded_step(
             deadline,
             "account custody shutdown",
-            self.shutdown_account_custody(),
+            self.shutdown_account_custody_by(deadline),
         )
         .await
         {
             warn!(error = %e, "Personal account custody shutdown failed");
         }
+        // A cut custody step leaves the store in the handle: hand it to a
+        // detached thread now, so the gateway's drop never releases it here.
+        self.detach_custody_release();
     }
 
     /// A fresh signal cancels the remaining preparations, then cuts backend

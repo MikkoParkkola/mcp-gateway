@@ -39,6 +39,14 @@ mod disk;
 mod error;
 #[path = "store_expiry.rs"]
 mod expiry;
+#[path = "store_gate.rs"]
+pub(crate) mod gate;
+#[cfg(test)]
+#[path = "store_gate_sites_tests.rs"]
+mod gate_sites_tests;
+#[cfg(test)]
+#[path = "store_gate_tests.rs"]
+mod gate_tests;
 #[path = "store_holds.rs"]
 mod holds;
 #[path = "store_input.rs"]
@@ -169,6 +177,8 @@ struct Shared {
     #[cfg(test)]
     seams: input::TestSeams,
     temp: AtomicU64,
+    /// Every mutation's admission (restart slice 5): see `gate`.
+    gate: gate::TaskGate,
     /// Test-only: a share of the temporary directory this store lives in, so it
     /// is removed only after the store's last handle and the test's own drop. Every blocking
     /// write holds an `Arc<Shared>`, so no write can land while it is being
@@ -189,6 +199,12 @@ impl TaskStore {
     #[cfg(test)]
     pub(crate) fn keep_test_dir(&self, dir: Arc<tempfile::TempDir>) {
         self.0.test_dir.keep(dir, &self.0.dir);
+    }
+
+    /// Test-only: the store's gate, so a row can pause it and read its count.
+    #[cfg(test)]
+    pub(crate) fn gate_for_test(&self) -> gate::TaskGate {
+        self.0.gate.clone()
     }
 
     /// Test-only: hold the ownership acquired before this store opened.
@@ -234,6 +250,7 @@ impl TaskStore {
             #[cfg(test)]
             seams: input::TestSeams::default(),
             temp: AtomicU64::new(0),
+            gate: gate::TaskGate::new(),
             #[cfg(test)]
             test_dir: crate::test_dir_keep::TestDirKeep::default(),
         })))
@@ -242,9 +259,11 @@ impl TaskStore {
     pub(super) async fn create(&self, task: PreparedTask) -> Result<CommittedTask, StoreError> {
         let shared = Arc::clone(&self.0);
         let (record, publication) = (task.record, task.publication);
-        tokio::task::spawn_blocking(move || shared.create_blocking(record, publication))
-            .await
-            .map_err(|_| StoreError::Storage)?
+        self.admitted(gate::Kind::External, move || {
+            shared.create_blocking(record, publication)
+        })
+        .await
+        .map_err(StoreError::from)?
     }
 
     pub(crate) fn get(&self, owner: &str, id: &str) -> Result<CommittedTask, StoreError> {
@@ -267,11 +286,11 @@ impl TaskStore {
     ) -> Result<CommittedTask, StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(gate::Kind::Internal, move || {
             shared.transition_blocking(&owner, &id, revision, event, at)
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 
     /// Durably set the dispatch marker at `expected_revision`. The public
@@ -285,11 +304,11 @@ impl TaskStore {
     ) -> Result<(), StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(gate::Kind::Internal, move || {
             shared.mark_dispatched_blocking(&owner, &id, expected_revision)
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 
     /// Durably attach `upstream` to a non-terminal row at `expected_revision`.
@@ -314,11 +333,11 @@ impl TaskStore {
     ) -> Result<(), StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(gate::Kind::Internal, move || {
             shared.mark_upstream_blocking(&owner, &id, expected_revision, (upstream, bindings))
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 
     #[cfg(test)]

@@ -80,7 +80,7 @@ fn child() {
 fn crash_S2() {
     // GIVEN: a child killed just after its logger was built (id minted and
     // recorded), its lease released only by its death
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     killed_at(At::LoggerBuilt, dir.path());
     let path = kill_log(dir.path());
     let id = lines(&path)[0]["log_id"].as_str().unwrap().to_string();
@@ -107,7 +107,7 @@ fn crash_S2() {
 fn a_kill_before_the_identified_record_is_finished_on_reopen() {
     // GIVEN: a child killed after the genesis open record, before the
     // identified record that names its id
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     killed_at(At::BeforeIdentified, dir.path());
     let path = kill_log(dir.path());
     let left = lines(&path);
@@ -138,7 +138,7 @@ fn a_kill_before_the_identified_record_is_finished_on_reopen() {
 fn a_restart_after_the_active_file_was_deleted_names_the_surviving_mark() {
     // GIVEN: a log with records, its writer gone, its active file deleted
     // and its mark kept
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = kill_log(dir.path());
     let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&first, 0);
@@ -189,7 +189,7 @@ fn deleted_and_unverified(path: &Path, counter: u64) {
 fn a_kill_before_the_upgrade_records_its_id_is_finished_on_reopen() {
     // GIVEN: a beta log (no id anywhere), and a child that opens it under
     // this version and is killed before the identified record
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = kill_log(dir.path());
     let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&first, 0);
@@ -219,7 +219,7 @@ fn a_kill_after_a_replacing_genesis_keeps_its_predecessor_evidence() {
     // GIVEN: a log with records, its writer gone, its active file deleted
     // and its mark kept; a new process killed after the new genesis's open
     // record, before its identified record
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = kill_log(dir.path());
     let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&first, 0);
@@ -262,7 +262,7 @@ fn a_rotated_log_whose_files_vanished_finishes_its_new_genesis_on_reopen() {
     // segments deleted and its mark (naming a segment past 0) kept; a new
     // process killed after the new genesis's open record, before its
     // identified record
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = kill_log(dir.path());
     let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&first, &path, 1);
@@ -303,7 +303,7 @@ fn an_upgraded_rotated_beta_log_killed_before_its_id_record_stays_unidentified()
     // mark were deleted; a child opens it under this version, mints an id
     // onto the open record that continues the sealed segment, and is killed
     // before the identified record
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = kill_log(dir.path());
     let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&first, &path, 1);
