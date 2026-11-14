@@ -437,23 +437,22 @@ mod unix {
     /// INV-10c: the mask reader returns the calling thread's real mask.
     #[test]
     fn inv10c_current_thread_mask_reads_the_thread() {
-        std::thread::spawn(|| {
-            // Set both signals here, so the row does not depend on the mask the
-            // test harness thread happened to pass on.
+        // A fresh thread sets both signals itself, so the row does not depend on the mask the test
+        // harness thread happened to pass on, and returns what the reader saw there. The assertions
+        // run here, in the test's own thread, which is where a failure is attributed to this row.
+        let mask = std::thread::spawn(|| {
             let mut unblock = SigSet::empty();
             unblock.add(Signal::SIGUSR2);
             unblock.thread_unblock().unwrap();
             let mut block = SigSet::empty();
             block.add(Signal::SIGUSR1);
             block.thread_block().unwrap();
-            let mask = crate::restart::invocation::current_thread_mask();
-            assert!(mask.contains(Signal::SIGUSR1));
-            assert!(!mask.contains(Signal::SIGUSR2));
+            crate::restart::invocation::current_thread_mask()
         })
         .join()
-        // resume_unwind re-raises the thread's own failure as the only one, so it is reported at its
-        // assertion line and not again at this join.
-        .unwrap_or_else(|e| std::panic::resume_unwind(e));
+        .unwrap();
+        assert!(mask.contains(Signal::SIGUSR1));
+        assert!(!mask.contains(Signal::SIGUSR2));
     }
 
     /// INV-11: a subcommand stops before any PATH walk; the control walks it.
