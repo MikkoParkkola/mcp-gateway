@@ -355,6 +355,9 @@ impl TaskStore {
     /// # Errors
     /// `RevisionConflict` when the row moved; `InvalidTransition` when no
     /// round is open.
+    /// Test rows call the shared method with the internal class; production
+    /// names its class through the `_as` form.
+    #[cfg(test)]
     pub(crate) async fn close_round(
         &self,
         owner: &str,

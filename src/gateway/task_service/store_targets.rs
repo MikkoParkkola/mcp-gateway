@@ -88,6 +88,9 @@ impl TaskStore {
     /// the bounded fallback is always the gateway's. `writes` names the
     /// members of a `Complete` result the gateway wrote (MIK-7993); it is
     /// stored only with that result, and never costs the result its room.
+    /// Test rows call the shared method with the internal class; production
+    /// names its class through the `_as` form.
+    #[cfg(test)]
     pub(crate) async fn settle_bounded_by(
         &self,
         owner: &str,
