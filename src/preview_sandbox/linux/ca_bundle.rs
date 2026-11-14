@@ -31,8 +31,7 @@ pub(super) const DISTRO_BUNDLES: [&str; 3] = [
 /// The `SSL_CERT_FILE` value `lookup` gives, passed on as given (a value that
 /// is not UTF-8 included): production calls it with `std::env::var_os`.
 pub(super) fn ambient_ca_bundle(lookup: impl Fn(&str) -> Option<OsString>) -> Option<OsString> {
-    let _ = lookup;
-    None
+    lookup("SSL_CERT_FILE")
 }
 
 /// The chosen bundle: the bytes read and validated, and where they came from.
@@ -44,36 +43,95 @@ pub(super) struct HostBundle {
 
 impl HostBundle {
     /// Choose the bundle: `ca_bundle` (the `SSL_CERT_FILE` value) when set,
-    /// else the first distro path that exists under `root` (`/` in
+    /// else the first distro path whose entry exists under `root` (`/` in
     /// production). An existing candidate that fails any check refuses: there
-    /// is no fall-through.
+    /// is no fall-through, and no built-in list.
     pub(super) fn choose(ca_bundle: Option<&OsStr>, root: &Path) -> Result<Self, Refusal> {
-        // Red stub: the first readable candidate, unchecked.
-        let candidates: Vec<PathBuf> = match ca_bundle {
-            Some(value) => vec![PathBuf::from(value)],
-            None => DISTRO_BUNDLES
-                .iter()
-                .map(|p| root.join(p.trim_start_matches('/')))
-                .collect(),
-        };
-        for path in candidates {
-            if let Ok(bytes) = std::fs::read(&path) {
-                return Ok(Self {
-                    bytes,
-                    source: path,
-                });
+        if let Some(value) = ca_bundle {
+            let path = Path::new(value);
+            // An empty value is not absolute either: set but empty refuses.
+            if !path.is_absolute() {
+                return Err(Refusal::Step(format!(
+                    "SSL_CERT_FILE is not an absolute path ({})",
+                    path.display()
+                )));
+            }
+            return Self::read(path);
+        }
+        for candidate in DISTRO_BUNDLES {
+            let path = root.join(candidate.trim_start_matches('/'));
+            match rustix::fs::lstat(&path) {
+                Ok(_) => return Self::read(&path),
+                Err(rustix::io::Errno::NOENT) => {}
+                Err(e) => {
+                    return Err(Refusal::Step(format!(
+                        "the CA bundle {} cannot be checked ({e})",
+                        path.display()
+                    )));
+                }
             }
         }
         Err(Refusal::Step("no CA bundle on this host".into()))
     }
-}
 
-/// Write `bytes` as the preview's CA snapshot `ca.pem` in `dir`.
-pub(super) fn write_snapshot(dir: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
-    // Red stub: a plain write, neither exclusive nor read-only.
-    let path = dir.join("ca.pem");
-    std::fs::write(&path, bytes)?;
-    Ok(path)
+    /// Open `path` once and judge only what that descriptor reads: a regular
+    /// file (a FIFO cannot block the non-blocking open), not empty, at most
+    /// [`MAX_BUNDLE`] bytes, every PEM section well formed and at least one
+    /// certificate. The source reported is the file the descriptor opened.
+    fn read(path: &Path) -> Result<Self, Refusal> {
+        use rustls::pki_types::CertificateDer;
+        use rustls::pki_types::pem::PemObject as _;
+        use std::io::Read as _;
+        use std::os::fd::AsRawFd as _;
+        let fail = |why: &str| Refusal::Step(format!("the CA bundle {} {why}", path.display()));
+        let flags =
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NONBLOCK;
+        let fd = rustix::fs::open(path, flags, rustix::fs::Mode::empty())
+            .map_err(|e| fail(&format!("cannot be opened ({e})")))?;
+        let stat = rustix::fs::fstat(&fd).map_err(|e| fail(&format!("cannot be checked ({e})")))?;
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile {
+            return Err(fail("is not a regular file"));
+        }
+        let source = std::fs::read_link(format!("/proc/self/fd/{}", fd.as_raw_fd()))
+            .map_err(|e| fail(&format!("cannot be located ({e})")))?;
+        let mut bytes = Vec::new();
+        let limit = u64::try_from(MAX_BUNDLE + 1).unwrap_or(u64::MAX);
+        std::fs::File::from(fd)
+            .take(limit)
+            .read_to_end(&mut bytes)
+            .map_err(|e| fail(&format!("cannot be read ({e})")))?;
+        if bytes.is_empty() {
+            return Err(fail("is empty"));
+        }
+        if bytes.len() > MAX_BUNDLE {
+            return Err(fail("is over 4 MiB"));
+        }
+        let mut certificates = 0_usize;
+        for item in CertificateDer::pem_slice_iter(&bytes) {
+            item.map_err(|_| fail("holds a malformed PEM section"))?;
+            certificates += 1;
+        }
+        if certificates == 0 {
+            return Err(fail("holds no PEM certificate"));
+        }
+        Ok(Self { bytes, source })
+    }
+
+    /// Write the validated bytes, never the source again, as `ca.pem` in
+    /// `dir` (the preview's private directory): created exclusively, mode
+    /// 0444 so the dropped fetch child can read it through its bind.
+    pub(super) fn snapshot(&self, dir: &Path) -> io::Result<PathBuf> {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let path = dir.join("ca.pem");
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o444)
+            .open(&path)?;
+        file.write_all(&self.bytes)?;
+        Ok(path)
+    }
 }
 
 #[cfg(test)]

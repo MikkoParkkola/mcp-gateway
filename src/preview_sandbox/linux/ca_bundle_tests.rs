@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
-use super::{DISTRO_BUNDLES, HostBundle, MAX_BUNDLE, ambient_ca_bundle, write_snapshot};
+use super::{DISTRO_BUNDLES, HostBundle, MAX_BUNDLE, ambient_ca_bundle};
 
 /// One freshly made certificate, PEM-encoded.
 fn pem() -> String {
@@ -209,7 +209,7 @@ fn the_snapshot_holds_the_validated_bytes() {
     let chosen = HostBundle::choose(None, root.path()).expect("chosen");
     write(&source, pem().as_bytes());
     let dir = tempfile::tempdir().expect("dir");
-    let snapshot = write_snapshot(dir.path(), &chosen.bytes).expect("snapshot");
+    let snapshot = chosen.snapshot(dir.path()).expect("snapshot");
     assert_eq!(std::fs::read(&snapshot).expect("read"), original.as_bytes());
 }
 
@@ -217,12 +217,16 @@ fn the_snapshot_holds_the_validated_bytes() {
 #[test]
 fn the_snapshot_is_read_only_and_exclusive() {
     let dir = tempfile::tempdir().expect("dir");
-    let snapshot = write_snapshot(dir.path(), pem().as_bytes()).expect("snapshot");
+    let bundle = HostBundle {
+        bytes: pem().into_bytes(),
+        source: PathBuf::from("/etc/ssl/certs/ca-certificates.crt"),
+    };
+    let snapshot = bundle.snapshot(dir.path()).expect("snapshot");
     let mode = std::fs::metadata(&snapshot)
         .expect("meta")
         .permissions()
         .mode()
         & 0o777;
     assert_eq!(mode, 0o444);
-    assert!(write_snapshot(dir.path(), pem().as_bytes()).is_err());
+    assert!(bundle.snapshot(dir.path()).is_err());
 }
