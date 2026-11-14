@@ -40,7 +40,7 @@ impl Gateway {
         // custody store to a release thread before `self` drops here.
         let _custody_release = self
             .account_custody()
-            .map(crate::personal_accounts::CustodyHandle::detach_on_drop);
+            .map(crate::personal_accounts::GatewayCustody::detach_on_drop);
         let orphan = stdio_shutdown::orphan_watch(
             #[cfg(test)]
             self.test_seams.parent_pid.clone(),
