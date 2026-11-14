@@ -42,7 +42,7 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/job_time_watch.py", ("macos-shards",)): "ci-env: reads this run's jobs from the Actions API (GITHUB_RUN_ID, actions: read)",
     ("scripts/ci/shard_tests.py", ("run", "linux", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/ci/shard_tests.py", ("run", "macos", "${{matrix.shard}}")): "cargo: runs cargo test shards",
-    ("scripts/ci/shard_tests.py", ("export-lib", "<TMP>/lib-bin")): "cargo: builds the macOS lib test binary",
+    ("scripts/ci/shard_tests.py", ("export-lib", "<TMP>/lib-bin")): "cargo: builds the lib test binary (macOS, and Linux's shared build)",
     ("scripts/ci/shard_tests.py", ("run", "macos", "lib-a")): "cargo: builds and runs a macOS lib half",
     ("scripts/ci/shard_tests.py", ("run", "macos", "int")): "cargo: runs the macOS integration shard (the os-int label's lane job)",
     ("scripts/ci/os_sensitive_diff.py", ("--base", "HEAD^1", "--head", "HEAD", "--pr", "$PR_NUMBER", "--labels", "$LABELS",
@@ -50,6 +50,8 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
         "ci-env: reads the pull request number, labels and head sha from the event payload",
     ("scripts/ci/shard_tests.py", ("run-prebuilt", "macos", "lib-a", "<TMP>/lib-bin/lib-tests")):
         "artifact: runs the lib test binary another job built",
+    ("scripts/ci/shard_tests.py", ("run-prebuilt", "linux", "${{matrix.shard}}", "<TMP>/lib-bin/lib-tests")):
+        "artifact: runs the shared lib test binary job linux-lib-build built",
     ("scripts/ci/shard_tests.py", ("wait-lib", "macos-lib-tests", "macOS shard lib-b")):
         "ci-env: polls this run's artifacts and jobs through the Actions API",
     ("scripts/dev/check-registry-packages.py", ()): "network: live npm/PyPI/HTTP lookups",

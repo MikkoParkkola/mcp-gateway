@@ -15,8 +15,9 @@ stall: a count that is high at the compile phase points at it.
 Rows: the step exists and has a timeout between 15 and 30 minutes (above the slowest healthy run read); its script, read
 as executable lines only (a comment counts for nothing), runs in this order: an `echo "phase compile...` line that prints
 the process COUNT and `free -m`'s Mem and Swap rows, the `cargo test ... --no-run` compile, an `echo "phase run...` line,
-then the test run; and it runs no other `ps`/`pgrep`/`/proc` listing. The keychain job's build step gets the same compile
-rows and the same listing ban. `--self-test` runs the checker on fixtures. Standard library only.
+then the test run; and it runs no other `ps`/`pgrep`/`/proc` listing. The shared lib test build step (job linux-lib-build,
+`shard_tests.py export-lib`) gets the same compile rows and the same listing ban. `--self-test` runs the checker on
+fixtures. Standard library only.
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ from pathlib import Path
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 STEP = "UPGRADING checks on the assembled guide"
 MEMLOG = "scripts/ci/with-memory-log.sh"
+EXPORT_LIB = 'python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"'
 
 
 def step_block(text: str, name: str = STEP) -> list[str] | None:
@@ -64,8 +66,9 @@ def phase_problems(cmds: list[str], with_run: bool) -> list[str]:
 
     out = []
     pc = at(lambda c: c.startswith('echo "phase compile'))
-    # `--no-run` counts only before a trailing comment.
-    build = at(lambda c: c.startswith("cargo test") and "--no-run" in c.partition("#")[0])
+    # `--no-run` counts only before a trailing comment. The shared lib test build compiles through export-lib.
+    build = at(lambda c: (c.startswith("cargo test") and "--no-run" in c.partition("#")[0])
+               or c.startswith(EXPORT_LIB))
     if pc < 0:
         out.append('no `echo "phase compile...` line')
     else:
@@ -105,15 +108,16 @@ def problems(text: str) -> list[str]:
     return out + phase_problems(commands(block), with_run=True)
 
 
-KEYCHAIN_STEP = "Build the test binary outside the session"
+SHARED_BUILD_STEP = "Build the shared lib test binary"
 
 
-def keychain_problems(text: str) -> list[str]:
-    """The keychain job's build step hung to the job limit once: it prints the same compile phase line."""
-    block = step_block(text, KEYCHAIN_STEP)
+def shared_build_problems(text: str) -> list[str]:
+    """The lib test binary's build hung to the job limit once (then in the keychain job): the shared build step prints
+    the same compile phase line."""
+    block = step_block(text, SHARED_BUILD_STEP)
     if block is None:
-        return [f"keychain step '{KEYCHAIN_STEP}' is missing"]
-    return [f"keychain step '{KEYCHAIN_STEP}': {p}" for p in phase_problems(commands(block), with_run=False)]
+        return [f"shared build step '{SHARED_BUILD_STEP}' is missing"]
+    return [f"shared build step '{SHARED_BUILD_STEP}': {p}" for p in phase_problems(commands(block), with_run=False)]
 
 
 PHASE = """echo "phase compile: $target at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^(Mem|Swap):/ {print $1, $3}')\""""
@@ -134,10 +138,10 @@ GOOD = f"""      - name: UPGRADING checks on the assembled guide (suffix)
 
   test:
 """
-KGOOD = f"""      - name: {KEYCHAIN_STEP}
+KGOOD = f"""      - name: {SHARED_BUILD_STEP}
         run: |
           {PHASE}
-          cargo test --all-features --lib --no-run
+          {EXPORT_LIB}
       - name: next
         run: x
 """
@@ -177,21 +181,22 @@ def self_test() -> int:
         ("the timeout belongs to the next step, not this one", GOOD.replace("        timeout-minutes: 20\n", "").replace("\n  test:\n", "\n      - name: other\n        timeout-minutes: 20\n        run: x\n"), 1),
     ]
     kcases = [
-        ("keychain step with the phase line", KGOOD, 0),
-        ("keychain build through the memory log", KGOOD.replace("          cargo test", "          " + MEMLOG + " cargo test"), 0),
-        ("keychain step without the phase line", KGOOD.replace("phase compile", "phase xx"), 1),
-        ("keychain phase line only in a comment", KGOOD.replace(PHASE, "# " + PHASE), 1),
-        ("keychain phase line after the build", swap(KGOOD, PHASE, "cargo test --all-features --lib --no-run"), 1),
-        ("keychain step without --no-run", KGOOD.replace(" --no-run", ""), 1),
-        ("keychain --no-run only in a trailing comment", KGOOD.replace(" --no-run", " # --no-run"), 1),
-        ("keychain step without free -m", KGOOD.replace("free -m", "true"), 1),
-        ("keychain step with the Mem row only", KGOOD.replace("(Mem|Swap)", "Mem"), 1),
-        ("keychain step with ps aux", KGOOD.replace("          cargo test", "          ps aux\n          cargo test"), 1),
-        ("keychain step with pgrep -a", KGOOD.replace("          cargo test", "          pgrep -a cargo\n          cargo test"), 1),
-        ("keychain step missing", KGOOD.replace(KEYCHAIN_STEP, "other"), 1),
+        ("shared build step with the phase line", KGOOD, 0),
+        ("shared build through the memory log", KGOOD.replace("          python3", "          " + MEMLOG + " python3"), 0),
+        ("shared build as a cargo --no-run compile", KGOOD.replace(EXPORT_LIB, "cargo test --all-features --lib --no-run"), 0),
+        ("shared build step without the phase line", KGOOD.replace("phase compile", "phase xx"), 1),
+        ("shared build phase line only in a comment", KGOOD.replace(PHASE, "# " + PHASE), 1),
+        ("shared build phase line after the build", swap(KGOOD, PHASE, EXPORT_LIB), 1),
+        ("shared build step with no compile", KGOOD.replace(EXPORT_LIB, "true"), 1),
+        ("shared build export-lib only in a comment", KGOOD.replace(EXPORT_LIB, "# " + EXPORT_LIB), 1),
+        ("shared build step without free -m", KGOOD.replace("free -m", "true"), 1),
+        ("shared build step with the Mem row only", KGOOD.replace("(Mem|Swap)", "Mem"), 1),
+        ("shared build step with ps aux", KGOOD.replace("          python3", "          ps aux\n          python3"), 1),
+        ("shared build step with pgrep -a", KGOOD.replace("          python3", "          pgrep -a cargo\n          python3"), 1),
+        ("shared build step missing", KGOOD.replace(SHARED_BUILD_STEP, "other"), 1),
     ]
     wrong = 0
-    for check, rows in ((keychain_problems, kcases), (problems, cases)):
+    for check, rows in ((shared_build_problems, kcases), (problems, cases)):
         for label, text, want in rows:
             got = len(check(text))
             ok = (got == 0) == (want == 0)
@@ -204,7 +209,7 @@ def self_test() -> int:
 
 def main() -> int:
     text = WORKFLOW.read_text()
-    ps = problems(text) + keychain_problems(text)
+    ps = problems(text) + shared_build_problems(text)
     for p in ps:
         print(f"::error::ci.yml: step '{STEP}': {p}")
     print(f"int-b upgrading step: {len(ps)} problem(s)")

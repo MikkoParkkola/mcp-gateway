@@ -207,6 +207,11 @@ jobs:
         run: |
           python3 scripts/ci/check_swap_jobs.py --self-test
           python3 scripts/ci/check_swap_jobs.py
+      # The shared lib test binary: a failed or hung build turns every consumer red, and no consumer builds its own.
+      - name: The shared lib test binary fails closed
+        run: |
+          python3 scripts/ci/check_shared_lib.py --self-test
+          python3 scripts/ci/check_shared_lib.py
       # The memory log those library builds run through (stub free and /proc, 1 s samples, about 15 s).
       - name: The memory-log wrapper keeps status, output and signals
         run: python3 scripts/ci/test_with_memory_log.py
@@ -1077,10 +1082,14 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Build the lib test binary
-        # Healthy builds take about 11 min; a stall ends here with its log (check_swap_jobs.py).
+      - name: Build the shared lib test binary
+        # Healthy builds take about 11 min; a stall ends here with its log (check_swap_jobs.py). The phase line
+        # (numbers only: the runner user's process count and `free -m` rows) tells a build that waits on a lock from
+        # one that thrashes on memory (scripts/ci/test_upgrading_step_bounds.py).
         timeout-minutes: 25
-        run: scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
+        run: |
+          echo "phase compile: the lib test binary at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^(Mem|Swap):/ {printf "%s total %s used %s free %s; ", $1, $2, $3, $4}')"
+          scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
       - name: Hand the lib test binary to its consumers
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -1221,7 +1230,7 @@ jobs:
       - name: Every Linux shard succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
-          ROLLUP_EXPECTS: linux-lib-build test-shards-lib test-shards
+          ROLLUP_EXPECTS: test-shards test-shards-lib linux-lib-build
         run: |
           # shellcheck disable=SC2086 # ROLLUP_EXPECTS is a space-separated id list on purpose
           python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS

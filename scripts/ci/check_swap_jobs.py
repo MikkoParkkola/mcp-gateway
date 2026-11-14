@@ -44,6 +44,8 @@ SINGLE_TARGET = re.compile(r"--(test|bin|doc|example|bench)\b")
 LLVM_COV_NO_COMPILE = re.compile(r"^\s*(clean|report)\b")
 WRAPPERS = (
     re.compile(r"scripts/ci/shard_tests\.py\s+run\s+linux\b"),
+    # The shared lib test binary: `export-lib` compiles it once for the run.
+    re.compile(r"scripts/ci/shard_tests\.py\s+export-lib\b"),
     re.compile(r"scripts/ci/coverage_shards\.py\s+run\b"),
     re.compile(r"scripts/ci/packaged-tests\.sh\s+(build|run)\b"),
     # The mutant harness, run from the repo or from the copy mutants.yml takes
@@ -70,8 +72,7 @@ EXEMPT = {
 # The jobs in scope, by workflow file and job id. A change to this set is a
 # change to which jobs carry the library compile, reviewed as such.
 EXPECTED = {
-    ("ci.yml", "gws-dry-run"),
-    ("ci.yml", "linux-keychain"),
+    ("ci.yml", "linux-lib-build"),
     ("ci.yml", "package-tests"),
     ("ci.yml", "test-shards"),
     ("ci.yml", "test-throwaway-hosted"),

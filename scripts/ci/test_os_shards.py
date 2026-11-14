@@ -11,6 +11,8 @@ Static checks on ci.yml and scripts/ci/shard_tests.py:
 - together they cover the targets the unsharded command ran (Linux, macOS:
   lib, bins, tests, doctests; Windows: `--tests`, which is lib, bins, tests);
 - each shard matrix in ci.yml lists exactly that OS's shards;
+- the Linux lib legs run from the shared lib test binary in their own job (SHARED_LIB): the same check names,
+  run even when the build failed (`!cancelled()`), only `run-prebuilt`, and the aggregate needs it and the build;
 - the aggregates keep the required names, need their shard jobs, run under
   !cancelled() with the shards' own skip guards, and pass the same job ids to
   check_needs.py;
@@ -34,7 +36,10 @@ JOBS = {  # os: (shard job, aggregate job, aggregate name, shard name prefix)
     "windows": ("windows-shards", "windows-check", "Windows check", "Windows shard "),
     "macos": ("macos-shards", "macos-check", "macOS check", "macOS shard "),
 }
-EXTRA_NEEDS = {"windows-check": ["windows-clippy"]}
+EXTRA_NEEDS = {"windows-check": ["windows-clippy"], "test": ["test-shards-lib", "linux-lib-build"]}
+# An OS whose lib legs run from one shared lib test binary: (their job, the build job, the legs). The legs keep the
+# shard job's name, so the check names stay; the build job's own wiring is check_shared_lib.py's.
+SHARED_LIB = {"linux": ("test-shards-lib", "linux-lib-build", ["lib-a", "lib-b"])}
 # Every aggregate skips on a same-repo merge-train PR into the release line: merge-train judges its needs
 # itself from the base copy of this workflow (the ROLLUP_EXPECTS ids below).
 TRAIN_SKIP = ("!(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
@@ -159,8 +164,10 @@ def workflow_problems(jobs: dict, st) -> list[str]:
             continue
         value = shard.get("strategy", {}).get("matrix", {}).get("shard")
         legs, labelled_legs = matrix_lists(value)
-        if sorted(legs or []) != legs_of(st, os_kind):
-            out.append(f"{shard_key}: matrix {value} is not the runner's {legs_of(st, os_kind)}")
+        shared_key, build_key, shared_legs = SHARED_LIB.get(os_kind, (None, None, []))
+        if sorted(legs or []) != sorted(set(legs_of(st, os_kind)) - set(shared_legs)):
+            out.append(f"{shard_key}: matrix {value} is not the runner's {legs_of(st, os_kind)}"
+                       + (f" less the shared-binary legs {shared_legs}" if shared_legs else ""))
         # The os-sensitive label: macOS is train-only (a static matrix, no clause) or
         # labelled (the expression, its labelled list LABELLED_LEGS, the clause on the
         # shards and their aggregate); Windows runs every shard under the label.
@@ -218,8 +225,32 @@ def workflow_problems(jobs: dict, st) -> list[str]:
         if str(agg.get("if", "")).replace(" ", "") != ("${{ !cancelled() && " + guard + " && " + TRAIN_SKIP + " }}").replace(" ", ""):
             out.append(f"{agg_key}: if must be !cancelled(), the shards' own guard and the merge-train skip, exactly")
         for extra in EXTRA_NEEDS.get(agg_key, []):
-            if str(jobs.get(extra, {}).get("if", "")) != str(shard.get("if", "")):
+            if extra == shared_key:
+                # It runs when the build failed too, so a failed build turns its legs red, never skipped.
+                want_if = "${{ !cancelled() && " + guard + " }}"
+                if str(jobs.get(extra, {}).get("if", "")).replace(" ", "") != want_if.replace(" ", ""):
+                    out.append(f"{extra}: if must be !cancelled() and {shard_key}'s guard, exactly")
+            elif str(jobs.get(extra, {}).get("if", "")) != str(shard.get("if", "")):
                 out.append(f"{extra}: if must equal {shard_key}'s guard")
+        if shared_key:
+            sj = jobs.get(shared_key) or {}
+            if sj.get("strategy", {}).get("matrix", {}).get("shard") != shared_legs:
+                out.append(f"{shared_key}: matrix must be exactly {shared_legs}")
+            if sj.get("strategy", {}).get("fail-fast") is not False:
+                out.append(f"{shared_key}: fail-fast must be false, so one red shard does not cancel the rest")
+            if sj.get("name") != name:
+                out.append(f"{shared_key}: name {sj.get('name')!r} must equal {shard_key}'s {name!r}, so the check names stay")
+            needs_s = sj.get("needs") or []
+            if build_key not in ([needs_s] if isinstance(needs_s, str) else needs_s):
+                out.append(f"{shared_key}: must need {build_key}")
+            scalls = [s.get("run", "").strip() for s in sj.get("steps", []) if "shard_tests.py" in s.get("run", "")]
+            swant = [f'{py} scripts/ci/shard_tests.py run-prebuilt {os_kind} ${{{{ matrix.shard }}}} "$RUNNER_TEMP/lib-bin/lib-tests"']
+            if scalls != swant:
+                out.append(f"{shared_key}: runner calls {scalls}, want exactly {swant!r}")
+            for s in sj.get("steps", []):
+                for leg in PIN.findall(str(s.get("if", ""))):
+                    if leg not in shared_legs:
+                        out.append(f"{shared_key}: step {s.get('name')!r} is pinned to {leg!r}, not a shard")
         steps = [s for s in agg.get("steps", []) if "scripts/ci/check_needs.py" in s.get("run", "")]
         # The verdict's command, without the shellcheck note above it.
         verdict = [" ".join(l.strip() for l in s.get("run", "").splitlines() if l.strip() and not l.strip().startswith("#"))
@@ -266,6 +297,24 @@ def self_test(jobs: dict, st) -> None:
         "duty pinned to a missing shard": lambda j: next(
             s for s in j["test-shards"]["steps"] if "UPGRADING" in s.get("name", "")
         ).__setitem__("if", "matrix.shard == 'int-z'"),
+        "shared leg dropped": lambda j: j["test-shards-lib"]["strategy"]["matrix"].__setitem__("shard", ["lib-a"]),
+        "a shared leg also in the shard job": lambda j: j["test-shards"]["strategy"]["matrix"].__setitem__(
+            "shard", ["int-a", "int-b", "lib-a"]),
+        "shared legs skipped when the build fails": lambda j: j["test-shards-lib"].__setitem__(
+            "if", j["test-shards"]["if"]),
+        "shared legs build their own binary": lambda j: next(
+            s for s in j["test-shards-lib"]["steps"] if "shard_tests.py" in s.get("run", "")
+        ).__setitem__("run", "python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}"),
+        "shared legs renamed": lambda j: j["test-shards-lib"].__setitem__("name", "Linux lib shard ${{ matrix.shard }}"),
+        "shared legs without the build need": lambda j: j["test-shards-lib"].__setitem__("needs", []),
+        "shared legs fail-fast": lambda j: j["test-shards-lib"]["strategy"].__setitem__("fail-fast", True),
+        "aggregate drops the shared legs": lambda j: j["test"].__setitem__(
+            "needs", [n for n in j["test"]["needs"] if n != "test-shards-lib"]),
+        "aggregate drops the shared build": lambda j: j["test"].__setitem__(
+            "needs", [n for n in j["test"]["needs"] if n != "linux-lib-build"]),
+        "shared duty pinned to a missing shard": lambda j: next(
+            s for s in j["test-shards-lib"]["steps"] if "UPGRADING" in s.get("name", "")
+        ).__setitem__("if", "matrix.shard == 'lib-z'"),
     }
     survived = [n for n, m in mutations.items() if not broken(m)]
     assert not survived, f"wiring mutations not caught: {survived}"
