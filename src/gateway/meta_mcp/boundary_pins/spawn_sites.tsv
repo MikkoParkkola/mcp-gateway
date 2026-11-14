@@ -61,20 +61,8 @@ src/gateway/task_service/execution/pending_cancel.rs	claim_and_send	spawn	1	no-r
 src/gateway/task_service/execution/pending_cancel.rs	flush	spawn	1	outside-calls	spawns cancel senders for pending upstream cancels that are due
 src/gateway/task_service/execution/pending_cancel.rs	listen_for_starts	spawn	1	outside-calls	listens for backend starts to resend pending cancels
 src/gateway/task_service/store.rs	close	spawn-blocking	1	outside-calls	closes the task store at shutdown
-src/gateway/task_service/store.rs	create	spawn-blocking	1	raised-at-join	writes a new task record; a Capacity or Duplicate refusal returns as StoreError through the join
-src/gateway/task_service/store.rs	mark_dispatched	spawn-blocking	1	no-refusal-inside	task store write marking a task dispatched; error returned to the awaiting caller
-src/gateway/task_service/store.rs	mark_upstream	spawn-blocking	1	no-refusal-inside	task store write recording the upstream task binding; error returned to the awaiting caller
 src/gateway/task_service/store.rs	open	spawn-blocking	1	outside-calls	opens and loads the task store at start-up
-src/gateway/task_service/store_expiry.rs	expire	spawn-blocking	1	outside-calls	task store expiry write, called only from the expiry sweep
-src/gateway/task_service/store_expiry.rs	reread_sealed	spawn-blocking	1	outside-calls	rereads sealed task records during expiry and start-up recovery
-src/gateway/task_service/store_input.rs	close_round	spawn-blocking	1	no-refusal-inside	task store write closing an input round; error returned to the awaiting caller
-src/gateway/task_service/store_input.rs	provide_input	spawn-blocking	1	raised-at-join	task store write accepting provided input; a refused answer returns as ProvideOutcome or StoreError through the join
-src/gateway/task_service/store_input.rs	require_input	spawn-blocking	1	no-refusal-inside	task store write moving a task to input-required; error returned to the awaiting caller
-src/gateway/task_service/store_pending_cancel.rs	record_cancel_attempt	spawn-blocking	1	no-refusal-inside	task store write recording an upstream cancel attempt
-src/gateway/task_service/store_targets.rs	add_targets	spawn-blocking	1	no-refusal-inside	task store write adding upstream targets; error returned to the awaiting caller
-src/gateway/task_service/store_targets.rs	claim_upstream_cancel	spawn-blocking	1	no-refusal-inside	task store claim of an upstream cancel; claim returned to the awaiting caller
-src/gateway/task_service/store_targets.rs	claim_upstream_cancel_undated	spawn-blocking	1	no-refusal-inside	task store claim of an upstream cancel without a date; claim returned to the awaiting caller
-src/gateway/task_service/store_targets.rs	settle_bounded_by	spawn-blocking	1	no-refusal-inside	task store write settling a task within its bound; error returned to the awaiting caller
+src/gateway/task_service/store_gate.rs	admitted	spawn-blocking	1	raised-at-join	the one spawn of every task-store mutation, made after the restart gate admits it; a store refusal (Capacity, Duplicate, a refused answer) returns as the work's own Result through the join
 src/gateway/ui/activity/mod.rs	blocking	spawn-blocking	1	no-refusal-inside	web UI activity read from disk
 src/gateway/ui/activity/mod.rs	stream_read	spawn-blocking	1	outside-calls	reads the web UI activity stream from the audit log
 src/gateway/ui/admin_audit.rs	recorded	spawn	1	no-refusal-inside	runs an admin UI handler and writes its admin audit record; no tool call's delivery runs inside
