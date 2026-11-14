@@ -109,7 +109,11 @@ impl<'a> StopRelease<'a> {
 impl Drop for StopRelease<'_> {
     fn drop(&mut self) {
         for adapter in self.0.take().unwrap_or_default() {
-            adapter.release_for_stop();
+            if mutant!("s9514.m6", true, false) {
+                adapter.resume();
+            } else if mutant!("s9514.m5", false, true) {
+                adapter.release_for_stop();
+            }
         }
     }
 }
@@ -127,13 +131,14 @@ impl Certified<'_> {
     /// every adapter and report the decision late.
     pub(crate) fn commit(mut self) -> Result<(), LateDecision> {
         let adapters = self.held.disarm();
-        if Instant::now() >= self.deadline {
+        if mutant!("s9514.m9", false, Instant::now() >= self.deadline) {
             for adapter in adapters {
                 adapter.resume();
             }
             return Err(LateDecision);
         }
-        for adapter in adapters {
+        let keep = mutant!("s9514.m8", adapters.len().saturating_sub(1), adapters.len());
+        for adapter in adapters.iter_mut().take(keep) {
             adapter.commit();
         }
         Ok(())
@@ -149,7 +154,7 @@ impl Certified<'_> {
 /// Whether no adapter still runs late work of an earlier attempt. The
 /// coordinator refuses a new attempt (busy) until this is true.
 pub(crate) fn all_settled(adapters: &[Box<dyn FloorAdapter>]) -> bool {
-    adapters.iter().all(|adapter| adapter.settled())
+    mutant!("s9514.m11", true, adapters.iter().all(|adapter| adapter.settled()))
 }
 
 /// Pause every owner, then checkpoint every owner, each call bounded by the
@@ -164,7 +169,7 @@ pub(crate) async fn run_checkpoint(
     match outcome {
         Ok(()) => Ok(Certified { held, deadline }),
         Err(cancel) => {
-            for adapter in held.disarm() {
+            for adapter in mutant!("s9514.m7", held.adapters(), held.disarm()) {
                 adapter.resume();
             }
             Err(cancel)
@@ -193,19 +198,45 @@ async fn bounded(
     deadline: Instant,
 ) -> Result<(), Cancelled> {
     let owner = adapter.owner();
-    past_deadline(owner, stage, deadline)?;
+    if mutant!("s9514.m13", false, true) {
+        past_deadline(owner, stage, deadline)?;
+    }
     let call = match stage {
         FloorStage::Pause => adapter.pause(deadline),
-        FloorStage::Checkpoint => adapter.checkpoint(deadline),
+        FloorStage::Checkpoint => adapter.checkpoint(mutant!(
+            "s9514.m10",
+            deadline + std::time::Duration::from_secs(1),
+            deadline
+        )),
     };
-    match tokio::time::timeout_at(deadline, call).await {
+    let bound = match stage {
+        FloorStage::Pause => mutant!("s9514.m1", deadline + std::time::Duration::from_secs(3600), deadline),
+        FloorStage::Checkpoint => mutant!("s9514.m2", deadline + std::time::Duration::from_secs(3600), deadline),
+    };
+    match tokio::time::timeout_at(bound, call).await {
         Err(_elapsed) => Err(Cancelled {
             owner,
             stage,
             reason: CancelReason::DeadlineExceeded,
         }),
-        Ok(Err(fault)) => Err(cancelled(owner, stage, fault)),
-        Ok(Ok(())) => past_deadline(owner, stage, deadline),
+        Ok(Err(fault)) => Err(if mutant!("s9514.m12", Instant::now() >= deadline, false) {
+            Cancelled {
+                owner,
+                stage,
+                reason: CancelReason::DeadlineExceeded,
+            }
+        } else {
+            cancelled(owner, stage, fault)
+        }),
+        Ok(Ok(())) => {
+            if mutant!("s9514.m3", stage == FloorStage::Pause, false)
+                || mutant!("s9514.m4", stage == FloorStage::Checkpoint, false)
+            {
+                Ok(())
+            } else {
+                past_deadline(owner, stage, deadline)
+            }
+        }
     }
 }
 
