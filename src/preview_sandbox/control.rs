@@ -258,15 +258,16 @@ pub(crate) async fn read_line<R: AsyncBufRead + Unpin>(
 async fn write_line<W: AsyncWrite + Unpin>(
     writer: &mut W,
     line: &str,
-    _bounds: ControlBounds,
+    bounds: ControlBounds,
 ) -> Result<(), Refusal> {
     let write = async {
         writer.write_all(line.as_bytes()).await?;
         writer.write_all(b"\n").await?;
         writer.flush().await
     };
-    write
+    tokio::time::timeout(bounds.frame, write)
         .await
+        .map_err(|_| Refusal::Step("the sandbox stopped reading its control socket".into()))?
         .map_err(|e| Refusal::Step(format!("writing the control socket ({e})")))
 }
 
