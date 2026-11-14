@@ -56,14 +56,14 @@ impl SecretStore for Counting {
 }
 
 struct Gw {
-    dir: tempfile::TempDir,
+    dir: std::sync::Arc<tempfile::TempDir>,
     path: std::path::PathBuf,
     ctx: Arc<ReloadContext>,
     store: Arc<Counting>,
 }
 
 fn gw_with(text: &str, refusing: bool, fail: bool) -> Gw {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_owner_only(&path, text).expect("write");
     let ctx = if refusing {
@@ -441,7 +441,7 @@ async fn a_save_names_its_fields_in_the_intent() {
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    let dir = Arc::new(tempfile::tempdir().expect("log dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let logger = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {

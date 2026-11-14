@@ -744,3 +744,6 @@ fn an_event_charge_after_a_lowering_reload_meets_the_new_budget() {
 
 #[path = "services_binding_tests.rs"]
 mod binding;
+
+#[path = "binding_admission_tests.rs"]
+mod binding_admission;

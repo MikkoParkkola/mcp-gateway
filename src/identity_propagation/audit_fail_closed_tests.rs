@@ -155,7 +155,7 @@ async fn mint_write_failure_is_fail_closed() {
     );
     let script =
         format!("ulimit -f 0; trap '' XFSZ; exec \"$0\" '{TEST_PATH}' --exact --nocapture");
-    let profile_dir = tempfile::tempdir().expect("private profile dir");
+    let profile_dir = crate::test_dir_keep::kept_tempdir();
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(script)

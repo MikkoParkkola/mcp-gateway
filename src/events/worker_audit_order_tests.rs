@@ -76,7 +76,7 @@ fn stored(dir: &std::path::Path, event_id: &str) -> crate::events::outbox::Outbo
 #[tokio::test]
 async fn an_audit_outage_does_not_use_up_the_attempts() {
     use std::sync::atomic::Ordering;
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         retry_max_attempts: 2,
@@ -126,7 +126,7 @@ async fn an_audit_outage_does_not_use_up_the_attempts() {
 /// written before the eviction's (worker settle).
 #[tokio::test]
 async fn a_self_evicting_burial_is_receipted_before_its_eviction() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         dead_letter_max_bytes: 1,
         ..crate::config::EventsConfig::default()
@@ -146,7 +146,7 @@ async fn a_self_evicting_burial_is_receipted_before_its_eviction() {
 async fn a_self_evicting_refusal_is_receipted_before_its_eviction() {
     use crate::events::fanout::{MAX_BODY, SourceEvent};
     use crate::events::types::{SourceKind, Visibility};
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         dead_letter_max_bytes: 1,
         ..crate::config::EventsConfig::default()
@@ -218,7 +218,7 @@ fn buried_setup(
 /// burial's receipt still comes before its eviction.
 #[tokio::test]
 async fn an_eviction_by_another_burial_follows_the_first_burials_receipt() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         dead_letter_max_records: 1,
         ..crate::config::EventsConfig::default()
@@ -244,7 +244,7 @@ async fn an_eviction_by_another_burial_follows_the_first_burials_receipt() {
 async fn an_eviction_by_a_fan_out_refusal_follows_the_burials_receipt() {
     use crate::events::fanout::{MAX_BODY, SourceEvent};
     use crate::events::types::{SourceKind, Visibility};
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         dead_letter_max_records: 1,
         ..crate::config::EventsConfig::default()
@@ -279,7 +279,7 @@ async fn an_eviction_by_a_fan_out_refusal_follows_the_burials_receipt() {
 /// that burial's receipt.
 #[tokio::test]
 async fn an_eviction_by_the_sweep_follows_the_burials_receipt() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         dead_letter_retention: Duration::from_secs(1),
         ..crate::config::EventsConfig::default()
@@ -306,7 +306,7 @@ async fn an_eviction_by_the_sweep_follows_the_burials_receipt() {
 /// can read, the same sweep evicts.
 #[tokio::test]
 async fn a_pre_1970_clock_sweeps_nothing() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         dead_letter_retention: Duration::from_secs(1),
         ..crate::config::EventsConfig::default()
@@ -337,7 +337,7 @@ async fn a_pre_1970_clock_sweeps_nothing() {
 /// unsent claims is retried, not buried `exhausted`.
 #[tokio::test]
 async fn a_failure_after_unsent_claims_is_judged_by_its_sends() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         retry_max_attempts: 2,
         ..crate::config::EventsConfig::default()
@@ -360,7 +360,7 @@ async fn a_failure_after_unsent_claims_is_judged_by_its_sends() {
 /// before its eviction, in the worker's own pass.
 #[tokio::test]
 async fn a_self_evicting_expiry_burial_is_receipted_before_its_eviction() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         dead_letter_max_bytes: 1,
         ..crate::config::EventsConfig::default()
@@ -397,7 +397,7 @@ async fn a_self_evicting_expiry_burial_is_receipted_before_its_eviction() {
 /// occurrence at fan-out, even when the subscription is gone by then.
 #[tokio::test]
 async fn a_dead_letter_record_names_the_host_stamped_on_the_occurrence() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());

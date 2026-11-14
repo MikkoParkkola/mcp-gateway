@@ -14,7 +14,7 @@ use super::*;
 #[test]
 fn concurrent_put_grant_keeps_every_grant() {
     const WRITERS: usize = 16;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let root = dir.path().to_path_buf();
     let barrier = Arc::new(std::sync::Barrier::new(WRITERS));
     let audit = governance_logger(&root);

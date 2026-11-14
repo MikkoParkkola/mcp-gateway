@@ -159,7 +159,7 @@ fn set(names: &[&str]) -> BTreeSet<String> {
 
 #[tokio::test]
 async fn l1_l2_admin_and_mapped_auditor_read_every_row() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logs = fixture(&dir);
     let all = set(&["tool_0", "tool_1", "tool_2", "tool_3", "tool_4"]);
     let admin = access::resolve(Some(&client(true, true)), None, &mapping()).unwrap();
@@ -180,7 +180,7 @@ async fn l1_l2_admin_and_mapped_auditor_read_every_row() {
 
 #[tokio::test]
 async fn l3_developers_see_exactly_their_own_rows_across_a_token_refresh() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logs = fixture(&dir);
     let dev = |issuer, subject| {
         access::resolve(
@@ -231,7 +231,7 @@ fn l4_l5_other_credentials_are_refused() {
 
 #[tokio::test]
 async fn r3_cleaned_is_no_longer_400_and_the_supported_list_names_it() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logs = logs(&dir);
     let (status, v) = body(list_page(
         &logs,
@@ -266,7 +266,7 @@ fn named(server: &str, tool: &str, rule: &str) -> Value {
 
 #[tokio::test]
 async fn list_rule_filter_returns_exactly_that_rules_rows() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logs(&dir);
     write_newest_first(
         &l,
@@ -312,7 +312,7 @@ async fn paged_tools(l: &Logs, pairs: &[(&str, &str)]) -> Vec<String> {
 
 #[tokio::test]
 async fn list_rule_filter_ands_with_server_and_pages() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logs(&dir);
     write_newest_first(
         &l,
@@ -332,7 +332,7 @@ async fn list_rule_filter_ands_with_server_and_pages() {
 
 #[tokio::test]
 async fn list_sparse_rule_filter_resumes_past_scan_exhausted() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logs(&dir);
     let pad = "z".repeat(400);
     let mut calls = vec![named("srv", "needle", "r1")];
@@ -373,7 +373,7 @@ async fn rule_tools(l: &Logs, rule: &str) -> BTreeSet<String> {
 
 #[tokio::test]
 async fn rule_filter_ignores_the_id_in_another_field() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logs(&dir);
     let mut e = named("srv", "rule-1", "r2");
     e["payload"] = "rule-1".into();
@@ -383,7 +383,7 @@ async fn rule_filter_ignores_the_id_in_another_field() {
 
 #[tokio::test]
 async fn rule_filter_has_no_prefix_collision() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logs(&dir);
     write_newest_first(
         &l,
@@ -406,7 +406,7 @@ async fn rule_filter_has_no_prefix_collision() {
 /// half; this change pins that `findings` never reads the answer's.
 #[tokio::test]
 async fn field_split_findings_vs_answer_findings() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logs(&dir);
     let request = finding("pii", "high", "arguments.q");
     // A delivery record writes its findings in the writer's shape.
@@ -433,7 +433,7 @@ async fn field_split_findings_vs_answer_findings() {
 
 #[tokio::test]
 async fn page_size_defaults_to_50_and_is_capped_at_200() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logs(&dir);
     let calls: Vec<Call<'_>> = vec![("a", None, ""); 210];
     write_calls(&l.invocation, &calls);
@@ -450,7 +450,7 @@ async fn page_size_defaults_to_50_and_is_capped_at_200() {
 
 #[tokio::test]
 async fn p4_a_token_this_process_did_not_issue_restarts_from_the_newest_row() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logs = fixture(&dir);
     let (_, first) = body(list_page(&logs, &Access::All, &query(&[("limit", "2")]))).await;
     let token = first["next_cursor"].as_str().unwrap().to_string();
@@ -511,7 +511,7 @@ fn rows_are_checked_with_the_running_key_not_a_reloaded_one() {
     let secret = super::verification_secret(&live).expect("a key is configured");
     assert_eq!(secret, RUNNING.as_bytes());
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let by_running = signed_call(&dir, "a.jsonl", RUNNING);
     let by_reloaded = signed_call(&dir, "b.jsonl", RELOADED);
     assert_eq!(
