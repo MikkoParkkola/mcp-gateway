@@ -61,6 +61,7 @@ mod restart_tests;
 mod secret_slots;
 pub(crate) mod session;
 mod settings;
+mod settings_unused;
 mod shell;
 mod status;
 pub(crate) mod stream;
@@ -113,6 +114,14 @@ pub fn api_router() -> Router<Arc<AppState>> {
     let router = Router::new()
         .route(routes::UI_SETTINGS_DIFF, post(settings::settings_diff))
         .route(routes::UI_SETTINGS, post(settings::settings_save))
+        .route(
+            routes::UI_SETTINGS_UNUSED,
+            get(settings_unused::list_unused),
+        )
+        .route(
+            routes::UI_SETTINGS_UNUSED_ENTRY,
+            axum::routing::delete(settings_unused::delete_unused_entry),
+        )
         .route(routes::UI_STATUS, get(status::status))
         .route(routes::UI_OVERVIEW, get(overview::overview))
         .route(routes::UI_TOOLS, get(tools))

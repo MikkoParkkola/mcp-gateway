@@ -371,6 +371,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the secret-entry index: names, stores and timestamps, never a value; created owner-only",
     ),
     (
+        "src/secret_store/unused.rs",
+        "scans the config, env files and capability files for an entry's suffix before an unused-entry delete; reads only, keeps no content",
+    ),
+    (
         "src/security/firewall/audit.rs",
         "append-only audit log; no secret",
     ),

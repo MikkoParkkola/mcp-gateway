@@ -113,7 +113,9 @@ src/protocol_revision_telemetry/window.rs	read_window_v2	fs::read	1	not-config	t
 src/ranking/ranker.rs	load	fs::read_to_string	1	not-config	tool usage counts JSON
 src/runtime/provision.rs	compile_descriptor_file	fs::read_to_string	1	not-config	runtime provisioning descriptor; public
 src/secret_store/index.rs	append	.open	1	not-config	the secret-entry index: names, stores and timestamps, never a value; created owner-only
-src/secret_store/index.rs	live	fs::read_to_string	1	not-config	the secret-entry index: names, stores and timestamps, never a value
+src/secret_store/index.rs	lines	fs::read_to_string	1	not-config	the secret-entry index: names, stores and timestamps, never a value
+src/secret_store/unused.rs	read_caps	fs::read	1	not-config	capability files scanned for an unused entry's suffix before it is listed or deleted; public definitions, nothing kept
+src/secret_store/unused.rs	read_regular	fs::read	1	not-config	env files scanned for an unused entry's suffix before it is listed or deleted (gateway.yaml goes through the config guard); nothing kept
 src/security/firewall/audit.rs	new	.open	1	write-only	appends to the firewall audit log; reads nothing
 src/security/transparency_log.rs	bounded_read_to_string	fs::read_to_string	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
 src/security/transparency_log.rs	read_last_nonempty_line_raw	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret

@@ -55,11 +55,12 @@ impl Index {
         })
     }
 
-    /// Records that this save removed `name` again.
-    pub(super) fn append_removed(&self, name: &str) -> Result<(), StoreError> {
+    /// Records that `name` was removed from `kind` alone: the same name in the
+    /// other store stays live.
+    pub(super) fn append_removed_in(&self, name: &str, kind: StoreKind) -> Result<(), StoreError> {
         self.append(&Line {
             name: name.to_owned(),
-            store: None,
+            store: Some(kind.as_str().to_owned()),
             created_at: None,
             removed_at: Some(now_ms()),
         })
@@ -90,21 +91,21 @@ impl Index {
         sync_dir(dir).map_err(|e| failed("cannot sync the secrets index directory", &e))
     }
 
-    /// Every name created and not removed, in index order. Unreadable lines,
+    /// Every name created and not removed, in index order. A removal line that
+    /// names a store retires only that store's row; one without (a save's
+    /// rollback, an older line) retires every row of the name. Unreadable lines,
     /// such as a torn last one, are skipped.
     pub(super) fn live(&self) -> Result<Vec<Live>, StoreError> {
-        let text = match std::fs::read_to_string(&self.path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(failed("cannot read the secrets index", &e)),
-        };
         let mut live: Vec<Live> = Vec::new();
-        for line in text
-            .lines()
-            .filter_map(|l| serde_json::from_str::<Line>(l).ok())
-        {
+        for line in self.lines()? {
             if line.removed_at.is_some() {
-                live.retain(|entry| entry.name != line.name);
+                live.retain(|entry| {
+                    entry.name != line.name
+                        || line
+                            .store
+                            .as_ref()
+                            .is_some_and(|store| *store != entry.store)
+                });
             } else if let Some(store) = line.store {
                 live.push(Live {
                     name: line.name,
@@ -114,6 +115,30 @@ impl Index {
             }
         }
         Ok(live)
+    }
+
+    /// Whether `name` was ever created in `kind`, live or removed since: a
+    /// delete repeated after its removal line finds the entry already gone.
+    pub(super) fn recorded_in(&self, name: &str, kind: StoreKind) -> Result<bool, StoreError> {
+        Ok(self.lines()?.iter().any(|line| {
+            line.name == name
+                && line.removed_at.is_none()
+                && line.store.as_deref() == Some(kind.as_str())
+        }))
+    }
+
+    /// Every readable line, in order. Unreadable lines, such as a torn last
+    /// one, are skipped; a missing index has none.
+    fn lines(&self) -> Result<Vec<Line>, StoreError> {
+        let text = match std::fs::read_to_string(&self.path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(failed("cannot read the secrets index", &e)),
+        };
+        Ok(text
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Line>(l).ok())
+            .collect())
     }
 }
 

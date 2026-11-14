@@ -86,6 +86,10 @@ owned_routes! {
     /// One of those servers made a disabled backend.
     UI_SETTINGS_DIFF = "/ui/api/settings/diff",
     UI_SETTINGS = "/ui/api/settings",
+    /// Secret entries the index records that no source names, for an admin to delete.
+    UI_SETTINGS_UNUSED = "/ui/api/settings/secrets/unused",
+    /// One of those entries, deleted by name.
+    UI_SETTINGS_UNUSED_ENTRY = "/ui/api/settings/secrets/unused/{name}",
     UI_DISCOVERY_ADOPT = "/ui/api/discovery/adopt",
     /// The decisions an admin has open.
     UI_DECISIONS = "/ui/api/decisions",

@@ -25,6 +25,11 @@ impl FilesStore {
         }
     }
 
+    /// The directory holding this store's entries.
+    pub(crate) fn entries_dir(&self) -> &Path {
+        &self.dir
+    }
+
     fn path(&self, name: &str) -> PathBuf {
         self.dir.join(name)
     }
@@ -94,6 +99,13 @@ impl SecretStore for FilesStore {
     }
 
     fn delete(&self, name: &str) -> Result<(), StoreError> {
+        // One file name inside `secrets/`, never a path: a caller that skipped the
+        // name check cannot reach outside the directory through this join.
+        if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+            return Err(StoreError::Failed(
+                "a secret entry name is not a file name".into(),
+            ));
+        }
         std::fs::remove_file(self.path(name))
             .map_err(|e| failed("cannot remove a secret file", &e))?;
         // Durable before the index marks it removed, or a crash could bring
