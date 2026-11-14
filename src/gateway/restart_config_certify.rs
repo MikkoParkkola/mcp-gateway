@@ -24,12 +24,12 @@ pub(super) struct CheckInput {
     pub(super) attempt: u64,
     /// The configured path as the source names it (Booted(p) -> p; Defaults -> the candidate the search found).
     pub(super) configured: PathBuf,
-    /// The config lock's resolved target (Locked::target), compared again at step 8.
+    /// The config lock's resolved target (`Locked::target`), compared again at step 8.
     pub(super) locked_target: PathBuf,
-    /// Whether any registered owed-reload flag was set (gate.any_owed()), read when the task starts (step 7).
+    /// Whether any registered owed-reload flag was set (`gate.any_owed()`), read when the task starts (step 7).
     pub(super) owed: Arc<dyn Fn() -> bool + Send + Sync>,
     /// The keychain reader captured on the calling thread: under cfg(test) the thread's test reader, if any
-    /// (config::keychain::current_test_keychain()), which the task installs around the evaluation; in release
+    /// (`config::keychain::current_test_keychain()`), which the task installs around the evaluation; in release
     /// the OS reader is per process.
     #[cfg(test)]
     pub(super) test_keychain: Option<Arc<dyn crate::config::keychain::KeychainRead>>,
@@ -142,7 +142,7 @@ fn recheck(input: &CheckInput, sha256: &str) -> Result<(), FloorFault> {
 }
 
 /// Steps 3-9 of the checkpoint, synchronous (runs on the attempt's `spawn_blocking`). Calls
-/// the check hook at Start, BeforeRead, AfterRead and AfterValidation under `cfg(test)`;
+/// the check hook at `Start`, `BeforeRead`, `AfterRead` and `AfterValidation` under `cfg(test)`;
 /// never writes a byte, never recovers.
 ///
 /// # Errors

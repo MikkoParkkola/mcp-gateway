@@ -212,7 +212,7 @@ impl Held {
         }
     }
 
-    /// Resume and release_for_stop: both locks free at once.
+    /// `resume` and `release_for_stop`: both locks free at once.
     pub(super) fn release_all(&mut self) {
         self.reload = None;
         self.config = None;

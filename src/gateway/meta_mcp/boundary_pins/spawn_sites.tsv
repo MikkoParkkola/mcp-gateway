@@ -17,9 +17,9 @@ src/capability/watcher.rs	start_walk	spawn-blocking	1	no-refusal-inside	fingerpr
 src/commands/cap.rs	cap_pin	spawn-blocking	1	outside-calls	CLI cap pin command: pins a capability file under its directory lock
 src/config_reload/override_audit.rs	start	spawn	1	no-refusal-inside	override-audit worker that drains a queue into the audit log
 src/config_reload/replace.rs	create_entries	spawn-blocking	1	outside-calls	creates vault secret entries for a web UI settings save; errors return to the UI handler, not a tool call
-src/config_reload/replace.rs	settle	spawn-blocking	1	no-refusal-inside	discards or keeps a refused save's pending secret entries
 src/config_reload/replace.rs	spawn_locked	spawn	1	outside-calls	web UI settings save or history restore of gateway.yaml plus reload; refusals return to the UI handler at join, not a tool call
 src/config_reload/replace_audit.rs	recover_held	spawn-blocking	1	outside-calls	recovers a config write's journal for the web UI settings save; no tool call's answer waits on it
+src/config_reload/replace_entries.rs	settle	spawn-blocking	1	no-refusal-inside	discards or keeps a refused save's pending secret entries
 src/config_reload/replace_validate.rs	validate_template	spawn-blocking	1	outside-calls	loads a config template for the web UI settings save; the refusal returns to the UI handler at join, not a tool call
 src/config_reload/watch_chain.rs	spawn_rewatch_task	spawn	1	outside-calls	config include-chain rewatch loop on file events and a retry timer
 src/config_reload/watcher.rs	spawn_reload_task	spawn	1	outside-calls	config file watcher loop that debounces and triggers reloads
