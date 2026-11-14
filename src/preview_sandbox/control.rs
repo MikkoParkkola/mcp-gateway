@@ -85,12 +85,12 @@ pub(crate) fn started_by(stat: &str, accepted: u64) -> Result<(), Refusal> {
         .rsplit_once(')')
         .ok_or_else(|| refuse("has no readable start time"))?;
     // Field 22 of the line; field 3 is the first after the name.
-    let start: u64 = fields
+    let start_ticks: u64 = fields
         .split_whitespace()
         .nth(22 - 3)
         .and_then(|field| field.parse().ok())
         .ok_or_else(|| refuse("has no readable start time"))?;
-    if start > accepted {
+    if start_ticks > accepted {
         return Err(refuse("started after its connection was taken"));
     }
     Ok(())
