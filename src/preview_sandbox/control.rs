@@ -81,16 +81,27 @@ pub(crate) fn started_by(stat: &str, accepted: u64) -> Result<(), Refusal> {
     let refuse = |why: &str| Refusal::Step(format!("the sandbox's control peer {why}"));
     // The fields after the LAST ')': the process name before it is the
     // process's own choice and may hold spaces and parentheses.
-    let (_, fields) = stat
-        .rsplit_once(')')
-        .ok_or_else(|| refuse("has no readable start time"))?;
+    let (_, fields) = mutant!(
+        "f1-stat-first-paren",
+        stat.split_once(')'),
+        stat.rsplit_once(')')
+    )
+    .ok_or_else(|| refuse("has no readable start time"))?;
     // Field 22 of the line; field 3 is the first after the name.
     let start: u64 = fields
         .split_whitespace()
-        .nth(22 - 3)
+        .nth(mutant!(
+            "f1-field-up",
+            22 - 2,
+            mutant!("f1-field-down", 22 - 4, 22 - 3)
+        ))
         .and_then(|field| field.parse().ok())
         .ok_or_else(|| refuse("has no readable start time"))?;
-    if start > accepted {
+    if mutant!(
+        "f1-start-skip",
+        false,
+        mutant!("f1-start-ge", start >= accepted, start > accepted)
+    ) {
         return Err(refuse("started after its connection was taken"));
     }
     Ok(())
@@ -103,8 +114,14 @@ fn boot_ticks() -> u64 {
     let hz = rustix::param::clock_ticks_per_second();
     let secs = u64::try_from(now.tv_sec).unwrap_or(0);
     let nanos = u64::try_from(now.tv_nsec).unwrap_or(0);
-    secs.saturating_mul(hz)
-        .saturating_add(nanos.saturating_mul(hz) / 1_000_000_000)
+    let ticks = secs
+        .saturating_mul(hz)
+        .saturating_add(nanos.saturating_mul(hz) / 1_000_000_000);
+    mutant!(
+        "f1-clock-huge",
+        u64::MAX / 2,
+        mutant!("f1-clock-zero", 0, ticks)
+    )
 }
 
 /// The peer's `/proc/<pid>` directory, opened once. Every later read goes
@@ -148,8 +165,15 @@ fn judge_dir(
             ))
         })
     };
-    started_by(&read("stat")?, accepted)?;
-    peer_is_helper(&read("status")?, unshare_pid, uid)
+    started_by(
+        &read("stat")?,
+        mutant!("f1-judge-no-start", u64::MAX, accepted),
+    )?;
+    mutant!(
+        "f1-judge-no-parent",
+        Ok(()),
+        peer_is_helper(&read("status")?, unshare_pid, uid)
+    )
 }
 
 /// Without `/proc` the peer cannot be judged, so it is refused.
@@ -232,7 +256,11 @@ pub(crate) async fn read_line<R: AsyncBufRead + Unpin>(
             }
             // The cap is checked before the buffer grows; the newline counts.
             if let Some(end) = buf.iter().position(|b| *b == b'\n') {
-                if line.len() + end >= MAX_LINE {
+                if mutant!(
+                    "f1-cap-nl",
+                    line.len() + end > MAX_LINE,
+                    line.len() + end >= MAX_LINE
+                ) {
                     return Err(refuse("is over 1 KiB"));
                 }
                 line.extend_from_slice(&buf[..end]);
@@ -240,7 +268,7 @@ pub(crate) async fn read_line<R: AsyncBufRead + Unpin>(
                 return Ok(line);
             }
             let taken = buf.len();
-            if line.len() + taken >= MAX_LINE {
+            if mutant!("f1-cap-chunk", false, line.len() + taken >= MAX_LINE) {
                 return Err(refuse("is over 1 KiB"));
             }
             line.extend_from_slice(buf);
@@ -265,10 +293,13 @@ async fn write_line<W: AsyncWrite + Unpin>(
         writer.write_all(b"\n").await?;
         writer.flush().await
     };
-    tokio::time::timeout(bounds.frame, write)
-        .await
-        .map_err(|_| Refusal::Step("the sandbox stopped reading its control socket".into()))?
-        .map_err(|e| Refusal::Step(format!("writing the control socket ({e})")))
+    tokio::time::timeout(
+        mutant!("f1-write-bound", Duration::from_secs(86_400), bounds.frame),
+        write,
+    )
+    .await
+    .map_err(|_| Refusal::Step("the sandbox stopped reading its control socket".into()))?
+    .map_err(|e| Refusal::Step(format!("writing the control socket ({e})")))
 }
 
 /// The helper's request for a fetch: `{"fetch_start": true}`.
