@@ -429,7 +429,7 @@ fn check_shape(
 
 /// What only a first page is judged on: the email and its window. The email is
 /// judged as the hash will see it: trimmed with the hash's own frozen
-/// White_Space list, and control characters taken from the fixed Cc ranges, so
+/// `White_Space` list, and control characters taken from the fixed Cc ranges, so
 /// no toolchain Unicode table decides what is refused.
 fn check_first_page(raw: &str, from: Option<&str>, to: Option<&str>) -> Result<(), &'static str> {
     let email = email_hash::trim_v1(raw);

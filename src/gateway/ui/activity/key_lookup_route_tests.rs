@@ -687,10 +687,10 @@ fn the_window_filters_rows_and_the_next_page_still_answers() {
 }
 
 /// The route hashes what the admin typed and the hash trims with its own
-/// frozen White_Space list, so padding finds the plain address's rows;
+/// frozen `White_Space` list, so padding finds the plain address's rows;
 /// validation judges the same trimmed text with the fixed control ranges.
 /// A pin, not red-provable on today's toolchain (std trim agrees with the
-/// frozen list); the source pin in email_hash_tests.rs is the red row.
+/// frozen list); the source pin in `email_hash_tests.rs` is the red row.
 /// Mutant: hash a blank value, skip the trim in validation, or drop either
 /// control range.
 #[test]
