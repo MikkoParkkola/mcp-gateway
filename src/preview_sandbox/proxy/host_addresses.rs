@@ -66,31 +66,43 @@ pub(super) fn fib_trie_local(text: &str) -> io::Result<Vec<(Ipv4Addr, u8)>> {
 /// no IPv6 only when the IPv6 sysctl tree is absent too.
 pub(super) fn if_inet6(text: Option<&str>, ipv6_sysctl_present: bool) -> io::Result<Vec<Ipv6Addr>> {
     let Some(text) = text else {
-        return if ipv6_sysctl_present {
-            Err(io::Error::other(
-                "/proc/net/if_inet6 is missing while IPv6 is enabled",
-            ))
-        } else {
-            Ok(Vec::new())
-        };
+        return missing_ipv6_file("if_inet6", ipv6_sysctl_present);
     };
     let mut addresses = Vec::new();
-    for line in text.lines() {
-        if line.is_empty() {
-            continue;
-        }
-        let Some(field) = line.split_whitespace().next() else {
-            return Err(io::Error::other(format!("bad if_inet6 line: {line}")));
-        };
-        if field.len() != 32 || !field.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(io::Error::other(format!("bad if_inet6 line: {line}")));
-        }
-        let value = u128::from_str_radix(field, 16)
-            .map_err(|_| io::Error::other(format!("bad if_inet6 line: {line}")))?;
+    for line in text.lines().filter(|line| !line.is_empty()) {
+        let value = line
+            .split_whitespace()
+            .next()
+            .and_then(|field| hex_field(field, 32))
+            .ok_or_else(|| io::Error::other(format!("bad if_inet6 line: {line}")))?;
         addresses.push(Ipv6Addr::from(value));
     }
     Ok(addresses)
 }
+
+/// A missing IPv6 file under `/proc/net` means no IPv6 only when the IPv6
+/// sysctl tree is missing too (IPv6 disabled at boot); otherwise it refuses.
+fn missing_ipv6_file<T>(name: &str, ipv6_sysctl_present: bool) -> io::Result<Vec<T>> {
+    if ipv6_sysctl_present {
+        Err(io::Error::other(format!(
+            "/proc/net/{name} is missing while IPv6 is enabled"
+        )))
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+/// A field of exactly `width` hex digits, as its value.
+fn hex_field(field: &str, width: usize) -> Option<u128> {
+    if field.len() != width || !field.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    u128::from_str_radix(field, 16).ok()
+}
+
+/// `RTF_LOCAL` in an `ipv6_route` line's flags: the host answers on the
+/// route's whole prefix.
+const RTF_LOCAL: u128 = 0x8000_0000;
 
 /// The host's IPv6 local routes from `/proc/net/ipv6_route`, an `AnyIP`
 /// prefix included; a missing file follows the rule of [`if_inet6`].
@@ -98,9 +110,29 @@ pub(super) fn ipv6_route_local(
     text: Option<&str>,
     ipv6_sysctl_present: bool,
 ) -> io::Result<Vec<(Ipv6Addr, u8)>> {
-    // Red step: the source is not read yet.
-    let _ = (text, ipv6_sysctl_present);
-    Ok(Vec::new())
+    let Some(text) = text else {
+        return missing_ipv6_file("ipv6_route", ipv6_sysctl_present);
+    };
+    let mut routes = Vec::new();
+    for line in text.lines().filter(|line| !line.is_empty()) {
+        let bad = || io::Error::other(format!("bad ipv6_route line: {line}"));
+        // destination, its prefix length, source, its length, next hop,
+        // metric, reference count, use count, flags, device.
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [dest, len, _, _, _, _, _, _, flags, _] = fields[..] else {
+            return Err(bad());
+        };
+        let dest = hex_field(dest, 32).ok_or_else(bad)?;
+        let len = hex_field(len, 2)
+            .and_then(|len| u8::try_from(len).ok())
+            .filter(|len| *len <= 128)
+            .ok_or_else(bad)?;
+        let flags = hex_field(flags, 8).ok_or_else(bad)?;
+        if flags & RTF_LOCAL != 0 {
+            routes.push((Ipv6Addr::from(dest), len));
+        }
+    }
+    Ok(routes)
 }
 
 /// Every network the host answers on: the IPv4 LOCAL routes, each IPv6
@@ -110,11 +142,10 @@ pub(super) fn networks(
     inet6: Vec<Ipv6Addr>,
     local6: Vec<(Ipv6Addr, u8)>,
 ) -> Vec<super::Owned> {
-    // Red step: the local routes are not joined yet.
-    let _ = local6;
     v4.into_iter()
         .map(|(a, len)| (IpAddr::V4(a), len))
         .chain(inet6.into_iter().map(|a| (IpAddr::V6(a), 128)))
+        .chain(local6.into_iter().map(|(a, len)| (IpAddr::V6(a), len)))
         .collect()
 }
 
