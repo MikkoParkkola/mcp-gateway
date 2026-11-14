@@ -547,10 +547,10 @@ async fn oidc_principal_is_silent_for_another_principals_slot(listen: bool) {
 
 #[tokio::test]
 async fn k1_an_oidc_listen_listener_is_silent_for_another_principals_slot() {
-    oidc_principal_is_silent_for_another_principals_slot(true).await;
+    Box::pin(oidc_principal_is_silent_for_another_principals_slot(true)).await;
 }
 
 #[tokio::test]
 async fn k2_an_oidc_legacy_session_is_silent_for_another_principals_slot() {
-    oidc_principal_is_silent_for_another_principals_slot(false).await;
+    Box::pin(oidc_principal_is_silent_for_another_principals_slot(false)).await;
 }

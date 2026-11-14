@@ -70,13 +70,16 @@ const CF_REFUSAL: &str = "{\"error\":{\"code\":-32600,\"message\":\"caller ident
 
 #[tokio::test]
 async fn cf_expired_at_request_is_refused_by_ingress_on_get() {
-    assert_eq!(expired_cf(Attach::Get).await, (401, CF_REFUSAL.to_string()));
+    assert_eq!(
+        Box::pin(expired_cf(Attach::Get)).await,
+        (401, CF_REFUSAL.to_string())
+    );
 }
 
 #[tokio::test]
 async fn cf_expired_at_request_is_refused_by_ingress_on_listen() {
     assert_eq!(
-        expired_cf(Attach::Listen).await,
+        Box::pin(expired_cf(Attach::Listen)).await,
         (401, format!("event: message\ndata: {CF_REFUSAL}\n\n"))
     );
 }
