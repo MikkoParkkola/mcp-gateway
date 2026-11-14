@@ -200,6 +200,7 @@ async fn the_snapshot_does_not_advertise_mutation() {
     store
         .append_audit(&ControlPlaneAuditEvent {
             grant_change: None,
+            ui_decision: None,
             event_id: "e1".to_string(),
             actor_id: "alice".to_string(),
             action: ControlPlaneAction::MutateGrant,

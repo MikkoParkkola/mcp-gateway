@@ -13,25 +13,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::Bytes;
-use axum::extract::{Path as RoutePath, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Extension, Json, Router};
+use axum::{Json, Router};
 use rand::RngExt as _;
-use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::activity::replay;
-use super::control_plane::mutations::admitted_actor;
 use super::guard::Guard;
 use crate::capability::CapabilityBackend;
-use crate::config_reload::Generation;
-use crate::control_plane::ControlPlaneRbac;
+use crate::control_plane::{AuditFilter, ControlPlaneAction, ControlPlaneStore};
 use crate::decisions::{
     CapabilityChange, DecisionSet, Fold, GRANT_DECISION_KIND, Health, LogPos, Shared, Source,
-    denial_from_record,
+    decisions_from_record, denial_from_record,
 };
 use crate::discovery::config_scanner::ConfigScanner;
 use crate::discovery::listing::{CACHE_WINDOW, ClientFiles, DiscoveryCache, Listing, ScanSource};
@@ -39,6 +35,10 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
 use crate::identity_grants::IdentityGrantAuditEvent;
+
+mod resolve;
+
+use resolve::resolve_decision;
 
 /// How often the tick re-checks grants, expiry and capability changes.
 const TICK: Duration = Duration::from_secs(2);
@@ -91,162 +91,6 @@ async fn count_decisions(State(state): State<Arc<AppState>>, guard: Guard) -> Re
     }
 }
 
-/// What a resolve may ask of an open decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ResolveAction {
-    Accept,
-    Deny,
-}
-
-/// The resolve body: strict, so a field this route does not know is refused
-/// and never read as something it is not.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ResolveRequest {
-    action: ResolveAction,
-    reason: String,
-    scope_digest: String,
-    ttl_seconds: Option<u64>,
-    #[serde(default)]
-    permanent: bool,
-}
-
-/// The longest reason a resolve takes, in characters.
-const REASON_MAX: usize = 500;
-/// The longest grant an accept may ask for: one year.
-const TTL_MAX_SECONDS: u64 = 365 * 24 * 60 * 60;
-
-/// One refusal answer: a status, a code a client branches on, and a fixed
-/// sentence. Nothing the caller sent is echoed back.
-fn resolve_error(status: StatusCode, code: &str, message: &str) -> Response {
-    (status, Json(json!({"error": code, "message": message}))).into_response()
-}
-
-/// The body's own rules, apart from the open item it names.
-fn check_resolve(request: &ResolveRequest) -> Result<(), &'static str> {
-    // Control characters are refused anywhere, a trailing newline too:
-    // the check reads the reason as sent, before any trim.
-    if request.reason.chars().any(char::is_control) {
-        return Err("the reason must not contain control characters");
-    }
-    let reason = request.reason.trim();
-    if reason.is_empty() || reason.chars().count() > REASON_MAX {
-        return Err("the reason must be 1 to 500 characters");
-    }
-    // Lowercase only, as the listing writes it: an uppercase copy would
-    // otherwise pass here and then read as a changed request.
-    let digest = request.scope_digest.as_str();
-    if digest.len() != 64
-        || !digest
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
-        return Err("scope_digest must be the 64 hex characters the listing gave");
-    }
-    match (request.action, request.ttl_seconds, request.permanent) {
-        (ResolveAction::Accept, Some(ttl), false) if (1..=TTL_MAX_SECONDS).contains(&ttl) => Ok(()),
-        (ResolveAction::Accept, None, true) | (ResolveAction::Deny, None, false) => Ok(()),
-        (ResolveAction::Accept, ..) => {
-            Err("an accept needs ttl_seconds (1 second to 1 year) or permanent: true, not both")
-        }
-        (ResolveAction::Deny, ..) => Err("a deny takes no ttl_seconds and no permanent"),
-    }
-}
-
-/// `POST /ui/api/decisions/{id}/resolve`: resolve one open access request.
-///
-/// This slice is the frame: the strict body, one status per state, the
-/// permission, the resolve mutex and the scope check against one snapshot.
-/// Neither action has an effect yet; the siblings add accept and deny.
-async fn resolve_decision(
-    State(state): State<Arc<AppState>>,
-    Extension(generation): Extension<Arc<Generation>>,
-    guard: Guard,
-    RoutePath(id): RoutePath<String>,
-    body: Bytes,
-) -> Response {
-    // The permission first: a caller without it learns nothing and writes
-    // nothing, whatever the body says. The row names the action; the role
-    // the request's pinned generation maps must allow it.
-    let (actor, action) = match admitted_actor(&generation, &guard) {
-        Ok(admitted) => admitted,
-        Err(refused) => return *refused,
-    };
-    let authorization = ControlPlaneRbac::authorize(&actor, action);
-    if !authorization.allowed {
-        return resolve_error(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "this caller may not resolve access requests",
-        );
-    }
-    let request: ResolveRequest = match serde_json::from_slice(&body) {
-        Ok(request) => request,
-        Err(_) => {
-            return resolve_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "invalid_body",
-                "the body is not a valid resolve request",
-            );
-        }
-    };
-    if let Err(message) = check_resolve(&request) {
-        return resolve_error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_body", message);
-    }
-    let Some(decisions) = state.meta_mcp.decisions() else {
-        return unavailable(&[]);
-    };
-    // One resolve at a time: the item is read and judged under this mutex.
-    let _resolving = decisions.resolving().await;
-    let item = match decisions.item(&id) {
-        Ok(Some(item)) => item,
-        Ok(None) => {
-            return resolve_error(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "no open decision has this id",
-            );
-        }
-        Err(sources) => return unavailable(&sources),
-    };
-    judge_item(&item, &request.scope_digest)
-}
-
-/// What a resolve may do with one open item, judged from that one snapshot:
-/// only an access request, only at the scope the admin was shown. Neither
-/// action has an effect in this slice, so a match is `not_available_yet`.
-fn judge_item(item: &Value, scope_digest: &str) -> Response {
-    if item.get("kind").and_then(Value::as_str) != Some("access_request") {
-        return resolve_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "not_resolvable",
-            "only access requests can be resolved here yet",
-        );
-    }
-    let current = item
-        .get("scope_digest")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if current != scope_digest {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "scope_changed",
-                "message": "the request changed since it was listed; nothing was written",
-                "scope": item.get("scope").cloned().unwrap_or(Value::Null),
-                "scope_digest": current,
-            })),
-        )
-            .into_response();
-    }
-    resolve_error(
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "not_available_yet",
-        "resolving an access request is not available yet",
-    )
-}
-
 /// 503 naming each source not yet readable and why.
 fn unavailable(sources: &[(&'static str, &'static str)]) -> Response {
     let sources: Vec<Value> = sources
@@ -275,14 +119,17 @@ const LIVE_QUEUE: usize = 4096;
 /// Build the decision set for `meta`, start its replay, its tick and the
 /// client-file discovery cache's refresh, and attach both. Each ends on
 /// `shutdown`. `config_path` is the gateway.yaml the discovery route reads,
-/// so the set judges adopt eligibility against the same file.
+/// so the set judges adopt eligibility against the same file. `store` is
+/// the control-plane store whose governance audit holds the UI decisions;
+/// without one no decision can have been recorded.
 pub(in crate::gateway) fn start(
     meta: &Arc<MetaMcp>,
     config_path: Option<PathBuf>,
     shutdown: tokio::sync::broadcast::Receiver<()>,
+    store: Option<Arc<dyn ControlPlaneStore>>,
 ) -> tokio::task::JoinHandle<()> {
     let files: Arc<dyn ScanSource> = Arc::new(ClientFiles(ConfigScanner::new()));
-    start_with(meta, config_path, shutdown, LIVE_QUEUE, files)
+    start_with(meta, config_path, shutdown, LIVE_QUEUE, files, store)
 }
 
 /// [`start`] over a given client-file scan source.
@@ -293,7 +140,7 @@ pub(in crate::gateway) fn start_with_source(
     shutdown: tokio::sync::broadcast::Receiver<()>,
     source: Arc<dyn ScanSource>,
 ) -> tokio::task::JoinHandle<()> {
-    start_with(meta, config_path, shutdown, LIVE_QUEUE, source)
+    start_with(meta, config_path, shutdown, LIVE_QUEUE, source, None)
 }
 
 /// [`start`] with a hand-off queue of `queue` notes, over `files`.
@@ -303,13 +150,17 @@ fn start_with(
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
     queue: usize,
     files: Arc<dyn ScanSource>,
+    store: Option<Arc<dyn ControlPlaneStore>>,
 ) -> tokio::task::JoinHandle<()> {
     let config_path: Option<Arc<Path>> = config_path.map(Arc::from);
     let shared = Arc::new(Shared::with_key(rand::rng().random()));
     meta.set_decisions(Arc::clone(&shared));
-    // UI decisions (a decline, a consumed allow) are first written by the
-    // resolve routes; this build writes none, so there is none to read.
-    shared.update(|set| set.set_health(Source::ControlPlane, Health::Ready));
+    match store {
+        None => shared.update(|set| set.set_health(Source::ControlPlane, Health::Absent)),
+        Some(store) => {
+            tokio::spawn(replay_ui_decisions_until_ready(store, Arc::clone(&shared)));
+        }
+    }
     let latest = start_discovery(
         meta,
         &shared,
@@ -449,6 +300,60 @@ async fn replay_until_ready(replays: Arc<Replays>) {
         }
         tokio::time::sleep(wait).await;
         wait = (wait * 2).min(REPLAY_RETRY_MAX);
+    }
+}
+
+/// Replay the UI decisions until the control-plane source is ready: a read
+/// that fails runs again after a wait that doubles up to
+/// [`REPLAY_RETRY_MAX`]. Until then the set is unreadable, so no resolve can
+/// record a decision this replay misses; every later one the route folds
+/// itself.
+async fn replay_ui_decisions_until_ready(store: Arc<dyn ControlPlaneStore>, shared: Arc<Shared>) {
+    let mut wait = Duration::from_secs(1);
+    loop {
+        let (store, set) = (Arc::clone(&store), Arc::clone(&shared));
+        let read = tokio::task::spawn_blocking(move || replay_ui_decisions(store.as_ref(), &set))
+            .await
+            .unwrap_or(false);
+        if read {
+            shared.update(|set| set.replay_done(Source::ControlPlane));
+            return;
+        }
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(REPLAY_RETRY_MAX);
+    }
+}
+
+/// Page through the governance audit, newest first, folding every UI
+/// decision it holds. Whether the whole audit was read.
+fn replay_ui_decisions(store: &dyn ControlPlaneStore, shared: &Shared) -> bool {
+    let filter = AuditFilter {
+        action: Some(ControlPlaneAction::MutateGrant),
+        ..AuditFilter::new(1000)
+    };
+    let mut page_filter = filter.clone();
+    loop {
+        let page = match store.read_audit(&page_filter) {
+            Ok(page) => page,
+            Err(error) => {
+                tracing::warn!(%error, "decisions: the governance audit could not be read; retrying");
+                return false;
+            }
+        };
+        let decisions: Vec<_> = page
+            .events
+            .iter()
+            .filter_map(|event| event.ui_decision.as_ref())
+            .filter_map(decisions_from_record)
+            .flatten()
+            .collect();
+        if !decisions.is_empty() {
+            shared.update(|set| set.apply_decisions(decisions));
+        }
+        match page.next_cursor {
+            Some(cursor) => page_filter = filter.resume(cursor),
+            None => return true,
+        }
     }
 }
 

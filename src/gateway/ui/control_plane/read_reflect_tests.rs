@@ -41,6 +41,7 @@ fn store_audit_reflected_and_store_rows_not_merged() {
     store
         .append_audit(&ControlPlaneAuditEvent {
             grant_change: None,
+            ui_decision: None,
             event_id: "e1".to_string(),
             actor_id: "alice".to_string(),
             action: ControlPlaneAction::MutateGrant,
@@ -154,6 +155,7 @@ fn an_unreadable_audit_line_marks_degraded_and_keeps_the_events_read() {
     store
         .append_audit(&ControlPlaneAuditEvent {
             grant_change: None,
+            ui_decision: None,
             event_id: "e1".to_string(),
             actor_id: "alice".to_string(),
             action: ControlPlaneAction::MutateGrant,

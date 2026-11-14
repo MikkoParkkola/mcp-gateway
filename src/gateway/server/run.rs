@@ -108,13 +108,6 @@ impl Gateway {
         // served; it never stops the start.
         let (health, health_saver) =
             health_wiring::start(&data_dir, &counters, shutdown_tx.subscribe());
-        // The web UI's open decisions: built, replayed and kept current here.
-        #[cfg(feature = "webui")]
-        let _decisions = crate::gateway::ui::decisions::start(
-            &meta_mcp,
-            self.config_path.clone(),
-            shutdown_tx.subscribe(),
-        );
         // F24: this mode delivers tools/list_changed, so it may advertise it.
         meta_mcp.set_change_feed(crate::gateway::ChangeFeed::Http);
         let (tools_changed_tx, tools_changed_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -208,6 +201,15 @@ impl Gateway {
         let opened_store = build_control_plane_store_with_log(&self.config, &control_plane_base)?;
         let governance_log = opened_store.as_ref().map(|o| Arc::clone(&o.governance_log));
         let control_plane_store = opened_store.map(|o| o.store);
+        // The web UI's open decisions: built, replayed and kept current here,
+        // once the store whose governance audit holds the UI decisions is open.
+        #[cfg(feature = "webui")]
+        let _decisions = crate::gateway::ui::decisions::start(
+            &meta_mcp,
+            self.config_path.clone(),
+            shutdown_tx.subscribe(),
+            control_plane_store.clone(),
+        );
         let (identity_grant_sink, grants_read) = identity_grants::start_identity_grant_audit(
             &self.config,
             &meta_mcp,
