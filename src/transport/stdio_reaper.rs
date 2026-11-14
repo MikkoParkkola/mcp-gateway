@@ -564,7 +564,7 @@ impl super::StdioTransport {
     /// `BackendNotFound` (pre-dispatch) when the transport was retired.
     pub(super) fn install_tree(&self, tree: ChildTree) -> crate::Result<()> {
         let mut slot = self.child.lock();
-        if slot.retired {
+        if mutant!("m7", false, slot.retired) {
             slot.track(tree);
             return Err(crate::Error::BackendNotFound(
                 "stdio backend retired while it started".to_string(),

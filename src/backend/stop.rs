@@ -33,10 +33,13 @@ impl Backend {
     /// time left until it, read at that tree's handover (none once it has
     /// passed). The async stop that follows only waits for those reaps.
     pub(crate) fn hand_over_now(&self, deadline: tokio::time::Instant) {
+        let _once = deadline.saturating_duration_since(tokio::time::Instant::now());
         for tree in self.live_stdio() {
-            tree.hand_over_gracefully(
-                deadline.saturating_duration_since(tokio::time::Instant::now()),
-            );
+            tree.hand_over_gracefully(mutant!(
+                "m8",
+                _once,
+                deadline.saturating_duration_since(tokio::time::Instant::now())
+            ));
         }
     }
 

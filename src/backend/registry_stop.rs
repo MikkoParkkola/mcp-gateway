@@ -34,8 +34,13 @@ impl BackendRegistry {
         // one tree is not charged to the next twice.
         let started = std::time::Instant::now();
         let backends = self.latch_and_snapshot();
+        let _entry = tokio::time::Instant::now();
         for backend in &backends {
-            backend.hand_over_now(deadline);
+            backend.hand_over_now(mutant!(
+                "m7b",
+                tokio::time::Instant::now() + deadline.saturating_duration_since(_entry),
+                deadline
+            ));
         }
         // The handover runs on the stop's thread; its cost is the stage's.
         debug!(
@@ -61,7 +66,7 @@ impl BackendRegistry {
     pub(crate) async fn stop_all_by(&self, deadline: tokio::time::Instant, handover: Handover) {
         // Published first: a tree's waits are cut to it from its first step.
         self.stop_deadline.move_earlier(deadline.into_std());
-        if handover == Handover::AtEntry || self.stop_deadline.is_hurried() {
+        if mutant!("m1", false, handover == Handover::AtEntry) || self.stop_deadline.is_hurried() {
             self.hand_over_now(deadline);
         }
         // The backends to retire are the ones the stop latched and took, in
