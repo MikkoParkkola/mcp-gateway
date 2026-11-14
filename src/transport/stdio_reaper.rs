@@ -620,25 +620,40 @@ impl super::StdioTransport {
         super::tree::clear_writer(&self.writer).await;
     }
 
-    /// Test seam (MIK-7923 coverage): a retire that lands in `start` between
-    /// the spawn and the install, as one from another thread can. Fires only
-    /// for the transport armed by [`Self::retire_after_spawn_for_test`].
+    /// Test seam: a retire or a graceful
+    /// handover that lands in `start` between the spawn and the install, as
+    /// one from another thread can. Fires only for the transport armed by
+    /// [`Self::retire_after_spawn_for_test`] or
+    /// [`Self::hand_over_after_spawn_for_test`].
     #[cfg(all(test, unix))]
     pub(super) fn after_spawn_for_test(&self) {
-        let mut armed = RETIRE_AFTER_SPAWN.lock();
-        if armed
+        let mut armed = AFTER_SPAWN.lock();
+        let Some(action) = armed
             .as_ref()
-            .is_some_and(|it| std::ptr::eq(it.as_ptr(), self))
-        {
-            *armed = None;
-            drop(armed);
-            self.retire_tree_now();
+            .filter(|(it, _)| std::ptr::eq(it.as_ptr(), self))
+            .map(|(_, action)| *action)
+        else {
+            return;
+        };
+        *armed = None;
+        drop(armed);
+        match action {
+            AfterSpawn::Retire => self.retire_tree_now(),
+            AfterSpawn::HandOver(budget) => self.hand_over_gracefully_now(budget),
         }
     }
 
     #[cfg(all(test, unix))]
     pub(super) fn retire_after_spawn_for_test(self: &std::sync::Arc<Self>) {
-        *RETIRE_AFTER_SPAWN.lock() = Some(std::sync::Arc::downgrade(self));
+        *AFTER_SPAWN.lock() = Some((std::sync::Arc::downgrade(self), AfterSpawn::Retire));
+    }
+
+    #[cfg(all(test, unix))]
+    pub(super) fn hand_over_after_spawn_for_test(self: &std::sync::Arc<Self>, budget: Duration) {
+        *AFTER_SPAWN.lock() = Some((
+            std::sync::Arc::downgrade(self),
+            AfterSpawn::HandOver(budget),
+        ));
     }
 
     /// End this transport's tree now, synchronously and without a runtime
@@ -662,9 +677,20 @@ impl super::StdioTransport {
     }
 }
 
+/// What the after-spawn seam does to the transport it is armed for.
 #[cfg(all(test, unix))]
-static RETIRE_AFTER_SPAWN: parking_lot::Mutex<Option<std::sync::Weak<super::StdioTransport>>> =
-    parking_lot::Mutex::new(None);
+#[derive(Clone, Copy)]
+enum AfterSpawn {
+    /// Retire its tree at once.
+    Retire,
+    /// Hand its tree over gracefully, the plan fitted to the budget.
+    HandOver(Duration),
+}
+
+#[cfg(all(test, unix))]
+static AFTER_SPAWN: parking_lot::Mutex<
+    Option<(std::sync::Weak<super::StdioTransport>, AfterSpawn)>,
+> = parking_lot::Mutex::new(None);
 
 #[cfg(test)]
 mod start_tests {

@@ -319,3 +319,6 @@ async fn a_backend_registered_as_the_stop_starts_is_refused_or_retired() {
         }
     }
 }
+
+#[path = "stop_deadline_early_tests.rs"]
+mod early;
