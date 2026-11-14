@@ -28,6 +28,7 @@
 //! ```
 
 pub mod api;
+pub mod audit_lookup;
 pub mod completion;
 pub mod dashboard_link;
 pub(crate) mod entry;
