@@ -179,7 +179,12 @@ pub(super) async fn start_fetching(
             };
             match ended_first {
                 Some(served) => served,
-                None => Err(helper_ended(&mut child).await),
+                // MUTANT (probe only, never merges): a helper that exits without
+                // connecting is accepted. The never-connects row must fail.
+                None => {
+                    let _ = helper_ended(&mut child).await;
+                    Ok(())
+                }
             }
         }
     };

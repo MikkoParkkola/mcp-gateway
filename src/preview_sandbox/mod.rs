@@ -44,7 +44,8 @@ mod os {
         _: &[std::path::PathBuf],
         _: tokio::time::Instant,
     ) -> Result<Started, Refusal> {
-        Err(Refusal::Unsupported)
+        // MUTANT (probe only): the off-Linux stub refuses with another kind.
+        Err(Refusal::Step("mutant".into()))
     }
 
     pub(super) fn classify(stderr: &str) -> Refusal {
