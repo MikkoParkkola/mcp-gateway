@@ -189,6 +189,11 @@ jobs:
         run: |
           python3 scripts/ci/check_toolchain_pin.py --self-test
           python3 scripts/ci/check_toolchain_pin.py
+      # The int-b UPGRADING step stalled twice to the job limit with no log: it is bounded and prints its phase.
+      - name: The int-b UPGRADING step is bounded and phased
+        run: |
+          python3 scripts/ci/test_upgrading_step_bounds.py --self-test
+          python3 scripts/ci/test_upgrading_step_bounds.py
       # Which Coverage probe runs share a concurrency group: release-line pushes one, everything else its own.
       - name: The coverage probe's concurrency groups
         run: |
@@ -207,6 +212,14 @@ jobs:
         run: |
           python3 scripts/ci/check_swap_jobs.py --self-test
           python3 scripts/ci/check_swap_jobs.py
+      # The shared lib test binary: a failed or hung build turns every consumer red, and no consumer builds its own.
+      - name: The shared lib test binary fails closed
+        run: |
+          python3 scripts/ci/check_shared_lib.py --self-test
+          python3 scripts/ci/check_shared_lib.py
+      # The memory log those library builds run through (stub free and /proc, 1 s samples, about 15 s).
+      - name: The memory-log wrapper keeps status, output and signals
+        run: python3 scripts/ci/test_with_memory_log.py
       # A harness struct must drop its child process before its TempDir (the child's late write fails the shard).
       - name: Test harnesses drop the child before the temp dir
         run: |
@@ -1077,6 +1090,42 @@ jobs:
 
   # The Linux suite as shards (MIK-8482); `test` below is the aggregate that
   # keeps the required name `Tests` (and docker-build's `needs: test`).
+  # The library's test binary, built once per run and shared: one rustc of about 18.5 GB on a 16 GB runner, the
+  # build that stalls or loses runners (15 jobs on 2026-11-13). The lib shards, keychain and gws run this binary
+  # instead of each building the same one (the same cargo hash in all five). Each consumer `needs` this job and
+  # runs even when it fails, so it ends red, never skipped (scripts/ci/check_shared_lib.py).
+  linux-lib-build:
+    name: Linux lib test binary
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/add-swap
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build the shared lib test binary
+        # Healthy builds take about 11 min; a stall ends here with its log (check_swap_jobs.py). The phase line
+        # (numbers only: the runner user's process count and `free -m` rows) tells a build that waits on a lock from
+        # one that thrashes on memory (scripts/ci/test_upgrading_step_bounds.py).
+        timeout-minutes: 25
+        run: |
+          echo "phase compile: the lib test binary at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^(Mem|Swap):/ {printf "%s total %s used %s free %s; ", $1, $2, $3, $4}')"
+          scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
+      - name: Hand the lib test binary to its consumers
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # One name per run: a rerun of a consumer alone finds this attempt's binary.
+          name: linux-lib-tests
+          path: ${{ runner.temp }}/lib-bin/lib-tests
+          retention-days: 1
+          overwrite: true
+          if-no-files-found: error
+
   test-shards:
     name: Linux shard ${{ matrix.shard }}
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
@@ -1085,8 +1134,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Selections and floors: scripts/ci/shard_tests.py.
-        shard: [lib-a, lib-b, int-a, int-b]
+        # Selections and floors: scripts/ci/shard_tests.py. The lib halves run from the shared binary in
+        # test-shards-lib (same check names).
+        shard: [int-a, int-b]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/add-swap
@@ -1111,7 +1161,9 @@ jobs:
       - name: Shard suite
         env:
           PREVIEW_SANDBOX_REQUIRED: "1"
-        run: python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}
+        # Memory every 30 s while it builds (scripts/ci/with-memory-log.sh). No step limit yet: a healthy lib-b run
+        # took 52 min on 2026-11-13, so it logs only until its tail is measured (check_swap_jobs.py LOG_ONLY).
+        run: scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}
       # MIK-8185: the UPGRADING checks again, on the guide as release
       # preparation will assemble it from upgrading.d/, so a fragment that
       # would break a check at release breaks its own PR. A run that selects
@@ -1119,22 +1171,84 @@ jobs:
       - name: UPGRADING checks on the assembled guide (MIK-8185)
         # int-b: its `[!a-l]*` targets include upgrading_summary_rows.
         if: matrix.shard == 'int-b'
+        # Healthy runs take 7 to 11 minutes. Two int-b jobs on 2026-11-13 sat here until the 60 minute job limit (the
+        # shard suite had finished in 18 minutes) and left no log; the step bound fails the step instead, with its
+        # log, and the phase lines say whether a compile or a test run stalled. The compile phase line also prints
+        # how many processes the runner user has (a count: pids only, never arguments, which can print secrets): a
+        # test child leaked by the shard suite could hold cargo's build-directory lock and show up as "Blocking
+        # waiting for file lock" in this step's log, and a high count here would point at it. Pinned by
+        # scripts/ci/test_upgrading_step_bounds.py.
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           python3 scripts/release/upgrading_fragments.py assemble --dry-run > "$RUNNER_TEMP/UPGRADING-4.0.md"
           export UPGRADING_DOC="$RUNNER_TEMP/UPGRADING-4.0.md"
-          for target in "--test upgrading_summary_rows" "--lib upgrade_notice_tests"; do
+          # The lib target (upgrade_notice_tests) runs from the shared binary in lib-b (test-shards-lib).
+          for target in "--test upgrading_summary_rows"; do
+            echo "phase compile: $target at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^(Mem|Swap):/ {printf "%s total %s used %s free %s; ", $1, $2, $3, $4}')"
             # shellcheck disable=SC2086 # $target is two words on purpose
-            cargo test --all-features $target 2>&1 | tee "$RUNNER_TEMP/assembled.log"
+            scripts/ci/with-memory-log.sh cargo test --all-features $target --no-run
+            echo "phase run: $target at $(date -u +%T)"
+            # shellcheck disable=SC2086 # $target is two words on purpose
+            scripts/ci/with-memory-log.sh cargo test --all-features $target 2>&1 | tee "$RUNNER_TEMP/assembled.log"
             if ! grep -Eq '^running [1-9][0-9]* tests?$' "$RUNNER_TEMP/assembled.log"; then
-              echo "::error::cargo test $target selected no test"
+              echo "::error::$target selected no test"
               exit 1
             fi
           done
 
+  # The lib halves of the Linux shards, from the shared binary: no compile here. `!cancelled()` runs them even when
+  # the build failed, so they end red instead of skipped (a skipped shard would read as passing).
+  test-shards-lib:
+    name: Linux shard ${{ matrix.shard }}
+    needs: [linux-lib-build]
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [lib-a, lib-b]
+    steps:
+      - name: The shared lib test binary was built
+        env:
+          BUILD: ${{ needs.linux-lib-build.result }}
+        run: '[ "$BUILD" = success ] || { echo "::error::the shared lib test binary was not built (linux-lib-build: $BUILD)"; exit 1; }'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Fetch the shared lib test binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-lib-tests
+          path: ${{ runner.temp }}/lib-bin
+      # ADR-027, as in test-shards: the preview sandbox tests need unprivileged user namespaces.
+      - name: Allow unprivileged user namespaces (preview sandbox tests)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Shard suite from the shared binary
+        env:
+          PREVIEW_SANDBOX_REQUIRED: "1"
+        run: python3 scripts/ci/shard_tests.py run-prebuilt linux ${{ matrix.shard }} "$RUNNER_TEMP/lib-bin/lib-tests"
+      # The upgrade-notice lib target (upgrade_notice_tests) on the assembled guide, from the shared binary; int-b runs the
+      # guide's integration target. A run that selects no test fails.
+      - name: UPGRADING lib checks on the assembled guide
+        if: matrix.shard == 'lib-b'
+        timeout-minutes: 10
+        env:
+          CARGO_MANIFEST_DIR: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release/upgrading_fragments.py assemble --dry-run > "$RUNNER_TEMP/UPGRADING-4.0.md"
+          export UPGRADING_DOC="$RUNNER_TEMP/UPGRADING-4.0.md"
+          # The artifact round trip drops the exec bit; set it here too rather than rely on the shard step before.
+          chmod +x "$RUNNER_TEMP/lib-bin/lib-tests"
+          "$RUNNER_TEMP/lib-bin/lib-tests" upgrade_notice_tests 2>&1 | tee "$RUNNER_TEMP/assembled-lib.log"
+          if ! grep -Eq '^running [1-9][0-9]* tests?$' "$RUNNER_TEMP/assembled-lib.log"; then
+            echo "::error::upgrade_notice_tests selected no test"
+            exit 1
+          fi
+
   test:
     name: Tests
-    needs: [test-shards]
+    needs: [linux-lib-build, test-shards-lib, test-shards]
     if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'train/')) }}
     runs-on: ubuntu-latest
     steps:
@@ -1144,7 +1258,7 @@ jobs:
       - name: Every Linux shard succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
-          ROLLUP_EXPECTS: test-shards
+          ROLLUP_EXPECTS: test-shards test-shards-lib linux-lib-build
         run: |
           # shellcheck disable=SC2086 # ROLLUP_EXPECTS is a space-separated id list on purpose
           python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
@@ -1203,7 +1317,9 @@ jobs:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
       #   release.yml `verify` needs it green on the released revision.
-      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+      - name: Run the tests
+        # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.
+        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
   # Same run on the self-hosted arm64 runner. Mutation evidence asks whether a
   # named test fails on a mutant and passes on the fix; that is logic, not
@@ -1257,27 +1373,34 @@ jobs:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
       #   release.yml `verify` needs it green on the released revision.
-      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+      - name: Run the tests
+        # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.
+        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
   # CAT.1 (MIK-7782): the real `gws` binary, pinned, accepts the argv every
   # shipped gws_* capability builds. `--dry-run` needs no credentials and sends
   # nothing; the test clears the environment and gives gws a private HOME.
   gws-dry-run:
     name: gws dry-run conformance
-    needs: scope
+    needs: [scope, linux-lib-build]
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
+      - name: The shared lib test binary was built
+        env:
+          BUILD: ${{ needs.linux-lib-build.result }}
+        run: '[ "$BUILD" = success ] || { echo "::error::the shared lib test binary was not built (linux-lib-build: $BUILD)"; exit 1; }'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/add-swap
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Fetch the shared lib test binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          toolchain: 1.99.1
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+          name: linux-lib-tests
+          path: ${{ runner.temp }}/lib-bin
       - name: Install the pinned gws
         run: |
           # The package's postinstall fetches the native binary, so scripts must
@@ -1285,7 +1408,16 @@ jobs:
           npm install --global @googleworkspace/cli@0.22.5
           test "$(gws --version | head -1)" = "gws 0.22.5"
       - name: Every gws capability dry-runs against the real binary
-        run: cargo test --all-features --lib -- --ignored every_gws_capability_is_accepted_by_the_real_binary_in_dry_run
+        # The shared lib test binary (no build here), run as `cargo test` would run it: from the package root. A filter
+        # that matches no test exits 0, so the step requires the one test's pass line, as the keychain steps do.
+        timeout-minutes: 10
+        env:
+          CARGO_MANIFEST_DIR: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          chmod +x "$RUNNER_TEMP/lib-bin/lib-tests"
+          "$RUNNER_TEMP/lib-bin/lib-tests" --ignored every_gws_capability_is_accepted_by_the_real_binary_in_dry_run 2>&1 | tee "$RUNNER_TEMP/gws.log"
+          grep -Eq "^test result: ok\. 1 passed" "$RUNNER_TEMP/gws.log"
 
   # The Linux keychain reader and writer against a real Secret Service
   # (ADR-028): an unlocked gnome-keyring on a private session bus. The reader
@@ -1294,41 +1426,51 @@ jobs:
   # collection is locked. The shards run both against stub programs only.
   linux-keychain:
     name: Linux keychain against gnome-keyring
-    needs: scope
+    needs: [scope, linux-lib-build]
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
+      - name: The shared lib test binary was built
+        env:
+          BUILD: ${{ needs.linux-lib-build.result }}
+        run: '[ "$BUILD" = success ] || { echo "::error::the shared lib test binary was not built (linux-lib-build: $BUILD)"; exit 1; }'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/add-swap
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Fetch the shared lib test binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          toolchain: 1.99.1
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+          name: linux-lib-tests
+          path: ${{ runner.temp }}/lib-bin
       - name: Install gnome-keyring, secret-tool and gdbus
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gnome-keyring libsecret-tools libglib2.0-bin dbus
-      - name: Build the test binary outside the session
-        run: cargo test --all-features --lib --no-run
+          chmod +x "$RUNNER_TEMP/lib-bin/lib-tests"
       - name: Read a stored entry, then refuse it locked
+        # The shared lib test binary (no build here), run as `cargo test` would run it: from the package root.
+        timeout-minutes: 5
+        env:
+          CARGO_MANIFEST_DIR: ${{ github.workspace }}
         run: |
           dbus-run-session -- bash -euo pipefail -c '
             # A throwaway keyring password: the keyring lives and dies with this step.
             printf "ci" | gnome-keyring-daemon --unlock --components=secrets > /dev/null
             printf " a\n" | secret-tool store --label=a15 service mcp-gateway-ci-a15
-            cargo test --all-features --lib -- --ignored --exact config::keychain_linux_tests::a15_the_real_secret_service_reads_back_byte_exact_and_refuses_when_locked 2>&1 | tee "$RUNNER_TEMP/a15.log"
+            "$RUNNER_TEMP/lib-bin/lib-tests" --ignored --exact config::keychain_linux_tests::a15_the_real_secret_service_reads_back_byte_exact_and_refuses_when_locked 2>&1 | tee "$RUNNER_TEMP/a15.log"
             grep -Eq "^test result: ok\. 1 passed" "$RUNNER_TEMP/a15.log"
           '
       - name: Create, read back, refuse a taken name, delete, then refuse locked
+        timeout-minutes: 5
+        env:
+          CARGO_MANIFEST_DIR: ${{ github.workspace }}
         run: |
           dbus-run-session -- bash -euo pipefail -c '
             printf "ci" | gnome-keyring-daemon --unlock --components=secrets > /dev/null
-            cargo test --all-features --lib -- --ignored --exact config::keychain_linux::writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked 2>&1 | tee "$RUNNER_TEMP/b18.log"
+            "$RUNNER_TEMP/lib-bin/lib-tests" --ignored --exact config::keychain_linux::writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked 2>&1 | tee "$RUNNER_TEMP/b18.log"
             grep -Eq "^test result: ok\. 1 passed" "$RUNNER_TEMP/b18.log"
           '
 
@@ -1508,7 +1650,9 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build the tests from the packaged crate
-        run: scripts/ci/packaged-tests.sh build
+        # Healthy builds take up to 17 min; a stall ends here with its log (check_swap_jobs.py).
+        timeout-minutes: 35
+        run: scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh build
 
   # The post-merge packaged run, on demand: a workflow file that is not on the
   # default branch yet cannot be dispatched itself.
