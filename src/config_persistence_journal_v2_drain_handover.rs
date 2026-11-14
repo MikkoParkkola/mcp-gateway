@@ -8,12 +8,14 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use super::super::JournalSession;
+use super::super::abandoned::{MAX_ABANDONED_BYTES, TornProof, encode_frame};
 use super::super::abandoned::{Placement, against_donor, frames_of, marked};
-use super::super::abandoned::{TornProof, encode_frame};
+use super::super::{JournalV2, ParkReason};
 use super::DrainSession;
 use super::fault::{self, At};
 use crate::config_persistence::sync_dir_of;
 use crate::security::transparency_log::rotation::file_id;
+use crate::security::transparency_log::settle::Role;
 
 /// Why a handover did not complete. The donor is byte-identical after `Foreign`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,7 +37,10 @@ pub(crate) fn abandoned_path(target: &Path) -> PathBuf {
 /// Open an existing abandoned file for the whole call: no symlink follow, no waiting on a
 /// FIFO, then the opened handle must be a private regular file of this user with one link.
 /// `Ok(None)` when there is no file.
-fn open_existing(path: &Path, bound: usize) -> Result<Option<(File, Vec<u8>)>, HandoverError> {
+pub(super) fn open_existing(
+    path: &Path,
+    bound: usize,
+) -> Result<Option<(File, Vec<u8>)>, HandoverError> {
     let file = match open_guarded(path, false) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -54,7 +59,7 @@ fn open_existing(path: &Path, bound: usize) -> Result<Option<(File, Vec<u8>)>, H
 
 /// The check every read of the file is behind: the OPENED handle is a regular file that is
 /// private to this user and has one link.
-fn checked(file: &File) -> Result<std::fs::Metadata, HandoverError> {
+pub(super) fn checked(file: &File) -> Result<std::fs::Metadata, HandoverError> {
     let meta = file.metadata().map_err(|_| HandoverError::Foreign)?;
     if meta.is_file() && private_to_us(&meta) {
         Ok(meta)
@@ -107,6 +112,58 @@ fn private_to_us(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
+/// The encoded size of the largest file any reachable state of `donor` can be: every counter at
+/// its widest, every owed terminal frozen by the drain's own builder, every record undelivered
+/// and parked with the longest reason. `usize::MAX` when that state cannot be built or encoded.
+pub(super) fn maximal_size(donor: &JournalV2) -> usize {
+    let mut widest = donor.clone();
+    for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
+        token.intent_counter = Some(u64::MAX);
+    }
+    // Built against the widened state, so a `settled_by` counter is the widest too.
+    let snapshot = widest.clone();
+    for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
+        // A terminal already frozen is never built again, so its intent is never parsed here.
+        if token
+            .records
+            .iter()
+            .any(|record| matches!(record.role, Role::Outcome | Role::Abandoned))
+        {
+            continue;
+        }
+        match super::terminal_record(&snapshot, token) {
+            Ok(Some(record)) => token.records.push(record),
+            Ok(None) => {}
+            Err(_) => return usize::MAX,
+        }
+    }
+    let longest = [
+        ParkReason::InvalidPayload,
+        ParkReason::ContentConflict,
+        ParkReason::ArtifactCorrupt,
+    ]
+    .into_iter()
+    .max_by_key(|reason| serde_json::to_vec(reason).map_or(0, |json| json.len()));
+    for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
+        for record in std::iter::once(&mut token.intent).chain(token.records.iter_mut()) {
+            record.delivered = false;
+            record.parked = longest;
+        }
+    }
+    let Some(frames) = frames_of(&widest) else {
+        return usize::MAX;
+    };
+    frames
+        .iter()
+        .map(|frame| encode_frame(frame).map_or(usize::MAX, |bytes| bytes.len()))
+        .fold(0, usize::saturating_add)
+}
+
+/// Whether a handover of `donor` can never outgrow `cap`, whatever the drain does later.
+pub(super) fn admits(donor: &JournalV2, cap: usize) -> bool {
+    maximal_size(donor) <= cap
+}
+
 pub(crate) fn hand_over(session: &mut DrainSession) -> Result<(), HandoverError> {
     // Refuse before anything is written: off Unix the file cannot be proven private to this user.
     if !cfg!(unix) {
@@ -116,6 +173,16 @@ pub(crate) fn hand_over(session: &mut DrainSession) -> Result<(), HandoverError>
     let donor = marked(&journal.state);
     donor.binding.as_ref().ok_or(HandoverError::Foreign)?;
     donor.finish_ready().map_err(|_| HandoverError::Journal)?;
+    // The file drain freezes only a decided terminal, and must never outgrow the file cap.
+    if donor
+        .writer
+        .iter()
+        .chain(&donor.attempts)
+        .any(|token| token.decision.is_none())
+        || !admits(&donor, MAX_ABANDONED_BYTES)
+    {
+        return Err(HandoverError::Journal);
+    }
     let frames: Vec<Vec<u8>> = frames_of(&donor)
         .ok_or(HandoverError::Foreign)?
         .iter()
@@ -226,6 +293,9 @@ fn seal(file: &mut File, path: &Path, frames: &[Vec<u8>]) -> Result<(), Handover
 }
 
 // The success-path rows need a file that passes the owner check, which only exists on Unix.
+#[cfg(all(test, unix))]
+#[path = "config_persistence_journal_v2_drain_handover_admit_tests.rs"]
+mod admit_tests;
 #[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_handover_crash_tests.rs"]
 mod crash_tests;
