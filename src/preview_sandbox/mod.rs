@@ -11,6 +11,8 @@
 mod fetch;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(unix)]
+mod proxy;
 #[cfg(target_os = "linux")]
 use linux as os;
 
@@ -244,3 +246,5 @@ pub async fn availability() -> &'static Result<(), Refusal> {
 }
 
 mod fetch_output;
+#[cfg(test)]
+mod staged_tests;
