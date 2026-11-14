@@ -550,20 +550,68 @@ fn nothing_in_the_key_server_calls_std_lowercase() {
 /// record builder hashes `identity.email()` and the log field hashes
 /// `identity.subject()`, each unchanged: no trim, case change, NFC or split in
 /// between. The callers of `EmailHashKey::hash` outside tests are these two
-/// (and the admin lookup route, which trims what the admin typed).
+/// and the admin lookup route, pinned by `the_lookup_route_hashes_what_the_admin_typed`.
+/// Each check reads production code only (tests, comments and strings blanked).
 /// Mutant: pass a transformed value at either site.
 #[test]
 fn the_email_reaches_the_hash_untouched() {
-    let audit = include_str!("audit.rs");
+    let audit = production_code(include_str!("audit.rs"));
     assert!(
         audit.contains("let email = identity.email();") && audit.contains("key.hash(email)"),
         "the record builder must hash identity.email() unchanged"
     );
-    let server = include_str!("mod.rs");
+    let server = production_code(include_str!("mod.rs"));
     assert!(
         server.contains("self.email_key.hash_subject(identity.subject())"),
         "the log field must hash identity.subject() unchanged"
     );
+}
+
+/// `source` with test-only items, comments and string literals blanked: the
+/// code that ships.
+fn production_code(source: &str) -> String {
+    crate::test_source_text::sanitize(&crate::test_source_text::production_text(source))
+}
+
+/// The admin lookup route hashes what the admin typed, unchanged, and judges a
+/// blank address with the hash's own frozen trim: no production code in the
+/// route reads the toolchain's Unicode tables (trim, whitespace, case or
+/// control classes). The route sits outside the key-server lowercase scan, so
+/// it has its own. Formatting is ignored; each pinned text appears once.
+/// Mutant: hash a std-trimmed value, validate with std trim, or wrap the
+/// frozen trim around a std one.
+#[test]
+fn the_lookup_route_hashes_what_the_admin_typed() {
+    let code: String = production_code(include_str!("../gateway/ui/activity/key_lookup.rs"))
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    for pinned in ["hash:key.hash(&raw)", "letemail=email_hash::trim_v1(raw);"] {
+        assert_eq!(
+            code.matches(pinned).count(),
+            1,
+            "the route must have `{pinned}` exactly once"
+        );
+    }
+    let rest = code.replace("email_hash::trim_v1(raw)", "");
+    for banned in [
+        "trim",
+        "is_whitespace",
+        "split_whitespace",
+        "to_lowercase",
+        "to_uppercase",
+        "is_control",
+        "is_alphabetic",
+        "is_alphanumeric",
+        "is_lowercase",
+        "is_uppercase",
+        "is_numeric",
+    ] {
+        assert!(
+            !rest.contains(banned),
+            "the route calls `{banned}`, which reads the toolchain's Unicode tables"
+        );
+    }
 }
 
 /// NORM.3: the startup self-check passes on the real normalization, and fails,
