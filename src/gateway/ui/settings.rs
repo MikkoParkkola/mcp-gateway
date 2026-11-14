@@ -105,9 +105,14 @@ fn unavailable() -> Response {
     .into_response()
 }
 
-/// The save route's answer with no reload context: nothing was attempted.
+/// The save route's answer with no reload context: nothing was attempted, so a
+/// 409 (the diff route, which writes nothing, keeps the 503 of [`unavailable`]).
 fn write_unavailable() -> Response {
-    unavailable()
+    flat_error(
+        StatusCode::CONFLICT,
+        "Config reload is not enabled on this gateway",
+    )
+    .into_response()
 }
 
 fn field_error(id: FieldId, code: &'static str, reason: &str) -> Response {

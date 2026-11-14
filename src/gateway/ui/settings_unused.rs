@@ -108,7 +108,8 @@ fn config_dir(path: &std::path::Path) -> &std::path::Path {
     path.parent().unwrap_or(std::path::Path::new("."))
 }
 
-/// The 503 a settings save returns when this gateway has no reload context.
+/// The listing's 503 when this gateway has no reload context: a read cannot
+/// answer right now.
 fn no_reload() -> Response {
     flat_error(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -117,9 +118,14 @@ fn no_reload() -> Response {
     .into_response()
 }
 
-/// The delete's answer with no reload context: nothing was attempted.
+/// The delete's answer with no reload context: nothing was attempted, so a 409
+/// (the listing, a read, keeps the 503 of [`no_reload`]).
 pub(super) fn delete_no_reload() -> Response {
-    no_reload()
+    flat_error(
+        StatusCode::CONFLICT,
+        "Config reload is not enabled on this gateway",
+    )
+    .into_response()
 }
 
 /// 503 `unreadable` with a fixed sentence.
