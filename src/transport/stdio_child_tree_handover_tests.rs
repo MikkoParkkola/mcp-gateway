@@ -1,8 +1,53 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A graceful handover that lands before or during a start: the start is
-//! refused and nothing is installed. Helpers are the parent module's.
+//! A retire or a graceful handover that lands before or during a start:
+//! the start is refused and nothing is installed. Helpers are the parent
+//! module's.
 use super::*;
+
+/// A tree spawned by a start the retire overtook after its
+/// pre-spawn check is refused at install and ended by the reaper, never
+/// installed.
+#[tokio::test]
+async fn a_tree_installed_after_a_retire_is_refused_and_ended() {
+    let (_w, t) = started("while IFS= read -r l; do :; done", None).await;
+    t.retire_tree_now();
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.args(["-c", "exec sleep 60"]);
+    let tree = ChildTree::new(super::super::super::spawn_in_own_tree(cmd).expect("spawn"));
+    let pid = pid_of(tree.pid().expect("leader pid"));
+    let refused = t.install_tree(tree);
+    assert!(
+        matches!(refused, Err(crate::Error::BackendNotFound(_))),
+        "a retired transport installed a tree: {refused:?}"
+    );
+    assert!(t.child.lock().tree.is_none(), "nothing was installed");
+    assert_eq!(finished(pid).await.refused, 0, "the reaper ended it");
+}
+
+/// `start`'s install refusal. A retire that lands between the
+/// spawn and the install (one from another thread can) refuses a restart,
+/// installs nothing, and drops the previous start's stdin, so no later write
+/// can reach a stale child.
+#[tokio::test]
+async fn a_retire_between_spawn_and_install_refuses_the_start() {
+    let (_w, t) = started("while IFS= read -r l; do :; done", None).await;
+    assert!(
+        t.writer.lock().await.is_some(),
+        "precondition: the first start's stdin"
+    );
+    t.retire_after_spawn_for_test();
+    let refused = t.start().await;
+    assert!(
+        matches!(&refused, Err(crate::Error::BackendNotFound(m)) if m.contains("while it started")),
+        "refused at install: {refused:?}"
+    );
+    assert!(
+        t.writer.lock().await.is_none(),
+        "the old stdin was released"
+    );
+    assert!(t.child.lock().tree.is_none(), "nothing was installed");
+}
 
 /// R2b.1 (HANDOVER.2, pin): a graceful handover that lands before a
 /// transport's first start retires its slot, so that start spawns nothing and
