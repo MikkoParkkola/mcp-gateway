@@ -87,6 +87,10 @@ async function settingsTab(body, ctx) {
 
 register('gateway', {
   title: 'Gateway',
+  // Settings is built in parts: this one draws the unused secret entries. The tooltip copy
+  // check holds the later parts' tips in a pending group named gateway.settings for exactly
+  // as long as this says so; the screen that completes the tab removes both.
+  inParts: ['settings'],
   tabs: {
     // Status and Actions are the rest of this page's work; null keeps them off the tab bar.
     status: null,

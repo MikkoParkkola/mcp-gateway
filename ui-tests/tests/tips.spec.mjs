@@ -63,11 +63,21 @@ test.describe('C2 planted faults', () => {
   });
   test('an id pending in a group named after its built tab passes: a tab built in parts', () => {
     const copy = { ...OK, _pending: { servers: ['servers.actions.add'], 'servers.status': ['servers.status.paused'] } };
-    expect(pair(copy, '')).toEqual([]);
+    const src = "register('servers', { title: 'Servers', inParts: ['status'], tabs: { status: (b) => b, actions: null, settings: null } });";
+    expect(pairingProblems(copy, scanScreens([src]))).toEqual([]);
+  });
+  test('a tab-named pending group outlives nothing: its tab must still be marked built in parts', () => {
+    const copy = { ...OK, _pending: { servers: ['servers.actions.add'], 'servers.status': ['servers.status.paused'] } };
+    expect(pair(copy, '')).toEqual(['pending group servers.status: servers.status is not marked built in parts']);
+  });
+  test('a tab marked built in parts needs its pending group', () => {
+    const src = "register('servers', { title: 'Servers', inParts: ['status'], tabs: { status: (b) => b, actions: null, settings: null } });\ntip('servers.status.paused');";
+    expect(pairingProblems(OK, scanScreens([src]))).toEqual(['servers.status: built in parts with no pending group']);
   });
   test('a group named after a tab holds only that tab\'s ids', () => {
     const copy = { ...OK, _pending: { 'servers.status': ['servers.actions.add'] } };
-    expect(pair(copy, "tip('servers.status.paused');")).toEqual(['servers.actions.add: in pending group servers.status, not its tab']);
+    const src = "register('servers', { title: 'Servers', inParts: ['status'], tabs: { status: (b) => b, actions: null, settings: null } });\ntip('servers.status.paused');";
+    expect(pairingProblems(copy, scanScreens([src]))).toEqual(['servers.actions.add: in pending group servers.status, not its tab']);
   });
   test('an unknown tab segment fails', () => {
     const copy = { ...OK, 'servers.extras.x': { title: 'X', text: 'x' }, _pending: { servers: ['servers.actions.add', 'servers.extras.x'] } };

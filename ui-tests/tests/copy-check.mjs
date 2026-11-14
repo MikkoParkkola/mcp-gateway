@@ -72,12 +72,14 @@ export function readShell(dir = SHELL_DIR) {
 /**
  * What the screens draw and build: `drawn` is every literal tip('<id>') argument,
  * `nonLiteral` counts tip( calls whose argument is not a string literal, and
- * `tabs` maps each registered page to its tabs, a tab being built unless its spec is null.
+ * `tabs` maps each registered page to its tabs, a tab being built unless its spec is null,
+ * and `parts` each page to the tabs its register() spec lists in `inParts` (built in parts).
  */
 export function scanScreens(sources) {
   const drawn = new Set();
   let nonLiteral = 0;
   const tabs = {};
+  const parts = {};
   for (const src of sources) {
     for (const m of src.matchAll(/\btip\(\s*([^)]*?)\s*\)/g)) {
       const lit = /^'([^']*)'$|^"([^"]*)"$/.exec(m[1]);
@@ -92,9 +94,16 @@ export function scanScreens(sources) {
       // Comments go first: their commas and colons are not entries. A // inside a string needs no space before it.
       const specs = topLevelEntries(block.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/[^\n]*/g, '$1'));
       tabs[m[1]] = Object.fromEntries(TABS.map((t) => [t, specs.has(t) && specs.get(t) !== 'null']));
+      // `inParts: ['settings']`, read within this register() call only.
+      const end = code.indexOf('register(', m.index + 1);
+      const marked = /\binParts\s*:\s*\[[^\]]*\]/.exec(code.slice(m.index, end === -1 ? undefined : end));
+      if (marked) {
+        const at = m.index + marked.index;
+        parts[m[1]] = new Set([...src.slice(at, at + marked[0].length).matchAll(/'([a-z]+)'|"([a-z]+)"/g)].map((x) => x[1] ?? x[2]));
+      }
     }
   }
-  return { drawn, nonLiteral, tabs };
+  return { drawn, nonLiteral, tabs, parts };
 }
 
 /** C8: every entry is {title, text} or {title, rows}, never both, with non-empty strings throughout. */
@@ -124,13 +133,20 @@ export function shapeProblems(copy) {
  * A tab built in parts keeps the ids its later parts draw in a pending group
  * named after the tab (`gateway.settings`), and that group holds only its own.
  */
-export function pairingProblems(copy, { drawn, nonLiteral, tabs }) {
+export function pairingProblems(copy, { drawn, nonLiteral, tabs, parts = {} }) {
   const out = [];
   if (nonLiteral) out.push(`${nonLiteral} tip() call(s) with a non-literal id`);
   const pending = new Set(Object.values(copy._pending ?? {}).flat());
   const later = new Set();
+  // A tab-named group lives exactly as long as its tab is marked built in parts.
+  const groups = new Set(Object.keys(copy._pending ?? {}).filter((g) => g.includes('.')));
+  for (const [page, marked] of Object.entries(parts)) {
+    for (const tab of marked) if (!groups.has(`${page}.${tab}`)) out.push(`${page}.${tab}: built in parts with no pending group`);
+  }
   for (const [group, list] of Object.entries(copy._pending ?? {})) {
     if (!group.includes('.')) continue;
+    const [gp, gt] = group.split('.');
+    if (!parts[gp]?.has(gt)) out.push(`pending group ${group}: ${group} is not marked built in parts`);
     for (const id of list) {
       if (id.startsWith(`${group}.`)) later.add(id);
       else out.push(`${id}: in pending group ${group}, not its tab`);
