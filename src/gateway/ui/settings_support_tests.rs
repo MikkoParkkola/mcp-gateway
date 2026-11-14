@@ -115,7 +115,15 @@ impl Route {
         let store = self.store.clone().map(Extension);
         if save {
             let body = Json::<SaveBody>::from_request(request, &()).await;
-            settings_save(State(self.state.clone()), store, guard, body).await
+            settings_save(
+                State(self.state.clone()),
+                store,
+                guard,
+                Extension(self.state.live_config.generation()),
+                None,
+                body,
+            )
+            .await
         } else {
             let body = Json::<DiffBody>::from_request(request, &()).await;
             settings_diff(State(self.state.clone()), store, guard, body).await

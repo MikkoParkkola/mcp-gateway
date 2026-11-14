@@ -119,6 +119,27 @@ pub struct ApiKeyConfig {
     /// refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_expires_at: Option<DateTime<Utc>>,
+    /// The admin key that approved this CLI login key: present only on a key
+    /// minted by `mcp-gateway login`, and what makes it a CLI key. The key is
+    /// live only while that approver is (see `ResolvedAuthConfig`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_by: Option<ApiKeyBinding>,
+    /// The host the CLI reported at login, sanitised; shown on the Keys screen
+    /// and never trusted for a decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_host: Option<String>,
+}
+
+/// The approver a CLI key is bound to: its stable principal (the quota limit
+/// key, 64 lowercase hex) and the full tag of the digest it approved with
+/// (64 lowercase hex). Neither is a secret or a digest of the key itself.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApiKeyBinding {
+    /// The approver's stable principal.
+    pub quota_principal: String,
+    /// The tag of the digest the approver presented.
+    pub digest_tag: String,
 }
 
 // Manual `Debug` (CWE-532): a derived one printed the key. The digest is not a
@@ -141,6 +162,15 @@ impl std::fmt::Debug for ApiKeyConfig {
             .field("principal", &redact(&self.principal))
             .field("previous_key_sha256", &redact(&self.previous_key_sha256))
             .field("previous_expires_at", &self.previous_expires_at)
+            .field(
+                "approved_by",
+                &if self.approved_by.is_some() {
+                    "<bound>"
+                } else {
+                    "None"
+                },
+            )
+            .field("cli_host", &self.cli_host)
             .finish()
     }
 }

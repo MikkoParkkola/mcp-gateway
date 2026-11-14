@@ -172,6 +172,8 @@ mod task_lifecycle_tests;
 
 #[cfg(all(test, feature = "metrics"))]
 mod backend_origin_count_tests;
+#[cfg(test)]
+mod cli_binding_revocation_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod egress_matrix_tests;
 #[cfg(test)]
