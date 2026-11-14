@@ -26,9 +26,10 @@ src/config/server_config.rs. The duration grammar is the gateway's
 this check, the Helm chart and the gateway's own parser share. The Helm chart is
 checked by scripts/dev/helm-chart-smoke.sh, which reads --print-default.
 
-Limits: a deploy artifact's timeout is read from its own folder only (a config kept
-elsewhere, or a Kustomize overlay, is not followed); Setext headings are not sections
-(none in tracked Markdown). SHIPPED and FLOORS keep both from hiding a lost artifact.
+Limits, not mitigated here: a deploy artifact's timeout is read from its own folder only, so
+a timeout kept elsewhere (a config outside the folder, a Kustomize overlay) is not seen and
+the artifact is checked against the default; Setext headings are not sections (none in
+tracked Markdown). SHIPPED and FLOORS only prove each artifact was found and checked.
 
 usage: check-stop-grace.py [ROOT] | --self-test | --print-default
 """
@@ -117,6 +118,9 @@ def timeouts_in(text):
 FENCE = re.compile(r"^\s*(```|~~~)")
 HEADING = re.compile(r"^(#{1,6})\s")
 SPAN = re.compile(r"`([^`]+)`")
+# An indented code line, or a line that starts with a docker command (after a prompt, sudo or
+# variable assignments); prose that mentions docker is neither.
+COMMAND_LINE = re.compile(r"(?:\s{4,}|\t)\S|\s*(?:\$\s+)?(?:sudo\s+)?(?:\w+=\S*\s+)*docker\b")
 
 
 def markdown_units(text):
@@ -149,7 +153,7 @@ def markdown_units(text):
             continue
         for m in SPAN.finditer(line):
             units.append((n, m.group(1), chain))
-        if "`" not in line and RUN_WORD.search(line):
+        if "`" not in line and (COMMAND_LINE.match(line) or timeouts_in(line)):
             run, k = line, n
             while run.endswith("\\") and k < len(lines):
                 run, k = run + "\n" + lines[k], k + 1
@@ -177,7 +181,7 @@ def parse_run(tokens):
     i = 0
     while i < len(tokens) and tokens[i] != "run":
         tok = tokens[i]
-        if tok == "container" or tok in GLOBAL_BOOLS or "=" in tok:
+        if tok == "container" or tok in GLOBAL_BOOLS or "=" in tok or (tok[:1] == "-" and tok[1:2] != "-" and len(tok) > 2):
             i += 1
         elif tok.startswith("-"):
             i += 2
@@ -232,6 +236,9 @@ def docker_runs(body):
             except ValueError:
                 tokens = text.split()
             parsed = parse_run(tokens)
+            if parsed is None and tokens[:1] and tokens[0].startswith("-") and "run" in tokens \
+                    and any(GATEWAY_IMAGE.search(t) for t in tokens):
+                parsed = (None, [], None, True)
             if parsed is not None:
                 runs.append((offsets[idx] if idx < len(offsets) else 0, *parsed))
     return runs
@@ -343,10 +350,14 @@ def check_plist(body, need):
 
 
 def check_k8s(body, need):
-    """Every pod template in the text: each terminationGracePeriodSeconds must be enough."""
-    values = re.findall(r"^\s*terminationGracePeriodSeconds:\s*(\S+)\s*$", body, re.M) or [None]
-    problems = [grace_problem("terminationGracePeriodSeconds", raw, int(raw) if raw and raw.isdigit() else None, need)
-                for raw in values]
+    """Each YAML document that is a gateway Deployment needs its own enough grace."""
+    problems = []
+    for doc in re.split(r"^---[ \t]*$", body, flags=re.M):
+        if "kubernetes" not in kinds_of(doc):
+            continue
+        values = re.findall(r"^\s*terminationGracePeriodSeconds:\s*([^\s#]+)", doc, re.M) or [None]
+        problems += [grace_problem("terminationGracePeriodSeconds", raw,
+                                   int(raw) if raw and raw.isdigit() else None, need) for raw in values]
     return [p for p in problems if p]
 
 
@@ -542,6 +553,12 @@ PLANTED = {
     "docs/run-dashdash.md": fence("docker run --rm -- " + IMG),
     "docs/run-unreadable.md": fence("docker run --made-up " + IMG + " --config /c"),
     "docs/indented.md": "Run it:\n\n    docker run -d \\\n      " + IMG + "\n",
+    "deploy/o/deployment.yaml": DEPLOYMENT + "      terminationGracePeriodSeconds: 31\n---\n" + DEPLOYMENT,
+    "docs/run-attached-global.md": fence("docker -Htcp://host run " + IMG),
+    "docs/run-global-unreadable.md": fence("docker --made-up-global run " + IMG),
+    "docs/indented-config.md": "Config:\n\n    server:\n      shutdown_timeout: 50s\n\nRun:\n\n    " + RUN31 + "\n",
+    "deploy/n/deployment.yaml": DEPLOYMENT + "      terminationGracePeriodSeconds: 31\n---\n"
+                                + DEPLOYMENT + "      terminationGracePeriodSeconds: 10  # short\n",
 }
 # Files a planted artifact reads, never flagged themselves.
 SUPPORT = {
@@ -560,6 +577,8 @@ CLEAN = {
     "docs/run-ok.md": fence("docker run -it --rm -e X=1 --stop-timeout=31 mcp-gateway:latest"),
     "docs/prose.md": "pass it to the process (`docker run -e MCP_GATEWAY_TOKEN`)\n",
     "docs/run-forever.md": fence("docker run --stop-timeout -1 " + IMG),
+    "docs/prose-docker.md": "Teams often keep a docker run of mcp-gateway:latest in a wiki page.\n",
+    "docs/run-attached.md": fence("docker run -p8080:80 -eA=1 --stop-timeout 31 " + IMG),
     "docs/run-name.md": fence("docker run --name mcp-gateway grafana/k6 run -"),
     # A timeout before the first heading is not a parent of the sections after it.
     "docs/preamble.md": fence("server:\n  shutdown_timeout: 50s") + "\n" + section("## B", RUN31),
@@ -567,6 +586,11 @@ CLEAN = {
 
 # Every planted offender's diagnostic, exactly: a fixture flagged for the wrong reason fails.
 EXPECTED = [
+    'deploy/o/deployment.yaml:1: kubernetes: terminationGracePeriodSeconds is unset; it needs at least 31 s',
+    'docs/run-attached-global.md:2: serving docker run --stop-timeout is unset; it needs at least 31 s',
+    'docs/run-global-unreadable.md:2: a docker run of the gateway image the check cannot read (it took None for the image); fix the example or teach check-stop-grace.py the option',
+    'deploy/n/deployment.yaml:1: kubernetes: terminationGracePeriodSeconds is 10; it needs at least 31 s',
+    'docs/indented-config.md:8: serving docker run --stop-timeout is 31; it needs at least 51 s',
     'deploy/a/u.service:1: systemd: TimeoutStopSec is 30s; it needs at least 31 s',
     'deploy/b/u.service:1: systemd: KillMode is not mixed: control-group SIGTERMs every backend with the gateway',
     'deploy/c/u.service:1: systemd: TimeoutStopSec is unset; it needs at least 31 s',
