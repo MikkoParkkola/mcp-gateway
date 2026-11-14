@@ -187,10 +187,10 @@ async fn work_that_panics_fails_the_attempt() {
     let entered = std::sync::Arc::new(tokio::sync::Notify::new());
     let (release, released) = std::sync::mpsc::channel::<()>();
     let released = std::sync::Mutex::new(released);
-    let hook: super::CommitHook = std::sync::Arc::new({
+    let hook: super::super::CommitHook = std::sync::Arc::new({
         let entered = std::sync::Arc::clone(&entered);
         move |stage| {
-            if matches!(stage, super::StoreWriteStage::Write) {
+            if matches!(stage, super::super::StoreWriteStage::Write) {
                 entered.notify_one();
                 let _ = released.lock().map(|rx| rx.recv());
                 panic!("the write panics on purpose");
