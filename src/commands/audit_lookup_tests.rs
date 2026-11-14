@@ -555,6 +555,11 @@ async fn a_refusal_names_an_unreadable_body_or_wait() {
         message.contains("503") && message.contains("not JSON"),
         "{message}"
     );
+    assert!(!message.contains("busy"), "the body was echoed: {message}");
+    assert!(
+        !message.contains("retry after"),
+        "no Retry-After was sent, so none is named: {message}"
+    );
     let app = axum::Router::new().fallback(|| async {
         (
             axum::http::StatusCode::TOO_MANY_REQUESTS,
