@@ -1,0 +1,27 @@
+head_sha	64d5b9e3cc52a858189304a18c96509d43ee8b3a
+#mutant m14-slash
+mcp_gateway	restart::invocation_tests::unix::inv4_slash_spellings_are_kept_as_spelled	src/restart/invocation_tests.rs:148
+#mutant m15-slashprobe
+mcp_gateway	restart::invocation_tests::unix::inv4b_slash_spelling_to_a_non_executable_is_refused	src/restart/invocation_tests.rs:154
+#mutant m16-defaultpath
+mcp_gateway	restart::invocation_tests::unix::inv3b_unset_path_searches_nothing_and_empty_path_is_cwd	src/restart/invocation_tests.rs:154
+#mutant m17-anchor
+mcp_gateway	restart::invocation_tests::unix::inv3_relative_and_empty_path_entries_anchor_to_cwd	src/restart/invocation_tests.rs:148
+#mutant m18-isfile
+mcp_gateway	restart::invocation_tests::unix::inv2b_an_executable_directory_is_not_a_hit	src/restart/invocation_tests.rs:197
+#mutant m19-access
+mcp_gateway	restart::invocation_tests::unix::inv2_a_non_executable_earlier_hit_is_skipped	src/restart/invocation_tests.rs:186
+#mutant m20-lenprefix
+mcp_gateway	restart::invocation_tests::unix::inv16_digest_golden_vector	src/restart/invocation_tests.rs:579
+#mutant m21-tailcount
+mcp_gateway	restart::invocation_tests::unix::inv16_digest_golden_vector	src/restart/invocation_tests.rs:579
+#mutant m22-cwdfield
+mcp_gateway	restart::invocation_tests::unix::inv18_path_excluded_cwd_included	src/restart/invocation_tests.rs:625
+#mutant m23-size
+mcp_gateway	restart::invocation_tests::unix::inv20_target_file_id	src/restart/invocation_tests.rs:658
+#mutant m24-ctime
+mcp_gateway	restart::invocation_tests::unix::inv20_target_file_id	src/restart/invocation_tests.rs:658
+#mutant m25-ino
+mcp_gateway	restart::invocation_tests::unix::inv20_target_file_id	src/restart/invocation_tests.rs:658
+#mutant m26-maskread
+mcp_gateway	restart::invocation_tests::unix::inv10c_current_thread_mask_reads_the_thread	src/restart/invocation_tests.rs:446
