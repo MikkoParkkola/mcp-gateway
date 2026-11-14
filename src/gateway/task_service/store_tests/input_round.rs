@@ -320,7 +320,14 @@ async fn assert_rounds_unserved(
         closed.err()
     );
     let closed = reader
-        .close_round(OWNER, task.id(), revision, "expired".into(), at(31))
+        .close_round_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
+            OWNER,
+            task.id(),
+            revision,
+            "expired".into(),
+            at(31),
+        )
         .await;
     assert!(matches!(closed, Err(StoreError::Unavailable)), "{closed:?}");
     assert!(reader.expired_input_rounds(far).is_empty());
@@ -443,13 +450,27 @@ async fn a_foreign_owner_cannot_write_the_dispatch_marker_or_a_round() {
         refused.as_ref().err()
     );
     let refused = store
-        .close_round(OTHER, task.id(), revision, "closed".to_owned(), at(31))
+        .close_round_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
+            OTHER,
+            task.id(),
+            revision,
+            "closed".to_owned(),
+            at(31),
+        )
         .await;
     assert!(matches!(refused, Err(StoreError::NotFound)), "{refused:?}");
     assert_eq!(bytes(), before, "a refused write changed the record");
 
     store
-        .close_round(OWNER, task.id(), revision, "closed".to_owned(), at(31))
+        .close_round_as(
+            crate::gateway::task_service::store::gate::Kind::Internal,
+            OWNER,
+            task.id(),
+            revision,
+            "closed".to_owned(),
+            at(31),
+        )
         .await
         .expect("control: the owner closes its round");
     assert_ne!(bytes(), before, "control: the round is closed on disk");
