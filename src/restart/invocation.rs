@@ -65,7 +65,7 @@ pub(crate) enum UnavailableReason {
 #[derive(Debug)]
 pub(crate) enum InvocationState {
     #[cfg(unix)]
-    Ready(Invocation),
+    Ready(Box<Invocation>),
     Unavailable(UnavailableReason),
 }
 
@@ -251,13 +251,13 @@ pub(crate) fn capture_from(
         _ => return off(Off::Embedded),
     }
     match resolve(argv0, &cwd, inputs.path_env.as_deref(), probe) {
-        Ok(target) => InvocationState::Ready(Invocation {
+        Ok(target) => InvocationState::Ready(Box::new(Invocation {
             argv0: argv0.clone(),
             tail: inputs.args[1..].to_vec(),
             cwd,
             target,
             entry_mask: inputs.mask,
-        }),
+        })),
         Err(reason) => off(reason),
     }
 }

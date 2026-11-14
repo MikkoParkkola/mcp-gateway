@@ -73,7 +73,7 @@ fn production_files(dir: &Path, out: &mut Vec<PathBuf>) {
             if !name.ends_with("_tests") {
                 production_files(&path, out);
             }
-        } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") {
+        } else if path.extension().is_some_and(|e| e == "rs") && !name.ends_with("_tests.rs") {
             out.push(path);
         }
     }
@@ -88,7 +88,7 @@ fn public_items(code: &str) -> Vec<usize> {
         let after = b.get(i + 3).copied();
         let word = before.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == b'_'))
             && after.is_some_and(|c| !(c.is_ascii_alphanumeric() || c == b'_'));
-        if word && code[i + 3..].trim_start().chars().next() != Some('(') {
+        if word && !code[i + 3..].trim_start().starts_with('(') {
             found.push(i);
         }
     }

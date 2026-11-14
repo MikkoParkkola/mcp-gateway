@@ -98,7 +98,7 @@ mod unix {
 
     fn ready(state: InvocationState) -> Invocation {
         match state {
-            InvocationState::Ready(inv) => inv,
+            InvocationState::Ready(inv) => *inv,
             InvocationState::Unavailable(r) => panic!("expected Ready, got Unavailable({r:?})"),
         }
     }
@@ -115,7 +115,7 @@ mod unix {
     }
 
     fn path_of(dirs: &[&Path]) -> Option<OsString> {
-        Some(std::env::join_paths(dirs).unwrap())
+        std::env::join_paths(dirs).ok()
     }
 
     /// INV-1: the first PATH entry holding an executable regular file wins.
@@ -487,7 +487,11 @@ mod unix {
     }
 
     fn hex(d: crate::restart::invocation::InvocationDigest) -> String {
-        d.0.iter().map(|b| format!("{b:02x}")).collect()
+        use std::fmt::Write as _;
+        d.0.iter().fold(String::new(), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
     }
 
     /// INV-16: the encoding layout, pinned by a vector computed outside the module.
