@@ -218,3 +218,51 @@ for (const width of WIDTHS) {
     expect(await blockingViolations(page)).toEqual([]);
   });
 }
+
+const deleteButton = (page, name) => row(page, name).getByRole('button', { name: `Delete ${name}` });
+
+test('G12: after Cancel, and after a refusal\'s Close, focus is on that entry\'s Delete again', async ({ page }) => {
+  await unusedScreen(page, { del: () => ({ status: 409, json: { error: 'named', message: 'a source still names that entry' } }) });
+  await open(page);
+  await deleteButton(page, NAME_B).click();
+  await dialog(page).getByRole('button', { name: 'Cancel' }).click();
+  await expect(deleteButton(page, NAME_B)).toBeFocused();
+  await deleteButton(page, NAME_B).click();
+  await act(page, NAME_B).click();
+  await expect(message(page)).toContainText('a source still names that entry');
+  await dialog(page).getByRole('button', { name: 'Close' }).click();
+  await expect(dialog(page)).toBeHidden();
+  await expect(deleteButton(page, NAME_B)).toBeFocused();
+});
+
+test('G13: a flat {error: sentence} refusal shows its sentence; a long one is cut at 500 characters', async ({ page }) => {
+  const long = `${'a'.repeat(499)}bz`;
+  let body = { error: 'that entry changed while you looked' };
+  await unusedScreen(page, { del: () => ({ status: 409, json: body }) });
+  await open(page);
+  await deleteButton(page, NAME_A).click();
+  await act(page, NAME_A).click();
+  await expect(message(page)).toContainText('that entry changed while you looked');
+  await dialog(page).getByRole('button', { name: 'Close' }).click();
+  body = { error: 'named', message: long };
+  await deleteButton(page, NAME_A).click();
+  await act(page, NAME_A).click();
+  await expect(message(page)).toContainText(`${'a'.repeat(499)}b`);
+  await expect(message(page)).not.toContainText('bz');
+});
+
+test('G14: markup in a refusal\'s or a not-confirmed sentence is shown as text', async ({ page }) => {
+  let status = 409;
+  await unusedScreen(page, { del: () => ({ status, json: { error: 'named', message: HOSTILE } }) });
+  await open(page);
+  for (const s of [409, 503]) {
+    status = s;
+    await deleteButton(page, NAME_A).click();
+    await act(page, NAME_A).click();
+    await expect(message(page)).toContainText(HOSTILE);
+    await expect(dialog(page).locator('img')).toHaveCount(0);
+    await dialog(page).getByRole('button', { name: 'Close' }).click();
+    await expect(dialog(page)).toBeHidden();
+  }
+  expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
+});

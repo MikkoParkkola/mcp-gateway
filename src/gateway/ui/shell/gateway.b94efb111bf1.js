@@ -8,17 +8,7 @@
 // and the list is read again, so a kept entry stays listed. Status and Actions
 // come with the rest of this page; until then they are not drawn. Every
 // server-supplied string goes in with textContent.
-import { register, render } from '/ui/assets/shell.48e18d9899c2.js';
-
-/** One element: attributes set through setAttribute, children appended as nodes or text. */
-function h(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v !== null && v !== undefined && v !== false) node.setAttribute(k, v === true ? '' : String(v));
-  }
-  node.append(...children);
-  return node;
-}
+import { register, render, el as h } from '/ui/assets/shell.85514d082c34.js';
 
 const STORES = { files: 'Files', keychain: 'Keychain' };
 const storeWord = (s) => STORES[s] ?? String(s);
@@ -30,13 +20,18 @@ function writtenWord(at) {
   return `${when.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
+/** The entry whose Delete gets focus back once the list is read again; null when none. */
+let refocus = null;
+
+const keyOf = (e) => `unused:${e.store}:${e.name}`;
+
 const entryPath = (e) => `/ui/api/settings/secrets/unused/${encodeURIComponent(e.name)}?store=${encodeURIComponent(e.store)}`;
 
 /** Delete one entry through the shell's confirm; whatever the outcome, the list is read again. */
 async function remove(e, opener, ctx) {
   const result = await ctx.confirm({
     opener,
-    key: `unused:${e.store}:${e.name}`,
+    key: keyOf(e),
     verb: 'Delete',
     object: `entry ${e.name}`,
     progress: `Deleting ${e.name}…`,
@@ -49,8 +44,13 @@ async function remove(e, opener, ctx) {
       notice: value?.already_gone ? `${e.name} was already gone.` : `Deleted ${e.name}.`,
     }),
   });
-  // A done outcome already routed and re-read the list; any other one reads it now.
-  if (result.outcome !== 'done') render();
+  // A done outcome already routed and re-read the list. A refusal or an outcome the
+  // gateway did not confirm reads it again, and focus goes back to this entry's
+  // Delete. Cancel changed nothing: the dialog already returned focus to its opener.
+  if (result.outcome === 'failed' || result.outcome === 'unconfirmed') {
+    refocus = keyOf(e);
+    render();
+  }
 }
 
 async function settingsTab(body, ctx) {
@@ -60,7 +60,7 @@ async function settingsTab(body, ctx) {
   const errors = (Array.isArray(listed?.errors) ? listed.errors : []).filter((x) => x && typeof x.store === 'string');
 
   const card = h('section', { class: 'tk unused-card', id: 'unused-secrets', 'aria-labelledby': 'unused-title' },
-    h('h2', { class: 'unused-title', id: 'unused-title' }, 'Unused secret entries'),
+    h('h2', { class: 'unused-title', id: 'unused-title', tabindex: -1 }, 'Unused secret entries'),
     h('p', { class: 't3' }, 'Entries a failed or rolled-back save left in a secret store. Nothing names them; delete them one at a time.'));
   if (errors.length) {
     card.append(h('ul', { class: 'unused-errors' },
@@ -70,7 +70,7 @@ async function settingsTab(body, ctx) {
     if (!errors.length) card.append(ctx.state('empty', { title: 'No unused entries', body: 'No secret store holds an entry that nothing names.' }));
   } else {
     const tbody = h('tbody', {}, ...entries.map((e) => {
-      const del = h('button', { class: 'btn danger', type: 'button', 'aria-label': `Delete ${e.name}` }, 'Delete');
+      const del = h('button', { class: 'btn danger', type: 'button', 'aria-label': `Delete ${e.name}`, 'data-key': keyOf(e) }, 'Delete');
       del.addEventListener('click', () => remove(e, del, ctx));
       return h('tr', { class: 'unused-entry' },
         h('td', { class: 'mono' }, e.name), h('td', {}, storeWord(e.store)), h('td', { class: 't2' }, writtenWord(e.written_at)), h('td', {}, del));
@@ -83,6 +83,11 @@ async function settingsTab(body, ctx) {
   }
   card.append(h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' }));
   body.append(card);
+  if (refocus) {
+    const back = [...card.querySelectorAll('button[data-key]')].find((b) => b.dataset.key === refocus);
+    refocus = null;
+    (back ?? card.querySelector('#unused-title')).focus();
+  }
 }
 
 register('gateway', {

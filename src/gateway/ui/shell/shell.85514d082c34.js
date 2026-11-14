@@ -208,7 +208,8 @@ function visibleTabs(id) {
 
 // ---------------------------------------------------------------- elements
 
-function el(tag, attrs = {}, ...children) {
+/** One element: attributes set through setAttribute, children appended as nodes or text. Screens use it too. */
+export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (v !== null && v !== undefined && v !== false) node.setAttribute(k, v === true ? '' : String(v));
@@ -389,6 +390,8 @@ export class ApiError extends Error {
 
 /** Longest gateway sentence kept on an ApiError; a longer one is cut there. */
 const SERVER_MESSAGE_MAX = 500;
+/** How long a refusal's body may take to arrive before the refusal is told by its status alone. */
+const REFUSAL_BODY_MS = 2000;
 
 /**
  * A JSON refusal's words: `{error: code, message: sentence}`, or a flat
@@ -397,14 +400,21 @@ const SERVER_MESSAGE_MAX = 500;
 async function refusalWords(reply) {
   if (!(reply.headers.get('content-type') ?? '').includes('json')) return {};
   const text = (v) => (typeof v === 'string' && v.trim() ? v.slice(0, SERVER_MESSAGE_MAX) : null);
+  let timer;
   try {
-    const body = await reply.json();
+    const late = new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), REFUSAL_BODY_MS); });
+    const parse = reply.json();
+    parse.catch(() => {}); // settled late, after the race: nothing waits for it any more
+    const body = await Promise.race([parse, late]);
     if (!body || typeof body !== 'object') return {};
     const message = text(body.message);
     if (message) return { code: text(body.error), serverMessage: message };
     return body.message === undefined ? { serverMessage: text(body.error) } : {};
-  } catch {
-    return {}; // an unreadable or aborted refusal body: its status still says what happened
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err; // the caller's own cancel stays a cancel
+    return {}; // an unreadable refusal body: its status still says what happened
+  } finally {
+    clearTimeout(timer);
   }
 }
 
