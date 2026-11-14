@@ -85,6 +85,12 @@ impl std::fmt::Debug for InvocationDigest {
 pub(crate) struct FileId {
     pub(crate) dev: u64,
     pub(crate) ino: u64,
+    /// With the change time, catches a rewrite into the same inode. ctime is
+    /// stamped at the filesystem's clock tick (often a few ms), so a
+    /// same-size rewrite within one tick can keep both.
+    pub(crate) size: u64,
+    pub(crate) ctime_sec: i64,
+    pub(crate) ctime_nsec: i64,
 }
 
 /// A Ready capture. Its `Debug` shows lengths only: argv may carry secrets.
@@ -170,6 +176,9 @@ impl Invocation {
         Ok(FileId {
             dev: meta.dev(),
             ino: meta.ino(),
+            size: meta.size(),
+            ctime_sec: meta.ctime(),
+            ctime_nsec: meta.ctime_nsec(),
         })
     }
 

@@ -563,29 +563,38 @@ mod unix {
         exe(&real);
         let link = tmp.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
+        // Read independently of the module: (dev, ino, size, ctime, ctime_nsec).
         let id = |p: &Path| {
             let m = std::fs::metadata(p).unwrap();
-            (m.dev(), m.ino())
+            (m.dev(), m.ino(), m.size(), m.ctime(), m.ctime_nsec())
+        };
+        let fid = |f: crate::restart::invocation::FileId| {
+            (f.dev, f.ino, f.size, f.ctime_sec, f.ctime_nsec)
         };
         let state = capture(vec![real.clone().into_os_string()], tmp.path(), None);
         let got = state.target_file_id().expect("Ready").unwrap();
-        assert_eq!((got.dev, got.ino), id(&real));
+        assert_eq!(fid(got), id(&real));
 
         let via = capture(vec![link.into_os_string()], tmp.path(), None);
         let got = via.target_file_id().expect("Ready").unwrap();
-        assert_eq!((got.dev, got.ino), id(&real), "link resolves to its target");
+        assert_eq!(fid(got), id(&real), "link resolves to its target");
+
+        // Rewritten in place: same inode, new content of another length (ctime
+        // alone could share a clock tick with the first write).
+        let before = id(&real);
+        std::fs::write(&real, b"#!/bin/sh\n# rewritten in place, longer\n").unwrap();
+        assert_eq!(id(&real).1, before.1, "premise: same inode");
+        let got = state.target_file_id().expect("Ready").unwrap();
+        assert_ne!(fid(got), before, "an in-place rewrite changes the file id");
+        assert_eq!(fid(got), id(&real));
 
         let before = id(&real);
         let fresh = tmp.path().join("fresh");
         exe(&fresh);
         std::fs::rename(&fresh, &real).unwrap();
         let got = state.target_file_id().expect("Ready").unwrap();
-        assert_ne!(
-            (got.dev, got.ino),
-            before,
-            "replaced file keeps the old inode"
-        );
-        assert_eq!((got.dev, got.ino), id(&real));
+        assert_ne!(fid(got).1, before.1, "replaced file keeps the old inode");
+        assert_eq!(fid(got), id(&real));
 
         std::fs::remove_file(&real).unwrap();
         let err = state.target_file_id().expect("Ready").unwrap_err();
