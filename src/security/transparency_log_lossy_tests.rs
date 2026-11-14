@@ -10,7 +10,7 @@ use crate::log_writer::test_sinks::stalled_log;
 
 #[test]
 fn l3_a_transparency_record_reaches_its_file_while_stderr_is_stalled() {
-    let dir = tempfile::tempdir().expect("a directory");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let logger = TransparencyLogger::open(cfg(&path, 2, false)).expect("logger opens");
     let stalled = stalled_log();

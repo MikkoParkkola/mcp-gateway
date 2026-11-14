@@ -550,20 +550,68 @@ fn nothing_in_the_key_server_calls_std_lowercase() {
 /// record builder hashes `identity.email()` and the log field hashes
 /// `identity.subject()`, each unchanged: no trim, case change, NFC or split in
 /// between. The callers of `EmailHashKey::hash` outside tests are these two
-/// (and the admin lookup route, which trims what the admin typed).
+/// and the admin lookup route, pinned by `the_lookup_route_hashes_what_the_admin_typed`.
+/// Each check reads production code only (tests, comments and strings blanked).
 /// Mutant: pass a transformed value at either site.
 #[test]
 fn the_email_reaches_the_hash_untouched() {
-    let audit = include_str!("audit.rs");
+    let audit = production_code(include_str!("audit.rs"));
     assert!(
         audit.contains("let email = identity.email();") && audit.contains("key.hash(email)"),
         "the record builder must hash identity.email() unchanged"
     );
-    let server = include_str!("mod.rs");
+    let server = production_code(include_str!("mod.rs"));
     assert!(
         server.contains("self.email_key.hash_subject(identity.subject())"),
         "the log field must hash identity.subject() unchanged"
     );
+}
+
+/// `source` with test-only items, comments and string literals blanked: the
+/// code that ships.
+fn production_code(source: &str) -> String {
+    crate::test_source_text::sanitize(&crate::test_source_text::production_text(source))
+}
+
+/// The admin lookup route hashes what the admin typed, unchanged, and judges a
+/// blank address with the hash's own frozen trim: no production code in the
+/// route reads the toolchain's Unicode tables (trim, whitespace, case or
+/// control classes). The route sits outside the key-server lowercase scan, so
+/// it has its own. Formatting is ignored; each pinned text appears once.
+/// Mutant: hash a std-trimmed value, validate with std trim, or wrap the
+/// frozen trim around a std one.
+#[test]
+fn the_lookup_route_hashes_what_the_admin_typed() {
+    let code: String = production_code(include_str!("../gateway/ui/activity/key_lookup.rs"))
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    for pinned in ["hash:key.hash(&raw)", "letemail=email_hash::trim_v1(raw);"] {
+        assert_eq!(
+            code.matches(pinned).count(),
+            1,
+            "the route must have `{pinned}` exactly once"
+        );
+    }
+    let rest = code.replace("email_hash::trim_v1(raw)", "");
+    for banned in [
+        "trim",
+        "is_whitespace",
+        "split_whitespace",
+        "to_lowercase",
+        "to_uppercase",
+        "is_control",
+        "is_alphabetic",
+        "is_alphanumeric",
+        "is_lowercase",
+        "is_uppercase",
+        "is_numeric",
+    ] {
+        assert!(
+            !rest.contains(banned),
+            "the route calls `{banned}`, which reads the toolchain's Unicode tables"
+        );
+    }
 }
 
 /// NORM.3: the startup self-check passes on the real normalization, and fails,
@@ -592,20 +640,31 @@ fn the_self_check_passes_the_real_normalization_and_fails_a_different_one() {
 
 /// NORM.3: the server's start runs the self-check before it reads or creates
 /// any key, so a build that normalizes differently never writes a key id or a
-/// row.
-/// Mutant: remove the call or move it after the key is resolved.
+/// row. Its error ends the start, and the `Key server enabled` line is logged
+/// only after it: the unlocked-install CI job
+/// (`scripts/ci/check-unlocked-install.sh`) reads that line on an installed
+/// binary as proof that the check ran and passed.
+/// Mutant: remove the call, move it after the key is resolved, ignore its
+/// error, or log the start before it.
 #[test]
 fn the_key_server_start_runs_the_self_check_before_any_key() {
     let source = include_str!("../gateway/server/run_steps.rs");
     let check = source
-        .find("email_hash::self_check()")
-        .expect("the start runs the self-check");
+        .find("email_hash::self_check().map_err(crate::Error::ConfigValidation)?;")
+        .expect("the start runs the self-check and stops on its error");
     let resolve = source
         .find("email_hmac_store::resolve(")
         .expect("the start resolves the key");
     assert!(
         check < resolve,
         "the self-check must come before the key is resolved"
+    );
+    let started = source
+        .find("\"Key server enabled\"")
+        .expect("the start logs that the key server is enabled");
+    assert!(
+        check < started,
+        "the key server must be logged as enabled only after the self-check passed"
     );
 }
 

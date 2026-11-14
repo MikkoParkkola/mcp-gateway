@@ -47,7 +47,7 @@ async fn healthy_invocation(l: &Arc<TransparencyLogger>) -> io::Result<()> {
 /// the bound it returns `TimedOut` with the write still held.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn stalled_append_times_out() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     let release = stall(&l);
     let l2 = Arc::clone(&l);
@@ -74,7 +74,7 @@ async fn stalled_append_times_out() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn stall_pins_no_runtime_worker() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     let release = stall(&l);
     let call = tokio::spawn({
@@ -99,7 +99,7 @@ async fn stall_pins_no_runtime_worker() {
 async fn stall_parks_one_blocking_thread() {
     use std::sync::atomic::Ordering;
     const CALLERS: usize = 21;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     let release = stall(&l);
     let start = Arc::new(tokio::sync::Barrier::new(CALLERS));
@@ -159,7 +159,7 @@ async fn stall_parks_one_blocking_thread() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fail_closed_calls_fail_fast_while_stalled() {
     use std::sync::atomic::Ordering;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     let release = stall(&l);
     assert!(invocation(&l).await.is_err());
@@ -181,7 +181,7 @@ async fn fail_closed_calls_fail_fast_while_stalled() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn admit_fails_fast_while_stalled_and_late_success_clears_it() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     let release = stall(&l);
     assert!(invocation(&l).await.is_err());
@@ -210,7 +210,7 @@ async fn admit_fails_fast_while_stalled_and_late_success_clears_it() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn best_effort_is_admitted_while_stalled() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logger(&dir, AuditFailurePolicy::BestEffort);
     let release = stall(&l);
     assert!(invocation(&l).await.is_err());
@@ -221,7 +221,7 @@ async fn best_effort_is_admitted_while_stalled() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn healthy_append_is_unaffected() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     append(&l, 0);
     invocation(&l).await.unwrap();
@@ -237,7 +237,7 @@ async fn healthy_append_is_unaffected() {
 /// one: it finishes on tokio's blocking pool and signals its clear.
 #[tokio::test]
 async fn completion_at_timeout_boundary_does_not_stick() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     let release = stall(&l);
     let probe = Arc::clone(&l);
@@ -260,7 +260,7 @@ async fn completion_at_timeout_boundary_does_not_stick() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn late_failure_degrades_with_cause() {
     use super::rotation::WriteFault;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     l.arm_write_fault(Some(WriteFault::FullForever));
     let release = stall(&l);
@@ -277,7 +277,7 @@ async fn late_failure_degrades_with_cause() {
 #[cfg(feature = "metrics")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn append_timeout_is_counted() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     let release = stall(&l);
     let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
@@ -305,7 +305,7 @@ async fn append_timeout_is_counted() {
 /// (5 s) the 2 s probe bound is the one that expires.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn probe_timeout_marks_the_log_stalled() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     // Degrade it with one failed append, then let appends succeed again.
     l.set_append_failure_for_test(true);

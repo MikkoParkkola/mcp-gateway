@@ -16,11 +16,6 @@ const PENDING: &[&str] = &[
     "src/commands/audit_race_tests.rs",
 ];
 
-/// The log module's own unit tests are exempt: they write synchronously and
-/// drop the log before its directory, and their one late write (a released
-/// bounded write) is drained by `release_and_drain`.
-const EXEMPT_PREFIX: &str = "src/security/transparency_log";
-
 fn is_test(rel: &str) -> bool {
     (rel.contains("/tests/")
         || rel.contains("_tests")
@@ -76,9 +71,7 @@ fn plain_temp_dir(text: &str) -> bool {
 }
 
 fn test_sources(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
-    sources_where(dir, root, out, &|rel| {
-        is_test(rel) && !rel.starts_with(EXEMPT_PREFIX)
-    });
+    sources_where(dir, root, out, &is_test);
 }
 
 /// Every `.rs` source under `dir` whose root-relative path `wanted` accepts.

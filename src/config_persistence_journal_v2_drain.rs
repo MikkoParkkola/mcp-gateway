@@ -10,8 +10,8 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use super::{
-    Fact, FrozenRecord, IntentId, JournalDecision, JournalError, JournalSession, ParkReason, Phase,
-    ResultClass, TerminalRole, TokenState,
+    Fact, FrozenRecord, IntentId, JournalDecision, JournalError, JournalSession, JournalV2,
+    ParkReason, Phase, ResultClass, TerminalRole, TokenState,
 };
 use crate::config_persistence::commit::{self, Action, FileRevision, Found, NotDurable, Refusal};
 use crate::config_persistence::journal::Recovered;
@@ -48,6 +48,8 @@ pub(crate) enum DrainError {
     Unconfirmed,
     Parked,
     Finish,
+    /// The abandoned file was refused as found; it is kept byte-identical.
+    FileRefused,
 }
 
 pub(crate) struct Delivery {
@@ -180,6 +182,18 @@ impl JournalDrain {
         let Some(journal) = &session.journal else {
             return Ok(());
         };
+        // A handed-over token counts as finished, so the shortcut below would unlink a donor
+        // whose file was never written. Only the handover's own resume, which proves the file
+        // first, may finish a handed-over journal.
+        if journal
+            .state
+            .writer
+            .iter()
+            .chain(&journal.state.attempts)
+            .any(|owner| owner.handed_over)
+        {
+            return Err(DrainError::Journal);
+        }
         if journal.state.pending.is_none()
             && journal.state.fact.is_some()
             && (journal.state.phase == Phase::Accepted
@@ -250,32 +264,7 @@ impl JournalDrain {
         }
         // Re-sync a retained candidate before trusting any in-memory delivery flag.
         journal.persist().map_err(|_| DrainError::Journal)?;
-        let owners: Vec<_> = journal
-            .state
-            .writer
-            .iter()
-            .chain(&journal.state.attempts)
-            .map(|owner| owner.intent_id.clone())
-            .collect();
-        for token in &owners {
-            send_record(journal, sink, &binding, token, None).await?;
-        }
-        // Counters are now acknowledged; freeze only missing caller payloads.
-        freeze_records(journal)?;
-        let terminal_order: Vec<_> = journal
-            .state
-            .attempts
-            .iter()
-            .chain(journal.state.writer.iter())
-            .map(|owner| owner.intent_id.clone())
-            .collect();
-        for token in terminal_order {
-            let count = owner_mut(journal, &token)?.records.len();
-            for index in 0..count {
-                send_record(journal, sink, &binding, &token, Some(index)).await?;
-            }
-        }
-        Ok(())
+        deliver_all(journal, sink, &binding).await
     }
 
     pub(crate) fn recovery_intent(
@@ -327,6 +316,41 @@ impl JournalDrain {
         fault::hit(&journal.target, fault::At::AttemptPersisted)?;
         Ok(Some(token))
     }
+}
+
+/// Every intent first, then the owed terminals frozen, then every record: the one delivery order,
+/// for the journal and for the abandoned file.
+async fn deliver_all(
+    journal: &mut JournalSession,
+    sink: &dyn SettleSink,
+    binding: &LogId,
+) -> Result<(), DrainError> {
+    let owners: Vec<_> = journal
+        .state
+        .writer
+        .iter()
+        .chain(&journal.state.attempts)
+        .map(|owner| owner.intent_id.clone())
+        .collect();
+    for token in &owners {
+        send_record(journal, sink, binding, token, None).await?;
+    }
+    // Counters are now acknowledged; freeze only missing caller payloads.
+    freeze_records(journal)?;
+    let terminal_order: Vec<_> = journal
+        .state
+        .attempts
+        .iter()
+        .chain(journal.state.writer.iter())
+        .map(|owner| owner.intent_id.clone())
+        .collect();
+    for token in terminal_order {
+        let count = owner_mut(journal, &token)?.records.len();
+        for index in 0..count {
+            send_record(journal, sink, binding, &token, Some(index)).await?;
+        }
+    }
+    Ok(())
 }
 
 fn report(recovered: Recovered, at_start: bool) -> RepairReport {
@@ -539,6 +563,78 @@ fn frozen(
     })
 }
 
+/// The terminal (or deferred) record `owner` still owes, built from its decision and counter;
+/// `None` when it owes none. The one builder: the drains freeze with it and the handover's size
+/// bound projects with it.
+fn terminal_record(
+    state: &JournalV2,
+    owner: &TokenState,
+) -> Result<Option<FrozenRecord>, DrainError> {
+    let Some(counter) = owner.intent_counter else {
+        return Err(DrainError::Journal);
+    };
+    let intent: Map<String, Value> =
+        serde_json::from_slice(&owner.intent.payload_json).map_err(|_| DrainError::Journal)?;
+    let kind = intent.get("kind").cloned().ok_or(DrainError::Journal)?;
+    let mut payload = Map::new();
+    payload.insert("kind".into(), kind);
+    payload.insert("intent_counter".into(), counter.into());
+    let role = if let Some(choice) = &owner.decision {
+        let role = match choice.terminal {
+            TerminalRole::Outcome => Role::Outcome,
+            TerminalRole::Abandoned => Role::Abandoned,
+        };
+        if owner.records.iter().any(|record| record.role == role) {
+            return Ok(None);
+        }
+        payload.insert(
+            "result".into(),
+            serde_json::to_value(choice.result).map_err(|_| DrainError::Journal)?,
+        );
+        payload.insert(
+            "reason".into(),
+            serde_json::to_value(choice.reason).map_err(|_| DrainError::Journal)?,
+        );
+        if let Some(token) = &choice.settled_by {
+            let attempt = state
+                .attempts
+                .iter()
+                .find(|attempt| &attempt.intent_id == token)
+                .ok_or(DrainError::Journal)?;
+            let counter = attempt.intent_counter.ok_or(DrainError::Journal)?;
+            payload.insert(
+                "settled_by".into(),
+                serde_json::json!({"token": token.0, "intent_counter": counter}),
+            );
+        }
+        role
+    } else if state.pending.is_some()
+        && state
+            .writer
+            .as_ref()
+            .is_some_and(|writer| writer.intent_id == owner.intent_id)
+    {
+        if owner
+            .records
+            .iter()
+            .any(|record| record.role == Role::Deferred)
+        {
+            return Ok(None);
+        }
+        payload.insert("reason".into(), "left_to_recovery".into());
+        Role::Deferred
+    } else {
+        return Ok(None);
+    };
+    frozen(
+        &owner.intent_id,
+        role,
+        payload,
+        owner.intent.attribution.clone(),
+    )
+    .map(Some)
+}
+
 fn freeze_records(journal: &mut JournalSession) -> Result<(), DrainError> {
     let owners: Vec<_> = journal
         .state
@@ -548,72 +644,10 @@ fn freeze_records(journal: &mut JournalSession) -> Result<(), DrainError> {
         .cloned()
         .collect();
     for owner in owners {
-        let Some(counter) = owner.intent_counter else {
-            return Err(DrainError::Journal);
-        };
-        let intent: Map<String, Value> =
-            serde_json::from_slice(&owner.intent.payload_json).map_err(|_| DrainError::Journal)?;
-        let kind = intent.get("kind").cloned().ok_or(DrainError::Journal)?;
-        let mut payload = Map::new();
-        payload.insert("kind".into(), kind);
-        payload.insert("intent_counter".into(), counter.into());
-        let role = if let Some(choice) = &owner.decision {
-            let role = match choice.terminal {
-                TerminalRole::Outcome => Role::Outcome,
-                TerminalRole::Abandoned => Role::Abandoned,
-            };
-            if owner.records.iter().any(|record| record.role == role) {
-                continue;
-            }
-            payload.insert(
-                "result".into(),
-                serde_json::to_value(choice.result).map_err(|_| DrainError::Journal)?,
-            );
-            payload.insert(
-                "reason".into(),
-                serde_json::to_value(choice.reason).map_err(|_| DrainError::Journal)?,
-            );
-            if let Some(token) = &choice.settled_by {
-                let attempt = journal
-                    .state
-                    .attempts
-                    .iter()
-                    .find(|attempt| &attempt.intent_id == token)
-                    .ok_or(DrainError::Journal)?;
-                let counter = attempt.intent_counter.ok_or(DrainError::Journal)?;
-                payload.insert(
-                    "settled_by".into(),
-                    serde_json::json!({"token": token.0, "intent_counter": counter}),
-                );
-            }
-            role
-        } else if journal.state.pending.is_some()
-            && journal
-                .state
-                .writer
-                .as_ref()
-                .is_some_and(|writer| writer.intent_id == owner.intent_id)
-        {
-            if owner
-                .records
-                .iter()
-                .any(|record| record.role == Role::Deferred)
-            {
-                continue;
-            }
-            payload.insert("reason".into(), "left_to_recovery".into());
-            Role::Deferred
-        } else {
-            continue;
-        };
-        let record = frozen(
-            &owner.intent_id,
-            role,
-            payload,
-            owner.intent.attribution.clone(),
-        )?;
-        owner_mut(journal, &owner.intent_id)?.records.push(record);
-        journal.persist().map_err(|_| DrainError::Journal)?;
+        if let Some(record) = terminal_record(&journal.state, &owner)? {
+            owner_mut(journal, &owner.intent_id)?.records.push(record);
+            journal.persist().map_err(|_| DrainError::Journal)?;
+        }
     }
     Ok(())
 }
@@ -715,6 +749,8 @@ fn appended_boundary(target: &Path, role: Role) -> Result<(), DrainError> {
 mod crash_tests;
 #[path = "config_persistence_journal_v2_drain_fault_tests.rs"]
 pub(crate) mod fault;
+#[path = "config_persistence_journal_v2_drain_file.rs"]
+pub(crate) mod file;
 #[path = "config_persistence_journal_v2_drain_fixtures_tests.rs"]
 mod fixtures;
 #[path = "config_persistence_journal_v2_drain_handover.rs"]

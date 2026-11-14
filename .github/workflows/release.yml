@@ -172,8 +172,16 @@ jobs:
     needs: resolve
     uses: ./.github/workflows/packaged-suite.yml
 
+  # `cargo install mcp-gateway` ignores Cargo.lock. This installs the packaged
+  # crate with its dependencies resolved at the tag and starts it with the key
+  # server, whose startup refuses when the email hash moved. The nightly run of
+  # the same workflow sees drift first; here it must pass at the tag itself.
+  unlocked-install:
+    needs: resolve
+    uses: ./.github/workflows/unlocked-install.yml
+
   verify:
-    needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, mrtr7b-full-burst]
+    needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, mrtr7b-full-burst, unlocked-install]
     runs-on: ubuntu-latest
     # Every publishing job reads these to decide stable vs prerelease channel.
     # `needs` exposes only direct dependencies, so each consumer names `verify`
@@ -393,7 +401,7 @@ jobs:
 
             ### Cargo (Recommended)
             ```bash
-            cargo install mcp-gateway --version ${{ needs.verify.outputs.version }}
+            cargo install --locked mcp-gateway --version ${{ needs.verify.outputs.version }}
             ```
 
             ### Manual Download
