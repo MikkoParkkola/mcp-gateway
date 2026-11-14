@@ -682,3 +682,38 @@ async fn a_parked_write_wins_its_revision_over_a_later_arrival() {
         "the later arrival meets the revision A already moved"
     );
 }
+
+// G5: every count has its owner before the first await or fallible call after
+// the decision. An admission dropped there (a cancelled caller, or a panic in
+// the backstop log) leaves nothing in flight.
+#[tokio::test(flavor = "current_thread")]
+async fn a_dropped_admission_leaves_nothing_in_flight() {
+    let gate = TaskGate::new();
+    let hold = GateSeams::arm(&gate.seams().at_decision);
+    {
+        let mut admit = std::pin::pin!(gate.admit(Kind::External));
+        assert!(
+            futures::poll!(admit.as_mut()).is_pending(),
+            "held after its decision"
+        );
+        within("G5d admit decision", hold.reached()).await;
+    }
+    assert_eq!(gate.in_flight(), 0, "a dropped admission is not in flight");
+}
+
+// G5: the same for a fresh parker: dropped right after its decision, it leaves
+// nothing parked, so no later resume drains for it.
+#[tokio::test(flavor = "current_thread")]
+async fn a_dropped_fresh_parker_leaves_nothing_parked() {
+    let gate = paused();
+    let hold = GateSeams::arm(&gate.seams().at_decision);
+    {
+        let mut park = std::pin::pin!(gate.admit(Kind::External));
+        assert!(
+            futures::poll!(park.as_mut()).is_pending(),
+            "held after its decision"
+        );
+        within("G5d park decision", hold.reached()).await;
+    }
+    assert_eq!(gate.parked(), 0, "a dropped parker is not parked");
+}
