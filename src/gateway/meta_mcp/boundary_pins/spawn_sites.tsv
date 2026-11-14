@@ -109,6 +109,7 @@ src/personal_accounts/worker.rs	offload	spawn-blocking	1	raised-at-join	personal
 src/personal_accounts/worker.rs	refresh_after_rejection	spawn-blocking	1	raised-at-join	refreshes a personal-account credential lease; a refusal returns as AccountServiceError through the join
 src/personal_accounts/worker.rs	refresh_if_expired	spawn-blocking	1	raised-at-join	refreshes a credential lease if expired; a refusal returns as AccountServiceError through the join
 src/preview_sandbox/proxy.rs	begin_fetch	spawn	1	outside-calls	the preview fetch's deadline timer: revokes that fetch's proxy credential at the deadline; no call's answer waits on it
+src/preview_sandbox/proxy.rs	bind	spawn	1	outside-calls	the preview proxy's accept loop over its Unix socket, aborted when the proxy drops; it hands each connection to serve_connection, and no call's answer waits on it
 src/preview_sandbox/proxy.rs	serve_connection	spawn	1	outside-calls	serves one connection to the preview sandbox's allowlist proxy (the fetch's npm/uv traffic); its 407/403 answers go to the sandbox, not to a tool call
 src/security/message_signing.rs	spawn_nonce_cleanup_task	spawn	1	outside-calls	nonce cache cleanup timer
 src/security/transparency_log_bounded.rs	dispatch_bounded	spawn-blocking	1	raised-at-join	bounded transparency-log append; the joined result, a join failure or a timeout returns as a dispatch phase: append_bounded raises it as an io error the caller refuses with AuditUnavailable under FailClosed, settle as Refused or Unconfirmed

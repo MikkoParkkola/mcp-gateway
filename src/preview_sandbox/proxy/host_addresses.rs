@@ -40,13 +40,19 @@ pub(super) fn fib_trie_local(text: &str) -> io::Result<Vec<(Ipv4Addr, u8)>> {
                 rest.parse()
                     .map_err(|_| io::Error::other(format!("bad fib_trie line: {line}")))?,
             );
-        } else if line.starts_with('/') {
-            let leaf =
-                current.ok_or_else(|| io::Error::other(format!("bad fib_trie line: {line}")))?;
-            if line.split_whitespace().next_back() == Some("LOCAL")
-                && !addresses.contains(&(leaf, 32))
-            {
-                addresses.push((leaf, 32));
+        } else if let Some(info) = line.strip_prefix('/') {
+            let bad = || io::Error::other(format!("bad fib_trie line: {line}"));
+            let leaf = current.ok_or_else(bad)?;
+            // `/<prefix length> <scope> <type>`: a LOCAL route over a prefix
+            // makes the host answer on every address in it.
+            let mut words = info.split_whitespace();
+            let len = words
+                .next()
+                .and_then(|word| word.parse::<u8>().ok())
+                .filter(|len| *len <= 32)
+                .ok_or_else(bad)?;
+            if words.next_back() == Some("LOCAL") && !addresses.contains(&(leaf, len)) {
+                addresses.push((leaf, len));
             }
         } else {
             return Err(io::Error::other(format!("bad fib_trie line: {line}")));

@@ -119,11 +119,13 @@ struct Live {
     deadline: tokio::task::AbortHandle,
 }
 
-impl Live {
+impl Drop for Live {
     /// End the fetch: wake the tunnel tasks, and shut every tunnel's sockets
-    /// now. It runs with the proxy's `live` lock held, so a second revoker
-    /// waits until every socket of this fetch is shut.
-    fn end(self) {
+    /// now. Every `Live` is dropped with the proxy's `live` lock held, so a
+    /// second revoker waits until every socket of this fetch is shut. A
+    /// `Live` dropped by a panic (a failed spawn in `begin_fetch`) ends the
+    /// same way.
+    fn drop(&mut self) {
         // Takes no lock on `live` and never awaits, so running it under that
         // lock cannot deadlock.
         self.deadline.abort();
@@ -167,7 +169,7 @@ impl Shared {
                 hook();
             }
         }
-        live.end();
+        drop(live);
     }
 
     fn revoke(&self, credential: &Credential) {
@@ -184,7 +186,8 @@ impl Shared {
 pub(crate) struct AllowlistProxy {
     unix_path: PathBuf,
     shared: Arc<Shared>,
-    tasks: Vec<JoinHandle<()>>,
+    /// The accept loop, aborted when the proxy drops.
+    accept: JoinHandle<()>,
     random: Random,
 }
 
@@ -195,7 +198,7 @@ impl AllowlistProxy {
     ///
     /// Synchronous on purpose: the sockets are bound with `std` and handed to
     /// tokio, so a preview's proxy needs no `await` to exist. The
-    /// accept tasks are spawned, so a runtime context must be current.
+    /// accept task is spawned, so a runtime context must be current.
     pub(crate) fn bind(
         resolve: Arc<dyn Resolve>,
         connect: Arc<dyn Connect>,
@@ -222,11 +225,11 @@ impl AllowlistProxy {
             .inspect_err(|_| {
                 let _ = std::fs::remove_dir_all(&dir);
             })?;
-        let tasks = vec![tokio::spawn(serve(unix, shared.clone()))];
+        let accept = tokio::spawn(serve(unix, shared.clone()));
         Ok(Self {
             unix_path,
             shared,
-            tasks,
+            accept,
             random: os_random,
         })
     }
@@ -314,9 +317,7 @@ impl AllowlistProxy {
 
 impl Drop for AllowlistProxy {
     fn drop(&mut self) {
-        for task in &self.tasks {
-            task.abort();
-        }
+        self.accept.abort();
         {
             let mut live = lock(&self.shared.live);
             if let Some(old) = live.take() {
@@ -386,8 +387,8 @@ fn copy_bounds(m: &Mutex<Bounds>) -> Bounds {
     *m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// A listener the accept loop can run over: a TCP or a Unix socket, or a
-/// row's fake that fails on cue.
+/// A listener the accept loop can run over: the Unix socket, or a row's
+/// fake that fails on cue.
 #[async_trait]
 trait Accept: Send + Sync + 'static {
     type Stream: Tunnel + 'static;
@@ -703,16 +704,42 @@ fn authorized(auth: &[&str], shared: &Shared) -> Option<Fetch> {
     })
 }
 
-/// The SSRF deny list, or one of the host's own addresses. Mapped and
+/// The SSRF deny list, or inside one of the host's own networks. Mapped and
 /// compatible IPv6 forms are unwrapped first (`is_private_or_reserved`
 /// already unwraps them for its own ranges).
 fn denied(addr: IpAddr, own: &[Owned]) -> bool {
-    let plain = |a: IpAddr| match a {
+    crate::security::ssrf::is_private_or_reserved(addr)
+        || own
+            .iter()
+            .any(|&(net, len)| within(plain(addr), plain(net), len))
+}
+
+/// An IPv4-mapped or compatible IPv6 address as its IPv4 address.
+fn plain(a: IpAddr) -> IpAddr {
+    match a {
         IpAddr::V6(v6) => v6.to_ipv4().map_or(a, IpAddr::V4),
         IpAddr::V4(_) => a,
-    };
-    crate::security::ssrf::is_private_or_reserved(addr)
-        || own.iter().any(|&(o, _)| plain(o) == plain(addr))
+    }
+}
+
+/// `addr` lies in the network `net/len`; a length past the family's width
+/// means the one address.
+fn within(addr: IpAddr, net: IpAddr, len: u8) -> bool {
+    match (addr, net) {
+        (IpAddr::V4(a), IpAddr::V4(n)) => {
+            let mask = u32::MAX
+                .checked_shl(32 - u32::from(len.min(32)))
+                .unwrap_or(0);
+            u32::from(a) & mask == u32::from(n) & mask
+        }
+        (IpAddr::V6(a), IpAddr::V6(n)) => {
+            let mask = u128::MAX
+                .checked_shl(128 - u32::from(len.min(128)))
+                .unwrap_or(0);
+            u128::from(a) & mask == u128::from(n) & mask
+        }
+        _ => false,
+    }
 }
 
 /// The request head up to its blank line, read a byte at a time so no
