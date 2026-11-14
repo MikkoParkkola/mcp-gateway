@@ -37,6 +37,9 @@ spec:
     spec:
       serviceAccountName: {{ include "mcp-gateway.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      {{- /* The gateway's stop total + 1 s (Kubernetes' default is 30 s, 1 s
+             short of the gateway's default); see mcp-gateway.stopGraceSeconds. */}}
+      terminationGracePeriodSeconds: {{ include "mcp-gateway.stopGraceSeconds" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
