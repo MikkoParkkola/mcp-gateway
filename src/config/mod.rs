@@ -89,17 +89,17 @@ pub(crate) use secret_file::{
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
-    AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, ApiKeyKind,
-    AuthConfig, CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, ChainEmit, ChainMode,
-    CircuitBreakerConfig, CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
-    DEFAULT_MAX_WORKERS, DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig, FileRoots,
-    HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig,
-    KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
-    PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, ProcessCommand, ProcessExecution,
-    RateLimitConfig, RecordPrincipalKeyRef, RemoteServerSigningConfig, ResponseContractConfig,
-    RetryConfig, RuntimeConfig, RuntimeProfileConfig, SecretStoreChoice, SecretsConfig,
-    SecurityConfig, SignatureChainConfig, StreamingConfig, TasksConfig, ToolContractConfig,
-    WebhookConfig, api_key_digest_spec,
+    AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyBinding, ApiKeyConfig,
+    ApiKeyKind, AuthConfig, CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, ChainEmit,
+    ChainMode, CircuitBreakerConfig, CodeModeConfig, ContextIntegrityConfig,
+    ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS, DashboardSessionConfig, ErrorBudgetSection,
+    FailsafeConfig, FileRoots, HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool,
+    IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig,
+    KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig,
+    ProcessCommand, ProcessExecution, RateLimitConfig, RecordPrincipalKeyRef,
+    RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeConfig,
+    RuntimeProfileConfig, SecretStoreChoice, SecretsConfig, SecurityConfig, SignatureChainConfig,
+    StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
 };
 pub use features::{
     EventsConfig, EventsRateLimit, EventsScheduleConfig, EventsSourcesConfig, EventsWatchConfig,

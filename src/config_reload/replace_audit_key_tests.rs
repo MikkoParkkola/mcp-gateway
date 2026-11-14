@@ -86,7 +86,7 @@ fn append(audit: Audit) {
 
 #[test]
 fn a_key_write_intent_names_its_actor_and_key() {
-    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (log, posture) = posture(&dir);
     let audit = posture
         .key_write(IntentKind::KeyCreate, admin(), "alpha")
@@ -107,7 +107,7 @@ fn every_other_kind_keeps_naming_the_gateway() {
         IntentKind::Restore,
         IntentKind::Recovery,
     ] {
-        let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (log, posture) = posture(&dir);
         append(posture.audit(kind.clone()).expect("an audited posture"));
         let record = only_record(&log);

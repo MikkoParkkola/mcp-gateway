@@ -125,14 +125,14 @@ fn in_memory_passes_conformance() {
 
 #[test]
 fn file_backend_passes_conformance() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     conformance(&file_store(dir.path()));
 }
 
 // MIK-6685.STORE.1 — durability across "restart" (reopen the same dir).
 #[test]
 fn file_backend_persists_across_reopen() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     {
         let s = file_store(dir.path());
         s.put_grant(grant("g1", ControlPlaneGrantStatus::Approved))
@@ -149,7 +149,7 @@ fn file_backend_persists_across_reopen() {
 // passes verify_log.
 #[test]
 fn audit_backed_by_verifiable_transparency_log() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logger = governance_logger(dir.path());
     let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     store
@@ -188,7 +188,7 @@ fn audit_backed_by_verifiable_transparency_log() {
 #[test]
 fn collection_files_are_owner_only() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = file_store(dir.path());
     store
         .put_grant(grant("g1", ControlPlaneGrantStatus::Requested))
@@ -204,7 +204,7 @@ fn collection_files_are_owner_only() {
 // truncates good data.
 #[test]
 fn corrupt_collection_fails_closed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = file_store(dir.path());
     store
         .put_grant(grant("g1", ControlPlaneGrantStatus::Approved))
@@ -233,7 +233,7 @@ fn corrupt_collection_fails_closed() {
 // the optimistic put loop then does not lose updates.
 #[test]
 fn stale_generation_is_rejected() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logger = governance_logger(dir.path());
     let store_dir = dir.path().join("store");
     let a = FileControlPlaneStore::open(store_dir.clone(), Arc::clone(&logger)).unwrap();
@@ -290,7 +290,7 @@ fn write_phase_faults_never_tear_the_collection() {
         FaultPoint::AfterRename,
         FaultPoint::AfterDirFsync,
     ] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let store = file_store(dir.path());
         let grants_path = store.grants_file();
 
@@ -323,7 +323,7 @@ fn write_phase_faults_never_tear_the_collection() {
 // the second starts), synced appends continue the chain and verify_log passes.
 #[test]
 fn cross_process_audit_append_stays_verifiable() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store_dir = dir.path().join("store");
     let logger_a = governance_logger(dir.path());
     let refused = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -382,7 +382,7 @@ fn cross_process_audit_append_stays_verifiable() {
 #[test]
 fn malformed_audit_entry_fails_closed() {
     use std::io::Write;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logger = governance_logger(dir.path());
     let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     store
@@ -411,7 +411,7 @@ fn malformed_audit_entry_fails_closed() {
 // verifiable audit entry as one unit, under a single lock.
 #[test]
 fn audited_commit_persists_grant_and_appends_verifiable_audit() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logger = governance_logger(dir.path());
     let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
 
@@ -436,7 +436,7 @@ fn audited_commit_persists_grant_and_appends_verifiable_audit() {
 // and returns false (no audit) for a missing target.
 #[test]
 fn set_grant_status_audited_is_field_only_and_audited() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logger = governance_logger(dir.path());
     let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
 
@@ -539,7 +539,7 @@ fn writing_a_backend_shaped_audit_action_fails_until_scoped_readers_filter_it() 
 #[test]
 #[should_panic(expected = "before its newest-N limit")]
 fn file_store_pins_written_actions_too() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logger = governance_logger(dir.path());
     let store = FileControlPlaneStore::open(dir.path().join("store"), logger).unwrap();
     let _ = store.append_audit(&audit_event(

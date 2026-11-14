@@ -43,8 +43,8 @@ fn firewall(mode: CrossTenantReads) -> Firewall {
 
 /// A log in a fresh directory; a logger opened in test code starts keyed
 /// with the test record key.
-fn logger() -> (TempDir, Arc<TransparencyLogger>) {
-    let dir = tempfile::tempdir().expect("tempdir");
+fn logger() -> (Arc<TempDir>, Arc<TransparencyLogger>) {
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,
         path: dir.path().join("transparency.ndjson").display().to_string(),

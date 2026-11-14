@@ -25,7 +25,7 @@ async fn a_capability_call_never_offers_an_armed_submission_a_handle() {
             "resultType": "task", "taskId": "peer-task-1", "status": "working"
         }))
         .await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let alice = ("api_key", "alice");
     let meta = gateway(

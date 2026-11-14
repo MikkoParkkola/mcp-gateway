@@ -333,7 +333,7 @@ impl DashboardBootstrap {
         limits: &SessionLimits,
         touch: Touch,
     ) -> SessionCheck {
-        self.check(handle, now, limits, touch, None)
+        self.check(handle, now, limits, touch, None).0
     }
 
     /// [`Self::check_session`], and a session minted by an API key ends when
@@ -347,6 +347,21 @@ impl DashboardBootstrap {
         touch: Touch,
         keys: &crate::gateway::auth::ResolvedAuthConfig,
     ) -> SessionCheck {
+        self.check_session_with_origin(handle, now, limits, touch, keys)
+            .0
+    }
+
+    /// Judge validity and capture the minting key under the same session lock.
+    /// A concurrent logout cannot strip the origin from an accepted session;
+    /// refused sessions never carry an origin.
+    pub(crate) fn check_session_with_origin(
+        &self,
+        handle: &str,
+        now: Now,
+        limits: &SessionLimits,
+        touch: Touch,
+        keys: &crate::gateway::auth::ResolvedAuthConfig,
+    ) -> (SessionCheck, Option<MintingKey>) {
         self.check(handle, now, limits, touch, Some(keys))
     }
 
@@ -357,24 +372,24 @@ impl DashboardBootstrap {
         limits: &SessionLimits,
         touch: Touch,
         keys: Option<&crate::gateway::auth::ResolvedAuthConfig>,
-    ) -> SessionCheck {
+    ) -> (SessionCheck, Option<MintingKey>) {
         let Ok(mut sessions) = self.sessions.lock() else {
-            return SessionCheck::Unknown;
+            return (SessionCheck::Unknown, None);
         };
         let Some(times) = sessions.get_mut(handle) else {
-            return SessionCheck::Unknown;
+            return (SessionCheck::Unknown, None);
         };
         if wall_unreadable(now) {
-            return SessionCheck::ClockUnreadable;
+            return (SessionCheck::ClockUnreadable, None);
         }
         if times.expired(now, limits) || keys.is_some_and(|keys| times.bound.key_dead(keys, now)) {
             sessions.remove(handle);
-            return SessionCheck::Expired;
+            return (SessionCheck::Expired, None);
         }
         if touch == Touch::Yes {
             times.last_seen = now;
         }
-        SessionCheck::Valid
+        (SessionCheck::Valid, times.bound.key.clone())
     }
 
     /// End the session `handle`; `true` only when it was live at `now`. An

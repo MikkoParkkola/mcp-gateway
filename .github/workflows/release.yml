@@ -226,7 +226,8 @@ jobs:
       # The skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       - name: Test
-        run: cargo test --all-features -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
+        # Memory every 30 s (scripts/ci/with-memory-log.sh); log-only until its duration is measured.
+        run: scripts/ci/with-memory-log.sh cargo test --all-features -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
 
       - name: Verify publish package
         # The runner image replaces the crates-io source with a mirror, and

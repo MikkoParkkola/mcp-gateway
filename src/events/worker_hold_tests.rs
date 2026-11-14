@@ -40,7 +40,7 @@ async fn an_unoffered_type_is_held_then_sent_once_offered() {
         ("probe.late", SourceKind::GatewayOperational),
         ("webhook.c.r.received", SourceKind::Webhook),
     ] {
-        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let hub = open_hub(dir.path(), 5);
         hub.keep_test_dir(Arc::clone(&dir));
         let services = logged_services(dir.path());
@@ -90,7 +90,7 @@ async fn an_unoffered_type_is_held_then_sent_once_offered() {
 /// sent or charged, then dead `exhausted`, and the subscription stays.
 #[tokio::test]
 async fn an_unoffered_record_is_held_until_exhausted_and_keeps_its_subscription() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = open_hub(dir.path(), 2);
     hub.keep_test_dir(Arc::clone(&dir));
     #[allow(unused_mut, reason = "set only with cost-governance")]
@@ -160,7 +160,7 @@ impl crate::events::EventSource for Vanishing {
 /// and the subscription stays.
 #[tokio::test]
 async fn a_type_withdrawn_after_the_sending_record_is_held() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = open_hub(dir.path(), 5);
     hub.keep_test_dir(Arc::clone(&dir));
     hub.register_source(Arc::new(Vanishing {
@@ -224,7 +224,7 @@ async fn a_not_found_authorize_holds_the_record() {
             Err(crate::events::types::RpcError::not_found())
         }
     }
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = open_hub(dir.path(), 5);
     hub.keep_test_dir(Arc::clone(&dir));
     hub.register_source(Arc::new(Unread));

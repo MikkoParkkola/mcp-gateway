@@ -70,11 +70,15 @@ async fn bootstrap_redeems_past_a_dead_cookie() {
 }
 
 /// The link the dashboard-link endpoint returned, for `credential`.
-async fn mint(state: &Arc<AppState>, credential: Option<&str>, cookie: Option<&str>) -> Reply {
+pub(in super::super) async fn mint(
+    state: &Arc<AppState>,
+    credential: Option<&str>,
+    cookie: Option<&str>,
+) -> Reply {
     send(state, request("POST", LINK, cookie, credential, false)).await
 }
 
-fn bootstrap_value(link: &str) -> String {
+pub(in super::super) fn bootstrap_value(link: &str) -> String {
     link.split_once("/dashboard?bootstrap=")
         .map(|(_, v)| v.to_string())
         .unwrap_or_default()
@@ -274,7 +278,7 @@ async fn a_stale_http_link_hands_off_after_an_https_reload() {
 }
 
 /// The session handle a redemption set.
-fn session_handle(out: &Reply) -> String {
+pub(in super::super) fn session_handle(out: &Reply) -> String {
     out.set_cookie()
         .split(';')
         .next()

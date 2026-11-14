@@ -69,9 +69,9 @@ async fn invoke(meta: &MetaMcp) -> Value {
 async fn a1_a2_a_withheld_call_is_recorded_and_an_outage_is_counted_not_answered() {
     let endpoint = Endpoint::start(false).await;
     let (absent_dir, dir, outage_dir) = (
-        Arc::new(tempfile::tempdir().unwrap()),
-        Arc::new(tempfile::tempdir().unwrap()),
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
+        crate::test_dir_keep::kept_tempdir(),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let absent = invoke(&ungranted(&endpoint, &absent_dir, false).0).await;
     let mut cells = Vec::new();
@@ -121,7 +121,7 @@ async fn a1_a2_a_withheld_call_is_recorded_and_an_outage_is_counted_not_answered
 #[tokio::test]
 async fn a3_a_dispatching_call_during_an_outage_still_fails_closed() {
     let endpoint = Endpoint::start(false).await;
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = gateway(
         &endpoint,
         vec![grant("g1", ALICE, ALICE)],
@@ -206,8 +206,8 @@ async fn a3a_a_withheld_steps_failed_record_is_isolated() {
     use super::grant_audit::seams;
     let endpoint = Endpoint::start(false).await;
     let (absent_dir, dir) = (
-        Arc::new(tempfile::tempdir().unwrap()),
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let absent = chain(&mixed(&endpoint, &absent_dir, false).0).await;
     let (withheld, _log) = mixed(&endpoint, &dir, true);
@@ -246,7 +246,7 @@ async fn a3a_a_withheld_steps_failed_record_is_isolated() {
 async fn a3b_another_steps_failed_record_still_fails_closed() {
     use super::grant_audit::seams;
     let endpoint = Endpoint::start(false).await;
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (withheld, _log) = mixed(&endpoint, &dir, true);
     seams::fail_append_of_tool_for_test(PERSONAL);
     let answered = chain(&withheld).await;

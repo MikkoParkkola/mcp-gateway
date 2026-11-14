@@ -42,7 +42,7 @@ fn exporter(dir: &Path, src: ExportSource, log: &Path) -> LogExporter {
 // labeled by source, carrying entry_hash/prev/checkpoint.
 #[test]
 fn forwards_both_sources_in_chain_order() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let inv_path = dir.path().join("inv.jsonl");
     let gov_path = dir.path().join("gov.jsonl");
     let inv = logger(&inv_path);
@@ -80,7 +80,7 @@ fn forwards_both_sources_in_chain_order() {
 // MIK-6689.SIEM.2 — cursor advances only after ack; a failed send is re-sent.
 #[test]
 fn cursor_advances_only_after_ack_and_resends() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("inv.jsonl");
     let l = logger(&log);
     l.log_invocation("s", "c", "srv", "t", "r", "p").unwrap();
@@ -110,7 +110,7 @@ fn cursor_advances_only_after_ack_and_resends() {
 // MIK-6689.SIEM.3 — bounded per poll: max_batch caps memory, lag is reported.
 #[test]
 fn bounded_batch_reports_lag() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("inv.jsonl");
     let l = logger(&log);
     // Four invocations after the genesis open record (#2275) and the
@@ -133,7 +133,7 @@ fn bounded_batch_reports_lag() {
 // MIK-6689.SIEM.4 — a tampered entry halts export; nothing is forwarded.
 #[test]
 fn tampered_entry_halts_and_alerts() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("inv.jsonl");
     let l = logger(&log);
     l.log_invocation("s", "c", "srv", "t", "r", "p").unwrap();
@@ -157,7 +157,7 @@ fn tampered_entry_halts_and_alerts() {
 // MIK-6689.SIEM.5 — rotation/truncation re-anchors and resumes.
 #[test]
 fn rotation_reanchors_and_resumes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("inv.jsonl");
     let l = logger(&log);
     l.log_invocation("s", "c", "srv", "t", "r1", "p1").unwrap();
@@ -208,7 +208,7 @@ fn signed_logger(path: &Path, secret: &str) -> Arc<TransparencyLogger> {
 #[test]
 fn exporter_with_secret_rejects_stale_sig_forgery() {
     const SECRET: &str = "a-test-secret-that-is-at-least-32-bytes!!";
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log_path = dir.path().join("gov.jsonl");
     let log = signed_logger(&log_path, SECRET);
     gov_event(&log, "e1");
@@ -266,7 +266,7 @@ fn exporter_with_secret_rejects_stale_sig_forgery() {
 #[test]
 fn exporter_with_secret_forwards_intact_signed_log() {
     const SECRET: &str = "a-test-secret-that-is-at-least-32-bytes!!";
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log_path = dir.path().join("gov.jsonl");
     let log = signed_logger(&log_path, SECRET);
     gov_event(&log, "e1");
@@ -286,7 +286,7 @@ fn exporter_with_secret_forwards_intact_signed_log() {
 // forwarded entry, and forwarding advances the cursor (at-least-once ack).
 #[test]
 fn file_sink_writes_ndjson_and_forwards() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log_path = dir.path().join("gov.jsonl");
     let log = logger(&log_path);
     gov_event(&log, "e1");
@@ -326,7 +326,7 @@ fn export_config_is_opt_in() {
 // so the cursor can never advance over a torn stream.
 #[test]
 fn unhealthy_sink_refuses_delivery() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let sink = FileExportSink::open(dir.path().join("siem.ndjson")).unwrap();
     // Healthy: an empty deliver succeeds.
     assert!(sink.deliver(&[]).is_ok());
@@ -344,7 +344,7 @@ fn unhealthy_sink_refuses_delivery() {
 // creates the sink file with the content (the dir-fsync path runs).
 #[test]
 fn file_sink_first_create_persists() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let sink_path = dir.path().join("nested/siem.ndjson");
     let sink = FileExportSink::open(sink_path.clone()).unwrap();
     assert!(!sink_path.exists(), "file not created until first deliver");
@@ -366,7 +366,7 @@ fn file_sink_first_create_persists() {
 // and each entry appears exactly once (no duplication across delivers).
 #[test]
 fn file_sink_stream_stays_valid_across_repeated_delivers() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let sink_path = dir.path().join("siem.ndjson");
     let sink = FileExportSink::open(sink_path.clone()).unwrap();
     let entry = |c: u64| ExportEntry {
@@ -459,7 +459,7 @@ fn until_sealed(l: &TransparencyLogger, path: &Path, seq: u64) {
 /// Null control: must stay green on the unmutated build.
 #[test]
 fn export_follows_rotation_without_loss() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = small_logger(&log, 12, "");
     (0..3).for_each(|i| gov_event(&l, &format!("a{i}")));
@@ -481,7 +481,7 @@ fn export_follows_rotation_without_loss() {
 
 #[test]
 fn export_reanchors_at_oldest_open_record_after_expiry() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = small_logger(&log, 1, "");
     gov_event(&l, "first");
@@ -502,7 +502,7 @@ fn export_reanchors_at_oldest_open_record_after_expiry() {
 #[test]
 fn export_rejects_forged_first_line_after_reanchor() {
     const SECRET: &str = "a-test-secret-that-is-at-least-32-bytes!!";
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = small_logger(&log, 1, SECRET);
     until_sealed(&l, &log, 2);
@@ -527,7 +527,7 @@ fn export_rejects_forged_first_line_after_reanchor() {
 
 #[test]
 fn export_rejects_non_open_first_line_after_expiry() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = small_logger(&log, 1, "");
     until_sealed(&l, &log, 2);
@@ -554,7 +554,7 @@ fn export_rejects_non_open_first_line_after_expiry() {
 
 #[test]
 fn export_loads_pre_d6_cursor() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = small_logger(&log, 12, "");
     gov_event(&l, "a");
@@ -571,7 +571,7 @@ fn export_loads_pre_d6_cursor() {
 
 #[test]
 fn export_from_genesis_cursor_after_expiry() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = small_logger(&log, 1, "");
     until_sealed(&l, &log, 2);
@@ -589,7 +589,7 @@ fn export_from_genesis_cursor_after_expiry() {
 #[test]
 fn export_names_the_active_segment_after_a_disk_full_drain() {
     use crate::security::transparency_log::rotation_fault::WriteFault;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = small_logger(&log, 12, "");
     until_sealed(&l, &log, 0);
@@ -610,7 +610,7 @@ fn export_names_the_active_segment_after_a_disk_full_drain() {
 #[test]
 fn export_rejects_open_record_whose_link_disagrees_after_expiry() {
     use crate::security::transparency_log::segments::sealed_path;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = small_logger(&log, 1, "");
     until_sealed(&l, &log, 2);
@@ -673,7 +673,7 @@ fn tail_entry(c: u64) -> ExportEntry {
 /// record to it, so every line stays complete NDJSON.
 #[test]
 fn a_torn_last_line_is_dropped_before_the_next_batch() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let sink_path = dir.path().join("siem.ndjson");
     let whole = serde_json::to_string(&tail_entry(1)).unwrap();
     std::fs::write(&sink_path, format!("{whole}\n{{\"source\":\"gov")).unwrap();
@@ -696,7 +696,7 @@ fn a_torn_last_line_is_dropped_before_the_next_batch() {
 /// A file that is nothing but a fragment loses the fragment, keeping the batch.
 #[test]
 fn a_file_holding_only_a_fragment_keeps_only_the_batch() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let sink_path = dir.path().join("siem.ndjson");
     std::fs::write(&sink_path, "{\"source\":").unwrap();
     let sink = FileExportSink::open(sink_path.clone()).unwrap();
@@ -713,7 +713,7 @@ fn a_file_holding_only_a_fragment_keeps_only_the_batch() {
 /// `MIK-8130.TAIL.3`: a file that ends in a newline is appended to as it is.
 #[test]
 fn a_clean_file_is_appended_to_unchanged() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let sink_path = dir.path().join("siem.ndjson");
     let first = serde_json::to_string(&tail_entry(1)).unwrap();
     std::fs::write(&sink_path, format!("{first}\n")).unwrap();

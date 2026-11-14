@@ -15,6 +15,10 @@ use std::time::Duration;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const ROW_LIMIT: Duration = Duration::from_secs(5);
 
+/// A close plans its exit waits inside its stop budget (10 s by default), so on
+/// a loaded host it may take that long; a write that held it would never end.
+const CLOSE_LIMIT: Duration = Duration::from_secs(30);
+
 /// Answers `initialize`, reads `notifications/initialized`, then runs `after`.
 async fn started(after: &str) -> (tempfile::TempDir, Arc<StdioTransport>) {
     started_with_timeout(after, REQUEST_TIMEOUT).await
@@ -125,7 +129,7 @@ async fn eof_during_a_blocked_write_ends_the_call() {
     // Part of the frame left, so the outcome is not known: no free retry.
     assert!(!err.is_pre_dispatch(), "{err:?}");
     // The frame keeps going out whole (#3453); close() cancels it, bounded.
-    tokio::time::timeout(ROW_LIMIT, t.close())
+    tokio::time::timeout(CLOSE_LIMIT, t.close())
         .await
         .expect("close ends the stuck whole-frame write")
         .expect("close");
@@ -245,7 +249,7 @@ async fn a_write_the_child_never_reads_ends_at_the_request_timeout() {
         .expect_err("nothing reads the request");
     assert!(matches!(err, Error::BackendTimeout(_)), "{err:?}");
     // The frame keeps going out whole (#3453); close() cancels it, bounded.
-    tokio::time::timeout(ROW_LIMIT, t.close())
+    tokio::time::timeout(CLOSE_LIMIT, t.close())
         .await
         .expect("close ends the stuck whole-frame write")
         .expect("close");

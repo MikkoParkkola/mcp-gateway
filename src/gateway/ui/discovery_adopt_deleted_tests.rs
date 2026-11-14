@@ -47,7 +47,7 @@ impl SecretStore for Deleting {
 
 /// An audit log in a directory of its own that the log keeps.
 fn audit_log() -> Arc<crate::security::TransparencyLogger> {
-    let dir = Arc::new(tempfile::tempdir().expect("log dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::transparency_log::TransparencyLogConfig {

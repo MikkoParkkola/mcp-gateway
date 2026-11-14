@@ -30,7 +30,7 @@ impl Route {
         Self::with_reload(text, false).await
     }
     pub(super) async fn with_reload(text: &str, refusing: bool) -> Self {
-        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("gateway.yaml");
         write_owner_only(&path, text).expect("config");
         let running = Config::load(Some(&path)).expect("fixture loads");
@@ -115,7 +115,15 @@ impl Route {
         let store = self.store.clone().map(Extension);
         if save {
             let body = Json::<SaveBody>::from_request(request, &()).await;
-            settings_save(State(self.state.clone()), store, guard, body).await
+            settings_save(
+                State(self.state.clone()),
+                store,
+                guard,
+                Extension(self.state.live_config.generation()),
+                None,
+                body,
+            )
+            .await
         } else {
             let body = Json::<DiffBody>::from_request(request, &()).await;
             settings_diff(State(self.state.clone()), store, guard, body).await
