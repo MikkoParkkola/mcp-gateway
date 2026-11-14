@@ -27,7 +27,7 @@ fn hold_at(gate: &ConfigGate, point: AdmittedPoint) -> Hold {
     hold_with_panic(gate, point, None)
 }
 
-/// Like [`hold_at`], and the first call at `panic_at` panics (the holder dies).
+/// Like [`hold_at`], and the first call at `panic_at` panics (the holder panic_now).
 fn hold_with_panic(
     gate: &ConfigGate,
     point: AdmittedPoint,
@@ -39,10 +39,10 @@ fn hold_with_panic(
     let (gate_release, taken) = (Arc::clone(&release), AtomicBool::new(false));
     let died = AtomicBool::new(false);
     gate.set_admitted_hook(Some(Arc::new(move |at| {
-        let dies = Some(at) == panic_at && !died.swap(true, Ordering::SeqCst);
+        let panic_now = Some(at) == panic_at && !died.swap(true, Ordering::SeqCst);
         assert!(
-            !dies,
-            "the write task dies after staging its secret entries"
+            !panic_now,
+            "the write task panic_now after staging its secret entries"
         );
         if at == point && !taken.swap(true, Ordering::SeqCst) {
             tx.lock().unwrap().send(()).ok();
@@ -211,7 +211,7 @@ fn live_entries(dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
-/// P2: a write task that dies after staging ends first; its detached cleanup
+/// P2: a write task that panic_now after staging ends first; its detached cleanup
 /// alone holds the settle. (No cancellation variant: the writer has no await
 /// between staging and the rename, and the hook is synchronous.)
 #[cfg(feature = "webui")]
