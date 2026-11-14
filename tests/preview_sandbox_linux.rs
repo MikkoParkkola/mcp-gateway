@@ -786,10 +786,9 @@ async fn ca_files_are_read_only_from_the_run_child() {
     );
 }
 
-/// 2b-1: the CA snapshot (in the proxy's private directory) sits under host
-/// `/tmp`, which the staging tmpfs covers; that is what makes "bind by
-/// pathname after staging" fail. The rows pass no `XDG_RUNTIME_DIR`, so the
-/// directory goes to the temp dir; this fails loudly if that is not `/tmp`.
+/// 2b-1: the CA snapshot sits under host `/tmp` (the rows pass no
+/// `XDG_RUNTIME_DIR`), which staging covers, so "bind by pathname after
+/// staging" fails; this fails loudly if the temp dir is not `/tmp`.
 #[tokio::test]
 async fn the_ca_snapshot_sits_under_tmp_on_this_host() {
     let Some(Started { mut child, .. }) = fetching("sleep 30").await else {
