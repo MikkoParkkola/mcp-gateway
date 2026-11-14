@@ -140,7 +140,7 @@ fn hand_off(
         }
     };
     if let Some(back) = rejected {
-        drop(back);
+        mutant!("slot_ignores_superseded", std::mem::forget(back), drop(back));
         #[cfg(test)]
         seams.slots.push(super::seams::SlotEntry {
             attempt,

@@ -157,11 +157,23 @@ impl ConfigFloor {
             #[cfg(test)]
             test_keychain,
         );
-        let certified = self.run_check(input, deadline).await?;
-        self.certify_gate(attempt)?;
-        self.held = locks::Held::new(reload, locked);
-        self.certification = Some(certified);
-        Ok(())
+        mutant!(
+            "late_guard_parked",
+            {
+                self.held = locks::Held::new(reload, locked);
+                let certified = self.run_check(input, deadline).await?;
+                self.certify_gate(attempt)?;
+                self.certification = Some(certified);
+                Ok(())
+            },
+            {
+                let certified = self.run_check(input, deadline).await?;
+                self.certify_gate(attempt)?;
+                self.held = locks::Held::new(reload, locked);
+                self.certification = Some(certified);
+                Ok(())
+            }
+        )
     }
 
     /// Moves the gate to Certified for this attempt; a gate that moved on refuses.
@@ -246,8 +258,16 @@ impl FloorAdapter for ConfigFloor {
         // unpolled has still paused; the adapter, not the future, holds it.
         self.prune_tasks();
         self.attempt += 1;
-        let paused = self.gate.pause(self.attempt);
-        Box::pin(async move { paused })
+        let attempt = self.attempt;
+        let gate = self.gate.clone();
+        mutant!(
+            "pause_inside_future",
+            futures::FutureExt::boxed(async move { gate.pause(attempt) }),
+            {
+                let paused = self.gate.pause(attempt);
+                futures::FutureExt::boxed(async move { paused })
+            }
+        )
     }
 
     fn checkpoint(&mut self, deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>> {
@@ -265,7 +285,7 @@ impl FloorAdapter for ConfigFloor {
     fn resume(&mut self) {
         self.prune_tasks();
         if !self.is_final() {
-            self.held.release_all();
+            mutant!("resume_keeps_guards", (), self.held.release_all());
         }
         self.gate.reopen();
     }
@@ -275,19 +295,19 @@ impl FloorAdapter for ConfigFloor {
         if !self.is_final() {
             self.held.release_all();
         }
-        self.gate.finish(GateState::Released);
+        mutant!("release_reopens", { self.gate.reopen(); }, { mutant!("release_replays", { self.gate.finish(GateState::Released); self.gate.poke_watcher(); }, { self.gate.finish(GateState::Released); }) });
     }
 
     fn commit(&mut self) {
         self.prune_tasks();
         if !self.is_final() {
-            self.held.release_reload();
+            mutant!("commit_keeps_reload_guard", (), mutant!("commit_drops_config_guard", self.held.release_all(), self.held.release_reload()));
         }
         self.gate.finish(GateState::Terminal);
     }
 
     fn settled(&self) -> bool {
-        self.checks.iter().all(locks::Task::finished)
+        mutant!("settled_always_true", true, self.checks.iter().all(locks::Task::finished))
     }
 }
 
