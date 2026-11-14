@@ -512,15 +512,38 @@ fn discovery_scans_no_network() {
     let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("read Cargo.toml");
     for line in manifest.lines().map(str::trim_start) {
         for name in CRATES {
-            // Inline in the source tree; a table of its own in the manifest
-            // `cargo package` writes, which the packaged suite reads.
             assert!(
-                !line.starts_with(&format!("{name} "))
-                    && !line.starts_with(&format!("{name}="))
-                    && !line.ends_with(&format!("dependencies.{name}]")),
+                !names_dependency(line, name),
                 "Cargo.toml depends on {name}"
             );
         }
+    }
+}
+
+/// Whether a manifest line names `name` as a dependency: inline, as the source
+/// tree writes it, or as a table of its own, as `cargo package` writes the
+/// manifest the packaged suite reads.
+fn names_dependency(line: &str, name: &str) -> bool {
+    line.starts_with(&format!("{name} "))
+        || line.starts_with(&format!("{name}="))
+        || line.ends_with(&format!("dependencies.{name}]"))
+}
+
+/// The dependency check sees a crate in either manifest form; in the packaged
+/// form it used to see nothing, so the check passed without looking.
+#[test]
+fn the_dependency_check_reads_both_manifest_forms() {
+    for (form, manifest) in [
+        ("source", "[dependencies]\nmdns = \"3\"\n"),
+        ("packaged", "[dependencies.mdns]\nversion = \"3\"\n"),
+    ] {
+        assert!(
+            manifest
+                .lines()
+                .map(str::trim_start)
+                .any(|line| names_dependency(line, "mdns")),
+            "{form}: an mDNS dependency is seen"
+        );
     }
 }
 
