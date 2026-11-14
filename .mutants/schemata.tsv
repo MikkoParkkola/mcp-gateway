@@ -1,0 +1,18 @@
+head_sha	2194f143ff19c099db4ea66ebca4c5b3da4d77a8
+#mutant m1
+mcp_gateway	backend::stop_deadline_tests::early::the_early_stop_hands_a_lock_held_backends_tree_over_at_its_first_step	src/backend/stop_deadline_early_tests.rs:97
+mcp_gateway	backend::stop_deadline_tests::early::an_early_stop_dropped_after_its_first_step_still_ends_its_trees	src/backend/stop_deadline_early_tests.rs:50
+mcp_gateway	backend::stop_deadline_tests::early::a_start_after_the_early_stops_first_step_spawns_nothing	src/backend/stop_deadline_early_tests.rs:153
+mcp_gateway	backend::stop_deadline_tests::early::the_early_handover_gets_the_whole_backend_stage	src/backend/stop_deadline_early_tests.rs:234
+#mutant m2
+mcp_gateway	backend::stop_deadline_tests::early::the_early_handover_gets_the_whole_backend_stage	src/backend/stop_deadline_early_tests.rs:234
+#mutant m3
+mcp_gateway	transport::stdio::reaper::plan_tests::a_backend_stage_budget_keeps_its_eof_and_term_phases	src/transport/stdio_reaper_plan_tests.rs:227
+#mutant m4
+mcp_gateway	transport::stdio::child_tree::tests::stop::a_handed_trees_grace_is_cut_once_at_the_stage_deadline	src/transport/stdio_child_tree_stop_tests.rs:232
+#mutant m6
+mcp_gateway	transport::stdio::child_tree::tests::a_graceful_handover_before_a_start_spawns_nothing	src/transport/stdio_child_tree_tests.rs:765
+#mutant m7
+mcp_gateway	transport::stdio::child_tree::tests::a_graceful_handover_between_spawn_and_install_refuses_the_start	src/transport/stdio_child_tree_tests.rs:787
+#mutant m7b
+mcp_gateway	backend::stop_deadline_tests::early::each_backend_reads_its_own_budget_at_its_handover	src/backend/stop_deadline_early_tests.rs:290
