@@ -543,6 +543,37 @@ async fn a_throttled_answer_names_how_long_to_wait() {
     );
 }
 
+/// A refusal whose body is not JSON says so, rather than a generic reason,
+/// and a Retry-After that is not a whole number of seconds is named as
+/// unreadable, never dropped: an unreadable part never becomes empty text.
+/// Mutant: read a bad body or a bad header as empty.
+#[tokio::test]
+async fn a_refusal_names_an_unreadable_body_or_wait() {
+    let (base, _) = stand_in(503, "<html>busy</html>").await;
+    let message = ask(&base).await.expect_err("a refusal");
+    assert!(
+        message.contains("503") && message.contains("not JSON"),
+        "{message}"
+    );
+    let app = axum::Router::new().fallback(|| async {
+        (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            [("retry-after", "soon")],
+            axum::Json(json!({"error": "slow down"})),
+        )
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("addr"));
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let message = ask(&base).await.expect_err("throttled");
+    assert!(
+        message.contains("429") && message.contains("retry after: unreadable"),
+        "{message}"
+    );
+}
+
 /// A typo in --from or --to is refused before any request is sent.
 /// Mutant: send it and let the gateway charge for it.
 #[tokio::test]
