@@ -105,6 +105,16 @@ fn unavailable() -> Response {
     .into_response()
 }
 
+/// The save route's answer with no reload context: nothing was attempted, so a
+/// 409 (the diff route, which writes nothing, keeps the 503 of [`unavailable`]).
+fn write_unavailable() -> Response {
+    flat_error(
+        StatusCode::CONFLICT,
+        "Config reload is not enabled on this gateway",
+    )
+    .into_response()
+}
+
 fn field_error(id: FieldId, code: &'static str, reason: &str) -> Response {
     (
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -228,7 +238,7 @@ pub(super) async fn settings_save(
         return invalid_body();
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
-        return unavailable();
+        return write_unavailable();
     };
     let mut edit = SaveEdit::default();
     for (entry, body) in body.fields.into_iter().enumerate() {
@@ -491,11 +501,11 @@ fn answer(refusal: UiRefused) -> Response {
         UiRefused::Preview(PreviewRefused::Untrusted(_) | PreviewRefused::Unread(_)) => {
             config_refusal().into_response()
         }
-        UiRefused::Busy => flat_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the config is being written; retry",
-        )
-        .into_response(),
+        // Refused before anything was attempted: a 4xx (a 5xx means the outcome is
+        // not confirmed). Still retryable, so it keeps its Retry-After.
+        UiRefused::Busy => {
+            flat_error(StatusCode::CONFLICT, "the config is being written; retry").into_response()
+        }
         UiRefused::SecretsRefused { timeout: true } => flat_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "the secret store did not answer; retry",

@@ -97,7 +97,7 @@ pub(crate) fn naming(sources: &NamingSources, name: &str) -> Result<Naming, Stri
 /// identities `file:` values resolve to, and one digest over all of it.
 struct Corpus {
     texts: Vec<String>,
-    files: BTreeSet<(u64, u64)>,
+    files: BTreeSet<FileId>,
     digest: String,
     entries_dir: PathBuf,
 }
@@ -200,7 +200,7 @@ fn read_caps(
         match item {
             Err(_) => return Err(CAP_UNREAD.to_owned()),
             Ok(entry) if entry.depth() > CAP_DEPTH => return Err(CAP_TOO_DEEP.to_owned()),
-            Ok(entry) if entry.depth() == 0 || !entry.file_type().is_file() => continue,
+            Ok(entry) if entry.depth() == 0 || !entry.file_type().is_file() => {}
             Ok(entry) => paths.push(entry.path().to_path_buf()),
         }
     }
@@ -233,13 +233,16 @@ fn take_strings(value: &Value, out: &mut Vec<String>) {
         }
     }
 }
-fn record_file(path: &Path, files: &mut BTreeSet<(u64, u64)>) -> Result<(), String> {
+fn record_file(path: &Path, files: &mut BTreeSet<FileId>) -> Result<(), String> {
     if let Some((id, _)) = entry_identity(path).map_err(|_| FILE_STAT.to_owned())? {
         files.insert(id);
     }
     Ok(())
 }
-fn entry_identity(path: &Path) -> Result<Option<((u64, u64), u64)>, String> {
+/// A file's (device, inode).
+type FileId = (u64, u64);
+
+fn entry_identity(path: &Path) -> Result<Option<(FileId, u64)>, String> {
     let meta = match std::fs::metadata(path) {
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err("the entry could not be stat'ed".to_owned()),
@@ -332,7 +335,7 @@ pub(crate) fn delete_unused(
             index.append_removed_in(name, kind).map_err(unrecorded)?;
             return Ok(Deleted::AlreadyGone);
         }
-        Err(error) if matches!(error, StoreError::TimedOut) => return Err(DeleteRefused::TimedOut),
+        Err(StoreError::TimedOut) => return Err(DeleteRefused::TimedOut),
         Err(_) => return Err(refuse("the secret store could not be read")),
     }
     #[cfg(test)]
@@ -346,15 +349,12 @@ pub(crate) fn delete_unused(
         Naming::NotNamed { digest } if digest != previous => return Err(DeleteRefused::Named),
         Naming::NotNamed { .. } => {}
     }
-    store.delete(name).map_err(|error| {
-        if matches!(error, StoreError::TimedOut) {
-            DeleteRefused::TimedOut
-        } else {
-            refuse("the secret store could not delete the entry")
-        }
+    store.delete(name).map_err(|error| match error {
+        StoreError::TimedOut => DeleteRefused::TimedOut,
+        _ => refuse("the secret store could not delete the entry"),
     })?;
     #[cfg(test)]
-    if seam::STOP_AFTER_STORE_DELETE.with(|cell| cell.get()) {
+    if seam::STOP_AFTER_STORE_DELETE.with(std::cell::Cell::get) {
         return Err(refuse("stopped at the seam"));
     }
     index.append_removed_in(name, kind).map_err(unrecorded)?;

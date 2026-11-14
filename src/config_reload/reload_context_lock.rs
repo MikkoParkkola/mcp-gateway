@@ -210,6 +210,13 @@ impl ReloadContext {
     }
 }
 
+/// The reload lock and the config sidecar, held until dropped.
+pub(crate) struct ConfigHeld<'a> {
+    _reload: tokio::sync::MutexGuard<'a, ()>,
+    /// The sidecar, with the target it resolved.
+    pub(crate) locked: crate::config_persistence::lock::Locked,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ReloadRefusal, ReloadRefusalKind};
@@ -255,11 +262,4 @@ mod tests {
         };
         assert_eq!(post_write_class(&refusal), RefusalClass::ShuttingDown);
     }
-}
-
-/// The reload lock and the config sidecar, held until dropped.
-pub(crate) struct ConfigHeld<'a> {
-    _reload: tokio::sync::MutexGuard<'a, ()>,
-    /// The sidecar, with the target it resolved.
-    pub(crate) locked: crate::config_persistence::lock::Locked,
 }

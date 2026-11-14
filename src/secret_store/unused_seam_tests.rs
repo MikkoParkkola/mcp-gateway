@@ -47,22 +47,22 @@ fn seams() -> SeamGuard {
     SeamGuard
 }
 
+/// Appends `line(name)` to the config at the seam before the re-check, then deletes: the
+/// delete refuses as Named and leaves the entry and the index byte for byte.
 #[cfg(unix)]
-#[test]
-fn delete_refuses_on_digest_change() {
-    const ROW: &str = "delete_refuses_on_digest_change";
+fn refused_after_config_edit(row: &str, line: fn(&str) -> String) {
     let _guard = seams();
     let (dir, vault, name) = saved();
     let sources = quiet(dir.path());
     let config = sources.config.clone();
-    let planted = name.clone();
+    let text = line(&name);
     BEFORE_RECHECK.with(|slot| {
         *slot.borrow_mut() = Some(Box::new(move || {
             let mut file = std::fs::OpenOptions::new()
                 .append(true)
                 .open(&config)
                 .expect("config");
-            writeln!(file, "# {planted}").expect("plant the name");
+            writeln!(file, "{text}").expect("edit the config");
         }));
     });
     let path = secret_path(dir.path(), &name);
@@ -75,13 +75,30 @@ fn delete_refuses_on_digest_change() {
         &sources,
         soon(),
     );
-    assert_eq!(got, Err(DeleteRefused::Named), "{ROW}: {got:?}");
+    assert_eq!(got, Err(DeleteRefused::Named), "{row}: {got:?}");
     assert_eq!(
         std::fs::read(&path).expect("entry"),
         file,
-        "{ROW}: entry changed"
+        "{row}: entry changed"
     );
-    assert_eq!(index_bytes(dir.path()), index, "{ROW}: index changed");
+    assert_eq!(index_bytes(dir.path()), index, "{row}: index changed");
+}
+
+/// The edit plants the entry's name, so the re-check's own naming refuses.
+#[cfg(unix)]
+#[test]
+fn delete_refuses_on_digest_change() {
+    refused_after_config_edit("delete_refuses_on_digest_change", |name| {
+        format!("# {name}")
+    });
+}
+
+/// The edit names nothing, so only the changed digest refuses: a source that moved
+/// between the two reads is not trusted to be the one the first read cleared.
+#[cfg(unix)]
+#[test]
+fn delete_refuses_on_unnaming_edit() {
+    refused_after_config_edit("delete_refuses_on_unnaming_edit", |_| "# edited".to_owned());
 }
 
 #[cfg(unix)]
@@ -107,8 +124,7 @@ fn delete_crash_between_delete_and_line() {
     let live = Index::at(dir.path()).live();
     assert!(
         live.as_ref()
-            .ok()
-            .is_some_and(|rows| rows.iter().any(|entry| entry.name == name)),
+            .is_ok_and(|rows| rows.iter().any(|entry| entry.name == name)),
         "{ROW}: name is not live: {live:?}"
     );
     assert_eq!(
@@ -127,8 +143,7 @@ fn delete_crash_between_delete_and_line() {
     let live = Index::at(dir.path()).live();
     assert!(
         live.as_ref()
-            .ok()
-            .is_some_and(|rows| rows.iter().all(|entry| entry.name != name)),
+            .is_ok_and(|rows| rows.iter().all(|entry| entry.name != name)),
         "{ROW}: name still live: {live:?}"
     );
 }

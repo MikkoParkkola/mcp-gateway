@@ -44,18 +44,17 @@ pub(super) struct StoreQuery {
     pub(super) store: String,
 }
 
-/// `BadName` 400, `NotListed` 404, `StoreMismatch`/`Named`/`Pending` 409,
-/// `Busy`/`TimedOut`/`Failed` 503.
+/// `BadName` 400, `NotListed` 404, `StoreMismatch`/`Named`/`Pending`/`Busy` 409 (refused,
+/// nothing attempted), `TimedOut`/`Failed` 503 (the outcome is not confirmed).
 pub(super) fn refusal_status(refused: &DeleteRefused) -> StatusCode {
     match refused {
         DeleteRefused::BadName => StatusCode::BAD_REQUEST,
         DeleteRefused::NotListed => StatusCode::NOT_FOUND,
-        DeleteRefused::StoreMismatch | DeleteRefused::Named | DeleteRefused::Pending => {
-            StatusCode::CONFLICT
-        }
-        DeleteRefused::Busy | DeleteRefused::TimedOut | DeleteRefused::Failed(_) => {
-            StatusCode::SERVICE_UNAVAILABLE
-        }
+        DeleteRefused::StoreMismatch
+        | DeleteRefused::Named
+        | DeleteRefused::Pending
+        | DeleteRefused::Busy => StatusCode::CONFLICT,
+        DeleteRefused::TimedOut | DeleteRefused::Failed(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
 
@@ -109,10 +108,21 @@ fn config_dir(path: &std::path::Path) -> &std::path::Path {
     path.parent().unwrap_or(std::path::Path::new("."))
 }
 
-/// The 503 a settings save returns when this gateway has no reload context.
+/// The listing's 503 when this gateway has no reload context: a read cannot
+/// answer right now.
 fn no_reload() -> Response {
     flat_error(
         StatusCode::SERVICE_UNAVAILABLE,
+        "Config reload is not enabled on this gateway",
+    )
+    .into_response()
+}
+
+/// The delete's answer with no reload context: nothing was attempted, so a 409
+/// (the listing, a read, keeps the 503 of [`no_reload`]).
+pub(super) fn delete_no_reload() -> Response {
+    flat_error(
+        StatusCode::CONFLICT,
         "Config reload is not enabled on this gateway",
     )
     .into_response()
@@ -204,14 +214,14 @@ pub(super) async fn delete_unused_entry(
     }
     if cfg!(any(target_os = "macos", windows)) && store == "keychain" {
         return structured_error(
-            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::CONFLICT,
             "keychain_delete_unavailable",
             KEYCHAIN_GUARDED,
         )
         .into_response();
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
-        return no_reload();
+        return delete_no_reload();
     };
     let held = match ctx.hold_config(RELOAD_LOCK_WAIT).await {
         Ok(held) => held,

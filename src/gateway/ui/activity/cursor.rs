@@ -22,8 +22,8 @@ static KEY: LazyLock<[u8; 32]> = LazyLock::new(rand::random);
 #[derive(Serialize, Deserialize)]
 struct Wire {
     v: u8,
-    /// What the token is bound to (the key-server lookup binds its safe
-    /// filter, never the email); `None` for Activity's own tokens.
+    /// What the token is bound to; always `None` for Activity's own tokens (the
+    /// key-server lookup now seals its pages with the continuation keyring).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     bind: Option<String>,
     #[serde(flatten)]
@@ -38,16 +38,6 @@ pub(super) fn decode(token: &str) -> Option<Cursor> {
     decode_with(&*KEY, token)
         .filter(|(_, bind)| bind.is_none())
         .map(|(c, _)| c)
-}
-
-/// A token for `cursor` bound to `bind`: it decodes only for the same bind.
-pub(super) fn encode_bound(cursor: &Cursor, bind: &str) -> String {
-    encode_with(&*KEY, cursor, Some(bind))
-}
-
-/// The cursor of `token` when it is bound to exactly `bind`.
-pub(super) fn decode_bound(token: &str, bind: &str) -> Option<Cursor> {
-    decode_with(&*KEY, token).and_then(|(c, b)| (b.as_deref() == Some(bind)).then_some(c))
 }
 
 fn mac(key: &[u8]) -> Hmac<Sha256> {
