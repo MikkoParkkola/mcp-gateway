@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Timelike as _, Utc};
 
+use super::gate::Kind;
 use super::{Shared, StoreError, TaskStore, owned, record_name, serialize};
 use crate::gateway::gateway_writes::WriteRecord;
 use crate::gateway::task_service::record::{
@@ -17,7 +18,6 @@ use crate::gateway::task_service::record::{
 };
 use crate::protocol::JsonRpcError;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
-use Kind;
 
 impl TaskStore {
     /// Merge `targets`, and the binding each ran under (MIK-8407), into a
