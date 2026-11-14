@@ -58,13 +58,13 @@ pub(crate) fn peer_is_helper(status: &str, unshare_pid: u32, uid: u32) -> Result
         .map(str::parse::<u32>)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| refuse("has no readable uid"))?;
-    if uids.len() != 4 {
+    if mutant!("f1-uid-count", false, uids.len() != 4) {
         return Err(refuse("has no readable uid"));
     }
-    if parent != unshare_pid {
+    if mutant!("f1-parent", false, parent != unshare_pid) {
         return Err(refuse("is not the sandbox's helper"));
     }
-    if uids.iter().any(|u| *u != uid) {
+    if mutant!("f1-uid-one", uids[0] != uid, uids.iter().any(|u| *u != uid)) {
         return Err(refuse("runs as another user"));
     }
     Ok(())
@@ -78,7 +78,7 @@ pub(crate) async fn accept_helper(
     uid: u32,
     bounds: ControlBounds,
 ) -> Result<UnixStream, Refusal> {
-    let accepted = tokio::time::timeout(bounds.accept, listener.accept())
+    let accepted = tokio::time::timeout(mutant!("f1-accept-bound", Duration::from_secs(86_400), bounds.accept), listener.accept())
         .await
         .map_err(|_| Refusal::Step("the sandbox never opened its control connection".into()))?;
     let (stream, _) = accepted
@@ -110,7 +110,7 @@ pub(crate) async fn read_line<R: AsyncBufRead + Unpin>(
 ) -> Result<String, Refusal> {
     let refuse = |why: &str| Refusal::Step(format!("the sandbox's control line {why}"));
     let io_err = |e: io::Error| Refusal::Step(format!("reading the control socket ({e})"));
-    match tokio::time::timeout(first, reader.fill_buf()).await {
+    match tokio::time::timeout(mutant!("f1-first-bound", Duration::from_secs(86_400), first), reader.fill_buf()).await {
         Err(_) => return Err(refuse("never came")),
         Ok(Err(e)) => return Err(io_err(e)),
         Ok(Ok([])) => return Err(refuse("ended with the connection")),
@@ -127,7 +127,7 @@ pub(crate) async fn read_line<R: AsyncBufRead + Unpin>(
                 line.extend_from_slice(&buf[..end]);
                 reader.consume(end + 1);
                 // The newline counts toward the cap.
-                if line.len() >= MAX_LINE {
+                if mutant!("f1-cap", line.len() > MAX_LINE, line.len() >= MAX_LINE) {
                     return Err(refuse("is over 1 KiB"));
                 }
                 return Ok(line);
@@ -140,7 +140,7 @@ pub(crate) async fn read_line<R: AsyncBufRead + Unpin>(
             }
         }
     };
-    let line = tokio::time::timeout(bounds.frame, rest)
+    let line = tokio::time::timeout(mutant!("f1-frame-bound", Duration::from_secs(86_400), bounds.frame), rest)
         .await
         .map_err(|_| refuse("stalled before its end"))??;
     String::from_utf8(line).map_err(|_| refuse("is not UTF-8"))
@@ -195,7 +195,7 @@ pub(crate) async fn serve_session(
         &read_line(&mut read, bounds.frame, bounds).await?,
         "fetch_start",
     )?;
-    if !start.fetch_start {
+    if mutant!("f1-start-false", false, !start.fetch_start) {
         return Err(Refusal::Step("the sandbox sent fetch_start false".into()));
     }
     let credential = proxy.begin_fetch(deadline)?;
@@ -217,7 +217,7 @@ pub(crate) async fn serve_session(
     write_line(&mut write, &issued).await.map_err(lost)?;
     let first = deadline.saturating_duration_since(tokio::time::Instant::now());
     let done: FetchDone = parse(&read_line(&mut read, first, bounds).await?, "fetch_done")?;
-    if !done.fetch_done {
+    if mutant!("f1-done-false", false, !done.fetch_done) {
         return Err(Refusal::Step("the sandbox sent fetch_done false".into()));
     }
     // The revoke returns only once every tunnel of the credential is shut.
@@ -236,7 +236,7 @@ struct Revoking<'a> {
 
 impl Drop for Revoking<'_> {
     fn drop(&mut self) {
-        self.proxy.revoke(&self.credential);
+        mutant!("f1-no-revoke", (), self.proxy.revoke(&self.credential));
     }
 }
 
