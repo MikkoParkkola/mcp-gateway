@@ -692,7 +692,10 @@ async fn a_member_joining_after_the_first_pre_reap_signal_is_still_ended() {
     })
     .await;
     // Leader exited: this step enters the settle window and signals once.
-    let settle_start = std::time::Instant::now();
+    // The steps run on given instants, not the wall clock: a leader killed
+    // fast is seen exited at the first step, which opens the window at `t0`,
+    // and a loaded host could reach this step after the window closed.
+    let settle_start = t0 + Duration::from_millis(1);
     assert!(matches!(tree.reap_step(settle_start), Reap::Pending));
     let after_first = tree.group_signals_sent;
     // A member arrives after that signal, in the same group.
