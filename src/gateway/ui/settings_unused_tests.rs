@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Rows for listing unused secret entries and deleting one at a time.
 
-use super::super::settings_unused::{StoreQuery, delete_unused_entry, list_unused, refusal_status};
+use super::super::settings_unused::{
+    StoreQuery, delete_no_reload, delete_unused_entry, list_unused, refusal_status,
+};
 #[cfg(unix)]
 use super::test_support::set;
 use super::test_support::{BASE, Route, client, decode, secret};
@@ -514,4 +516,18 @@ async fn delete_route_keychain_refused_here() {
     assert_eq!(status, StatusCode::CONFLICT, "{ROW}: {body}");
     assert_eq!(body["error"], "keychain_delete_unavailable", "{ROW}");
     assert_eq!(route.text(), before, "{ROW}: gateway.yaml unchanged");
+}
+
+/// The delete with no reload context attempted nothing: 409 (the listing, a read,
+/// keeps its 503).
+#[tokio::test]
+async fn delete_without_reload_answers_409() {
+    const ROW: &str = "delete_without_reload_answers_409";
+    let (status, body) = decode(delete_no_reload()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{ROW}: {body}");
+    assert_eq!(
+        body,
+        json!({"error": "Config reload is not enabled on this gateway"}),
+        "{ROW}"
+    );
 }

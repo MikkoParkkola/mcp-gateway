@@ -105,6 +105,11 @@ fn unavailable() -> Response {
     .into_response()
 }
 
+/// The save route's answer with no reload context: nothing was attempted.
+fn write_unavailable() -> Response {
+    unavailable()
+}
+
 fn field_error(id: FieldId, code: &'static str, reason: &str) -> Response {
     (
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -228,7 +233,7 @@ pub(super) async fn settings_save(
         return invalid_body();
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
-        return unavailable();
+        return write_unavailable();
     };
     let mut edit = SaveEdit::default();
     for (entry, body) in body.fields.into_iter().enumerate() {

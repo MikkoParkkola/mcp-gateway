@@ -284,6 +284,18 @@ async fn vault_failed() {
     assert!(!body.to_string().contains(CANARY));
 }
 
+/// A write route with no reload context attempted nothing: 409, same body, no
+/// Retry-After. The diff route, which writes nothing, keeps the 503 below.
+#[tokio::test]
+async fn reload_not_enabled_on_a_write() {
+    let (status, body) = decode(write_unavailable()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body,
+        json!({"error": "Config reload is not enabled on this gateway"})
+    );
+}
+
 #[tokio::test]
 async fn reload_not_enabled() {
     let response = unavailable();

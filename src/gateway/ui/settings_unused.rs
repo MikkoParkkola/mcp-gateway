@@ -117,6 +117,11 @@ fn no_reload() -> Response {
     .into_response()
 }
 
+/// The delete's answer with no reload context: nothing was attempted.
+pub(super) fn delete_no_reload() -> Response {
+    no_reload()
+}
+
 /// 503 `unreadable` with a fixed sentence.
 fn unreadable(message: &str) -> Response {
     structured_error(StatusCode::SERVICE_UNAVAILABLE, "unreadable", message).into_response()
@@ -210,7 +215,7 @@ pub(super) async fn delete_unused_entry(
         .into_response();
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
-        return no_reload();
+        return delete_no_reload();
     };
     let held = match ctx.hold_config(RELOAD_LOCK_WAIT).await {
         Ok(held) => held,
