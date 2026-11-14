@@ -61,10 +61,9 @@ fn certified() -> TaskGate {
 /// Run `future` to completion or fail the row by name: a missed wakeup or a
 /// barrier the skeleton never reaches must not hang the suite.
 async fn within<T>(row: &str, future: impl Future<Output = T>) -> T {
-    match tokio::time::timeout(Duration::from_secs(30), future).await {
-        Ok(value) => value,
-        Err(_) => panic!("{row}: did not finish in time"),
-    }
+    tokio::time::timeout(Duration::from_secs(30), future)
+        .await
+        .unwrap_or_else(|elapsed| panic!("{row}: did not finish in time ({elapsed})"))
 }
 
 // G2: every cell of the design's decision table for a fresh submitter (no
@@ -294,7 +293,10 @@ fn every_blocking_store_write_goes_through_the_gate() {
             .and_then(|n| n.to_str())
             .unwrap_or_default()
             .to_owned();
-        if !name.starts_with("store") || !name.ends_with(".rs") || name.contains("_tests") {
+        let is_rs = path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
+        if !name.starts_with("store") || !is_rs || name.contains("_tests") {
             continue;
         }
         let text = std::fs::read_to_string(&path).expect("a store source file");

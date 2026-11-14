@@ -86,7 +86,7 @@ async fn an_internal_park_proceeds_at_the_backstop() {
     let gate = paused();
     let mut parker = std::pin::pin!(gate.admit(Kind::Internal));
     assert!(futures::poll!(parker.as_mut()).is_pending(), "parked");
-    tokio::time::advance(DEADLINE + BUDGET - Duration::from_secs(1)).await;
+    tokio::time::advance((DEADLINE + BUDGET).saturating_sub(Duration::from_secs(1))).await;
     assert!(
         futures::poll!(parker.as_mut()).is_pending(),
         "still parked before the backstop"

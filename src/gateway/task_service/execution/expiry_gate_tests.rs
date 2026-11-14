@@ -20,10 +20,9 @@ const OWNER: &str = "verified-owner";
 const BACKEND: &str = "peer";
 
 async fn within<T>(row: &str, future: impl Future<Output = T>) -> T {
-    match tokio::time::timeout(Duration::from_secs(30), future).await {
-        Ok(value) => value,
-        Err(_) => panic!("{row}: did not finish in time"),
-    }
+    tokio::time::timeout(Duration::from_secs(30), future)
+        .await
+        .unwrap_or_else(|elapsed| panic!("{row}: did not finish in time ({elapsed})"))
 }
 
 struct Fixture {
