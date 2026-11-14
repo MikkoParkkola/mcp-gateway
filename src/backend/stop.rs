@@ -31,9 +31,11 @@ impl Backend {
     /// to the reaper now, synchronously and without a runtime, with the MCP
     /// stdio order planned to fit `budget`. The async stop that follows only
     /// waits for those reaps.
-    pub(crate) fn hand_over_now(&self, budget: Duration) {
+    pub(crate) fn hand_over_now(&self, deadline: tokio::time::Instant) {
         for tree in self.live_stdio() {
-            tree.hand_over_gracefully(budget);
+            tree.hand_over_gracefully(
+                deadline.saturating_duration_since(tokio::time::Instant::now()),
+            );
         }
     }
 

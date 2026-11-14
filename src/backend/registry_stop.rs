@@ -9,6 +9,17 @@ use tracing::warn;
 
 use super::{Backend, BackendRegistry};
 
+/// When a backend stop hands every live stdio tree to the reaper.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Handover {
+    /// At the stage's entry, before any backend's stop waits for its locks, so
+    /// a held restart lock cannot eat the trees' graceful phases (the HTTP stop).
+    AtEntry,
+    /// Only once the stop is hurried: the stdio stop, whose hurry lane owns the
+    /// handover.
+    WhenHurried,
+}
+
 impl BackendRegistry {
     /// The stop deadline this registry's backends share, for backends built
     /// outside it (the capability executor's MCP children).
@@ -16,10 +27,13 @@ impl BackendRegistry {
         Arc::clone(&self.stop_deadline)
     }
 
-    /// Hand every live tree to the reaper without waiting for lifecycle locks.
-    pub(crate) fn hand_over_now(&self, budget: std::time::Duration) {
+    /// Hand every live tree to the reaper without waiting for lifecycle locks,
+    /// each planned to end by `deadline`.
+    pub(crate) fn hand_over_now(&self, deadline: tokio::time::Instant) {
+        // STUB (red run): the budget is read once, before the loop.
+        let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
         for backend in self.latch_and_snapshot() {
-            backend.hand_over_now(budget);
+            backend.hand_over_now(tokio::time::Instant::now() + budget);
         }
     }
 
@@ -31,10 +45,12 @@ impl BackendRegistry {
     /// every backend's tree not yet handed to the reaper is then killed at
     /// once, so none is left running behind the parent. A tree already
     /// handed over is in the reaper's hands, cut to `deadline`.
-    pub(crate) async fn stop_all_by(&self, deadline: tokio::time::Instant) {
+    pub(crate) async fn stop_all_by(&self, deadline: tokio::time::Instant, handover: Handover) {
         self.stop_deadline.move_earlier(deadline.into_std());
+        // STUB (red run): AtEntry acts like WhenHurried.
+        let _ = handover;
         if self.stop_deadline.is_hurried() {
-            self.hand_over_now(deadline.saturating_duration_since(tokio::time::Instant::now()));
+            self.hand_over_now(deadline);
         }
         // The backends to retire are the ones the stop latched and took, in
         // one hold: a reload registering after this is refused, never stopped
