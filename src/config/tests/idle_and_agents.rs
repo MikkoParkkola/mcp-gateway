@@ -128,11 +128,8 @@ fn the_stop_grace_table_matches_the_duration_grammar() {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
         let (input, want) = line.split_once('\t').expect("two TAB-separated columns");
-        write_owner_only(
-            &path,
-            &format!("server:\n  shutdown_timeout: \"{input}\"\n"),
-        )
-        .expect("write");
+        write_owner_only(&path, format!("server:\n  shutdown_timeout: \"{input}\"\n"))
+            .expect("write");
         match Config::load(Some(&path)) {
             Ok(cfg) => {
                 let timeout = cfg.server.shutdown_timeout;
