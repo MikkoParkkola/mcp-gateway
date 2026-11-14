@@ -496,6 +496,8 @@ async fn delete_refuses_hard_linked_entry_behind_symlinked_config() {
     std::fs::hard_link(&entry, route.dir.path().join("also"))
         .unwrap_or_else(|error| panic!("{ROW}: hard link: {error}"));
     let response = delete(&route, &name, "files", true).await;
-    assert_eq!(response.status(), StatusCode::CONFLICT, "{ROW}: hard link");
+    let (status, body) = decode(response).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{ROW}: hard link {body}");
+    assert_eq!(body["error"], "named", "{ROW}: refused as named");
     assert!(entry.is_file(), "{ROW}: file remains");
 }

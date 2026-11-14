@@ -426,7 +426,7 @@ fn capability_walk_refuses_past_the_depth_bound() {
     let mut sources = quiet(dir.path());
     sources.capability_dirs.push(cap);
     let got = naming(&sources, &name);
-    assert!(got.is_err(), "{ROW}: expected Err, got {got:?}");
+    assert_eq!(got, Err(super::CAP_TOO_DEEP.to_owned()), "{ROW}");
 }
 
 /// A capability directory that links back to itself was not read. The check
@@ -444,5 +444,5 @@ fn capability_symlink_loop_refuses() {
     let mut sources = quiet(dir.path());
     sources.capability_dirs.push(cap);
     let got = naming(&sources, &name);
-    assert!(got.is_err(), "{ROW}: expected Err, got {got:?}");
+    assert_eq!(got, Err(super::CAP_UNREAD.to_owned()), "{ROW}");
 }

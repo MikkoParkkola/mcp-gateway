@@ -559,3 +559,19 @@ fn retired_name_still_held_is_not_already_gone() {
     assert_eq!(got, Err(DeleteRefused::NotListed), "{ROW}: {got:?}");
     assert_eq!(store.exists(&name), Ok(true), "{ROW}: entry is gone");
 }
+
+/// A retired name whose store cannot answer is not reported gone: the store's
+/// error decides, and nothing is written.
+#[test]
+fn retired_name_with_a_failing_store_is_not_already_gone() {
+    const ROW: &str = "retired_name_with_a_failing_store_is_not_already_gone";
+    let (dir, vault, store, name, _index, sources) = fault_entry();
+    Index::at(dir.path())
+        .append_removed_in(&name, StoreKind::Keychain)
+        .unwrap_or_else(|error| panic!("{ROW}: retire: {error:?}"));
+    let before = index_bytes(dir.path());
+    store.set_exists(StoreError::TimedOut);
+    let got = delete_unused(&vault, &store, &name, &sources, soon());
+    assert_eq!(got, Err(DeleteRefused::TimedOut), "{ROW}: {got:?}");
+    assert_eq!(index_bytes(dir.path()), before, "{ROW}: index changed");
+}
