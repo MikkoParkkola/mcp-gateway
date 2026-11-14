@@ -2,18 +2,23 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Rows for listing unused secret entries and deleting one at a time.
 
-use super::super::settings_unused::{StoreQuery, delete_unused_entry, list_unused};
+use super::super::settings_unused::{StoreQuery, delete_unused_entry, list_unused, refusal_status};
 use super::test_support::{BASE, Route, client, decode, secret, set};
 use super::{SettingsStoreForTest, route_secret_tests::recording};
+use crate::config::FailsafeConfig;
+use crate::config::{EnvOverlay, LiveEnv, ResolvedEnvFiles};
+use crate::config_reload::ReloadContext;
 use crate::gateway::ui::admin_audit::AuditDetail;
 use crate::gateway::ui::guard::Guard;
 use crate::gateway::{auth::AuthenticatedClient, routes};
+use crate::secret_store::DeleteRefused;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{Method, Request, StatusCode};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::Ordering};
+use std::time::Duration;
 
 const SHAPED: &str = "mcp-gateway.x.1.0123456789abcdef";
 
@@ -365,4 +370,78 @@ async fn locks_released_after_refusals() {
         .save(json!([set("environment", &json!("prod"))]))
         .await;
     assert_eq!(status, StatusCode::OK, "{ROW} save {body}");
+}
+
+/// Each delete refusal answers its one status: 400 a bad shape, 404 not listed,
+/// 409 an entry still named, pending or live in the other store, 503 a busy,
+/// slow or unreadable store or source.
+#[test]
+fn refusal_statuses() {
+    const ROW: &str = "refusal_statuses";
+    for (refused, status) in [
+        (DeleteRefused::BadName, StatusCode::BAD_REQUEST),
+        (DeleteRefused::NotListed, StatusCode::NOT_FOUND),
+        (DeleteRefused::StoreMismatch, StatusCode::CONFLICT),
+        (DeleteRefused::Named, StatusCode::CONFLICT),
+        (DeleteRefused::Pending, StatusCode::CONFLICT),
+        (DeleteRefused::Busy, StatusCode::SERVICE_UNAVAILABLE),
+        (DeleteRefused::TimedOut, StatusCode::SERVICE_UNAVAILABLE),
+        (
+            DeleteRefused::Failed("store-canary".into()),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    ] {
+        assert_eq!(refusal_status(&refused), status, "{ROW}: {refused:?}");
+    }
+}
+
+/// Only a capability file under a directory the on-disk config lists names the
+/// entry: the delete is refused and the file stays.
+#[tokio::test]
+async fn delete_refuses_capability_named() {
+    const ROW: &str = "delete_refuses_capability_named";
+    const VALUE: &str = "unused-capability-canary";
+    let (route, name) = unnamed_entry(ROW, VALUE).await;
+    let caps = route.dir.path().join("caps");
+    std::fs::create_dir_all(&caps).expect("caps");
+    std::fs::write(caps.join("tool.yaml"), format!("auth: keychain:{name}\n")).expect("cap");
+    route.write(&format!(
+        "{BASE}capabilities:\n  directories:\n    - \"{}\"\n",
+        caps.display()
+    ));
+    assert!(
+        !route.text().contains(&name),
+        "{ROW} config does not name it"
+    );
+    let response = delete(&route, &name, "files", true).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT, "{ROW} capability");
+    assert!(secret_file(&route, &name).is_file(), "{ROW} file remains");
+}
+
+/// Only an env file the running gateway was started with names the entry: the
+/// delete is refused and the file stays.
+#[tokio::test]
+async fn delete_refuses_env_named() {
+    const ROW: &str = "delete_refuses_env_named";
+    const VALUE: &str = "unused-env-canary";
+    let (route, name) = unnamed_entry(ROW, VALUE).await;
+    let env = route.dir.path().join("gateway.env");
+    std::fs::write(&env, format!("TOKEN=keychain:{name}\n")).expect("env");
+    let live = Arc::new(LiveEnv::new(
+        Arc::new(EnvOverlay::none()),
+        ResolvedEnvFiles::new(vec![env], false),
+    ));
+    let ctx = ReloadContext::new(
+        route.path(),
+        Arc::clone(&route.ctx.live_config),
+        Arc::clone(&route.state.backends),
+        FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("context")
+    .with_env(live);
+    route.state.meta_mcp.set_reload_context(Arc::new(ctx));
+    let response = delete(&route, &name, "files", true).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT, "{ROW} env file");
+    assert!(secret_file(&route, &name).is_file(), "{ROW} file remains");
 }

@@ -12,11 +12,17 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 use crate::gateway::{router::AppState, ui::guard::Guard};
+use crate::secret_store::DeleteRefused;
 
 /// `?store=keychain|files` on a delete.
 #[derive(Deserialize)]
 pub(super) struct StoreQuery {
     pub(super) store: String,
+}
+
+/// The status a delete refusal answers with.
+pub(super) fn refusal_status(_refused: &DeleteRefused) -> StatusCode {
+    StatusCode::NOT_IMPLEMENTED
 }
 
 /// `GET /ui/api/settings/secrets/unused`.
