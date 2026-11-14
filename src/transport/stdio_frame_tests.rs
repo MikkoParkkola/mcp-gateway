@@ -336,7 +336,8 @@ impl Drop for KillEscapedOnDrop {
 /// The pipe goes through fd 3: a background job's own stdin is `/dev/null`
 /// in a non-interactive shell, so `<&0` would not hand it the pipe. The
 /// reader leaves the group through perl's `setsid`, since macOS ships no
-/// `setsid` command (MIK-8183).
+/// `setsid` command (MIK-8183) and is detached by a subshell's double fork:
+/// a member still attached to the backend by parent pid is swept with it.
 #[cfg(unix)]
 #[tokio::test]
 async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
@@ -352,7 +353,7 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         "while IFS= read -r line; do\n\
          case \"$line\" in\n\
          *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
-         *'notifications/initialized'*) exec 3<&0; perl -MPOSIX -e 'setsid; exec @ARGV' sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         *'notifications/initialized'*) exec 3<&0; (perl -MPOSIX -e 'setsid; exec @ARGV' sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"); exec sleep 1000 ;;\n\
          esac\ndone\n",
         pid = pidfile.display()
     );
@@ -383,10 +384,29 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         !escaped.trim().is_empty(),
         "precondition: the escaped reader started"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let held = crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || {
+        let held = transport.writer.try_lock().is_err();
+        std::future::ready(if held {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue("the write has not taken stdin yet".to_owned())
+        })
+    })
+    .await;
     assert!(
-        transport.writer.try_lock().is_err(),
-        "precondition: the write holds stdin"
+        held.is_ok(),
+        "precondition: the write holds stdin: {held:?}"
+    );
+    // A signal-0 probe: it sends nothing, so it is not a raw kill.
+    let live = |pid: &str| {
+        pid.parse::<i32>()
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
+    };
+    assert!(
+        live(escaped.trim()),
+        "precondition: the detached reader is live before the close"
     );
     let closed = tokio::time::timeout(std::time::Duration::from_secs(10), transport.close()).await;
     let escaped_alive = std::process::Command::new("kill")

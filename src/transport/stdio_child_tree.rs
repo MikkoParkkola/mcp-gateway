@@ -36,6 +36,15 @@ pub(super) struct ChildTree {
     /// The gateway's stop deadline, when its backend belongs to one: cuts the
     /// waits so the kill lands in time (see `StopDeadline`).
     stop_deadline: Option<std::sync::Arc<super::reaper::StopDeadline>>,
+    /// The descendant sweep: everything still attached to this
+    /// backend by parent pid dies with it. Taken by the one run, before the
+    /// group kill.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    sweep: Option<super::sweep::Sweep>,
+    /// The leader's pid, so a start-time read that failed at construction is
+    /// retried at the first snapshot.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    sweep_root: Option<u32>,
     #[cfg(all(test, unix))]
     pub(super) term_signals_sent: usize,
     #[cfg(test)]
@@ -170,6 +179,8 @@ impl ChildTree {
             .id()
             .and_then(|id| i32::try_from(id).ok())
             .and_then(rustix::process::Pid::from_raw);
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let wrapper_pid = wrapper.id();
         Self {
             wrapper,
             #[cfg(unix)]
@@ -180,6 +191,12 @@ impl ChildTree {
             ending: Ending::Now,
             grace: None,
             stop_deadline: None,
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            sweep: wrapper_pid
+                .and_then(super::sweep::PlatformTable::identity_of)
+                .map(|root| super::sweep::Sweep::new(root, super::sweep::config())),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            sweep_root: wrapper_pid,
             #[cfg(all(test, unix))]
             term_signals_sent: 0,
             #[cfg(test)]
@@ -281,6 +298,69 @@ impl ChildTree {
         match self.ending {
             Ending::Graceful { .. } => self.stop_deadline.clone(),
             Ending::Now => None,
+        }
+    }
+
+    /// Record this tree's descendants now: called before the first signal of a
+    /// stop (including the stdin close) and on every reaper step before the
+    /// group kill. A start-time read that failed at construction is retried.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn sweep_snapshot(&mut self) {
+        if self.sweep.is_none()
+            && !self.signals_closed
+            && let Some(root) = self
+                .sweep_root
+                .and_then(super::sweep::PlatformTable::identity_of)
+        {
+            self.sweep = Some(super::sweep::Sweep::new(root, super::sweep::config()));
+        }
+        if let Some(sweep) = self.sweep.as_mut() {
+            sweep.snapshot(&mut super::sweep::PlatformTable::new());
+        }
+    }
+
+    /// No descendant sweep on this platform.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[allow(clippy::unused_self)]
+    pub(super) fn sweep_snapshot(&mut self) {}
+
+    /// Freeze, verify and kill every descendant, once, before the group kill.
+    /// Residuals are logged as a count and pids only: never a command line.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn sweep_descendants(&mut self) {
+        let Some(mut sweep) = self.sweep.take() else {
+            tracing::warn!(
+                backend = self.wrapper.id(),
+                "descendant sweep not run: the backend's start time could not be read"
+            );
+            return;
+        };
+        let report = sweep.run(
+            &mut super::sweep::PlatformTable::new(),
+            super::sweep::process_budget(),
+        );
+        if !report.residual.is_empty()
+            || report.incomplete_reads > 0
+            || report.unconfirmed > 0
+            || report.stuck_stopped > 0
+            || report.rescued > 0
+            || report.stop_mismatch > 0
+        {
+            tracing::warn!(
+                backend = self.wrapper.id(),
+                residual = report.residual.len(),
+                unreadable = report.unknown,
+                unconfirmed_stopped = report.unconfirmed,
+                stuck_stopped = report.stuck_stopped,
+                rescued = report.rescued,
+                stop_mismatch = report.stop_mismatch,
+                incomplete_reads = report.incomplete_reads,
+                killed = report.killed.len(),
+                continued = report.continued.len(),
+                passes = report.passes,
+                pids = ?report.residual.iter().map(|who| who.pid).collect::<Vec<_>>(),
+                "descendant sweep could not confirm every descendant gone (process table errors counted as unreadable)"
+            );
         }
     }
 
@@ -386,12 +466,20 @@ impl ChildTree {
         {
             return Reap::Pending;
         }
+        // Before the first signal, and on every step while the waits run: the
+        // sweep's picture of the tree is taken while the backend still holds it.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if self.reaping.is_none() {
+            self.sweep_snapshot();
+        }
         if self.reaping.is_none() && self.in_grace(now) {
             return Reap::Pending;
         }
         let (started, phase) = if let Some(state) = self.reaping {
             state
         } else {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            self.sweep_descendants();
             self.start_kill();
             let state = (now, Self::FIRST_REAP_PHASE);
             self.reaping = Some(state);
@@ -514,6 +602,26 @@ const PRE_REAP_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 /// the gate closes and the leader is reaped (MIK-8213).
 #[cfg(unix)]
 const PRE_REAP_SETTLE: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Slack added to the nested gateway's worst case below, for a kill or a reap
+/// that lands late on a busy host.
+#[cfg(unix)]
+const NESTED_TERM_MARGIN: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// What a nested gateway needs after the SIGTERM that tells it to hurry: its
+/// hurried backend waits ([`super::reaper::HURRY_WINDOW`]), then the reap's
+/// grace for a killed leader and its settle, plus a margin. An outer stop gives
+/// its SIGTERM wait at least this much when its waits can afford it, so the
+/// inner's own kill lands before the outer's. Derived here, beside the reap
+/// constants it depends on, so changing them moves it.
+#[cfg(unix)]
+pub(super) const NESTED_TERM_NEED: std::time::Duration = super::reaper::HURRY_WINDOW
+    .saturating_add(PRE_REAP_GRACE)
+    .saturating_add(PRE_REAP_SETTLE)
+    .saturating_add(NESTED_TERM_MARGIN);
+/// Windows has no SIGTERM phase.
+#[cfg(not(unix))]
+pub(super) const NESTED_TERM_NEED: std::time::Duration = std::time::Duration::ZERO;
 
 #[cfg(all(test, unix))]
 #[path = "stdio_child_tree_tests.rs"]

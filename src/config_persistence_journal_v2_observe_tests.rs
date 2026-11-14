@@ -30,6 +30,11 @@ pub(super) enum Event {
     #[cfg(unix)]
     AfterTornWrite,
     RepairPaused,
+    HandoverFlagged,
+    AbandonFileAppended,
+    AbandonFileDataSynced,
+    AbandonFileSynced,
+    HandoverFinished,
 }
 
 #[derive(Default)]
