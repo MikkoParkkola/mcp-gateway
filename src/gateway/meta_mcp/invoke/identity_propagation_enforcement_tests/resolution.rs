@@ -246,7 +246,7 @@ fn mint_audit_write_failure_returns_generic_error_no_leak() {
         .to_string();
     let script =
         format!("ulimit -f 0; trap '' XFSZ; exec \"$0\" '{TEST_PATH}' --exact --nocapture");
-    let profile_dir = tempfile::tempdir().expect("private profile dir");
+    let profile_dir = crate::test_dir_keep::kept_tempdir();
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(script)

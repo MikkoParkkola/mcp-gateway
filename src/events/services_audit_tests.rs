@@ -57,7 +57,7 @@ fn open_log(dir: &std::path::Path) -> Arc<TransparencyLogger> {
 
 #[tokio::test]
 async fn an_attempt_record_the_log_refuses_is_reported_not_swallowed() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = open_log(dir.path());
     let services = services_with(Some(Arc::clone(&log)));
     services.audit_attempt(&attempt()).await.expect("written");
@@ -88,7 +88,7 @@ async fn a_refused_tenant_read_record_withholds_the_callback_frame() {
     use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
     use crate::security::firewall::{Firewall, FirewallConfig};
 
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = TransparencyLogConfig {
         enabled: true,
         path: dir

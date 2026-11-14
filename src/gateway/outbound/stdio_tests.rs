@@ -116,7 +116,7 @@ async fn a_bridged_request_naming_another_tenant_is_withheld() {
         "with no log, a bridged request naming B after an A read is still withheld"
     );
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let log = TransparencyLogger::open(Arc::new(
         crate::security::transparency_log::TransparencyLogConfig {

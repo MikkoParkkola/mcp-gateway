@@ -52,7 +52,7 @@ pub(super) struct Gw {
     pub state: Arc<AppState>,
     pub backend: Arc<Backend>,
     pub issuer: String,
-    pub store: tempfile::TempDir,
+    pub store: std::sync::Arc<tempfile::TempDir>,
     pub forms: Forms,
     /// Every link the client announced at the terminal.
     pub announced: Arc<std::sync::Mutex<Vec<String>>>,
@@ -113,7 +113,7 @@ impl Gw {
 
     /// As [`Gw::over`], with the callback server on `callback_host`.
     pub(super) async fn over_on(issuer: String, forms: Forms, callback_host: &str) -> Self {
-        let store = tempfile::tempdir().expect("token store");
+        let store = crate::test_dir_keep::kept_tempdir();
         Self::build(issuer, forms, callback_host, store, Audit::On).await
     }
 
@@ -130,7 +130,7 @@ impl Gw {
     /// layer then passes requests straight through to the handler.
     pub(super) async fn new_without_audit_log() -> Self {
         let (issuer, forms) = token_endpoint(Some("access-a")).await;
-        let store = tempfile::tempdir().expect("token store");
+        let store = crate::test_dir_keep::kept_tempdir();
         Self::build(issuer, forms, "127.0.0.1", store, Audit::Off).await
     }
 
@@ -138,7 +138,7 @@ impl Gw {
         issuer: String,
         forms: Forms,
         callback_host: &str,
-        store: tempfile::TempDir,
+        store: std::sync::Arc<tempfile::TempDir>,
         audit: Audit,
     ) -> Self {
         let auth = AuthConfig {

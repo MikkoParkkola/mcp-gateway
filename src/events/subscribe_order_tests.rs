@@ -25,7 +25,7 @@ fn lifecycle_actions(dir: &std::path::Path) -> Vec<String> {
 /// log still records the insert before the refresh.
 #[tokio::test]
 async fn a_racing_refresh_is_audited_after_the_insert_it_follows() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
     hub.register_source(Arc::new(Probe::default()));
@@ -81,7 +81,7 @@ async fn a_racing_refresh_is_audited_after_the_insert_it_follows() {
 /// the same gate, cannot change the catalogue in between.
 #[tokio::test]
 async fn a_subscribe_holds_the_catalogue_gate_through_its_admit() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
     hub.register_source(Arc::new(Probe::default()));

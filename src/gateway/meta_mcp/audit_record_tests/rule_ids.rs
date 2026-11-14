@@ -12,7 +12,7 @@ use crate::security::{ToolPolicy, ToolPolicyConfig};
 
 #[tokio::test]
 async fn a_meta_tool_policy_refusal_records_its_rule_id() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta(Ok(ok_result()), &dir);
     let key = crate::gateway::record_principal::test_record_key().rule_id_key();
     let policy = ToolPolicy::from_config_keyed(
@@ -49,7 +49,7 @@ async fn a_meta_tool_policy_refusal_records_its_rule_id() {
 /// A call to a backend that does not exist records no rule.
 #[tokio::test]
 async fn a_not_found_refusal_records_no_rule() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta(Ok(ok_result()), &dir);
     let who = api_key_caller();
     let args = json!({"server": "nowhere", "tool": "read", "arguments": {}});
@@ -71,7 +71,7 @@ async fn a_not_found_refusal_records_no_rule() {
 /// attribution is not recorded.
 #[tokio::test]
 async fn a_response_side_block_records_no_rule() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut meta = meta(Ok(ok_result()), &dir);
     meta.set_response_contract(crate::config::ResponseContractConfig {
         fail_closed: true,

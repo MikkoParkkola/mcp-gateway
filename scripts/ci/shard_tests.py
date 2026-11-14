@@ -24,11 +24,13 @@ were deleted is lowered in the same diff, where review sees it.
   shard_tests.py wait-lib <artifact> <producer job name>
                                      wait for it in this run (found=true|false)
   shard_tests.py run-prebuilt <os> <shard> <binary>
-                                     run a PREBUILT shard from that binary
+                                     run a PREBUILT or SHARED_BUILD shard from that binary
   shard_tests.py --self-test         check the counter against fixed logs
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -101,6 +103,11 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
 # Shards that are no matrix leg of their own: each runs from the lib test
 # binary another shard of its OS built and exported (`export-lib`).
 PREBUILT = {"macos": {"lib-a": "lib-b"}}
+# Shards that are matrix legs of their own but compile nothing: they run from the lib test binary one job
+# of the run builds and shares (ci.yml's linux-lib-build, `export-lib`), under the same guards as `run`.
+SHARED_BUILD = {"linux": ("lib-a", "lib-b")}
+# The lib test binary's folder under BY_BINARY, as the cargo runner names it (`mcp_gateway-<hash>`, hash dropped).
+LIB_TARGET = "mcp_gateway"
 # Built, not run: the default `cargo test` target set compiles examples, and
 # Windows' former `cargo test --no-run` did too.
 EXAMPLES = {"linux": "int-b", "macos": "int", "windows": "int-b"}
@@ -333,16 +340,23 @@ def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -
         if rc != 0:
             failed.append(f"examples: cargo build exited {rc}")
     if tmp:
-        paths = leftovers(tmp)
-        bad = unexpected({name: files_in(path) for name, path in paths.items()})
-        # Tolerated entries are printed too: which ones count against the
-        # allowance is only sort order, so the cause can sit in either list.
-        for name in sorted(set(paths) - set(bad)):
-            print(f"::notice::{os_kind} {shard} tolerated in TMPDIR: {name} "
-                  f"({contents(paths[name])})")
-        # A failure lists every file: the writer may be named by the last one.
-        failed += [f"left in TMPDIR: {name} ({contents(paths[name], None)})" for name in bad]
-        shutil.rmtree(tmp, ignore_errors=True)
+        failed += tmp_problems(os_kind, shard, tmp)
+    return failed
+
+
+def tmp_problems(os_kind: str, shard: str, tmp: str) -> list[str]:
+    """The TMPDIR guard's verdict on a shard's private `tmp` (then removed): one failure per entry a test
+    left there that KNOWN_LEFTOVERS does not allow."""
+    paths = leftovers(tmp)
+    bad = unexpected({name: files_in(path) for name, path in paths.items()})
+    # Tolerated entries are printed too: which ones count against the
+    # allowance is only sort order, so the cause can sit in either list.
+    for name in sorted(set(paths) - set(bad)):
+        print(f"::notice::{os_kind} {shard} tolerated in TMPDIR: {name} "
+              f"({contents(paths[name])})")
+    # A failure lists every file: the writer may be named by the last one.
+    failed = [f"left in TMPDIR: {name} ({contents(paths[name], None)})" for name in bad]
+    shutil.rmtree(tmp, ignore_errors=True)
     return failed
 
 
@@ -581,6 +595,24 @@ def prebuilt_rows() -> None:
         assert run_prebuilt("macos", "lib-a", fake) == 1 and union_problems(fake, "macos"), "a gap passed"
         binary(ok_run)
         assert run_prebuilt("macos", "lib-a", fake) == 0 and union_problems(fake, "macos") == []
+        # Linux: a shared-build leg runs under the TMPDIR guard a cargo shard has. The binary sees its own
+        # BY_BINARY folder as TMPDIR, and a test that leaves a file there fails the leg.
+        lfloor = max(SHARDS["linux"][leg][0][3] for leg in SHARED_BUILD["linux"])
+        lok = f'echo "running {lfloor} tests"; echo "test result: ok. {lfloor} passed; 0 failed; 0 ignored"'
+        binary(lok + f'; case "$TMPDIR" in */{BY_BINARY}/{LIB_TARGET}) ;; *) exit 8;; esac')
+        assert run_prebuilt("linux", "lib-a", fake) == 0, "a clean Linux shared-build leg failed"
+        assert main(["shard_tests.py", "run-prebuilt", "linux", "lib-b", fake]) == 0, "lib-b was refused"
+        binary(lok + '; echo x > "$TMPDIR/stray-file"')
+        # The same verdict line `run` prints for a cargo shard whose lib binary (mcp_gateway-<hash>) left it.
+        out = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        with contextlib.redirect_stdout(out):
+            rc = run_prebuilt("linux", "lib-a", fake)
+        out.flush()
+        said = out.buffer.getvalue().decode()
+        assert rc == 1 and f"::error::linux lib-a left in TMPDIR: {LIB_TARGET}/stray-file" in said, \
+            f"a Linux leg that left a temp file did not fail as `run` does: rc {rc}"
+        # Only the shared-build legs run from the binary on Linux: an integration shard compiles its own.
+        assert main(["shard_tests.py", "run-prebuilt", "linux", "int-a", fake]) == 2, "int-a ran prebuilt"
         # export-lib copies the executable cargo names, and fails when cargo names none.
         built = os.path.join(root, "built")
         with open(built, "w") as f:
@@ -748,13 +780,19 @@ def union_problems(binary: str, os_kind: str) -> list[str]:
 
 
 def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
-    """Run a PREBUILT shard from an exported lib test binary, as `cargo test` would run it: from the
-    package root with CARGO_MANIFEST_DIR set. Same floor and report as `run`."""
+    """Run a PREBUILT or SHARED_BUILD shard from an exported lib test binary, as `cargo test` would run it:
+    from the package root with CARGO_MANIFEST_DIR set, and on a TMP_GUARDED OS with the TMPDIR guard `run`
+    applies (the binary's own BY_BINARY folder as TMPDIR, a leftover fails the shard). Same floor and report."""
     ((step, _args, test_args, floor),) = SHARDS[os_kind][shard]
     os.chmod(binary, 0o755)  # an artifact round trip drops the exec bit
     # The coverage guard: the halves' selections on this binary partition its whole list.
     union = union_problems(binary, os_kind)
     env = {**os.environ, "CARGO_MANIFEST_DIR": ROOT}
+    tmp = tempfile.mkdtemp(prefix="shard-tmp-") if os_kind in TMP_GUARDED else None
+    if tmp:
+        # What the cargo runner gives this binary: its own folder, so a leftover is reported under it.
+        env["TMPDIR"] = os.path.join(tmp, BY_BINARY, LIB_TARGET)
+        os.makedirs(env["TMPDIR"])
     p = subprocess.Popen([binary, *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=ROOT)
     lines = []
@@ -770,6 +808,8 @@ def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
     failed = [f"{step}: test binary exited {rc}"] * (rc != 0)
     failed += [f"{step}: selected {n} tests, below the floor of {floor}"] * (n < floor)
     failed += union
+    if tmp:
+        failed += tmp_problems(os_kind, shard, tmp)
     for f in failed:
         print(f"::error::{os_kind} {shard} {f}")
     return 1 if failed else 0
@@ -834,7 +874,8 @@ def main(argv: list[str]) -> int:
         return export_lib(argv[2])
     if len(argv) == 4 and argv[1] == "wait-lib":
         return wait_lib(argv[2], argv[3])
-    if len(argv) == 5 and argv[1] == "run-prebuilt" and argv[3] in PREBUILT.get(argv[2], {}):
+    if (len(argv) == 5 and argv[1] == "run-prebuilt"
+            and (argv[3] in PREBUILT.get(argv[2], {}) or argv[3] in SHARED_BUILD.get(argv[2], ()))):
         return run_prebuilt(argv[2], argv[3], argv[4])
     print(__doc__, file=sys.stderr)
     return 2

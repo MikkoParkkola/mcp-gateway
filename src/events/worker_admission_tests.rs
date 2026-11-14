@@ -88,7 +88,7 @@ impl EventSource for Gated {
 /// One attempt of a queued `probe.gate` event, paused just before its send
 /// while a reload publishes `after` and returns; the posts its callback got.
 async fn attempt_across_a_reload(after: Config) -> usize {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
@@ -155,7 +155,7 @@ async fn a_reload_that_keeps_the_backend_before_the_send_still_sends() {
 /// A `backend.x.tools_changed` attempt paused before its send while backend
 /// `x` leaves the registry (`remove`) or stays; the posts its callback got.
 async fn backend_attempt_across_a_removal(remove: bool) -> usize {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
@@ -313,7 +313,7 @@ async fn within(limit: Duration, done: impl Fn() -> bool) -> bool {
 /// network I/O: the gate is released before the POST.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reload_waits_for_an_admission_but_not_for_the_send() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
