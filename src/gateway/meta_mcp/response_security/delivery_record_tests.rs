@@ -80,7 +80,7 @@ async fn t5_a_delivery_record_on_an_unreadable_clock_is_written_undated() {
     use crate::security::{TransparencyLogConfig, TransparencyLogger};
 
     // GIVEN: a gateway with a transparency log
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("transparency.ndjson");
     let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,

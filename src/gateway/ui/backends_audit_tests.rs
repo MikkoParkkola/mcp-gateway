@@ -48,7 +48,7 @@ impl Audited {
     }
 
     async fn build(reload: Reload) -> Self {
-        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("gateway.yaml");
         write_owner_only(&path, START).expect("write config");
         let (mut state, store) = crate::gateway::router::tests::audience_state(

@@ -64,7 +64,7 @@ async fn call(meta: &MetaMcp, server: &str) -> String {
 /// never `not_found`: the gate judged a backend that existed.
 #[tokio::test]
 async fn a_backend_lost_after_the_gate_saw_it_records_no_not_found() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, calls) = logged(&dir);
     let registry = Arc::clone(meta.backends.for_test());
     let _armed = before_dispatch_resolution(move || {
@@ -89,7 +89,7 @@ async fn a_backend_lost_after_the_gate_saw_it_records_no_not_found() {
 /// outcome, never `not_found`.
 #[tokio::test]
 async fn a_backend_registered_after_the_gate_missed_it_records_no_not_found() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = logged(&dir);
     let registry = Arc::clone(meta.backends.for_test());
     let beta_calls = Arc::new(std::sync::Mutex::new(None));
@@ -123,7 +123,7 @@ async fn a_backend_registered_after_the_gate_missed_it_records_no_not_found() {
 /// a mark is the invocation's own.
 #[tokio::test]
 async fn a_mark_never_reaches_a_later_call_on_the_same_name() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = logged(&dir);
     let registry = Arc::clone(meta.backends.for_test());
     let args = json!({"server": "beta", "tool": "read", "arguments": {}});
@@ -153,7 +153,7 @@ async fn a_mark_never_reaches_a_later_call_on_the_same_name() {
 /// outcome, never the first call's `not_found`.
 #[tokio::test]
 async fn a_miss_does_not_label_a_later_successful_call() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _) = logged(&dir);
     let registry = Arc::clone(meta.backends.for_test());
     let args = json!({"server": "beta", "tool": "read", "arguments": {}});

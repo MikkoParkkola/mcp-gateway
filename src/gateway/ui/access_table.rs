@@ -224,6 +224,15 @@ pub(super) static ROWS: &[Row] = &[
         false,
     ),
     row(routes::UI_DECISIONS, Get, Admin(AdminRequired), &[], false),
+    // Resolving an access request writes a grant (accept) or a decision
+    // (deny): the grant routes' own permission.
+    row(
+        routes::UI_DECISIONS_RESOLVE,
+        Post,
+        ControlPlane(CpCheck::Action(ControlPlaneAction::MutateGrant)),
+        &[],
+        false,
+    ),
     row(routes::UI_POLICIES, Get, Admin(AdminRequired), &[], false),
     row(
         routes::UI_DECISIONS_COUNT,

@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
 
 use super::records::{ApiKeyRef, LiveBinding, Subscription};
-use crate::config_reload::LiveConfig;
+use crate::config_reload::{Generation, LiveConfig};
 use crate::security::TransparencyLogger;
 
 /// What the hub borrows from the rest of the gateway.
@@ -173,9 +173,21 @@ impl Services {
     /// As [`Self::admits`]; `None` asks only that the key be live, for
     /// owner-scoped events that need no backend grant.
     /// A key with an expiry is judged on `now`, and refused on a clock that
-    /// cannot be read (MIK-8202).
+    /// cannot be read, so a recovering clock cannot expire a live key.
+    /// A CLI key stands only while its approver does.
     fn admits_grant(
         &self,
+        key: Option<KeyCheck<'_>>,
+        backend: Option<&str>,
+        now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
+    ) -> bool {
+        let generation = self.live.generation();
+        Self::admits_grant_in_generation(&generation, key, backend, now)
+    }
+
+    /// The file key and its approval binding must belong to one generation.
+    fn admits_grant_in_generation(
+        generation: &Generation,
         key: Option<KeyCheck<'_>>,
         backend: Option<&str>,
         now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
@@ -187,8 +199,8 @@ impl Services {
             KeyCheck::Holder(r) => (r.name.as_str(), r.principal.as_str()),
             KeyCheck::ThisRequest { name, principal } => (name, principal),
         };
-        self.live
-            .get()
+        generation
+            .config()
             .auth
             .api_keys
             .iter()
@@ -206,6 +218,16 @@ impl Services {
                     .as_deref()
                     .is_some_and(|tag| secret_still_valid(k, tag, now)),
                 KeyCheck::ThisRequest { .. } => true,
+            })
+            // Match the resolved identity as well as the name so another
+            // key's approval binding cannot authorize this holder.
+            .filter(|k| {
+                k.approved_by.is_none()
+                    || generation.auth().api_keys().iter().any(|resolved| {
+                        resolved.name == k.name
+                            && resolved.principal().storage_form() == principal
+                            && generation.auth().binding_live(resolved, now.ok())
+                    })
             })
             .is_some_and(|k| {
                 backend.is_none_or(|backend| k.backends.iter().any(|b| b == "*" || b == backend))
@@ -761,3 +783,7 @@ mod tests;
 #[cfg(test)]
 #[path = "services_audit_tests.rs"]
 mod audit_tests;
+
+#[cfg(test)]
+#[path = "one_generation_tests.rs"]
+mod one_generation_tests;

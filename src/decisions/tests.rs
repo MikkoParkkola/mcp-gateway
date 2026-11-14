@@ -108,6 +108,39 @@ fn decide(set: &mut DecisionSet, offset: u64, capability: &str, minute: i64) {
     );
 }
 
+/// The digest names one scope and one position set: the order they come
+/// in and repeats do not change it, any other entry or position does, and
+/// no scope can be dressed up as positions. The last pair shared one
+/// encoding while the entry count came after the entries.
+#[test]
+fn the_scope_digest_has_one_encoding_per_scope_and_positions() {
+    use super::items::scope_digest;
+    use serde_json::json;
+    let entry = |capability: &str, tool: &str| json!({"capability": capability, "tool": tool, "grant_scope": "read"});
+    let (a, b) = (
+        entry("stripe.charges", "pay"),
+        entry("stripe.refunds", "refund"),
+    );
+    let digest = scope_digest(&[a.clone(), b.clone()], &[("h1", 1), ("h2", 2)]);
+    assert_eq!(
+        scope_digest(
+            &[b.clone(), a.clone(), a.clone()],
+            &[("h2", 2), ("h1", 1), ("h1", 1)]
+        ),
+        digest
+    );
+    assert_ne!(
+        scope_digest(std::slice::from_ref(&a), &[("h1", 1), ("h2", 2)]),
+        digest
+    );
+    assert_ne!(scope_digest(&[a, b], &[("h1", 1), ("h2", 3)]), digest);
+    let dressed = json!({"capability": "", "tool": "a", "grant_scope": "\0\0\0\0\0\0\0\u{1}b"});
+    assert_ne!(
+        scope_digest(&[dressed], &[]),
+        scope_digest(&[], &[("a", 9), ("b", 1)])
+    );
+}
+
 fn count(set: &DecisionSet) -> usize {
     set.snapshot().expect("all sources ready").0
 }

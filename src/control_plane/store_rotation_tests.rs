@@ -57,7 +57,7 @@ fn fill_until_rotated(store: &FileControlPlaneStore, dir: &Path, n: usize) -> us
 
 #[test]
 fn read_audit_pages_across_rotation() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = rotating_store(dir.path());
     let written = fill_until_rotated(&store, dir.path(), 2);
     let mut seen = Vec::new();
@@ -116,7 +116,7 @@ fn rotate_inside_resolve(store: &Arc<FileControlPlaneStore>, dir: &Path) {
 /// segment's own end: no event is skipped and none repeated.
 #[test]
 fn a_rotation_while_resolving_the_newest_page_skips_nothing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = Arc::new(rotating_store(dir.path()));
     for i in 0..4 {
         store.append_audit(&audit_event(&format!("e{i}"))).unwrap();
@@ -133,7 +133,7 @@ fn a_rotation_while_resolving_the_newest_page_skips_nothing() {
 /// the cursor, not at the new active file's shorter length.
 #[test]
 fn a_rotation_while_resolving_an_active_cursor_skips_nothing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = Arc::new(rotating_store(dir.path()));
     for i in 0..4 {
         store.append_audit(&audit_event(&format!("e{i}"))).unwrap();
@@ -153,7 +153,7 @@ fn a_rotation_while_resolving_an_active_cursor_skips_nothing() {
 /// rotates: the page starts at the cursor in segment 0, now sealed.
 #[test]
 fn a_rotation_while_resolving_an_offset_only_cursor_skips_nothing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = Arc::new(rotating_store(dir.path()));
     for i in 0..4 {
         store.append_audit(&audit_event(&format!("e{i}"))).unwrap();
@@ -177,7 +177,7 @@ fn sealed_file(dir: &Path, seq: u64) -> std::path::PathBuf {
 /// flagged, rather than reading as the end of the log.
 #[test]
 fn a_cursor_into_a_removed_oldest_segment_restarts_newest() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = rotating_store(dir.path());
     fill_until_rotated(&store, dir.path(), 2);
     std::fs::remove_file(sealed_file(dir.path(), 0)).unwrap();
@@ -197,7 +197,7 @@ fn a_cursor_into_a_removed_oldest_segment_restarts_newest() {
 /// A segment removed between kept ones is a hole the pages never step over.
 #[test]
 fn a_missing_segment_between_kept_ones_fails_the_page() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = rotating_store(dir.path());
     fill_until_rotated(&store, dir.path(), 3);
     std::fs::remove_file(sealed_file(dir.path(), 1)).unwrap();
@@ -218,7 +218,7 @@ fn a_missing_segment_between_kept_ones_fails_the_page() {
 /// page fails, rather than read as a log never written.
 #[test]
 fn a_newest_segment_removed_while_resolving_fails_the_page() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = rotating_store(dir.path());
     store.append_audit(&audit_event("e0")).unwrap();
     let log = dir.path().join("audit.jsonl");
@@ -234,7 +234,7 @@ fn a_newest_segment_removed_while_resolving_fails_the_page() {
 /// flagged. Nothing passes silently as complete.
 #[test]
 fn a_cursor_expiring_while_resolving_fails_then_restarts_on_retry() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = rotating_store(dir.path());
     fill_until_rotated(&store, dir.path(), 2);
     let cursor = AuditCursor {
@@ -258,7 +258,7 @@ fn a_cursor_expiring_while_resolving_fails_then_restarts_on_retry() {
 
 #[test]
 fn legacy_read_audit_cursor_after_rotation_resets() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = rotating_store(dir.path());
     store.append_audit(&audit_event("old")).unwrap();
     let len = std::fs::metadata(dir.path().join("audit.jsonl"))
@@ -280,7 +280,7 @@ fn legacy_read_audit_cursor_after_rotation_resets() {
 /// offset fails.
 #[test]
 fn read_audit_cursors_are_line_starts_in_their_segment() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let store = rotating_store(dir.path());
     fill_until_rotated(&store, dir.path(), 2);
     let log = dir.path().join("audit.jsonl");

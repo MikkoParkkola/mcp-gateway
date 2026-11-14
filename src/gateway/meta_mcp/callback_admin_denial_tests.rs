@@ -58,7 +58,7 @@ fn records(dir: &tempfile::TempDir) -> Vec<Value> {
 /// reason. An admin is not refused.
 #[tokio::test]
 async fn non_admin_callback_registration_is_refused_as_forbidden() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta(&dir).await;
     let caller = anonymous_caller();
     assert_ne!(caller.admin, crate::gateway::authz::AdminStanding::Gateway);
@@ -93,7 +93,7 @@ async fn non_admin_callback_registration_is_refused_as_forbidden() {
 /// The backend check runs first, so the rule reads `InScope` as admin.
 #[tokio::test]
 async fn an_in_scope_admin_keeps_callback_registration() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta(&dir).await;
     let scoped = MetaMcpCallerContext {
         admin: crate::gateway::authz::AdminStanding::InScope,
@@ -127,7 +127,7 @@ impl Write for Buffer {
 /// "refused by authorization" warning naming the tool.
 #[tokio::test(flavor = "current_thread")]
 async fn non_admin_callback_registration_is_audited_as_a_denial() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta(&dir).await;
     let buffer = Buffer::default();
     let writer = buffer.clone();

@@ -95,8 +95,8 @@ fn b_flagged(fw: &Firewall) -> bool {
 }
 
 /// A transparency log in a fresh directory under `policy`.
-fn logger(policy: AuditFailurePolicy) -> (TempDir, Arc<TransparencyLogger>) {
-    let dir = tempfile::tempdir().expect("tempdir");
+fn logger(policy: AuditFailurePolicy) -> (Arc<TempDir>, Arc<TransparencyLogger>) {
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,
         path: dir.path().join("transparency.ndjson").display().to_string(),
@@ -108,7 +108,7 @@ fn logger(policy: AuditFailurePolicy) -> (TempDir, Arc<TransparencyLogger>) {
 }
 
 /// A `FailClosed` log whose next append fails once.
-fn failing_log() -> (TempDir, Arc<TransparencyLogger>) {
+fn failing_log() -> (Arc<TempDir>, Arc<TransparencyLogger>) {
     let (dir, log) = logger(AuditFailurePolicy::FailClosed);
     log.fail_next_append_for_test();
     (dir, log)

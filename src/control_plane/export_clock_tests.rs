@@ -16,7 +16,7 @@ use crate::security::transparency_log::TransparencyLogConfig;
 #[test]
 fn t5b_an_undated_delivery_record_exports_and_verifies_with_its_null_timestamp() {
     // GIVEN: a log whose second entry is an undated delivery record
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("inv.jsonl");
     let logger = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {

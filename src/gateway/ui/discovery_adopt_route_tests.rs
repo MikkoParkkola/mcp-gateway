@@ -76,7 +76,7 @@ fn stdio(name: &str, command: &str, env: &[(&str, &str)]) -> DiscoveredServer {
 
 /// A gateway over `text` in a temp dir, adopting from `finds`.
 struct Route {
-    dir: tempfile::TempDir,
+    dir: std::sync::Arc<tempfile::TempDir>,
     _store: crate::gateway::router::tests::FixtureDir,
     state: Arc<AppState>,
     cache: Arc<DiscoveryCache>,
@@ -85,7 +85,7 @@ struct Route {
 
 impl Route {
     async fn new(text: &str, finds: Vec<DiscoveredServer>) -> Self {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("gateway.yaml");
         write_owner_only(&path, text).expect("write config");
         let (mut state, store) = crate::gateway::router::tests::audience_state(
