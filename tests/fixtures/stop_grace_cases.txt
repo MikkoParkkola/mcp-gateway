@@ -9,7 +9,8 @@
 # Columns, separated by one TAB: the value as written, then the grace in whole
 # seconds (the timeout rounded up to a second, + 1 s), or `refused` where the
 # gateway refuses the value at start. A bare number is seconds; the cap is 100
-# years (crate::duration_bound::MAX_DURATION, 3155760000 s).
+# years (crate::duration_bound::MAX_DURATION, 3155760000 s). Surrounding whitespace is
+# trimmed as Rust's str::trim does, Unicode included (the no-break spaces around 30s).
 30s	31
 13s	14
 45	46
@@ -19,6 +20,8 @@
 1000ms	2
 +30s	31
 0030s	31
+000000000000000000000030s	31
+ 30s 	31
 1000000	1000001
 3155760000	3155760001
 3155760000s	3155760001

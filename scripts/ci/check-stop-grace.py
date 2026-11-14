@@ -26,6 +26,10 @@ src/config/server_config.rs. The duration grammar is the gateway's
 this check, the Helm chart and the gateway's own parser share. The Helm chart is
 checked by scripts/dev/helm-chart-smoke.sh, which reads --print-default.
 
+Limits: a deploy artifact's timeout is read from its own folder only (a config kept
+elsewhere, or a Kustomize overlay, is not followed); Setext headings are not sections
+(none in tracked Markdown). SHIPPED and FLOORS keep both from hiding a lost artifact.
+
 usage: check-stop-grace.py [ROOT] | --self-test | --print-default
 """
 import pathlib
@@ -53,7 +57,7 @@ LONG_RUNNING_COMMANDS = frozenset({"serve", "kubernetes"})
 # clap's own: the help subcommand and the help and version flags print and exit.
 ONE_SHOT = tuple(sorted(ONE_SHOT_COMMANDS)) + ("help", "--help", "-h", "--version", "-V")
 GATEWAY_IMAGE = re.compile(r"(?:^|/)mcp-gateway(?::[\w.-]+)?(?:@sha256:[0-9a-f]+)?$")
-GRAMMAR = re.compile(r"\s*\+?([0-9]+)(ms|s|m|h)?\s*", re.ASCII)
+GRAMMAR = re.compile(r"\+?([0-9]+)(ms|s|m|h)?", re.ASCII)  # after a Unicode trim, as str::trim
 SCALE = {"s": 1, "m": 60, "h": 3600}
 ENV_NAME = "MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT"
 
@@ -79,7 +83,7 @@ def cap_seconds(root):
 
 def timeout_seconds(text, cap):
     """server.shutdown_timeout text -> whole seconds (rounded up), or None where the gateway refuses it."""
-    m = GRAMMAR.fullmatch(text)
+    m = GRAMMAR.fullmatch(text.strip())
     if not m:
         return None
     n, unit = int(m.group(1)), m.group(2) or "s"
@@ -116,11 +120,14 @@ SPAN = re.compile(r"`([^`]+)`")
 
 
 def markdown_units(text):
-    """(line, body, chain) per fenced block and per inline code span. `chain` is the
-    ids of the section the unit sits in and of every parent section."""
+    """(line, body, chain) per fenced block, per inline code span, and per plain or indented
+    line that runs docker (with its backslash continuations). `chain` is the ids of the
+    section the unit sits in and of every parent section."""
     units, stack, next_id, fence, body, start = [], [], 0, None, [], 0
-    for n, line in enumerate(text.splitlines(), 1):
-        chain = (0,) + tuple(i for _, i in stack)  # 0: the text before any heading
+    lines = text.splitlines()
+    for n, line in enumerate(lines, 1):
+        # 0: the text before the first heading, a section of its own and parent of nothing.
+        chain = tuple(i for _, i in stack) or (0,)
         if fence:
             if line.strip().startswith(fence):
                 units.append((start, "\n".join(body), chain))
@@ -142,20 +149,75 @@ def markdown_units(text):
             continue
         for m in SPAN.finditer(line):
             units.append((n, m.group(1), chain))
+        if "`" not in line and RUN_WORD.search(line):
+            run, k = line, n
+            while run.endswith("\\") and k < len(lines):
+                run, k = run + "\n" + lines[k], k + 1
+            units.append((n, run, chain))
     return units
 
 
 # ── docker run ───────────────────────────────────────────────────────────────
-RUN = re.compile(r"\bdocker\s+(?:container\s+)?run\b")
+RUN_WORD = re.compile(r"\bdocker\b")
 # docker run flags that take no value; every other flag takes one (or has `=`).
 BOOL_FLAGS = {"--detach", "--interactive", "--tty", "--rm", "--init", "--privileged", "--read-only",
-              "--publish-all", "--no-healthcheck", "--oom-kill-disable", "--sig-proxy", "--help"}
-SHORT_BOOLS = re.compile(r"-[ditP]+")
+              "--publish-all", "--no-healthcheck", "--oom-kill-disable", "--sig-proxy", "--help", "--quiet"}
+SHORT_BOOL_CHARS = set("ditPq")
+# docker's own options before `run` that take no value.
+GLOBAL_BOOLS = {"--debug", "-D", "--tls", "--tlsverify"}
 SHELL_STOP = {"|", "||", "&&", ";", "&", ">", ">>", "<", "2>&1"}
+# Options whose value may name the gateway without being the image.
+NAMING_FLAGS = {"--name", "--hostname", "-h", "--network-alias"}
+
+
+def parse_run(tokens):
+    """(image or None, args, stop_timeout or None, hidden) for the tokens after `docker`, or
+    None when they are not a `run` (global options and `container` may come first). `hidden`:
+    an option took a gateway image as its value, so the parse cannot be trusted."""
+    i = 0
+    while i < len(tokens) and tokens[i] != "run":
+        tok = tokens[i]
+        if tok == "container" or tok in GLOBAL_BOOLS or "=" in tok:
+            i += 1
+        elif tok.startswith("-"):
+            i += 2
+        else:
+            return None
+    if i >= len(tokens):
+        return None
+    image, args, stop, hidden, i = None, [], None, False, i + 1
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in SHELL_STOP or tok.startswith((">", "2>")):
+            break
+        if image is not None:
+            args.append(tok)
+        elif tok == "--":
+            image = tokens[i + 1] if i + 1 < len(tokens) else None
+            i += 1
+        elif tok.startswith("--"):
+            name, eq, value = tok.partition("=")
+            if not eq and name not in BOOL_FLAGS:
+                i += 1
+                value = tokens[i] if i < len(tokens) else ""
+            if name == "--stop-timeout":
+                stop = value
+            hidden |= name not in NAMING_FLAGS and bool(GATEWAY_IMAGE.search(value))
+        elif tok.startswith("-") and len(tok) > 1:
+            # -d, -it: flags. -p, -dp: the last letter takes the next word. -p8080:80: self-contained.
+            body = tok[1:]
+            if not set(body) <= SHORT_BOOL_CHARS and set(body[:-1]) <= SHORT_BOOL_CHARS:
+                i += 1
+                value = tokens[i] if i < len(tokens) else ""
+                hidden |= "-" + body[-1] not in NAMING_FLAGS and bool(GATEWAY_IMAGE.search(value))
+        else:
+            image = tok
+        i += 1
+    return image, args, stop, hidden
 
 
 def docker_runs(body):
-    """(line offset, image, args, stop_timeout or None) per `docker run` in a text."""
+    """(line offset, image or None, args, stop_timeout or None, hidden) per `docker ... run`."""
     runs = []
     joined = re.sub(r"\\\n", " ", body)
     offsets = [0]
@@ -163,34 +225,15 @@ def docker_runs(body):
         if m.group() == "\n":
             offsets.append(body[: m.end()].count("\n"))
     for idx, line in enumerate(joined.split("\n")):
-        for m in RUN.finditer(line):
+        for m in RUN_WORD.finditer(line):
             text = re.sub(r"\$\([^)]*\)", "X", line[m.end():])
             try:
                 tokens = shlex.split(text, comments=True)
             except ValueError:
                 tokens = text.split()
-            image, args, stop, i = None, [], None, 0
-            while i < len(tokens):
-                tok = tokens[i]
-                if tok in SHELL_STOP or tok.startswith((">", "2>")):
-                    break
-                if image is not None:
-                    args.append(tok)
-                elif tok.startswith("--"):
-                    name, eq, value = tok.partition("=")
-                    if not eq and name not in BOOL_FLAGS:
-                        i += 1
-                        value = tokens[i] if i < len(tokens) else ""
-                    if name == "--stop-timeout":
-                        stop = value
-                elif tok.startswith("-") and len(tok) > 1:
-                    if not SHORT_BOOLS.fullmatch(tok) and len(tok) == 2:
-                        i += 1
-                else:
-                    image = tok
-                i += 1
-            if image is not None:
-                runs.append((offsets[idx] if idx < len(offsets) else 0, image, args, stop))
+            parsed = parse_run(tokens)
+            if parsed is not None:
+                runs.append((offsets[idx] if idx < len(offsets) else 0, *parsed))
     return runs
 
 
@@ -201,7 +244,8 @@ def serving(args):
 # ── Grace values, in each artifact's own syntax ─────────────────────────────
 SYSTEMD_UNITS = {"us": 1e-6, "usec": 1e-6, "ms": 1e-3, "msec": 1e-3, "": 1, "s": 1, "sec": 1, "second": 1,
                  "seconds": 1, "m": 60, "min": 60, "minute": 60, "minutes": 60, "h": 3600, "hr": 3600,
-                 "hour": 3600, "hours": 3600}
+                 "hour": 3600, "hours": 3600, "d": 86400, "day": 86400, "days": 86400,
+                 "w": 604800, "week": 604800, "weeks": 604800}
 GO_UNITS = {"ns": 1e-9, "us": 1e-6, "µs": 1e-6, "ms": 1e-3, "s": 1, "m": 60, "h": 3600}
 
 
@@ -227,6 +271,12 @@ def first(pattern, text, flags=re.M):
     return m.group(1) if m else None
 
 
+def last(pattern, text, flags=re.M):
+    """The effective setting where the platform lets a later assignment win."""
+    found = re.findall(pattern, text, flags)
+    return found[-1] if found else None
+
+
 def grace_problem(what, raw, seconds, need):
     """None when the grace is enough; else what is wrong with it."""
     if raw is None:
@@ -239,9 +289,9 @@ def grace_problem(what, raw, seconds, need):
 
 
 def check_systemd(body, need):
-    raw = first(r"^\s*TimeoutStopSec=(.*?)\s*$", body)
+    raw = last(r"^\s*TimeoutStopSec=(.*?)\s*$", body)
     problems = [grace_problem("TimeoutStopSec", raw, systemd_seconds(raw) if raw else None, need)]
-    if first(r"^\s*KillMode=(\S+)\s*$", body) != "mixed":
+    if last(r"^\s*KillMode=(\S+)\s*$", body) != "mixed":
         problems.append("KillMode is not mixed: control-group SIGTERMs every backend with the gateway")
     return [p for p in problems if p]
 
@@ -255,7 +305,7 @@ def compose_services(body):
             continue
         indent = len(line) - len(line.lstrip())
         if si is None:
-            if re.fullmatch(r"\s*services:\s*", line):
+            if re.fullmatch(r"\s*services:\s*(?:#.*)?", line):
                 si = indent
             continue
         if indent <= si:
@@ -267,14 +317,20 @@ def compose_services(body):
             out.append(current)
         elif current is not None:
             current[1] = current[1] or first(r"""^\s*image:\s*["']?([^"'\s#]+)""", line)
-            current[2] = current[2] or first(r"""^\s*stop_grace_period:\s*["']?([^"'\s#]+)""", line)
+            current[2] = first(r"""^\s*stop_grace_period:\s*["']?([^"'\s#]+)""", line) or current[2]
     return out
+
+
+def gateway_service(name, image):
+    """A service that runs the gateway: by its image, or by its name when the image comes
+    from a build, an extends or a variable the line parser cannot resolve."""
+    return bool(image and GATEWAY_IMAGE.search(image)) or "mcp-gateway" in name
 
 
 def check_compose(body, need):
     problems = []
     for name, image, raw in compose_services(body):
-        if image and GATEWAY_IMAGE.search(image):
+        if gateway_service(name, image):
             p = grace_problem(f"service {name} stop_grace_period", raw, go_seconds(raw) if raw else None, need)
             problems += [p] if p else []
     return problems
@@ -287,18 +343,33 @@ def check_plist(body, need):
 
 
 def check_k8s(body, need):
-    raw = first(r"^\s*terminationGracePeriodSeconds:\s*([0-9]+)\s*$", body)
-    p = grace_problem("terminationGracePeriodSeconds", raw, int(raw) if raw else None, need)
-    return [p] if p else []
+    """Every pod template in the text: each terminationGracePeriodSeconds must be enough."""
+    values = re.findall(r"^\s*terminationGracePeriodSeconds:\s*(\S+)\s*$", body, re.M) or [None]
+    problems = [grace_problem("terminationGracePeriodSeconds", raw, int(raw) if raw and raw.isdigit() else None, need)
+                for raw in values]
+    return [p for p in problems if p]
 
 
 def check_run(stop, need):
+    if stop == "-1":  # docker's "wait for ever"
+        return []
     p = grace_problem("serving docker run --stop-timeout", stop, int(stop) if stop and stop.isdigit() else None, need)
     return [p] if p else []
 
 
 # ── The scan ─────────────────────────────────────────────────────────────────
 KINDS = ("systemd", "compose", "launchd", "kubernetes", "docker run")
+# Every shipped template, by path and kind: one the scan stops recognizing fails by name,
+# even while another artifact of its kind is still found.
+SHIPPED = {
+    "deploy/single-node/mcp-gateway.service": "systemd",
+    "deploy/single-node/docker-compose.yaml": "compose",
+    "deploy/single-node/com.mikkoparkkola.mcp-gateway.plist": "launchd",
+    "deploy/kubernetes/enterprise-alpha/base/deployment.yaml": "kubernetes",
+}
+# Today's counts, docs examples included. A count below its floor means the scan missed
+# something; lowering a floor is a deliberate edit that a reviewer sees.
+FLOORS = {"systemd": 2, "compose": 2, "launchd": 1, "kubernetes": 1, "docker run": 5}
 CHECKS = {"systemd": check_systemd, "compose": check_compose, "launchd": check_plist, "kubernetes": check_k8s}
 GATEWAY_EXEC = re.compile(r"^\s*ExecStart=\S*mcp-gateway\b", re.M)
 
@@ -308,7 +379,7 @@ def kinds_of(body):
     kinds = []
     if "[Service]" in body and GATEWAY_EXEC.search(body):
         kinds.append("systemd")
-    if any(image and GATEWAY_IMAGE.search(image) for _, image, _ in compose_services(body)):
+    if any(gateway_service(name, image) for name, image, _ in compose_services(body)):
         kinds.append("compose")
     if "<plist" in body and re.search(r"<string>[^<]*mcp-gateway[^<]*</string>", body):
         kinds.append("launchd")
@@ -327,14 +398,21 @@ def need_for(timeouts, default, cap):
     return (max(secs) if secs else default) + 1
 
 
-def check_text(rel, line, body, need, counts, found):
+def check_text(rel, line, body, need, counts, found, seen):
     for kind in kinds_of(body):
         counts[kind] += 1
+        seen.add((rel, kind))
         found += [f"{rel}:{line}: {kind}: {p}" for p in CHECKS[kind](body, need)]
-    for offset, image, args, stop in docker_runs(body):
-        if GATEWAY_IMAGE.search(image) and serving(args):
-            counts["docker run"] += 1
-            found += [f"{rel}:{line + offset}: {p}" for p in check_run(stop, need)]
+    for offset, image, args, stop, hidden in docker_runs(body):
+        if image and GATEWAY_IMAGE.search(image):
+            if serving(args):
+                counts["docker run"] += 1
+                found += [f"{rel}:{line + offset}: {p}" for p in check_run(stop, need)]
+        elif hidden or any(GATEWAY_IMAGE.search(a) for a in args):
+            # The gateway image after the word read as the image: an option the parser does
+            # not know took a value it should not have, or none it should. Fail closed.
+            found.append(f"{rel}:{line + offset}: a docker run of the gateway image the check cannot read "
+                         f"(it took {image!r} for the image); fix the example or teach check-stop-grace.py the option")
 
 
 def tracked(root):
@@ -347,12 +425,12 @@ def tracked(root):
     return sorted(files or (p.relative_to(root).as_posix() for p in pathlib.Path(root).rglob("*") if p.is_file()))
 
 
-def violations(root):
+def violations(root, shipped=None, floors=None):
     """(offenders, per-kind counts) for every tracked deploy file and Markdown page. A kind
     that matched nothing is an offender too: a check that finds nothing has checked nothing."""
     root = pathlib.Path(root)
     default, cap = default_timeout(root), cap_seconds(root)
-    counts, found = dict.fromkeys(KINDS, 0), []
+    counts, found, seen = dict.fromkeys(KINDS, 0), [], set()
     files = tracked(root)
     read = lambda rel: (root / rel).read_text(encoding="utf-8", errors="replace")  # noqa: E731
     for rel in files:
@@ -366,7 +444,7 @@ def violations(root):
                 if need is None:
                     found.append(f"{rel}:{line}: its section sets a stop timeout the gateway refuses")
                 else:
-                    check_text(rel, line, body, need, counts, found)
+                    check_text(rel, line, body, need, counts, found, seen)
         elif rel.startswith("deploy/") and "/templates/" not in rel:
             # The artifact's own timeout: the file and its siblings (a Kubernetes base keeps the
             # gateway's config in a ConfigMap beside the Deployment). Helm templates are rendered
@@ -377,8 +455,15 @@ def violations(root):
             if need is None:
                 found.append(f"{rel}:1: its folder sets a stop timeout the gateway refuses")
             else:
-                check_text(rel, 1, read(rel), need, counts, found)
-    found += [f"no {kind} artifact found: the scan matched nothing to check" for kind, n in counts.items() if not n]
+                check_text(rel, 1, read(rel), need, counts, found, seen)
+    shipped = SHIPPED if shipped is None else shipped
+    floors = FLOORS if floors is None else floors
+    found += [f"{path}: the shipped {kind} artifact was not checked as one (moved, renamed or no longer "
+              f"recognized); update SHIPPED in check-stop-grace.py"
+              for path, kind in sorted(shipped.items()) if (path, kind) not in seen]
+    found += [f"found {n} {kind} artifact(s), fewer than the {floors.get(kind, 1)} expected: the scan missed one, "
+              f"or FLOORS in check-stop-grace.py must be lowered on purpose"
+              for kind, n in counts.items() if n < floors.get(kind, 1)]
     return found, counts
 
 
@@ -443,6 +528,20 @@ PLANTED = {
     "docs/parent.md": section("## Parent", "server:\n  shutdown_timeout: 50s") + section("### Child", RUN31),
     "docs/refused.md": section("## S", "server:\n  shutdown_timeout: 1d", RUN31),
     "docs/long-running.md": fence("docker run " + IMG + " kubernetes controller --file r.yaml"),
+    # The effective setting is the last one; every pod template counts.
+    "deploy/j/u.service": UNIT + "TimeoutStopSec=31s\nKillMode=mixed\nTimeoutStopSec=10s\n",
+    "deploy/k/u.service": UNIT + "TimeoutStopSec=31s\nKillMode=mixed\nKillMode=control-group\n",
+    "deploy/l/deployment.yaml": DEPLOYMENT + "      terminationGracePeriodSeconds: 31\n---\n"
+                                + DEPLOYMENT + "      terminationGracePeriodSeconds: 10\n",
+    # A commented `services:`, and a gateway service built from source (known by its name).
+    "deploy/m/docker-compose.yaml": "services:  # the stack\n  mcp-gateway:\n    build: .\n",
+    # docker run forms: a flag cluster ending in a value flag, global options, `--`, an
+    # unknown option that swallows the image (unreadable), an indented code block.
+    "docs/run-cluster.md": fence("docker run -dp 1:1 " + IMG),
+    "docs/run-global.md": fence("docker --context prod run --quiet " + IMG),
+    "docs/run-dashdash.md": fence("docker run --rm -- " + IMG),
+    "docs/run-unreadable.md": fence("docker run --made-up " + IMG + " --config /c"),
+    "docs/indented.md": "Run it:\n\n    docker run -d \\\n      " + IMG + "\n",
 }
 # Files a planted artifact reads, never flagged themselves.
 SUPPORT = {
@@ -460,7 +559,45 @@ CLEAN = {
     "docs/sibling.md": section("## A", "server:\n  shutdown_timeout: 50s") + section("## B", RUN31),
     "docs/run-ok.md": fence("docker run -it --rm -e X=1 --stop-timeout=31 mcp-gateway:latest"),
     "docs/prose.md": "pass it to the process (`docker run -e MCP_GATEWAY_TOKEN`)\n",
+    "docs/run-forever.md": fence("docker run --stop-timeout -1 " + IMG),
+    "docs/run-name.md": fence("docker run --name mcp-gateway grafana/k6 run -"),
+    # A timeout before the first heading is not a parent of the sections after it.
+    "docs/preamble.md": fence("server:\n  shutdown_timeout: 50s") + "\n" + section("## B", RUN31),
 }
+
+# Every planted offender's diagnostic, exactly: a fixture flagged for the wrong reason fails.
+EXPECTED = [
+    'deploy/a/u.service:1: systemd: TimeoutStopSec is 30s; it needs at least 31 s',
+    'deploy/b/u.service:1: systemd: KillMode is not mixed: control-group SIGTERMs every backend with the gateway',
+    'deploy/c/u.service:1: systemd: TimeoutStopSec is unset; it needs at least 31 s',
+    'deploy/d/u.service:1: systemd: TimeoutStopSec is 31s; it needs at least 46 s',
+    'deploy/e/docker-compose.yaml:1: compose: service gw stop_grace_period is unset; it needs at least 31 s',
+    'deploy/f/gw.plist:1: launchd: ExitTimeOut is 30; it needs at least 31 s',
+    'deploy/g/deployment.yaml:1: kubernetes: terminationGracePeriodSeconds is 30; it needs at least 31 s',
+    'deploy/h/deployment.yaml:1: kubernetes: terminationGracePeriodSeconds is 31; it needs at least 61 s',
+    "deploy/i/u.service:1: systemd: TimeoutStopSec 'soon' cannot be read; it needs at least 31 s",
+    'deploy/j/u.service:1: systemd: TimeoutStopSec is 10s; it needs at least 31 s',
+    'deploy/k/u.service:1: systemd: KillMode is not mixed: control-group SIGTERMs every backend with the gateway',
+    'deploy/l/deployment.yaml:1: kubernetes: terminationGracePeriodSeconds is 10; it needs at least 31 s',
+    'deploy/m/docker-compose.yaml:1: compose: service mcp-gateway stop_grace_period is unset; it needs at least 31 s',
+    'docs/indented.md:3: serving docker run --stop-timeout is unset; it needs at least 31 s',
+    'docs/long-running.md:2: serving docker run --stop-timeout is unset; it needs at least 31 s',
+    'docs/parent.md:11: serving docker run --stop-timeout is 31; it needs at least 51 s',
+    'docs/refused.md:4: its section sets a stop timeout the gateway refuses',
+    'docs/refused.md:9: its section sets a stop timeout the gateway refuses',
+    'docs/run-cluster.md:2: serving docker run --stop-timeout is unset; it needs at least 31 s',
+    'docs/run-dashdash.md:2: serving docker run --stop-timeout is unset; it needs at least 31 s',
+    'docs/run-global.md:2: serving docker run --stop-timeout is unset; it needs at least 31 s',
+    'docs/run-inline.md:1: serving docker run --stop-timeout is unset; it needs at least 31 s',
+    'docs/run-multiline.md:2: serving docker run --stop-timeout is 30; it needs at least 31 s',
+    'docs/run-unreadable.md:2: a docker run of the gateway image the check cannot read (it took None for the image); fix the example or teach check-stop-grace.py the option',
+    'docs/sec-compose-list.md:9: compose: service gw stop_grace_period is 31s; it needs at least 46 s',
+    'docs/sec-compose-map.md:9: compose: service gw stop_grace_period is 31s; it needs at least 46 s',
+    'docs/sec-config.md:9: serving docker run --stop-timeout is 31; it needs at least 46 s',
+    'docs/sec-plist.md:9: serving docker run --stop-timeout is 31; it needs at least 46 s',
+    'docs/sec-run-env.md:8: serving docker run --stop-timeout is 31; it needs at least 46 s',
+    'docs/sec-systemd.md:9: systemd: TimeoutStopSec is 31s; it needs at least 46 s',
+]
 
 
 def command_words(root):
@@ -494,28 +631,27 @@ def self_test():
         for rel in (DEFAULT_SRC, CAP_SRC):
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             (root / rel).write_text((here / rel).read_text(encoding="utf-8"), encoding="utf-8")
-        found, counts = violations(root)
-        assert sorted(found) == sorted(f"no {k} artifact found: the scan matched nothing to check" for k in KINDS), found
+        found, counts = violations(root, shipped={}, floors={})
+        assert sorted(found) == sorted(
+            f"found 0 {k} artifact(s), fewer than the 1 expected: the scan missed one, "
+            f"or FLOORS in check-stop-grace.py must be lowered on purpose" for k in KINDS), found
         for rel, text in {**PLANTED, **SUPPORT, **CLEAN}.items():
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             (root / rel).write_text(text, encoding="utf-8")
-        found, counts = violations(root)
-    flagged = {line.split(":")[0] for line in found}
-    assert flagged == set(PLANTED), (sorted(set(PLANTED) - flagged), sorted(flagged - set(PLANTED)), found)
+        found, counts = violations(root, shipped={}, floors={})
+        # A shipped artifact the scan no longer recognizes, and a count below its floor.
+        pinned, _ = violations(root, shipped={"deploy/c2/u.service": "systemd", "deploy/gone/u.service": "systemd"},
+                               floors={"launchd": 3})
+    assert sorted(found) == sorted(EXPECTED), (sorted(set(found) - set(EXPECTED)), sorted(set(EXPECTED) - set(found)))
+    assert {line.split(":")[0] for line in found} == set(PLANTED), "every planted file is flagged, no clean one"
     assert all(counts.values()), counts
-    expect = [
-        "deploy/a/u.service:1: systemd: TimeoutStopSec is 30s; it needs at least 31 s",
-        "deploy/b/u.service:1: systemd: KillMode is not mixed: control-group SIGTERMs every backend with the gateway",
-        "deploy/c/u.service:1: systemd: TimeoutStopSec is unset; it needs at least 31 s",
-        "deploy/d/u.service:1: systemd: TimeoutStopSec is 31s; it needs at least 46 s",
-        "deploy/h/deployment.yaml:1: kubernetes: terminationGracePeriodSeconds is 31; it needs at least 61 s",
-        "deploy/i/u.service:1: systemd: TimeoutStopSec 'soon' cannot be read; it needs at least 31 s",
-        "docs/run-inline.md:1: serving docker run --stop-timeout is unset; it needs at least 31 s",
-        "docs/run-multiline.md:2: serving docker run --stop-timeout is 30; it needs at least 31 s",
-        "docs/parent.md:11: serving docker run --stop-timeout is 31; it needs at least 51 s",
-    ]
-    for line in expect:
-        assert line in found, (line, found)
+    assert sorted(set(pinned) - set(found)) == [
+        "deploy/gone/u.service: the shipped systemd artifact was not checked as one (moved, renamed or no "
+        "longer recognized); update SHIPPED in check-stop-grace.py",
+        "found 2 launchd artifact(s), fewer than the 3 expected: the scan missed one, or FLOORS in "
+        "check-stop-grace.py must be lowered on purpose",
+    ], sorted(set(pinned) - set(found))
+    assert set(SHIPPED.values()) <= set(KINDS) and set(FLOORS) == set(KINDS)
     print(f"check-stop-grace self-test: ok ({len(rows)} table rows, {len(PLANTED)} planted, {len(CLEAN)} clean)")
     return 0
 

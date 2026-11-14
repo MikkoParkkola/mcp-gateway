@@ -225,13 +225,14 @@ value typed into the wrong field may be a secret.
 {{- $secs := 30 -}}
 {{- if hasKey $server "shutdown_timeout" -}}
 {{- $v := get $server "shutdown_timeout" -}}
-{{- $text := toString $v -}}
+{{- $text := trim (toString $v) -}}
 {{- if kindIs "float64" $v -}}
 {{- /* A number from a values file arrives as float64, written 1e+06 from a million up. */ -}}
 {{- if or (lt $v 0.0) (gt $v 3155760000.0) (ne $v (floor $v)) -}}{{- fail $refuse -}}{{- end -}}
 {{- $text = printf "%.0f" $v -}}
 {{- end -}}
-{{- $grammar := `^\s*\+?([0-9]+)(ms|s|m|h)?\s*$` -}}
+{{- /* After a Unicode trim, as the gateway's str::trim. */ -}}
+{{- $grammar := `^\+?([0-9]+)(ms|s|m|h)?$` -}}
 {{- if not (regexMatch $grammar $text) -}}{{- fail $refuse -}}{{- end -}}
 {{- /* Leading zeros dropped, one digit kept; more than 13 digits is above the cap in any unit, and atoi would overflow. */ -}}
 {{- $digits := regexReplaceAll "^0+(.)" (regexReplaceAll $grammar $text "${1}") "${1}" -}}

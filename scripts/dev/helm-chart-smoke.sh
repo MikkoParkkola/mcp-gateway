@@ -412,11 +412,22 @@ while IFS=$'\t' read -r input want; do
   rows=$((rows + 1))
 done <"$CHART/../../../tests/fixtures/stop_grace_cases.txt"
 [ "$rows" -ge 20 ] || fail "only $rows stop grace rows ran; the table lost its rows"
+# A values-file number that is not a whole, non-negative count of seconds: the
+# gateway refuses it, so the render does too.
+for bad in 1.5 -5; do
+  printf 'config:\n  server:\n    shutdown_timeout: %s\n' "$bad" >"$pkgdir/grace.yaml"
+  out="$("$HELM" template t "$CHART" --show-only templates/deployment.yaml -f "$pkgdir/grace.yaml" 2>&1)" \
+    && fail "a values-file shutdown_timeout of $bad rendered"
+  grep -q 'config.server.shutdown_timeout is not a duration' <<<"$out" \
+    || fail "a values-file shutdown_timeout of $bad is refused without naming the setting: $(tail -1 <<<"$out")"
+done
 # The chart's only timeout source is config.server.shutdown_timeout: it already
 # refuses every MCP_GATEWAY_* extraEnv name, this one included.
-"$HELM" template t "$CHART" --set 'extraEnv[0].name=MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT' \
-  --set 'extraEnv[0].value=60s' >/dev/null 2>&1 \
+out="$("$HELM" template t "$CHART" --set 'extraEnv[0].name=MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT' \
+  --set 'extraEnv[0].value=60s' 2>&1)" \
   && fail "an extraEnv MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT rendered; the stop grace would not follow it"
+grep -q 'extraEnv name "MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT" is reserved' <<<"$out" \
+  || fail "an extraEnv MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT is refused for another reason: $(tail -1 <<<"$out")"
 
 # shellcheck source=scripts/dev/helm-chart-auth-modes.sh
 source "$(dirname "${BASH_SOURCE[0]}")/helm-chart-auth-modes.sh"
