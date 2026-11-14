@@ -628,14 +628,13 @@ impl super::StdioTransport {
     #[cfg(all(test, unix))]
     pub(super) fn after_spawn_for_test(&self) {
         let mut armed = AFTER_SPAWN.lock();
-        let Some(action) = armed
-            .as_ref()
-            .filter(|(it, _)| std::ptr::eq(it.as_ptr(), self))
-            .map(|(_, action)| *action)
+        let Some(at) = armed
+            .iter()
+            .position(|(it, _)| std::ptr::eq(it.as_ptr(), self))
         else {
             return;
         };
-        *armed = None;
+        let (_, action) = armed.swap_remove(at);
         drop(armed);
         match action {
             AfterSpawn::Retire => self.retire_tree_now(),
@@ -645,15 +644,12 @@ impl super::StdioTransport {
 
     #[cfg(all(test, unix))]
     pub(super) fn retire_after_spawn_for_test(self: &std::sync::Arc<Self>) {
-        *AFTER_SPAWN.lock() = Some((std::sync::Arc::downgrade(self), AfterSpawn::Retire));
+        arm_after_spawn(self, AfterSpawn::Retire);
     }
 
     #[cfg(all(test, unix))]
     pub(super) fn hand_over_after_spawn_for_test(self: &std::sync::Arc<Self>, budget: Duration) {
-        *AFTER_SPAWN.lock() = Some((
-            std::sync::Arc::downgrade(self),
-            AfterSpawn::HandOver(budget),
-        ));
+        arm_after_spawn(self, AfterSpawn::HandOver(budget));
     }
 
     /// End this transport's tree now, synchronously and without a runtime
@@ -688,9 +684,21 @@ enum AfterSpawn {
 }
 
 #[cfg(all(test, unix))]
-static AFTER_SPAWN: parking_lot::Mutex<
-    Option<(std::sync::Weak<super::StdioTransport>, AfterSpawn)>,
-> = parking_lot::Mutex::new(None);
+/// Every transport the after-spawn seam is armed for, one entry each, so seam
+/// rows running at the same time never overwrite each other's arming.
+static AFTER_SPAWN: parking_lot::Mutex<Vec<(std::sync::Weak<super::StdioTransport>, AfterSpawn)>> =
+    parking_lot::Mutex::new(Vec::new());
+
+/// Arm the after-spawn seam for `transport`, replacing its own earlier arming
+/// and dropping entries whose transport is gone.
+#[cfg(all(test, unix))]
+fn arm_after_spawn(transport: &std::sync::Arc<super::StdioTransport>, action: AfterSpawn) {
+    let mut armed = AFTER_SPAWN.lock();
+    armed.retain(|(it, _)| {
+        it.strong_count() > 0 && !std::ptr::eq(it.as_ptr(), std::sync::Arc::as_ptr(transport))
+    });
+    armed.push((std::sync::Arc::downgrade(transport), action));
+}
 
 #[cfg(test)]
 mod start_tests {

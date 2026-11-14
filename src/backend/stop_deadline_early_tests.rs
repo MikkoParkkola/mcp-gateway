@@ -21,6 +21,10 @@ fn marking_peer() -> String {
         "PEER ignores SIGTERM in one place"
     );
     let (first, rest) = PEER.split_once('\n').expect("PEER has lines");
+    assert!(
+        first.starts_with("import ") && first.contains("signal"),
+        "premise: PEER's first line imports signal, so the handler can follow it"
+    );
     format!("{first}\n{MARK}{}", rest.replace(IGNORE, ""))
 }
 
@@ -244,12 +248,10 @@ async fn the_early_handover_gets_the_whole_backend_stage() {
 }
 
 /// Two [`recording`] backends, each tree holding the handover thread for
-/// `hold`, handed over by a stop of the stage ending at `deadline`, awaited
-/// (30 s watchdog). Returns the handovers in the order they came.
-async fn two_handed(
-    hold: Duration,
-    deadline: tokio::time::Instant,
-) -> Vec<(Duration, std::time::Instant)> {
+/// `hold`, handed over by a stop of a `stage` long stage, its deadline set
+/// right before the stop so fixture setup spends none of it, awaited (30 s
+/// watchdog). Returns the handovers in the order they came.
+async fn two_handed(hold: Duration, stage: Duration) -> Vec<(Duration, std::time::Instant)> {
     let (one, two) = (
         tempfile::tempdir().expect("temp dir"),
         tempfile::tempdir().expect("temp dir"),
@@ -262,6 +264,7 @@ async fn two_handed(
     };
     let _first = recording(&registry, one.path(), "first", recorder(&seen));
     let _second = recording(&registry, two.path(), "second", recorder(&seen));
+    let deadline = tokio::time::Instant::now() + stage;
     tokio::time::timeout(
         Duration::from_secs(30),
         registry.stop_all_by(deadline, crate::backend::Handover::AtEntry),
@@ -279,11 +282,7 @@ async fn two_handed(
 #[tokio::test]
 async fn each_backend_reads_its_own_budget_at_its_handover() {
     let hold = Duration::from_millis(50);
-    let seen = two_handed(
-        hold,
-        tokio::time::Instant::now() + Duration::from_millis(6_400),
-    )
-    .await;
+    let seen = two_handed(hold, Duration::from_millis(6_400)).await;
     let [(earlier, _), (later, _)] = seen.as_slice() else {
         panic!("expected one handover per backend, got {seen:?}");
     };
@@ -293,19 +292,58 @@ async fn each_backend_reads_its_own_budget_at_its_handover() {
     );
 }
 
+/// R3d (HANDOVER.3): inside one backend each tree's budget is read at its
+/// own handover too: the later tree's budget is shorter by at least the
+/// earlier tree's hold.
+#[tokio::test]
+async fn each_tree_of_a_backend_reads_its_own_budget_at_its_handover() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let registry = BackendRegistry::new();
+    let seen = Seen::default();
+    let hold = Duration::from_millis(50);
+    let recorder = || Recorder {
+        seen: Arc::clone(&seen),
+        hold,
+    };
+    let (backend, _first) = recording(&registry, dir.path(), "two-trees", recorder());
+    let second: Arc<dyn crate::transport::LiveTree> = Arc::new(recorder());
+    backend
+        .replaced_transport_cleanups
+        .lock()
+        .live
+        .push(Arc::downgrade(&second));
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(6_400);
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        registry.stop_all_by(deadline, crate::backend::Handover::AtEntry),
+    )
+    .await
+    .expect("the stop returns within the watchdog");
+    let mut seen = seen.lock().expect("lock").clone();
+    seen.sort_by_key(|(_, at)| *at);
+    let [(earlier, _), (later, _)] = seen.as_slice() else {
+        panic!("expected one handover per tree, got {seen:?}");
+    };
+    assert!(
+        *later + hold <= *earlier,
+        "the later tree's budget ({later:?}) was not read at its own handover (earlier {earlier:?})"
+    );
+}
+
 /// R3c (HANDOVER.3): a stage deadline spent during the handover loop gives
-/// the backends after it a zero budget (no panic), and the stop returns.
+/// the backends after it a zero budget (no panic), and the stop returns. The
+/// first budget is positive, so the deadline passed inside the loop.
 #[tokio::test]
 async fn a_deadline_spent_mid_handover_gives_the_rest_a_zero_budget() {
     let hold = Duration::from_millis(50);
-    let seen = two_handed(
-        hold,
-        tokio::time::Instant::now() + Duration::from_millis(30),
-    )
-    .await;
-    let [_, (later, _)] = seen.as_slice() else {
+    let seen = two_handed(hold, Duration::from_millis(30)).await;
+    let [(earlier, _), (later, _)] = seen.as_slice() else {
         panic!("expected one handover per backend, got {seen:?}");
     };
+    assert!(
+        *earlier > Duration::ZERO,
+        "premise: the deadline was not already spent at the first handover"
+    );
     assert_eq!(
         *later,
         Duration::ZERO,

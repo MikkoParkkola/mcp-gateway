@@ -29,8 +29,9 @@ impl Backend {
     /// [`Self::retire_now`]'s graceful twin, for a healthy backend let go
     /// (an idle capability child): latch `stopping` and hand every live tree
     /// to the reaper now, synchronously and without a runtime, with the MCP
-    /// stdio order planned to fit `budget`. The async stop that follows only
-    /// waits for those reaps.
+    /// stdio order planned to end by `deadline`: each tree's plan fits the
+    /// time left until it, read at that tree's handover (none once it has
+    /// passed). The async stop that follows only waits for those reaps.
     pub(crate) fn hand_over_now(&self, deadline: tokio::time::Instant) {
         for tree in self.live_stdio() {
             tree.hand_over_gracefully(

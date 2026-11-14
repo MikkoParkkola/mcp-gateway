@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::{Backend, BackendRegistry};
 
@@ -32,9 +32,17 @@ impl BackendRegistry {
     pub(crate) fn hand_over_now(&self, deadline: tokio::time::Instant) {
         // Each backend reads what is left at its own handover: a slow scan of
         // one tree is not charged to the next twice.
-        for backend in self.latch_and_snapshot() {
+        let started = std::time::Instant::now();
+        let backends = self.latch_and_snapshot();
+        for backend in &backends {
             backend.hand_over_now(deadline);
         }
+        // The handover runs on the stop's thread; its cost is the stage's.
+        debug!(
+            backends = backends.len(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "handed every live stdio tree to the reaper"
+        );
     }
 
     /// [`Self::stop_all`], planned to end by `deadline`: the deadline is set
