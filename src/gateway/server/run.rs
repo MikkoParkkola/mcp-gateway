@@ -767,7 +767,7 @@ impl Gateway {
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
         self.backends
-            .stop_all_by(stop_deadline, crate::backend::Handover::WhenHurried)
+            .stop_all_by(stop_deadline, crate::backend::Handover::AtEntry)
             .await;
 
         Ok(())

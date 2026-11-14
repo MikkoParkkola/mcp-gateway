@@ -30,10 +30,10 @@ impl BackendRegistry {
     /// Hand every live tree to the reaper without waiting for lifecycle locks,
     /// each planned to end by `deadline`.
     pub(crate) fn hand_over_now(&self, deadline: tokio::time::Instant) {
-        // STUB (red run): the budget is read once, before the loop.
-        let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+        // Each backend reads what is left at its own handover: a slow scan of
+        // one tree is not charged to the next twice.
         for backend in self.latch_and_snapshot() {
-            backend.hand_over_now(tokio::time::Instant::now() + budget);
+            backend.hand_over_now(deadline);
         }
     }
 
@@ -45,11 +45,15 @@ impl BackendRegistry {
     /// every backend's tree not yet handed to the reaper is then killed at
     /// once, so none is left running behind the parent. A tree already
     /// handed over is in the reaper's hands, cut to `deadline`.
+    ///
+    /// With [`Handover::AtEntry`] every live tree goes to the reaper before
+    /// any backend's stop waits for its locks, so a restart holding one
+    /// cannot eat the trees' graceful phases; with [`Handover::WhenHurried`]
+    /// only a hurried stop does that.
     pub(crate) async fn stop_all_by(&self, deadline: tokio::time::Instant, handover: Handover) {
+        // Published first: a tree's waits are cut to it from its first step.
         self.stop_deadline.move_earlier(deadline.into_std());
-        // STUB (red run): AtEntry acts like WhenHurried.
-        let _ = handover;
-        if self.stop_deadline.is_hurried() {
+        if handover == Handover::AtEntry || self.stop_deadline.is_hurried() {
             self.hand_over_now(deadline);
         }
         // The backends to retire are the ones the stop latched and took, in
