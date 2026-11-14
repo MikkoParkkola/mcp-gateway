@@ -566,3 +566,118 @@ async fn a_disabled_accounts_block_starts_an_ordinary_gateway_with_no_custody() 
         "a disabled block reads no key material; the process environment stays unchanged"
     );
 }
+
+/// A hang bound only: every wait below ends on an event.
+const SERVE_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The fixture gateway with its task store and data directory inside a kept temp
+/// dir (a serve opens its task store, which must be kept), so a serve never
+/// touches the developer's own. Hold the returned dir for the whole test.
+fn serving(mut gateway: Gateway) -> (Gateway, std::sync::Arc<tempfile::TempDir>) {
+    let kept = crate::test_dir_keep::kept_tempdir();
+    gateway.config.tasks.store_dir = kept.path().join("tasks").display().to_string();
+    (gateway.with_data_dir(kept.path().join("data")), kept)
+}
+
+fn attached(gateway: &Gateway) -> Arc<crate::personal_accounts::GatewayCustody> {
+    Arc::clone(
+        gateway
+            .account_custody()
+            .expect("a configured accounts block must attach custody"),
+    )
+}
+
+/// An HTTP serve that returns early (its stop total is refused at the start
+/// checks) starts the custody release on its way out, so the store never waits
+/// for the last handle to drop; the release then frees both locks while this
+/// test still holds the handle.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_http_serve_that_returns_early_starts_the_custody_release() {
+    let fx = fixture(&Accounts::Configured(KEY_B64));
+    fx.seed();
+    let (mut gateway, _kept) = serving(build(&fx.config_path).await.expect("custody starts"));
+    let custody = attached(&gateway);
+    // Below the HTTP minimum: `run` refuses at its start checks.
+    gateway.config.server.shutdown_timeout = std::time::Duration::from_secs(1);
+    let refused = tokio::time::timeout(SERVE_BOUND, Box::pin(gateway.run()))
+        .await
+        .expect("run returned");
+    assert!(refused.is_err(), "a 1 s stop total is refused at start");
+    assert!(
+        custody.release_started(),
+        "the serve ended without starting the custody release"
+    );
+    custody
+        .shutdown()
+        .await
+        .expect("the started release completes");
+    drop(PersonalAccountStore::open(fx.store_config()).expect("the release freed both locks"));
+}
+
+/// The stdio stop releases custody with the BOUNDED call, as the HTTP stop
+/// does: when its release thread cannot start, the store is held as stuck to
+/// exit, never dropped on the blocking pool the runtime's exit waits on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_stdio_stop_releases_custody_with_the_bounded_call() {
+    let fx = fixture(&Accounts::Configured(KEY_B64));
+    fx.seed();
+    let (gateway, _kept) = serving(build(&fx.config_path).await.expect("custody starts"));
+    let custody = attached(&gateway);
+    custody.fail_next_release_spawn();
+    let (stdin, input) = tokio::io::duplex(64 * 1024);
+    let (output, _reader) = tokio::io::duplex(1 << 20);
+    // EOF at once: the ordinary stdio stop.
+    drop(stdin);
+    tokio::time::timeout(
+        SERVE_BOUND,
+        Box::pin(gateway.run_stdio_on(input, output, None)),
+    )
+    .await
+    .expect("the stdio serve returned")
+    .expect("the stdio serve ends cleanly at EOF");
+    let after = custody.shutdown().await;
+    assert!(
+        matches!(after, Err(CustodyError::ReleaseStuck)),
+        "the stdio stop did not use the bounded release (a failed spawn must leave the store stuck): {after:?}"
+    );
+}
+
+/// A stdio serve cancelled mid-session (the task running it aborted, as a
+/// parent's kill of that task does) starts the custody release on its way out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_stdio_serve_starts_the_custody_release() {
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
+    let fx = fixture(&Accounts::Configured(KEY_B64));
+    fx.seed();
+    let (gateway, _kept) = serving(build(&fx.config_path).await.expect("custody starts"));
+    let custody = attached(&gateway);
+    let (mut stdin, input) = tokio::io::duplex(64 * 1024);
+    let (output, reader) = tokio::io::duplex(1 << 20);
+    let served = tokio::spawn(async move { drop(gateway.run_stdio_on(input, output, None).await) });
+    // An answered handshake means the serve is running past its first poll.
+    stdin
+        .write_all(
+            b"{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"custody\",\"version\":\"1\"}}}\n",
+        )
+        .await
+        .expect("write the handshake");
+    tokio::time::timeout(
+        SERVE_BOUND,
+        tokio::io::BufReader::new(reader).lines().next_line(),
+    )
+    .await
+    .expect("the handshake was answered")
+    .expect("read the answer")
+    .expect("an answer line");
+    served.abort();
+    let _ = served.await;
+    assert!(
+        custody.release_started(),
+        "the cancelled serve did not start the custody release"
+    );
+    custody
+        .shutdown()
+        .await
+        .expect("the started release completes");
+    drop(PersonalAccountStore::open(fx.store_config()).expect("the release freed both locks"));
+}

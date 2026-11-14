@@ -390,12 +390,39 @@ impl Gateway {
     /// # Errors
     ///
     /// Returns the custody handle's own refusal if the drain cannot complete.
+    /// Test-only: both serve paths use the bounded form.
+    #[cfg(test)]
     pub(crate) async fn shutdown_account_custody(
         &self,
     ) -> std::result::Result<(), crate::personal_accounts::CustodyError> {
         match self.account_custody() {
             Some(custody) => custody.shutdown().await,
             None => Ok(()),
+        }
+    }
+
+    /// The bounded form for a gateway stop: the call ends at `deadline`, and a
+    /// release still running then continues off the stop path (reported once).
+    ///
+    /// # Errors
+    ///
+    /// Returns the custody handle's own refusal.
+    pub(crate) async fn shutdown_account_custody_by(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> std::result::Result<(), crate::personal_accounts::CustodyError> {
+        match self.account_custody() {
+            Some(custody) => custody.shutdown_by(deadline).await.map(|_| ()),
+            None => Ok(()),
+        }
+    }
+
+    /// The last step of a stop: hand any custody store the stop did not release
+    /// to a detached thread and return at once, so dropping the gateway never
+    /// releases it on the runtime thread. A no-op without an `accounts` block.
+    pub(crate) fn detach_custody_release(&self) {
+        if let Some(custody) = self.account_custody() {
+            custody.detach_release();
         }
     }
 }

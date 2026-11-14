@@ -29,6 +29,7 @@ src/gateway/server/cleartext.rs	reload_posture_refusal	-	config reload posture c
 src/gateway/server/cleartext.rs	serve_refusal	-	startup and reload posture checks, before any listener opens
 src/gateway/server/cleartext.rs	service_host	-	startup and reload posture checks, before any listener opens
 src/gateway/server/construct.rs	account_custody	-	startup account-custody accessor, not per tools/call
+src/gateway/server/construct.rs	detach_custody_release	-	account-custody release handed off at the end of a stop, once per stop
 src/gateway/server/construct.rs	new	-	Gateway construction, once at startup
 src/gateway/server/construct.rs	new_evaluated_inner	-	Gateway construction, once at startup
 src/gateway/server/construct.rs	new_evaluated_with_account_http	-	Gateway construction, once at startup
@@ -36,6 +37,7 @@ src/gateway/server/construct.rs	new_with_env	-	Gateway construction, once at sta
 src/gateway/server/construct.rs	new_with_path	-	Gateway construction, once at startup
 src/gateway/server/construct.rs	reload_path	-	startup and config-watcher accessor, not per call
 src/gateway/server/construct.rs	shutdown_account_custody	-	account-custody shutdown
+src/gateway/server/construct.rs	shutdown_account_custody_by	-	account-custody shutdown, bounded by the stop deadline, once per stop
 src/gateway/server/construct.rs	start_account_custody	-	startup account custody, once per serve
 src/gateway/server/construct.rs	start_account_custody_inner	-	startup account custody, once per serve
 src/gateway/server/construct.rs	with_env	-	Gateway construction, once at startup

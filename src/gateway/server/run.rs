@@ -53,6 +53,11 @@ impl Gateway {
         // Taken first, so the uptime the web UI reports counts from the start
         // of this call, not from the first request it serves.
         let started = ProcessStart::now();
+        // Any exit, an early error or a cancelled call included, hands the
+        // custody store to a release thread before `self` drops here.
+        let _custody_release = self
+            .account_custody()
+            .map(crate::personal_accounts::GatewayCustody::detach_on_drop);
         start_checks::http(&self.config)?;
         let addr = SocketAddr::new(
             self.config
@@ -745,7 +750,10 @@ impl Gateway {
         // Not covered by gateway_bootstrap_tests — no test drives `run`.
         budget
             .stage("account custody shutdown", total, async {
-                if let Err(e) = self.shutdown_account_custody().await {
+                if let Err(e) = self
+                    .shutdown_account_custody_by(budget.post_listener_end())
+                    .await
+                {
                     warn!(error = %e, "Personal account custody shutdown failed");
                 }
             })
@@ -767,6 +775,10 @@ impl Gateway {
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
         self.backends.stop_all_by(stop_deadline).await;
+
+        // Whatever the custody stage did not release (it was skipped or cut):
+        // never drop the store on this thread when `self` drops.
+        self.detach_custody_release();
 
         Ok(())
     }

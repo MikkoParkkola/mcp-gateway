@@ -108,6 +108,7 @@ src/personal_accounts/mod.rs	start_custody_with_http	spawn-blocking	1	outside-ca
 src/personal_accounts/worker.rs	offload	spawn-blocking	1	raised-at-join	personal-account store operation on the blocking pool; a refusal (e.g. scope broadening) returns as AccountServiceError through the join
 src/personal_accounts/worker.rs	refresh_after_rejection	spawn-blocking	1	raised-at-join	refreshes a personal-account credential lease; a refusal returns as AccountServiceError through the join
 src/personal_accounts/worker.rs	refresh_if_expired	spawn-blocking	1	raised-at-join	refreshes a credential lease if expired; a refusal returns as AccountServiceError through the join
+src/personal_accounts/worker.rs	release_by	spawn-blocking	1	no-refusal-inside	standalone custody shutdown whose release thread could not start: drops the account store on the blocking pool, and the call waits for its done signal
 src/security/message_signing.rs	spawn_nonce_cleanup_task	spawn	1	outside-calls	nonce cache cleanup timer
 src/security/transparency_log_bounded.rs	dispatch_bounded	spawn-blocking	1	raised-at-join	bounded transparency-log append; the joined result, a join failure or a timeout returns as a dispatch phase: append_bounded raises it as an io error the caller refuses with AuditUnavailable under FailClosed, settle as Refused or Unconfirmed
 src/skills/watcher.rs	spawn_regen_task	spawn	1	outside-calls	skills directory watcher that regenerates skill output on changes

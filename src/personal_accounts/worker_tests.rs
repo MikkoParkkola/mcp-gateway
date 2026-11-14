@@ -186,6 +186,14 @@ type ProviderGates = Mutex<HashMap<String, (oneshot::Sender<()>, oneshot::Receiv
 struct ProviderState {
     calls: Mutex<Vec<String>>,
     gates: ProviderGates,
+    /// A stalled release: the provider's `Drop` signals entry, then waits for
+    /// the release (a hang guard bounds it). The service owns the provider, so
+    /// this is a real store release that does not return.
+    drop_gate: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    /// A release that panics inside the service's drop.
+    panic_on_drop: std::sync::atomic::AtomicBool,
+    /// The thread the service's final drop ran on.
+    drop_thread: Mutex<Option<std::thread::ThreadId>>,
 }
 
 impl ProviderState {
@@ -213,6 +221,48 @@ impl ProviderState {
 
 struct GatedProvider {
     state: Arc<ProviderState>,
+    /// Only the provider the service owns records its drop and stalls in it;
+    /// a clone handed out by `provider()` drops quietly.
+    original: bool,
+}
+
+impl Clone for GatedProvider {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+            original: false,
+        }
+    }
+}
+
+/// How long a stalled release waits for its release before giving up.
+const RELEASE_HANG_GUARD: Duration = Duration::from_secs(20);
+
+impl Drop for GatedProvider {
+    fn drop(&mut self) {
+        if !self.original {
+            return;
+        }
+        *self
+            .state
+            .drop_thread
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(std::thread::current().id());
+        assert!(
+            !self.state.panic_on_drop.load(Ordering::SeqCst),
+            "the provider's drop panics"
+        );
+        let gate = self
+            .state
+            .drop_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some((entered, release)) = gate {
+            let _ = entered.send(());
+            let _ = release.recv_timeout(RELEASE_HANG_GUARD);
+        }
+    }
 }
 
 impl RefreshProvider for GatedProvider {
@@ -270,6 +320,7 @@ fn start(root: &std::path::Path, capacity: usize) -> Fixture {
         config(root),
         GatedProvider {
             state: Arc::clone(&provider),
+            original: true,
         },
         CountingObserver {
             calls: Arc::clone(&observer_calls),
@@ -440,6 +491,7 @@ fn a_failed_start_reaches_the_real_lock_boundary_and_yields_no_handle() {
         config(tmp.path()),
         GatedProvider {
             state: Arc::new(ProviderState::default()),
+            original: true,
         },
         CountingObserver {
             calls: Arc::new(AtomicUsize::new(0)),
@@ -673,3 +725,5 @@ fn single_flight_survives_the_handle_for_one_account() {
 
 #[path = "worker_tests/concurrency_tests.rs"]
 mod concurrency_tests;
+#[path = "worker_tests/release_tests.rs"]
+mod release_tests;
