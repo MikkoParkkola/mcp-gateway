@@ -239,12 +239,10 @@ src/gateway/task_service/store_expiry.rs	expire	1	Async hop to expire_blocking
 src/gateway/task_service/store_expiry.rs	expired_candidates	1	Snapshots terminal rows past retention for the sweep
 src/gateway/task_service/store_expiry.rs	interrupted	1	Selects non-terminal rows for startup recovery
 src/gateway/task_service/store_expiry.rs	skipped_records	1	Getter for skipped-row counts
-src/gateway/task_service/store_input.rs	close_round	1	Async hop to close_round_blocking, where ownership is checked
 src/gateway/task_service/store_input.rs	provide_input	1	Async hop to provide_input_blocking, where ownership and outstanding keys are checked
 src/gateway/task_service/store_input.rs	reason	1	Formats the round-closed sentence
 src/gateway/task_service/store_input.rs	require_input	1	Async hop to require_input_blocking, where ownership is checked
 src/gateway/task_service/store_targets.rs	add_targets	1	Async hop to add_targets_blocking, where ownership is checked
-src/gateway/task_service/store_targets.rs	settle_bounded_by	1	Async hop to settle_bounded_blocking, where ownership and revision are checked
 src/gateway/task_service/store_unix.rs	sync_dir	1	fsync of the store directory
 src/gateway/task_service/store_unix.rs	sync_file	1	fsync of a record file
 src/gateway/task_service/execution/operations.rs	spawn_now	1	Spawns an already-admitted worker under the shutdown token; the audit-write decision is spawn_worker's

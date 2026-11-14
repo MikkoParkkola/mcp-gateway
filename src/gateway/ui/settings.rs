@@ -66,7 +66,10 @@ fn secret<'de, D: Deserializer<'de>>(deserializer: D) -> Result<WipedBytes, D::E
     String::deserialize(deserializer).map(|s| WipedBytes::new(s.into_bytes()))
 }
 
-use super::errors::{config_refusal, flat_error, no_config_file, stale, structured_error};
+use super::errors::{
+    config_refusal, flat_error, no_config_file, no_reload_read, no_reload_write, stale,
+    structured_error,
+};
 use super::secret_slots::{self, Unopened};
 use crate::config_persistence::keyedit::{FiniteF64, GiveUp, Scalar};
 use crate::config_reload::ui_fields::{FieldId, Param, PreviewEdit, PreviewValue, ValueKind};
@@ -94,14 +97,6 @@ fn retry(mut response: Response) -> Response {
         .headers_mut()
         .insert(RETRY_AFTER, HeaderValue::from_static("1"));
     response
-}
-
-fn unavailable() -> Response {
-    flat_error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Config reload is not enabled on this gateway",
-    )
-    .into_response()
 }
 
 fn field_error(id: FieldId, code: &'static str, reason: &str) -> Response {
@@ -173,7 +168,7 @@ pub(super) async fn settings_diff(
         return invalid_body();
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
-        return unavailable();
+        return no_reload_read().into_response();
     };
     let mut edit = PreviewEdit::default();
     for (entry, body) in body.fields.into_iter().enumerate() {
@@ -256,7 +251,7 @@ pub(super) async fn settings_save(
         return invalid_body();
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
-        return unavailable();
+        return no_reload_write().into_response();
     };
     let mut edit = SaveEdit::default();
     for (entry, body) in body.fields.into_iter().enumerate() {
@@ -519,11 +514,11 @@ fn answer(refusal: UiRefused) -> Response {
         UiRefused::Preview(PreviewRefused::Untrusted(_) | PreviewRefused::Unread(_)) => {
             config_refusal().into_response()
         }
-        UiRefused::Busy => flat_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the config is being written; retry",
-        )
-        .into_response(),
+        // Refused before anything was attempted: a 4xx (a 5xx means the outcome is
+        // not confirmed). Still retryable, so it keeps its Retry-After.
+        UiRefused::Busy => {
+            flat_error(StatusCode::CONFLICT, "the config is being written; retry").into_response()
+        }
         UiRefused::SecretsRefused { timeout: true } => flat_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "the secret store did not answer; retry",
@@ -600,3 +595,6 @@ mod route_tests;
 #[cfg(test)]
 #[path = "settings_support_tests.rs"]
 mod test_support;
+#[cfg(test)]
+#[path = "settings_unused_tests.rs"]
+mod unused_route_tests;

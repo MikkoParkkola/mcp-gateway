@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Timelike as _, Utc};
 
+use super::gate::Kind;
 use super::{Shared, StoreError, TaskStore, owned, record_name, serialize};
 use crate::gateway::gateway_writes::WriteRecord;
 use crate::gateway::task_service::record::{
@@ -42,15 +43,15 @@ impl TaskStore {
     ) -> Result<(), StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(Kind::Internal, move || {
             shared.add_targets_blocking(&owner, &id, expected_revision, (targets, bindings))
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 
-    /// [`Self::settle_bounded_by`] with the gateway as the author: the tests'
-    /// shorthand.
+    /// [`Self::settle_bounded_as`] for the internal class with the gateway as the
+    /// author: the tests' shorthand.
     #[cfg(test)]
     pub(crate) async fn settle_bounded(
         &self,
@@ -60,7 +61,8 @@ impl TaskStore {
         (event, targets): (TaskTransition, Option<Vec<Target>>),
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
-        self.settle_bounded_by(
+        self.settle_bounded_as(
+            Kind::Internal,
             owner,
             id,
             revision,
@@ -87,8 +89,12 @@ impl TaskStore {
     /// the bounded fallback is always the gateway's. `writes` names the
     /// members of a `Complete` result the gateway wrote (MIK-7993); it is
     /// stored only with that result, and never costs the result its room.
-    pub(crate) async fn settle_bounded_by(
+    /// The caller names its class: the route's cancel is External, a worker's
+    /// settle and recovery Internal.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn settle_bounded_as(
         &self,
+        kind: Kind,
         owner: &str,
         id: &str,
         revision: u64,
@@ -107,7 +113,7 @@ impl TaskStore {
         };
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(kind, move || {
             shared.settle_bounded_blocking(
                 &owner,
                 &id,
@@ -117,7 +123,7 @@ impl TaskStore {
             )
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 
     /// Test-only: the targets stored for `id`, whatever owner holds it.
@@ -608,11 +614,11 @@ impl TaskStore {
     ) -> Result<CancelClaim, StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(Kind::Internal, move || {
             shared.claim_upstream_cancel_blocking(&owner, &id, offered)
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 
     /// The same claim after [`StoreError::ClockUnreadable`]: the descriptor
@@ -630,11 +636,11 @@ impl TaskStore {
     ) -> Result<CancelClaim, StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(Kind::Internal, move || {
             shared.claim_upstream_cancel_undated_blocking(&owner, &id, offered)
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 }
 

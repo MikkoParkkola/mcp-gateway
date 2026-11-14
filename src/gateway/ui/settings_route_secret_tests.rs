@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use serde_json::json;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 #[derive(Clone, Default)]
@@ -82,6 +82,8 @@ pub(super) struct Recording {
     creates: AtomicUsize,
     values: Mutex<Vec<(String, Vec<u8>)>>,
     fail: Option<bool>,
+    /// Fails every delete once set, as a rollback whose delete cannot finish.
+    pub(super) fail_delete: AtomicBool,
 }
 impl Recording {
     pub(super) fn calls(&self) -> usize {
@@ -121,6 +123,9 @@ impl SecretStore for Recording {
         Ok(reference)
     }
     fn delete(&self, name: &str) -> Result<(), StoreError> {
+        if self.fail_delete.load(Ordering::SeqCst) {
+            return Err(StoreError::Failed("delete-failure-canary".into()));
+        }
         self.inner.delete(name)
     }
 }
@@ -131,6 +136,7 @@ pub(super) fn recording(route: &Route, fail: Option<bool>) -> Arc<Recording> {
         creates: AtomicUsize::new(0),
         values: Mutex::new(Vec::new()),
         fail,
+        fail_delete: AtomicBool::new(false),
     })
 }
 

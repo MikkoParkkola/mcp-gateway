@@ -37,6 +37,14 @@ mod provenance;
 pub(super) use clock::{ClockWait, readable_now};
 use clock::{Resealed, readable_or_fail, redeeming_dispatch};
 
+/// What one round close did. Only a sweep is ever `Skipped`: a restart
+/// checkpoint held the store, and the next tick covers the round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Closed {
+    Done,
+    Skipped,
+}
+
 /// Consecutive state-only rounds one worker resumes before it gives up. A
 /// fixed ceiling that stops a backend looping the gateway forever.
 const STATE_ONLY_CEILING: usize = 4;
@@ -615,17 +623,35 @@ impl TaskExecutor {
         reason: String,
         at: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), super::CommitFailure> {
+        let kind = crate::gateway::task_service::store::gate::Kind::Internal;
+        // Only a sweep is ever skipped, so an internal close is done or failed.
+        self.close_round_as(kind, owner_digest, id, revision, reason, at)
+            .await
+            .map(drop)
+    }
+
+    /// `close_round` for a caller of class `kind`: the expiry sweep is Sweep.
+    pub(super) async fn close_round_as(
+        &self,
+        kind: crate::gateway::task_service::store::gate::Kind,
+        owner_digest: &str,
+        id: &str,
+        revision: u64,
+        reason: String,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Closed, super::CommitFailure> {
         match self
             .service
             .store
-            .close_round(owner_digest, id, revision, reason, at)
+            .close_round_as(kind, owner_digest, id, revision, reason, at)
             .await
         {
             Ok(committed) => {
                 self.published(&committed, id);
                 self.notify_observer(CommitStage::Transitioned, id).await;
-                Ok(())
+                Ok(Closed::Done)
             }
+            Err(StoreError::Skipped) => Ok(Closed::Skipped),
             Err(StoreError::RevisionConflict) => Err(super::CommitFailure::RevisionConflict),
             Err(StoreError::NotFound) => Err(super::CommitFailure::Service(
                 crate::gateway::task_service::ServiceError::NotFound,
