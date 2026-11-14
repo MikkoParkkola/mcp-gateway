@@ -1,0 +1,5 @@
+head_sha	186b2b9dfa7fed040e90fc170f7f5dd6cf79c256
+#mutant m16b-defaultunset
+mcp_gateway	restart::invocation_tests::unix::inv3b_unset_path_searches_nothing_and_empty_path_is_cwd	src/restart/invocation_tests.rs:246
+#mutant m26-maskread
+mcp_gateway	restart::invocation_tests::unix::inv10c_current_thread_mask_reads_the_thread	src/restart/invocation_tests.rs:454
