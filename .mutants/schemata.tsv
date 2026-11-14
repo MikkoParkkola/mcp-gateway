@@ -1,0 +1,29 @@
+head_sha	7ae6cba8bbb93f2f2b0a1d89e1dfaca246ccd129
+#mutant f1-start-ge
+mcp_gateway	preview_sandbox::control::tests::t8_a_peer_started_after_the_accept_is_refused	src/preview_sandbox/control_tests.rs:220
+#mutant f1-start-skip
+mcp_gateway	preview_sandbox::control::tests::t8_a_peer_started_after_the_accept_is_refused	src/preview_sandbox/control_tests.rs:219
+#mutant f1-stat-first-paren
+mcp_gateway	preview_sandbox::control::tests::t8_a_crafted_process_name_cannot_shift_the_start_time	src/preview_sandbox/control_tests.rs:228
+#mutant f1-field-up
+mcp_gateway	preview_sandbox::control::tests::t8_a_peer_started_after_the_accept_is_refused	src/preview_sandbox/control_tests.rs:220
+#mutant f1-field-down
+mcp_gateway	preview_sandbox::control::tests::t8_a_peer_started_after_the_accept_is_refused	src/preview_sandbox/control_tests.rs:219
+#mutant f1-judge-no-start
+mcp_gateway	preview_sandbox::control::tests::t8_a_proc_directory_never_follows_a_reaped_pid	src/preview_sandbox/control_tests.rs:268
+#mutant f1-judge-no-parent
+mcp_gateway	preview_sandbox::control::tests::t8_a_proc_directory_never_follows_a_reaped_pid	src/preview_sandbox/control_tests.rs:276
+#mutant f1-clock-zero
+mcp_gateway	preview_sandbox::control::tests::t8_a_proc_directory_never_follows_a_reaped_pid	src/preview_sandbox/control_tests.rs:264
+#mutant f1-clock-huge
+mcp_gateway	preview_sandbox::control::tests::t8_a_proc_directory_never_follows_a_reaped_pid	src/preview_sandbox/control_tests.rs:272
+#mutant f1-write-bound
+mcp_gateway	preview_sandbox::control::tests::t4_a_peer_that_stops_reading_is_cut_off	src/preview_sandbox/control_tests.rs:325
+#mutant f1-cap-nl
+mcp_gateway	preview_sandbox::control::tests::t4_a_line_over_one_kib_is_refused	src/preview_sandbox/control_tests.rs:78
+#mutant f1-cap-chunk
+mcp_gateway	preview_sandbox::control::tests::t4_a_line_read_in_chunks_is_refused_at_the_cap	src/preview_sandbox/control_tests.rs:91
+#mutant f1-start-false
+mcp_gateway	preview_sandbox::proxy::tests::session::s2_any_other_line_ends_the_session_and_revokes	src/preview_sandbox/proxy_tests/session.rs:119
+#mutant f1-done-false
+mcp_gateway	preview_sandbox::proxy::tests::session::s2_any_other_line_ends_the_session_and_revokes	src/preview_sandbox/proxy_tests/session.rs:150
