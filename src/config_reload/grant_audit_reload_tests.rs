@@ -336,3 +336,20 @@ async fn a_row_changed_outside_twice_is_counted_once() {
         "{outcome}"
     );
 }
+
+/// JRN.3: an answer that says UNRECORDED still counts the rows changed
+/// outside the gateway.
+#[tokio::test]
+async fn an_unrecorded_answer_still_counts_outside_rows() {
+    let r = Reload::new();
+    r.cli(add(row("g1", "r"))).await;
+    r.reload().await.unwrap();
+    r.edit(vec![row("g1", "edited")]).await;
+    r.store.fail_from.store(1, Ordering::SeqCst);
+    let outcome = r.reload().await.unwrap();
+    assert!(outcome.contains("UNRECORDED"), "{outcome}");
+    assert!(
+        outcome.contains("; 1 changed outside the gateway"),
+        "{outcome}"
+    );
+}

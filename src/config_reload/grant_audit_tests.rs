@@ -466,3 +466,23 @@ async fn only_a_recorded_plan_warns_about_an_outside_change() {
         Some((V::OutOfBand, "g1".into(), Some(after)))
     );
 }
+
+/// JRN.3: a record whose appends fail still warns once about a row changed
+/// outside the gateway: the change is already published.
+#[tokio::test]
+async fn a_failed_append_still_warns_about_an_outside_change() {
+    let f = Fixture::new();
+    f.cli(add(row("g1", "r"))).await;
+    f.reconcile().await.unwrap();
+    f.direct_write(vec![row("g1", "edited")]).await;
+    let rows = f.rows().await;
+    let prepared = f
+        .auditor
+        .prepare(&rows, &f.journal())
+        .map_err(|r| r.0)
+        .unwrap();
+    f.store.fail_from.store(1, Ordering::SeqCst);
+    let (recorded, logs) = crate::test_log_capture::capture_warnings(|| f.auditor.record(prepared));
+    assert!(matches!(recorded, Recorded::Unrecorded(_)), "{recorded:?}");
+    assert_eq!(logs.matches("outside the gateway").count(), 1, "{logs}");
+}
