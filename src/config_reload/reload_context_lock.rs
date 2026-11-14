@@ -64,6 +64,26 @@ impl ReloadContext {
             })
     }
 
+    /// The reload lock, then the config sidecar with no recovery (a pending
+    /// journal stays where it is), each within `wait`: the order every holder
+    /// takes them in, for a caller that changes something beside the config,
+    /// such as a secret entry, and must not race a config write.
+    pub(crate) async fn hold_config(
+        &self,
+        wait: Duration,
+    ) -> std::result::Result<ConfigHeld<'_>, ConfigWriteError> {
+        let deadline = std::time::Instant::now() + wait;
+        let reload = self.lock_reload_within(wait).await?;
+        let locked =
+            crate::config_persistence::lock::lock_config_deferred(&self.config_path, deadline)
+                .await
+                .map_err(ConfigWriteError::from)?;
+        Ok(ConfigHeld {
+            _reload: reload,
+            locked,
+        })
+    }
+
     /// Run the file load on its own thread and wait for it without holding a
     /// runtime worker (#1808).
     ///
@@ -235,4 +255,11 @@ mod tests {
         };
         assert_eq!(post_write_class(&refusal), RefusalClass::ShuttingDown);
     }
+}
+
+/// The reload lock and the config sidecar, held until dropped.
+pub(crate) struct ConfigHeld<'a> {
+    _reload: tokio::sync::MutexGuard<'a, ()>,
+    /// The sidecar, with the target it resolved.
+    pub(crate) locked: crate::config_persistence::lock::Locked,
 }
