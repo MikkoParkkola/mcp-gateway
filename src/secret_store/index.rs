@@ -55,9 +55,15 @@ impl Index {
         })
     }
 
-    /// Records that `name` was removed from `kind` alone.
-    pub(super) fn append_removed_in(&self, name: &str, _kind: StoreKind) -> Result<(), StoreError> {
-        self.append_removed(name)
+    /// Records that `name` was removed from `kind` alone: the same name in the
+    /// other store stays live.
+    pub(super) fn append_removed_in(&self, name: &str, kind: StoreKind) -> Result<(), StoreError> {
+        self.append(&Line {
+            name: name.to_owned(),
+            store: Some(kind.as_str().to_owned()),
+            created_at: None,
+            removed_at: Some(now_ms()),
+        })
     }
 
     /// Records that this save removed `name` again.
@@ -95,7 +101,9 @@ impl Index {
         sync_dir(dir).map_err(|e| failed("cannot sync the secrets index directory", &e))
     }
 
-    /// Every name created and not removed, in index order. Unreadable lines,
+    /// Every name created and not removed, in index order. A removal line that
+    /// names a store retires only that store's row; one without (a save's
+    /// rollback, an older line) retires every row of the name. Unreadable lines,
     /// such as a torn last one, are skipped.
     pub(super) fn live(&self) -> Result<Vec<Live>, StoreError> {
         let text = match std::fs::read_to_string(&self.path) {
@@ -109,7 +117,13 @@ impl Index {
             .filter_map(|l| serde_json::from_str::<Line>(l).ok())
         {
             if line.removed_at.is_some() {
-                live.retain(|entry| entry.name != line.name);
+                live.retain(|entry| {
+                    entry.name != line.name
+                        || line
+                            .store
+                            .as_ref()
+                            .is_some_and(|store| *store != entry.store)
+                });
             } else if let Some(store) = line.store {
                 live.push(Live {
                     name: line.name,
