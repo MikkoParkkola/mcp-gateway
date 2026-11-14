@@ -236,3 +236,31 @@ async fn work_that_panics_fails_the_attempt() {
         "an admission that ended without an outcome failed the attempt"
     );
 }
+
+// G7 x G11: an internal parker admitted at its backstop leaves the parked count
+// in the same step. A resume that lands between that admission and the
+// parker's return must not count it as a drain member, or the drain waits for
+// a member that never reports and the gate stays Draining.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn a_backstop_admission_is_never_a_drain_member() {
+    let gate = paused();
+    let mut p = std::pin::pin!(gate.admit(Kind::Internal));
+    assert!(futures::poll!(p.as_mut()).is_pending(), "P parks");
+    let decision = GateSeams::arm(&gate.seams().at_decision);
+    tokio::time::advance(DEADLINE + BUDGET + Duration::from_secs(1)).await;
+    assert!(
+        futures::poll!(p.as_mut()).is_pending(),
+        "P is admitted at its backstop and held at the decision"
+    );
+    within("G7b decision", decision.reached()).await;
+    gate.resume();
+    decision.release();
+    let admitted = within("G7b P returns", p).await;
+    assert!(admitted.is_ok(), "the backstop admits an Internal parker");
+    drop(admitted);
+    assert_eq!(
+        gate.state(),
+        GateState::Open,
+        "the resume found no parked member, so the gate is open"
+    );
+}
