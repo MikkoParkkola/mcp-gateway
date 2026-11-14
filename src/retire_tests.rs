@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use super::{EXIT_OVERRUN, Exit, RetirePlan, WATCHDOG_SLACK, arm_with, finish, tail};
+use super::{EXIT_OVERRUN, Exit, RetirePlan, WATCHDOG_SLACK, arm_with, finish, logger_bound, tail};
 use crate::log_writer::test_sinks::{WATCHDOG, line, parked};
 use crate::log_writer::{FlushEnd, LOG_FLUSH_DEADLINE, StopOutcome};
 
@@ -234,11 +234,11 @@ fn the_watchdog_exits_75_at_its_slack_past_the_end() {
 /// U3 (RETIRE.4): a code stored before the watchdog fires is the exit code.
 #[test]
 fn the_watchdog_exits_with_the_stored_code() {
+    // Production's order: armed at the stop, the code stored later by the tail.
     let stored = fresh_code();
+    let fired = armed(std::time::Instant::now(), stored);
     stored.store(0, Ordering::SeqCst);
-    let (code, _) = armed(std::time::Instant::now(), stored)
-        .recv_timeout(WATCHDOG)
-        .expect("the watchdog fired");
+    let (code, _) = fired.recv_timeout(WATCHDOG).expect("the watchdog fired");
     assert_eq!(code, 0, "the watchdog ignored the stored code");
 }
 
@@ -263,12 +263,12 @@ fn a_watchdog_armed_late_fires_at_once() {
 /// with that stored code, not 75.
 #[test]
 fn a_held_main_thread_exits_with_the_code_the_tail_stored() {
+    // Armed at the stop, as in production; the tail's finish stores the code later.
     let stored = fresh_code();
+    let fired = armed(std::time::Instant::now(), stored);
     let joined = StopOutcome::Joined(FlushEnd::Clean);
     let _ = finish(ExitCode::FAILURE, false, Some(&joined), stored);
-    let (code, _) = armed(std::time::Instant::now(), stored)
-        .recv_timeout(WATCHDOG)
-        .expect("the watchdog fired");
+    let (code, _) = fired.recv_timeout(WATCHDOG).expect("the watchdog fired");
     assert_eq!(
         code, 1,
         "the watchdog did not exit with the tail's stored code"
@@ -329,4 +329,65 @@ fn the_watchdog_path_writes_nothing_to_stdout() {
             "the watchdog's module prints to stdout"
         );
     }
+}
+
+/// Whitespace-free production code of `source`, for wiring rows rustfmt cannot break.
+fn wired(source: &str) -> String {
+    use crate::test_source_text::{production_text, sanitize};
+    sanitize(&production_text(source))
+        .split_whitespace()
+        .collect()
+}
+
+/// U6b (RETIRE.4): the plan cell is wired end to end: `cli::run` makes it and
+/// hands it to the runtime and to dispatch, the HTTP serve gives it to the
+/// gateway, the stop stores the plan in it and then arms the watchdog, and the
+/// tail reads it. Deleting any link leaves the stop unbounded.
+#[test]
+fn the_plan_cell_is_wired_from_cli_run_to_the_stop_and_the_watchdog() {
+    let run = wired(include_str!("gateway/server/run.rs"));
+    let fixed = run
+        .find("StopBudget::fixed_at(")
+        .expect("the budget is fixed");
+    let after = &run[fixed..];
+    let set = after
+        .find("cell.set(plan)")
+        .expect("the stop stores the plan in the cell");
+    let arm = after
+        .find("crate::retire::arm(&plan)")
+        .expect("the stop arms the watchdog");
+    assert!(set < arm, "the watchdog is armed before the plan is stored");
+    let entry = wired(include_str!("cli/entry.rs"));
+    for link in [
+        "RetireCell::default()",
+        "block_on(mode,&plan,",
+        "gateway.set_retire_cell(plan)",
+        "crate::retire::tail(code,left_running,plan.get().copied(),",
+    ] {
+        assert!(entry.contains(link), "cli::run's plan wiring lost `{link}`");
+    }
+    let construct = wired(include_str!("gateway/server/construct.rs"));
+    assert!(
+        construct.contains("self.retire=Some(cell)"),
+        "the gateway's setter drops the cell"
+    );
+}
+
+/// U2 (RETIRE.4), the logger's bound itself, on both sides of its min: a
+/// plan ending far off leaves the usual 2 s, a near one cuts to its end.
+#[test]
+fn the_logger_bound_is_the_sooner_of_its_two_seconds_and_the_logger_end() {
+    let now = std::time::Instant::now();
+    let far = plan_ending_in(Duration::from_secs(60));
+    assert_eq!(
+        logger_bound(now, &far),
+        now + LOG_FLUSH_DEADLINE,
+        "a far logger end did not leave the usual 2 s"
+    );
+    let near = plan_ending_in(Duration::from_millis(300));
+    assert_eq!(
+        logger_bound(now, &near),
+        near.logger_end().into_std(),
+        "a near logger end did not cut the bound"
+    );
 }

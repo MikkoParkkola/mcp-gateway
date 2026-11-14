@@ -107,7 +107,7 @@ pub(crate) fn finish(
     let Some(outcome) = outcome else {
         return code;
     };
-    let status = if left_running || !outcome.permits_exec() {
+    let status = if left_running || !outcome.is_joined() {
         EXIT_OVERRUN
     } else {
         // An HTTP serve, the one path with a plan, returns SUCCESS or FAILURE.
@@ -162,6 +162,12 @@ pub(crate) fn arm(plan: &RetirePlan) {
     });
 }
 
+/// When the logger's terminal stop ends for a stop started at `now`: within its
+/// usual 2 s, and never past the plan's logger end.
+pub(crate) fn logger_bound(now: std::time::Instant, plan: &RetirePlan) -> std::time::Instant {
+    (now + crate::log_writer::LOG_FLUSH_DEADLINE).min(plan.logger_end().into_std())
+}
+
 /// `cli::run`'s tail after the runtime retired: with an HTTP stop's `plan`, the
 /// logger's terminal stop bounded by the plan, then [`finish`]; without one,
 /// the flush guard drops as before.
@@ -182,8 +188,9 @@ pub(crate) fn tail(
             "the stop's runtime wait left blocking work running; exiting 75"
         );
     }
-    let bound = std::time::Instant::now() + crate::log_writer::LOG_FLUSH_DEADLINE;
-    let outcome = flush.stop_and_join(bound.min(plan.logger_end().into_std()));
+    let outcome = flush.stop_and_join(logger_bound(std::time::Instant::now(), &plan));
+    // Stored before the note below, so a stderr that blocks it cannot change it.
+    let code = finish(code, left_running, Some(&outcome), stored_code());
     // The logger is closed: what it could not write is one line straight to
     // stderr, best effort. A writer not joined is left behind; the watchdog
     // bounds whatever it still holds.
@@ -203,7 +210,7 @@ pub(crate) fn tail(
         use std::io::Write as _;
         let _ = writeln!(std::io::stderr(), "mcp-gateway: the log writer: {note}");
     }
-    finish(code, left_running, Some(&outcome), stored_code())
+    code
 }
 
 #[cfg(test)]

@@ -272,3 +272,42 @@ fn a_planned_shutdown_leaves_a_stuck_task_behind_within_the_cap() {
         "the planned shutdown waited {took:?} for a stuck task"
     );
 }
+
+/// U1d (RETIRE.4): `block_on` reads the plan its future stored in the cell, as
+/// the HTTP stop stores it during the run, when it shuts the runtime down: a
+/// stuck blocking task then holds the exit no longer than the cap, and the
+/// shutdown reports it left running.
+#[test]
+fn block_on_bounds_its_shutdown_by_the_plan_stored_during_the_run() {
+    let plan = crate::retire::RetireCell::default();
+    let cell = Arc::clone(&plan);
+    let (release, stuck) = mpsc::channel::<()>();
+    let (sent, got) = mpsc::channel();
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let ((), left_running) = block_on(
+            RuntimeShutdown::Bounded(SERVE_RUNTIME_SHUTDOWN_TIMEOUT),
+            &plan,
+            async move {
+                let far = tokio::time::Instant::now() + Duration::from_secs(60);
+                let _ = cell.set(plan_with_runtime_end(far));
+                let (started, running) = tokio::sync::oneshot::channel();
+                tokio::task::spawn_blocking(move || {
+                    let _ = started.send(());
+                    let _ = stuck.recv();
+                });
+                running.await.expect("the stuck task starts");
+            },
+        );
+        let _ = sent.send((left_running, started.elapsed()));
+    });
+    let (left_running, took) = got
+        .recv_timeout(Duration::from_secs(30))
+        .expect("block_on returned within the watchdog");
+    drop(release);
+    assert!(left_running, "the shutdown did not report the stuck task");
+    assert!(
+        took < Duration::from_secs(2),
+        "block_on ignored the plan stored during the run and waited {took:?}"
+    );
+}

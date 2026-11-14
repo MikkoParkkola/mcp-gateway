@@ -286,8 +286,20 @@ pub(crate) enum StopOutcome {
 }
 
 impl StopOutcome {
-    pub(crate) fn permits_exec(&self) -> bool {
+    /// Whether the writer was stopped and joined, whatever its last flush did.
+    pub(crate) fn is_joined(&self) -> bool {
         matches!(self, Self::Joined(_))
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the committed restart path decides its exec with it"
+        )
+    )]
+    pub(crate) fn permits_exec(&self) -> bool {
+        self.is_joined()
     }
 }
 
