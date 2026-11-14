@@ -1,0 +1,9 @@
+head_sha	bc173dbcb546604fd88ee89dc6e7b7544db8e6dc
+#mutant M3
+mcp_gateway	gateway::ui::activity::key_lookup_route_tests::padding_finds_the_plain_address_and_blank_or_control_is_refused	src/gateway/ui/activity/key_lookup_route_tests.rs:701
+#mutant M4
+mcp_gateway	gateway::ui::activity::key_lookup_route_tests::padding_finds_the_plain_address_and_blank_or_control_is_refused	src/gateway/ui/activity/key_lookup_route_tests.rs:252
+#mutant M5
+mcp_gateway	gateway::ui::activity::key_lookup_route_tests::padding_finds_the_plain_address_and_blank_or_control_is_refused	src/gateway/ui/activity/key_lookup_route_tests.rs:726
+#mutant M6
+mcp_gateway	gateway::ui::activity::key_lookup_route_tests::padding_finds_the_plain_address_and_blank_or_control_is_refused	src/gateway/ui/activity/key_lookup_route_tests.rs:726
