@@ -8,7 +8,7 @@ use super::*;
 /// (untimed) and after still verifies, and reads back whole.
 #[test]
 fn governance_records_are_timed_and_a_mixed_log_verifies() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logger = governance_logger(dir.path());
     let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     // A record as written before the stamp: the same fields, no time.

@@ -76,7 +76,7 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
             allowed.get("error").is_none() && endpoint.arrivals() == 1,
             "premise: the granted control did not succeed: {allowed}"
         );
-        let probe_dir = Arc::new(tempfile::tempdir().unwrap());
+        let probe_dir = crate::test_dir_keep::kept_tempdir();
         let probe = surfaced(gateway(
             &endpoint,
             vec![],
@@ -90,8 +90,8 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
             "premise: withheld reached the endpoint: {refused}"
         );
     });
-    let dir = Arc::new(tempfile::tempdir().unwrap());
-    let absent_dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let absent_dir = crate::test_dir_keep::kept_tempdir();
     let endpoint = runtime.block_on(Endpoint::start(false));
     let (withheld, log) = denied_gateway(&endpoint, &dir);
     let withheld = surfaced(withheld);
@@ -157,7 +157,7 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
 #[tokio::test]
 async fn row7b_another_decision_in_the_request_still_fails_closed() {
     let endpoint = Endpoint::start(false).await;
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, log) = denied_gateway(&endpoint, &dir);
     let meta = surfaced(meta);
     let who = api_key("bob");
@@ -208,7 +208,7 @@ fn row7c_a_cancelled_withheld_call_still_logs_its_failed_record() {
     let (_guard, mut seen) = crate::test_log_capture::live_count(WARNING);
     runtime.block_on(async {
         let endpoint = Endpoint::start(false).await;
-        let dir = Arc::new(tempfile::tempdir().unwrap());
+        let dir = crate::test_dir_keep::kept_tempdir();
         let meta = Arc::new(surfaced(denied_gateway(&endpoint, &dir).0));
         let hold = seams::hold_next_write_for_test();
         seams::fail_append_at_for_test(1);

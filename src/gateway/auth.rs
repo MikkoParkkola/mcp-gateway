@@ -43,6 +43,12 @@ pub use dashboard::DashboardBootstrap;
 pub(crate) use dashboard::{
     Bound, MintingKey, Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch,
 };
+
+/// Retains the minting key's identity when a cookie authenticates a dashboard request.
+#[cfg(feature = "webui")]
+#[derive(Debug, Clone)]
+pub(crate) struct SessionMintedBy(pub(crate) MintingKey);
+
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
 #[path = "auth_handoff.rs"]
@@ -352,15 +358,20 @@ pub async fn auth_middleware(
         let limits = session_limits(&state);
         // Judged by the request's pinned key table: a session whose minting
         // key a reload removed, demoted or expired ends here (K13).
-        match state.dashboard_bootstrap.check_session_with(
+        let checked_session = state.dashboard_bootstrap.check_session_with_origin(
             &handle,
             Now::read(),
             &limits,
             touch,
             auth_config,
-        ) {
+        );
+        match checked_session.0 {
             SessionCheck::Valid if !has_authorization && !is_bootstrap => {
                 request.extensions_mut().insert(dashboard_client());
+                #[cfg(feature = "webui")]
+                if let Some(key) = checked_session.1 {
+                    request.extensions_mut().insert(SessionMintedBy(key));
+                }
                 return next.run(request).await;
             }
             SessionCheck::Valid => {}
@@ -606,6 +617,14 @@ mod rotation_tests;
 #[cfg(test)]
 #[path = "auth_limit_state_tests.rs"]
 mod limit_state_tests;
+
+#[cfg(test)]
+#[path = "auth_approval_binding_tests.rs"]
+mod approval_binding_tests;
+
+#[cfg(test)]
+#[path = "auth_session_origin_tests.rs"]
+mod session_origin_tests;
 
 /// SIGNING.5 row 44: which nonce-quota authority a dashboard session carries.
 ///

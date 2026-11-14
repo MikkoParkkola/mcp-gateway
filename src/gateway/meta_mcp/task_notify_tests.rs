@@ -48,7 +48,7 @@ fn gateway(
 /// A frame is tagged with the subscription and written to the log as sent.
 #[tokio::test]
 async fn a_delivered_task_frame_is_tagged_and_logged_as_sent() {
-    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _log) = gateway(&dir, AuditFailurePolicy::FailClosed);
     let subscription = SubscriptionId::of_request(RequestId::Number(5));
 
@@ -81,7 +81,7 @@ async fn a_delivered_task_frame_is_tagged_and_logged_as_sent() {
 /// delivered, as a `tasks/get` response is not.
 #[tokio::test]
 async fn a_task_frame_that_cannot_be_logged_is_withheld_when_fail_closed() {
-    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, log) = gateway(&dir, AuditFailurePolicy::FailClosed);
     let subscription = SubscriptionId::of_request(RequestId::Number(6));
     log.fail_next_append_for_test();
@@ -102,7 +102,7 @@ async fn a_task_frame_that_cannot_be_logged_is_withheld_when_fail_closed() {
 /// delivered after it completed, is sent as the completed task, whole.
 #[tokio::test]
 async fn a_frame_carries_the_task_as_it_is_at_delivery() {
-    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _log) = gateway(&dir, AuditFailurePolicy::FailClosed);
     let subscription = SubscriptionId::of_request(RequestId::Number(7));
     let mut task = crate::protocol::tasks::Task::create("gateway_invoke")
@@ -156,7 +156,7 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
 /// the stored result or error, completed and failed alike.
 #[tokio::test]
 async fn a_frame_of_an_unvouched_row_carries_the_withheld_answer() {
-    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, _log) = gateway(&dir, AuditFailurePolicy::FailClosed);
     let echoed = "echo of key legacy-secret-6d02";
     let reason = crate::gateway::meta_mcp::upstream::SECRETS_WITHHELD;
@@ -287,7 +287,7 @@ const MARKED: &str = "marked-after-storing-9105";
 /// removed.
 #[tokio::test]
 async fn a_notification_removes_a_value_marked_after_the_task_was_stored() {
-    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, registry) = gateway_with_alpha(&dir);
     let stored = completed(&format!("done {MARKED}"));
     registry.mark_for_test("alpha", MARKED);
@@ -307,7 +307,7 @@ async fn a_notification_removes_a_value_marked_after_the_task_was_stored() {
 /// status-only, and the log says why the output was withheld.
 #[test]
 fn a_refused_scrub_sends_the_status_only_notification_and_says_why() {
-    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (frame, logs) = crate::test_log_capture::capture_warnings(|| {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -345,7 +345,7 @@ fn a_refused_scrub_sends_the_status_only_notification_and_says_why() {
 #[tokio::test]
 async fn a_stored_output_the_scrub_redacts_reads_as_rewritten() {
     use super::invoke::egress::EgressOutcome;
-    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (meta, registry) = gateway_with_alpha(&dir);
     registry.mark_for_test("alpha", MARKED);
     let marked = completed(&format!("done {MARKED}"));

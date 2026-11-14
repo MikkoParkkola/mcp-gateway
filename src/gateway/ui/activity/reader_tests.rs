@@ -112,7 +112,7 @@ fn log_path(dir: &tempfile::TempDir, name: &str) -> PathBuf {
 
 #[test]
 fn p2_pages_every_call_once_newest_first_across_segments() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let l = logger(&path, 1000);
     for i in 0..250 {
@@ -129,7 +129,7 @@ fn p2_pages_every_call_once_newest_first_across_segments() {
 
 #[test]
 fn p2_a_full_page_holds_exactly_the_limit() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let l = logger(&path, 1000);
     for i in 0..250 {
@@ -143,7 +143,7 @@ fn p2_a_full_page_holds_exactly_the_limit() {
 
 #[test]
 fn p2a_rotation_between_pages_neither_skips_nor_repeats() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let l = logger(&path, 1000);
     for i in 0..30 {
@@ -175,7 +175,7 @@ fn p2a_rotation_between_pages_neither_skips_nor_repeats() {
 
 #[test]
 fn p2a_rotation_inside_one_request_reads_the_sealed_bytes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let l = Arc::new(logger(&path, 1000));
     for i in 0..8 {
@@ -206,7 +206,7 @@ fn p2a_rotation_inside_one_request_reads_the_sealed_bytes() {
 /// segment from its own end, not from the new active file's shorter length.
 #[test]
 fn a_rotation_while_resolving_the_newest_page_skips_nothing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let l = Arc::new(logger(&path, 1000));
     for i in 0..8 {
@@ -244,7 +244,7 @@ fn a_rotation_while_resolving_the_newest_page_skips_nothing() {
 /// page fails rather than read as a log never written.
 #[test]
 fn a_newest_segment_removed_while_resolving_fails_the_page() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let l = logger(&path, 1000);
     call(&l, 0);
@@ -261,7 +261,7 @@ fn a_newest_segment_removed_while_resolving_fails_the_page() {
 /// flagged.
 #[test]
 fn a_cursor_expiring_while_resolving_fails_then_restarts_on_retry() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let l = logger(&path, 1000);
     for i in 0..250 {
@@ -292,7 +292,7 @@ fn a_cursor_expiring_while_resolving_fails_then_restarts_on_retry() {
 /// its place.
 #[test]
 fn a_segment_removed_after_resolving_fails_the_page() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let l = logger(&path, 1000);
     for i in 0..30 {
@@ -334,7 +334,7 @@ fn entry(id: &str, ts: Option<&str>) -> Value {
 
 #[test]
 fn p3_a_record_at_the_cap_is_assembled_across_windows() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let mut big = json!({"tool": "tool_1", "pad": ""});
     let base = big.to_string().len();
@@ -359,7 +359,7 @@ fn p3_a_record_at_the_cap_is_assembled_across_windows() {
 /// logger refuses, is reported once and never served.
 #[test]
 fn p3_a_line_one_byte_over_the_cap_is_reported() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let mut big = json!({"tool": "tool_1", "pad": ""});
     let base = big.to_string().len();
@@ -380,7 +380,7 @@ fn p3_a_line_one_byte_over_the_cap_is_reported() {
 
 #[test]
 fn p3_an_over_cap_line_is_reported_once_and_bounded() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let mut body = entry("0", None).to_string() + "\n";
     body.push_str(&"y".repeat(6 * 1024 * 1024));
@@ -408,7 +408,7 @@ fn p3_an_over_cap_line_is_reported_once_and_bounded() {
 
 #[test]
 fn p5_a_cursor_into_an_expired_segment_restarts_newest() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let l = logger(&path, 2);
     for i in 0..40 {
@@ -501,7 +501,7 @@ fn p6_merge_is_the_full_expected_sequence_across_page_boundaries() {
         ),
     ];
     for (n, (inv_lines, gov_lines, expected)) in scenarios.iter().enumerate() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let inv = log_path(&dir, "inv.jsonl");
         let gov = log_path(&dir, "gov.jsonl");
         let lines = |l: &[(&str, Option<String>)]| -> Vec<Value> {
@@ -523,7 +523,7 @@ fn p6_merge_is_the_full_expected_sequence_across_page_boundaries() {
 
 #[test]
 fn p7_a_sparse_filter_stops_at_the_budget_and_resumes_to_an_older_match() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let pad = "z".repeat(400);
     let mut lines = vec![json!({"tool": "tool_needle", "pad": pad})];
@@ -548,7 +548,7 @@ fn p7_a_sparse_filter_stops_at_the_budget_and_resumes_to_an_older_match() {
 #[test]
 fn p6_untimed_governance_records_sort_just_below_the_oldest_timed_one() {
     let ts = |t: &str| Some(format!("2026-10-26T{t}Z"));
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let inv = log_path(&dir, "inv.jsonl");
     let gov = log_path(&dir, "gov.jsonl");
     // Governance: two records from before the upgrade (untimed), then two timed.
@@ -584,7 +584,7 @@ fn p6_untimed_governance_records_sort_just_below_the_oldest_timed_one() {
 fn a_read_in_the_rotation_gap_finds_the_sealed_file() {
     // Rotation renames the active file to its sealed name, then creates the
     // next one; a read opening by name in between must not see an empty log.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     write_lines(&path, &[entry("0", None), entry("1", None)]);
     let (from, to) = (path.clone(), sealed_path(&path, 0));
@@ -599,7 +599,7 @@ fn a_read_in_the_rotation_gap_finds_the_sealed_file() {
 fn the_active_segment_is_numbered_by_its_open_record() {
     // Every sealed segment expired (retention or the disk-full path): only
     // the active file, opened as segment 7, is left.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir, "inv.jsonl");
     let opened = |seq: u64| json!({"event": "audit_segment_opened", "segment_seq": seq});
     write_lines(&path, &[opened(7), entry("a", None), entry("b", None)]);

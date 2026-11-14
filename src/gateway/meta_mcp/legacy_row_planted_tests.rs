@@ -7,8 +7,6 @@
 //! serve through `refuse_stored_delivery`, judged here. If that judge ever
 //! serves such a row, this fails and the old rows need a read-time strip.
 
-use std::sync::Arc;
-
 use super::grant_audit::with_grant_slot;
 use super::grant_audit_fixture::{CAPS, Endpoint, PERSONAL, grant};
 use super::grant_decision_audit_tests::{api_key, context, gateway};
@@ -23,7 +21,7 @@ const ALICE: (&str, &str) = ("api_key", "alice");
 async fn a_pre_binding_row_with_a_planted_member_is_refused_when_served() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,

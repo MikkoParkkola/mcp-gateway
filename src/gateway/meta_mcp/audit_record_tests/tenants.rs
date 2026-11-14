@@ -73,7 +73,7 @@ fn log_text(dir: &tempfile::TempDir) -> String {
 /// the writer after the scope ends.
 #[tokio::test]
 async fn allowed_call_record_carries_tenants_and_data_classes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = attributing(meta(Ok(reply_naming("cust-9", "")), &dir));
     let who = api_key_caller();
     meta.invoke_tool(&args_for(Some("cust-1")), None, &context(&AllowAll, &who))
@@ -98,7 +98,7 @@ async fn allowed_call_record_carries_tenants_and_data_classes() {
 /// classified).
 #[tokio::test]
 async fn gate_refused_response_keeps_response_tenants() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let note = format!("AWS_ACCESS_KEY_ID={}", example_access_key());
     let mut refusing = meta(Ok(reply_naming("cust-9", &note)), &dir);
     refusing.enable_response_inspection_action_mode();
@@ -117,7 +117,7 @@ async fn gate_refused_response_keeps_response_tenants() {
 /// T9. No firewall, no attribution: the record keeps its schema.
 #[tokio::test]
 async fn no_firewall_means_no_attribution_fields() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = meta(Ok(reply_naming("cust-9", "")), &dir);
     let who = api_key_caller();
     meta.invoke_tool(&args_for(Some("cust-1")), None, &context(&AllowAll, &who))
@@ -132,7 +132,7 @@ async fn no_firewall_means_no_attribution_fields() {
 /// never empty, so this catches an unconditional write.
 #[tokio::test]
 async fn tenantless_call_writes_no_attribution_fields() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let plain = json!({"content": [{"type": "text", "text": "{\"ok\":true}"}], "isError": false});
     let meta = attributing(meta(Ok(plain), &dir));
     let who = api_key_caller();
@@ -147,7 +147,7 @@ async fn tenantless_call_writes_no_attribution_fields() {
 /// T11 (route half). The attributed meta record verifies as part of the chain.
 #[tokio::test]
 async fn attributed_meta_record_verifies() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = attributing(meta(Ok(reply_naming("cust-9", "")), &dir));
     let who = api_key_caller();
     meta.invoke_tool(&args_for(Some("cust-1")), None, &context(&AllowAll, &who))
@@ -181,7 +181,7 @@ async fn declare_read_only(meta: &MetaMcp) {
 /// re-classified as the raw response was.
 #[tokio::test]
 async fn cache_hit_record_carries_delivered_tenants() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut cached = meta(Ok(reply_naming("cust-9", "")), &dir);
     cached.cache = Some(Arc::new(crate::cache::ResponseCache::new()));
     cached.default_cache_ttl = Duration::from_secs(300);
@@ -214,7 +214,7 @@ fn oversize_reply_naming(tenant: &str) -> Value {
 /// record carries `attribution: "uninspected"` and no tenant it could not read.
 #[tokio::test]
 async fn oversize_response_record_says_uninspected() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = attributing(meta(Ok(oversize_reply_naming("cust-9")), &dir));
     let who = api_key_caller();
     meta.invoke_tool(&args_for(None), None, &context(&AllowAll, &who))
@@ -229,7 +229,7 @@ async fn oversize_response_record_says_uninspected() {
 /// though far under 1 MiB, is recorded uninspected, not as naming no tenant.
 #[tokio::test]
 async fn deep_nested_response_record_says_uninspected() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let deep = format!(
         "{}{{\"customer_id\":\"cust-9\"}}{}",
         "[".repeat(200),
@@ -250,7 +250,7 @@ async fn deep_nested_response_record_says_uninspected() {
 /// the value was too large to inspect.
 #[tokio::test]
 async fn oversize_cache_hit_record_says_both() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut cached = meta(Ok(oversize_reply_naming("cust-9")), &dir);
     cached.cache = Some(Arc::new(crate::cache::ResponseCache::new()));
     cached.default_cache_ttl = Duration::from_secs(300);
@@ -360,7 +360,7 @@ fn keyed(key: &str) -> crate::protocol::mrtr::RetryFields {
 /// script.
 #[tokio::test]
 async fn a_replayed_peer_error_result_is_recorded_as_a_cached_delivery() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let base = meta(Ok(reply_naming("cust-9", "")), &dir);
     base.backends
@@ -400,7 +400,7 @@ async fn a_replayed_peer_error_result_is_recorded_as_a_cached_delivery() {
 /// stores no refusal, so the hit comes from the idempotency cache.
 #[tokio::test]
 async fn a_replayed_refusal_records_only_the_delivered_tenants() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let note = format!("AWS_ACCESS_KEY_ID={}", example_access_key());
     let mut refusing = meta(Ok(reply_naming("cust-9", &note)), &dir);
     refusing.enable_response_inspection_action_mode();
@@ -435,7 +435,7 @@ async fn a_replayed_refusal_records_only_the_delivered_tenants() {
 /// `invoke::relay::tests::a_replayed_invoke_answer_stages_its_unwrapped_value`.
 #[tokio::test]
 async fn a_replayed_invoke_answer_is_attributed_from_its_tool_value() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = attributing(meta(Ok(reply_naming("cust-1", "")), &dir));
     let who = api_key_caller();
     let value = json!({"rows": [{"customer_id": "cust-7"}]});
@@ -473,7 +473,7 @@ async fn a_replayed_invoke_answer_is_attributed_from_its_tool_value() {
 /// classes, marked uninspected as the refusal was (MIK-7636).
 #[tokio::test]
 async fn a_replayed_refused_receipt_is_recorded_as_a_cached_delivery() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let registry = Arc::new(crate::backend::BackendRegistry::new());
     let backend = Arc::new(crate::backend::Backend::new(
         "alpha",

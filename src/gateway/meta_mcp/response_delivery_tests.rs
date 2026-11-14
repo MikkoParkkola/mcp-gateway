@@ -28,7 +28,7 @@ const DELIVERED_SENTINEL: &str = "firewall-delivery-surviving-public-context-927
 struct Fixture {
     meta: MetaMcp,
     firewall: Arc<Firewall>,
-    directory: TempDir,
+    directory: std::sync::Arc<TempDir>,
 }
 
 impl Fixture {
@@ -42,7 +42,7 @@ impl Fixture {
         scan_responses: bool,
         logging: bool,
     ) -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_dir_keep::kept_tempdir();
         let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
         let config = FirewallConfig {
             enabled,

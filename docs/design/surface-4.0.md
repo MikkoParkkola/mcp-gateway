@@ -328,7 +328,11 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `auth.api_keys` | KEEP | `Vec::new()` | who may call the gateway | - | src/config/features/auth.rs:25 |
 | `auth.api_keys[].admin` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:98 |
 | `auth.api_keys[].allowed_tools` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:91 |
+| `auth.api_keys[].approved_by` | KEEP | — | ApiKeyBinding records the admin key that approved a CLI key; absent on ordinary keys | - | src/config/features/api_key.rs:126 |
+| `auth.api_keys[].approved_by.digest_tag` | KEEP | — | full tag of the approver digest used to approve the CLI key | - | src/config/features/api_key.rs:142 |
+| `auth.api_keys[].approved_by.quota_principal` | KEEP | — | stable principal of the CLI key approver | - | src/config/features/api_key.rs:140 |
 | `auth.api_keys[].backends` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:87 |
+| `auth.api_keys[].cli_host` | KEEP | — | reported CLI host for the Keys screen; never trusted for authorization | - | src/config/features/api_key.rs:130 |
 | `auth.api_keys[].denied_tools` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:95 |
 | `auth.api_keys[].expires_at` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:77 |
 | `auth.api_keys[].key` | REMOVE | — | legacy plaintext key, parsed only to be refused | refused at load naming `key_sha256`; `upgrade` replaces a literal key with its digest and names an `env:`/`file:`/`${}` value to fix by hand (tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | src/config/features/api_key.rs:70 |

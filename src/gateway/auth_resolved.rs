@@ -52,6 +52,9 @@ fn resolve_api_keys(
                 personal: k.kind == crate::config::ApiKeyKind::Personal,
                 explicit_principal: k.principal.clone(),
                 previous,
+                approved_by: k.approved_by.clone(),
+                #[cfg(feature = "webui")]
+                cli_host: k.cli_host.clone(),
             })
         })
         .collect::<Result<Vec<_>>>()
@@ -266,12 +269,55 @@ impl ResolvedAuthConfig {
     ) -> bool {
         self.api_keys().iter().any(|k| {
             k.quota_principal.same_key_principal(&minter.quota)
-                && secret_still_valid(k, &minter.digest_tag, |end| {
-                    !crate::config::api_key_expired(Some(end), at)
-                })
-                && crate::gateway::authz::admin_standing(k.admin, &k.backends).is_gateway()
-                && !crate::config::api_key_expired(k.expires_at, at)
+                && approver_holds(k, &minter.digest_tag, at)
+                && self.binding_live(k, Some(at))
         })
+    }
+
+    /// Whether `quota` is the stable identity of a CLI key: some key in this
+    /// table carries an approver binding and has that quota principal. Display
+    /// names can collide or change, so a restriction on CLI keys is judged by
+    /// this identity, never by a key's name.
+    ///
+    /// Matching by quota principal is exact because no two credentials can share
+    /// one: `validate_distinct_principals` refuses it at load and at reload.
+    /// Rows in `config_reload/principal_collision_tests.rs` pin that:
+    /// `two_keys_sharing_a_principal_fail_to_load`,
+    /// `a_reload_that_introduces_a_shared_principal_is_refused` and
+    /// `a_cli_key_sharing_a_principal_with_an_ordinary_key_fails_to_load`.
+    #[cfg(feature = "webui")]
+    pub(crate) fn is_cli_key_quota(&self, quota: &QuotaPrincipal) -> bool {
+        self.api_keys()
+            .iter()
+            .any(|key| key.approved_by.is_some() && key.quota_principal.same_key_principal(quota))
+    }
+
+    /// Whether `key`'s approver still stands at `at`. A key with no binding
+    /// is not a CLI key and passes, so every other key keeps today's path.
+    /// A CLI key needs exactly one key carrying its approver's stable
+    /// principal; that key must be unbound itself (no chains, and a self
+    /// binding denies), still accept the digest it approved with (current, or
+    /// previous inside its grace), and be an unexpired gateway-wide admin. No
+    /// reading of the clock denies a CLI key.
+    pub(crate) fn binding_live(
+        &self,
+        key: &ResolvedApiKey,
+        at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> bool {
+        let Some(bound) = &key.approved_by else {
+            return true;
+        };
+        let Some(at) = at else {
+            return false;
+        };
+        let keys = self.api_keys();
+        let mut matching = keys
+            .iter()
+            .filter(|k| k.quota_principal.has_limit_key(&bound.quota_principal));
+        let (Some(root), None) = (matching.next(), matching.next()) else {
+            return false;
+        };
+        root.approved_by.is_none() && approver_holds(root, &bound.digest_tag, at)
     }
 
     /// When `key` last authenticated in this process, in unix seconds:
@@ -416,6 +462,10 @@ impl ResolvedAuthConfig {
         if via_previous && expired(key.previous.as_ref().map(|p| p.expires_at)) {
             return None;
         }
+        // A CLI key stands only while its approver does (CLIAUTH binding).
+        if !self.binding_live(key, now) {
+            return None;
+        }
         // Accepted: the key's last use, at the reading that judged it. With no
         // reading there is no time to record, so nothing is written.
         if let Some(now) = now {
@@ -472,9 +522,14 @@ impl ResolvedAuthConfig {
         let key = keys
             .iter()
             .find(|k| k.name == name && k.principal().storage_form() == principal)?;
-        (!crate::config::api_key_expired_now(key.expires_at)
-            && binding.holds(key, |end| !crate::config::api_key_expired_now(Some(end))))
-        .then(|| Self::client_of(key))
+        if key.approved_by.is_none() {
+            return (!crate::config::api_key_expired_now(key.expires_at)
+                && binding.holds(key, |end| !crate::config::api_key_expired_now(Some(end))))
+            .then(|| Self::client_of(key));
+        }
+        // Expiry, grace and approval must agree on one clock reading.
+        let now = crate::clock::utc_now().ok()?;
+        self.client_for_key_at(name, principal, binding, now)
     }
 
     /// [`Self::client_for_key`] judged at `now`, the caller's reading of the
@@ -491,7 +546,8 @@ impl ResolvedAuthConfig {
             .iter()
             .find(|k| k.name == name && k.principal().storage_form() == principal)?;
         (!crate::config::api_key_expired(key.expires_at, now)
-            && binding.holds(key, |end| !crate::config::api_key_expired(Some(end), now)))
+            && binding.holds(key, |end| !crate::config::api_key_expired(Some(end), now))
+            && self.binding_live(key, Some(now)))
         .then(|| Self::client_of(key))
     }
 
@@ -623,6 +679,16 @@ impl KeyBinding<'_> {
 
 /// Whether the secret fingerprinted `tag` still authenticates as `key`: its
 /// current digest, or its previous one while `in_grace` says the grace runs.
+/// Whether `key` can stand behind something it approved or minted with the
+/// digest tagged `tag`: it still accepts that digest (current, or previous
+/// inside its grace), it is a gateway-wide admin, and it has not expired.
+fn approver_holds(key: &ResolvedApiKey, tag: &str, at: chrono::DateTime<chrono::Utc>) -> bool {
+    secret_still_valid(key, tag, |end| {
+        !crate::config::api_key_expired(Some(end), at)
+    }) && crate::gateway::authz::admin_standing(key.admin, &key.backends).is_gateway()
+        && !crate::config::api_key_expired(key.expires_at, at)
+}
+
 fn secret_still_valid(
     key: &ResolvedApiKey,
     tag: &str,
@@ -695,3 +761,7 @@ pub(super) fn with_dummy_digest<R>(digest: [u8; 32], f: impl FnOnce() -> R) -> R
     let _restore = Restore(DUMMY_DIGEST_OVERRIDE.with(|cell| cell.replace(Some(digest))));
     f()
 }
+
+#[cfg(test)]
+#[path = "auth_one_reading_tests.rs"]
+mod one_reading_tests;

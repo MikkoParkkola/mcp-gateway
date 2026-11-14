@@ -103,6 +103,24 @@ fn two_keys_sharing_a_principal_fail_to_load() {
     assert_collision_refused(loaded, "alpha", "bravo", PREFIX);
 }
 
+/// A CLI key (one with an approver binding) and an ordinary key may not share a
+/// principal either. `ResolvedAuthConfig::is_cli_key_quota` matches a caller to
+/// CLI keys by quota principal, which is safe only because no two keys can
+/// share one: this row pins that for a CLI key as one of the pair.
+#[test]
+fn a_cli_key_sharing_a_principal_with_an_ordinary_key_fails_to_load() {
+    let approver = "a".repeat(64);
+    let body = format!(
+        "  api_keys:\n    - name: alpha\n      key_sha256: \"{}\"\n\
+         \x20   - name: bravo\n      key_sha256: \"{}\"\n      approved_by:\n\
+         \x20       quota_principal: \"{approver}\"\n        digest_tag: \"{approver}\"\n",
+        colliding(PREFIX, '0'),
+        colliding(PREFIX, '1')
+    );
+    let (_dir, _path, loaded) = load(&body, None);
+    assert_collision_refused(loaded, "alpha", "bravo", PREFIX);
+}
+
 #[test]
 fn two_ordinary_keys_still_load() {
     let body = two_keys(&digest_of("k-alpha"), &digest_of("k-bravo"));
