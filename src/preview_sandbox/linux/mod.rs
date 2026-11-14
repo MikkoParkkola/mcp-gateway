@@ -4,6 +4,7 @@
 //! the gateway itself makes no namespace syscall, and the gateway's own binary
 //! runs inside them as `__preview-sandbox` and `__preview-drop`.
 
+mod control_client;
 mod drop;
 mod helper;
 mod mounts;
@@ -127,6 +128,17 @@ pub(super) fn start(
     })
 }
 
+/// [`start`] after the fetch step's handshake (`preview_sandbox::start_fetching`).
+pub(super) async fn start_fetching(
+    helper: &Path,
+    target: &Target,
+    protected: &[PathBuf],
+    deadline: tokio::time::Instant,
+) -> Result<Started, Refusal> {
+    let _ = (helper, target, protected, deadline);
+    Err(Refusal::Step("the fetch step is not built yet".into()))
+}
+
 /// Turn a target into the helper's plan, refusing what the root cannot hold.
 /// A bare program name is looked up on `path`.
 fn build_plan(
@@ -233,6 +245,7 @@ fn build_plan(
         env,
         program: utf8(&exec)?,
         target: argv,
+        fetch: None,
     })
 }
 
