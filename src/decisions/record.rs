@@ -44,7 +44,7 @@ fn sorted_positions(request: &OpenRequest) -> Vec<(&str, &str, u64)> {
                 .map(move |pos| (capability.as_str(), pos.entry.as_str(), pos.counter))
         })
         .collect();
-    parts.sort_unstable();
+    mutant!("unsorted", (), parts.sort_unstable());
     parts.dedup();
     parts
 }
@@ -94,7 +94,7 @@ pub(crate) fn decision_record(request: &OpenRequest, digest: &str) -> UiDecision
 pub(crate) fn decisions_from_record(record: &UiDecisionRecord) -> Option<Vec<UiDecision>> {
     // Only a decline closes refusals: an accept closes its request once its
     // rows are published, so a revoke of them can open it again.
-    if !record.is_decline() || record.entries.is_empty() {
+    if mutant!("foldsaccepts", false, !record.is_decline()) || record.entries.is_empty() {
         return None;
     }
     record
@@ -139,7 +139,11 @@ pub(crate) enum AcceptTtl {
 
 /// One length-prefixed field, so no two field lists share an encoding.
 fn push_field(bytes: &mut Vec<u8>, text: &str) {
-    bytes.extend((text.len() as u64).to_be_bytes());
+    mutant!(
+        "nolenprefix",
+        (),
+        bytes.extend((text.len() as u64).to_be_bytes())
+    );
     bytes.extend(text.as_bytes());
 }
 
@@ -166,16 +170,16 @@ pub(crate) fn accept_key(
     let parts = sorted_positions(request);
     let mut bytes = b"mcpg/ui-decision/accept-key/v1\0".to_vec();
     for text in [
-        request.authority.as_str(),
-        request.subject.as_str(),
-        request.agent.as_str(),
-        actor,
-        scope_digest,
+        mutant!("noauthority", "", request.authority.as_str()),
+        mutant!("nosubject", "", request.subject.as_str()),
+        mutant!("noagent", "", request.agent.as_str()),
+        mutant!("noactor", "", actor),
+        mutant!("nodigest", "", scope_digest),
     ] {
         push_field(&mut bytes, text);
     }
     push_field(&mut bytes, &parts.len().to_string());
-    for (capability, entry, counter) in &parts {
+    for (capability, entry, counter) in mutant!("nopositions", &parts[..0], &parts[..]) {
         push_field(&mut bytes, capability);
         push_field(&mut bytes, entry);
         push_field(&mut bytes, &counter.to_string());
@@ -184,7 +188,7 @@ pub(crate) fn accept_key(
         AcceptTtl::Seconds(seconds) => format!("ttl:{seconds}"),
         AcceptTtl::Permanent => "permanent".to_owned(),
     };
-    push_field(&mut bytes, &ttl);
+    mutant!("nottl", (), push_field(&mut bytes, &ttl));
     crate::hashing::sha256_hex(&bytes)
 }
 
@@ -201,7 +205,11 @@ pub(crate) fn accept_key(
 pub(crate) fn accept_event_id(key: &str, generation: u64) -> String {
     let mut bytes = b"mcpg/ui-decision/accept/v1\0".to_vec();
     push_field(&mut bytes, key);
-    push_field(&mut bytes, &generation.to_string());
+    mutant!(
+        "eventnon",
+        (),
+        push_field(&mut bytes, &generation.to_string())
+    );
     crate::hashing::sha256_hex(&bytes)
 }
 
@@ -217,8 +225,19 @@ pub(crate) fn accept_event_id(key: &str, generation: u64) -> String {
 )]
 pub(crate) fn accept_row_id(key: &str, capability: &str, generation: u64) -> String {
     let mut bytes = b"mcpg/ui-decision/row/v1\0".to_vec();
-    push_field(&mut bytes, key);
-    push_field(&mut bytes, capability);
-    push_field(&mut bytes, &generation.to_string());
+    push_field(
+        &mut bytes,
+        &mutant!(
+            "rowfromevent",
+            accept_event_id(key, generation),
+            key.to_owned()
+        ),
+    );
+    mutant!("rownocap", (), push_field(&mut bytes, capability));
+    mutant!(
+        "rownog",
+        (),
+        push_field(&mut bytes, &generation.to_string())
+    );
     crate::hashing::sha256_hex(&bytes)
 }
