@@ -165,3 +165,31 @@ async fn t8_no_connection_within_the_bound_is_refused() {
         .expect("the accept did not end within the guard");
     assert!(accepted.is_err());
 }
+
+/// T8, kills "the first matching status line wins": a process name cannot
+/// smuggle a second parent or uid line ahead of the real ones.
+#[test]
+fn t8_a_duplicated_status_field_is_refused() {
+    let forged = format!(
+        "Name:\tx\nPPid:\t4241\nUid:\t1000\t1000\t1000\t1000\n{}",
+        status("1", "1000\t1000\t1000\t1000")
+    );
+    assert!(peer_is_helper(&forged, 4241, 1000).is_err());
+}
+
+/// T8, kills "the listener outlives the accept": once the helper's one
+/// connection is taken, whatever the peer check said, no second connection
+/// is served.
+#[tokio::test]
+async fn t8_no_second_connection_is_served() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("control.sock");
+    let listener = tokio::net::UnixListener::bind(&path).expect("bind");
+    let first = tokio::spawn(tokio::net::UnixStream::connect(path.clone()));
+    let accepted = tokio::time::timeout(GUARD, super::accept_helper(listener, 1, 0, B))
+        .await
+        .expect("the accept did not end within the guard");
+    drop(accepted);
+    let _first = first.await.expect("join");
+    assert!(tokio::net::UnixStream::connect(&path).await.is_err());
+}

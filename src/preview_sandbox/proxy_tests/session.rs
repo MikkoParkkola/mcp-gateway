@@ -172,3 +172,28 @@ async fn s3_a_closed_socket_mid_fetch_revokes_the_credential() {
     assert!(served.is_err());
     assert_eq!(status_under(&rig, &secret).await, 407);
 }
+
+/// T4, kills "a dropped session leaves its credential live": the session
+/// future is dropped right after the credential went out.
+#[tokio::test(flavor = "current_thread")]
+async fn s4_a_dropped_session_revokes_the_credential() {
+    let rig = rig().await;
+    let (helper, gateway) = UnixStream::pair().expect("pair");
+    let (read, mut write) = helper.into_split();
+    let mut read = BufReader::new(read);
+    let secret = {
+        let session = serve_session(gateway, &rig.proxy, deadline(), CONTROL_BOUNDS);
+        tokio::pin!(session);
+        write
+            .write_all(b"{\"fetch_start\":true}\n")
+            .await
+            .expect("write");
+        let mut issued = String::new();
+        tokio::select! {
+            _ = &mut session => panic!("the session ended before the credential was read"),
+            read = read.read_line(&mut issued) => { read.expect("credential"); }
+        }
+        secret_of(&issued)
+    };
+    assert_eq!(status_under(&rig, &secret).await, 407);
+}
