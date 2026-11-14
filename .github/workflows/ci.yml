@@ -1212,6 +1212,8 @@ jobs:
           set -euo pipefail
           python3 scripts/release/upgrading_fragments.py assemble --dry-run > "$RUNNER_TEMP/UPGRADING-4.0.md"
           export UPGRADING_DOC="$RUNNER_TEMP/UPGRADING-4.0.md"
+          # The artifact round trip drops the exec bit; set it here too rather than rely on the shard step before.
+          chmod +x "$RUNNER_TEMP/lib-bin/lib-tests"
           "$RUNNER_TEMP/lib-bin/lib-tests" upgrade_notice_tests 2>&1 | tee "$RUNNER_TEMP/assembled-lib.log"
           if ! grep -Eq '^running [1-9][0-9]* tests?$' "$RUNNER_TEMP/assembled-lib.log"; then
             echo "::error::upgrade_notice_tests selected no test"
@@ -1380,13 +1382,16 @@ jobs:
           npm install --global @googleworkspace/cli@0.22.5
           test "$(gws --version | head -1)" = "gws 0.22.5"
       - name: Every gws capability dry-runs against the real binary
-        # The shared lib test binary (no build here), run as `cargo test` would run it: from the package root.
+        # The shared lib test binary (no build here), run as `cargo test` would run it: from the package root. A filter
+        # that matches no test exits 0, so the step requires the one test's pass line, as the keychain steps do.
         timeout-minutes: 10
         env:
           CARGO_MANIFEST_DIR: ${{ github.workspace }}
         run: |
+          set -euo pipefail
           chmod +x "$RUNNER_TEMP/lib-bin/lib-tests"
-          "$RUNNER_TEMP/lib-bin/lib-tests" --ignored every_gws_capability_is_accepted_by_the_real_binary_in_dry_run
+          "$RUNNER_TEMP/lib-bin/lib-tests" --ignored every_gws_capability_is_accepted_by_the_real_binary_in_dry_run 2>&1 | tee "$RUNNER_TEMP/gws.log"
+          grep -Eq "^test result: ok\. 1 passed" "$RUNNER_TEMP/gws.log"
 
   # The Linux keychain reader and writer against a real Secret Service
   # (ADR-028): an unlocked gnome-keyring on a private session bus. The reader

@@ -474,6 +474,12 @@ def _cases(live: dict) -> list[tuple[str, dict]]:
     extra = fresh()
     extra["extra"] = {"needs": BUILD_JOB, "runs-on": "ubuntu-latest", "steps": []}
 
+    stray_download = fresh()
+    stray_download["stray"] = {
+        "runs-on": "ubuntu-latest",
+        "steps": [{"uses": "actions/download-artifact@x", "with": {"name": ARTIFACT, "path": DOWNLOAD_PATH}}],
+    }
+
     rollup_needs = fresh()
     rollup_needs[ROLLUP]["needs"] = [need for need in rollup_needs[ROLLUP]["needs"] if need != LIB_SHARDS]
 
@@ -502,6 +508,7 @@ def _cases(live: dict) -> list[tuple[str, dict]]:
         ("build step timeout >= job timeout", long_build),
         ("BUILD_JOB gains continue-on-error at job level", build_continues),
         ("a new job extra that needs BUILD_JOB", extra),
+        ("a job downloads the binary without needing the build", stray_download),
         ("ROLLUP drops test-shards-lib from needs", rollup_needs),
         ("ROLLUP_EXPECTS drops linux-lib-build", rollup_expects),
         ("a consumer job gains continue-on-error", consumer_continues),
