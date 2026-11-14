@@ -189,3 +189,26 @@ fn a_hurried_close_keeps_term_after_setup_latency() {
     deadline.move_earlier(now + KILL_RESERVE);
     assert_eq!(deadline.hurry(now), now + KILL_RESERVE);
 }
+
+/// A cut records when it was made, as one pair with the deadline: a later
+/// deadline moves neither, an earlier one moves both.
+#[test]
+fn a_cut_records_when_it_was_made_and_a_later_one_moves_nothing() {
+    let deadline = super::StopDeadline::default();
+    assert_eq!(deadline.get_with_set_at(), None, "unset until a stop");
+    let now = std::time::Instant::now();
+    deadline.move_earlier(now + Duration::from_secs(60));
+    let (at, set) = deadline.get_with_set_at().expect("the cut is set");
+    assert_eq!(at, now + Duration::from_secs(60));
+    assert!(set >= now, "the set-time is when the move ran");
+    deadline.move_earlier(now + Duration::from_secs(90));
+    assert_eq!(
+        deadline.get_with_set_at(),
+        Some((at, set)),
+        "a later deadline moves neither the cut nor its set-time"
+    );
+    deadline.move_earlier(now + Duration::from_secs(30));
+    let (earlier, reset) = deadline.get_with_set_at().expect("the cut is set");
+    assert_eq!(earlier, now + Duration::from_secs(30));
+    assert!(reset >= set, "an earlier cut records its own set-time");
+}
