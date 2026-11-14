@@ -686,5 +686,50 @@ fn the_window_filters_rows_and_the_next_page_still_answers() {
     assert_eq!(subjects(&second).len(), 1, "{second}");
 }
 
+/// The route hashes what the admin typed and the hash trims with its own
+/// frozen `White_Space` list, so padding finds the plain address's rows;
+/// validation judges the same trimmed text with the fixed control ranges.
+/// A pin, not red-provable on today's toolchain (std trim agrees with the
+/// frozen list); the source pin in `email_hash_tests.rs` is the red row.
+/// Mutant: hash a blank value, skip the trim in validation, or drop either
+/// control range.
+#[test]
+fn padding_finds_the_plain_address_and_blank_or_control_is_refused() {
+    let fx = Fx::new();
+    fx.plant("s1", EMAIL, &fx.ks.email_key);
+    let padded = format!("\u{3000} {EMAIL}\t\u{85}\u{2028}");
+    assert_eq!(subjects(&fx.lookup(&padded, &json!({}))), vec!["s1"]);
+    // Not White_Space, so kept: the hash differs and nothing matches.
+    let zero_width = format!("\u{200b}{EMAIL}\u{feff}");
+    assert!(subjects(&fx.lookup(&zero_width, &json!({}))).is_empty());
+    // Interior White_Space that is not a control character is kept and accepted.
+    assert!(subjects(&fx.lookup("ada@\u{a0}corp.invalid", &json!({}))).is_empty());
+    // Length is judged after the trim: 320 bytes is accepted, padded or not
+    // (`Fx::lookup` asserts a 200 for each).
+    let domain = "@corp.invalid";
+    let at_limit = format!("{}{domain}", "a".repeat(320 - domain.len()));
+    assert_eq!(at_limit.len(), 320);
+    fx.lookup(&at_limit, &json!({}));
+    fx.lookup(&format!("{at_limit}{}", " ".repeat(320)), &json!({}));
+    for refused in [
+        " \u{a0}\u{3000}\u{2028}".to_owned(),
+        format!("a{at_limit}"),
+        "ada@\u{0}corp.test".to_owned(),
+        "ada@\u{1f}corp.test".to_owned(),
+        "ada@\u{7f}corp.test".to_owned(),
+        "ada@\u{85}corp.test".to_owned(),
+        "ada@\u{9f}corp.test".to_owned(),
+    ] {
+        fx.state.process.lookup_budget().reset_for_test();
+        let body = json!({ "email": refused }).to_string();
+        let (status, _, answer) = fx.post(admin("a"), &body);
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused:?}: {answer}");
+        assert!(
+            answer.to_string().contains("not valid"),
+            "{refused:?}: {answer}"
+        );
+    }
+}
+
 #[path = "key_lookup_route_tests/page.rs"]
 mod page;
