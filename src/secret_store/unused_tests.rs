@@ -453,42 +453,25 @@ fn capability_symlink_loop_refuses() {
     assert_eq!(got, Err(super::CAP_UNREAD.to_owned()), "{ROW}");
 }
 
-/// The keychain guard's force switch exists only in test builds: every line of `unused.rs`
-/// that names it sits in the `#[cfg(test)]` seam module or directly under a `#[cfg(test)]`
-/// attribute, so no release build can force the macOS and Windows keychain guard off.
+/// The keychain guard's force switch exists only in test builds: the production text of
+/// `unused.rs` (every test-only item blanked by the shared reader) never names it, so no
+/// release build can force the macOS and Windows keychain guard off.
 #[test]
 fn keychain_guard_seam_is_test_only() {
     const ROW: &str = "keychain_guard_seam_is_test_only";
-    let lines: Vec<&str> = include_str!("unused.rs").lines().collect();
-    let start = lines
-        .iter()
-        .position(|line| line.trim() == "mod seam {")
-        .unwrap_or_else(|| panic!("{ROW}: no seam module"));
-    assert_eq!(
-        lines.get(start.wrapping_sub(1)).map(|line| line.trim()),
-        Some("#[cfg(test)]"),
-        "{ROW}: the seam module is not test-only"
-    );
-    let end = lines[start..]
-        .iter()
-        .position(|line| *line == "}")
-        .map(|offset| start + offset)
-        .unwrap_or_else(|| panic!("{ROW}: the seam module does not close"));
-    let named: Vec<usize> = (0..lines.len())
-        .filter(|&i| lines[i].contains("GUARD_KEYCHAIN"))
-        .collect();
+    let text = include_str!("unused.rs");
+    // The switch and its one read are in this file, so a scan that finds nothing proves something.
     assert!(
-        named.len() >= 2,
-        "{ROW}: the switch and its one read: {named:?}"
+        text.matches("GUARD_KEYCHAIN").count() >= 2,
+        "{ROW}: the switch and its read are in unused.rs"
     );
-    for i in named {
-        let in_seam = (start..=end).contains(&i);
-        let under_cfg = i > 0 && lines[i - 1].trim() == "#[cfg(test)]";
+    let production = crate::test_source_text::production_text(text);
+    for (i, line) in production.lines().enumerate() {
         assert!(
-            in_seam || under_cfg,
+            !line.contains("GUARD_KEYCHAIN"),
             "{ROW}: unused.rs:{} names the switch outside cfg(test): {}",
             i + 1,
-            lines[i]
+            line.trim()
         );
     }
 }
