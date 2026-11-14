@@ -10,7 +10,7 @@ use crate::gateway::authz::AdminStanding;
 use crate::gateway::meta_mcp::{MetaMcpCallerContext, anonymous_caller};
 use crate::gateway::restart_config_floor::seams::{AdmittedPoint, ReloadSource};
 use crate::gateway::restart_config_floor::support::{
-    self, BOUND, Probe, WatcherFixture, config_probe, recv_bounded, reload_probe, sha256_hex, tick,
+    self, Probe, WatcherFixture, config_probe, recv_bounded, reload_probe, sha256_hex, tick,
 };
 use crate::gateway::restart_config_floor::{AdmitKind, ConfigFloor, ConfigGate, GateState};
 use crate::gateway::restart_floor::{FloorAdapter, FloorFault};
@@ -22,6 +22,10 @@ use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::SystemTime;
 use tokio::time::Instant;
+
+/// Every bounded wait here: `support::BOUND`'s value, spelled locally because the
+/// timing gate cannot follow a `crate::` import to a const.
+const BOUND: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Design erratum E1; existing `UiRefused::Busy` status, settings.rs:494 (503 with
 /// `Retry-After: 1`), whose flat `{error}` body states the reason.
@@ -85,10 +89,10 @@ struct Fx {
 impl Fx {
     async fn new() -> Self {
         let route = Route::new(BASE).await;
-        let gate = ConfigGate::new();
-        // The wiring stage hands this gate to the route; the floor and watcher have it now.
-        let floor = support::floor_over(&gate, &route.ctx, &route.path());
-        let watcher = WatcherFixture::over(&gate, &route.ctx, &route.path());
+        // The route's registry owns the one gate its reload context, the floor and the watcher share.
+        let gate = route.state.backends.config_gate();
+        let floor = support::floor_over(&route.ctx, &route.path());
+        let watcher = WatcherFixture::over(&route.ctx, &route.path());
         Self {
             route,
             gate,
@@ -352,10 +356,12 @@ async fn p8_replay_and_admitted_write_both_land() {
     for _ in 0..3 {
         tick(&fx.watcher).await;
     }
-    // Each entry carries the value the running config holds after that reload.
+    // Each entry records the running `environment` after that reload. The write's
+    // own reload reads the disk, which already holds the outside edit, so it logs
+    // "a1" too; key B is asserted on the running config below.
     assert_eq!(fx.replays(), ["a1"], "{ROW}: replay entries by value");
     let writes = support::reload_values(&fx.gate, ReloadSource::Write);
-    assert_eq!(writes, ["b1"], "{ROW}: write entries by value");
+    assert_eq!(writes, ["a1"], "{ROW}: write entries by value");
     assert_eq!(fx.gate.reload_log().len(), 2, "{ROW}: no other reload");
     assert_eq!(
         fx.running_environment().as_deref(),
@@ -384,7 +390,7 @@ async fn p8_held_replay_blocks_the_next_checkpoint() {
     fx.floor.resume();
     let watcher = std::mem::replace(
         &mut fx.watcher,
-        WatcherFixture::over(&fx.gate, &fx.route.ctx, &fx.route.path()),
+        WatcherFixture::over(&fx.route.ctx, &fx.route.path()),
     );
     let ticking = tokio::spawn(async move { tick(&watcher).await });
     recv_bounded(&reached, "the replay reaching WatcherAfterAdmission");

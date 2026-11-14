@@ -8,7 +8,7 @@ use std::path::Path;
 use tokio::time::Instant;
 
 use super::support::{self, Probe};
-use super::{ConfigFloor, ConfigGate, production_candidates};
+use super::{ConfigFloor, production_candidates};
 use crate::backend::BackendRegistry;
 use crate::gateway::restart_floor::{FloorAdapter, FloorFault};
 use crate::test_source_text::production_text;
@@ -76,6 +76,7 @@ const DEFINITIONS: &[&str] = &[
 const NAMES: &[&str] = &[
     "SeamLog",
     "AdmittedPoint",
+    "WriterAfterStaging",
     "AdmittedHook",
     "SettleWindow",
     "ReloadSource",
@@ -267,7 +268,7 @@ fn tagged(tag: &str) -> String {
 const INVALID: &str = "backends: [\n";
 
 fn defaults(candidates: &support::Candidates) -> ConfigFloor {
-    support::defaults_floor(&ConfigGate::new(), &BackendRegistry::new(), candidates)
+    support::defaults_floor(&BackendRegistry::new(), candidates)
 }
 
 #[tokio::test]
@@ -399,7 +400,7 @@ async fn n2_defaults_file_deleted_before_certify_is_not_configured() {
 /// A Booted floor with no reload context: only a registry and the file.
 fn contextless(text: &str) -> (support::ConfigDir, ConfigFloor) {
     let cfg = support::ConfigDir::with(text);
-    let floor = support::booted_floor(&ConfigGate::new(), &BackendRegistry::new(), &cfg.path);
+    let floor = support::booted_floor(&BackendRegistry::new(), &cfg.path);
     (cfg, floor)
 }
 

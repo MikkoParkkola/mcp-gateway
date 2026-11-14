@@ -291,6 +291,9 @@ pub(crate) mod seams {
     /// Named points where a holder of an admission guard calls the hook.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum AdmittedPoint {
+        /// Byte writer, its secret entries staged, before `write_atomic`: a row
+        /// kills the write task here so `Entries::drop` runs the detached discard.
+        WriterAfterStaging,
         /// Byte writer, after it released both locks, during secret settlement.
         WriterAfterLocks,
         /// Inside the detached secret-entry cleanup.
@@ -335,7 +338,8 @@ pub(crate) mod seams {
         Replay,
     }
 
-    /// A completed reload and the running value of the key the row edits.
+    /// A completed reload and the running config's `environment` at that moment
+    /// (empty when unset): one fixed key, which every row that reads the log edits.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub(crate) struct ReloadEntry {
         pub(crate) source: ReloadSource,
@@ -386,7 +390,9 @@ pub(crate) mod seams {
     pub(crate) enum CheckStep {
         /// Both locks held, before any read.
         Start,
-        /// After the journal and abandoned checks, before the trusted read.
+        /// After the unsettled-write checks (step 3), before the target identity
+        /// check and the trusted read (steps 4 and 5): C3 repoints the link here so
+        /// only step 4 can catch it.
         BeforeRead,
         /// After the trusted read of the file.
         AfterRead,
@@ -504,7 +510,8 @@ pub(crate) mod seams {
             self.seams.decisions.snapshot()
         }
 
-        /// A test reload context appends here on every completed reload.
+        /// Every completed reload appends here (production calls it under
+        /// `cfg(test)`), with the running `environment` after that reload.
         pub(crate) fn record_reload(&self, source: ReloadSource, value: &str) {
             let value = value.to_owned();
             self.seams.reloads.push(ReloadEntry { source, value });

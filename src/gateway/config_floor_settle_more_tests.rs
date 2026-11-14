@@ -35,6 +35,10 @@ fn hold_at(gate: &ConfigGate, at: AdmittedPoint) -> Hold {
     Hold { reached, release }
 }
 
+/// The Paused row of the design's gate table (section 2), manual reload column.
+const PAUSED_RELOAD_REFUSAL: &str =
+    "a restart is being prepared; the reload runs when it is decided";
+
 fn edited(value: &str) -> String {
     format!("{BASE}environment: \"{value}\"\n")
 }
@@ -68,7 +72,11 @@ async fn p7_replay_owed_survives_a_refused_watcher_admission() {
     floor.pause(deadline()).await.expect("pause");
     booted.cfg.rewrite(&edited("e1"));
     let folded = support::manual_reload(&booted.gate, &booted.ctx).await;
-    assert!(folded.is_err(), "{ROW}: a reload while paused answers 409");
+    assert_eq!(
+        folded.err().as_deref(),
+        Some(PAUSED_RELOAD_REFUSAL),
+        "{ROW}: a reload while paused answers the exact refusal"
+    );
     assert!(
         booted.gate.replay_owed(),
         "{ROW}: the manual reload owes a replay"

@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Cancel and retry rows X1-X3: a refused checkpoint through `run_checkpoint`
-//! leaves the config owner recovered, and a retry certifies.
+//! leaves the config owner recovered, and a retry certifies. Every row drives
+//! the byte writer, so the whole file is webui-only.
+#![cfg(feature = "webui")]
 
 use std::sync::Arc;
 
@@ -9,7 +11,7 @@ use futures::future::BoxFuture;
 use tokio::time::Instant;
 
 use super::support::{self, BASE, Booted, Probe};
-use super::{AdmitKind, ConfigFloor, GateState};
+use super::{ConfigFloor, GateState};
 use crate::gateway::restart_floor::{
     CancelReason, Cancelled, FloorAdapter, FloorFault, FloorOwner, FloorStage, run_checkpoint,
 };
@@ -113,6 +115,36 @@ fn config_cancel(reason: CancelReason) -> Cancelled {
     }
 }
 
+/// After the cancel: a real UI write sets `environment` to a literal (its lock
+/// recovers any journal first), the premise that no journal remains holds, and
+/// the second checkpoint certifies the hash of the bytes the write produced.
+#[cfg(feature = "webui")]
+async fn write_then_retry(
+    row: &str,
+    booted: &Booted,
+    adapters: &mut [Box<dyn FloorAdapter>],
+    floor: &tokio::sync::Mutex<ConfigFloor>,
+) {
+    let written = format!("{BASE}environment: \"{row}\"\n");
+    let outcome = support::write_bytes(&booted.gate, Arc::clone(&booted.ctx), &written).await;
+    assert!(outcome.is_ok(), "{row} the UI write is admitted and lands");
+    assert_eq!(
+        booted.running_environment().as_deref(),
+        Some(row),
+        "{row} running value"
+    );
+    // Premise: the write's own recovery left no journal, so none is removed here.
+    let journal = booted.cfg.beside(".gateway.yaml.replace-journal");
+    assert!(!journal.exists(), "{row} no journal remains");
+    assert_eq!(
+        booted.cfg.bytes(),
+        written.as_bytes(),
+        "{row} bytes written"
+    );
+    assert_certified_retry(row, adapters, floor, &written).await;
+}
+
+#[cfg(feature = "webui")]
 #[tokio::test]
 async fn x1_v1_journal_cancels_then_retry_certifies() {
     const ROW: &str = "X1";
@@ -130,26 +162,10 @@ async fn x1_v1_journal_cancels_then_retry_certifies() {
         "{ROW} first run"
     );
     assert_recovered(ROW, &booted);
-    // A direct gate client is admitted again (the row plays the writer here).
-    assert!(
-        booted.gate.admit(AdmitKind::Write).is_ok(),
-        "{ROW} write admitted"
-    );
-    // An unrelated call is served: an outside edit reloads into the running config.
-    let edited = format!("{BASE}environment: \"e1\"\n");
-    booted.cfg.rewrite(&edited);
-    let reloaded = support::manual_reload(&booted.gate, &booted.ctx).await;
-    assert!(reloaded.is_ok(), "{ROW} manual reload served");
-    assert_eq!(
-        booted.running_environment().as_deref(),
-        Some("e1"),
-        "{ROW} running value"
-    );
-    // The journal goes; the retry certifies the literal bytes.
-    std::fs::remove_file(&journal).expect("remove journal");
-    assert_certified_retry(ROW, &mut adapters, &floor, &edited).await;
+    write_then_retry(ROW, &booted, &mut adapters, &floor).await;
 }
 
+#[cfg(feature = "webui")]
 #[tokio::test]
 async fn x2_invalid_file_cancels_then_fixed_file_certifies() {
     const ROW: &str = "X2";
@@ -166,15 +182,7 @@ async fn x2_invalid_file_cancels_then_fixed_file_certifies() {
         "{ROW} first run"
     );
     assert_recovered(ROW, &booted);
-    // A direct gate client is admitted again (the row plays the writer here).
-    assert!(
-        booted.gate.admit(AdmitKind::Write).is_ok(),
-        "{ROW} write admitted"
-    );
-    // Rewriting the file valid lets the retry certify its literal bytes.
-    let fixed = format!("{BASE}environment: \"e2\"\n");
-    booted.cfg.rewrite(&fixed);
-    assert_certified_retry(ROW, &mut adapters, &floor, &fixed).await;
+    write_then_retry(ROW, &booted, &mut adapters, &floor).await;
 }
 
 /// Hold the byte writer at `WriterAfterLocks` until the returned sender fires;

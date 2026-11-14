@@ -24,11 +24,24 @@ struct Hold {
 }
 
 fn hold_at(gate: &ConfigGate, point: AdmittedPoint) -> Hold {
+    hold_with_panic(gate, point, None)
+}
+
+/// Like [`hold_at`], and the first call at `panic_at` panics (the holder dies).
+fn hold_with_panic(
+    gate: &ConfigGate,
+    point: AdmittedPoint,
+    panic_at: Option<AdmittedPoint>,
+) -> Hold {
     let (tx, reached) = channel();
     let tx = Mutex::new(tx);
     let release = Arc::new(Barrier::new(2));
     let (gate_release, taken) = (Arc::clone(&release), AtomicBool::new(false));
+    let died = AtomicBool::new(false);
     gate.set_admitted_hook(Some(Arc::new(move |at| {
+        if Some(at) == panic_at && !died.swap(true, Ordering::SeqCst) {
+            panic!("the write task dies after staging its secret entries");
+        }
         if at == point && !taken.swap(true, Ordering::SeqCst) {
             tx.lock().unwrap().send(()).ok();
             gate_release.wait();
@@ -117,8 +130,8 @@ async fn p1_held_write_keeps_checkpoint_pending_then_certifies() {
     certified_hash(ROW, &floor, text.as_bytes());
 }
 
-/// A save that creates one secret entry and then fails before its rename, so the
-/// entry is discarded by cleanup work after the writer's task is done.
+/// A save that stages one secret entry; the row's hook kills the write task
+/// after staging, so the entry is discarded by detached cleanup.
 #[cfg(feature = "webui")]
 async fn failing_secret_save(
     ctx: Arc<crate::config_reload::ReloadContext>,
@@ -160,27 +173,34 @@ async fn failing_secret_save(
     replace_audited(ctx, replace, audit, RELOAD_LOCK_WAIT).await
 }
 
-/// P2: a failed save's main task ends first; its detached cleanup alone holds
-/// the settle.
+/// P2: a write task that dies after staging ends first; its detached cleanup
+/// alone holds the settle. (No cancellation variant: the writer has no await
+/// between staging and the rename, and the hook is synchronous.)
 #[cfg(feature = "webui")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p2_failed_save_cleanup_alone_keeps_checkpoint_pending() {
-    use crate::config_persistence::journal::fault::{Fault, set};
+async fn p2_dead_write_cleanup_alone_keeps_checkpoint_pending() {
     const ROW: &str = "P2";
     let booted = Booted::new(BASE);
     let store_dir = tempfile::tempdir().expect("store dir");
-    let hold = hold_at(&booted.gate, AdmittedPoint::Cleanup);
-    let _armed = set(&booted.cfg.path, Fault::FailWrite);
+    let hold = hold_with_panic(
+        &booted.gate,
+        AdmittedPoint::Cleanup,
+        Some(AdmittedPoint::WriterAfterStaging),
+    );
     let save = tokio::spawn(failing_secret_save(
         Arc::clone(&booted.ctx),
         store_dir.path().to_path_buf(),
     ));
+    let answer = tokio::time::timeout(BOUND, save).await;
+    let answer = answer.expect("P2: the save task finished").expect("join");
+    assert!(answer.is_err(), "{ROW}: the dead save answers a failure");
     hold.wait_reached(ROW, "the cleanup");
-    // The main task's guard is gone: only the cleanup's handle is counted.
-    wait_until(
-        "P2: admissions_in_flight fell to the cleanup's handle",
-        || booted.gate.admissions_in_flight() == 1,
+    assert_eq!(
+        booted.gate.admissions_in_flight(),
+        1,
+        "{ROW}: only the cleanup's own count remains"
     );
+    assert_probes_free(ROW, &booted);
     let mut floor = booted.floor();
     floor.pause(deadline()).await.expect("pause");
     let mut fut = floor.checkpoint(deadline());
@@ -188,10 +208,8 @@ async fn p2_failed_save_cleanup_alone_keeps_checkpoint_pending() {
         is_pending(&mut fut).await,
         "{ROW}: Pending on the cleanup alone"
     );
-    assert_probes_free(ROW, &booted);
     hold.release();
     finish(fut, ROW).await;
-    assert!(save.await.expect("join").is_err(), "{ROW}: the save failed");
     certified_hash(ROW, &floor, BASE.as_bytes());
 }
 

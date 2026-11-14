@@ -120,15 +120,11 @@ pub(crate) fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
     }
 }
 
-/// A Booted floor over the config at `path`, on `gate` and the reload lock of
-/// `registry`: the same lock its reload context and `reload_outcome` take.
-pub(crate) fn booted_floor(
-    gate: &ConfigGate,
-    registry: &BackendRegistry,
-    path: &Path,
-) -> ConfigFloor {
+/// A Booted floor over the config at `path`, on the gate and the reload lock of
+/// `registry`: the ones its reload contexts and `reload_outcome` use.
+pub(crate) fn booted_floor(registry: &BackendRegistry, path: &Path) -> ConfigFloor {
     ConfigFloor::new(
-        gate.clone(),
+        registry.config_gate(),
         registry.reload_lock_handle(),
         ConfigSource::Booted(path.to_path_buf()),
         Vec::new(),
@@ -137,13 +133,9 @@ pub(crate) fn booted_floor(
 
 /// A Defaults floor whose fallback search reads the temp `candidates`, passed
 /// through the candidate-path override a row owns.
-pub(crate) fn defaults_floor(
-    gate: &ConfigGate,
-    registry: &BackendRegistry,
-    candidates: &Candidates,
-) -> ConfigFloor {
+pub(crate) fn defaults_floor(registry: &BackendRegistry, candidates: &Candidates) -> ConfigFloor {
     let mut floor = ConfigFloor::new(
-        gate.clone(),
+        registry.config_gate(),
         registry.reload_lock_handle(),
         ConfigSource::Defaults,
         Vec::new(),
@@ -169,7 +161,7 @@ impl Booted {
         let ctx = reload_context(&cfg.path, Arc::clone(&registry));
         Self {
             cfg,
-            gate: ConfigGate::new(),
+            gate: registry.config_gate(),
             registry,
             ctx,
         }
@@ -177,7 +169,7 @@ impl Booted {
 
     /// A floor for this config; each call builds a fresh adapter.
     pub(crate) fn floor(&self) -> ConfigFloor {
-        booted_floor(&self.gate, &self.registry, &self.cfg.path)
+        booted_floor(&self.registry, &self.cfg.path)
     }
 
     pub(crate) fn config_probe(&self) -> Probe {
@@ -230,12 +222,8 @@ pub(crate) fn reload_values(gate: &ConfigGate, source: super::seams::ReloadSourc
 
 /// A Booted floor over an existing reload context (its own registry's reload
 /// lock) and config `path`, for rows that reuse another fixture's context.
-pub(crate) fn floor_over(
-    gate: &ConfigGate,
-    ctx: &crate::config_reload::ReloadContext,
-    path: &Path,
-) -> ConfigFloor {
-    booted_floor(gate, &ctx.registry, path)
+pub(crate) fn floor_over(ctx: &crate::config_reload::ReloadContext, path: &Path) -> ConfigFloor {
+    booted_floor(&ctx.registry, path)
 }
 
 #[cfg(feature = "webui")]
@@ -328,13 +316,9 @@ pub(crate) struct WatcherFixture {
 }
 
 impl WatcherFixture {
-    pub(crate) fn over(
-        gate: &ConfigGate,
-        ctx: &Arc<crate::config_reload::ReloadContext>,
-        path: &Path,
-    ) -> Self {
+    pub(crate) fn over(ctx: &Arc<crate::config_reload::ReloadContext>, path: &Path) -> Self {
         Self {
-            gate: gate.clone(),
+            gate: ctx.registry.config_gate(),
             ctx: Arc::clone(ctx),
             path: path.to_path_buf(),
         }
