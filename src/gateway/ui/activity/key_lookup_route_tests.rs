@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
+use base64::Engine as _;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -47,7 +48,17 @@ fn client(admin: bool, backends: &[&str], kind: CredentialKind) -> Authenticated
 fn admin(name: &str) -> AuthenticatedClient {
     let mut c = client(true, &["*"], CredentialKind::StaticBearer);
     c.name = name.to_owned();
+    // A credential principal of its own: a page token binds to it.
+    c.principal =
+        crate::gateway::record_principal::InternalPrincipal::new(format!("principal-{name}"));
     c
+}
+
+/// The digest `who`'s tokens bind to: the route's own function, so a row cannot
+/// drift from what the route does.
+fn fingerprint(who: &AuthenticatedClient) -> String {
+    super::key_lookup::cursor_principal(Some(who), &axum::http::HeaderMap::new())
+        .expect("a credential principal")
 }
 
 struct Fx {
@@ -243,6 +254,50 @@ impl Fx {
         value
     }
 
+    /// A next-page request: the token and nothing else (plus `extra`), on a
+    /// full budget.
+    fn next_page(
+        &self,
+        who: AuthenticatedClient,
+        token: &str,
+        extra: &Value,
+    ) -> (StatusCode, Option<String>, Value) {
+        let mut body = json!({"cursor": token});
+        if let (Some(b), Some(e)) = (body.as_object_mut(), extra.as_object()) {
+            b.extend(e.clone());
+        }
+        self.state.process.lookup_budget().reset_for_test();
+        self.post(who, &body.to_string())
+    }
+
+    /// The scope a page token for EMAIL carries, born at `born`.
+    fn scope(&self, born: u64) -> super::key_lookup::PageScope {
+        super::key_lookup::PageScope {
+            hash: self.ks.email_key.hash(EMAIL),
+            version: u64::from(crate::key_server::email_hash::VERSION),
+            key_id: self.ks.email_key.key_id(),
+            from: None,
+            to: None,
+            pos: super::reader::Cursor {
+                inv: None,
+                gov: None,
+                gov_bound: None,
+            },
+            born,
+        }
+    }
+
+    /// Seal a page token by hand, for the rows that need a time or a scope the
+    /// route would not mint.
+    fn seal_by_hand(
+        &self,
+        who: &AuthenticatedClient,
+        scope: &super::key_lookup::PageScope,
+        now: u64,
+    ) -> String {
+        super::key_lookup::seal(&self.state, &fingerprint(who), scope, now).expect("sealed")
+    }
+
     fn all_files(&self) -> Vec<(String, String)> {
         std::fs::read_dir(self.dir.path())
             .unwrap()
@@ -359,11 +414,13 @@ fn matching_rows_come_from_every_segment_and_only_for_the_same_hash() {
     assert_eq!(subjects(&fx.lookup(OTHER, &json!({}))), vec!["s3"]);
 }
 
-/// MIK-9455.LOOKUP.2: pages follow the cursor, which is bound to the safe
-/// filter: another email's cursor restarts at the newest row and says so.
-/// Mutant: ignore the bind, or never return a cursor.
+/// MIK-9455.LOOKUP.2: a next page is asked for with the token alone, and the
+/// token the route hands out is sealed: it holds neither the email nor its
+/// keyed hash, in the clear or as base64 of either.
+/// Mutant: return a token that spells the hash (an unsealed cursor), or
+/// require the email again for the next page.
 #[test]
-fn pages_follow_a_cursor_that_is_bound_to_its_filter() {
+fn pages_follow_a_sealed_cursor_sent_without_the_email() {
     let fx = Fx::new();
     fx.plant("s1", EMAIL, &fx.ks.email_key);
     fx.plant("s2", EMAIL, &fx.ks.email_key);
@@ -374,12 +431,62 @@ fn pages_follow_a_cursor_that_is_bound_to_its_filter() {
         .as_str()
         .expect("a next cursor")
         .to_owned();
-    let second = fx.lookup(EMAIL, &json!({"limit": 1, "cursor": token}));
+    let hash = fx.ks.email_key.hash(EMAIL);
+    for secret in [EMAIL, EMAIL.to_lowercase().as_str(), hash.as_str()] {
+        assert!(!token.contains(secret), "the token spells {secret}");
+    }
+    for part in token.split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_') {
+        if let Ok(raw) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(part) {
+            let raw = String::from_utf8_lossy(&raw).into_owned();
+            assert!(
+                !raw.contains(hash.as_str()),
+                "a token part decodes to the hash"
+            );
+            assert!(!raw.to_lowercase().contains(&EMAIL.to_lowercase()));
+        }
+    }
+    let (status, cache, second) = fx.next_page(admin("a"), &token, &json!({"limit": 1}));
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(cache.as_deref(), Some("no-store"));
     assert_eq!(subjects(&second), vec!["s1"], "{second}");
-    assert_eq!(second["cursor_reset"], false);
-    let foreign = fx.lookup(OTHER, &json!({"limit": 1, "cursor": token}));
-    assert_eq!(foreign["cursor_reset"], true, "{foreign}");
-    assert_eq!(subjects(&foreign), vec!["s3"]);
+    assert!(
+        !second.to_string().contains(EMAIL),
+        "the answer must not echo the email"
+    );
+}
+
+/// The two request shapes are exclusive: a first page is an email (and
+/// optionally limit, from, to); a next page is a cursor (and optionally a
+/// limit). Both, neither, or a window beside a cursor are refused.
+/// Mutant: accept both and ignore one, or let from/to ride beside a cursor.
+#[test]
+fn a_request_is_an_email_or_a_cursor_never_both_or_neither() {
+    let fx = Fx::new();
+    fx.plant("s1", EMAIL, &fx.ks.email_key);
+    fx.plant("s2", EMAIL, &fx.ks.email_key);
+    let first = fx.lookup(EMAIL, &json!({"limit": 1}));
+    let token = first["next_cursor"].as_str().expect("cursor").to_owned();
+    // Each shape error is refused by the shape check itself, in its own words:
+    // not by a later layer that happens to refuse the same request.
+    for (body, words) in [
+        (json!({"email": EMAIL, "cursor": token}), "not both"),
+        (json!({"limit": 1}), "not both"),
+        (
+            json!({"cursor": token, "from": "2000-01-01T00:00:00Z"}),
+            "window",
+        ),
+        (
+            json!({"cursor": token, "to": "2100-01-01T00:00:00Z"}),
+            "window",
+        ),
+        (json!({"cursor": token, "extra": 1}), "JSON object"),
+    ] {
+        fx.state.process.lookup_budget().reset_for_test();
+        let (status, _, answer) = fx.post(admin("a"), &body.to_string());
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {answer}");
+        assert!(answer.to_string().contains(words), "{body}: {answer}");
+        assert!(!answer.to_string().contains(EMAIL), "{answer}");
+    }
 }
 
 /// MIK-9455.LOOKUP.2: a log line that is not a JSON entry is reported, not
@@ -551,10 +658,11 @@ fn a_window_that_ends_before_it_starts_is_refused() {
 }
 
 /// MIK-9455.LOOKUP.2: the time window keeps rows inside it and drops rows
-/// outside it, and a cursor from one window does not carry into another.
-/// Mutant: ignore the window, or leave it out of the cursor's bind.
+/// outside it, and a next page under a window still answers (that the window
+/// itself rides in the token is the seal rows' business).
+/// Mutant: ignore the window.
 #[test]
-fn the_window_filters_rows_and_is_part_of_the_cursor_bind() {
+fn the_window_filters_rows_and_the_next_page_still_answers() {
     let fx = Fx::new();
     fx.plant("s1", EMAIL, &fx.ks.email_key);
     fx.plant("s2", EMAIL, &fx.ks.email_key);
@@ -570,14 +678,13 @@ fn the_window_filters_rows_and_is_part_of_the_cursor_bind() {
         subjects(&fx.lookup(EMAIL, &earlier)).is_empty(),
         "rows after to are dropped"
     );
+    // The window rides inside the sealed token: page two keeps it.
     let first = fx.lookup(EMAIL, &json!({"limit": 1, "from": "2000-01-01T00:00:00Z"}));
-    let token = first["next_cursor"]
-        .as_str()
-        .expect("a next cursor")
-        .to_owned();
-    let moved = fx.lookup(
-        EMAIL,
-        &json!({"limit": 1, "from": "2001-01-01T00:00:00Z", "cursor": token}),
-    );
-    assert_eq!(moved["cursor_reset"], true, "{moved}");
+    let token = first["next_cursor"].as_str().expect("cursor").to_owned();
+    let (status, _, second) = fx.next_page(admin("a"), &token, &json!({"limit": 1}));
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(subjects(&second).len(), 1, "{second}");
 }
+
+#[path = "key_lookup_route_tests/page.rs"]
+mod page;
