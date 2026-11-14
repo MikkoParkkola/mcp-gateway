@@ -155,3 +155,45 @@ async fn c4i_an_address_inside_a_host_owned_ipv6_prefix_is_refused() {
     let st = connect_status(&rig, "registry.npmjs.org:443", &cred).await;
     assert_eq!(st, 200);
 }
+
+/// C4i, kills "an IPv4-mapped or compatible host network keeps its IPv6
+/// prefix length": `::ffff:93.184.216.0/120` is the IPv4 /24, in both forms.
+#[tokio::test]
+async fn c4i_a_mapped_host_prefix_covers_its_ipv4_addresses() {
+    let rig = rig().await;
+    let cred = begin(&rig);
+    for net in ["::ffff:93.184.216.0", "::93.184.216.0"] {
+        *rig.interfaces.0.lock().expect("lock") = Some(vec![(ip(net), 120)]);
+        rig.resolve.set(NPM, vec![GLOBAL]);
+        let st = connect_status(&rig, "registry.npmjs.org:443", &cred).await;
+        assert_eq!(st, 403, "{net}/120");
+        // Just outside the /24: admitted, so the refusal is the prefix's.
+        rig.resolve.set(NPM, vec![ip("93.184.217.34")]);
+        let st = connect_status(&rig, "registry.npmjs.org:443", &cred).await;
+        assert_eq!(st, 200, "{net}/120");
+    }
+}
+
+/// C4i, kills "a mask edge is off": prefix lengths 0, the family width and
+/// past it, in both families and across them.
+#[test]
+fn c4i_network_containment_edges() {
+    use super::super::within;
+    let v4 = ip("93.184.216.34");
+    let v6 = ip("2606:4700::1111");
+    // /0 covers its whole family, and only that family.
+    assert!(within(v4, ip("0.0.0.0"), 0));
+    assert!(!within(v6, ip("0.0.0.0"), 0));
+    assert!(within(v6, ip("::"), 0));
+    // The family width is the one address; a length past it counts as the width.
+    assert!(within(v4, v4, 32));
+    assert!(!within(ip("93.184.216.35"), v4, 32));
+    assert!(within(v4, v4, 40));
+    assert!(within(v6, v6, 128));
+    assert!(!within(ip("2606:4700::1112"), v6, 128));
+    // An IPv4 address against a mapped IPv6 network, and the mapped address
+    // against an IPv4 network.
+    assert!(within(v4, ip("::ffff:93.184.216.0"), 120));
+    assert!(within(ip("::ffff:93.184.216.34"), ip("93.184.216.0"), 24));
+    assert!(!within(ip("93.184.217.34"), ip("::ffff:93.184.216.0"), 120));
+}
