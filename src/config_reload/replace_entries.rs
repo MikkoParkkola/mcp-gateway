@@ -22,8 +22,8 @@ use crate::secret_store::PendingSecrets;
 pub(super) struct Entries {
     pub(super) pending: Option<PendingSecrets>,
     pub(super) renamed: bool,
-    /// The write's one admission once entries are staged (moved from the
-    /// task): a detached discard holds the gate's in-flight count until the
+    /// The write's one admission, moved from the task before any entry is
+    /// staged: a detached discard holds the gate's in-flight count until the
     /// store calls are done, even when the write task died.
     pub(super) admitted: Option<AdmissionGuard>,
     #[cfg(test)]
@@ -50,7 +50,14 @@ impl Entries {
         match how {
             Settle::Keep | Settle::Abandon => settle_now(pending, how),
             Settle::Discard => {
-                if let Err(e) = tokio::task::spawn_blocking(move || settle_now(pending, how)).await
+                // The guard rides with the store calls: a write task that dies
+                // during this await leaves the discard running, still counted.
+                let admitted = self.admitted.take();
+                if let Err(e) = tokio::task::spawn_blocking(move || {
+                    settle_now(pending, how);
+                    drop(admitted);
+                })
+                .await
                 {
                     tracing::warn!(error = %e, "discarding a refused save's secret entries failed; they are listed as unused");
                 }

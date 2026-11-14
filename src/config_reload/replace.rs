@@ -212,7 +212,8 @@ async fn spawn_locked(
     receipt: Option<receipt::RevokeCheck>,
 ) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
     // The gate admits before the task exists; the guard lives in the task, so a
-    // dead task releases it, and the task moves it into `Entries` once secret entries are staged.
+    // dead task releases it, and the task moves it into `Entries` before any
+    // secret entry is staged.
     let admitted = ctx
         .registry
         .config_gate()
@@ -401,7 +402,6 @@ impl ReloadContext {
         admitted: AdmissionGuard,
     ) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
         let deadline = Instant::now() + wait;
-        let mut admitted = Some(admitted);
         // The reload lock, then the config sidecar lock: the order every
         // holder takes them in (module docs).
         let reload_guard = self.lock_reload_within(wait).await.map_err(|e| match e {
@@ -439,10 +439,13 @@ impl ReloadContext {
                 return Err(ReplaceError::Stale { current: now });
             }
         }
+        // The write's one guard moves in before any entry is staged: a task
+        // that dies while staging drops `Entries`, whose detached discard then
+        // holds the count until its store calls are done.
         let mut entries = Entries {
             pending: None,
             renamed: false,
-            admitted: None,
+            admitted: Some(admitted),
             #[cfg(test)]
             gate: self.registry.config_gate(),
         };
@@ -473,10 +476,6 @@ impl ReloadContext {
             None => Ok(template.bytes().to_vec()),
             Some(step) => fill_secrets(template, step, deadline, &mut entries).await,
         };
-        // Staged entries take the task's guard: still exactly one count.
-        if entries.pending.is_some() {
-            entries.admitted = admitted.take();
-        }
         let result = match result {
             Ok(new) => {
                 #[cfg(test)]
