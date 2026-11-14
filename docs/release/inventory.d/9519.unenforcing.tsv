@@ -1,0 +1,4 @@
+src/gateway/task_service/store_floor.rs	owner	1	Names the adapter's floor owner (TaskStore); decides nothing
+src/gateway/task_service/store_floor.rs	gate	1	Returns the store's gate to the adapter's calls; decides nothing
+src/gateway/task_service/store_gate.rs	idle	1	Waits until no admitted task-store work is in flight; the checkpoint decides on what follows
+src/gateway/task_service/store_disk.rs	sync_store_dir	1	Syncs the task store directory through the hook's DirectorySync stage; its caller decides what a failure means

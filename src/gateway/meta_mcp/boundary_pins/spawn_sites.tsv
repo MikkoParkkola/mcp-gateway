@@ -62,6 +62,7 @@ src/gateway/task_service/execution/pending_cancel.rs	flush	spawn	1	outside-calls
 src/gateway/task_service/execution/pending_cancel.rs	listen_for_starts	spawn	1	outside-calls	listens for backend starts to resend pending cancels
 src/gateway/task_service/store.rs	close	spawn-blocking	1	outside-calls	closes the task store at shutdown
 src/gateway/task_service/store.rs	open	spawn-blocking	1	outside-calls	opens and loads the task store at start-up
+src/gateway/task_service/store_floor.rs	checkpoint	spawn-blocking	1	raised-at-join	the restart checkpoint's re-save of every task record under the ordering lock while the gate is closed; a store refusal (Unavailable, Storage) or a lost worker returns at the join and the adapter answers the matching floor fault
 src/gateway/task_service/store_gate.rs	admitted	spawn-blocking	1	raised-at-join	the one spawn of every task-store mutation, made after the restart gate admits it; a store refusal (Capacity, Duplicate, a refused answer) returns as the work's own Result through the join
 src/gateway/ui/activity/mod.rs	blocking	spawn-blocking	1	no-refusal-inside	web UI activity read from disk
 src/gateway/ui/activity/mod.rs	stream_read	spawn-blocking	1	outside-calls	reads the web UI activity stream from the audit log

@@ -461,6 +461,13 @@ impl TaskGate {
         self.tx.borrow().state
     }
 
+    /// Wait until no admitted work is in flight. The gate holds its own
+    /// sender, so the wait ends only on the count, never on a closed channel.
+    pub(crate) async fn idle(&self) {
+        let mut rx = self.rx.clone();
+        let _ = rx.wait_for(|g| g.in_flight == 0).await;
+    }
+
     /// Admitted work not yet finished.
     pub(crate) fn in_flight(&self) -> usize {
         self.tx.borrow().in_flight
