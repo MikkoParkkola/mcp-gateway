@@ -255,6 +255,9 @@ fn a_stale_claim_does_not_explain_a_revert_of_a_known_row() {
         ["g1"],
         "control"
     );
-    let stale = [claim("g1", &grant_digest(&accepted), "e1")];
-    assert_eq!(out_of_band(&run(&state, reverted, none, &stale).0), ["g1"]);
+    let old_claim = [claim("g1", &grant_digest(&accepted), "e1")];
+    assert_eq!(
+        out_of_band(&run(&state, reverted, none, &old_claim).0),
+        ["g1"]
+    );
 }

@@ -365,8 +365,7 @@ pub(super) fn plan(
         pending: None,
         ..state.clone()
     };
-    let mut out = Vec::new();
-    let mut outside = Vec::new();
+    let (mut out, mut outside) = (Vec::new(), Vec::new());
     if state.gap {
         out.push(indeterminate(
             "gap",
