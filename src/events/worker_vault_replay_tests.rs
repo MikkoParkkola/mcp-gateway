@@ -53,7 +53,7 @@ fn still_dead(hub: &EventsHub) -> bool {
 /// Under the grant it was observed under, a vault record replays.
 #[tokio::test(flavor = "current_thread")]
 async fn a_vault_replay_under_the_same_grant_requeues() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (hub, _fence) = buried(dir.path());
     hub.keep_test_dir(Arc::clone(&dir));
     let _admits = forced_verdict::answer(AccessVerdict::Admits);
@@ -65,7 +65,7 @@ async fn a_vault_replay_under_the_same_grant_requeues() {
 /// refused now, by name, and nothing is queued.
 #[tokio::test(flavor = "current_thread")]
 async fn a_vault_replay_after_a_rotation_is_refused() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (hub, fence) = buried(dir.path());
     hub.keep_test_dir(Arc::clone(&dir));
     fence.rotate_grant("u1");
@@ -83,7 +83,7 @@ async fn a_vault_replay_after_a_rotation_is_refused() {
 /// a guess and the operator is told to try again.
 #[tokio::test(flavor = "current_thread")]
 async fn a_vault_replay_with_custody_busy_is_refused_unavailable() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (hub, fence) = buried(dir.path());
     hub.keep_test_dir(Arc::clone(&dir));
     *fence.refuse.lock().expect("fence") = Some(FenceRead::Busy);

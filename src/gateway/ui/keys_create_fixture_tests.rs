@@ -108,6 +108,8 @@ pub(super) struct Call {
     pub(super) known: Option<String>,
     pub(super) before_lock: Option<BeforeLock>,
     pub(super) inject: Option<InjectWriter>,
+    /// The named-key provenance the auth layer adds for an API-key caller.
+    pub(super) named: Option<crate::gateway::auth::NamedApiKey>,
 }
 
 impl Call {
@@ -118,6 +120,7 @@ impl Call {
             known: Some(KNOWN.to_owned()),
             before_lock: None,
             inject: None,
+            named: None,
         }
     }
 }
@@ -200,7 +203,7 @@ impl Fixture {
                 .finish(),
         );
         let rt = capturing_runtime(&dispatch);
-        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("gateway.yaml");
         if setup.file {
             write_owner_only(&path, &setup.text).expect("write config");
@@ -308,7 +311,8 @@ impl Fixture {
             .method("POST")
             .uri(URI)
             .header("content-type", "application/json")
-            .extension(call.client);
+            .extension(call.client)
+            .extension(self.live.generation());
         if let Some(known) = call.known {
             request = request.extension(KnownSecret(known));
         }
@@ -317,6 +321,9 @@ impl Fixture {
         }
         if let Some(inject) = call.inject {
             request = request.extension(inject);
+        }
+        if let Some(named) = call.named {
+            request = request.extension(named);
         }
         let response = super::admin_audit::audited_api_router(&self.state)
             .with_state(Arc::clone(&self.state))

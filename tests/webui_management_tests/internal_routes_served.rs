@@ -103,6 +103,16 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
             "the_count_is_the_lists_length_and_revision_for_an_admin_only",
         )],
     ),
+    // The frame only: the table's fixture never starts the decision set, so
+    // its answers are 503; this test starts it and pins each status.
+    (
+        "/ui/api/decisions/{id}/resolve",
+        Method::POST,
+        &[(
+            DECISIONS_ROUTE,
+            "resolve_answers_one_status_per_state_and_writes_nothing",
+        )],
+    ),
     // The table's fixture attaches no discovery cache, so its admin answer
     // is 503; this test attaches one and pins the served 200.
     (

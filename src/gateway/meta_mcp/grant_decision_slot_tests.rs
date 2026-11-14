@@ -89,7 +89,7 @@ async fn wait_for_decisions(dir: &Arc<tempfile::TempDir>, count: usize) -> Vec<V
 /// the decision's record, written on a spawned task.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unslotted_check_refuses_and_still_records() {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let endpoint = Endpoint::start(false).await;
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
@@ -110,7 +110,7 @@ async fn unslotted_check_refuses_and_still_records() {
 /// is still written, and the close has nothing left to fail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_check_after_the_seal_refuses_and_still_records() {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let endpoint = Endpoint::start(false).await;
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
@@ -135,7 +135,7 @@ async fn a_check_after_the_seal_refuses_and_still_records() {
 /// the stall rather than pinning a thread.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unslotted_check_on_stalled_log_is_bounded() {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let endpoint = Endpoint::start(false).await;
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
@@ -167,7 +167,7 @@ async fn unslotted_check_on_stalled_log_is_bounded() {
 #[tokio::test]
 #[should_panic(expected = "slot")]
 async fn unslotted_check_panics_under_test() {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
         .with_identity_grants(grants(vec![grant("g1", ALICE, ALICE)]));
     meta.enable_transparency_log(logger(&dir, AuditFailurePolicy::BestEffort));
@@ -198,7 +198,7 @@ impl std::io::Write for Captured {
 /// does not panic, and logs the lost record at `error!`.
 #[tokio::test]
 async fn off_runtime_unslotted_check_refuses_without_panic() {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let endpoint = Endpoint::start(false).await;
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = Arc::new(gateway(
@@ -258,7 +258,7 @@ fn stalled_log_bounds_the_decision_write() {
             .build()
             .expect("the scenario runtime builds");
         let outcome = runtime.block_on(async {
-            let dir = Arc::new(tempfile::tempdir().unwrap());
+            let dir = crate::test_dir_keep::kept_tempdir();
             let endpoint = Arc::new(Endpoint::start(true).await);
             let log = logger(&dir, AuditFailurePolicy::FailClosed);
             let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
@@ -327,7 +327,7 @@ async fn http_refusal_carries_the_recorded_id_without_reading_the_answer() {
     ] {
         let (endpoint, dir) = (
             Endpoint::start(false).await,
-            Arc::new(tempfile::tempdir().unwrap()),
+            crate::test_dir_keep::kept_tempdir(),
         );
         let log = logger(&dir, AuditFailurePolicy::FailClosed);
         let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))

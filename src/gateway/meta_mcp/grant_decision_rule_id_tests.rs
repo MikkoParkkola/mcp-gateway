@@ -4,8 +4,6 @@
 //! the grant check and neither a rule id nor a grant id, even when the store
 //! is keyed and a row that does not match holds an id.
 
-use std::sync::Arc;
-
 use serde_json::json;
 
 use super::super::grant_audit_fixture::{
@@ -30,7 +28,7 @@ fn past() -> chrono::DateTime<chrono::Utc> {
 async fn refused_without_ids(case: &str, (who, reason): (Who, &str), row: IdentityGrant) {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,

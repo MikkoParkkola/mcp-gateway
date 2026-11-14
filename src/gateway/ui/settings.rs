@@ -6,10 +6,8 @@ use crate::{
     gateway::{router::AppState, ui::guard::Guard},
     wiped_bytes::WipedBytes,
 };
-#[cfg(test)]
-use axum::extract::Extension;
 use axum::{
-    Json,
+    Extension, Json,
     extract::{State, rejection::JsonRejection},
     response::{IntoResponse, Response},
 };
@@ -80,6 +78,7 @@ use crate::config_reload::{
     RELOAD_LOCK_WAIT, RefusalClass, ReloadOutcome, SaveEdit, SaveValue, SecretTarget, Shown,
     UiPreview, UiRefused, path_text, ui_diff, ui_save,
 };
+use crate::gateway::auth::{MintingKey, QuotaPrincipal, ResolvedAuthConfig, SessionMintedBy};
 use axum::http::{
     StatusCode,
     header::{HeaderValue, RETRY_AFTER},
@@ -200,10 +199,22 @@ pub(super) async fn settings_diff(
     }
 }
 
+/// Display names can collide or change; the stable key principal carries the restriction.
+pub(crate) fn caller_is_cli_key(
+    auth: &ResolvedAuthConfig,
+    bearer_quota: Option<&QuotaPrincipal>,
+    session: Option<&MintingKey>,
+) -> bool {
+    bearer_quota.is_some_and(|quota| auth.is_cli_key_quota(quota))
+        || session.is_some_and(|minter| auth.is_cli_key_quota(&minter.quota))
+}
+
 pub(super) async fn settings_save(
     State(state): State<Arc<AppState>>,
     #[cfg(test)] store_for_test: Option<Extension<SettingsStoreForTest>>,
     guard: Guard,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    session: Option<Extension<SessionMintedBy>>,
     body: Result<Json<SaveBody>, JsonRejection>,
 ) -> Response {
     if let Err(refused) = guard.admit() {
@@ -212,6 +223,23 @@ pub(super) async fn settings_save(
     let Ok(Json(body)) = body else {
         return invalid_body();
     };
+    // Refuse the whole edit before opening the store: even a secret stored
+    // ahead of the config write must not outlive a CLI key's approver.
+    if body
+        .fields
+        .iter()
+        .any(|field| field.field.starts_with("auth."))
+        && caller_is_cli_key(
+            generation.auth(),
+            guard
+                .client
+                .as_ref()
+                .and_then(|client| client.quota_principal.as_ref()),
+            session.as_ref().map(|Extension(SessionMintedBy(key))| key),
+        )
+    {
+        return super::guard::Refused::Forbidden.into_response();
+    }
     let Some(base) = FileRevision::from_text(&body.base_revision) else {
         return invalid_body();
     };
@@ -555,6 +583,9 @@ fn secret_target(
 #[cfg(test)]
 #[path = "settings_answer_tests.rs"]
 mod answer_tests;
+#[cfg(test)]
+#[path = "settings_cli_tests.rs"]
+mod cli_tests;
 #[cfg(test)]
 #[path = "settings_route_secret_tests.rs"]
 mod route_secret_tests;

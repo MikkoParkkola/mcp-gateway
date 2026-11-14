@@ -73,7 +73,7 @@ fn keyless_exporter(dir: &Path, log: &Path) -> LogExporter {
 /// the missing key, and forwards nothing. Red on base: every entry forwarded.
 #[test]
 fn a_signed_log_without_a_key_is_not_exported_hash_only() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("inv.jsonl");
     write_log(&log, SECRET);
     assert!(
@@ -100,7 +100,7 @@ fn a_signed_log_without_a_key_is_not_exported_hash_only() {
 /// exports hash-only, unchanged.
 #[test]
 fn an_unsigned_log_without_a_key_still_exports() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("inv.jsonl");
     write_log(&log, "");
     assert!(!log_contains_signed_entry(&log).expect("scan"));
@@ -119,7 +119,7 @@ fn an_unsigned_log_without_a_key_still_exports() {
 /// are outside the entry hash, so stripping them leaves the chain intact.
 #[test]
 fn verify_and_export_agree_on_a_mixed_log() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("inv.jsonl");
     write_log(&log, SECRET);
     strip_leading_signatures(&log, 2);
@@ -143,7 +143,7 @@ fn verify_and_export_agree_on_a_mixed_log() {
 /// exporter on the same cursor forwards every entry exactly once.
 #[test]
 fn restoring_the_key_resumes_without_loss_or_duplicates() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("inv.jsonl");
     write_log(&log, SECRET);
 
@@ -174,7 +174,7 @@ fn restoring_the_key_resumes_without_loss_or_duplicates() {
 /// prefix; the poll that reaches the first signed entry halts there.
 #[test]
 fn a_small_batch_forwards_the_unsigned_prefix_then_halts_at_the_signed_entry() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("inv.jsonl");
     write_log(&log, SECRET);
     strip_leading_signatures(&log, 2);
@@ -212,7 +212,7 @@ fn any_sig_field_marks_an_entry_signed() {
 /// uses and through the exporter alike: it cannot open a hash-only path.
 #[test]
 fn a_null_sig_is_refused_by_verify_and_export_alike() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("inv.jsonl");
     write_log(&log, "");
     let content = std::fs::read_to_string(&log).expect("read");
