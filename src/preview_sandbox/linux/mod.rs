@@ -4,6 +4,7 @@
 //! the gateway itself makes no namespace syscall, and the gateway's own binary
 //! runs inside them as `__preview-sandbox` and `__preview-drop`.
 
+mod control_client;
 mod drop;
 mod helper;
 mod mounts;

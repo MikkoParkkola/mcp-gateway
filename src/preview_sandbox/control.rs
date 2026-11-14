@@ -17,10 +17,8 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as
 use tokio::net::{UnixListener, UnixStream};
 
 use super::Refusal;
+use super::control_msg::{Expired, FetchDone, FetchStart, Issued, MAX_LINE};
 use super::proxy::{AllowlistProxy, Credential};
-
-/// The longest control line, its newline included.
-pub(crate) const MAX_LINE: usize = 1024;
 
 /// The bounds a session runs under; rows shorten them.
 #[derive(Clone, Copy, Debug)]
@@ -271,25 +269,9 @@ async fn write_line<W: AsyncWrite + Unpin>(
         .map_err(|e| Refusal::Step(format!("writing the control socket ({e})")))
 }
 
-/// The helper's request for a fetch: `{"fetch_start": true}`.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FetchStart {
-    fetch_start: bool,
-}
-
-/// The helper's report that the fetch ended: `{"fetch_done": true}`.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FetchDone {
-    fetch_done: bool,
-}
-
-/// The gateway's answer to `fetch_start`.
-#[derive(serde::Serialize)]
-struct Issued<'a> {
-    credential: &'a str,
-    deadline_ms: u128,
+fn encode<T: serde::Serialize>(message: &T) -> Result<String, Refusal> {
+    serde_json::to_string(message)
+        .map_err(|e| Refusal::Step(format!("encoding a control line ({e})")))
 }
 
 fn parse<T: serde::de::DeserializeOwned>(line: &str, what: &str) -> Result<T, Refusal> {
@@ -326,11 +308,10 @@ pub(crate) async fn serve_session(
     let deadline_ms = deadline
         .saturating_duration_since(tokio::time::Instant::now())
         .as_millis();
-    let issued = serde_json::to_string(&Issued {
-        credential: credential.secret(),
+    let issued = encode(&Issued {
+        credential: credential.secret().to_owned(),
         deadline_ms,
-    })
-    .map_err(|e| Refusal::Step(format!("encoding the credential line ({e})")))?;
+    })?;
     write_line(&mut write, &issued, bounds).await?;
     let first = deadline.saturating_duration_since(tokio::time::Instant::now());
     let done: FetchDone = parse(&read_line(&mut read, first, bounds).await?, "fetch_done")?;
@@ -339,7 +320,7 @@ pub(crate) async fn serve_session(
     }
     // The revoke returns only once every tunnel of the credential is shut.
     drop(fetch);
-    write_line(&mut write, r#"{"expired":true}"#, bounds).await?;
+    write_line(&mut write, &encode(&Expired { expired: true })?, bounds).await?;
     Ok(())
 }
 
