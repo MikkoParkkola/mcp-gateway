@@ -18,6 +18,9 @@ use super::gate::{GateState, Kind, Refused, TaskGate};
 use crate::gateway::task_service::record::PreparedTask;
 use crate::protocol::tasks::{Task, TaskOptions};
 
+#[path = "store_gate_timer_tests.rs"]
+mod timers;
+
 const DEADLINE: Duration = Duration::from_secs(10);
 const BUDGET: Duration = Duration::from_secs(30);
 const OWNER: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -558,100 +561,6 @@ async fn every_exit_wakes_a_parked_submitter() {
             "{exit} ran the parked submitter"
         );
     }
-}
-
-// G7: an External submitter still parked on its own attempt at deadline + 1 s
-// refuses itself, whether the gate is Paused or Certified.
-#[tokio::test(flavor = "current_thread", start_paused = true)]
-async fn an_external_park_ends_one_second_past_the_deadline() {
-    for gate in [paused(), certified()] {
-        let refused = within("G7 refusal", gate.admit(Kind::External)).await;
-        assert_eq!(
-            refused.map(drop),
-            Err(Refused::Restarting),
-            "{:?}",
-            gate.state()
-        );
-    }
-}
-
-// G7: the coordinator's own exit at the deadline wins every tie with the
-// parker's timer: polled first, resumed first, or left unpolled past its
-// timer, the parker is admitted, never told "restarting".
-#[tokio::test(flavor = "current_thread", start_paused = true)]
-async fn a_resume_at_the_deadline_always_beats_the_parker_timer() {
-    // (a) the parker is polled at the deadline, then the gate resumes.
-    let gate = paused();
-    let mut parker = std::pin::pin!(gate.admit(Kind::External));
-    assert!(futures::poll!(parker.as_mut()).is_pending(), "(a) parked");
-    tokio::time::advance(DEADLINE).await;
-    assert!(
-        futures::poll!(parker.as_mut()).is_pending(),
-        "(a) still parked at the deadline"
-    );
-    gate.resume();
-    assert!(within("G7 (a)", parker).await.is_ok(), "(a) admitted");
-
-    // (b) the gate resumes at the deadline before the parker is polled again.
-    let gate = paused();
-    let mut parker = std::pin::pin!(gate.admit(Kind::External));
-    assert!(futures::poll!(parker.as_mut()).is_pending(), "(b) parked");
-    tokio::time::advance(DEADLINE).await;
-    gate.resume();
-    assert!(within("G7 (b)", parker).await.is_ok(), "(b) admitted");
-
-    // (c) resumed at the deadline, the parker is not polled again until its
-    // own timer has fired: the timer's re-decision sees the resume.
-    let gate = paused();
-    let mut parker = std::pin::pin!(gate.admit(Kind::External));
-    assert!(futures::poll!(parker.as_mut()).is_pending(), "(c) parked");
-    tokio::time::advance(DEADLINE).await;
-    gate.resume();
-    tokio::time::advance(Duration::from_secs(2)).await;
-    assert!(
-        within("G7 (c)", parker).await.is_ok(),
-        "(c) admitted after its timer"
-    );
-}
-
-// G7: an Internal submitter is never refused by a timer: past the deadline it
-// still waits for the coordinator's exit, and lands after resume.
-#[tokio::test(flavor = "current_thread", start_paused = true)]
-async fn an_internal_park_outlasts_the_deadline_until_resume() {
-    let gate = paused();
-    let mut parker = std::pin::pin!(gate.admit(Kind::Internal));
-    assert!(futures::poll!(parker.as_mut()).is_pending(), "parked");
-    tokio::time::advance(DEADLINE + Duration::from_secs(2)).await;
-    assert!(
-        futures::poll!(parker.as_mut()).is_pending(),
-        "not refused past the deadline"
-    );
-    gate.resume();
-    assert!(
-        within("G7 internal", parker).await.is_ok(),
-        "admitted after resume"
-    );
-}
-
-// G7: with the coordinator's exit withheld, an Internal submitter proceeds at
-// the backstop (deadline + stop budget) while the gate is still paused.
-#[tokio::test(flavor = "current_thread", start_paused = true)]
-async fn an_internal_park_proceeds_at_the_backstop() {
-    let gate = paused();
-    let mut parker = std::pin::pin!(gate.admit(Kind::Internal));
-    assert!(futures::poll!(parker.as_mut()).is_pending(), "parked");
-    tokio::time::advance(DEADLINE + BUDGET - Duration::from_secs(1)).await;
-    assert!(
-        futures::poll!(parker.as_mut()).is_pending(),
-        "still parked before the backstop"
-    );
-    let admitted = within("G7 backstop", parker).await;
-    assert!(admitted.is_ok(), "proceeds at the backstop, never refused");
-    assert_eq!(
-        gate.state(),
-        GateState::Paused(1),
-        "no exit came: the gate never opened"
-    );
 }
 
 // G15: a submitter that parked while Draining, and is still parked when a
