@@ -115,26 +115,59 @@ pub(crate) fn invocation() -> &'static InvocationState {
     INVOCATION.get().unwrap_or(&NOT_CAPTURED)
 }
 
-// RED-PHASE STUB A (always unavailable, wrong values): replaced by the real
-// implementation in the next commit. Every row must fail against it.
-
 impl InvocationState {
     /// The confirmation binding (slice 7); None when restart is unavailable.
     pub(crate) fn digest(&self) -> Option<InvocationDigest> {
-        None
+        match self {
+            #[cfg(unix)]
+            Self::Ready(inv) => Some(inv.digest()),
+            Self::Unavailable(_) => None,
+        }
     }
 
     /// The target file's identity now, following symlinks as execve does;
     /// None when restart is unavailable.
     pub(crate) fn target_file_id(&self) -> Option<std::io::Result<FileId>> {
-        None
+        match self {
+            #[cfg(unix)]
+            Self::Ready(inv) => Some(inv.file_id()),
+            Self::Unavailable(_) => None,
+        }
     }
 }
 
 #[cfg(unix)]
 impl Invocation {
+    /// SHA-256 over a domain tag, a field count, then each field length-
+    /// prefixed (little-endian u64): argv0, the tail count and items, cwd,
+    /// target. PATH is left out: it only chose the target, which is in.
     pub(super) fn digest(&self) -> InvocationDigest {
-        InvocationDigest([0; 32])
+        use sha2::{Digest as _, Sha256};
+        use std::os::unix::ffi::OsStrExt as _;
+        fn field(h: &mut Sha256, bytes: &[u8]) {
+            h.update((bytes.len() as u64).to_le_bytes());
+            h.update(bytes);
+        }
+        let mut h = Sha256::new();
+        h.update(b"mcp-gateway/invocation/v1\0");
+        h.update(4_u32.to_le_bytes());
+        field(&mut h, self.argv0.as_bytes());
+        h.update((self.tail.len() as u64).to_le_bytes());
+        for item in &self.tail {
+            field(&mut h, item.as_bytes());
+        }
+        field(&mut h, self.cwd.as_os_str().as_bytes());
+        field(&mut h, self.target.as_os_str().as_bytes());
+        InvocationDigest(h.finalize().into())
+    }
+
+    fn file_id(&self) -> std::io::Result<FileId> {
+        use std::os::unix::fs::MetadataExt as _;
+        let meta = std::fs::metadata(&self.target)?;
+        Ok(FileId {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        })
     }
 
     #[cfg(test)]
@@ -145,29 +178,40 @@ impl Invocation {
         target: PathBuf,
         entry_mask: nix::sys::signal::SigSet,
     ) -> Self {
-        let _ = (argv0, tail, cwd, target, entry_mask);
         Self {
-            argv0: OsString::new(),
-            tail: Vec::new(),
-            cwd: PathBuf::new(),
-            target: PathBuf::new(),
-            entry_mask: nix::sys::signal::SigSet::empty(),
+            argv0,
+            tail,
+            cwd,
+            target,
+            entry_mask,
         }
     }
 }
 
-/// True when `path` is a regular file this process may execute.
+/// True when `path` is a regular file this process may execute (symlinks
+/// followed, as execve does).
 #[cfg(unix)]
 pub(crate) fn is_executable_regular(path: &std::path::Path) -> bool {
-    let _ = path;
-    false
+    std::fs::metadata(path).is_ok_and(|m| m.is_file())
+        && rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
 }
 
-/// The calling thread's signal mask, read without changing it.
+/// The calling thread's signal mask, read without changing it. A failed read
+/// counts as everything blocked, so the capture refuses rather than guesses.
 #[cfg(unix)]
 pub(crate) fn current_thread_mask() -> nix::sys::signal::SigSet {
-    nix::sys::signal::SigSet::empty()
+    nix::sys::signal::SigSet::thread_get_mask().unwrap_or_else(|_| nix::sys::signal::SigSet::all())
 }
+
+/// Signals an operator or supervisor stops the gateway with; one blocked at
+/// entry would be blocked in the restarted gateway too.
+#[cfg(unix)]
+const STOP_SIGNALS: [nix::sys::signal::Signal; 4] = [
+    nix::sys::signal::Signal::SIGINT,
+    nix::sys::signal::Signal::SIGTERM,
+    nix::sys::signal::Signal::SIGHUP,
+    nix::sys::signal::Signal::SIGPIPE,
+];
 
 /// Pure capture: no global state, no I/O beyond `probe`.
 #[cfg(unix)]
@@ -176,11 +220,99 @@ pub(crate) fn capture_from(
     given: &Cli,
     probe: &dyn Fn(&std::path::Path) -> bool,
 ) -> InvocationState {
-    let _ = (inputs, given, probe);
-    InvocationState::Unavailable(UnavailableReason::NotFound)
+    use UnavailableReason as Off;
+    let off = InvocationState::Unavailable;
+    if given.command.is_some() {
+        return off(Off::NotServe);
+    }
+    let Some(argv0) = inputs.args.first().filter(|a| !a.is_empty()) else {
+        return off(Off::NoArgv0);
+    };
+    if let Some(sig) = STOP_SIGNALS.into_iter().find(|s| inputs.mask.contains(*s)) {
+        return off(Off::BlockedSignal(sig));
+    }
+    let Ok(cwd) = inputs.cwd else {
+        return off(Off::Cwd);
+    };
+    match <Cli as clap::Parser>::try_parse_from(&inputs.args) {
+        Ok(parsed) if same_serve(&parsed, given) => {}
+        _ => return off(Off::Embedded),
+    }
+    match resolve(argv0, &cwd, inputs.path_env.as_deref(), probe) {
+        Ok(target) => InvocationState::Ready(Invocation {
+            argv0: argv0.clone(),
+            tail: inputs.args[1..].to_vec(),
+            cwd,
+            target,
+            entry_mask: inputs.mask,
+        }),
+        Err(reason) => off(reason),
+    }
+}
+
+/// Whether two serve invocations are the same, field for field. Exhaustive
+/// on purpose: a new `Cli` field fails to compile here until it is compared.
+#[cfg(unix)]
+fn same_serve(a: &Cli, b: &Cli) -> bool {
+    let Cli {
+        config,
+        port,
+        host,
+        log_level,
+        log_format,
+        no_meta_mcp,
+        protocol_revision_window,
+        command,
+    } = a;
+    command.is_none()
+        && b.command.is_none()
+        && *config == b.config
+        && *port == b.port
+        && *host == b.host
+        && *log_level == b.log_level
+        && *log_format == b.log_format
+        && *no_meta_mcp == b.no_meta_mcp
+        && *protocol_revision_window == b.protocol_revision_window
+}
+
+/// argv0 with a `/` is anchored to the startup cwd as spelled; a bare name
+/// takes the first executable regular file on the startup PATH, empty and
+/// relative entries anchored to the cwd. No canonicalizing, no default PATH.
+#[cfg(unix)]
+fn resolve(
+    argv0: &std::ffi::OsStr,
+    cwd: &std::path::Path,
+    path_env: Option<&std::ffi::OsStr>,
+    probe: &dyn Fn(&std::path::Path) -> bool,
+) -> Result<PathBuf, UnavailableReason> {
+    use std::os::unix::ffi::OsStrExt as _;
+    if argv0.as_bytes().contains(&b'/') {
+        let target = cwd.join(argv0);
+        return if probe(&target) {
+            Ok(target)
+        } else {
+            Err(UnavailableReason::NotExecutable)
+        };
+    }
+    let path_env = path_env.ok_or(UnavailableReason::NotFound)?;
+    std::env::split_paths(path_env)
+        .map(|dir| cwd.join(dir).join(argv0))
+        .find(|candidate| probe(candidate))
+        .ok_or(UnavailableReason::NotFound)
 }
 
 /// Capture once and install the result; the first call wins.
+#[cfg(unix)]
+pub(crate) fn capture_and_install(inputs: CaptureInputs, given: &Cli) {
+    if INVOCATION.get().is_none() {
+        // A lost race keeps the first value, which is the rule.
+        let _ = INVOCATION.set(capture_from(inputs, given, &is_executable_regular));
+    }
+}
+
+/// Off unix, restart is guidance-only.
+#[cfg(not(unix))]
 pub(crate) fn capture_and_install(inputs: CaptureInputs, given: &Cli) {
     let _ = (inputs, given);
+    let _ = INVOCATION.set(InvocationState::Unavailable(UnavailableReason::Unsupported));
 }
