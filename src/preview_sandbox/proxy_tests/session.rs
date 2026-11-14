@@ -225,7 +225,9 @@ async fn r7a_a_helper_silent_through_setup_is_refused() {
 
 /// R7b, kills "`fetch_start` keeps the old 5 s frame bound": a helper whose
 /// setup takes longer than a frame still gets its credential.
-#[tokio::test(flavor = "current_thread")]
+// The paused clock makes the helper's pause and the session's bounds
+// virtual timers, fired in order whatever the load.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn r7b_a_fetch_start_after_the_frame_bound_but_within_setup_is_served() {
     let rig = rig().await;
     let (helper, gateway) = UnixStream::pair().expect("pair");
@@ -265,7 +267,9 @@ async fn r7b_a_fetch_start_after_the_frame_bound_but_within_setup_is_served() {
 
 /// R7c, kills "the setup bound outlives the preview's deadline": a
 /// `fetch_start` after the deadline is refused and gets no credential.
-#[tokio::test(flavor = "current_thread")]
+// The paused clock makes the helper's pause and the session's bounds
+// virtual timers, fired in order whatever the load.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn r7c_a_fetch_start_after_the_deadline_gets_no_credential() {
     let rig = rig().await;
     let (helper, gateway) = UnixStream::pair().expect("pair");
