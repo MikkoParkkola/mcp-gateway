@@ -1,0 +1,1 @@
+src/gateway/router/backend_handlers/direct_dispatch/forward.rs	is_recent_write	1	Decides only whether a direct forward is counted in the restart preview's recent-write sample; it refuses nothing, grants nothing and changes no call

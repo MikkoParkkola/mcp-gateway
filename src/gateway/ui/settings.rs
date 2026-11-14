@@ -67,7 +67,8 @@ fn secret<'de, D: Deserializer<'de>>(deserializer: D) -> Result<WipedBytes, D::E
 }
 
 use super::errors::{
-    RESTART_BUSY, config_refusal, flat_error, gate_refusal, no_config_file, stale, structured_error,
+    RESTART_BUSY, config_refusal, flat_error, gate_refusal, no_config_file, no_reload_read,
+    no_reload_write, stale, structured_error,
 };
 use super::secret_slots::{self, Unopened};
 use crate::config_persistence::keyedit::{FiniteF64, GiveUp, Scalar};
@@ -96,14 +97,6 @@ fn retry(mut response: Response) -> Response {
         .headers_mut()
         .insert(RETRY_AFTER, HeaderValue::from_static("1"));
     response
-}
-
-fn unavailable() -> Response {
-    flat_error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Config reload is not enabled on this gateway",
-    )
-    .into_response()
 }
 
 fn field_error(id: FieldId, code: &'static str, reason: &str) -> Response {
@@ -175,7 +168,7 @@ pub(super) async fn settings_diff(
         return invalid_body();
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
-        return unavailable();
+        return no_reload_read().into_response();
     };
     let mut edit = PreviewEdit::default();
     for (entry, body) in body.fields.into_iter().enumerate() {
@@ -258,7 +251,7 @@ pub(super) async fn settings_save(
         return invalid_body();
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
-        return unavailable();
+        return no_reload_write().into_response();
     };
     let mut edit = SaveEdit::default();
     for (entry, body) in body.fields.into_iter().enumerate() {
@@ -522,14 +515,14 @@ fn answer(refusal: UiRefused) -> Response {
         UiRefused::Preview(PreviewRefused::Untrusted(_) | PreviewRefused::Unread(_)) => {
             config_refusal().into_response()
         }
-        UiRefused::Busy(reason) => flat_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            match reason {
-                BusyReason::Locked => "the config is being written; retry",
-                BusyReason::Restart => RESTART_BUSY,
-            },
-        )
-        .into_response(),
+        // Refused before anything was attempted: a 4xx (a 5xx means the outcome is
+        // not confirmed). Still retryable, so it keeps its Retry-After.
+        UiRefused::Busy(BusyReason::Locked) => {
+            flat_error(StatusCode::CONFLICT, "the config is being written; retry").into_response()
+        }
+        UiRefused::Busy(BusyReason::Restart) => {
+            flat_error(StatusCode::SERVICE_UNAVAILABLE, RESTART_BUSY).into_response()
+        }
         UiRefused::Down(down) => gate_refusal(down),
         UiRefused::SecretsRefused { timeout: true } => flat_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -610,3 +603,6 @@ mod route_tests;
 #[cfg(test)]
 #[path = "settings_support_tests.rs"]
 mod test_support;
+#[cfg(test)]
+#[path = "settings_unused_tests.rs"]
+mod unused_route_tests;

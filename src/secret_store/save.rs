@@ -61,9 +61,13 @@ impl Vault {
         ))
     }
 
+    /// The entry index this vault guards.
+    pub(super) fn index(&self) -> &Index {
+        &self.index
+    }
+
     /// The vault lock's path.
-    #[cfg(test)]
-    pub(crate) fn lock_path(&self) -> &Path {
+    pub(super) fn lock_path(&self) -> &Path {
         &self.lock_path
     }
 
@@ -274,7 +278,7 @@ impl Written {
                     || (!self.created.contains(name) && matches!(store.exists(name), Ok(false))))
         };
         for name in self.indexed.iter().filter(|n| gone(n)) {
-            if let Err(error) = vault.index.append_removed(name) {
+            if let Err(error) = vault.index.append_removed_in(name, store.kind()) {
                 tracing::warn!(entry = %name, %error, "a rolled-back secret entry stays in the index");
             }
         }
@@ -345,6 +349,9 @@ pub(crate) struct UnusedEntry {
 /// `keychain:` name, or the basename of a `file:` path under `secrets/`. A
 /// caller holds the config sidecar from reading that file until this
 /// returns, so a concurrent save cannot make an active secret look unused.
+///
+/// The Settings listing built on this is advisory: it takes no config lock, and
+/// a delete re-checks every naming source under the reload, config and vault locks.
 ///
 /// # Errors
 ///
