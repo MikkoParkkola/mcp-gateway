@@ -106,7 +106,7 @@ impl Corpus {
         let Some(suffix) = suffix_of(name) else {
             return Err("the entry name has no generated suffix".to_owned());
         };
-        if self.texts.iter().any(|text| text.contains(suffix)) {
+        if mutant!("named_check_skipped", false, self.texts.iter().any(|text| text.contains(suffix))) {
             return Ok(Naming::Named);
         }
         let path = self.entries_dir.join(name);
@@ -136,12 +136,12 @@ fn corpus(sources: &NamingSources) -> Result<Corpus, String> {
     texts.push(ascii_lower(&config));
     let text = std::str::from_utf8(&config).map_err(|_| CONFIG_UNREAD.to_owned())?;
     let parsed = crate::yaml::from_str::<Value>(text).map_err(|_| CONFIG_PARSE.to_owned())?;
-    take_strings(&parsed, &mut scalars);
+    mutant!("yaml_scalars_ignored", (), take_strings(&parsed, &mut scalars));
     for path in &sources.env_files {
         let bytes = read_regular(path, "an env file could not be read")?;
         absorb(&mut hasher, 3, path.as_os_str().as_encoded_bytes());
         absorb(&mut hasher, 4, &bytes);
-        texts.push(ascii_lower(&bytes));
+        mutant!("env_source_ignored", (), texts.push(ascii_lower(&bytes)));
     }
     for value in &sources.env_values {
         absorb(&mut hasher, 5, value.as_bytes());
@@ -156,7 +156,7 @@ fn corpus(sources: &NamingSources) -> Result<Corpus, String> {
         }
     }
     for dir in &sources.capability_dirs {
-        read_caps(dir, &mut hasher, &mut texts, &mut scalars)?;
+        mutant!("capability_source_ignored", Ok(()), read_caps(dir, &mut hasher, &mut texts, &mut scalars))?;
     }
     let mut files = BTreeSet::new();
     for scalar in &scalars {
@@ -169,14 +169,25 @@ fn corpus(sources: &NamingSources) -> Result<Corpus, String> {
         texts,
         files,
         digest: hex::encode(hasher.finalize()),
-        entries_dir: sources.entries_dir.clone(),
+        entries_dir: mutant!(
+            "entries_dir_from_config",
+            sources.config.parent().unwrap_or(Path::new(".")).to_path_buf(),
+            sources.entries_dir.clone()
+        ),
     })
 }
 fn read_regular(path: &Path, sentence: &str) -> Result<Vec<u8>, String> {
-    match std::fs::metadata(path) {
-        Ok(meta) if meta.is_file() => std::fs::read(path).map_err(|_| sentence.to_owned()),
-        _ => Err(sentence.to_owned()),
-    }
+    mutant!(
+        "source_error_reads_as_unnamed",
+        match std::fs::metadata(path) {
+            Ok(meta) if meta.is_file() => Ok(std::fs::read(path).unwrap_or_default()),
+            _ => Ok(Vec::new()),
+        },
+        match std::fs::metadata(path) {
+            Ok(meta) if meta.is_file() => std::fs::read(path).map_err(|_| sentence.to_owned()),
+            _ => Err(sentence.to_owned()),
+        }
+    )
 }
 fn read_caps(
     dir: &Path,
@@ -198,8 +209,8 @@ fn read_caps(
         .max_depth(CAP_DEPTH + 1)
     {
         match item {
-            Err(_) => return Err(CAP_UNREAD.to_owned()),
-            Ok(entry) if entry.depth() > CAP_DEPTH => return Err(CAP_TOO_DEEP.to_owned()),
+            Err(_) => mutant!("loop_skipped", continue, return Err(CAP_UNREAD.to_owned())),
+            Ok(entry) if mutant!("depth_unbounded", false, entry.depth() > CAP_DEPTH) => return Err(CAP_TOO_DEEP.to_owned()),
             Ok(entry) if entry.depth() == 0 || !entry.file_type().is_file() => {}
             Ok(entry) => paths.push(entry.path().to_path_buf()),
         }
@@ -226,7 +237,7 @@ fn take_strings(value: &Value, out: &mut Vec<String>) {
             Value::Array(items) => pending.extend(items),
             Value::Object(map) => {
                 // A key can carry a name too, escaped like any scalar.
-                out.extend(map.keys().cloned());
+                mutant!("yaml_keys_skipped", (), out.extend(map.keys().cloned()));
                 pending.extend(map.values());
             }
             _ => {}
@@ -344,9 +355,15 @@ pub(crate) fn delete_unused(
             run();
         }
     });
-    match naming(sources, name).map_err(DeleteRefused::Failed)? {
+    match mutant!(
+        "digest_recheck_skipped",
+        Naming::NotNamed { digest: previous.clone() },
+        naming(sources, name).map_err(DeleteRefused::Failed)?
+    ) {
         Naming::Named => return Err(DeleteRefused::Named),
-        Naming::NotNamed { digest } if digest != previous => return Err(DeleteRefused::Named),
+        Naming::NotNamed { digest } if mutant!("digest_arm_skipped", false, digest != previous) => {
+            return Err(DeleteRefused::Named);
+        }
         Naming::NotNamed { .. } => {}
     }
     store.delete(name).map_err(|error| match error {
