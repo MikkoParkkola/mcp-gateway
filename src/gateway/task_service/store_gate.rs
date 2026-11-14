@@ -307,34 +307,42 @@ impl TaskGate {
                     Decision::Park | Decision::Refuse(_) => false,
                 }
             });
-            if let (Decision::Admit { .. }, Some(ticket)) = (decision, ticket.as_mut()) {
-                ticket.admitted = true;
-            }
-            #[cfg(test)]
-            seams::GateSeams::pass(&self.seams.at_decision).await;
-            match decision {
+            // Every count the step took gets its owner here, before any await
+            // or call that can fail: a caller dropped at the seam, or a panic in
+            // the log below, then gives the count back.
+            let admitted = match decision {
                 Decision::Admit { cohort } => {
-                    if closed {
-                        tracing::error!(
-                            attempt = stamp.map(|s| s.attempt),
-                            "a task-store write proceeded at the restart backstop, outside its attempt's certified image"
-                        );
+                    if let Some(ticket) = ticket.as_mut() {
+                        ticket.admitted = true;
                     }
-                    return Ok(Admitted {
+                    Some(Admitted {
                         gate: self.clone(),
                         cohort: cohort.then_some(drain),
                         recorded: AtomicBool::new(false),
-                    });
+                    })
                 }
-                Decision::Refuse(refused) => return Err(refused),
-                Decision::Park => {}
-            }
+                Decision::Park | Decision::Refuse(_) => None,
+            };
             if let Some(stamp) = fresh {
                 ticket = Some(Ticket {
                     gate: self.clone(),
                     stamp,
                     admitted: false,
                 });
+            }
+            #[cfg(test)]
+            seams::GateSeams::pass(&self.seams.at_decision).await;
+            if let Some(admitted) = admitted {
+                if closed {
+                    tracing::error!(
+                        attempt = stamp.map(|s| s.attempt),
+                        "a task-store write proceeded at the restart backstop, outside its attempt's certified image"
+                    );
+                }
+                return Ok(admitted);
+            }
+            if let Decision::Refuse(refused) = decision {
+                return Err(refused);
             }
             let Some(ticket) = ticket.as_mut() else {
                 // Unreachable: a Park decision always leaves a ticket.

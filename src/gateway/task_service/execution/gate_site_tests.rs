@@ -281,7 +281,9 @@ async fn the_sweep_closes_rounds_as_a_sweep_and_skips_after_commit() {
 
 // G12 x G13: a pause that lands between two round closes of one tick stops
 // the tick cleanly. The close before the pause stands; the second is skipped,
-// which is no failure, and waits for the next tick.
+// which is no failure, and waits for the next tick. The gate resumes while the
+// skipped close is still returning, so the skip is read from the close's own
+// answer, not from the gate's state afterwards.
 #[tokio::test(flavor = "current_thread")]
 async fn a_pause_between_round_closes_skips_the_rest_cleanly() {
     async fn within<T>(future: impl std::future::Future<Output = T>) -> T {
@@ -304,6 +306,7 @@ async fn a_pause_between_round_closes_skips_the_rest_cleanly() {
     gate(&f).pause(1, deadline, deadline + std::time::Duration::from_secs(30));
     hold.release();
     within(hold.reached()).await;
+    gate(&f).resume();
     hold.release();
     let outcome = within(tick).await.expect("the tick task");
     assert!(
