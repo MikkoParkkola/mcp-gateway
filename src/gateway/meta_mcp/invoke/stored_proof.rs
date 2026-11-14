@@ -131,6 +131,9 @@ impl crate::gateway::meta_mcp::MetaMcp {
         }
         witness.spend();
         super::nonce_settle::mark_dispatched(caller, (server, tool));
+        if mutant!("z4", true, false) {
+            self.recent_writes.note(std::time::Instant::now());
+        }
         Break(
             self.audit_replay(
                 &deferred.tool_name,

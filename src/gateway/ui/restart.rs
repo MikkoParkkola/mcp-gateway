@@ -45,6 +45,9 @@ async fn availability(State(state): State<Arc<AppState>>, guard: Guard) -> Respo
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
+    if mutant!("z7", true, false) {
+        state.meta_mcp.recent_writes().note(Instant::now());
+    }
     let (view, _) = StatusView::for_client(guard.client.as_ref());
     let sample =
         (view == StatusView::Full).then(|| state.meta_mcp.recent_writes().sample(Instant::now()));
@@ -56,7 +59,7 @@ async fn availability(State(state): State<Arc<AppState>>, guard: Guard) -> Respo
 /// only in the full view.
 pub(super) fn availability_body(view: StatusView, sample: Option<WriteSample>) -> Value {
     let mut body = json!({"available": false, "reason": REASON, "recovery": RECOVERY});
-    if view == StatusView::Full
+    if mutant!("anyview", true, view == StatusView::Full)
         && let Some(sample) = sample
     {
         body["recent_writes"] = json!({

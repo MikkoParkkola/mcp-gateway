@@ -60,6 +60,9 @@ pub(super) async fn forward_sanitized(
         rw::retry_effect(preflight.retry.request_state.is_some()),
     );
     // After redeem, on the exact bytes sent: the answers are in the params now.
+    if mutant!("z12", true, false) {
+        state.meta_mcp.recent_writes().note(Instant::now());
+    }
     let permit = match direct_permit::mint_permit(scope, Some(&sanitized_params)) {
         Ok(permit) => permit,
         Err(e) => {
@@ -72,7 +75,15 @@ pub(super) async fn forward_sanitized(
     #[cfg(test)]
     direct_idempotency::seams::before_mark().await;
     direct_idempotency::mark(admitted.lease.as_ref());
-    if is_recent_write(scope, envelope, propagation, admitted.call.tool) {
+    if mutant!(
+        "h2sdrop",
+        false,
+        mutant!(
+            "z12",
+            false,
+            is_recent_write(scope, envelope, propagation, admitted.call.tool)
+        )
+    ) {
         state.meta_mcp.recent_writes().note(Instant::now());
     }
     let cancel_on = admitted.cancel_on.take();
@@ -199,7 +210,11 @@ pub(super) async fn forward_plain(
     #[cfg(test)]
     direct_idempotency::seams::before_mark().await;
     direct_idempotency::mark(admitted.lease.as_ref());
-    if is_recent_write(scope, envelope, propagation, admitted.call.tool) {
+    if mutant!(
+        "h2pdrop",
+        false,
+        is_recent_write(scope, envelope, propagation, admitted.call.tool)
+    ) {
         state.meta_mcp.recent_writes().note(Instant::now());
     }
     let cancel_on = admitted.cancel_on.take();

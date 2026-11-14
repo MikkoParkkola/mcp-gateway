@@ -284,6 +284,9 @@ impl MetaMcp {
         } = sent;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
+        if mutant!("z5", true, false) {
+            self.recent_writes.note(std::time::Instant::now());
+        }
         // U12: a web UI call goes out only as the call its gate admitted.
         #[cfg(feature = "webui")]
         if let Err(refusal) = crate::gateway::ui_call::admit_send((server, tool)) {
@@ -303,7 +306,15 @@ impl MetaMcp {
                 dispatch_binding.as_deref(),
             )
             .map(|(effect, _)| effect);
-        if crate::gateway::recent_writes::counts_as_write(effect) {
+        if mutant!(
+            "h1drop",
+            false,
+            mutant!(
+                "z5",
+                false,
+                crate::gateway::recent_writes::counts_as_write(effect)
+            )
+        ) {
             self.recent_writes.note(std::time::Instant::now());
         }
         let lent = caller_credential.lent();

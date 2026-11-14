@@ -98,9 +98,11 @@ pub(super) enum ArmWrites {
 impl MetaArm {
     /// How this meta-tool counts. Exhaustive, so a new meta-tool does not
     /// compile until it is classed.
-    pub(super) const fn writes(self) -> ArmWrites {
+    pub(super) fn writes(self) -> ArmWrites {
         match self {
-            Self::Invoke | Self::Execute | Self::RunPlaybook => ArmWrites::Leaves,
+            Self::Invoke | Self::Execute | Self::RunPlaybook => {
+                mutant!("leafarm", ArmWrites::Write, ArmWrites::Leaves)
+            }
             Self::Search
             | Self::ListServers
             | Self::ListTools

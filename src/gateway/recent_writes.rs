@@ -73,10 +73,10 @@ impl RecentWrites {
         let mut ring = self.ring.lock();
         let bucket = &mut ring.buckets[slot(second)];
         if bucket.0 != second {
-            *bucket = (second, 0);
+            *bucket = (second, mutant!("stale", bucket.1, 0));
         }
         bucket.1 += 1;
-        ring.writes_total += 1;
+        ring.writes_total += mutant!("nototal", 0, 1);
     }
 
     /// The window as of `now`: every bucket whose second is `now`'s or one of
@@ -93,15 +93,21 @@ impl RecentWrites {
             .buckets
             .iter()
             .filter(|(stamp, _)| {
-                second
-                    .checked_sub(*stamp)
-                    .is_some_and(|age| age <= WINDOW_SECS)
+                second.checked_sub(*stamp).is_some_and(|age| {
+                    mutant!("nowsec", age >= 1, true)
+                        && age <= mutant!("edge61", WINDOW_SECS + 1, WINDOW_SECS)
+                })
             })
             .map(|(_, n)| n)
             .sum();
         WriteSample {
             count,
-            complete_secs: u8::try_from(second.min(WINDOW_SECS)).unwrap_or(u8::MAX),
+            complete_secs: u8::try_from(mutant!(
+                "complete",
+                second.min(WINDOW_SECS).saturating_sub(1),
+                second.min(WINDOW_SECS)
+            ))
+            .unwrap_or(u8::MAX),
             taken_at_mono: now,
             writes_total: ring.writes_total,
         }
@@ -116,7 +122,10 @@ fn slot(second: u64) -> usize {
 
 /// The one rule: a dispatch counts unless its tool declared it read-only.
 pub(crate) fn counts_as_write(effect: Option<Effect>) -> bool {
-    effect != Some(Effect::ReadOnly)
+    if mutant!("nonefree", effect.is_none(), false) {
+        return false;
+    }
+    mutant!("rocount", true, effect != Some(Effect::ReadOnly))
 }
 
 /// Whether a direct-route forward of `method` counts: `tools/call` by its
@@ -124,7 +133,7 @@ pub(crate) fn counts_as_write(effect: Option<Effect>) -> bool {
 /// read list (initialize, ping and the list and read methods).
 pub(crate) fn direct_method_counts(method: &str, effect: Option<Effect>) -> bool {
     match method {
-        "tools/call" => counts_as_write(effect),
+        "tools/call" => mutant!("directeffect", true, counts_as_write(effect)),
         "initialize"
         | "ping"
         | "tools/list"
@@ -132,7 +141,7 @@ pub(crate) fn direct_method_counts(method: &str, effect: Option<Effect>) -> bool
         | "resources/read"
         | "resources/templates/list"
         | "prompts/list"
-        | "prompts/get" => false,
+        | "prompts/get" => mutant!("readlist", true, false),
         _ => true,
     }
 }

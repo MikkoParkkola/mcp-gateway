@@ -139,7 +139,11 @@ impl RestartBoard {
             id: board.last_id,
             phase: RestartPhase::Accepted,
             deadline_unix_ms: checkpoint_deadline_unix_ms,
-            remaining_calls: 0,
+            remaining_calls: mutant!(
+                "b_noreset",
+                board.record.map_or(0, |r| r.remaining_calls),
+                0
+            ),
             cancel: None,
         });
         board.last_id
@@ -147,6 +151,18 @@ impl RestartBoard {
 
     /// Accepted to Checkpoint.
     pub(crate) fn checkpoint(&self) {
+        if mutant!("zb1", true, false) {
+            let mut board = self.board.lock();
+            if board.record.is_none() {
+                board.record = Some(RestartStatus {
+                    id: 0,
+                    phase: RestartPhase::Checkpoint,
+                    deadline_unix_ms: 0,
+                    remaining_calls: 0,
+                    cancel: None,
+                });
+            }
+        }
         self.edit(|record, _| {
             if record.phase == RestartPhase::Accepted {
                 record.phase = RestartPhase::Checkpoint;
@@ -157,7 +173,9 @@ impl RestartBoard {
     /// Cancel the attempt before its commit.
     pub(crate) fn cancel(&self, reason: RestartCancel) {
         self.edit(|record, committed| {
-            if !*committed && record.phase != RestartPhase::Cancelled {
+            if mutant!("b_cancelafter", true, !*committed)
+                && mutant!("b_recancel", true, record.phase != RestartPhase::Cancelled)
+            {
                 record.phase = RestartPhase::Cancelled;
                 record.cancel = Some(reason);
             }
@@ -167,9 +185,19 @@ impl RestartBoard {
     /// The commit edge: the deadline becomes the stop's own.
     pub(crate) fn commit(&self, stop_deadline_unix_ms: u64) {
         self.edit(|record, committed| {
-            if !*committed && record.phase == RestartPhase::Checkpoint {
+            if !*committed
+                && mutant!(
+                    "b_commitany",
+                    true,
+                    record.phase == RestartPhase::Checkpoint
+                )
+            {
                 *committed = true;
-                record.deadline_unix_ms = stop_deadline_unix_ms;
+                record.deadline_unix_ms = mutant!(
+                    "b_nodeadline",
+                    record.deadline_unix_ms,
+                    stop_deadline_unix_ms
+                );
             }
         });
     }
@@ -179,7 +207,7 @@ impl RestartBoard {
     pub(crate) fn restarting(&self) {
         let mut early = None;
         self.edit(|record, committed| {
-            if *committed {
+            if mutant!("b_early", true, *committed) {
                 forward(record, RestartPhase::Restarting);
             } else {
                 early = Some(record.id);
@@ -197,7 +225,7 @@ impl RestartBoard {
     /// Forward to Saving after the commit; otherwise silent.
     pub(crate) fn saving(&self) {
         self.edit(|record, committed| {
-            if *committed {
+            if mutant!("zb2", true, *committed) {
                 forward(record, RestartPhase::Saving);
             }
         });
@@ -242,7 +270,7 @@ impl RestartBoard {
 /// Move `record` to `to` only when that is forward by rank. A committed
 /// record is never Cancelled (cancel is refused after the commit).
 fn forward(record: &mut RestartStatus, to: RestartPhase) {
-    if to.rank() > record.phase.rank() {
+    if mutant!("b_backwards", true, to.rank() > record.phase.rank()) {
         record.phase = to;
     }
 }

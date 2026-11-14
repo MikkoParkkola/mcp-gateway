@@ -148,6 +148,9 @@ impl MetaMcp {
         // compile.
         _permit: super::chokepoint::Permit,
     ) -> Result<Value> {
+        if mutant!("z9", true, false) {
+            self.recent_writes.note(std::time::Instant::now());
+        }
         let dispatch_start = Instant::now();
         let dispatch_result = self
             .dispatch_to_backend(

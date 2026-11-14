@@ -468,7 +468,15 @@ impl MetaMcp {
         let mut trace = None;
         // A local write arm is a recent write for the restart warning, counted
         // at its entry, a refused one too; a leaf dispatch counts in `send`.
-        if MetaArm::parse(tool_name).map(MetaArm::writes) == Some(ArmWrites::Write) {
+        if mutant!(
+            "h3drop",
+            false,
+            mutant!(
+                "z13",
+                MetaArm::parse(tool_name).is_some(),
+                MetaArm::parse(tool_name).map(MetaArm::writes) == Some(ArmWrites::Write)
+            )
+        ) {
             self.recent_writes.note(std::time::Instant::now());
         }
         let result = match MetaArm::parse(tool_name) {
