@@ -164,18 +164,25 @@ impl Invocation {
         use sha2::{Digest as _, Sha256};
         use std::os::unix::ffi::OsStrExt as _;
         fn field(h: &mut Sha256, bytes: &[u8]) {
-            h.update((bytes.len() as u64).to_le_bytes());
+            h.update(mutant!("m20-lenprefix", 0_u64, bytes.len() as u64).to_le_bytes());
             h.update(bytes);
         }
         let mut h = Sha256::new();
         h.update(b"mcp-gateway/invocation/v1\0");
         h.update(4_u32.to_le_bytes());
         field(&mut h, self.argv0.as_bytes());
-        h.update((self.tail.len() as u64).to_le_bytes());
+        h.update(mutant!("m21-tailcount", 0_u64, self.tail.len() as u64).to_le_bytes());
         for item in &self.tail {
             field(&mut h, item.as_bytes());
         }
-        field(&mut h, self.cwd.as_os_str().as_bytes());
+        field(
+            &mut h,
+            mutant!(
+                "m22-cwdfield",
+                b"".as_slice(),
+                self.cwd.as_os_str().as_bytes()
+            ),
+        );
         field(&mut h, self.target.as_os_str().as_bytes());
         InvocationDigest(h.finalize().into())
     }
@@ -185,9 +192,9 @@ impl Invocation {
         let meta = std::fs::metadata(&self.target)?;
         Ok(FileId {
             dev: meta.dev(),
-            ino: meta.ino(),
-            size: meta.size(),
-            ctime_sec: meta.ctime(),
+            ino: mutant!("m25-ino", 0, meta.ino()),
+            size: mutant!("m23-size", 0, meta.size()),
+            ctime_sec: mutant!("m24-ctime", 0, meta.ctime()),
             ctime_nsec: meta.ctime_nsec(),
         })
     }
@@ -214,15 +221,24 @@ impl Invocation {
 /// followed, as execve does).
 #[cfg(unix)]
 pub(crate) fn is_executable_regular(path: &std::path::Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|m| m.is_file())
-        && rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
+    std::fs::metadata(path).is_ok_and(|m| mutant!("m18-isfile", true, m.is_file()))
+        && mutant!(
+            "m19-access",
+            true,
+            rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
+        )
 }
 
 /// The calling thread's signal mask, read without changing it. A failed read
 /// counts as everything blocked, so the capture refuses rather than guesses.
 #[cfg(unix)]
 pub(crate) fn current_thread_mask() -> nix::sys::signal::SigSet {
-    nix::sys::signal::SigSet::thread_get_mask().unwrap_or_else(|_| nix::sys::signal::SigSet::all())
+    mutant!(
+        "m26-maskread",
+        nix::sys::signal::SigSet::empty(),
+        nix::sys::signal::SigSet::thread_get_mask()
+            .unwrap_or_else(|_| nix::sys::signal::SigSet::all())
+    )
 }
 
 /// Signals an operator or supervisor stops the gateway with; one blocked at
@@ -308,17 +324,21 @@ fn resolve(
     probe: &dyn Fn(&std::path::Path) -> bool,
 ) -> Result<PathBuf, UnavailableReason> {
     use std::os::unix::ffi::OsStrExt as _;
-    if argv0.as_bytes().contains(&b'/') {
+    if mutant!("m14-slash", false, argv0.as_bytes().contains(&b'/')) {
         let target = cwd.join(argv0);
-        return if probe(&target) {
+        return if mutant!("m15-slashprobe", true, probe(&target)) {
             Ok(target)
         } else {
             Err(UnavailableReason::NotExecutable)
         };
     }
-    let path_env = path_env.ok_or(UnavailableReason::NotFound)?;
+    let path_env = mutant!(
+        "m16-defaultpath",
+        std::ffi::OsStr::new("/usr/bin:/bin"),
+        path_env.ok_or(UnavailableReason::NotFound)?
+    );
     std::env::split_paths(path_env)
-        .map(|dir| cwd.join(dir).join(argv0))
+        .map(|dir| mutant!("m17-anchor", dir.join(argv0), cwd.join(dir).join(argv0)))
         .find(|candidate| probe(candidate))
         .ok_or(UnavailableReason::NotFound)
 }
