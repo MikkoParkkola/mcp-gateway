@@ -61,6 +61,14 @@ test.describe('C2 planted faults', () => {
     const copy = { ...OK, _pending: { servers: ['servers.actions.add', 'servers.status.paused'] } };
     expect(pair(copy, '')).toEqual(['servers.status.paused: pending under built servers.status']);
   });
+  test('an id pending in a group named after its built tab passes: a tab built in parts', () => {
+    const copy = { ...OK, _pending: { servers: ['servers.actions.add'], 'servers.status': ['servers.status.paused'] } };
+    expect(pair(copy, '')).toEqual([]);
+  });
+  test('a group named after a tab holds only that tab\'s ids', () => {
+    const copy = { ...OK, _pending: { 'servers.status': ['servers.actions.add'] } };
+    expect(pair(copy, "tip('servers.status.paused');")).toEqual(['servers.actions.add: in pending group servers.status, not its tab']);
+  });
   test('an unknown tab segment fails', () => {
     const copy = { ...OK, 'servers.extras.x': { title: 'X', text: 'x' }, _pending: { servers: ['servers.actions.add', 'servers.extras.x'] } };
     expect(pair(copy, "tip('servers.status.paused');")).toContain('servers.extras.x: not <page>.<tab>.<subject>');

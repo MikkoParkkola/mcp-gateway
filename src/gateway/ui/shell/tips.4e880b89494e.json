@@ -38,10 +38,6 @@
   ],
   "gateway": [
    "gateway.actions.configuration-versions",
-   "gateway.settings.2-which-key-does-it",
-   "gateway.settings.and-memory-just-brought-in",
-   "gateway.settings.environment-name",
-   "gateway.settings.sentry-the-server-you-just",
    "gateway.status.11-47-edit-not-applied",
    "gateway.status.2-restarts-6-s-down",
    "gateway.status.4-0-0",
@@ -53,6 +49,12 @@
    "gateway.status.how-the-gateway-itself-is",
    "gateway.status.memory-now",
    "gateway.status.reloaded-at-10-31-after"
+  ],
+  "gateway.settings": [
+   "gateway.settings.2-which-key-does-it",
+   "gateway.settings.and-memory-just-brought-in",
+   "gateway.settings.environment-name",
+   "gateway.settings.sentry-the-server-you-just"
   ],
   "overview": [
    "overview.status.answering-grouped-by-the-gateway",

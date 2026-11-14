@@ -121,11 +121,21 @@ export function shapeProblems(copy) {
 /**
  * C1 and C2, by page and tab: an id drawn by a screen must have copy; a copy id
  * must be drawn, or pending because its page is unregistered or its tab is null.
+ * A tab built in parts keeps the ids its later parts draw in a pending group
+ * named after the tab (`gateway.settings`), and that group holds only its own.
  */
 export function pairingProblems(copy, { drawn, nonLiteral, tabs }) {
   const out = [];
   if (nonLiteral) out.push(`${nonLiteral} tip() call(s) with a non-literal id`);
   const pending = new Set(Object.values(copy._pending ?? {}).flat());
+  const later = new Set();
+  for (const [group, list] of Object.entries(copy._pending ?? {})) {
+    if (!group.includes('.')) continue;
+    for (const id of list) {
+      if (id.startsWith(`${group}.`)) later.add(id);
+      else out.push(`${id}: in pending group ${group}, not its tab`);
+    }
+  }
   const ids = Object.keys(copy).filter((k) => k !== '_pending');
   for (const id of [...drawn, ...ids, ...pending]) if (!ID.test(id)) out.push(`${id}: not <page>.<tab>.<subject>`);
   for (const id of drawn) if (!(id in copy)) out.push(`${id}: drawn with no copy`);
@@ -137,7 +147,7 @@ export function pairingProblems(copy, { drawn, nonLiteral, tabs }) {
       continue;
     }
     if (!pending.has(id)) out.push(`${id}: neither drawn nor pending`);
-    else if (built) out.push(`${id}: pending under built ${page}.${tab}`);
+    else if (built && !later.has(id)) out.push(`${id}: pending under built ${page}.${tab}`);
   }
   for (const id of pending) if (!(id in copy)) out.push(`${id}: pending with no copy`);
   return out;
