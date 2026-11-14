@@ -512,8 +512,12 @@ fn discovery_scans_no_network() {
     let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("read Cargo.toml");
     for line in manifest.lines().map(str::trim_start) {
         for name in CRATES {
+            // Inline in the source tree; a table of its own in the manifest
+            // `cargo package` writes, which the packaged suite reads.
             assert!(
-                !line.starts_with(&format!("{name} ")) && !line.starts_with(&format!("{name}=")),
+                !line.starts_with(&format!("{name} "))
+                    && !line.starts_with(&format!("{name}="))
+                    && !line.ends_with(&format!("dependencies.{name}]")),
                 "Cargo.toml depends on {name}"
             );
         }
