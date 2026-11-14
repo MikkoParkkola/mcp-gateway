@@ -8,3 +8,4 @@ src/gateway/task_service/store_gate.rs	storage_failed	3	A list output is never a
 src/gateway/task_service/store_targets.rs	settle_bounded_as	1	Async hop to settle_bounded_blocking through TaskStore::admitted with its caller's class; ownership and revision are checked in the blocking body
 src/gateway/task_service/store_input.rs	close_round_as	1	Async hop to close_round_blocking through TaskStore::admitted with its caller's class; ownership is checked in the blocking body
 src/gateway/task_service/execution/input_round.rs	close_round_as	1	Forwards to the store's close_round_as with the caller's class and publishes; the ownership check is in the store
+src/gateway/task_service/store_gate.rs	sweeps_allowed	2	Forwards TaskStore's question to TaskGate::sweeps_allowed; decides nothing itself

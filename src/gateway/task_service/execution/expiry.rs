@@ -138,6 +138,11 @@ fn finish(failure: Option<ServiceError>) -> Result<(), ServiceError> {
 /// report success over a directory it could not delete from.
 async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     let service = Arc::clone(&executor.service);
+    // A restart checkpoint holds the store: this tick does nothing, and the
+    // next one sees the same candidates.
+    if !service.store.sweeps_allowed() {
+        return Ok(());
+    }
     // Sealed rows first: a repaired or removed row lifts the seal on new keyed
     // calls without a restart (MIK-8052), and a repaired row is served again
     // (MIK-8121). It never fails the sweep.
@@ -176,6 +181,14 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
         let Err(failure) = cancelled else {
             continue;
         };
+        // A checkpoint paused the store after this tick began: the close was
+        // skipped, not refused, and the next tick covers it. ponytail: read
+        // after the failure, so a pause and resume both landing inside one
+        // close would count it as failed; carry the skip through the commit
+        // error if that ever shows up.
+        if !service.store.sweeps_allowed() {
+            return round_failure.map_or(Ok(()), Err);
+        }
         // A cancel refused because the round moved (answered, cancelled, gone)
         // is benign. The commit reports a refused transition the way it reports
         // a failed write, so the row itself says which one this was: still an
@@ -231,6 +244,9 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
             Err(
                 StoreError::NotFound | StoreError::RevisionConflict | StoreError::InvalidTransition,
             ) => {}
+            // A checkpoint paused the store mid-tick: stop here; the next tick
+            // covers the rest.
+            Err(StoreError::Skipped) => return outcome,
             Err(error) => {
                 tracing::warn!(%error, task_id = %id, "expired task record not deleted");
                 outcome = Err(ServiceError::Unavailable);

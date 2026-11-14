@@ -9,3 +9,10 @@ src/gateway/task_service/store_gate.rs	release	1	standard	borderline	TaskGate::r
 src/gateway/task_service/store_gate.rs	commit	1	standard	borderline	TaskGate::commit	The commit edge: refuses new external submissions, admits work parked before it and internal completion work
 src/gateway/task_service/store_gate.rs	admitted	1	critical	d	TaskStore::admitted	Admits each task-store mutation through TaskGate::admit before its blocking work is spawned, and moves the admission into that work so it stays counted; a refusal returns before anything runs
 src/gateway/task_service/store_gate.rs	storage_failed	2	standard	borderline	Outcome::storage_failed	Marks a storage error from admitted work as a failure, which fails the attempt's checkpoint
+src/gateway/task_service/store_gate.rs	decide	1	critical	d	decide	The gate's one decision: admits, parks or refuses a task-store mutation for the state, the caller's class and its ticket; TaskGate::admit acts on it
+src/gateway/task_service/store_gate.rs	bound	1	standard	borderline	bound	Sets when a parked submitter decides again on its own: one second past its attempt's deadline (external), its backstop (internal), never while draining
+src/gateway/task_service/store_gate.rs	mark_failed	1	standard	borderline	mark_failed	Marks the open attempt failed when admitted work failed or ended without an outcome; the checkpoint refuses on it
+src/gateway/task_service/store_gate.rs	cohort_done	1	standard	borderline	cohort_done	Counts one drain member done and opens the gate at zero, so newer writes wait for the cohort
+src/gateway/task_service/store_gate.rs	restamp	1	standard	borderline	TaskGate::restamp	Gives a ticket parked in an earlier attempt the current attempt's bounds, so a stale deadline cannot refuse it
+src/gateway/task_service/store_gate.rs	drop	1	standard	borderline	Admitted::drop	Ends an admission: uncounts it, fails the attempt when the work reported no outcome, and counts a cohort member done
+src/gateway/task_service/store_gate.rs	drop	2	standard	borderline	Ticket::drop	Ends a parked submitter's ticket; one of a drain's cohort that ends unadmitted still counts done
