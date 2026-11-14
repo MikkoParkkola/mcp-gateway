@@ -30,11 +30,21 @@ pub(crate) struct FetchDone {
 
 /// The gateway's answer to `fetch_start`: the fetch's proxy credential and
 /// the milliseconds left to the fetch's deadline.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Issued {
     pub(crate) credential: String,
     pub(crate) deadline_ms: u128,
+}
+
+/// The credential is a live proxy secret: a debug print never shows it.
+impl std::fmt::Debug for Issued {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Issued")
+            .field("credential", &"<redacted>")
+            .field("deadline_ms", &self.deadline_ms)
+            .finish()
+    }
 }
 
 /// The gateway's answer to `fetch_done`, sent only once every tunnel of the
