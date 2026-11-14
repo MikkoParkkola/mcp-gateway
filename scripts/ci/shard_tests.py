@@ -29,6 +29,8 @@ were deleted is lowered in the same diff, where review sees it.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -601,7 +603,14 @@ def prebuilt_rows() -> None:
         assert run_prebuilt("linux", "lib-a", fake) == 0, "a clean Linux shared-build leg failed"
         assert main(["shard_tests.py", "run-prebuilt", "linux", "lib-b", fake]) == 0, "lib-b was refused"
         binary(lok + '; echo x > "$TMPDIR/stray-file"')
-        assert run_prebuilt("linux", "lib-a", fake) == 1, "a Linux leg that left a temp file passed"
+        # The same verdict line `run` prints for a cargo shard whose lib binary (mcp_gateway-<hash>) left it.
+        out = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        with contextlib.redirect_stdout(out):
+            rc = run_prebuilt("linux", "lib-a", fake)
+        out.flush()
+        said = out.buffer.getvalue().decode()
+        assert rc == 1 and f"::error::linux lib-a left in TMPDIR: {LIB_TARGET}/stray-file" in said, \
+            f"a Linux leg that left a temp file did not fail as `run` does: rc {rc}"
         # Only the shared-build legs run from the binary on Linux: an integration shard compiles its own.
         assert main(["shard_tests.py", "run-prebuilt", "linux", "int-a", fake]) == 2, "int-a ran prebuilt"
         # export-lib copies the executable cargo names, and fails when cargo names none.
