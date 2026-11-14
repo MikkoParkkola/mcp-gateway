@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use crate::log_writer::StopOutcome;
+use crate::log_writer::{FlushEnd, StopOutcome};
 
 /// The exec share of a committed restart: the logger's end moves this much
 /// earlier, so the third preflight and `execve` always have time before D.
@@ -33,6 +33,13 @@ pub(crate) const EXIT_OVERRUN: u8 = 75;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Exit {
     Plain,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the committed restart path stores it; until then only the exec-share rows build it"
+        )
+    )]
     Restart,
 }
 
@@ -102,11 +109,9 @@ pub(crate) fn finish(
     };
     let status = if left_running || !outcome.permits_exec() {
         EXIT_OVERRUN
-    } else if code == ExitCode::SUCCESS {
-        0
     } else {
         // An HTTP serve, the one path with a plan, returns SUCCESS or FAILURE.
-        1
+        u8::from(code != ExitCode::SUCCESS)
     };
     stored.store(i32::from(status), Ordering::SeqCst);
     if status == EXIT_OVERRUN {
@@ -179,13 +184,24 @@ pub(crate) fn tail(
     }
     let bound = std::time::Instant::now() + crate::log_writer::LOG_FLUSH_DEADLINE;
     let outcome = flush.stop_and_join(bound.min(plan.logger_end().into_std()));
-    if !outcome.permits_exec() {
-        // The logger is closed: one line straight to stderr, best effort.
+    // The logger is closed: what it could not write is one line straight to
+    // stderr, best effort. A writer not joined is left behind; the watchdog
+    // bounds whatever it still holds.
+    let note = match &outcome {
+        StopOutcome::Joined(FlushEnd::Clean) => None,
+        StopOutcome::Joined(FlushEnd::SinkError) => {
+            Some("its last flush failed; lines may be lost")
+        }
+        StopOutcome::WorkerFailed => Some("its thread failed; exiting 75"),
+        StopOutcome::NotJoined(worker) => Some(if worker.is_finished() {
+            "it finished just past its deadline; exiting 75"
+        } else {
+            "it did not finish by its deadline; exiting 75"
+        }),
+    };
+    if let Some(note) = note {
         use std::io::Write as _;
-        let _ = writeln!(
-            std::io::stderr(),
-            "mcp-gateway: the log writer did not finish by its deadline ({outcome:?}); exiting 75"
-        );
+        let _ = writeln!(std::io::stderr(), "mcp-gateway: the log writer: {note}");
     }
     finish(code, left_running, Some(&outcome), stored_code())
 }
