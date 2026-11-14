@@ -475,3 +475,27 @@ async fn delete_route_files_refused_off_unix() {
     );
     assert!(secret_file(&route, &name).is_file(), "{ROW}: file remains");
 }
+
+/// gateway.yaml is a symlink to a file in another directory, and the entry
+/// file has a second name in the route directory. The delete is refused and
+/// the entry stays.
+#[cfg(unix)]
+#[tokio::test]
+async fn delete_refuses_hard_linked_entry_behind_symlinked_config() {
+    const ROW: &str = "delete_refuses_hard_linked_entry_behind_symlinked_config";
+    const VALUE: &str = "unused-link-canary";
+    let (route, name) = unnamed_entry(ROW, VALUE).await;
+    let elsewhere = tempfile::tempdir().unwrap_or_else(|error| panic!("{ROW}: dir: {error}"));
+    let moved = elsewhere.path().join("gateway.yaml");
+    write_owner_only(&moved, route.text()).unwrap_or_else(|error| panic!("{ROW}: yaml: {error}"));
+    std::fs::remove_file(route.path())
+        .unwrap_or_else(|error| panic!("{ROW}: remove config: {error}"));
+    std::os::unix::fs::symlink(&moved, route.path())
+        .unwrap_or_else(|error| panic!("{ROW}: symlink: {error}"));
+    let entry = secret_file(&route, &name);
+    std::fs::hard_link(&entry, route.dir.path().join("also"))
+        .unwrap_or_else(|error| panic!("{ROW}: hard link: {error}"));
+    let response = delete(&route, &name, "files", true).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT, "{ROW}: hard link");
+    assert!(entry.is_file(), "{ROW}: file remains");
+}

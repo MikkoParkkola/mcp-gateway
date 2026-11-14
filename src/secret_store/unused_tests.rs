@@ -186,6 +186,12 @@ fn plant_escape(dir: &Path, _name: &str, suffix: &str) -> NamingSources {
     sources(dir)
 }
 
+fn plant_yaml_key(dir: &Path, _name: &str, suffix: &str) -> NamingSources {
+    let body = format!("\"{}\": clean\n", hex_escapes(suffix));
+    write_owner_only(dir.join("gateway.yaml"), body).expect("yaml");
+    sources(dir)
+}
+
 fn plant_upper(dir: &Path, _name: &str, suffix: &str) -> NamingSources {
     let upper = suffix.to_ascii_uppercase();
     write_owner_only(dir.join("gateway.yaml"), format!("k: {upper}\n")).expect("yaml");
@@ -293,6 +299,7 @@ fn named_by_every_source() {
         ("capability", plant_cap),
         ("nested capability", plant_nested),
         ("yaml escape", plant_escape),
+        ("yaml key", plant_yaml_key),
         ("upper case", plant_upper),
     ];
     // Same-file identity is readable only on Unix, so these two name a file there alone.
@@ -357,9 +364,9 @@ fn remove_then_recreate() {
         .append_removed_in(&n, StoreKind::Files)
         .expect("remove");
     let text = std::fs::read_to_string(dir.path().join("secrets-index.jsonl")).expect("index");
-    let line = text.lines().last().unwrap_or("");
-    let parsed: serde_json::Value = serde_json::from_str(line).expect("json");
-    assert_eq!(parsed["store"].as_str(), Some("files"), "{ROW}: {line}");
+    let last = text.lines().last().unwrap_or("");
+    let parsed: serde_json::Value = serde_json::from_str(last).expect("json");
+    assert_eq!(parsed["store"].as_str(), Some("files"), "{ROW}: {last}");
     index
         .append_created(&n, StoreKind::Files)
         .expect("recreate");
@@ -399,4 +406,42 @@ fn scoped_line_golden() {
         .collect();
     assert_eq!(kept.len(), 1, "{ROW}: {live:?}");
     assert_eq!(kept[0], "keychain", "{ROW}: {live:?}");
+}
+
+/// Seventeen nested directories put a readable file past the walk. That source
+/// was not read, so the check refuses.
+#[test]
+fn capability_walk_refuses_past_the_depth_bound() {
+    const ROW: &str = "capability_walk_refuses_past_the_depth_bound";
+    let (dir, _vault, name) = saved();
+    let cap = dir.path().join("caps");
+    let mut bottom = cap.clone();
+    for level in 1..=17 {
+        bottom.push(level.to_string());
+    }
+    std::fs::create_dir_all(&bottom).unwrap_or_else(|error| panic!("{ROW}: caps: {error}"));
+    std::fs::write(bottom.join("bottom.yaml"), b"k: clean")
+        .unwrap_or_else(|error| panic!("{ROW}: cap: {error}"));
+    let mut sources = quiet(dir.path());
+    sources.capability_dirs.push(cap);
+    let got = naming(&sources, &name);
+    assert!(got.is_err(), "{ROW}: expected Err, got {got:?}");
+}
+
+/// A capability directory that links back to itself was not read. The check
+/// refuses.
+#[cfg(unix)]
+#[test]
+fn capability_symlink_loop_refuses() {
+    const ROW: &str = "capability_symlink_loop_refuses";
+    let (dir, _vault, name) = saved();
+    let cap = dir.path().join("caps");
+    std::fs::create_dir_all(&cap).unwrap_or_else(|error| panic!("{ROW}: caps: {error}"));
+    std::fs::write(cap.join("a.yaml"), b"k: clean")
+        .unwrap_or_else(|error| panic!("{ROW}: cap: {error}"));
+    link_file(&cap, &cap.join("loop"));
+    let mut sources = quiet(dir.path());
+    sources.capability_dirs.push(cap);
+    let got = naming(&sources, &name);
+    assert!(got.is_err(), "{ROW}: expected Err, got {got:?}");
 }

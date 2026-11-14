@@ -13,7 +13,7 @@ use crate::gateway::test_helpers::write_owner_only;
 use crate::secret_store::fresh_name;
 use crate::secret_store::index::Index;
 use crate::secret_store::{
-    FilesStore, NewSecret, SecretStore, StoreError, StoreKind, Vault, save_secrets,
+    FilesStore, NewSecret, SaveError, SecretStore, StoreError, StoreKind, Vault, save_secrets,
 };
 use std::collections::BTreeMap;
 #[cfg(unix)]
@@ -399,10 +399,7 @@ fn exists_error_writes_no_line() {
         store.calls()
     );
     assert!(
-        matches!(
-            got,
-            Err(DeleteRefused::TimedOut) | Err(DeleteRefused::Failed(_))
-        ),
+        matches!(got, Err(DeleteRefused::TimedOut | DeleteRefused::Failed(_))),
         "{ROW}: {got:?}"
     );
     assert_eq!(index_bytes(dir.path()), index, "{ROW}: index changed");
@@ -506,4 +503,59 @@ fn files_delete_refused_off_unix() {
     let again = std::fs::read(&path).unwrap_or_else(|error| panic!("{ROW}: entry: {error}"));
     assert_eq!(again, file, "{ROW}: entry changed");
     assert_eq!(index_bytes(dir.path()), index, "{ROW}: index changed");
+}
+
+/// A refused commit rolls the new keychain entry back. The removal line names
+/// that store.
+#[test]
+fn rollback_writes_a_store_scoped_line() {
+    const ROW: &str = "rollback_writes_a_store_scoped_line";
+    let (dir, vault) = rig();
+    let store = Fault::new();
+    let saved = save_secrets(
+        &vault,
+        &store,
+        &[NewSecret {
+            field: "f",
+            value: b"v",
+        }],
+        |_| Err::<(), &str>("commit refused"),
+    );
+    assert!(
+        matches!(saved, Err(SaveError::Commit(_))),
+        "{ROW}: {saved:?}"
+    );
+    let text = std::fs::read_to_string(dir.path().join("secrets-index.jsonl"))
+        .unwrap_or_else(|error| panic!("{ROW}: index: {error}"));
+    let created = text
+        .lines()
+        .find(|line| line.contains("created_at"))
+        .unwrap_or_else(|| panic!("{ROW}: no created line:\n{text}"));
+    let created: serde_json::Value = serde_json::from_str(created)
+        .unwrap_or_else(|error| panic!("{ROW}: created line: {error}"));
+    let name = created["name"].as_str().unwrap_or("");
+    assert!(!name.is_empty(), "{ROW}: created name:\n{text}");
+    let removals: Vec<_> = text
+        .lines()
+        .filter(|line| line.contains(name) && line.contains("removed_at"))
+        .collect();
+    assert_eq!(removals.len(), 1, "{ROW}: {text}");
+    let parsed: serde_json::Value = serde_json::from_str(removals[0])
+        .unwrap_or_else(|error| panic!("{ROW}: removal line: {error}"));
+    assert_eq!(parsed["name"].as_str(), Some(name), "{ROW}: {text}");
+    assert_eq!(parsed["store"].as_str(), Some("keychain"), "{ROW}: {text}");
+}
+
+/// A removal line for a name the store still holds is not an entry that is
+/// already gone. The delete refuses and leaves the entry.
+#[test]
+fn retired_name_still_held_is_not_already_gone() {
+    const ROW: &str = "retired_name_still_held_is_not_already_gone";
+    let (dir, vault, store, name, _index, sources) = fault_entry();
+    Index::at(dir.path())
+        .append_removed_in(&name, StoreKind::Keychain)
+        .unwrap_or_else(|error| panic!("{ROW}: retire: {error:?}"));
+    let got = delete_unused(&vault, &store, &name, &sources, soon());
+    assert_eq!(got, Err(DeleteRefused::NotListed), "{ROW}: {got:?}");
+    assert_eq!(store.exists(&name), Ok(true), "{ROW}: entry is gone");
 }
