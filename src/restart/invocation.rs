@@ -222,7 +222,7 @@ pub(crate) fn is_executable_regular(path: &std::path::Path) -> bool {
 /// counts as everything blocked, so the capture refuses rather than guesses.
 #[cfg(unix)]
 pub(crate) fn current_thread_mask() -> nix::sys::signal::SigSet {
-    nix::sys::signal::SigSet::thread_get_mask().unwrap_or_else(|_| nix::sys::signal::SigSet::all())
+    mutant!("m26-maskread", nix::sys::signal::SigSet::empty(), nix::sys::signal::SigSet::thread_get_mask().unwrap_or_else(|_| nix::sys::signal::SigSet::all()))
 }
 
 /// Signals an operator or supervisor stops the gateway with; one blocked at
@@ -316,7 +316,7 @@ fn resolve(
             Err(UnavailableReason::NotExecutable)
         };
     }
-    let path_env = path_env.ok_or(UnavailableReason::NotFound)?;
+    let path_env = mutant!("m16b-defaultunset", path_env.or(Some(std::ffi::OsStr::new("/usr/bin:/bin"))), path_env).ok_or(UnavailableReason::NotFound)?;
     std::env::split_paths(path_env)
         .map(|dir| cwd.join(dir).join(argv0))
         .find(|candidate| probe(candidate))
