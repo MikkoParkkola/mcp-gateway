@@ -66,6 +66,10 @@ pub(crate) enum CustodyError {
     /// Shutdown has begun; new work is refused rather than queued.
     #[error("custody is shutting down")]
     ShuttingDown,
+    /// A release could not start a thread and the store is held until the
+    /// process exits.
+    #[error("the custody store could not be released and is held until exit")]
+    ReleaseStuck,
     #[error(transparent)]
     Account(#[from] AccountServiceError),
 }
@@ -91,16 +95,83 @@ pub(crate) enum CustodyStartError {
 /// handle is still alive. A `std::sync::Mutex` guards it: every access is a
 /// clone or a take, no await is ever held under it.
 pub(crate) struct CustodyHandle<P, O> {
-    service: std::sync::Mutex<Option<Arc<AccountService<P, O>>>>,
+    slot: std::sync::Mutex<Slot<P, O>>,
+    /// Becomes true when the service itself is dropped, wherever that happens.
+    done: tokio::sync::watch::Receiver<bool>,
     permits: Arc<Semaphore>,
     shutting_down: AtomicBool,
+    /// Set by the first report, so a release problem is logged once. Shared
+    /// with the release thread, which reports a panic.
+    reported: Arc<AtomicBool>,
+    /// Test seam: the next release thread fails to start.
+    #[cfg(test)]
+    fail_next_spawn: AtomicBool,
     capacity: usize,
+}
+
+/// What the handle holds, all behind one mutex: one transition at a time.
+enum Slot<P, O> {
+    /// Serving, or refusing but not yet released.
+    Open(Arc<Held<P, O>>),
+    /// A release thread owns the handle's reference.
+    Releasing,
+    /// A thread could not be started and the reference was leaked to process
+    /// exit: never waited on, never reported released.
+    Stuck,
+}
+
+/// The service plus the signal that it is gone. `done` is the LAST field, so it
+/// drops after the service (store, provider, observer): completion means the
+/// store really dropped, on whichever thread held the final reference.
+struct Held<P, O> {
+    service: AccountService<P, O>,
+    _done: DoneGuard,
+}
+
+impl<P, O> std::ops::Deref for Held<P, O> {
+    type Target = AccountService<P, O>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.service
+    }
+}
+
+impl<P, O> Slot<P, O> {
+    /// Take the reference out of an `Open` slot (leaving `Releasing`); any other
+    /// state is left as it is.
+    fn take_open(&mut self) -> Option<Arc<Held<P, O>>> {
+        match std::mem::replace(self, Slot::Releasing) {
+            Slot::Open(held) => Some(held),
+            other => {
+                *self = other;
+                None
+            }
+        }
+    }
+}
+
+/// Log a release problem once per handle, whichever call meets it first. Error
+/// level: a store whose locks are not released is a lost-lock risk. No line
+/// names an account or a secret.
+fn report_once(reported: &AtomicBool, what: &str) {
+    if !reported.swap(true, Ordering::SeqCst) {
+        tracing::error!("account custody: {what}");
+    }
+}
+
+/// Sends `true` when dropped, also while a panic unwinds.
+struct DoneGuard(tokio::sync::watch::Sender<bool>);
+
+impl Drop for DoneGuard {
+    fn drop(&mut self) {
+        let _ = self.0.send(true);
+    }
 }
 
 /// One admitted call: the service to run it against, and the permit that keeps
 /// it inside the in-flight bound until it finishes.
 struct Admission<P, O> {
-    service: Arc<AccountService<P, O>>,
+    service: Arc<Held<P, O>>,
     permit: OwnedSemaphorePermit,
 }
 
@@ -120,12 +191,19 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         // refusal on first use.
         let store = PersonalAccountStore::open(config)?;
         let capacity = capacity.max(1);
+        let (done_tx, done_rx) = tokio::sync::watch::channel(false);
+        let held = Held {
+            service: AccountService::new(store, provider, observer),
+            _done: DoneGuard(done_tx),
+        };
         Ok(Self {
-            service: std::sync::Mutex::new(Some(Arc::new(AccountService::new(
-                store, provider, observer,
-            )))),
+            slot: std::sync::Mutex::new(Slot::Open(Arc::new(held))),
+            done: done_rx,
             permits: Arc::new(Semaphore::new(capacity)),
             shutting_down: AtomicBool::new(false),
+            reported: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            fail_next_spawn: AtomicBool::new(false),
             capacity,
         })
     }
@@ -153,13 +231,10 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         let permit = Arc::clone(&self.permits)
             .try_acquire_owned()
             .map_err(|_| CustodyError::Busy)?;
-        let service = self
-            .service
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(Arc::clone)
-            .ok_or(CustodyError::ShuttingDown)?;
+        let service = match &*self.lock_slot() {
+            Slot::Open(held) => Arc::clone(held),
+            Slot::Releasing | Slot::Stuck => return Err(CustodyError::ShuttingDown),
+        };
         Ok(Admission { service, permit })
     }
 
@@ -261,12 +336,18 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
     where
         P: Clone,
     {
-        self.service
+        match &*self.lock_slot() {
+            Slot::Open(held) => Ok(held.provider().clone()),
+            Slot::Releasing | Slot::Stuck => Err(CustodyError::ShuttingDown),
+        }
+    }
+
+    /// The slot, whether or not a panic poisoned its mutex: every access is a
+    /// clone or a take and no await is held under it.
+    fn lock_slot(&self) -> std::sync::MutexGuard<'_, Slot<P, O>> {
+        self.slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(|service| service.provider().clone())
-            .ok_or(CustodyError::ShuttingDown)
     }
 
     /// Test-only, like [`AccountService::commit_grant_if`] it forwards to.
@@ -290,26 +371,265 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
     /// Takes `&self`, not `self`: "a command after shutdown is refused" and
     /// "the locks are free while the handle is still alive" are both contracts
     /// that a consuming signature makes unexpressible. Idempotent.
+    /// Test-only: every stop path uses the bounded `shutdown_by`.
+    #[cfg(test)]
     pub(crate) async fn shutdown(&self) -> Result<(), CustodyError> {
-        // Refuse first, drain second. The other order would let a call slip in
+        // No deadline: in-flight work completes and Ok means the store is
+        // dropped and both file locks are free. A store a thread could not be
+        // started for is reported as an error, never as released.
+        match self.release_by(None).await? {
+            ShutdownEnd::Released => Ok(()),
+            ShutdownEnd::ReleasePending | ShutdownEnd::InFlightPending | ShutdownEnd::Stuck => {
+                Err(CustodyError::ReleaseStuck)
+            }
+        }
+    }
+
+    /// Start the release of `held` on a detached thread. The reference travels
+    /// in a shared cell, so a spawn that fails (its closure is dropped) leaves
+    /// the reference in the cell for the caller to recover and leak instead of
+    /// dropping it inline. A release thread that panics still signals done (the
+    /// guard is the service's last field) and reports once.
+    fn spawn_release(&self, held: Arc<Held<P, O>>) -> Result<(), Arc<Held<P, O>>> {
+        let cell = Arc::new(std::sync::Mutex::new(Some(held)));
+        let recover = |cell: &std::sync::Mutex<Option<Arc<Held<P, O>>>>| {
+            cell.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+        };
+        let (thread_cell, reported) = (Arc::clone(&cell), Arc::clone(&self.reported));
+        let release = move || {
+            let held = thread_cell
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(held))).is_err() {
+                report_once(&reported, "the store release panicked");
+            }
+        };
+        let builder = std::thread::Builder::new().name("shutdown: custody release".to_owned());
+        // The seam fails the spawn itself, so a row drives the real failure
+        // arm below: the closure is dropped unrun, as a failed spawn drops it.
+        #[cfg(test)]
+        let spawned = if self.fail_next_spawn.swap(false, Ordering::SeqCst) {
+            drop(release);
+            Err(std::io::Error::other("injected spawn failure"))
+        } else {
+            builder.spawn(release)
+        };
+        #[cfg(not(test))]
+        let spawned = builder.spawn(release);
+        match spawned {
+            Ok(_) => Ok(()),
+            // A failed spawn drops its closure unrun, so the reference is still
+            // in the cell; an empty cell would mean a thread took it, which is
+            // a started release, never a panic on the stop path.
+            Err(_) => recover(&cell).map_or(Ok(()), Err),
+        }
+    }
+
+    /// Wait for the service to be gone: `true` when it is, `false` at `deadline`.
+    async fn await_done(&self, deadline: Option<tokio::time::Instant>) -> bool {
+        let mut done = self.done.clone();
+        let waiting = done.wait_for(|gone| *gone);
+        match deadline {
+            Some(at) => matches!(tokio::time::timeout_at(at, waiting).await, Ok(Ok(_))),
+            None => waiting.await.is_ok(),
+        }
+    }
+
+    /// The one release path. `deadline` `None` is the unbounded `shutdown()`.
+    async fn release_by(
+        &self,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<ShutdownEnd, CustodyError> {
+        // Refuse first, drain second: the other order would let a call slip in
         // behind the drain and outlive the store it needs.
         self.shutting_down.store(true, Ordering::Release);
-        let capacity = u32::try_from(self.capacity).unwrap_or(u32::MAX);
+        // A later call inspects the slot BEFORE draining permits, so it is never
+        // told "in flight" about a release that is already running or stuck.
+        if let Some(end) = self.settled_end(deadline).await {
+            return end;
+        }
         // Holding every permit means no operation is in flight. In-flight work
-        // is awaited, not cancelled: a command admitted before shutdown still
-        // completes.
-        let drained = Arc::clone(&self.permits).acquire_many_owned(capacity).await;
-        let taken = self
-            .service
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        // The last `Arc` goes here, so the store — and both of its exclusive
-        // file locks — is released while this handle is still alive.
-        drop(taken);
+        // is awaited, not cancelled, up to the deadline.
+        let capacity = u32::try_from(self.capacity).unwrap_or(u32::MAX);
+        let draining = Arc::clone(&self.permits).acquire_many_owned(capacity);
+        let drained = match deadline {
+            Some(at) => {
+                let Ok(permits) = tokio::time::timeout_at(at, draining).await else {
+                    // A detach may have started (or failed to start) the
+                    // release while this call drained: report that, not "in flight".
+                    if let Some(end) = self.settled_end(deadline).await {
+                        return end;
+                    }
+                    report_once(
+                        &self.reported,
+                        "in-flight work still running at the stop deadline; the store was not released",
+                    );
+                    return Ok(ShutdownEnd::InFlightPending);
+                };
+                permits
+            }
+            None => draining.await,
+        };
+        // Take the reference and publish the new state in one critical section.
+        let started = {
+            let mut slot = self.lock_slot();
+            match slot.take_open() {
+                // Taken by a concurrent call while this one drained: a stuck
+                // store is never waited on, a running release is.
+                None if matches!(*slot, Slot::Stuck) => Some(false),
+                None => None,
+                Some(held) => match self.spawn_release(held) {
+                    Ok(()) => Some(true),
+                    Err(held) if deadline.is_none() => {
+                        // Standalone shutdown: the gateway may stay alive, so do
+                        // not hold the locks to exit; drop on the blocking pool.
+                        drop(slot);
+                        drop(tokio::task::spawn_blocking(move || drop(held)));
+                        Some(true)
+                    }
+                    Err(held) => {
+                        // The stop and detach paths: never drop it inline.
+                        std::mem::forget(held);
+                        *slot = Slot::Stuck;
+                        Some(false)
+                    }
+                },
+            }
+        };
         drop(drained);
-        Ok(())
+        match started {
+            Some(true) | None => Ok(self.release_end(deadline).await),
+            Some(false) => {
+                report_once(
+                    &self.reported,
+                    "the store release could not start a thread; the store is held until exit",
+                );
+                Self::stuck_end(deadline)
+            }
+        }
     }
+
+    /// How a call ends when the release is already running or stuck; `None`
+    /// while the slot is still `Open`. The slot lock is released before any wait.
+    async fn settled_end(
+        &self,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Option<Result<ShutdownEnd, CustodyError>> {
+        let stuck = match &*self.lock_slot() {
+            Slot::Open(_) => return None,
+            Slot::Releasing => false,
+            Slot::Stuck => true,
+        };
+        Some(if stuck {
+            Self::stuck_end(deadline)
+        } else {
+            Ok(self.release_end(deadline).await)
+        })
+    }
+
+    /// How a call ends when the release thread is (or was) running.
+    async fn release_end(&self, deadline: Option<tokio::time::Instant>) -> ShutdownEnd {
+        if self.await_done(deadline).await {
+            ShutdownEnd::Released
+        } else {
+            report_once(
+                &self.reported,
+                "store release still running at the stop deadline; it finishes off the stop path",
+            );
+            ShutdownEnd::ReleasePending
+        }
+    }
+
+    /// How a call ends on a stuck store: bounded callers are told, unbounded
+    /// ones get an error at once instead of waiting for a signal that never comes.
+    fn stuck_end(deadline: Option<tokio::time::Instant>) -> Result<ShutdownEnd, CustodyError> {
+        if deadline.is_some() {
+            Ok(ShutdownEnd::Stuck)
+        } else {
+            Err(CustodyError::ReleaseStuck)
+        }
+    }
+
+    /// Like [`Self::shutdown`] but bounded: the call ends at `deadline` whatever
+    /// the release is doing; a release still running then continues off the stop
+    /// path (reported once). `Released` means the store is dropped and both file
+    /// locks are free.
+    pub(crate) async fn shutdown_by(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Result<ShutdownEnd, CustodyError> {
+        self.release_by(Some(deadline)).await
+    }
+
+    /// Hand any remaining service to a detached release thread and return at
+    /// once: the end of a stop that cut or skipped the custody step, so the last
+    /// drop is never on the thread that drops the gateway. Idempotent.
+    pub(crate) fn detach_release(&self) {
+        self.shutting_down.store(true, Ordering::Release);
+        let mut slot = self.lock_slot();
+        if let Some(held) = slot.take_open()
+            && let Err(held) = self.spawn_release(held)
+        {
+            std::mem::forget(held);
+            *slot = Slot::Stuck;
+            report_once(
+                &self.reported,
+                "the store release could not start a thread; the store is held until exit",
+            );
+        }
+    }
+
+    /// A guard for a serve's whole body: dropped by any exit (an early error
+    /// return, a cancelled future, the normal end after the stop's own detach),
+    /// it hands the store to a release thread, so the gateway's drop never
+    /// releases it on that thread. Idempotent with [`Self::detach_release`].
+    pub(crate) fn detach_on_drop(self: &Arc<Self>) -> DetachOnDrop<P, O> {
+        DetachOnDrop(Arc::clone(self))
+    }
+
+    /// Test seam: whether a release has started (or is stuck), read without
+    /// starting one.
+    #[cfg(test)]
+    pub(crate) fn release_started(&self) -> bool {
+        !matches!(*self.lock_slot(), Slot::Open(_))
+    }
+
+    /// Test seam: the next release thread fails to start.
+    #[cfg(test)]
+    pub(crate) fn fail_next_release_spawn(&self) {
+        self.fail_next_spawn.store(true, Ordering::SeqCst);
+    }
+}
+
+/// See [`CustodyHandle::detach_on_drop`]. Held for a serve's whole body: a
+/// temporary dropped at once would start the release before the serve runs.
+#[must_use = "hold the guard for the whole serve; dropping it starts the custody release"]
+pub(crate) struct DetachOnDrop<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static>(
+    Arc<CustodyHandle<P, O>>,
+);
+
+impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Drop
+    for DetachOnDrop<P, O>
+{
+    fn drop(&mut self) {
+        self.0.detach_release();
+    }
+}
+
+/// How a bounded custody shutdown ended.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ShutdownEnd {
+    /// The store is dropped and both file locks are free.
+    Released,
+    /// The deadline passed while the release was still running off the stop path.
+    ReleasePending,
+    /// In-flight work still held a permit at the deadline; the store was not taken.
+    InFlightPending,
+    /// A spawn failed and the store is held until the process exits.
+    Stuck,
 }
 
 #[path = "worker_journeys.rs"]
