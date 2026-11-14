@@ -197,3 +197,14 @@ fn c4i_network_containment_edges() {
     assert!(within(ip("::ffff:93.184.216.34"), ip("93.184.216.0"), 24));
     assert!(!within(ip("93.184.217.34"), ip("::ffff:93.184.216.0"), 120));
 }
+
+/// C4i, kills "a native IPv6 network is read only through the mapped form":
+/// `::/88` holds `::1:0:0` literally, though reading `::` as the mapped
+/// `::ffff:0:0` would miss it.
+#[test]
+fn c4i_a_low_native_network_is_matched_literally() {
+    use super::super::within;
+    assert!(within(ip("::1:0:0"), ip("::"), 88));
+    assert!(within(ip("::1:0:0"), ip("::"), 95));
+    assert!(!within(ip("::1:0:0"), ip("::"), 96));
+}
