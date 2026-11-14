@@ -49,42 +49,67 @@ fn joined(auth: &ResolvedAuthConfig, live: Option<&ResolvedApiKey>) -> (Option<S
         .and_then(|key| auth.key_last_used(key))
         .and_then(|secs| DateTime::from_timestamp(secs, 0))
         .map(rfc3339);
-    let is_live = live.is_some_and(|key| !crate::config::api_key_expired_now(key.expires_at));
+    // Effective liveness: a CLI key whose approver is gone is listed, not live.
+    let is_live = live.is_some_and(|key| {
+        if key.approved_by.is_none() {
+            return !crate::config::api_key_expired_now(key.expires_at);
+        }
+        // The key and its approver must be live at the same instant.
+        crate::clock::utc_now().is_ok_and(|now| {
+            !crate::config::api_key_expired(key.expires_at, now)
+                && auth.binding_live(key, Some(now))
+        })
+    });
     (last_used, is_live)
+}
+
+/// A CLI login key's entry also shows the host it reported, as plain data;
+/// every other entry keeps its fields unchanged.
+fn with_cli_host(host: Option<&str>, mut entry: Value) -> Value {
+    if let (Some(host), Some(fields)) = (host, entry.as_object_mut()) {
+        fields.insert("cli_host".to_owned(), Value::from(host));
+    }
+    entry
 }
 
 /// One file entry, joined with the live key of its name.
 fn file_entry(auth: &ResolvedAuthConfig, live: &[ResolvedApiKey], key: &ApiKeyConfig) -> Value {
     let (last_used, is_live) = joined(auth, live.iter().find(|l| l.name == key.name));
-    json!({
-        "name": key.name,
-        "backends": key.backends,
-        "allowed_tools": key.allowed_tools,
-        "denied_tools": key.denied_tools,
-        "admin": key.admin,
-        "expires_at": key.expires_at.map(rfc3339),
-        "previous_expires_at": key.previous_expires_at.map(rfc3339),
-        "rate_limit": key.rate_limit,
-        "last_used": last_used,
-        "live": is_live,
-    })
+    with_cli_host(
+        key.cli_host.as_deref(),
+        json!({
+            "name": key.name,
+            "backends": key.backends,
+            "allowed_tools": key.allowed_tools,
+            "denied_tools": key.denied_tools,
+            "admin": key.admin,
+            "expires_at": key.expires_at.map(rfc3339),
+            "previous_expires_at": key.previous_expires_at.map(rfc3339),
+            "rate_limit": key.rate_limit,
+            "last_used": last_used,
+            "live": is_live,
+        }),
+    )
 }
 
 /// One live key, for an answer with no usable file behind it.
 fn live_entry(auth: &ResolvedAuthConfig, key: &ResolvedApiKey) -> Value {
     let (last_used, is_live) = joined(auth, Some(key));
-    json!({
-        "name": key.name,
-        "backends": key.backends,
-        "allowed_tools": key.allowed_tools,
-        "denied_tools": key.denied_tools,
-        "admin": key.admin,
-        "expires_at": key.expires_at.map(rfc3339),
-        "previous_expires_at": key.previous.as_ref().map(|p| rfc3339(p.expires_at)),
-        "rate_limit": key.rate_limit,
-        "last_used": last_used,
-        "live": is_live,
-    })
+    with_cli_host(
+        key.cli_host.as_deref(),
+        json!({
+            "name": key.name,
+            "backends": key.backends,
+            "allowed_tools": key.allowed_tools,
+            "denied_tools": key.denied_tools,
+            "admin": key.admin,
+            "expires_at": key.expires_at.map(rfc3339),
+            "previous_expires_at": key.previous.as_ref().map(|p| rfc3339(p.expires_at)),
+            "rate_limit": key.rate_limit,
+            "last_used": last_used,
+            "live": is_live,
+        }),
+    )
 }
 
 /// The answer for no file (`absent`) or a file that failed to load
@@ -137,3 +162,7 @@ pub(super) async fn keys(
     };
     Json(answer).into_response()
 }
+
+#[cfg(test)]
+#[path = "keys_binding_tests.rs"]
+mod binding_tests;

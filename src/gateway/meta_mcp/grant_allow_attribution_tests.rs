@@ -45,7 +45,7 @@ struct Granted {
 
 async fn granted(rows: Vec<IdentityGrant>) -> Granted {
     let endpoint = Endpoint::start(false).await;
-    let dir = Arc::new(tempfile::tempdir().expect("a temp dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = gateway(
         &endpoint,
         vec![],

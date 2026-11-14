@@ -15,7 +15,7 @@ async fn the_events_fence_reads_the_real_vault_grant() {
         crate::config::AuthConfig::default(),
         &Binding::ConnectedFor(SUBJECT),
     );
-    let audit = tempfile::tempdir().expect("a log directory");
+    let audit = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::transparency_log::TransparencyLogConfig {

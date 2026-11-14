@@ -42,7 +42,7 @@ async fn clock_scripted_at(
 /// not be judged, and not sent.
 #[tokio::test]
 async fn a_window_read_that_fails_once_keeps_an_overdue_record() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
@@ -67,7 +67,7 @@ async fn a_window_read_that_fails_once_keeps_an_overdue_record() {
 /// were never judged.
 #[tokio::test]
 async fn a_last_window_read_that_fails_once_sends_nothing() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
     hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
@@ -111,7 +111,7 @@ async fn a_last_window_read_that_fails_once_sends_nothing() {
 #[tokio::test(start_paused = true)]
 async fn the_delivery_worker_outlives_a_clock_before_1970() {
     use std::sync::atomic::Ordering::{Release, SeqCst};
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     // The callback answers nothing, so an attempt fails; one attempt only, so
     // no jittered retry can add a second send before the count is read
     // (MIK-8486).

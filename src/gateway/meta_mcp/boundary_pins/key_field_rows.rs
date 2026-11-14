@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! K5 completeness: every `ApiKeyConfig` field has a row showing that a reload
 //! changing it applies on the next call, or a stated reason it has none. A new
-//! field fails to compile in `fields`'s destructure until it is named, and a
-//! field named there but left out of the table fails the struct comparison.
+//! field fails to compile in `assert_fields_exhaustive` until it is named;
+//! a field named there but left out of the table fails the struct comparison.
 //! A row counts only while it runs and is about its field: a top-level test
 //! with no `#[ignore]`, `#[cfg]` or `#[cfg_attr]` on it or its file, in a file
 //! `router/mod.rs` declares with only a `test` (or test-and-`webui`) gate,
@@ -50,24 +50,9 @@ enum Pin {
     Exempt(&'static str),
 }
 
-/// Every field and its pin. Destructured with no `..`: a field added to
-/// `ApiKeyConfig` stops this compiling until it is named here.
+/// Every field and its pin, backed by an exhaustive compile-time inventory.
 fn fields() -> Vec<(&'static str, Pin)> {
-    let ApiKeyConfig {
-        key: _,
-        key_sha256: _,
-        expires_at: _,
-        name: _,
-        rate_limit: _,
-        backends: _,
-        allowed_tools: _,
-        denied_tools: _,
-        admin: _,
-        kind: _,
-        principal: _,
-        previous_key_sha256: _,
-        previous_expires_at: _,
-    } = ApiKeyConfig::default();
+    assert_fields_exhaustive();
     vec![
         (
             "key",
@@ -148,7 +133,39 @@ fn fields() -> Vec<(&'static str, Pin)> {
             "previous_expires_at",
             Pin::Row(KEYS, "k5_a_rotation_written_by_reload_honours_its_grace"),
         ),
+        (
+            "approved_by",
+            Pin::Row(
+                KEYS,
+                "k5_a_reload_removing_a_cli_keys_approver_ends_it_on_the_next_call",
+            ),
+        ),
+        (
+            "cli_host",
+            Pin::Exempt("display only: shown on the Keys screen, never read by a decision"),
+        ),
     ]
+}
+
+/// Keep the compile-time field inventory exhaustive.
+fn assert_fields_exhaustive() {
+    let ApiKeyConfig {
+        key: _,
+        key_sha256: _,
+        expires_at: _,
+        name: _,
+        rate_limit: _,
+        backends: _,
+        allowed_tools: _,
+        denied_tools: _,
+        admin: _,
+        kind: _,
+        principal: _,
+        previous_key_sha256: _,
+        previous_expires_at: _,
+        approved_by: _,
+        cli_host: _,
+    } = ApiKeyConfig::default();
 }
 
 /// The named fields of `ApiKeyConfig` as its source declares them.
