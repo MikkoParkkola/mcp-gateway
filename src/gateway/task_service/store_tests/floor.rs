@@ -234,12 +234,12 @@ async fn s6_skipped_files_and_the_lease_are_left_alone() {
         serde_json::from_slice(&std::fs::read(&reserved).unwrap()).unwrap();
     value["model"]["task"]["lastUpdatedAt"] = serde_json::json!("2026-09-06T00:00:00Z");
     std::fs::write(&reserved, serde_json::to_vec(&value).unwrap()).unwrap();
-    std::fs::write(
-        path.join("task-00000000-0000-4000-8000-000000000001.json"),
+    // Owner-only, as the store requires of every file it finds.
+    seed_private(
+        &path.join("task-00000000-0000-4000-8000-000000000001.json"),
         b"{not json",
-    )
-    .unwrap();
-    std::fs::write(path.join(format!("{}.json.tmp.1.0", ids[0])), b"partial").unwrap();
+    );
+    seed_private(&path.join(format!("{}.json.tmp.1.0", ids[0])), b"partial");
     let store = open(&path).await;
     let live = format!("{}.json", ids[0]);
     let others = |path: &Path| {
