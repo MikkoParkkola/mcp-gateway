@@ -25,14 +25,18 @@ use super::proxy::{AllowlistProxy, Credential};
 pub(crate) struct ControlBounds {
     /// The helper's one connection.
     pub(crate) accept: Duration,
-    /// The handshake, and the rest of any frame once its first byte came.
+    /// The rest of any frame once its first byte came, and each write.
     pub(crate) frame: Duration,
+    /// The first byte of `fetch_start`: the helper connects before it builds
+    /// its root and asks for the fetch after, so this covers its setup.
+    pub(crate) setup: Duration,
 }
 
 /// The design's bounds.
 pub(crate) const CONTROL_BOUNDS: ControlBounds = ControlBounds {
     accept: Duration::from_secs(5),
     frame: Duration::from_secs(5),
+    setup: Duration::from_secs(30),
 };
 
 /// The connecting process is the helper: its parent is the `unshare` the
@@ -165,7 +169,9 @@ pub(crate) async fn accept_helper(
     unshare_pid: u32,
     uid: u32,
     bounds: ControlBounds,
+    deadline: tokio::time::Instant,
 ) -> Result<UnixStream, Refusal> {
+    let _ = deadline;
     let accepted = tokio::time::timeout(bounds.accept, listener.accept())
         .await
         .map_err(|_| Refusal::Step("the sandbox never opened its control connection".into()))?;
