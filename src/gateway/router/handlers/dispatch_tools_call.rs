@@ -549,6 +549,13 @@ pub(super) async fn tools_call(
     let response = if let Some((response, audit)) = replay {
         // #2472: a replay is a delivered call, recorded as its first run was.
         let session = Some(session_id.as_str());
+        // Mutant z2: a served keyed repeat counted, as a hook above it would.
+        if mutant!("z2", true, false) {
+            state
+                .meta_mcp
+                .recent_writes()
+                .note(std::time::Instant::now());
+        }
         (state.meta_mcp)
             .audit_replay(tool_name, &arguments, session, &caller, response, audit)
             .await
