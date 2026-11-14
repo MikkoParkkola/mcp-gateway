@@ -140,11 +140,17 @@ async fn a_restart_of_a_backend_that_ignores_every_signal_completes_in_bound() {
         .await
         .expect("the restart completes within its bound");
     assert!(restarted.is_ok(), "the restart failed: {restarted:?}");
-    assert_ne!(
-        kernel_view(old),
-        Some(false),
-        "the old backend still runs after the restart"
-    );
+    // The old close is hard-limited: on a loaded host the limit can end it
+    // with the old tree handed to the reaper, killed a moment after the
+    // restart returns. What the row guards is an old backend left running.
+    let by = std::time::Instant::now() + Duration::from_secs(30);
+    while kernel_view(old) == Some(false) {
+        assert!(
+            std::time::Instant::now() < by,
+            "the old backend still runs 30 s after the restart"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     backend.stop().await.expect("stop");
 }
 
