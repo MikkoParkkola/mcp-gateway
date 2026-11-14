@@ -53,19 +53,27 @@ cmd=$!
 sample start
 nap=
 while :; do
+  # bash 5.1 and 5.2 drop a job a signal killed from the job table as soon as they notice the death, so a CMD killed
+  # before the wait below (while a sample runs, say: an out-of-memory kill) is never named by `wait -n`, and the loop
+  # would wake only for naps until the step limit. Its pid is gone then: collect the status bash saved for it.
+  if ! kill -0 "$cmd" 2>/dev/null; then
+    wait "$cmd" 2>/dev/null
+    status=$?
+    break
+  fi
   # One nap at a time: a signal can end the wait below while the nap still runs.
   if [ -z "$nap" ]; then
     sleep "$every" &
     nap=$!
   fi
-  done=
-  # Wakes when CMD ends (an already-ended CMD counts), when the nap ends, or when a trapped signal arrives
-  # (then done is empty and the loop waits again; CMD's own end still wakes it).
-  wait -n -p done "$cmd" "$nap" 2>/dev/null
+  ended=
+  # Wakes when CMD ends (an exited CMD counts even if it ended first; a killed one may be dropped, see above), when
+  # the nap ends, or when a trapped signal arrives (then ended is empty and the loop waits again).
+  wait -n -p ended "$cmd" "$nap" 2>/dev/null
   status=$?
-  if [ "${done:-}" = "$cmd" ]; then
+  if [ "${ended:-}" = "$cmd" ]; then
     break
-  elif [ "${done:-}" = "$nap" ]; then
+  elif [ "${ended:-}" = "$nap" ]; then
     nap=
     sample running
   fi
