@@ -60,7 +60,7 @@ fn exporter(dir: &Path, log: &Path) -> LogExporter {
 /// One vanish mid-scan: one rescan, nothing lost.
 #[test]
 fn export_rescans_once_when_a_listed_file_vanishes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = logger(&log);
     (0..3).for_each(|i| event(&l, &format!("a{i}")));
@@ -85,7 +85,7 @@ fn export_rescans_once_when_a_listed_file_vanishes() {
 /// the next poll carries on.
 #[test]
 fn export_reports_busy_when_the_log_changes_twice() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = logger(&log);
     (0..3).for_each(|i| event(&l, &format!("a{i}")));
@@ -137,7 +137,7 @@ fn rotate(l: &TransparencyLogger, log: &Path) {
 /// scans: a busy poll that forwards nothing, and the next poll carries on.
 #[test]
 fn export_reports_busy_when_segments_change_on_both_scans() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = logger(&log);
     (0..3).for_each(|i| event(&l, &format!("a{i}")));
@@ -168,7 +168,7 @@ fn export_reports_busy_when_segments_change_on_both_scans() {
 /// not a busy log on every poll.
 #[test]
 fn export_of_an_absent_log_is_an_empty_poll() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let mut exp = exporter(dir.path(), &log);
     EXPORT_PASSES.with(|c| c.set(0));
@@ -180,7 +180,7 @@ fn export_of_an_absent_log_is_an_empty_poll() {
 /// Growth during the scan: no rescan.
 #[test]
 fn export_does_not_rescan_for_growth() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = logger(&log);
     (0..3).for_each(|i| event(&l, &format!("a{i}")));
@@ -198,7 +198,7 @@ fn export_does_not_rescan_for_growth() {
 /// and none read twice.
 #[test]
 fn export_reads_a_segment_sealed_after_the_listing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = logger(&log);
     (0..3).for_each(|i| event(&l, &format!("a{i}")));
@@ -227,7 +227,7 @@ fn export_reads_a_segment_sealed_after_the_listing() {
 #[test]
 fn export_rescans_once_when_rotation_and_retention_pass_the_listing() {
     use crate::security::transparency_log::segments::{list_segments, sealed_path};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("gov.jsonl");
     let l = logger(&log);
     (0..3).for_each(|i| event(&l, &format!("a{i}")));

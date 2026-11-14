@@ -193,7 +193,7 @@ async fn tenant_read_corpus_fp_measurement() {
 
     let reads = ReadHistory::shared();
     let fw = Arc::new(firewall(window, &reads));
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     // One firewall, so the stream judge shares the frames' read history.
     let stream = Stream::new(&fw, dir.path());
     let mut seen: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();

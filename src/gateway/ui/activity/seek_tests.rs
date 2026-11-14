@@ -30,7 +30,7 @@ fn logger(path: &Path) -> TransparencyLogger {
 
 #[test]
 fn c1_an_old_record_in_a_sealed_segment_is_found_by_seek() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
     let l = logger(&path);
     for i in 0..400 {
@@ -59,7 +59,7 @@ fn c1_an_old_record_in_a_sealed_segment_is_found_by_seek() {
 
 #[test]
 fn c1_bisection_reads_o_log_n_windows_in_a_large_file() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
     let pad = "p".repeat(400);
     let body: String = (1..=30_000)
@@ -77,7 +77,7 @@ fn c1_bisection_reads_o_log_n_windows_in_a_large_file() {
 
 #[test]
 fn c1_a_record_at_the_cap_is_returned_whole() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
     let mut big = json!({"counter": 5, "pad": ""});
     let base = big.to_string().len();
@@ -103,7 +103,7 @@ fn c1_a_record_at_the_cap_is_returned_whole() {
 
 #[test]
 fn c2_a_counter_not_in_the_kept_log_is_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
     let body: String = (10..=20)
         .map(|c| json!({"counter": c}).to_string() + "\n")
@@ -122,7 +122,7 @@ fn c2_a_counter_not_in_the_kept_log_is_none() {
 fn c1_bad_lines_never_hide_the_records_after_them() {
     // A torn line after every third counter, and a line over the record cap
     // after counter 25: every counter on both sides is still found.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
     let mut body = String::new();
     for c in 1..=40 {
@@ -149,7 +149,7 @@ fn c1_bad_lines_never_hide_the_records_after_them() {
 #[test]
 fn a_file_in_the_rotation_gap_is_found_under_its_sealed_name() {
     use crate::security::transparency_log::segments::sealed_path;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("inv.jsonl");
     std::fs::write(sealed_path(&log, 3), "{\"counter\": 1}\n").unwrap();
     // The active name is gone for an instant; segment 3's bytes are sealed.

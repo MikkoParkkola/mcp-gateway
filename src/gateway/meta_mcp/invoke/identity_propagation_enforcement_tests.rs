@@ -632,7 +632,7 @@ async fn the_mint_attaches_the_send_check_to_what_it_lends() {
     // A required binding mints only with a durable audit record. The log
     // lives in its own directory: it writes sidecar files beside its path,
     // and the directory takes them with it.
-    let dir = tempfile::tempdir().expect("a log directory");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
         path: dir

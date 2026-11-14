@@ -21,6 +21,12 @@ use crate::config::{ApiKeyConfig, ApiKeyKind, Config, api_key_digest_spec};
 use crate::config_reload::LiveConfig;
 use chrono::Utc;
 
+impl Services {
+    pub(crate) fn binding_test_admin(&self, principal: &str, at: chrono::DateTime<Utc>) -> bool {
+        standing(self, principal, at).is_some_and(|s| s.admin)
+    }
+}
+
 fn key(name: &str, secret: &str, admin: bool) -> ApiKeyConfig {
     ApiKeyConfig {
         key: None,

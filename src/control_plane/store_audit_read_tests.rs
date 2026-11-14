@@ -103,7 +103,7 @@ fn in_memory_audit_read_is_bounded_and_ordered() {
 // MIK-6710.AUDIT.1 — both backends satisfy the bounded-read contract.
 #[test]
 fn file_audit_read_is_bounded_and_ordered() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     bounded_audit_conformance(&file_store(dir.path()));
 }
 
@@ -114,7 +114,7 @@ fn file_audit_read_is_bounded_and_ordered() {
 #[test]
 fn file_audit_read_caps_bytes_on_a_log_larger_than_the_window() {
     use std::io::Write;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logger = governance_logger(dir.path());
     let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     store
@@ -222,7 +222,7 @@ fn file_audit_read_caps_bytes_on_a_log_larger_than_the_window() {
 #[test]
 fn file_audit_read_fails_closed_on_a_line_longer_than_the_window() {
     use std::io::Write;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let logger = governance_logger(dir.path());
     let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     store

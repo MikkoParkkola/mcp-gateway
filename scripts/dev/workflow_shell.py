@@ -206,6 +206,9 @@ class UnsupportedSyntax(Exception):
 
 
 KEYWORDS = {"if", "then", "else", "elif", "fi", "for", "do", "done", "while", "until", "case", "esac", "!"}
+# Wrappers that run their arguments unchanged and only log around them: the walker reads the command they run.
+# Closed list; scripts/ci/with-memory-log.sh logs memory numbers while a library build runs.
+TRANSPARENT = frozenset({"scripts/ci/with-memory-log.sh", "./scripts/ci/with-memory-log.sh"})
 PYTHONS = {"python", "python3"}
 # The gates' pinned environment (scripts/gate-env): its interpreter by path in
 # the workflows, and as pre-push binds it.
@@ -586,6 +589,8 @@ def _command_words(piece):
     words = [value for _, value in pairs]
     while words and (words[0] in KEYWORDS or ASSIGN.match(words[0])):
         words = words[1:]
+    if words and words[0] in TRANSPARENT:
+        words = words[1:]
     if words and words[0] == "env":
         words = words[1:]
         while words and ASSIGN.match(words[0]):
@@ -659,6 +664,13 @@ def executions(run_block: str, shell_lines: ShellLines = ShellLines.STRICT,
     return found
 
 
+def _unwrapped(line):
+    """`line` without a leading TRANSPARENT wrapper: the command the wrapper runs is the execution, so a line like
+    `scripts/ci/with-memory-log.sh python3 x.py` reads as `python3 x.py`, not as a run of the wrapper's .sh."""
+    head, _, rest = line.lstrip().partition(" ")
+    return rest if head in TRANSPARENT and rest.strip() else line
+
+
 def _walk(run_block: str, shell_lines: ShellLines = ShellLines.STRICT, ci_only_lines=frozenset()) -> list[Execution]:
     """The walker proper: every script execution it can read, in order."""
     # One word per `${{ … }}` expression, so whitespace splitting keeps it whole.
@@ -670,7 +682,7 @@ def _walk(run_block: str, shell_lines: ShellLines = ShellLines.STRICT, ci_only_l
         if (role is not Role.COMMAND and _names_sh(body) and " ".join(body.split()) not in ci_only_lines
                 and shell_lines is ShellLines.STRICT):
             raise UnsupportedSyntax(f"a .sh inside a heredoc body: {body.strip()}")
-    lines = [text for text, role in scanned if role is Role.COMMAND]
+    lines = [_unwrapped(text) for text, role in scanned if role is Role.COMMAND]
     found, bound, loops = [], {}, {}
     for raw in lines:
         if any("\n" in body and (PY_WORD.search(body) or PY_PATH.search(body) or _names_sh(body))

@@ -81,7 +81,7 @@ fn current_thread() -> tokio::runtime::Runtime {
 #[test]
 fn api4_4_only_an_override_that_lets_a_backend_load_is_recorded() {
     current_thread().block_on(async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (log, path) = logger(&dir);
         let (auditor, drain) = OverrideAuditor::start(Some(log));
         let mut backends = named(&["inventory"], || exposed(true));
@@ -110,7 +110,7 @@ fn api4_4_only_an_override_that_lets_a_backend_load_is_recorded() {
 #[test]
 fn api4_4_transitions_land_in_the_order_they_were_queued() {
     current_thread().block_on(async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (log, path) = logger(&dir);
         let (auditor, drain) = OverrideAuditor::start(Some(log));
         let names: Vec<String> = (0..20).map(|i| format!("b{i:02}")).collect();
@@ -142,7 +142,7 @@ fn api4_4_transitions_land_in_the_order_they_were_queued() {
 #[test]
 fn api4_4_a_transition_queued_before_shutdown_is_written_by_the_drain() {
     current_thread().block_on(async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (log, path) = logger(&dir);
         let (auditor, drain) = OverrideAuditor::start(Some(log));
         auditor.sync_config(&named(&["inventory"], || exposed(true)));
@@ -161,7 +161,7 @@ fn api4_4_a_transition_queued_before_shutdown_is_written_by_the_drain() {
 /// named in the log, one line per record.
 #[test]
 fn api4_4_a_drain_that_runs_out_names_every_unwritten_record() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (log, _path) = logger(&dir);
     let lines = crate::test_log_capture::records(|| {
         current_thread().block_on(async {
@@ -216,7 +216,7 @@ fn api4_4_without_a_log_each_transition_is_a_named_warning() {
 #[test]
 fn api4_4_removing_an_in_effect_backend_withdraws_it() {
     current_thread().block_on(async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (log, path) = logger(&dir);
         let (auditor, drain) = OverrideAuditor::start(Some(log));
         auditor.sync_config(&named(&["inventory"], || exposed(true)));
@@ -240,7 +240,7 @@ fn api4_4_removing_an_in_effect_backend_withdraws_it() {
 #[test]
 fn api4_4_a_reload_dropped_after_registering_still_records_the_override() {
     current_thread().block_on(async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (log, path) = logger(&dir);
         let (auditor, drain) = OverrideAuditor::start(Some(log));
         let registry = crate::backend::BackendRegistry::new();
@@ -293,7 +293,7 @@ fn registry_with_exposed(name: &str) -> crate::backend::BackendRegistry {
 #[test]
 fn api4_4_the_drain_waits_for_a_reload_in_flight() {
     current_thread().block_on(async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (log, path) = logger(&dir);
         let (auditor, drain) = OverrideAuditor::start(Some(log));
         let registry = crate::backend::BackendRegistry::new();
@@ -329,7 +329,7 @@ fn api4_4_the_drain_waits_for_a_reload_in_flight() {
 #[test]
 fn api4_4_a_fail_closed_log_that_cannot_record_at_start_refuses_it() {
     current_thread().block_on(async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("transparency.jsonl");
         let log = Arc::new(
             TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -355,7 +355,7 @@ fn api4_4_a_fail_closed_log_that_cannot_record_at_start_refuses_it() {
 #[test]
 fn api4_4_the_start_record_is_on_disk_before_serving() {
     current_thread().block_on(async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (log, path) = logger(&dir);
         let (auditor, _drain) = OverrideAuditor::start(None);
         auditor
@@ -380,7 +380,7 @@ fn api4_4_a_stalled_audit_file_does_not_hang_the_start() {
                 false,
             ),
         ] {
-            let dir = tempfile::tempdir().unwrap();
+            let dir = crate::test_dir_keep::kept_tempdir();
             let path = dir.path().join("transparency.jsonl");
             let log = Arc::new(
                 TransparencyLogger::open(Arc::new(TransparencyLogConfig {
