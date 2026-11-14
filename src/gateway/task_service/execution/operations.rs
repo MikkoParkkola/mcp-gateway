@@ -503,57 +503,47 @@ impl TaskExecutor {
                 principal,
                 id,
                 revision,
-            } => {
-                let cancel = || {
-                    (
-                        TaskTransition::Cancel,
-                        crate::gateway::task_service::record::Provenance::default(),
-                        crate::gateway::gateway_writes::WriteRecord::default(),
-                    )
-                };
-                match self
-                    .transition_write(
-                        principal,
-                        id,
-                        revision,
-                        cancel(),
-                        ErrorAuthor::Gateway,
-                        None,
-                        Kind::External,
-                    )
-                    .await
-                {
-                    // An owner can always cancel (MIK-8202 P4a, lead ruling): on a
-                    // clock before 1970 the cancel neither waits nor refuses. It is
-                    // dated at the record's own last change, a real time the record
-                    // already carries, never 1969 or 0.
-                    Err(CommitFailure::ClockUnreadable) => {
-                        let dated = self
-                            .service
-                            .get(principal, id)
-                            .map_err(CommitFailure::Service)?
-                            .task
-                            .last_updated_at();
-                        self.transition_write(
-                            principal,
-                            id,
-                            revision,
-                            cancel(),
-                            ErrorAuthor::Gateway,
-                            Some(dated),
-                            Kind::External,
-                        )
-                        .await?
-                    }
-                    other => other?,
-                }
-            }
+            } => self.cancel_write(principal, id, revision).await?,
         };
         if changed {
             self.published(&committed, &id);
             self.notify_observer(CommitStage::Transitioned, &id).await;
         }
         Ok(committed)
+    }
+
+    /// The route's cancel, an external write. An owner can always cancel
+    /// (MIK-8202 P4a, lead ruling): on a clock before 1970 the cancel neither
+    /// waits nor refuses. It is dated at the record's own last change, a real
+    /// time the record already carries, never 1969 or 0.
+    async fn cancel_write(
+        &self,
+        principal: &str,
+        id: &str,
+        revision: u64,
+    ) -> Result<(CommittedTask, bool, String), CommitFailure> {
+        let cancel = || {
+            (
+                TaskTransition::Cancel,
+                crate::gateway::task_service::record::Provenance::default(),
+                crate::gateway::gateway_writes::WriteRecord::default(),
+            )
+        };
+        let (author, kind) = (ErrorAuthor::Gateway, Kind::External);
+        let first = self
+            .transition_write(principal, id, revision, cancel(), author, None, kind)
+            .await;
+        let Err(CommitFailure::ClockUnreadable) = first else {
+            return first;
+        };
+        let dated = self
+            .service
+            .get(principal, id)
+            .map_err(CommitFailure::Service)?
+            .task
+            .last_updated_at();
+        self.transition_write(principal, id, revision, cancel(), author, Some(dated), kind)
+            .await
     }
 
     /// The request-side adapter: a caller-supplied principal becomes an owner
