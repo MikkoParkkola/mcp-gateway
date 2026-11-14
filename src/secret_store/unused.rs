@@ -118,11 +118,16 @@ fn corpus(sources: &NamingSources) -> Result<Corpus, String> {
     let mut hasher = Sha256::new();
     let mut texts = Vec::new();
     let mut scalars = Vec::new();
-    let config = read_regular(&sources.config, CONFIG_UNREAD)?;
+    // Through the config guard, as every gateway.yaml read is: a config the
+    // gateway would refuse to load is refused here too.
+    let config =
+        crate::config::read_checked_file(&sources.config, crate::config::CheckedFile::Config)
+            .map_err(|_| CONFIG_UNREAD.to_owned())?
+            .into_bytes();
     let root = sources.config.as_os_str().as_encoded_bytes();
     absorb(&mut hasher, 1, root);
     absorb(&mut hasher, 2, &config);
-    texts.push(folded(&config));
+    texts.push(ascii_lower(&config));
     let text = std::str::from_utf8(&config).map_err(|_| CONFIG_UNREAD.to_owned())?;
     let parsed = crate::yaml::from_str::<Value>(text).map_err(|_| CONFIG_PARSE.to_owned())?;
     take_strings(&parsed, &mut scalars);
@@ -130,7 +135,7 @@ fn corpus(sources: &NamingSources) -> Result<Corpus, String> {
         let bytes = read_regular(path, "an env file could not be read")?;
         absorb(&mut hasher, 3, path.as_os_str().as_encoded_bytes());
         absorb(&mut hasher, 4, &bytes);
-        texts.push(folded(&bytes));
+        texts.push(ascii_lower(&bytes));
     }
     for value in &sources.env_values {
         absorb(&mut hasher, 5, value.as_bytes());
@@ -141,7 +146,7 @@ fn corpus(sources: &NamingSources) -> Result<Corpus, String> {
         absorb(&mut hasher, 6, bytes);
         match value.to_str() {
             Some(text) => scalars.push(text.to_owned()),
-            None => texts.push(folded(bytes)),
+            None => texts.push(ascii_lower(bytes)),
         }
     }
     for dir in &sources.capability_dirs {
@@ -193,7 +198,7 @@ fn read_caps(
         let bytes = std::fs::read(&path).map_err(|_| CAP_UNREAD.to_owned())?;
         absorb(hasher, 8, path.as_os_str().as_encoded_bytes());
         absorb(hasher, 9, &bytes);
-        texts.push(folded(&bytes));
+        texts.push(ascii_lower(&bytes));
         if let Ok(text) = std::str::from_utf8(&bytes)
             && let Ok(value) = crate::yaml::from_str::<Value>(text)
         {
@@ -243,7 +248,8 @@ fn absorb(hasher: &mut Sha256, tag: u8, bytes: &[u8]) {
     hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     hasher.update(bytes);
 }
-fn folded(bytes: &[u8]) -> String {
+/// `bytes` with ASCII letters lower-cased, so a suffix matches in any case.
+fn ascii_lower(bytes: &[u8]) -> String {
     bytes
         .iter()
         .map(|byte| char::from(byte.to_ascii_lowercase()))

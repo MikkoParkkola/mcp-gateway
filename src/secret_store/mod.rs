@@ -28,8 +28,7 @@ pub(crate) use save::{
     unused_entries_until,
 };
 pub(crate) use unused::{
-    DeleteRefused, Deleted, Naming, NamingSources, delete_unused, is_generated_name, naming,
-    suffix_of,
+    DeleteRefused, Deleted, Listing, NamingSources, delete_unused, is_generated_name, listing,
 };
 
 /// A store new secrets are written to. Every call is bounded and never

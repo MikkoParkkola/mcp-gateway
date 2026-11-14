@@ -3,6 +3,7 @@
 //! Unused entries: which sources name an entry, the index's store-scoped lines, and name shapes (ADR-028 rule 6).
 
 use super::{Naming, NamingSources, is_generated_name, naming, suffix_of};
+use crate::gateway::test_helpers::write_owner_only;
 use crate::secret_store::index::Index;
 use crate::secret_store::{
     FilesStore, NewSecret, SecretStore, StoreKind, UnusedEntry, Vault, fresh_name, save_secrets,
@@ -37,7 +38,7 @@ pub(super) fn sources(dir: &Path) -> NamingSources {
 pub(super) fn quiet(dir: &Path) -> NamingSources {
     let config = dir.join("gateway.yaml");
     if !config.is_file() {
-        std::fs::write(&config, b"k: clean\n").expect("yaml");
+        write_owner_only(&config, b"k: clean\n").expect("yaml");
     }
     sources(dir)
 }
@@ -188,13 +189,13 @@ fn plant_nested(dir: &Path, _name: &str, suffix: &str) -> NamingSources {
 
 fn plant_escape(dir: &Path, _name: &str, suffix: &str) -> NamingSources {
     let body = format!("ref: \"{}\"\n", hex_escapes(suffix));
-    std::fs::write(dir.join("gateway.yaml"), body).expect("yaml");
+    write_owner_only(dir.join("gateway.yaml"), body).expect("yaml");
     sources(dir)
 }
 
 fn plant_upper(dir: &Path, _name: &str, suffix: &str) -> NamingSources {
     let upper = suffix.to_ascii_uppercase();
-    std::fs::write(dir.join("gateway.yaml"), format!("k: {upper}\n")).expect("yaml");
+    write_owner_only(dir.join("gateway.yaml"), format!("k: {upper}\n")).expect("yaml");
     sources(dir)
 }
 
@@ -202,7 +203,7 @@ fn plant_symlink(dir: &Path, name: &str, _suffix: &str) -> NamingSources {
     let link = dir.join("current");
     link_file(&secret_path(dir, name), &link);
     let yaml = format!("k: \"file:{}\"\n", link.display());
-    std::fs::write(dir.join("gateway.yaml"), yaml).expect("yaml");
+    write_owner_only(dir.join("gateway.yaml"), yaml).expect("yaml");
     sources(dir)
 }
 
@@ -240,7 +241,7 @@ fn plant_cap_mode(dir: &Path) -> NamingSources {
 }
 
 fn plant_bad_yaml(dir: &Path) -> NamingSources {
-    std::fs::write(dir.join("gateway.yaml"), b"[\n").expect("yaml");
+    write_owner_only(dir.join("gateway.yaml"), b"[\n").expect("yaml");
     sources(dir)
 }
 

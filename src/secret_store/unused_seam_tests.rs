@@ -9,6 +9,7 @@ use super::tests::{
     index_bytes, quiet, rig, save_field, saved, scoped_removal, secret_path, soon, sources,
 };
 use super::{DeleteRefused, Deleted, delete_unused, listing};
+use crate::gateway::test_helpers::write_owner_only;
 use crate::secret_store::index::Index;
 use crate::secret_store::{
     FilesStore, NewSecret, SecretStore, StoreError, StoreKind, save_secrets,
@@ -174,7 +175,7 @@ fn vault_lock_released_after_refusals() {
     {
         let (dir, vault, name) = saved();
         let sources = sources(dir.path());
-        std::fs::write(&sources.config, format!("k: {name}\n")).expect("yaml");
+        write_owner_only(&sources.config, format!("k: {name}\n")).expect("yaml");
         let got = delete_unused(
             &vault,
             &FilesStore::new(dir.path()),

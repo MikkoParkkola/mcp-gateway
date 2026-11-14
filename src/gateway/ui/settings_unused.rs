@@ -4,15 +4,35 @@
 //! The delete holds the reload lock, the config sidecar and the vault lock, in that
 //! order, and re-checks every naming source under them.
 
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
+use axum::Json;
 use axum::extract::{Path, Query, State, rejection::QueryRejection};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
+use serde_json::{Value, json};
 
+use super::admin_audit::AuditDetail;
+use super::errors::{flat_error, structured_error};
+use crate::config_reload::{ConfigWriteError, RELOAD_LOCK_WAIT, ReloadContext};
 use crate::gateway::{router::AppState, ui::guard::Guard};
-use crate::secret_store::DeleteRefused;
+use crate::secret_store::{
+    DeleteRefused, Deleted, FilesStore, Listing, NamingSources, SecretStore, Vault, delete_unused,
+    is_generated_name, listing,
+};
+
+/// Fixed sentences. None repeats a path, a name, or a loader error.
+const CONFIG_UNREAD: &str = "the config could not be read";
+const UNREADABLE: &str = "the unused entries could not be read";
+const VAULT_FAILED: &str = "the vault could not be opened";
+const LOCK_FAILED: &str = "the config lock could not be taken";
+const DELETE_FAILED: &str = "the delete did not finish";
+const NO_KEYCHAIN: &str = "no keychain on this platform";
+
+type Opened = Arc<dyn SecretStore + Send + Sync>;
 
 /// `?store=keychain|files` on a delete.
 #[derive(Deserialize)]
@@ -20,28 +40,269 @@ pub(super) struct StoreQuery {
     pub(super) store: String,
 }
 
-/// The status a delete refusal answers with.
-pub(super) fn refusal_status(_refused: &DeleteRefused) -> StatusCode {
-    StatusCode::NOT_IMPLEMENTED
+/// BadName 400, NotListed 404, StoreMismatch/Named/Pending 409, Busy/TimedOut/Failed 503.
+pub(super) fn refusal_status(refused: &DeleteRefused) -> StatusCode {
+    match refused {
+        DeleteRefused::BadName => StatusCode::BAD_REQUEST,
+        DeleteRefused::NotListed => StatusCode::NOT_FOUND,
+        DeleteRefused::StoreMismatch | DeleteRefused::Named | DeleteRefused::Pending => {
+            StatusCode::CONFLICT
+        }
+        DeleteRefused::Busy | DeleteRefused::TimedOut | DeleteRefused::Failed(_) => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    }
 }
 
-/// `GET /ui/api/settings/secrets/unused`.
-pub(super) async fn list_unused(State(_state): State<Arc<AppState>>, guard: Guard) -> Response {
+/// The one place naming sources are gathered for `target`.
+///
+/// Config path, the running gateway's env files, values parsed from those files
+/// by a fresh load, every process-environment value, and both capability-directory
+/// lists with duplicates removed. A failed load is [`CONFIG_UNREAD`], with no detail.
+fn naming_sources(ctx: &ReloadContext, target: &std::path::Path) -> Result<NamingSources, String> {
+    let loaded = crate::config::Config::load_with_overlay(Some(target), ctx.env_paths())
+        .map_err(|_| CONFIG_UNREAD.to_owned())?;
+    let mut capability_dirs = Vec::new();
+    extend_dirs(
+        &mut capability_dirs,
+        &ctx.live_config.get().capabilities.directories,
+    );
+    extend_dirs(
+        &mut capability_dirs,
+        &loaded.config.capabilities.directories,
+    );
+    Ok(NamingSources {
+        config: target.to_path_buf(),
+        env_files: ctx.env_paths().as_paths().to_vec(),
+        env_values: loaded
+            .overlay
+            .assigned_values()
+            .map(str::to_owned)
+            .collect(),
+        process_env: std::env::vars_os().map(|(_, value)| value).collect(),
+        capability_dirs,
+    })
+}
+
+/// Append `listed` as paths, skipping a path already present.
+fn extend_dirs(dirs: &mut Vec<PathBuf>, listed: &[String]) {
+    for dir in listed {
+        let path = PathBuf::from(dir);
+        if !dirs.contains(&path) {
+            dirs.push(path);
+        }
+    }
+}
+
+/// Parent of the running config path: where a save keeps the vault and the files store.
+fn config_dir(path: &std::path::Path) -> &std::path::Path {
+    path.parent().unwrap_or(std::path::Path::new("."))
+}
+
+/// The 503 a settings save returns when this gateway has no reload context.
+fn no_reload() -> Response {
+    flat_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Config reload is not enabled on this gateway",
+    )
+    .into_response()
+}
+
+/// 503 `unreadable` with a fixed sentence.
+fn unreadable(message: &str) -> Response {
+    structured_error(StatusCode::SERVICE_UNAVAILABLE, "unreadable", message).into_response()
+}
+
+/// `GET /ui/api/settings/secrets/unused`. Names, stores, and write times. No value, no audit.
+pub(super) async fn list_unused(State(state): State<Arc<AppState>>, guard: Guard) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    StatusCode::NOT_IMPLEMENTED.into_response()
+    let Some(ctx) = state.meta_mcp.reload_context() else {
+        return no_reload();
+    };
+    match tokio::task::spawn_blocking(move || read_unused(&ctx)).await {
+        Ok(Ok(listed)) => Json(list_body(&listed)).into_response(),
+        Ok(Err(sentence)) => unreadable(sentence),
+        Err(_) => unreadable(UNREADABLE),
+    }
+}
+
+/// Build sources for `ctx.config_path`, open the vault and the stores, and list.
+/// A sources or vault failure is a fixed sentence.
+fn read_unused(ctx: &ReloadContext) -> Result<Listing, &'static str> {
+    let sources = naming_sources(ctx, &ctx.config_path).map_err(|_| CONFIG_UNREAD)?;
+    let dir = config_dir(&ctx.config_path);
+    let vault = Vault::for_config_dir(dir).map_err(|_| VAULT_FAILED)?;
+    let files = FilesStore::new(dir);
+    let keychain = crate::config::keychain::os_secret_store();
+    let mut stores: Vec<&dyn SecretStore> = vec![&files];
+    if let Some(store) = &keychain {
+        let store: &dyn SecretStore = store.as_ref();
+        stores.push(store);
+    }
+    Ok(listing(&vault, &stores, &sources))
+}
+
+/// `entries` of name, store kind, and RFC 3339 `written_at` (`null` at 0 ms).
+/// `errors` of store kind and why. No secret value.
+fn list_body(listed: &Listing) -> Value {
+    json!({
+        "entries": listed.entries.iter().map(|entry| json!({
+            "name": entry.name,
+            "store": entry.store.as_str(),
+            "written_at": written_at(entry.created_at_ms),
+        })).collect::<Vec<_>>(),
+        "errors": listed.errors.iter().map(|(kind, why)| json!({
+            "store": kind.as_str(),
+            "why": why,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// RFC 3339 from `created_at_ms`, or `None` (JSON null) when the index stored 0.
+fn written_at(created_at_ms: u64) -> Option<String> {
+    if created_at_ms == 0 {
+        return None;
+    }
+    let millis = i64::try_from(created_at_ms).ok()?;
+    chrono::DateTime::from_timestamp_millis(millis).map(|at| at.to_rfc3339())
 }
 
 /// `DELETE /ui/api/settings/secrets/unused/{name}?store=...`.
+///
+/// Query and name are refused before anything else is touched. From the reload
+/// lock on, that lock and the config sidecar stay held until this returns, and
+/// every answer records the entry, the store, and the result. Never a value.
 pub(super) async fn delete_unused_entry(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     guard: Guard,
-    Path(_name): Path<String>,
-    _query: Result<Query<StoreQuery>, QueryRejection>,
+    Path(name): Path<String>,
+    query: Result<Query<StoreQuery>, QueryRejection>,
 ) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    StatusCode::NOT_IMPLEMENTED.into_response()
+    let store = match query {
+        Ok(Query(StoreQuery { store })) => store,
+        Err(_) => return refusal_response(&DeleteRefused::BadName),
+    };
+    if store != "files" && store != "keychain" {
+        return refusal_response(&DeleteRefused::BadName);
+    }
+    if !is_generated_name(&name) {
+        return refusal_response(&DeleteRefused::BadName);
+    }
+    let Some(ctx) = state.meta_mcp.reload_context() else {
+        return no_reload();
+    };
+    let held = match ctx.hold_config(RELOAD_LOCK_WAIT).await {
+        Ok(held) => held,
+        Err(ConfigWriteError::Busy) => return audited(&name, &store, &DeleteRefused::Busy),
+        Err(ConfigWriteError::Failed(_)) => {
+            return audited(
+                &name,
+                &store,
+                &DeleteRefused::Failed(LOCK_FAILED.to_owned()),
+            );
+        }
+    };
+    if crate::config_persistence::journal::unsettled(&held.locked.target) {
+        return audited(&name, &store, &DeleteRefused::Pending);
+    }
+    let opened: Opened = if store == "files" {
+        Arc::new(FilesStore::new(config_dir(&ctx.config_path)))
+    } else {
+        let Some(os) = crate::config::keychain::os_secret_store() else {
+            return audited(
+                &name,
+                &store,
+                &DeleteRefused::Failed(NO_KEYCHAIN.to_owned()),
+            );
+        };
+        os
+    };
+    // The config load, the vault and the store calls all block: they run off the
+    // async workers while this task keeps both locks held.
+    let target = held.locked.target.clone();
+    let worker = Arc::clone(&ctx);
+    let entry = name.clone();
+    let joined = tokio::task::spawn_blocking(move || {
+        let sources = naming_sources(&worker, &target).map_err(DeleteRefused::Failed)?;
+        let vault = Vault::for_config_dir(config_dir(&worker.config_path))
+            .map_err(|_| DeleteRefused::Failed(VAULT_FAILED.to_owned()))?;
+        delete_unused(
+            &vault,
+            opened.as_ref(),
+            &entry,
+            &sources,
+            Instant::now() + RELOAD_LOCK_WAIT,
+        )
+    })
+    .await;
+    let outcome = match joined {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            return audited(
+                &name,
+                &store,
+                &DeleteRefused::Failed(DELETE_FAILED.to_owned()),
+            );
+        }
+    };
+    match outcome {
+        Ok(Deleted::Removed) => deleted(&name, &store, false),
+        Ok(Deleted::AlreadyGone) => deleted(&name, &store, true),
+        Err(refused) => audited(&name, &store, &refused),
+    }
+}
+
+/// 200 `{"deleted","already_gone"}`, audited as `removed` or `already_gone`.
+fn deleted(name: &str, store: &str, already_gone: bool) -> Response {
+    let response = Json(json!({"deleted": name, "already_gone": already_gone})).into_response();
+    let result = if already_gone {
+        "already_gone"
+    } else {
+        "removed"
+    };
+    with_audit(response, name, store, result)
+}
+
+/// Refusal JSON, `{"error","message"}`, with no audit detail.
+fn refusal_response(refused: &DeleteRefused) -> Response {
+    let (code, message) = refusal_parts(refused);
+    structured_error(refusal_status(refused), code, message).into_response()
+}
+
+/// [`refusal_response`] plus the audit detail. Used only after the reload lock is taken.
+fn audited(name: &str, store: &str, refused: &DeleteRefused) -> Response {
+    let (code, _) = refusal_parts(refused);
+    with_audit(refusal_response(refused), name, store, code)
+}
+
+/// `secret_entry`, `store`, and `result` on the response. Never a value.
+fn with_audit(mut response: Response, name: &str, store: &str, result: &str) -> Response {
+    let mut detail = serde_json::Map::new();
+    detail.insert("secret_entry".into(), json!(name));
+    detail.insert("store".into(), json!(store));
+    detail.insert("result".into(), json!(result));
+    response.extensions_mut().insert(AuditDetail(detail));
+    response
+}
+
+/// Snake_case variant name, and the fixed sentence (Failed keeps the store's text).
+fn refusal_parts(refused: &DeleteRefused) -> (&'static str, &str) {
+    match refused {
+        DeleteRefused::BadName => (
+            "bad_name",
+            "the name or the store is not one this route deletes",
+        ),
+        DeleteRefused::NotListed => ("not_listed", "that entry is not listed"),
+        DeleteRefused::StoreMismatch => ("store_mismatch", "that entry is in the other store"),
+        DeleteRefused::Named => ("named", "a source still names that entry"),
+        DeleteRefused::Pending => ("pending", "a config write is still unsettled"),
+        DeleteRefused::Busy => ("busy", "a lock this delete needs is held"),
+        DeleteRefused::TimedOut => ("timed_out", "the secret store did not answer in time"),
+        DeleteRefused::Failed(text) => ("failed", text),
+    }
 }

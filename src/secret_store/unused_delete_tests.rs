@@ -6,6 +6,7 @@ use super::tests::{
     index_bytes, list, quiet, rig, save_field, saved, scoped_removal, secret_path, soon, sources,
 };
 use super::{DeleteRefused, Deleted, NamingSources, delete_unused};
+use crate::gateway::test_helpers::write_owner_only;
 use crate::secret_store::index::Index;
 use crate::secret_store::{
     FilesStore, NewSecret, SecretStore, StoreError, StoreKind, Vault, fresh_name, save_secrets,
@@ -297,7 +298,7 @@ fn delete_refuses_bad_names() {
     let (dir, vault) = rig();
     let gateway = dir.path().join("gateway.yaml");
     let before = b"k: clean\n".to_vec();
-    std::fs::write(&gateway, &before).expect("yaml");
+    write_owner_only(&gateway, &before).expect("yaml");
     std::fs::create_dir_all(dir.path().join("secrets")).expect("secrets");
     let store = FilesStore::new(dir.path());
     let sources = sources(dir.path());
@@ -328,7 +329,7 @@ fn delete_refuses_named() {
     const ROW: &str = "delete_refuses_named";
     let (dir, vault, name) = saved();
     let suffix = name.rsplit('.').next().expect("suffix");
-    std::fs::write(dir.path().join("gateway.yaml"), format!("k: {suffix}\n")).expect("yaml");
+    write_owner_only(dir.path().join("gateway.yaml"), format!("k: {suffix}\n")).expect("yaml");
     let path = secret_path(dir.path(), &name);
     let file = std::fs::read(&path).expect("entry");
     let index = index_bytes(dir.path());
