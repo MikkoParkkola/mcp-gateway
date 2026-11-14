@@ -159,9 +159,6 @@ impl MetaMcp {
             client_claim.as_ref(),
             idem_reservation,
         )? {
-            if mutant!("z2", true, false) {
-                self.recent_writes.note(std::time::Instant::now());
-            }
             super::nonce_settle::settle_pre_send(
                 caller,
                 super::nonce_settle::PreSendExit::Served((server, tool)),

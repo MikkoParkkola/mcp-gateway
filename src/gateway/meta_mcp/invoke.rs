@@ -134,6 +134,10 @@ impl MetaMcp {
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
         trace_id: &str,
     ) -> Result<TracedOutcome> {
+        // Mutant z2: counted at the invoke entry, above every replay.
+        if mutant!("z2", true, false) {
+            self.recent_writes.note(std::time::Instant::now());
+        }
         let intake = match self
             .intake(intake::IntakeIn {
                 args,
