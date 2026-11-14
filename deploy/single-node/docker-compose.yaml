@@ -3,6 +3,9 @@ services:
     image: ghcr.io/mikkoparkkola/mcp-gateway:latest
     container_name: mcp-gateway
     restart: unless-stopped
+    # Docker's 10 s default SIGKILLs the gateway mid-stop; it needs its stop
+    # timeout (30 s by default) + 1 s (docs/DEPLOYMENT.md, Stop grace).
+    stop_grace_period: 31s
     command: ["--config", "/config.yaml", "--host", "0.0.0.0", "--port", "39400"]
     ports:
       - "127.0.0.1:39400:39400"

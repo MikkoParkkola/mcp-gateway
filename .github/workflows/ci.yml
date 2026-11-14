@@ -272,6 +272,11 @@ jobs:
         run: python3 scripts/ci/check-pick-then-bind.py --self-test
       - name: No test picks a port, releases it and binds it later (MIK-8211)
         run: python3 scripts/ci/check-pick-then-bind.py
+      - name: Validate the stop-grace check against planted artifacts
+        run: python3 scripts/ci/check-stop-grace.py --self-test
+      # A runner that SIGKILLs sooner cuts the gateway's own stop short.
+      - name: Every shipped way to run the gateway gives it its stop timeout + 1 s
+        run: python3 scripts/ci/check-stop-grace.py
 
   service-template-smoke:
     name: Service template smoke

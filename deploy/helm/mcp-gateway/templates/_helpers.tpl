@@ -206,3 +206,44 @@ sizeLimit. Quantities: plain bytes, or Ki/Mi/Gi/Ti, or k/M/G/T.
 {{- define "mcp-gateway.stateClaim" -}}
 {{- .Values.persistence.existingClaim | default (printf "%s-state" (include "mcp-gateway.fullname" . | trunc 57 | trimSuffix "-")) -}}
 {{- end -}}
+
+{{/*
+The pod's stop grace in whole seconds: config.server.shutdown_timeout
+rounded up to a second, + 1 s, so the kubelet's SIGKILL never lands inside the
+gateway's own stop. Read with the gateway's grammar
+(src/config/humantime_serde.rs): one whole number with an optional unit ms, s,
+m or h (a bare number is seconds), at most 100 years. Anything else fails the
+render, as the gateway would refuse it at start; unset, the gateway's 30 s
+default. tests/fixtures/stop_grace_cases.txt holds the rows the gateway, this
+helper and scripts/ci/check-stop-grace.py share. The value is not echoed: a
+value typed into the wrong field may be a secret.
+*/}}
+{{- define "mcp-gateway.stopGraceSeconds" -}}
+{{- $cap := 3155760000 -}}
+{{- $refuse := "config.server.shutdown_timeout is not a duration the gateway accepts: one whole number with an optional unit ms, s, m or h (a bare number is seconds), at most 100 years, such as 30s. The pod's stop grace is derived from it." -}}
+{{- $server := (.Values.config | default dict).server | default dict -}}
+{{- $secs := 30 -}}
+{{- if hasKey $server "shutdown_timeout" -}}
+{{- $v := get $server "shutdown_timeout" -}}
+{{- $text := toString $v -}}
+{{- if kindIs "float64" $v -}}
+{{- /* A number from a values file arrives as float64, written 1e+06 from a million up. */ -}}
+{{- if or (lt $v 0.0) (gt $v 3155760000.0) (ne $v (floor $v)) -}}{{- fail $refuse -}}{{- end -}}
+{{- $text = printf "%.0f" $v -}}
+{{- end -}}
+{{- $grammar := `^\s*\+?([0-9]+)(ms|s|m|h)?\s*$` -}}
+{{- if not (regexMatch $grammar $text) -}}{{- fail $refuse -}}{{- end -}}
+{{- /* Leading zeros dropped, one digit kept; more than 13 digits is above the cap in any unit, and atoi would overflow. */ -}}
+{{- $digits := regexReplaceAll "^0+(.)" (regexReplaceAll $grammar $text "${1}") "${1}" -}}
+{{- if gt (len $digits) 13 -}}{{- fail $refuse -}}{{- end -}}
+{{- $n := atoi $digits -}}
+{{- $unit := regexReplaceAll $grammar $text "${2}" -}}
+{{- if eq $unit "ms" -}}{{- $secs = div (add $n 999) 1000 -}}
+{{- else if eq $unit "m" -}}{{- $secs = mul $n 60 -}}
+{{- else if eq $unit "h" -}}{{- $secs = mul $n 3600 -}}
+{{- else -}}{{- $secs = $n -}}
+{{- end -}}
+{{- if gt $secs $cap -}}{{- fail $refuse -}}{{- end -}}
+{{- end -}}
+{{- add $secs 1 -}}
+{{- end -}}

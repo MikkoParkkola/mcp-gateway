@@ -34,6 +34,9 @@ spec:
       # the `kubernetes` subcommands shell out to kubectl, which the image does
       # not carry. The reconciler Role is for wherever that CLI runs.
       automountServiceAccountToken: false
+      # The gateway's stop timeout (30 s by default) + 1 s: the 30 s Kubernetes
+      # default would SIGKILL it at the end of its own stop (docs/DEPLOYMENT.md, Stop grace).
+      terminationGracePeriodSeconds: 31
       securityContext:
         runAsNonRoot: true
         # The image declares `USER gateway`, a name the kubelet cannot verify
