@@ -1254,6 +1254,11 @@ An `env:` reference to a variable that was set but empty passed validation, and 
 `server.metrics_token` is unchanged: an unset or empty variable (or an unreadable `file:`, item 44) there still leaves the gateway
 running with `/metrics` closed (item 33). No error prints a secret value.
 
+A keychain entry deleted from Gateway › Settings (unused secret entries) whose delete answered 503 `timed_out` on macOS
+or Windows may still be removed later, when the system keychain finishes the call. A config that names that entry in the
+meantime passes its checks and then fails its next load with the error above until a new value is saved for that
+setting.
+
 ## 41. API keys are configured as sha256 digests, with optional expiry
 
 **Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for an API key configured as plaintext `key`

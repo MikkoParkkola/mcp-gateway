@@ -184,9 +184,8 @@ pub(super) async fn delete_unused_entry(
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    let store = match query {
-        Ok(Query(StoreQuery { store })) => store,
-        Err(_) => return refusal_response(&DeleteRefused::BadName),
+    let Ok(Query(StoreQuery { store })) = query else {
+        return refusal_response(&DeleteRefused::BadName);
     };
     if store != "files" && store != "keychain" {
         return refusal_response(&DeleteRefused::BadName);
@@ -241,15 +240,12 @@ pub(super) async fn delete_unused_entry(
         )
     })
     .await;
-    let outcome = match joined {
-        Ok(outcome) => outcome,
-        Err(_) => {
-            return audited(
-                &name,
-                &store,
-                &DeleteRefused::Failed(DELETE_FAILED.to_owned()),
-            );
-        }
+    let Ok(outcome) = joined else {
+        return audited(
+            &name,
+            &store,
+            &DeleteRefused::Failed(DELETE_FAILED.to_owned()),
+        );
     };
     match outcome {
         Ok(Deleted::Removed) => deleted(&name, &store, false),
@@ -303,7 +299,11 @@ fn refusal_parts(refused: &DeleteRefused) -> (&'static str, &str) {
         DeleteRefused::Named => ("named", "a source still names that entry"),
         DeleteRefused::Pending => ("pending", "a config write is still unsettled"),
         DeleteRefused::Busy => ("busy", "a lock this delete needs is held"),
-        DeleteRefused::TimedOut => ("timed_out", "the secret store did not answer in time"),
+        DeleteRefused::TimedOut => (
+            "timed_out",
+            "the secret store did not answer in time; the delete may still complete later, and a config that names \
+             this entry then fails its next load until a new value is saved for that setting",
+        ),
         DeleteRefused::Failed(text) => ("failed", text),
     }
 }
