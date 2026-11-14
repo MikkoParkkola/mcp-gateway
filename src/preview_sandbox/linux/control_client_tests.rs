@@ -219,3 +219,14 @@ fn r2_a_spent_deadline_is_refused() {
     seen.join().expect("gateway");
     assert!(got.is_err());
 }
+
+/// Kills "a debug print shows the credential" (CWE-532): `Issued`'s Debug
+/// output never holds the secret.
+#[test]
+fn r2_a_debug_print_never_shows_the_credential() {
+    let issued = Issued {
+        credential: SECRET.into(),
+        deadline_ms: 1,
+    };
+    assert!(!format!("{issued:?}").contains(SECRET));
+}

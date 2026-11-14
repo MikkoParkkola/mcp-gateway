@@ -225,7 +225,12 @@ async fn r7a_a_helper_silent_through_setup_is_refused() {
 
 /// R7b, kills "`fetch_start` keeps the old 5 s frame bound": a helper whose
 /// setup takes longer than a frame still gets its credential.
-#[tokio::test(flavor = "current_thread")]
+// The paused clock makes the helper's pause and the session's bounds
+// virtual timers, fired in order whatever the load. The only I/O peer is the
+// script future on this same thread, which writes synchronously; and the
+// session's `timeout` polls its read before its timer, so a clock that
+// auto-advances past a ready read still takes the read.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn r7b_a_fetch_start_after_the_frame_bound_but_within_setup_is_served() {
     let rig = rig().await;
     let (helper, gateway) = UnixStream::pair().expect("pair");
@@ -263,25 +268,24 @@ async fn r7b_a_fetch_start_after_the_frame_bound_but_within_setup_is_served() {
     assert_eq!(expired, "{\"expired\":true}\n");
 }
 
-/// R7c, kills "the setup bound outlives the preview's deadline": a
-/// `fetch_start` after the deadline is refused and gets no credential.
+/// R7c, kills "the setup bound outlives the preview's deadline": a helper
+/// that never asks is cut off at the deadline, not at the setup bound (both
+/// bounds here are past the guard, so only the deadline can end it in time),
+/// and gets no credential.
 #[tokio::test(flavor = "current_thread")]
-async fn r7c_a_fetch_start_after_the_deadline_gets_no_credential() {
+async fn r7c_the_setup_wait_ends_at_the_preview_deadline() {
     let rig = rig().await;
     let (helper, gateway) = UnixStream::pair().expect("pair");
     let bounds = ControlBounds {
-        setup: 10 * SEC,
-        frame: 10 * SEC,
+        setup: 30 * SEC,
+        frame: 30 * SEC,
         ..CONTROL_BOUNDS
     };
     let soon = tokio::time::Instant::now() + SEC;
     let session = serve_session(gateway, &rig.proxy, soon, bounds);
+    // Event-driven: the helper only waits for the gateway to end the session.
     let script = async {
-        let (read, mut write) = helper.into_split();
-        let mut read = BufReader::new(read);
-        tokio::time::sleep(2 * SEC).await;
-        // The gateway may already have closed; a failed write is fine here.
-        let _ = write.write_all(b"{\"fetch_start\":true}\n").await;
+        let mut read = BufReader::new(helper);
         let mut answer = String::new();
         let _ = read.read_line(&mut answer).await;
         answer

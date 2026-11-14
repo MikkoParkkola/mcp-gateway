@@ -6,8 +6,8 @@
 //! proxy credential, the helper reports the fetch done, and the gateway
 //! answers `expired` only once every tunnel of that credential is shut.
 #![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the fetch step, a later part, drives it")
+    not(any(test, target_os = "linux")),
+    expect(dead_code, reason = "only the Linux fetch step drives it so far")
 )]
 
 use std::io;
