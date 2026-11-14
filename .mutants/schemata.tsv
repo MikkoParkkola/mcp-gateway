@@ -1,0 +1,3 @@
+head_sha	a0cb04628e7759cea1f67781552839d1a9b96bf5
+#mutant R1
+mcp-gateway	commands::audit_lookup::tests::a_refusal_names_an_unreadable_body_or_wait	src/commands/audit_lookup_tests.rs:576
