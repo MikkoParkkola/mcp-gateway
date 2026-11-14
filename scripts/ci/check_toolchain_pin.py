@@ -107,9 +107,13 @@ def check_dockerfile(text: str, want: str) -> list[str]:
     published image is compiled by the compiler CI tests with; a minor-only tag such as `rust:1.99-slim` moves with every
     patch release, and an untagged `rust` with every release. A digest picks the image instead of the tag and this check
     cannot tell its compiler, so a Rust builder with a digest is refused. No Rust image at all is a problem too."""
-    # Join backslash-continued lines (the Dockerfile default escape), keeping each instruction's first line number.
+    # Join backslash-continued lines (the Dockerfile default escape), keeping each instruction's first line number. A
+    # comment line is never an instruction and never continues one, even when it ends in a backslash; inside a
+    # continuation Docker also drops blank lines.
     joined, buf, start = [], "", 0
     for n, line in enumerate(text.split("\n"), 1):
+        if line.lstrip().startswith("#") or (buf and not line.strip()):
+            continue
         start = start if buf else n
         if line.rstrip().endswith("\\"):
             buf += line.rstrip()[:-1] + " "
@@ -259,6 +263,11 @@ def self_test() -> int:
         ("the pinned image on a continued line", "FROM \\\n  rust:1.99.1-slim AS builder\n", 0),
         ("a digest after the pinned tag (the digest picks the image)", "FROM rust:1.99.1-slim@sha256:0123abcd AS b\n", 1),
         ("an older image hidden behind a continued line", "FROM rust:1.99.1 AS ok\nFROM \\\n  rust:1.98-slim AS builder\n", 1),
+        ("an older image behind a comment in a continued line", "FROM rust:1.99.1 AS ok\nFROM \\\n# the builder\n  rust:1.98-slim AS b\n", 1),
+        ("an older image behind a blank line in a continued line", "FROM rust:1.99.1 AS ok\nFROM \\\n\n  rust:1.98-slim AS b\n", 1),
+        ("the pinned image behind a comment in a continued line", "FROM \\\n  # the builder\n  rust:1.99.1-slim AS b\n", 0),
+        ("header comments ending in backslashes, then the pinned image", "# Run: docker run \\\n#   -p 1:1 \\\n\nFROM rust:1.99.1-slim\n", 0),
+        ("header comments ending in backslashes, then an older image", "# Run: docker run \\\n#   -p 1:1 \\\n\nFROM rust:1.98-slim\n", 1),
         ("a tagged image named like an earlier stage", "FROM rust:1.99.1-slim AS rust\nFROM rust:1.98-slim\n", 1),
         ("an older minor (today's drift)", "FROM mirror.gcr.io/library/rust:1.98-slim AS builder\nFROM debian:trixie-slim\n", 1),
         ("the pin's minor only, a floating tag", "FROM rust:1.99-slim AS builder\n", 1),
