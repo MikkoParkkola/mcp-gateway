@@ -358,3 +358,81 @@ async fn narrowing_a_gateway_admin_to_one_backend_ends_its_stream() {
 async fn taking_admin_from_a_gateway_admin_ends_its_stream() {
     a_demotion_ends_a_gateway_admins_stream(&["*"], false).await;
 }
+
+/// S2: a restart record change reaches the unscoped admin as one status frame
+/// carrying it; no scoped caller gets a frame for it (its next status frame is
+/// the in-scope change, one step on) or ever carries the member.
+#[tokio::test]
+async fn s2_a_restart_change_reaches_only_the_full_view() {
+    let (state, bearers, _dir) = gateway().await;
+    let mut admin = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    let first = admin.until("status").await;
+    let none = serde_json::Value::Null;
+    assert_eq!(first.json().get("restart"), Some(&none), "{}", first.json());
+    let mut scoped = Vec::new();
+    for (who, bearer) in scoped_callers(&bearers) {
+        let mut s = open(&state, request(STREAM, Who::Bearer(&bearer), None)).await;
+        let status = s.until("status").await;
+        assert!(status.json().get("restart").is_none(), "{who}");
+        scoped.push((who, s, part(&status, 's')));
+    }
+    let before = observed(&state);
+    state.meta_mcp.restart_board().accept(1_000);
+    let next = admin.until("status").await;
+    assert_eq!(
+        next.json()["restart"]["phase"],
+        "accepted",
+        "{}",
+        next.json()
+    );
+    assert_eq!(part(&next, 's'), part(&first, 's') + 1, "one frame");
+    watcher_observed(&state, before).await;
+    register(&state, "late");
+    for (who, s, prev) in &mut scoped {
+        let next = s.until("status").await;
+        assert_eq!(next.json()["server_count"], 2, "{who}: the in-scope change");
+        assert!(next.json().get("restart").is_none(), "{who}");
+        assert_eq!(
+            part(&next, 's'),
+            *prev + 1,
+            "{who}: no frame for the restart"
+        );
+    }
+}
+
+/// S3: a commit that changes only the deadline sends the admin one status
+/// frame with the new deadline, and no tick-only frames follow: the next
+/// status frame is the next real change.
+#[tokio::test]
+async fn s3_a_deadline_only_commit_sends_the_admin_one_frame() {
+    let (state, _bearers, _dir) = gateway().await;
+    let board = state.meta_mcp.restart_board();
+    board.accept(1_000);
+    board.checkpoint();
+    let mut admin = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    let first = admin.until("status").await;
+    assert_eq!(
+        first.json()["restart"]["deadline"],
+        1_000,
+        "{}",
+        first.json()
+    );
+    board.commit(2_000);
+    let next = admin.until("status").await;
+    let body = next.json();
+    let restart = &body["restart"];
+    assert_eq!(
+        (&restart["deadline"], &restart["phase"]),
+        (&serde_json::json!(2_000), &serde_json::json!("checkpoint")),
+        "{restart}"
+    );
+    assert_eq!(part(&next, 's'), part(&first, 's') + 1, "one frame");
+    register(&state, "late");
+    let after = admin.until("status").await;
+    assert_eq!(after.json()["server_count"], 3, "{}", after.json());
+    assert_eq!(
+        part(&after, 's'),
+        part(&next, 's') + 1,
+        "no tick-only frame"
+    );
+}

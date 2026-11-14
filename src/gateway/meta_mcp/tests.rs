@@ -57,6 +57,8 @@ mod modern_connections;
 mod narrowed_tool_lists;
 #[path = "tests/profiles.rs"]
 mod profiles;
+#[path = "tests/recent_writes_arms.rs"]
+mod recent_writes_arms;
 #[path = "tests/response_cache.rs"]
 mod response_cache;
 #[path = "tests/search_dispatch.rs"]

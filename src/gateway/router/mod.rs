@@ -352,6 +352,12 @@ mod playbook_key_tests;
 /// The key-by-policy barrier: one request, one generation.
 #[cfg(all(test, feature = "firewall"))]
 mod policy_barrier_tests;
+/// Restart slice 8: the writes each route counts toward the recent-write
+/// sample.
+#[cfg(test)]
+mod recent_writes_route_more_tests;
+#[cfg(test)]
+mod recent_writes_route_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release
 /// MIK-8058: a failed reload's status says whose fault it is.

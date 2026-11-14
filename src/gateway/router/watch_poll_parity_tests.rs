@@ -461,3 +461,57 @@ async fn only_read_only_rest_capabilities_are_watch_targets() {
     watched.sort();
     assert_eq!(watched, ["rest_default", "rest_named"]);
 }
+
+/// R9 (recent writes): a watch poll counts by the effect of the definition
+/// the executor runs. Read-only: nothing. Not read-only: one, even though the
+/// executor then refuses the poll before any request, because the refusal
+/// (the capability backend's read-only check) comes after the dispatch hook.
+#[tokio::test]
+async fn r9_a_watch_poll_counts_by_the_executed_definition() {
+    use crate::events::watch_source::{Charge, CredentialUse, Target};
+    let endpoint = crate::gateway::meta_mcp::grant_audit_fixture::Endpoint::start(false).await;
+    let catalogued = Target {
+        capability: "probe".into(),
+        backend: "probe_caps".into(),
+        read_only: true,
+        credential: CredentialUse::Free,
+        input_schema: json!({}),
+    };
+    for (read_only, arrives, want) in [(true, true, 0), (false, false, 1)] {
+        let fx = fixture(Answer::Ok, |_| {}).await;
+        let meta = &fx.state.meta_mcp;
+        meta.set_capabilities(served(endpoint.port, read_only));
+        let client = fx
+            .state
+            .live_config
+            .generation()
+            .auth()
+            .client_for_key(
+                "k-budget",
+                crate::gateway::auth::principal_of("k-budget").storage_form(),
+                crate::gateway::auth::KeyBinding::Unchecked,
+            )
+            .expect("the fixture key is live");
+        let total = || {
+            meta.recent_writes()
+                .sample(std::time::Instant::now())
+                .writes_total
+        };
+        let before = total();
+        let polled = super::super::watch_poll::poll_capability(
+            &fx.state,
+            &client,
+            "subscriber",
+            Charge::Global,
+            &catalogued,
+            json!({}),
+        )
+        .await;
+        assert_eq!(
+            polled.is_ok(),
+            arrives,
+            "premise, read_only {read_only}: {polled:?}"
+        );
+        assert_eq!(total() - before, want, "read_only {read_only}");
+    }
+}

@@ -15,6 +15,7 @@ use super::guard::Guard;
 use super::{AppState, access_report, auth_facts, call_windows};
 use crate::gateway::auth::is_gateway_admin;
 use crate::gateway::authz::BackendGrant;
+use crate::gateway::restart_status::RestartStatus;
 use crate::oauth::client::sign_in::SignIn;
 
 /// `GET /ui/api/status` — JSON snapshot of gateway health.
@@ -73,13 +74,15 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
             .iter()
             .filter(|b| b.status().circuit_state != crate::failsafe::CircuitState::Open)
             .count();
-        return json!({
+        let mut body = json!({
             "server_count": total,
             "healthy_count": healthy,
             "degraded_count": total - healthy,
             "uptime_secs": state.process.uptime_secs(),
             "version": env!("CARGO_PKG_VERSION"),
         });
+        add_restart(&mut body, view, state.meta_mcp.restart_board().status());
+        return body;
     }
 
     // Full admin view
@@ -146,7 +149,7 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
         server.calls_prev_24h = w.prev_day;
     }
 
-    json!({
+    let mut body = json!({
         "server_count": total,
         "tool_count": tool_count,
         "uptime_secs": state.process.uptime_secs(),
@@ -158,8 +161,16 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
         },
         "servers": servers,
         "counts_since": counts_since,
-    })
+    });
+    add_restart(&mut body, view, state.meta_mcp.restart_board().status());
+    body
 }
+
+/// Add the restart member to a status body: the latest attempt's wire form,
+/// or null before any accept, in the full view only. The counts-only view
+/// (which scoped callers get too) never carries it, so a change of the record
+/// raises the stream's status generation and never its counts generation.
+pub(super) fn add_restart(_body: &mut Value, _view: StatusView, _record: Option<RestartStatus>) {}
 
 #[expect(
     clippy::struct_excessive_bools,

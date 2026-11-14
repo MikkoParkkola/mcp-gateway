@@ -424,3 +424,29 @@ mod slot;
 /// when it is served.
 #[path = "cache_marked_later_tests.rs"]
 mod cache_marked_later;
+
+/// R4 (recent writes): a capability call counts by its declaration: one not
+/// declared read-only adds one write, a read-only one none. The endpoint's
+/// hit is the premise that each call ran. No inner-cache case: the executor
+/// ignores a cache on a capability not declared read-only (the parser's R14
+/// row), and a read-only capability counts nothing either way.
+#[tokio::test]
+async fn r4_a_capability_counts_by_its_declaration() {
+    for (name, metadata, want) in [
+        ("mark_read", "  read_only: false\n", 1),
+        ("lookup", "  read_only: true\n", 0),
+    ] {
+        let fx = backend("unrelated", "search", ann(READ_ONLY), false).await;
+        let meta = fx.meta();
+        let hits = counting_capability(&meta, name, metadata).await;
+        let total = || {
+            meta.recent_writes()
+                .sample(std::time::Instant::now())
+                .writes_total
+        };
+        let before = total();
+        invoke(&meta, "capabilities", name).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "premise: {name} ran");
+        assert_eq!(total() - before, want, "{name}");
+    }
+}

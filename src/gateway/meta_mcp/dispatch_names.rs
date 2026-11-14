@@ -84,6 +84,53 @@ impl MetaArm {
     }
 }
 
+/// How a meta-tool counts toward the recent-write sample.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "red stub: the arm hook reads it next")
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ArmWrites {
+    /// Counted per leaf dispatch it makes, never at the arm.
+    Leaves,
+    /// Reads only: never counted.
+    Read,
+    /// Counted once at the arm's entry, as undeclared.
+    Write,
+}
+
+impl MetaArm {
+    /// How this meta-tool counts. Exhaustive, so a new meta-tool does not
+    /// compile until it is classed.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "red stub: the arm hook reads it next")
+    )]
+    pub(super) const fn writes(self) -> ArmWrites {
+        match self {
+            Self::Search
+            | Self::Execute
+            | Self::ListServers
+            | Self::ListTools
+            | Self::SearchTools
+            | Self::Invoke
+            | Self::GetStats
+            | Self::CostReport
+            | Self::WebhookStatus
+            | Self::RunPlaybook
+            | Self::KillServer
+            | Self::ReviveServer
+            | Self::ListDisabledCapabilities
+            | Self::SetProfile
+            | Self::GetProfile
+            | Self::ListProfiles
+            | Self::SetState
+            | Self::ReloadConfig
+            | Self::ReloadCapabilities => ArmWrites::Read,
+        }
+    }
+}
+
 /// Whether `tool_name` names a composite meta-tool (`gateway_execute`,
 /// `gateway_run_playbook`); `false` for any other name.
 pub(crate) fn is_composite_meta_tool(tool_name: &str) -> bool {

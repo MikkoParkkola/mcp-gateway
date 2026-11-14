@@ -286,3 +286,33 @@ async fn idem6_read_only_call_is_unaffected_by_the_kill() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.contains("done"), "the normal result: {body}");
 }
+
+/// The fixture's recent-write total.
+fn writes_total(fx: &Fixture) -> u64 {
+    fx.state
+        .meta_mcp
+        .recent_writes()
+        .sample(Instant::now())
+        .writes_total
+}
+
+/// R12b (recent writes), meta route: a write killed mid-flight was already
+/// sent, so it counts once.
+#[tokio::test]
+async fn r12b_meta_call_killed_mid_flight_counts_once() {
+    let fx = fixture(IdempotencyKeyMode::Optional).await;
+    let before = writes_total(&fx);
+    kill_mid_flight(&fx, "/mcp", &invoke(1, "w", Some(KEY)), 1).await;
+    assert_eq!(fx.deliveries(), 1, "premise: delivered once");
+    assert_eq!(writes_total(&fx) - before, 1);
+}
+
+/// R12c (recent writes), direct route: the same on `POST /mcp/alpha`.
+#[tokio::test]
+async fn r12c_direct_call_killed_mid_flight_counts_once() {
+    let fx = fixture(IdempotencyKeyMode::Optional).await;
+    let before = writes_total(&fx);
+    kill_mid_flight(&fx, "/mcp/alpha", &call(1, "w", &json!({}), Some(KEY)), 1).await;
+    assert_eq!(fx.deliveries(), 1, "premise: delivered once");
+    assert_eq!(writes_total(&fx) - before, 1);
+}

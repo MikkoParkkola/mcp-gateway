@@ -501,6 +501,9 @@ pub struct MetaMcp {
     /// deadline keeps its permit until it ends.
     #[cfg(feature = "webui")]
     pub(super) ui_calls: Arc<tokio::sync::Semaphore>,
+    /// This boot's recent-write counter and restart status board.
+    pub(super) recent_writes: Arc<crate::gateway::recent_writes::RecentWrites>,
+    pub(super) restart_board: Arc<crate::gateway::restart_status::RestartBoard>,
 }
 
 /// The session a request belongs to, if it has one.

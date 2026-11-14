@@ -152,3 +152,51 @@ async fn generations_survive_a_watcher_restart() {
     let _again = admit(&hub, "a").expect("admitted");
     assert_eq!(rx.borrow().status_gen, before, "a restart never resets it");
 }
+
+/// B7: every change of the restart record (null to a record, id, phase,
+/// deadline, remaining calls, reason) raises the status generation by exactly
+/// one and never the counts generation; an unchanged record raises nothing.
+/// Both bodies go through the status builder's own restart step.
+#[tokio::test]
+async fn b7_restart_record_changes_raise_only_the_status_generation() {
+    use super::super::status::{StatusView, add_restart};
+    use crate::gateway::restart_status::{RestartBoard, RestartCancel};
+    let (hub, board) = (StreamHub::new(), RestartBoard::default());
+    let rx = hub.subscribe();
+    let publish = || {
+        let (mut full, mut counts) = (json!({"a": 1}), json!({"n": 1}));
+        add_restart(&mut full, StatusView::Full, board.status());
+        add_restart(&mut counts, StatusView::CountsOnly, board.status());
+        hub.observe(full, counts, false);
+        let snapshot = rx.borrow();
+        (snapshot.status_gen, snapshot.counts_gen)
+    };
+    let (mut status, counts) = publish();
+    let steps: [(&str, fn(&RestartBoard)); 8] = [
+        ("null to a record", |b| {
+            b.accept(1_000);
+        }),
+        ("id", |b| {
+            b.accept(1_000);
+        }),
+        ("phase", RestartBoard::checkpoint),
+        ("deadline", |b| b.commit(2_000)),
+        ("remaining calls", |b| b.set_remaining_calls(4)),
+        ("phase after commit", RestartBoard::restarting),
+        ("a fresh attempt", |b| {
+            b.accept(1_000);
+        }),
+        ("reason", |b| b.cancel(RestartCancel::Recheck)),
+    ];
+    for (what, step) in steps {
+        step(&board);
+        let (moved, counted) = publish();
+        assert_eq!((moved, counted), (status + 1, counts), "{what}");
+        assert_eq!(
+            publish(),
+            (moved, counts),
+            "{what}: unchanged, nothing rises"
+        );
+        status = moved;
+    }
+}

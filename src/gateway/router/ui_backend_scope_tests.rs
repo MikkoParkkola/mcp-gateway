@@ -384,5 +384,37 @@ async fn a_backend_scope_bounds_every_role_on_every_read() {
     );
 }
 
+/// S1: the status route's restart member. Before any accept the full view
+/// answers `restart: null`, after one the record; every counts-only and
+/// scoped caller never carries the member.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s1_only_the_full_status_view_carries_restart() {
+    let fx = scoped_fixture().await;
+    let router = create_router(Arc::clone(&fx.state));
+    let board = fx.state.meta_mcp.restart_board();
+    let mut wrong = Vec::new();
+    for accepted in [false, true] {
+        if accepted {
+            board.accept(1_000);
+        }
+        for who in WHO {
+            let (code, body) = send(&router, get(who, routes::UI_STATUS)).await;
+            assert_eq!(code, StatusCode::OK, "{who:?}");
+            let body: Value = serde_json::from_slice(&body).expect("status JSON");
+            let want = match (body.get("servers").is_some(), accepted) {
+                (false, _) => None,
+                (true, false) => Some(Value::Null),
+                (true, true) => Some(board.status().expect("a record").wire()),
+            };
+            let got = body.get("restart");
+            let phase_ok = !(want.is_some() && accepted) || body["restart"]["phase"] == "accepted";
+            if got != want.as_ref() || !phase_ok {
+                wrong.push(format!("{who:?} accepted={accepted}: {got:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[path = "ui_backend_scope_snapshot_tests.rs"]
 mod snapshot;

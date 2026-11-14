@@ -3,16 +3,22 @@
 //! Restart availability and an audited refusal; no process lifecycle changes.
 
 use std::sync::Arc;
+use std::time::Instant;
 
+use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
-use serde_json::{Map, json};
+use serde_json::{Map, Value, json};
 
+use super::status::StatusView;
 use super::{admin_audit::AuditDetail, errors::flat_error, guard::Guard};
+use crate::gateway::auth::is_gateway_admin;
+use crate::gateway::authz::BackendGrant;
+use crate::gateway::recent_writes::WriteSample;
 use crate::gateway::{router::AppState, routes};
 
 const REASON: &str = if cfg!(windows) {
@@ -37,11 +43,27 @@ struct Body {
     confirm: String,
 }
 
-async fn availability(guard: Guard) -> Response {
+async fn availability(State(state): State<Arc<AppState>>, guard: Guard) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    Json(json!({"available": false, "reason": REASON, "recovery": RECOVERY})).into_response()
+    let client = guard.client.as_ref();
+    let view = if is_gateway_admin(client) && BackendGrant::for_ui(client) == BackendGrant::Unscoped
+    {
+        StatusView::Full
+    } else {
+        StatusView::CountsOnly
+    };
+    let sample =
+        (view == StatusView::Full).then(|| state.meta_mcp.recent_writes().sample(Instant::now()));
+    Json(availability_body(view, sample)).into_response()
+}
+
+/// The restart GET body for a caller shown `view`, with the recent-write
+/// sample when one was taken: only `count` and `complete_secs` of it, and
+/// only in the full view.
+pub(super) fn availability_body(_view: StatusView, _sample: Option<WriteSample>) -> Value {
+    json!({"available": false, "reason": REASON, "recovery": RECOVERY})
 }
 
 async fn refuse(guard: Guard, body: Result<Json<Body>, JsonRejection>) -> Response {

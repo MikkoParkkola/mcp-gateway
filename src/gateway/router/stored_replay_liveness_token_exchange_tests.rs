@@ -483,3 +483,53 @@ mod plan_external;
 
 #[path = "stored_replay_liveness_direct_tests.rs"]
 mod direct;
+
+/// R10c (recent writes): a stored replay that is lifted sends nothing, so it
+/// moves no recent write; the first, real send counts once. A hook placed in
+/// `mark_dispatched`, which a stored replay also reaches, fails this row.
+#[tokio::test]
+async fn r10c_a_lifted_stored_replay_is_not_counted() {
+    use std::sync::atomic::Ordering;
+
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    let mut counter = None;
+    let (router, sends, _dirs) =
+        r6m_token_exchange::gateway_armed(&key, idp.endpoint(), &alice, |meta| {
+            counter = Some(Arc::clone(meta.recent_writes()));
+            meta
+        })
+        .await;
+    let counter = counter.expect("the arm ran");
+    let total = || counter.sample(std::time::Instant::now()).writes_total;
+    let call = || {
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": r6m_token_exchange::TX, "tool": TOOL,
+                "arguments": {"folder": "inbox"}},
+            "_meta": meta(Some("r10c"), false)})
+    };
+    let before = total();
+    let first = r6m_token_exchange::send_as(&router, &alice, call()).await;
+    assert!(
+        first.to_string().contains(MARKER),
+        "premise: dispatched: {first}"
+    );
+    assert_eq!(total() - before, 1, "the real send counts once: {first}");
+    let again = r6m_token_exchange::send_as(&router, &alice, call()).await;
+    assert!(
+        again.to_string().contains(MARKER),
+        "premise: lifted: {again}"
+    );
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "premise: not re-sent: {again}"
+    );
+    assert_eq!(
+        total() - before,
+        1,
+        "the lifted replay was counted: {again}"
+    );
+    drop(idp);
+}

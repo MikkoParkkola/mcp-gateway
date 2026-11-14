@@ -134,7 +134,12 @@ fn refusal(body: &Value, available: bool) {
     } else {
         json!({"reason": REASON, "recovery": recovery})
     };
-    assert_eq!(*body, expected, "no token, success flag or extra promise");
+    // The admin's recent-write sample is S4's; here only the refusal itself.
+    let mut shown = body.clone();
+    if let Some(members) = shown.as_object_mut() {
+        members.remove("recent_writes");
+    }
+    assert_eq!(shown, expected, "no token, success flag or extra promise");
     for promise in
         "success|succeeded|restarting|restarted|will restart|restart scheduled".split('|')
     {
@@ -258,4 +263,61 @@ async fn cross_origin_valid_post_is_refused_before_auth_and_audit() {
     }
     // A missing route must not pass merely because the outer origin gate works.
     send(&fx, request("POST", URI, Some(ADMIN), Some(&valid())), 409).await;
+}
+
+/// S4: over HTTP the unscoped admin's restart GET carries `recent_writes`
+/// with `count` and `complete_secs` only; the scoped admin stays 403.
+#[tokio::test]
+async fn s4_admin_restart_get_carries_recent_writes() {
+    let fx = fixture().await;
+    let body = send(&fx, request("GET", URI, Some(ADMIN), None), 200).await;
+    let writes = body["recent_writes"]
+        .as_object()
+        .unwrap_or_else(|| panic!("recent_writes: {body}"));
+    let mut keys: Vec<&str> = writes.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["complete_secs", "count"], "{body}");
+    assert_eq!(writes["count"], 0, "no call ran: {body}");
+    assert!(
+        writes["complete_secs"].as_u64().is_some_and(|s| s <= 60),
+        "{body}"
+    );
+    let scoped = send(&fx, request("GET", URI, Some("scoped"), None), 403).await;
+    assert!(scoped.get("recent_writes").is_none(), "{scoped}");
+}
+
+/// B6: the restart GET body carries `recent_writes {count, complete_secs}` in
+/// the full view only, and nothing else of the sample. Scoped admins map to
+/// the counts-only view; over HTTP their 403 would hide this, hence a unit row.
+#[test]
+fn b6_restart_body_carries_recent_writes_only_in_the_full_view() {
+    use super::restart::availability_body;
+    use super::status::StatusView;
+    use crate::gateway::recent_writes::WriteSample;
+    let sample = WriteSample {
+        count: 7,
+        complete_secs: 42,
+        taken_at_mono: std::time::Instant::now(),
+        writes_total: 99,
+    };
+    let full = availability_body(StatusView::Full, Some(sample));
+    assert_eq!(
+        full["recent_writes"],
+        json!({"count": 7, "complete_secs": 42}),
+        "{full}"
+    );
+    let mut rest = full.clone();
+    rest.as_object_mut()
+        .expect("an object")
+        .remove("recent_writes");
+    let base = availability_body(StatusView::CountsOnly, None);
+    assert_eq!(rest, base, "the sample adds one member and nothing else");
+    for (view, sample) in [
+        (StatusView::CountsOnly, Some(sample)),
+        (StatusView::CountsOnly, None),
+        (StatusView::Full, None),
+    ] {
+        let body = availability_body(view, sample);
+        assert!(body.get("recent_writes").is_none(), "{body}");
+    }
 }
