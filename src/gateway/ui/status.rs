@@ -31,12 +31,7 @@ pub(super) async fn status(
     // A caller with no credential (a public status path) has no scope to
     // narrow by. A scoped admin gets the counts, within its scope: the full
     // view lists every backend.
-    let scope = BackendGrant::for_ui(client.as_ref());
-    let view = if is_gateway_admin(client.as_ref()) && scope == BackendGrant::Unscoped {
-        StatusView::Full
-    } else {
-        StatusView::CountsOnly
-    };
+    let (view, scope) = StatusView::for_client(client.as_ref());
     let mut body = status_body(&state, view, scope);
     body["auth"] = auth_facts(&state, client.as_ref());
     // An auth-on caller with no credential gets no `access` member at all.
@@ -54,6 +49,23 @@ pub(super) enum StatusView {
     /// Counts only, of the backends the caller's scope reaches: every other
     /// caller.
     CountsOnly,
+}
+
+impl StatusView {
+    /// The view `client` gets and the backend scope its counts read within:
+    /// the full view only for an unscoped gateway admin. The one place that
+    /// decides it, for the status route and the restart GET alike.
+    pub(super) fn for_client(
+        client: Option<&crate::gateway::auth::AuthenticatedClient>,
+    ) -> (Self, BackendGrant<'_>) {
+        let scope = BackendGrant::for_ui(client);
+        let view = if is_gateway_admin(client) && scope == BackendGrant::Unscoped {
+            Self::Full
+        } else {
+            Self::CountsOnly
+        };
+        (view, scope)
+    }
 }
 
 /// The status body without the caller's `auth` member, which the caller adds.

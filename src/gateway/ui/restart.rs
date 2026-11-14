@@ -16,8 +16,6 @@ use serde_json::{Map, Value, json};
 
 use super::status::StatusView;
 use super::{admin_audit::AuditDetail, errors::flat_error, guard::Guard};
-use crate::gateway::auth::is_gateway_admin;
-use crate::gateway::authz::BackendGrant;
 use crate::gateway::recent_writes::WriteSample;
 use crate::gateway::{router::AppState, routes};
 
@@ -47,13 +45,7 @@ async fn availability(State(state): State<Arc<AppState>>, guard: Guard) -> Respo
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    let client = guard.client.as_ref();
-    let view = if is_gateway_admin(client) && BackendGrant::for_ui(client) == BackendGrant::Unscoped
-    {
-        StatusView::Full
-    } else {
-        StatusView::CountsOnly
-    };
+    let (view, _) = StatusView::for_client(guard.client.as_ref());
     let sample =
         (view == StatusView::Full).then(|| state.meta_mcp.recent_writes().sample(Instant::now()));
     Json(availability_body(view, sample)).into_response()
