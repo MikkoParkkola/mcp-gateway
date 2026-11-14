@@ -166,17 +166,23 @@ async fn t2_revoke_closes_the_upstream_half() {
         .await
         .expect("the CONNECT was not answered within the guard");
     assert_eq!(status(&head), 200, "{head}");
-    // The dial already completed, so this accept returns at once. Nothing
-    // awaits between the revoke and the read: a task cannot have run.
+    // The dial already completed, so this accept returns at once. The read
+    // below blocks this thread (the runtime has no other), so no proxy task
+    // can run before it returns: only the revoke itself can have shut the
+    // upstream half. It waits, bounded, for the FIN rather than expecting it
+    // queued already: macOS loopback TCP delivers it asynchronously.
     let mut upstream = listener.accept().expect("accept").0;
-    upstream.set_nonblocking(true).expect("nonblocking");
+    upstream
+        .set_read_timeout(Some(GUARD))
+        .expect("read timeout");
     rig.proxy.revoke(&cred);
     let mut byte = [0u8; 1];
     let read = upstream.read(&mut byte);
     let shut = match &read {
         Ok(0) => true,
         Ok(_) => false,
-        Err(e) => e.kind() != ErrorKind::WouldBlock,
+        // A timeout means the upstream half is still open.
+        Err(e) => !matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut),
     };
     assert!(shut, "revoke left the upstream half open: {read:?}");
 }
