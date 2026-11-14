@@ -61,7 +61,7 @@ impl ShutdownGuard {
     fn shut_down(&mut self) -> bool {
         self.runtime
             .take()
-            .is_some_and(|runtime| shut_down(runtime, self.mode, self.plan.get().copied()))
+            .is_some_and(|runtime| shut_down(runtime, self.mode, mutant!("m9", None, self.plan.get().copied())))
     }
 }
 
@@ -112,9 +112,9 @@ pub(crate) fn wait_bound(
     plan: Option<crate::retire::RetirePlan>,
     now: tokio::time::Instant,
 ) -> std::time::Duration {
-    plan.map_or(timeout, |plan| {
+    mutant!("m1", timeout, plan.map_or(timeout, |plan| {
         crate::retire::RUNTIME_WAIT_CAP.min(plan.runtime_end().saturating_duration_since(now))
-    })
+    }))
 }
 
 /// Run `future` to completion on a new multi-thread runtime, then shut the
