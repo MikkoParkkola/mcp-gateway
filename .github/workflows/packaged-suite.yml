@@ -49,4 +49,5 @@ jobs:
       # No build cache: the release calls this, and a restored cache is input
       # nobody reviewed at the tag.
       - name: Run the tests from the packaged crate
-        run: scripts/ci/packaged-tests.sh run
+        # Memory every 30 s (scripts/ci/with-memory-log.sh); log-only until its duration is measured.
+        run: scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh run
