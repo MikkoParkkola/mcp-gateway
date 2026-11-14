@@ -76,7 +76,12 @@ pub(super) async fn seeded(path: &Path, n: u64) -> (TaskStore, Vec<String>) {
 pub(super) fn records(path: &Path) -> BTreeMap<String, Vec<u8>> {
     files(path)
         .into_iter()
-        .filter(|(name, _)| name.starts_with("task-") && name.ends_with(".json"))
+        .filter(|(name, _)| {
+            name.starts_with("task-")
+                && Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        })
         .collect()
 }
 

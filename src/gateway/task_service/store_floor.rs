@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The task store's restart floor adapter (owner TaskStore). A pause closes
+//! The task store's restart floor adapter (owner `TaskStore`). A pause closes
 //! the store's gate for one attempt; the checkpoint waits for admitted work to
 //! finish, then re-saves every loaded record under the ordering lock without
 //! closing the store, and certifies the attempt. Every re-save handle is held

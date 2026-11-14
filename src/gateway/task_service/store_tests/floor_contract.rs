@@ -209,10 +209,6 @@ async fn c3b_resume_from_paused_or_certified_opens_the_gate() {
 // releases the gate; parked work (cohort and Draining parker alike) lands with
 // no ordering; nothing is replayed and a sweep may run again.
 #[tokio::test]
-#[expect(
-    clippy::await_holding_lock,
-    reason = "the held ordering lock keeps the cohort member in flight until the release"
-)]
 async fn c3c_release_from_paused_certified_or_draining_releases_parked_work() {
     for from in ["Paused", "Certified", "Draining"] {
         let dir = tempfile::tempdir().unwrap();
