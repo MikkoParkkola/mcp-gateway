@@ -12,8 +12,11 @@
 //!
 //! RED-FIRST SKELETON: every method below admits, counts and changes nothing,
 //! so each row in `store_gate_tests.rs` fails at its own assertion until the
-//! behaviour lands. Design: restart slice 5, mik-9444/design.md (r3 final).
-#![allow(dead_code, reason = "red-phase: remove when the implementation uses it")]
+//! behaviour lands.
+#![allow(
+    dead_code,
+    reason = "red-phase: remove when the implementation uses it"
+)]
 
 use std::sync::Arc;
 
@@ -40,7 +43,9 @@ pub(crate) enum GateState {
     Certified(u64),
     /// After a resume: submitters parked before it are admitted first; `left`
     /// counts the ones whose blocking work has not finished yet.
-    Draining { left: usize },
+    Draining {
+        left: usize,
+    },
     Terminal,
     Released,
 }
@@ -103,7 +108,9 @@ impl TaskGate {
 
     /// Ask for admission for one mutation of class `kind`. Stub: always admits.
     pub(crate) async fn admit(&self, _kind: Kind) -> Result<Admitted, Refused> {
-        Ok(Admitted { _gate: self.clone() })
+        Ok(Admitted {
+            _gate: self.clone(),
+        })
     }
 
     /// Close the gate for `attempt`, whose checkpoint ends at `deadline`; an
@@ -208,7 +215,9 @@ pub(crate) mod seams {
         /// Arm a barrier and hand the row its side.
         pub(crate) fn arm(slot: &Mutex<Option<Arc<Hold>>>) -> Arc<Hold> {
             let hold = Arc::new(Hold::default());
-            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&hold));
+            *slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&hold));
             hold
         }
     }

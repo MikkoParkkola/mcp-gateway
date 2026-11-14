@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Rows for the task store's gate (restart slice 5a, test plan
-//! mik-9444/test-plan.md). Written before the gate's behaviour: against the
-//! red-first skeleton every row fails at its own assertion, and a row that
-//! would otherwise wait forever fails by name under its own timeout.
+//! Rows for the task store's gate, written before the gate's behaviour:
+//! against the red-first skeleton every row fails at its own assertion, and a
+//! row that would otherwise wait forever fails by name under its own timeout.
+//! Row names in comments (G2, G3, ...) follow the restart slice's test plan.
 
 use std::future::Future;
 use std::time::Duration;
@@ -11,8 +11,8 @@ use std::time::Duration;
 use futures::FutureExt as _;
 use tokio::time::Instant;
 
-use super::TaskStore;
 use super::StoreLimits;
+use super::TaskStore;
 use super::gate::seams::GateSeams;
 use super::gate::{GateState, Kind, Refused, TaskGate};
 use crate::gateway::task_service::record::PreparedTask;
@@ -88,15 +88,31 @@ async fn the_gate_decides_every_state_and_kind_as_designed() {
     let terminal = certified();
     terminal.commit();
     assert_eq!(terminal.state(), GateState::Terminal);
-    assert_eq!(try_admit(&terminal, External), restarting, "terminal refuses a new External");
-    assert_eq!(try_admit(&terminal, Internal), Admitted, "terminal admits Internal");
-    assert_eq!(try_admit(&terminal, Sweep), skipped, "terminal skips a sweep");
+    assert_eq!(
+        try_admit(&terminal, External),
+        restarting,
+        "terminal refuses a new External"
+    );
+    assert_eq!(
+        try_admit(&terminal, Internal),
+        Admitted,
+        "terminal admits Internal"
+    );
+    assert_eq!(
+        try_admit(&terminal, Sweep),
+        skipped,
+        "terminal skips a sweep"
+    );
 
     let released = paused();
     released.release();
     assert_eq!(released.state(), GateState::Released);
     for kind in [External, Internal, Sweep] {
-        assert_eq!(try_admit(&released, kind), Admitted, "released admits {kind:?}");
+        assert_eq!(
+            try_admit(&released, kind),
+            Admitted,
+            "released admits {kind:?}"
+        );
     }
 }
 
@@ -114,8 +130,16 @@ async fn a_parked_submitter_cannot_miss_the_reopening() {
     gate.resume();
     hold.release();
     let admitted = within("G3 wake", parked).await.expect("the submitter task");
-    assert_eq!(admitted, Ok(()), "admitted after the reopening it slept through");
-    assert_eq!(gate.state(), GateState::Open, "the drain of one opened the gate");
+    assert_eq!(
+        admitted,
+        Ok(()),
+        "admitted after the reopening it slept through"
+    );
+    assert_eq!(
+        gate.state(),
+        GateState::Open,
+        "the drain of one opened the gate"
+    );
 }
 
 // G4: checking the state and counting the admission are one step, so a
@@ -134,12 +158,24 @@ async fn an_admission_is_counted_in_the_same_step_as_its_check() {
         }
     });
     within("G4 decision", hold.reached()).await;
-    assert_eq!(gate.in_flight(), 1, "counted at the decision, before anything else runs");
-    assert!(gate.idle().now_or_never().is_none(), "not idle while an admission is out");
+    assert_eq!(
+        gate.in_flight(),
+        1,
+        "counted at the decision, before anything else runs"
+    );
+    assert!(
+        gate.idle().now_or_never().is_none(),
+        "not idle while an admission is out"
+    );
     hold.release();
-    assert!(gate.idle().now_or_never().is_none(), "still out until its holder lets go");
+    assert!(
+        gate.idle().now_or_never().is_none(),
+        "still out until its holder lets go"
+    );
     let _ = finish.send(());
-    within("G4 finish", submitter).await.expect("the submitter task");
+    within("G4 finish", submitter)
+        .await
+        .expect("the submitter task");
     within("G4 idle", gate.idle()).await;
     assert_eq!(gate.in_flight(), 0);
 }
@@ -190,12 +226,21 @@ async fn the_count_follows_the_write_not_its_caller() {
     store.set_hook(Some(hook)).await;
     let caller = tokio::spawn({
         let store = store.clone();
-        async move { store.create(PreparedTask::for_test(&task(), OWNER, 1)).await.map(drop) }
+        async move {
+            store
+                .create(PreparedTask::for_test(&task(), OWNER, 1))
+                .await
+                .map(drop)
+        }
     });
     within("G5 entered", entered.notified()).await;
     caller.abort();
     let _ = caller.await;
-    assert_eq!(gate.in_flight(), 1, "the blocked write is still counted after its caller dropped");
+    assert_eq!(
+        gate.in_flight(),
+        1,
+        "the blocked write is still counted after its caller dropped"
+    );
     let _ = release.send(());
     within("G5 drained", gate.idle()).await;
     assert_eq!(gate.in_flight(), 0);
@@ -210,7 +255,11 @@ async fn a_quiet_gate_still_changes_state() {
     gate.certify(1);
     assert_eq!(gate.state(), GateState::Certified(1));
     gate.resume();
-    assert_eq!(gate.state(), GateState::Open, "nothing parked: resume opens at once");
+    assert_eq!(
+        gate.state(),
+        GateState::Open,
+        "nothing parked: resume opens at once"
+    );
 }
 
 /// The name of the function whose body holds line `at`, found by walking back
@@ -222,7 +271,8 @@ fn enclosing_fn(lines: &[&str], at: usize) -> Option<String> {
             .chars()
             .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
             .collect();
-        (!name.is_empty() && after[name.len()..].trim_start().starts_with(['(', '<'])).then_some(name)
+        (!name.is_empty() && after[name.len()..].trim_start().starts_with(['(', '<']))
+            .then_some(name)
     })
 }
 
@@ -236,7 +286,11 @@ fn every_blocking_store_write_goes_through_the_gate() {
     let mut strays = Vec::new();
     for entry in std::fs::read_dir(&dir).expect("the task_service directory") {
         let path = entry.expect("a directory entry").path();
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_owned();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_owned();
         if !name.starts_with("store") || !name.ends_with(".rs") || name.contains("_tests") {
             continue;
         }
@@ -253,7 +307,10 @@ fn every_blocking_store_write_goes_through_the_gate() {
             }
         }
     }
-    assert!(strays.is_empty(), "blocking store work outside the gate: {strays:#?}");
+    assert!(
+        strays.is_empty(),
+        "blocking store work outside the gate: {strays:#?}"
+    );
 }
 
 // G9: a write admitted before the pause that fails during it is recorded in
@@ -280,7 +337,12 @@ async fn a_failing_write_is_recorded_before_the_count_drains() {
     store.set_hook(Some(hook)).await;
     let caller = tokio::spawn({
         let store = store.clone();
-        async move { store.create(PreparedTask::for_test(&task(), OWNER, 1)).await.map(drop) }
+        async move {
+            store
+                .create(PreparedTask::for_test(&task(), OWNER, 1))
+                .await
+                .map(drop)
+        }
     });
     within("G9 entered", entered.notified()).await;
     caller.abort();
@@ -289,7 +351,10 @@ async fn a_failing_write_is_recorded_before_the_count_drains() {
     assert!(!gate.failed(), "nothing has failed yet");
     let _ = release.send(());
     within("G9 drained", gate.idle()).await;
-    assert!(gate.failed(), "the failure was recorded by the time the count reached zero");
+    assert!(
+        gate.failed(),
+        "the failure was recorded by the time the count reached zero"
+    );
 }
 
 // G10: once the checkpoint has seen nothing in flight, no submitter of either
@@ -298,8 +363,16 @@ async fn a_failing_write_is_recorded_before_the_count_drains() {
 async fn nothing_runs_between_quiescence_and_resume() {
     let gate = paused();
     within("G10 quiescent", gate.idle()).await;
-    assert_eq!(try_admit(&gate, Kind::Internal), Outcome::Parked, "Internal parks after quiescence");
-    assert_eq!(try_admit(&gate, Kind::External), Outcome::Parked, "External parks after quiescence");
+    assert_eq!(
+        try_admit(&gate, Kind::Internal),
+        Outcome::Parked,
+        "Internal parks after quiescence"
+    );
+    assert_eq!(
+        try_admit(&gate, Kind::External),
+        Outcome::Parked,
+        "External parks after quiescence"
+    );
     assert_eq!(gate.in_flight(), 0, "the checkpoint's view stays true");
 }
 
@@ -318,11 +391,17 @@ fn held_submitter(
     let admitted = std::sync::Arc::new(tokio::sync::Notify::new());
     let (finish, finished) = tokio::sync::oneshot::channel::<()>();
     let task = tokio::spawn({
-        let (gate, log, admitted) = (gate.clone(), std::sync::Arc::clone(log), std::sync::Arc::clone(&admitted));
+        let (gate, log, admitted) = (
+            gate.clone(),
+            std::sync::Arc::clone(log),
+            std::sync::Arc::clone(&admitted),
+        );
         async move {
             let admission = gate.admit(kind).await;
             if admission.is_ok() {
-                log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(name);
+                log.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(name);
                 admitted.notify_one();
                 let _ = finished.await;
             }
@@ -363,9 +442,17 @@ async fn resume_lands_the_parked_cohort_before_new_arrivals() {
     gate.resume();
     assert_eq!(gate.state(), GateState::Draining { left: 1 });
     within("G11 P admitted", p_admitted.notified()).await;
-    assert_eq!(gate.state(), GateState::Draining { left: 1 }, "admitted is not finished");
+    assert_eq!(
+        gate.state(),
+        GateState::Draining { left: 1 },
+        "admitted is not finished"
+    );
     let (a_task, a_admitted, a_finish) = park_held(&gate, Kind::External, "A", &log).await;
-    assert_eq!(gate.state(), GateState::Draining { left: 1 }, "a new arrival is not counted");
+    assert_eq!(
+        gate.state(),
+        GateState::Draining { left: 1 },
+        "a new arrival is not counted"
+    );
     assert_eq!(*log.lock().unwrap(), vec!["P"], "A waits behind the cohort");
     let _ = p_finish.send(());
     within("G11 P done", p_task).await.expect("P's task");
@@ -388,7 +475,11 @@ async fn a_ticket_taken_while_draining_is_not_counted() {
     let (a_task, _a_admitted, _a_finish) = park_held(&gate, Kind::Internal, "A", &log).await;
     a_task.abort();
     let _ = a_task.await;
-    assert_eq!(gate.state(), GateState::Draining { left: 1 }, "A's dropped ticket left the count alone");
+    assert_eq!(
+        gate.state(),
+        GateState::Draining { left: 1 },
+        "A's dropped ticket left the count alone"
+    );
     let _ = p_finish.send(());
     within("G11b P done", p_task).await.expect("P's task");
     assert_eq!(gate.state(), GateState::Open);
@@ -405,15 +496,27 @@ async fn the_drain_survives_a_vanished_member_and_skips_sweeps() {
     let (q_task, q_admitted, q_finish) = park_held(&gate, Kind::External, "Q", &log).await;
     gate.resume();
     assert_eq!(gate.state(), GateState::Draining { left: 2 });
-    assert_eq!(try_admit(&gate, Kind::Sweep), Outcome::Refused(Refused::Skipped), "sweeps skip while draining");
+    assert_eq!(
+        try_admit(&gate, Kind::Sweep),
+        Outcome::Refused(Refused::Skipped),
+        "sweeps skip while draining"
+    );
     p_task.abort();
     let _ = p_task.await;
     within("G11c Q admitted", q_admitted.notified()).await;
     let _ = q_finish.send(());
     within("G11c Q done", q_task).await.expect("Q's task");
-    assert_eq!(gate.state(), GateState::Open, "the vanished member did not strand the drain");
+    assert_eq!(
+        gate.state(),
+        GateState::Open,
+        "the vanished member did not strand the drain"
+    );
 
     let empty = paused();
     empty.resume();
-    assert_eq!(empty.state(), GateState::Open, "nothing parked: open at once");
+    assert_eq!(
+        empty.state(),
+        GateState::Open,
+        "nothing parked: open at once"
+    );
 }
