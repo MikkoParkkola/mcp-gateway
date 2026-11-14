@@ -218,9 +218,21 @@ pub(crate) mod seams {
         pub(crate) at_decision: Arc<Mutex<Option<Arc<Hold>>>>,
         /// Inside `admit`, after a Park decision and before the wait.
         pub(crate) before_wait: Arc<Mutex<Option<Arc<Hold>>>>,
+        /// Every class `admit` was asked for, in order (a row reads and clears it).
+        pub(crate) admits: Arc<Mutex<Vec<super::Kind>>>,
     }
 
     impl GateSeams {
+        /// The classes asked for since the last call, oldest first.
+        pub(crate) fn take_admits(&self) -> Vec<super::Kind> {
+            std::mem::take(
+                &mut *self
+                    .admits
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
+        }
+
         /// Arm a barrier and hand the row its side.
         pub(crate) fn arm(slot: &Mutex<Option<Arc<Hold>>>) -> Arc<Hold> {
             let hold = Arc::new(Hold::default());

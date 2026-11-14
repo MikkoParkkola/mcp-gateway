@@ -42,6 +42,9 @@ mod expiry;
 #[path = "store_gate.rs"]
 pub(crate) mod gate;
 #[cfg(test)]
+#[path = "store_gate_sites_tests.rs"]
+mod gate_sites_tests;
+#[cfg(test)]
 #[path = "store_gate_tests.rs"]
 mod gate_tests;
 #[path = "store_holds.rs"]

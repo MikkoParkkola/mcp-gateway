@@ -734,3 +734,37 @@ async fn a_repaired_row_whose_write_fails_stays_sealed() {
     service.store.set_hook(None).await;
     service.close().await.unwrap();
 }
+
+/// G13 (restart gate): the sealed re-read asks the gate for the Sweep class,
+/// and after the commit edge it is skipped: a removed sealed row keeps its
+/// seal until a later tick, instead of lifting it.
+#[tokio::test]
+async fn the_sealed_reread_is_a_sweep_and_skips_after_commit() {
+    use super::super::store::gate::Kind;
+    for terminal in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, rows, _admission, service) = sealed_service(dir.path(), &["k-g13"]).await;
+        let gate = service.store.gate_for_test();
+        let _ = gate.seams().take_admits();
+        if terminal {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            gate.pause(1, deadline, deadline + std::time::Duration::from_secs(30));
+            gate.certify(1);
+            gate.commit();
+        }
+        std::fs::remove_file(path.join(format!("{}.json", rows[0].0))).unwrap();
+        service.reread_sealed().await;
+        assert_eq!(
+            gate.seams().take_admits(),
+            vec![Kind::Sweep],
+            "the re-read asks as a Sweep"
+        );
+        let expected = usize::from(terminal);
+        assert_eq!(
+            service.skipped_records().sealed,
+            expected,
+            "terminal={terminal}: the seal lifts only when the re-read ran"
+        );
+        service.close().await.unwrap();
+    }
+}
