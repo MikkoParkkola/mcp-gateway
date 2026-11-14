@@ -81,7 +81,7 @@ impl RetirePlan {
     pub(crate) fn logger_end(&self) -> Instant {
         match self.exit {
             Exit::Plain => self.end,
-            Exit::Restart => self.end.checked_sub(EXEC_SHARE).unwrap_or(self.end),
+            Exit::Restart => mutant!("m7", self.end, self.end.checked_sub(EXEC_SHARE).unwrap_or(self.end)),
         }
     }
 }
@@ -105,9 +105,13 @@ pub(crate) fn finish(
     stored: &AtomicI32,
 ) -> ExitCode {
     let Some(outcome) = outcome else {
-        return code;
+        return mutant!(
+            "m8",
+            if left_running { ExitCode::from(EXIT_OVERRUN) } else { code },
+            code
+        );
     };
-    let status = if left_running || !outcome.is_joined() {
+    let status = if mutant!("m3", false, left_running) || mutant!("m4", false, !outcome.is_joined()) {
         EXIT_OVERRUN
     } else {
         // An HTTP serve, the one path with a plan, returns SUCCESS or FAILURE.
@@ -130,13 +134,13 @@ pub(crate) fn arm_with(
     stored: &'static AtomicI32,
     exit: impl FnOnce(i32) + Send + 'static,
 ) -> Option<std::thread::JoinHandle<()>> {
-    let at = end + WATCHDOG_SLACK;
+    let at = mutant!("m6", end, end + WATCHDOG_SLACK);
     std::thread::Builder::new()
         .name("stop-watchdog".into())
         .spawn(move || {
             // Sleeps at least this long; armed late, not at all.
             std::thread::sleep(at.saturating_duration_since(std::time::Instant::now()));
-            let code = stored.load(Ordering::SeqCst);
+            let code = mutant!("m5", -1, stored.load(Ordering::SeqCst));
             exit(if code < 0 {
                 i32::from(EXIT_OVERRUN)
             } else {
@@ -165,7 +169,11 @@ pub(crate) fn arm(plan: &RetirePlan) {
 /// When the logger's terminal stop ends for a stop started at `now`: within its
 /// usual 2 s, and never past the plan's logger end.
 pub(crate) fn logger_bound(now: std::time::Instant, plan: &RetirePlan) -> std::time::Instant {
-    (now + crate::log_writer::LOG_FLUSH_DEADLINE).min(plan.logger_end().into_std())
+    mutant!(
+        "m2",
+        now + crate::log_writer::LOG_FLUSH_DEADLINE,
+        (now + crate::log_writer::LOG_FLUSH_DEADLINE).min(plan.logger_end().into_std())
+    )
 }
 
 /// `cli::run`'s tail after the runtime retired: with an HTTP stop's `plan`, the
