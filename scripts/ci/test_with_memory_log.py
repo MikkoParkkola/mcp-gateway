@@ -63,14 +63,15 @@ def rows() -> list[tuple[str, bool, str]]:
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         env = stubs(tmp)
-        # W1: start line, >= 2 samples, end line, no trailing sleep.
-        rc, so, se, t = run(f"{w} sleep 3", env)
+        # W1: start line, >= 2 samples, end line. 8 s and a loose time bound: under heavy load one sample took
+        # about 2 s, and a 3 s command then ended before its second sample. W7 is the no-trailing-sampler check.
+        rc, so, se, t = run(f"{w} sleep 8", env)
         lines = [l for l in se.splitlines() if l.startswith("memory ")]
-        ok = (rc == 0 and len(lines) >= 4 and "start" in lines[0] and "end, exit 0:" in lines[-1] and t < 4.5
+        ok = (rc == 0 and len(lines) >= 4 and "start" in lines[0] and "end, exit 0:" in lines[-1] and t < 11
               and "Mem total 15983 used 1502 available 14200" in lines[0] and "Swap total 11263 used 12" in lines[0]
               and "pressure mem some 1.50 full 0.75" in lines[0] and "io some 2.25" in lines[0]
               and "load 3.99" in lines[0] and "cgroup MB 9216 oom_kill 2" in lines[0])
-        out.append(("W1 a 3 s command: start, samples, end exit 0, numbers parsed, no trailing sleep", ok, se[-400:]))
+        out.append(("W1 an 8 s command: start, 2+ samples, end exit 0, numbers parsed", ok, se[-400:]))
         # W2: the command's own failure status.
         rc, so, se, t = run(f"{w} bash -c 'exit 3'", env)
         out.append(("W2 exit 3 passes through", rc == 3 and "end, exit 3:" in se.splitlines()[-1], se[-200:]))

@@ -36,7 +36,7 @@ python3 scripts/ci/test_docker_pr_scope.py	0	closed
 python3 scripts/ci/test_docs_only_gating.py	1	closed
 python3 scripts/ci/test_upgrading_step_bounds.py	0	closed
 python3 scripts/ci/test_upgrading_step_bounds.py --self-test	0	closed
-python3 scripts/ci/test_with_memory_log.py	9	closed
+python3 scripts/ci/test_with_memory_log.py	24	closed
 python3 scripts/ci/test_feature_shards.py	0	closed
 python3 scripts/ci/test_heavy_train_gating.py	1	closed
 python3 scripts/ci/test_os_shards.py	1	closed
