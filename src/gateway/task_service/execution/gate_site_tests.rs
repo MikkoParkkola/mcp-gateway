@@ -108,7 +108,7 @@ fn digest(f: &Fixture) -> String {
         .to_owned()
 }
 
-fn settle<'a>(id: &'a str, revision: u64) -> TransitionWrite<'a> {
+fn settle(id: &str, revision: u64) -> TransitionWrite<'_> {
     TransitionWrite::Settle {
         principal: OWNER,
         id,

@@ -93,7 +93,8 @@ async fn expiring_row(f: &Fixture, key: &str) -> String {
 
 /// Move the store's clock a day ahead, past every fixture row's TTL.
 fn age_out(f: &Fixture) {
-    let later = crate::clock::utc_now().expect("the clock reads") + chrono::Duration::days(1);
+    let later =
+        crate::clock::utc_now().expect("the clock reads") + crate::duration_bound::delta!(days, 1);
     f.service.store.set_clock_for_test(Some(later));
 }
 
