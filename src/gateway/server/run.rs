@@ -57,7 +57,7 @@ impl Gateway {
         // custody store to a release thread before `self` drops here.
         let _custody_release = self
             .account_custody()
-            .map(crate::personal_accounts::worker::CustodyHandle::detach_on_drop);
+            .map(crate::personal_accounts::CustodyHandle::detach_on_drop);
         start_checks::http(&self.config)?;
         let addr = SocketAddr::new(
             self.config
