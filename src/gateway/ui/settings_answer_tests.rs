@@ -196,7 +196,7 @@ row!(
 row!(
     busy,
     UiRefused::Busy,
-    SERVICE_UNAVAILABLE,
+    CONFLICT,
     "the config is being written; retry",
     true
 );

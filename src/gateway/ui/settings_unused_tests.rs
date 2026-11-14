@@ -396,7 +396,7 @@ fn refusal_statuses() {
         (DeleteRefused::StoreMismatch, StatusCode::CONFLICT),
         (DeleteRefused::Named, StatusCode::CONFLICT),
         (DeleteRefused::Pending, StatusCode::CONFLICT),
-        (DeleteRefused::Busy, StatusCode::SERVICE_UNAVAILABLE),
+        (DeleteRefused::Busy, StatusCode::CONFLICT),
         (DeleteRefused::TimedOut, StatusCode::SERVICE_UNAVAILABLE),
         (
             DeleteRefused::Failed("store-canary".into()),
@@ -511,7 +511,7 @@ async fn delete_route_keychain_refused_here() {
     let route = Route::new(BASE).await;
     let before = route.text();
     let (status, body) = decode(delete(&route, SHAPED, "keychain", true).await).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{ROW}: {body}");
+    assert_eq!(status, StatusCode::CONFLICT, "{ROW}: {body}");
     assert_eq!(body["error"], "keychain_delete_unavailable", "{ROW}");
     assert_eq!(route.text(), before, "{ROW}: gateway.yaml unchanged");
 }
