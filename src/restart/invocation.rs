@@ -244,20 +244,27 @@ pub(crate) fn capture_from(
 ) -> InvocationState {
     use UnavailableReason as Off;
     let off = InvocationState::Unavailable;
-    if given.command.is_some() {
+    if mutant!("m01-notserve", false, given.command.is_some()) {
         return off(Off::NotServe);
     }
-    let Some(argv0) = inputs.args.first().filter(|a| !a.is_empty()) else {
+    let Some(argv0) = inputs
+        .args
+        .first()
+        .filter(|a| mutant!("m02-argv0", true, !a.is_empty()))
+    else {
         return off(Off::NoArgv0);
     };
-    if let Some(sig) = STOP_SIGNALS.into_iter().find(|s| inputs.mask.contains(*s)) {
+    if let Some(sig) = STOP_SIGNALS
+        .into_iter()
+        .find(|s| mutant!("m03-mask", false, inputs.mask.contains(*s)))
+    {
         return off(Off::BlockedSignal(sig));
     }
-    let Ok(cwd) = inputs.cwd else {
+    let Ok(cwd) = mutant!("m04-cwd", Ok(PathBuf::from("/")), inputs.cwd) else {
         return off(Off::Cwd);
     };
     match <Cli as clap::Parser>::try_parse_from(&inputs.args) {
-        Ok(parsed) if same_serve(&parsed, given) => {}
+        Ok(parsed) if mutant!("m05-embedded", true, same_serve(&parsed, given)) => {}
         _ => return off(Off::Embedded),
     }
     match resolve(argv0, &cwd, inputs.path_env.as_deref(), probe) {
@@ -286,15 +293,21 @@ fn same_serve(a: &Cli, b: &Cli) -> bool {
         protocol_revision_window,
         command,
     } = a;
-    command.is_none()
-        && b.command.is_none()
-        && *config == b.config
-        && *port == b.port
-        && *host == b.host
-        && *log_level == b.log_level
-        && *log_format == b.log_format
-        && *no_meta_mcp == b.no_meta_mcp
-        && *protocol_revision_window == b.protocol_revision_window
+    mutant!(
+        "m13-command",
+        true,
+        command.is_none() && b.command.is_none()
+    ) && mutant!("m06-config", true, *config == b.config)
+        && mutant!("m07-port", true, *port == b.port)
+        && mutant!("m08-host", true, *host == b.host)
+        && mutant!("m09-loglevel", true, *log_level == b.log_level)
+        && mutant!("m10-logformat", true, *log_format == b.log_format)
+        && mutant!("m11-nometa", true, *no_meta_mcp == b.no_meta_mcp)
+        && mutant!(
+            "m12-window",
+            true,
+            *protocol_revision_window == b.protocol_revision_window
+        )
 }
 
 /// argv0 with a `/` is anchored to the startup cwd as spelled; a bare name
