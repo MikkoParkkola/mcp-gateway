@@ -92,6 +92,8 @@ src/gateway/ui/keys_revoke.rs	revoke_key	spawn-blocking	1	no-refusal-inside	read
 src/gateway/ui/mod.rs	config	spawn-blocking	1	no-refusal-inside	web UI config page reads the literal config file for secret references
 src/gateway/ui/preview.rs	preview_backend	spawn	1	outside-calls	web UI backend preview: starts and describes a backend in its own task; not a tool call
 src/gateway/ui/secret_slots.rs	open_store	spawn-blocking	1	no-refusal-inside	opens the secret store choice and the vault off the async workers for adopt and the backend routes; a keychain that does not answer in time is a 503
+src/gateway/ui/settings_unused.rs	delete_unused_entry	spawn-blocking	1	no-refusal-inside	the unused-secret delete: loads gateway.yaml for its naming sources and calls the store off the async workers while the handler holds the reload lock and config sidecar; its refusals return as the route's answer
+src/gateway/ui/settings_unused.rs	list_unused	spawn-blocking	1	no-refusal-inside	lists unused secret entries: reads gateway.yaml, env and capability files and the index off the async workers; a read failure returns as the route's 503
 src/gateway/ui/stream/mod.rs	stream	spawn	1	outside-calls	feeds the web UI's server-sent event stream
 src/gateway/ui/stream/watcher.rs	spawn	spawn	1	outside-calls	watches for changes to publish on the web UI stream
 src/gateway/ui/tool_call.rs	spawn_call	spawn	1	own-cell	runs a web UI tool call detached through the /mcp handler, which opens the call's own delivery cell and records its refusal
