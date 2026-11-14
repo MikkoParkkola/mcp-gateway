@@ -14,7 +14,8 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Build
 # ---------------------------------------------------------------------------
-FROM mirror.gcr.io/library/rust:1.98-slim AS builder
+# The compiler CI tests with, exactly (scripts/ci/check_toolchain_pin.py fails on any other tag).
+FROM mirror.gcr.io/library/rust:1.99.1-slim AS builder
 
 WORKDIR /app
 
