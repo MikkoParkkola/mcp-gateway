@@ -233,6 +233,7 @@ fn plant_env_mode(dir: &Path) -> NamingSources {
     sources
 }
 
+#[cfg(unix)]
 fn plant_cap_mode(dir: &Path) -> NamingSources {
     let cap = dir.join("caps");
     std::fs::create_dir_all(&cap).expect("caps");
@@ -341,6 +342,9 @@ fn unreadable_source_refuses() {
     for (case, plant) in [
         ("env directory", plant_env_dir as fn(&Path) -> NamingSources),
         ("env mode", plant_env_mode),
+        // Unix only: off Unix the unreadable stand-in is a directory, which the capability
+        // walk skips as not a file, so the case would not reach an unreadable read.
+        #[cfg(unix)]
         ("capability mode", plant_cap_mode),
         ("bad yaml", plant_bad_yaml),
         ("env missing", plant_env_missing),
@@ -447,4 +451,27 @@ fn capability_symlink_loop_refuses() {
     sources.capability_dirs.push(cap);
     let got = naming(&sources, &name);
     assert_eq!(got, Err(super::CAP_UNREAD.to_owned()), "{ROW}");
+}
+
+/// The keychain guard's force switch exists only in test builds: the production text of
+/// `unused.rs` (every test-only item blanked by the shared reader) never names it, so no
+/// release build can force the macOS and Windows keychain guard off.
+#[test]
+fn keychain_guard_seam_is_test_only() {
+    const ROW: &str = "keychain_guard_seam_is_test_only";
+    let text = include_str!("unused.rs");
+    // The switch and its one read are in this file, so a scan that finds nothing proves something.
+    assert!(
+        text.matches("GUARD_KEYCHAIN").count() >= 2,
+        "{ROW}: the switch and its read are in unused.rs"
+    );
+    let production = crate::test_source_text::production_text(text);
+    for (i, line) in production.lines().enumerate() {
+        assert!(
+            !line.contains("GUARD_KEYCHAIN"),
+            "{ROW}: unused.rs:{} names the switch outside cfg(test): {}",
+            i + 1,
+            line.trim()
+        );
+    }
 }

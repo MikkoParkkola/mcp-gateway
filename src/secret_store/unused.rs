@@ -52,8 +52,13 @@ pub(crate) enum DeleteRefused {
     NotListed,
     StoreMismatch,
     Named,
+    /// A config write is unsettled; only the admin route checks for one.
+    #[cfg(feature = "webui")]
     Pending,
     Busy,
+    /// A keychain delete on macOS or Windows: the native call can finish after its
+    /// bound and after the locks are released, so it is refused for now.
+    KeychainUnavailable,
     TimedOut,
     Failed(String),
 }
@@ -293,6 +298,9 @@ pub(crate) fn delete_unused(
     if cfg!(not(unix)) && store.kind() == StoreKind::Files {
         return Err(refuse(LINKS_UNVERIFIED));
     }
+    if store.kind() == StoreKind::Keychain && keychain_delete_guarded() {
+        return Err(DeleteRefused::KeychainUnavailable);
+    }
     let _held =
         lock_file_blocking(vault.lock_path(), "the secret vault", deadline).map_err(|error| {
             if matches!(error, NotLocked::Busy) {
@@ -401,6 +409,16 @@ pub(crate) fn listing(
     }
     listed
 }
+/// macOS and Windows refuse a keychain delete until a late-landing delete is handled.
+/// The route refuses first; this second copy keeps any other caller out, so lifting
+/// the guard means removing both.
+fn keychain_delete_guarded() -> bool {
+    #[cfg(test)]
+    if let Some(forced) = seam::GUARD_KEYCHAIN.with(std::cell::Cell::get) {
+        return forced;
+    }
+    cfg!(any(target_os = "macos", windows))
+}
 /// Per-thread seams inside [`delete_unused`], set by a row.
 #[cfg(test)]
 mod seam {
@@ -409,6 +427,8 @@ mod seam {
         pub(super) static BEFORE_RECHECK: RefCell<Option<Box<dyn FnOnce()>>> =
             const { RefCell::new(None) };
         pub(super) static STOP_AFTER_STORE_DELETE: Cell<bool> = const { Cell::new(false) };
+        /// `Some` forces the keychain guard on or off for this thread; `None` follows the platform.
+        pub(super) static GUARD_KEYCHAIN: Cell<Option<bool>> = const { Cell::new(None) };
     }
 }
 #[cfg(test)]

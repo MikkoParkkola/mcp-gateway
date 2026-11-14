@@ -276,6 +276,35 @@ impl AuthConfig {
         Ok(())
     }
 
+    /// A CLI key's `approved_by` holds two 64-hex values: the approver's
+    /// stable principal and the tag of the digest it approved with. Only the
+    /// syntax is checked here; whether the approver is still there is judged at
+    /// every authorization, so an approver that is gone leaves a loadable key.
+    pub(crate) fn validate_api_key_bindings(&self) -> Result<()> {
+        let hex64 = |v: &str| {
+            v.len() == 64
+                && v.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
+        for key in &self.api_keys {
+            let Some(bound) = &key.approved_by else {
+                continue;
+            };
+            for (field, value) in [
+                ("quota_principal", &bound.quota_principal),
+                ("digest_tag", &bound.digest_tag),
+            ] {
+                if !hex64(value) {
+                    return Err(Error::ConfigValidation(format!(
+                        "auth.api_keys['{}'].approved_by.{field} must be 64 lowercase hex digits",
+                        key.name
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Resolve the bearer token (expand env vars, generate if `auto`).
     ///
     /// # Errors
@@ -434,6 +463,10 @@ mod api_key_name_tests;
 #[cfg(test)]
 #[path = "api_key_digest_tests.rs"]
 mod api_key_digest_tests;
+
+#[cfg(test)]
+#[path = "api_key_binding_tests.rs"]
+mod api_key_binding_tests;
 
 #[cfg(test)]
 #[path = "auth_dashboard_session_tests.rs"]

@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Each refusal has its own test; the first red row cannot hide the rest.
-use super::{test_support::decode, *};
+use super::test_support::{BASE, Route, client, decode};
+use super::*;
 use crate::config_persistence::keyedit::{GiveUp, Segment};
 use crate::config_reload::ui_fields::FieldId;
 use crate::config_reload::{FileRevision, RefusalClass};
@@ -284,24 +285,32 @@ async fn vault_failed() {
     assert!(!body.to_string().contains(CANARY));
 }
 
-/// A write route with no reload context attempted nothing: 409, same body, no
-/// Retry-After. The diff route, which writes nothing, keeps the 503 below.
+/// A save with no reload context attempted nothing: through the save handler, 409,
+/// no Retry-After, gateway.yaml unchanged. The diff route, a read, keeps the 503 below.
 #[tokio::test]
 async fn reload_not_enabled_on_a_write() {
-    let (status, body) = decode(write_unavailable()).await;
+    let route = Route::new(BASE).await.without_reload().await;
+    let before = route.text();
+    let body = route.saved_body(&json!([])).to_string();
+    let response = route.response(true, &body, client(true)).await;
+    assert!(!response.headers().contains_key(RETRY_AFTER));
+    let (status, body) = decode(response).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(
         body,
         json!({"error": "Config reload is not enabled on this gateway"})
     );
+    assert_eq!(route.text(), before, "gateway.yaml unchanged");
 }
 
 #[tokio::test]
 async fn reload_not_enabled() {
-    let response = unavailable();
+    let route = Route::new(BASE).await.without_reload().await;
+    let body = json!({"fields": []}).to_string();
+    let response = route.response(false, &body, client(true)).await;
     assert!(!response.headers().contains_key(RETRY_AFTER));
     let (status, body) = decode(response).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(
         body,
         json!({"error": "Config reload is not enabled on this gateway"})

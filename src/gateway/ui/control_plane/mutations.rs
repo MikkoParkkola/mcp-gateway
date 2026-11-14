@@ -55,7 +55,7 @@ pub(super) struct MutationResponse {
 /// always derived its actor: the RBAC check itself stays in
 /// `validate_for_actor`, after the store check. The role is the one the
 /// request's pinned generation maps (ADR-023).
-fn admitted_actor(
+pub(in crate::gateway::ui) fn admitted_actor(
     generation: &Generation,
     guard: &Guard,
 ) -> Result<(crate::control_plane::ControlPlaneActor, ControlPlaneAction), super::super::guard::Early>

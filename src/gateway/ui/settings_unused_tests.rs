@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Rows for listing unused secret entries and deleting one at a time.
 
-use super::super::settings_unused::{
-    StoreQuery, delete_no_reload, delete_unused_entry, list_unused, refusal_status,
-};
+use super::super::settings_unused::{StoreQuery, delete_unused_entry, list_unused, refusal_status};
 #[cfg(unix)]
 use super::test_support::set;
 use super::test_support::{BASE, Route, client, decode, secret};
@@ -22,7 +20,7 @@ use crate::gateway::{auth::AuthenticatedClient, routes};
 use crate::secret_store::DeleteRefused;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header::RETRY_AFTER};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::Ordering};
@@ -399,6 +397,7 @@ fn refusal_statuses() {
         (DeleteRefused::Named, StatusCode::CONFLICT),
         (DeleteRefused::Pending, StatusCode::CONFLICT),
         (DeleteRefused::Busy, StatusCode::CONFLICT),
+        (DeleteRefused::KeychainUnavailable, StatusCode::CONFLICT),
         (DeleteRefused::TimedOut, StatusCode::SERVICE_UNAVAILABLE),
         (
             DeleteRefused::Failed("store-canary".into()),
@@ -518,16 +517,49 @@ async fn delete_route_keychain_refused_here() {
     assert_eq!(route.text(), before, "{ROW}: gateway.yaml unchanged");
 }
 
-/// The delete with no reload context attempted nothing: 409 (the listing, a read,
-/// keeps its 503).
+/// A delete that finds the config being written answers 409 busy with a Retry-After,
+/// as the save route's busy does: nothing was attempted, and a retry soon may pass.
+/// It waits out the reload lock's own bound, so this row takes that long.
+#[tokio::test]
+async fn delete_busy_says_retry_after() {
+    const ROW: &str = "delete_busy_says_retry_after";
+    let route = Route::new(BASE).await;
+    let before = route.text();
+    let held = route
+        .ctx
+        .hold_config(crate::config_reload::RELOAD_LOCK_WAIT)
+        .await
+        .unwrap_or_else(|_| panic!("{ROW}: hold the config"));
+    let response = delete(&route, SHAPED, "files", true).await;
+    drop(held);
+    assert_eq!(response.status(), StatusCode::CONFLICT, "{ROW}");
+    assert_eq!(
+        response
+            .headers()
+            .get(RETRY_AFTER)
+            .map(axum::http::HeaderValue::as_bytes),
+        Some(&b"1"[..]),
+        "{ROW}: Retry-After"
+    );
+    let (_, body) = decode(response).await;
+    assert_eq!(body["error"], "busy", "{ROW}: {body}");
+    assert_eq!(route.text(), before, "{ROW}: gateway.yaml unchanged");
+}
+
+/// The delete with no reload context attempted nothing: through the handler with a
+/// valid name and store, 409 and gateway.yaml unchanged (the listing, a read, keeps
+/// its 503).
 #[tokio::test]
 async fn delete_without_reload_answers_409() {
     const ROW: &str = "delete_without_reload_answers_409";
-    let (status, body) = decode(delete_no_reload()).await;
+    let route = Route::new(BASE).await.without_reload().await;
+    let before = route.text();
+    let (status, body) = decode(delete(&route, SHAPED, "files", true).await).await;
     assert_eq!(status, StatusCode::CONFLICT, "{ROW}: {body}");
     assert_eq!(
         body,
         json!({"error": "Config reload is not enabled on this gateway"}),
         "{ROW}"
     );
+    assert_eq!(route.text(), before, "{ROW}: gateway.yaml unchanged");
 }

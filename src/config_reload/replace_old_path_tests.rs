@@ -12,7 +12,7 @@ use crate::gateway::test_helpers::ConfigFiles;
 /// context's reporting: the production posture of a gateway with a
 /// transparency log.
 fn audit_log_reporting() -> super::super::refusals::ReloadReporting {
-    let dir = Arc::new(tempfile::tempdir().expect("log dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::transparency_log::TransparencyLogConfig {

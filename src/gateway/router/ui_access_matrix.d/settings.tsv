@@ -164,10 +164,10 @@
 /ui/api/settings	POST	json	OidcUnmapped	403:error="Admin authentication required"
 /ui/api/settings	POST	json	Session	422
 /ui/api/settings	POST	json	StandardKey	403:error="Admin authentication required"
-/ui/api/settings	POST	valid	AdminKey	503
-/ui/api/settings	POST	valid	AdminKeyUnmapped	503
+/ui/api/settings	POST	valid	AdminKey	409
+/ui/api/settings	POST	valid	AdminKeyUnmapped	409
 /ui/api/settings	POST	valid	AuthOff	403:error="Admin authentication required"
-/ui/api/settings	POST	valid	Bearer	503
+/ui/api/settings	POST	valid	Bearer	409
 /ui/api/settings	POST	valid	NoKey	401:error.code=-32000
 /ui/api/settings	POST	valid	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/settings	POST	valid	OidcAdmin	403:error="Admin authentication required"
@@ -177,7 +177,7 @@
 /ui/api/settings	POST	valid	OidcDeveloperNoSubject	403:error="Admin authentication required"
 /ui/api/settings	POST	valid	OidcReviewer	403:error="Admin authentication required"
 /ui/api/settings	POST	valid	OidcUnmapped	403:error="Admin authentication required"
-/ui/api/settings	POST	valid	Session	503
+/ui/api/settings	POST	valid	Session	409
 /ui/api/settings	POST	valid	StandardKey	403:error="Admin authentication required"
 /ui/api/settings	PUT	bad-json	AdminKey	405
 /ui/api/settings	PUT	bad-json	AdminKeyUnmapped	405
