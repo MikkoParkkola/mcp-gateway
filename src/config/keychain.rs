@@ -82,31 +82,50 @@ pub(crate) fn bounded<T: Send + 'static>(
 /// between asks. The whole wait stays well inside [`BOUND`].
 #[cfg(any(windows, test))]
 pub(crate) const CONFIRM_ATTEMPTS: u32 = 8;
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 pub(crate) const CONFIRM_GAP: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// A delete is done only when the entry is seen gone. Credential Manager can
 /// keep answering for an entry whose delete already succeeded, so
-/// `still_there` is asked up to `attempts` times, `gap` apart. An entry that is
-/// still there at the end, or a question that fails, is an error: unknown is
-/// never reported as removed.
+/// `still_there` is asked up to `attempts` times, with `sleep(gap)` between
+/// asks. An entry that is still there at the end, or a question that fails, is
+/// an error: a state that could not be read is never reported as removed.
 #[cfg(any(windows, test))]
 pub(crate) fn confirm_absent(
     attempts: u32,
     gap: std::time::Duration,
+    mut sleep: impl FnMut(std::time::Duration),
     mut still_there: impl FnMut() -> Result<bool, KeychainError>,
 ) -> Result<(), KeychainError> {
     for attempt in 0..attempts {
         if attempt > 0 {
-            std::thread::sleep(gap);
+            sleep(gap);
         }
         if !still_there()? {
             return Ok(());
         }
     }
-    Err(KeychainError::Unavailable(format!(
-        "could not confirm removal: the entry is still readable after {attempts} checks"
-    )))
+    let why = if attempts == 0 {
+        "could not confirm removal: no check was allowed".to_owned()
+    } else {
+        format!("could not confirm removal: the entry is still readable after {attempts} checks")
+    };
+    Err(KeychainError::Unavailable(why))
+}
+
+/// The whole delete: `remove` runs the OS delete (an entry already absent
+/// counts as removed), then absence is confirmed. A failed `remove` asks
+/// nothing.
+#[cfg(any(windows, test))]
+pub(crate) fn delete_confirmed(
+    attempts: u32,
+    gap: std::time::Duration,
+    sleep: impl FnMut(std::time::Duration),
+    remove: impl FnOnce() -> Result<(), KeychainError>,
+    still_there: impl FnMut() -> Result<bool, KeychainError>,
+) -> Result<(), KeychainError> {
+    remove()?;
+    confirm_absent(attempts, gap, sleep, still_there)
 }
 
 /// The reader an [`EnvOverlay`](super::EnvOverlay) resolves through. The

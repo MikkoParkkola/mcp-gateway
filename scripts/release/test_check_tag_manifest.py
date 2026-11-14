@@ -709,10 +709,14 @@ COVERAGE_BUNDLE = ("7", "rerunning all jobs rebuilds them; multi-GB bundles per 
 # rerun of int alone within the day reuses it, after that int builds its half
 # itself; nothing published depends on it.
 MACOS_LIB_BINARY = ("1", "int rebuilds its half when it is gone; a large test binary per run")
+# ci.yml's shared Linux lib test binary: its consumers rerun within the day reuse it; after that a consumer rerun
+# fails red at the download (it never builds its own) until linux-lib-build reruns too. Nothing published depends on it.
+LINUX_LIB_BINARY = ("1", "a consumer rerun after a day fails red until the build reruns; a large test binary per run")
 SHORT_HANDOFFS = {  # (workflow, artifact name) -> (retention-days, reason)
     ("coverage-probe.yml", "cov-shard-sdk"): COVERAGE_BUNDLE,
     ("coverage-probe.yml", "cov-shard-${{ matrix.part }}"): COVERAGE_BUNDLE,
     ("ci.yml", "macos-lib-tests"): MACOS_LIB_BINARY,
+    ("ci.yml", "linux-lib-tests"): LINUX_LIB_BINARY,
 }
 
 
