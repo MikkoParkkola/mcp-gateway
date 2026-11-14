@@ -121,7 +121,7 @@ pub(super) fn saver_closure(
 ) -> impl Fn() + Send + Sync + 'static {
     move || {
         if let (Some(path), Ok(now)) = (&path, clock()) {
-            file::save_gated(&history, path, now, &gate);
+            file::save_gated(&history, path, now, &gate, file::Wait::SkipIfBusy);
         }
     }
 }

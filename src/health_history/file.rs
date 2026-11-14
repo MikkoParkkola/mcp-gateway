@@ -110,16 +110,18 @@ pub(crate) fn save(history: &HealthHistory, path: &Path, now: u64, wait: Wait) -
     save_with(history, path, now, wait, Check::None) == SaveOutcome::Saved
 }
 
-/// The periodic save behind the health floor's gate.
+/// A save behind the health floor's gate: the periodic one (SkipIfBusy) or
+/// the adapter's resume replay (Block).
 pub(crate) fn save_gated(
     history: &HealthHistory,
     path: &Path,
     now: u64,
     gate: &super::gate::HealthGate,
+    wait: Wait,
 ) -> SaveOutcome {
     #[cfg(test)]
     super::pause_points::at(super::pause_points::Point::SaverBeforeLock, &path_key(path));
-    save_with(history, path, now, Wait::SkipIfBusy, Check::Gate(gate))
+    save_with(history, path, now, wait, Check::Gate(gate))
 }
 
 /// The checkpoint worker's save: it waits for SAVES, then writes only while
@@ -130,6 +132,8 @@ pub(crate) fn checkpoint_save(
     now: u64,
     live: &std::sync::atomic::AtomicBool,
 ) -> SaveOutcome {
+    #[cfg(test)]
+    super::pause_points::at(super::pause_points::Point::WorkerWaiting, &path_key(path));
     save_with(history, path, now, Wait::Block, Check::Live(live))
 }
 
@@ -151,8 +155,26 @@ fn save_with(
                 None => return SaveOutcome::Busy,
             },
         };
-        // red-phase: the check is not applied yet.
-        let _ = check;
+        match check {
+            Check::None => {}
+            Check::Gate(gate) => {
+                let admitted = gate.admit(super::gate::Closure::Save, || {
+                    #[cfg(test)]
+                    super::pause_points::at(
+                        super::pause_points::Point::AdmissionMark,
+                        &path_key(path),
+                    );
+                });
+                if admitted == super::gate::Admit::Skip {
+                    return SaveOutcome::GateSkipped;
+                }
+            }
+            Check::Live(live) => {
+                if !live.load(std::sync::atomic::Ordering::SeqCst) {
+                    return SaveOutcome::Superseded;
+                }
+            }
+        }
         #[cfg(test)]
         super::pause_points::at(super::pause_points::Point::AfterLiveCheck, &path_key(path));
         let outcome = snapshot_and_write(history, path, now);

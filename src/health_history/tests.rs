@@ -551,8 +551,9 @@ fn s2_a_busy_periodic_save_changes_nothing() {
     for flag in [false, true] {
         h.set_incomplete(flag);
         let before = file::write_count(&path);
-        let (outcome, logs) =
-            crate::test_log_capture::capture_warnings(|| file::save_gated(&h, &path, T0, &gate));
+        let (outcome, logs) = crate::test_log_capture::capture_warnings(|| {
+            file::save_gated(&h, &path, T0, &gate, file::Wait::SkipIfBusy)
+        });
         assert_eq!(outcome, file::SaveOutcome::Busy);
         assert_eq!(file::write_count(&path), before, "a busy save wrote");
         assert_eq!(h.incomplete(), flag, "a busy save touched the flag");
@@ -574,13 +575,13 @@ fn s3_a_gate_skipped_save_changes_nothing() {
     for flag in [false, true] {
         h.set_incomplete(flag);
         let before = file::write_count(&path);
-        let mut outcome = file::save_gated(&h, &path, T0, &gate);
+        let mut outcome = file::save_gated(&h, &path, T0, &gate, file::Wait::SkipIfBusy);
         for _ in 0..1_000 {
             if outcome != file::SaveOutcome::Busy {
                 break;
             }
             std::thread::yield_now();
-            outcome = file::save_gated(&h, &path, T0, &gate);
+            outcome = file::save_gated(&h, &path, T0, &gate, file::Wait::SkipIfBusy);
         }
         assert_eq!(
             outcome,

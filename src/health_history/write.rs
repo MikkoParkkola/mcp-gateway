@@ -126,6 +126,17 @@ impl Inner {
     }
 
     /// Accrue running time to `now` and mark the half-hours it covers.
+    /// One sample: the current window's memory and session maxima.
+    fn sample(&mut self, memory: Option<u64>, sessions: u64, now: u64) {
+        let Some(half) = self.half_mut(now) else {
+            return;
+        };
+        if let Some(bytes) = memory {
+            half.memory_max = Some(half.memory_max.map_or(bytes, |m| m.max(bytes)));
+        }
+        half.sessions_max = Some(half.sessions_max.map_or(sessions, |m| m.max(sessions)));
+    }
+
     fn tick(&mut self, now: u64) {
         if now <= self.last_tick {
             return;
@@ -253,24 +264,23 @@ impl HealthHistory {
         }
     }
 
+    /// Test-only since restart slice 6b: the sampler goes through
+    /// `sample_and_tick_gated` (one lock).
+    #[cfg(test)]
     pub(crate) fn sample(&self, memory: Option<u64>, sessions: u64, now: u64) {
-        let mut inner = self.0.lock();
-        let Some(half) = inner.half_mut(now) else {
-            return;
-        };
-        if let Some(bytes) = memory {
-            half.memory_max = Some(half.memory_max.map_or(bytes, |m| m.max(bytes)));
-        }
-        half.sessions_max = Some(half.sessions_max.map_or(sessions, |m| m.max(sessions)));
+        self.0.lock().sample(memory, sessions, now);
     }
 
+    /// Test-only since restart slice 6b: the sampler goes through
+    /// `sample_and_tick_gated` (one lock).
+    #[cfg(test)]
     pub(crate) fn tick(&self, now: u64) {
         self.0.lock().tick(now);
     }
 
     /// The periodic sampler's step behind the health floor's gate: admission,
-    /// the sample and the tick under one history lock.
-    // red-phase: stub: today's sample and tick (two locks), no admission.
+    /// the sample and the tick under one history lock, so a sampler that read
+    /// the gate open cannot change the history after a checkpoint's cut.
     pub(crate) fn sample_and_tick_gated(
         &self,
         gate: &super::gate::HealthGate,
@@ -278,16 +288,23 @@ impl HealthHistory {
         sessions: u64,
         now: u64,
     ) -> super::gate::Admit {
-        let _ = gate;
         #[cfg(test)]
         super::pause_points::at(super::pause_points::Point::SamplerBeforeLock, &self.key());
-        self.sample(memory, sessions, now);
+        let mut inner = self.0.lock();
+        let admitted = gate.admit(super::gate::Closure::Sample, || {
+            #[cfg(test)]
+            super::pause_points::at(super::pause_points::Point::AdmissionMark, &self.key());
+        });
+        if admitted == super::gate::Admit::Skip {
+            return admitted;
+        }
+        inner.sample(memory, sessions, now);
         #[cfg(test)]
         count_sample(&self.key());
         #[cfg(test)]
         super::pause_points::at(super::pause_points::Point::SampleBeforeTick, &self.key());
-        self.tick(now);
-        super::gate::Admit::Run
+        inner.tick(now);
+        admitted
     }
 
     /// This history's key for the pause points and the sample count.

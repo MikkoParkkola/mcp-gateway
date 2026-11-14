@@ -55,41 +55,69 @@ impl Default for HealthGate {
     }
 }
 
+impl GateState {
+    fn from_u8(raw: u8) -> Self {
+        match raw {
+            0 => Self::Open,
+            1 => Self::Paused,
+            2 => Self::Terminal,
+            _ => Self::Released,
+        }
+    }
+}
+
 impl HealthGate {
-    // red-phase: stub, the state never changes.
     pub(crate) fn state(&self) -> GateState {
-        let _ = self.state.load(SeqCst);
-        GateState::Open
+        GateState::from_u8(self.state.load(SeqCst))
     }
 
-    // red-phase: stub, a no-op.
     pub(crate) fn store(&self, state: GateState) {
-        let _ = state;
+        self.state.store(state as u8, SeqCst);
+    }
+
+    fn flag(&self, which: Closure) -> &AtomicBool {
+        match which {
+            Closure::Save => &self.save_skipped,
+            Closure::Sample => &self.sample_skipped,
+        }
     }
 
     /// Admission for `which`, called by the closure under the lock that
     /// guards what it touches; `at_mark` is the test seam between the mark
-    /// and the second read.
-    // red-phase: stub, always runs.
+    /// and the second read. Paused: mark, read again; if the gate opened
+    /// meanwhile, run only by claiming the mark back (else the replay that
+    /// claimed it runs it). Terminal skips unmarked: nothing is replayed after
+    /// a commit.
     pub(crate) fn admit(&self, which: Closure, at_mark: impl FnOnce()) -> Admit {
-        let _ = (which, at_mark);
-        Admit::Run
+        match self.state() {
+            GateState::Open | GateState::Released => Admit::Run,
+            GateState::Terminal => Admit::Skip,
+            GateState::Paused => {
+                self.flag(which).store(true, SeqCst);
+                at_mark();
+                match self.state() {
+                    GateState::Paused | GateState::Terminal => Admit::Skip,
+                    GateState::Open | GateState::Released => {
+                        if self.claim(which) {
+                            Admit::Run
+                        } else {
+                            Admit::Skip
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Take `which`'s mark (true -> false); true means the caller owns the
     /// single coalesced run.
-    // red-phase: stub, nothing is ever marked.
     pub(crate) fn claim(&self, which: Closure) -> bool {
-        let _ = which;
-        false
+        self.flag(which).swap(false, SeqCst)
     }
 
     /// Whether `which` is marked (a test probe).
     #[cfg(test)]
     pub(crate) fn marked(&self, which: Closure) -> bool {
-        match which {
-            Closure::Save => self.save_skipped.load(SeqCst),
-            Closure::Sample => self.sample_skipped.load(SeqCst),
-        }
+        self.flag(which).load(SeqCst)
     }
 }
