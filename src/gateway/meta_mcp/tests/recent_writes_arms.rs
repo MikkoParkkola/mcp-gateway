@@ -54,7 +54,6 @@ const fn class(arm: MetaArm) -> Class {
 /// does not exist does reach the send step, and counts there.)
 fn arguments(arm: MetaArm) -> Value {
     match arm {
-        MetaArm::Invoke => json!({}),
         MetaArm::Execute => json!({"chain": []}),
         MetaArm::RunPlaybook => json!({"name": "nowhere"}),
         MetaArm::Search | MetaArm::SearchTools => json!({"query": "nowhere"}),
@@ -63,7 +62,8 @@ fn arguments(arm: MetaArm) -> Value {
         }
         MetaArm::SetProfile => json!({"profile": "nowhere"}),
         MetaArm::SetState => json!({"state": "nowhere"}),
-        MetaArm::ListServers
+        MetaArm::Invoke
+        | MetaArm::ListServers
         | MetaArm::GetStats
         | MetaArm::CostReport
         | MetaArm::WebhookStatus
