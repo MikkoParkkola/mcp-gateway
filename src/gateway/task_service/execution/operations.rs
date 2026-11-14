@@ -14,6 +14,7 @@ use super::{
     TaskExecutor, TaskIntent, TaskService, TaskTransition, TransitionWrite, UpstreamRecovery,
     commit_and_run, commit_to_service, is_terminal, json, oneshot, upstream,
 };
+use crate::gateway::task_service::store::gate::Kind;
 
 // Used only by `observe_commits`, which is compiled out of release builds.
 #[cfg(any(test, debug_assertions))]
@@ -458,16 +459,8 @@ impl TaskExecutor {
                 writes,
             } => {
                 let outcome = (event, targets, writes);
-                self.transition_write(
-                    principal,
-                    id,
-                    revision,
-                    outcome,
-                    author,
-                    at,
-                    crate::gateway::task_service::store::gate::Kind::Internal,
-                )
-                .await?
+                self.transition_write(principal, id, revision, outcome, author, at, Kind::Internal)
+                    .await?
             }
             // Its own arm, never merged with `Settle`: the two carry the same
             // field types and merging them would hand a stored digest to the
@@ -502,7 +495,7 @@ impl TaskExecutor {
                     ),
                     author,
                     Some(now),
-                    crate::gateway::task_service::store::gate::Kind::Internal,
+                    Kind::Internal,
                 )
                 .await?
             }
@@ -526,7 +519,7 @@ impl TaskExecutor {
                         cancel(),
                         ErrorAuthor::Gateway,
                         None,
-                        crate::gateway::task_service::store::gate::Kind::External,
+                        Kind::External,
                     )
                     .await
                 {
@@ -548,7 +541,7 @@ impl TaskExecutor {
                             cancel(),
                             ErrorAuthor::Gateway,
                             Some(dated),
-                            crate::gateway::task_service::store::gate::Kind::External,
+                            Kind::External,
                         )
                         .await?
                     }
@@ -580,7 +573,7 @@ impl TaskExecutor {
         ),
         author: ErrorAuthor,
         at: Option<chrono::DateTime<chrono::Utc>>,
-        kind: crate::gateway::task_service::store::gate::Kind,
+        kind: Kind,
     ) -> Result<(CommittedTask, bool, String), CommitFailure> {
         let owner = self
             .service

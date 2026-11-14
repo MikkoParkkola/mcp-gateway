@@ -169,7 +169,7 @@ impl Admitted {
     pub(crate) fn record(&self, storage_failed: bool) {
         self.recorded.store(true, Ordering::Relaxed);
         if storage_failed {
-            self.gate.tx.send_if_modified(|g| mark_failed(g));
+            self.gate.tx.send_if_modified(mark_failed);
         }
     }
 }
@@ -615,7 +615,10 @@ impl super::TaskStore {
         kind: Kind,
         work: impl FnOnce() -> R + Send + 'static,
     ) -> Result<R, Gated> {
-        let admission = self.0.gate.admit(kind).await.map_err(Gated::Refused)?;
+        // Boxed: the admission's wait state stays off every store future.
+        let admission = Box::pin(self.0.gate.admit(kind))
+            .await
+            .map_err(Gated::Refused)?;
         tokio::task::spawn_blocking(move || {
             let output = work();
             admission.record(output.storage_failed());
