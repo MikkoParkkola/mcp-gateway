@@ -424,7 +424,7 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
             // A failed spawn drops its closure unrun, so the reference is still
             // in the cell; an empty cell would mean a thread took it, which is
             // a started release, never a panic on the stop path.
-            Err(_) => recover(&cell).map_or(Ok(()), Err),
+            Err(_) => mutant!("c9460.e1", Ok(()), recover(&cell).map_or(Ok(()), Err)),
         }
     }
 
