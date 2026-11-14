@@ -82,7 +82,11 @@ fn in_bound() -> Instant {
 
 /// After a cancel: gate Open and both certification locks free.
 fn assert_recovered(row: &str, booted: &Booted) {
-    assert_eq!(booted.gate.state(), GateState::Open, "{row} gate state");
+    assert_eq!(
+        booted.gate.gate_state(),
+        GateState::Open,
+        "{row} gate state"
+    );
     assert_eq!(booted.config_probe(), Probe::Free, "{row} config lock");
     assert_eq!(booted.reload_probe(), Probe::Free, "{row} reload lock");
 }

@@ -533,7 +533,7 @@ async fn p9c_certified_outside_edit_kept_for_replay() {
         "{ROW}: running value moved"
     );
     assert!(
-        fx.gate.state() == GateState::Certified(1),
+        fx.gate.gate_state() == GateState::Certified(1),
         "{ROW}: gate state after the tick"
     );
     fx.floor.resume();
@@ -599,7 +599,11 @@ async fn k8_case(row: &str, end: End) {
     for round in 1..=2 {
         fx.floor.resume();
         fx.floor.release_for_stop();
-        assert_eq!(fx.gate.state(), state, "{row}: state after repeat {round}");
+        assert_eq!(
+            fx.gate.gate_state(),
+            state,
+            "{row}: state after repeat {round}"
+        );
         let paused = fx.floor.pause(deadline()).await;
         assert_eq!(
             paused,

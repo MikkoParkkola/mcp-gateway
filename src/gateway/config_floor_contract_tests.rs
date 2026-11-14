@@ -99,7 +99,11 @@ async fn k2_dropped_checkpoint_holds_nothing() {
     });
     assert_probes(ROW, &b, Probe::Free, "free after the check task ended");
     assert!(floor.settled(), "{ROW} settled once the check ended");
-    assert_eq!(b.gate.state(), GateState::Paused(1), "{ROW} still paused");
+    assert_eq!(
+        b.gate.gate_state(),
+        GateState::Paused(1),
+        "{ROW} still paused"
+    );
     floor.commit();
     assert_eq!(b.config_probe(), Probe::Free, "{ROW} no certification held");
 }
@@ -197,7 +201,7 @@ async fn k6_cli_writer_waits_behind_commit() {
         .expect("K6 writer never reached the lock wait");
     floor.commit();
     assert_eq!(
-        b.gate.state(),
+        b.gate.gate_state(),
         GateState::Terminal,
         "{ROW} commit is terminal"
     );
@@ -340,6 +344,6 @@ mod held_write {
             vec![own],
             "{ROW} no reload after the tick"
         );
-        assert_eq!(b.gate.state(), GateState::Released, "{ROW} released");
+        assert_eq!(b.gate.gate_state(), GateState::Released, "{ROW} released");
     }
 }

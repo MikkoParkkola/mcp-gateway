@@ -64,7 +64,7 @@ pub(crate) struct ConfigGate {
     settled: Arc<Notify>,
     watcher: Arc<Notify>,
     #[cfg(test)]
-    pub(super) seams: super::seams::GateSeams,
+    pub(super) seams: super::seams::ConfigGateSeams,
 }
 
 /// Counted in flight until dropped; cloning counts one more holder.

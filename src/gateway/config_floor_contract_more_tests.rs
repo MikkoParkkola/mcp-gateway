@@ -147,7 +147,7 @@ async fn k9_dropped_unpolled_pause_leaves_gate_paused_and_resume_replays() {
     drop(floor.pause(Instant::now() + Duration::from_secs(10)));
     // THEN: the adapter, not the future, holds the pause
     assert!(
-        matches!(booted.gate.state(), GateState::Paused(_)),
+        matches!(booted.gate.gate_state(), GateState::Paused(_)),
         "{ROW}: state after the dropped pause must be Paused"
     );
     // WHEN: resume() and one tick
@@ -181,13 +181,17 @@ async fn k9_dropped_unpolled_pause_then_stop_replays_nothing() {
         support::reload_log(&booted.gate).is_empty(),
         "{ROW}: a stop replays nothing"
     );
-    assert_eq!(booted.gate.state(), GateState::Released, "{ROW}");
+    assert_eq!(booted.gate.gate_state(), GateState::Released, "{ROW}");
     // GIVEN: an adapter never paused, WHEN resume() and a tick
     let idle = Booted::new(support::BASE);
     idle.floor().resume();
     support::tick(&support::WatcherFixture::new(&idle)).await;
     // THEN: still Open, no reload
-    assert_eq!(idle.gate.state(), GateState::Open, "{ROW}: never paused");
+    assert_eq!(
+        idle.gate.gate_state(),
+        GateState::Open,
+        "{ROW}: never paused"
+    );
     assert!(support::reload_log(&idle.gate).is_empty(), "{ROW}");
 }
 
@@ -334,7 +338,7 @@ async fn sync_call_under_held_locks<R: Send + 'static>(
         .expect("outside holder takes the config lock");
     let join = std::thread::spawn(move || call(&mut floor));
     let result = support::join_bounded(join, what);
-    (result, booted.gate.state())
+    (result, booted.gate.gate_state())
 }
 
 #[tokio::test]

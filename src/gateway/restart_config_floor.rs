@@ -388,7 +388,7 @@ pub(crate) mod seams {
 
     /// The gate's seams, one set per gate instance.
     #[derive(Clone, Default)]
-    pub(crate) struct GateSeams {
+    pub(crate) struct ConfigGateSeams {
         pub(crate) admitted_hook: Arc<Mutex<Option<AdmittedHook>>>,
         pub(crate) settle_window: Arc<Mutex<Option<SettleWindow>>>,
         pub(crate) decisions: SeamLog<GateDecision>,
@@ -396,7 +396,7 @@ pub(crate) mod seams {
         pub(crate) pokes: SeamLog<WatcherPoke>,
     }
 
-    impl GateSeams {
+    impl ConfigGateSeams {
         /// Appends one admission decision with the state it was decided in;
         /// the gate calls it under its own mutex, so the log is in decision order.
         pub(crate) fn record_decision(&self, state: GateState, kind: AdmitKind, admitted: bool) {
@@ -422,9 +422,9 @@ pub(crate) mod seams {
         }
     }
 
-    impl std::fmt::Debug for GateSeams {
+    impl std::fmt::Debug for ConfigGateSeams {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("GateSeams")
+            f.write_str("ConfigGateSeams")
         }
     }
 
@@ -506,7 +506,7 @@ pub(crate) mod seams {
 
     impl ConfigGate {
         /// The state word as the gate holds it now.
-        pub(crate) fn state(&self) -> GateState {
+        pub(crate) fn gate_state(&self) -> GateState {
             self.inner.lock().state
         }
 
