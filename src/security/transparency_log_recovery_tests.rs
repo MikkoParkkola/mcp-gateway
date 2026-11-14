@@ -52,7 +52,7 @@ fn hwm_at_seal(path: &Path) -> serde_json::Value {
 
 #[test]
 fn recovers_crash_after_seal() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     one_rotation(&path);
     // Rebuild the state "seal written, rename not done": move `.0` back.
@@ -71,7 +71,7 @@ fn recovers_crash_after_seal() {
 
 #[test]
 fn recovers_crash_after_rename() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     one_rotation(&path);
     std::fs::remove_file(&path).unwrap(); // seal + rename, no active
@@ -85,7 +85,7 @@ fn recovers_crash_after_rename() {
 
 #[test]
 fn recovers_crash_after_create_before_open_record() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     one_rotation(&path);
     std::fs::write(&path, b"").unwrap(); // empty active beside a sealed `.0`
@@ -100,7 +100,7 @@ fn recovers_crash_after_create_before_open_record() {
 
 #[test]
 fn torn_open_record_is_truncated_and_rewritten() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let active = one_rotation(&path);
     let open_line = active[0].to_string();
@@ -113,7 +113,7 @@ fn torn_open_record_is_truncated_and_rewritten() {
 
 #[test]
 fn torn_tail_dropped_is_recorded() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = open(&path, 12);
     (0..3).for_each(|i| append(&l, i));
@@ -129,7 +129,7 @@ fn torn_tail_dropped_is_recorded() {
 
 #[test]
 fn newline_less_valid_record_is_kept() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = open(&path, 12);
     (0..3).for_each(|i| append(&l, i));
@@ -151,7 +151,7 @@ fn newline_less_valid_record_is_kept() {
 #[test]
 fn newline_less_record_failing_its_hash_or_signature_is_dropped() {
     for signed in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
         (0..3).for_each(|i| append(&l, i));
@@ -188,7 +188,7 @@ fn newline_less_record_failing_its_hash_or_signature_is_dropped() {
 
 #[test]
 fn recovers_crash_between_expiry_record_and_unlink() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = open(&path, 1);
     rotate_n(&l, &path, 1);
@@ -210,7 +210,7 @@ fn recovers_crash_between_expiry_record_and_unlink() {
 
 #[test]
 fn open_refuses_unsealed_newest_segment_without_active() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = open(&path, 12);
     (0..3).for_each(|i| append(&l, i));
@@ -239,7 +239,7 @@ fn two_sealed(path: &Path, on_full: OnDiskFull) -> TransparencyLogger {
 
 #[test]
 fn disk_full_expire_oldest_frees_reserve_then_succeeds() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = two_sealed(&path, OnDiskFull::ExpireOldest);
     assert!(sibling(&path, "reserve").exists());
@@ -263,7 +263,7 @@ fn disk_full_expire_oldest_frees_reserve_then_succeeds() {
 
 #[test]
 fn disk_full_refuse_stays_degraded() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = two_sealed(&path, OnDiskFull::Refuse);
     l.arm_write_fault(Some(WriteFault::FullUntilReserveFreed));
@@ -279,7 +279,7 @@ fn disk_full_refuse_stays_degraded() {
 
 #[test]
 fn expiry_record_unwritable_deletes_nothing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = two_sealed(&path, OnDiskFull::ExpireOldest);
     l.arm_write_fault(Some(WriteFault::FullForever));
@@ -291,7 +291,7 @@ fn expiry_record_unwritable_deletes_nothing() {
 
 #[test]
 fn expiry_fsync_failure_deletes_nothing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let mut c = (*cfg(&path, 1, false)).clone();
     c.rotation.on_disk_full = OnDiskFull::ExpireOldest;
@@ -320,7 +320,7 @@ fn expiry_fsync_failure_deletes_nothing() {
 
 #[test]
 fn enospc_after_rename_rebuilds_writer() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = two_sealed(&path, OnDiskFull::ExpireOldest);
     l.arm_write_fault(Some(WriteFault::FullAfterRename));
@@ -337,7 +337,7 @@ fn enospc_after_rename_rebuilds_writer() {
 
 #[test]
 fn reserve_is_written_not_sparse() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = open(&path, 12);
     rotate_n(&l, &path, 1);
@@ -353,7 +353,7 @@ fn reserve_is_written_not_sparse() {
 
 #[test]
 fn rotation_leaves_no_degraded_window() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = Arc::new(open(&path, 100).with_failure_policy(AuditFailurePolicy::FailClosed));
     // Deterministic: between rename and the new open record, `Inner` is held.
@@ -429,7 +429,7 @@ fn one_sealed(path: &Path) -> TransparencyLogger {
 /// even with no sealed segment left.
 #[test]
 fn missing_hwm_after_last_sealed_expired_is_a_live_gap() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     expired_last_sealed_then_tail_cut(&path);
     let r = verify(&path, false);
@@ -441,7 +441,7 @@ fn missing_hwm_after_last_sealed_expired_is_a_live_gap() {
 /// Archive mode keeps its split: the same state warns, never fails.
 #[test]
 fn missing_hwm_after_last_sealed_expired_warns_in_archive_mode() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     expired_last_sealed_then_tail_cut(&path);
     let r = verify_segments(&path, &cfg(&path, 12, false), VerifyMode::Archive).unwrap();
@@ -459,7 +459,7 @@ fn missing_hwm_after_last_sealed_expired_warns_in_archive_mode() {
 /// log is told apart from a pre-D6 one and tail loss needs `.hwm` to rule out.
 #[test]
 fn missing_hwm_on_never_rotated_log_is_a_live_gap() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let mut c = (*cfg(&path, 12, false)).clone();
     c.rotation.max_segment_bytes = u64::MAX;
@@ -490,7 +490,7 @@ fn missing_hwm_on_never_rotated_log_is_a_live_gap() {
 /// holding only that record; it is a clean log, not tail loss.
 #[test]
 fn open_record_only_log_without_hwm_verifies_clean() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     drop(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     super::rotation_tests::cut_to_open_record(&path);
@@ -504,7 +504,7 @@ fn open_record_only_log_without_hwm_verifies_clean() {
 /// report tail loss.
 #[test]
 fn hwm_written_during_a_pass_is_a_retry_not_a_gap() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     let hwm = sibling(&path, "hwm");
@@ -528,7 +528,7 @@ fn hwm_written_during_a_pass_is_a_retry_not_a_gap() {
 /// first surviving record then links to a hash that is not genesis.
 #[test]
 fn head_cut_after_last_sealed_expired_still_fails_live_verify() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     expired_last_sealed_then_tail_cut(&path);
     let all = lines(&path);

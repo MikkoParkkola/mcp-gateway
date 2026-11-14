@@ -109,13 +109,13 @@ fn log_in(dir: &tempfile::TempDir) -> Arc<crate::security::TransparencyLogger> {
 struct Fixture {
     state: Arc<AppState>,
     runtime: Arc<AuthRuntime>,
-    dir: tempfile::TempDir,
+    dir: std::sync::Arc<tempfile::TempDir>,
     _router_dir: crate::gateway::router::tests::FixtureDir,
 }
 
 impl Fixture {
     async fn new() -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         // Owner-only, as the loader requires of a secret file, on every OS.
         crate::gateway::test_helpers::write_owner_only(dir.path().join("mu.digest"), spec(MU))
             .expect("write the secret file");

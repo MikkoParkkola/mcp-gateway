@@ -68,7 +68,7 @@ async fn refused_record(meta: &MetaMcp, dir: &tempfile::TempDir) -> (crate::Erro
 /// A response gate's block names `response_gate`.
 #[tokio::test]
 async fn a_response_gate_block_records_response_gate() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut meta = logged_meta(&dir);
     // No contract declared for `read`, fail closed, enforced.
     meta.set_response_contract(crate::config::ResponseContractConfig {
@@ -90,7 +90,7 @@ async fn a_response_gate_block_records_response_gate() {
 #[tokio::test]
 async fn a_budget_refusal_records_cost_budget() {
     use crate::cost_accounting::config::CostGovernanceConfig;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut cfg = CostGovernanceConfig {
         enabled: true,
         ..Default::default()
@@ -211,7 +211,7 @@ impl crate::transport::Transport for RefusedAtSend {
 /// `unrecorded`. Flips to that kind when an identity-standing kind is added.
 #[tokio::test]
 async fn a_send_refusal_on_the_meta_route_records_unrecorded() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = logged_meta_with(&dir, Arc::new(RefusedAtSend));
     let who = api_key_caller();
     let caller = context(&AllowAll, &who);

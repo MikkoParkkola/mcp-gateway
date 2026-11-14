@@ -509,7 +509,7 @@ fn the_watcher_context_is_built_on_the_audited_reporting() {
 #[tokio::test]
 async fn a_context_reporting_into_the_audit_log_records_its_recovery() {
     use crate::security::{TransparencyLogConfig, TransparencyLogger};
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_owner_only(&path, START).expect("write config");
     let log_path = dir.path().join("audit.ndjson");

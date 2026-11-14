@@ -91,6 +91,8 @@ owned_routes! {
     UI_DECISIONS = "/ui/api/decisions",
     /// How many decisions an admin has open, and their revision.
     UI_DECISIONS_COUNT = "/ui/api/decisions/count",
+    /// Resolve one open decision (an access request: accept or deny).
+    UI_DECISIONS_RESOLVE = "/ui/api/decisions/{id}/resolve",
     /// The Policies screen's read model: the tool policy and the finding
     /// rules, with coverage, shadowing and editability.
     UI_POLICIES = "/ui/api/policies",

@@ -17,7 +17,7 @@ use super::{EventsHub, Flipping, counting_callback, logged_services, queued_with
 #[tokio::test]
 async fn an_owner_scoped_occurrence_is_refused_by_its_source() {
     for owner_scoped in [false, true] {
-        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let config = crate::config::EventsConfig {
             callback_allow_private: vec!["127.0.0.0/8".into()],
             ..crate::config::EventsConfig::default()
@@ -54,7 +54,7 @@ async fn an_owner_scoped_occurrence_is_refused_by_its_source() {
 /// is checked on every attempt).
 #[tokio::test]
 async fn an_owner_scoped_occurrence_still_needs_its_callers_access() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()

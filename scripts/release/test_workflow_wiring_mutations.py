@@ -1714,8 +1714,15 @@ CASES += [
 # The full burst every per-PR job skips gates the release (MIK-7534).
 CASES += [
     ("release-verify-drops-the-full-burst", "release.yml",
-     "needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, mrtr7b-full-burst]\n",
-     "needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery]\n", CAUGHT),
+     "needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, mrtr7b-full-burst, unlocked-install]\n",
+     "needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, unlocked-install]\n", CAUGHT),
+    # The unlocked install of the packaged crate gates the release too.
+    ("release-verify-drops-the-unlocked-install", "release.yml",
+     "needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, mrtr7b-full-burst, unlocked-install]\n",
+     "needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, mrtr7b-full-burst]\n", CAUGHT),
+    ("unlocked-install-no-longer-callable", "unlocked-install.yml", "  workflow_call:\n", "", CAUGHT),
+    ("unlocked-install-installs-locked", "unlocked-install.yml",
+     "packaged-tests.sh install-unlocked", "packaged-tests.sh build", CAUGHT),
     ("full-burst-no-longer-callable", "mrtr7b-full-burst.yml", "  workflow_call:\n", "", CAUGHT),
     ("full-burst-runs-another-test", "mrtr7b-full-burst.yml",
      "            mik_7479_full_burst_every_call_reaches_one_terminal_frame --nocapture",

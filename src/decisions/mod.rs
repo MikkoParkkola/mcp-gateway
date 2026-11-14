@@ -143,11 +143,19 @@ impl Requested {
     /// The refusals newer than the last UI decision and still kept: at or
     /// after the log's `edge` counter.
     fn pending(&self, edge: Option<u64>) -> impl Iterator<Item = &DateTime<Utc>> {
+        self.pending_refusals(edge).map(|(_, at)| at)
+    }
+
+    /// The same refusals with their log positions: what an admin was shown,
+    /// and what a scope digest must cover.
+    fn pending_refusals(
+        &self,
+        edge: Option<u64>,
+    ) -> impl Iterator<Item = (&LogPos, &DateTime<Utc>)> {
         self.refused
             .iter()
             .filter(move |(pos, _)| edge.is_none_or(|edge| pos.counter >= edge))
-            .map(|(_, at)| at)
-            .filter(move |at| self.decided.is_none_or(|decided| **at > decided))
+            .filter(move |(_, at)| self.decided.is_none_or(|decided| **at > decided))
     }
 }
 
@@ -552,28 +560,60 @@ fn reason_and_scope(
 
 /// The set as the gateway holds it: one lock, read by the list route and the
 /// stream's snapshot, written by the producers.
-pub(crate) struct Shared(parking_lot::RwLock<DecisionSet>);
+pub(crate) struct Shared {
+    set: parking_lot::RwLock<DecisionSet>,
+    /// Serializes the resolve route: one resolve at a time, so a second
+    /// resolve of an id sees what the first one changed.
+    resolve: tokio::sync::Mutex<()>,
+}
 
 impl Shared {
     /// A handle over a set keyed by `key`.
     pub(crate) fn with_key(key: [u8; 32]) -> Self {
-        Self(parking_lot::RwLock::new(DecisionSet::with_key(key)))
+        Self {
+            set: parking_lot::RwLock::new(DecisionSet::with_key(key)),
+            resolve: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    /// Hold the resolve mutex. Taken before anything else of a resolve.
+    pub(crate) async fn resolving(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.resolve.lock().await
+    }
+
+    /// One open item by id, cloned under a single read lock: its fields are
+    /// one consistent snapshot of the set. While any source is not yet
+    /// readable the items are partial, so the sources are returned instead:
+    /// a real request must never read as `not_found` during a replay.
+    pub(crate) fn item(
+        &self,
+        id: &str,
+    ) -> Result<Option<Value>, Vec<(&'static str, &'static str)>> {
+        let set = self.set.read();
+        if !set.readable() {
+            return Err(set.unavailable());
+        }
+        Ok(set
+            .items
+            .iter()
+            .find(|item| item.get("id").and_then(Value::as_str) == Some(id))
+            .cloned())
     }
 
     /// Apply `change` under the write lock.
     pub(crate) fn update<T>(&self, change: impl FnOnce(&mut DecisionSet) -> T) -> T {
-        change(&mut self.0.write())
+        change(&mut self.set.write())
     }
 
     /// [`DecisionSet::snapshot`] under the read lock.
     pub(crate) fn snapshot(&self) -> Option<(usize, u64)> {
-        self.0.read().snapshot()
+        self.set.read().snapshot()
     }
 
     /// [`DecisionSet::view`] under the read lock, or the sources not yet
     /// readable.
     pub(crate) fn view(&self) -> Result<View, Vec<(&'static str, &'static str)>> {
-        let set = self.0.read();
+        let set = self.set.read();
         set.view().ok_or_else(|| set.unavailable())
     }
 }

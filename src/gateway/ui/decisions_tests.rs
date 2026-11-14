@@ -128,7 +128,7 @@ fn scope_len(body: &Value) -> usize {
 
 #[tokio::test]
 async fn an_admin_is_served_the_open_decisions_and_no_one_else() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let now = crate::clock::utc_now().expect("a readable clock");
     write(&log, note("stripe.charges", now));
@@ -167,7 +167,7 @@ async fn an_admin_is_served_the_open_decisions_and_no_one_else() {
 
 #[tokio::test]
 async fn a_request_whose_refusals_left_the_log_is_closed() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     // Small segments, one kept: the fillers below expire the first one.
     let log = log_in(&dir, 2048, 1);
     let (state, _store) = state_with(&log).await;
@@ -235,7 +235,7 @@ async fn hold_the_set(decisions: Arc<Shared>) -> std::sync::mpsc::Sender<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reader_that_cannot_take_the_set_does_not_hold_up_an_append() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
@@ -257,11 +257,11 @@ async fn a_reader_that_cannot_take_the_set_does_not_hold_up_an_append() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_burst_past_the_queue_is_replayed_not_lost() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let files = tempfile::tempdir().expect("tempdir");
+    let files = crate::test_dir_keep::kept_tempdir();
     let none = super::super::discovery_wiring_tests::Scripted::new(files.path(), &[]);
     let _tick = start_with(&state.meta_mcp, None, shutdown, 1, none);
     served_when(&state, |_| true).await;
@@ -287,7 +287,7 @@ async fn a_burst_past_the_queue_is_replayed_not_lost() {
 fn measure_the_replay_at_the_retention_cap() {
     use std::io::Write as _;
 
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("transparency.jsonl");
     let mut file = std::io::BufWriter::new(std::fs::File::create(&path).expect("file"));
     let (mut bytes, mut notes) = (0_u64, 0_u64);
@@ -349,7 +349,7 @@ fn measure_the_replay_at_the_retention_cap() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_replay_waits_for_the_one_already_running() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let shared = Arc::new(Shared::with_key([7; 32]));
     shared.update(|set| {
@@ -385,7 +385,7 @@ async fn a_replay_waits_for_the_one_already_running() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_waiting_replay_unmarks_a_ready_it_did_not_read() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let shared = Arc::new(Shared::with_key([7; 32]));
     // A directory is no log: this replay cannot read, so it never marks ready.
     let replays = Arc::new(Replays {
@@ -420,7 +420,7 @@ async fn a_waiting_replay_unmarks_a_ready_it_did_not_read() {
 
 #[test]
 fn a_log_with_no_sealed_segment_has_an_edge() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let now = crate::clock::utc_now().expect("a readable clock");
     write(&log, note("stripe.charges", now));
@@ -455,7 +455,7 @@ async fn count(state: &Arc<AppState>, admin: bool) -> (StatusCode, Value) {
 /// never a number.
 #[tokio::test]
 async fn the_count_is_unavailable_while_a_source_is() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let shared = Arc::new(Shared::with_key([7; 32]));
@@ -476,7 +476,7 @@ async fn the_count_is_unavailable_while_a_source_is() {
 /// R6: the count is the list's length and revision, for an admin only.
 #[tokio::test]
 async fn the_count_is_the_lists_length_and_revision_for_an_admin_only() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = log_in(&dir, 1 << 20, 12);
     let now = crate::clock::utc_now().expect("a readable clock");
     write(&log, note("stripe.charges", now));
@@ -506,4 +506,205 @@ async fn the_count_is_the_lists_length_and_revision_for_an_admin_only() {
 
     let (status, _) = count(&state, false).await;
     assert_eq!(status, admin_auth_required().0, "a non-admin is refused");
+}
+
+// ---- POST /ui/api/decisions/{id}/resolve: the frame ----
+
+async fn resolve(
+    state: &Arc<AppState>,
+    admin: bool,
+    id: &str,
+    body: impl AsRef<[u8]>,
+) -> (StatusCode, Value) {
+    let guard = Guard::for_route(
+        routes::UI_DECISIONS_RESOLVE,
+        &Method::POST,
+        Some(client(admin)),
+    );
+    let response = resolve_decision(
+        State(Arc::clone(state)),
+        axum::Extension(state.live_config.generation()),
+        guard,
+        axum::extract::Path(id.to_owned()),
+        axum::body::Bytes::copy_from_slice(body.as_ref()),
+    )
+    .await;
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+fn deny_body(digest: &str) -> Value {
+    json!({"action": "deny", "reason": "not needed", "scope_digest": digest})
+}
+
+/// A started gateway with one open access request; its id and digest.
+async fn one_request() -> (
+    Arc<AppState>,
+    Arc<TransparencyLogger>,
+    String,
+    String,
+    (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
+) {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let now = crate::clock::utc_now().expect("a readable clock");
+    write(&log, note("stripe.charges", now));
+    let (state, store) = state_with(&log).await;
+    let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let _tick = start(&state.meta_mcp, None, shutdown);
+    let body = served_when(&state, |body| scope_len(body) == 1).await;
+    let item = &body["decisions"][0];
+    let id = item["id"].as_str().expect("an id").to_owned();
+    let digest = item["scope_digest"].as_str().expect("a digest").to_owned();
+    (state, log, id, digest, (dir, store))
+}
+
+#[tokio::test]
+async fn resolve_answers_one_status_per_state_and_writes_nothing() {
+    let (state, _log, id, digest, _keep) = one_request().await;
+    assert_eq!(digest.len(), 64, "{digest}");
+
+    let (status, body) = resolve(&state, false, &id, deny_body(&digest).to_string()).await;
+    assert_ne!(status, StatusCode::OK, "a non-admin is refused: {body}");
+    assert_ne!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "refused before the body: {body}"
+    );
+
+    for bad in [
+        "not json".to_owned(),
+        json!({"action": "deny", "reason": "r", "scope_digest": digest, "extra": 1}).to_string(),
+        json!({"action": "deny", "reason": " ", "scope_digest": digest}).to_string(),
+        json!({"action": "deny", "reason": "not needed\n", "scope_digest": digest}).to_string(),
+        json!({"action": "deny", "reason": "r", "scope_digest": "abc"}).to_string(),
+        json!({"action": "deny", "reason": "r", "scope_digest": digest.to_uppercase()}).to_string(),
+        json!({"action": "accept", "reason": "r", "scope_digest": digest}).to_string(),
+        json!({"action": "accept", "reason": "r", "scope_digest": digest,
+               "ttl_seconds": 60, "permanent": true})
+        .to_string(),
+        json!({"action": "deny", "reason": "r", "scope_digest": digest,
+               "ttl_seconds": 60})
+        .to_string(),
+    ] {
+        let (status, body) = resolve(&state, true, &id, &bad).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}: {body}");
+        assert_eq!(body["error"], "invalid_body", "{bad}");
+    }
+
+    let (status, body) = resolve(&state, true, "no-such-id", deny_body(&digest).to_string()).await;
+    assert_eq!(
+        (status, &body["error"]),
+        (StatusCode::NOT_FOUND, &json!("not_found"))
+    );
+
+    let outdated = "0".repeat(64);
+    let (status, body) = resolve(&state, true, &id, deny_body(&outdated).to_string()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "scope_changed");
+    assert_eq!(body["scope_digest"], json!(digest));
+
+    let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"], "not_available_yet");
+}
+
+#[tokio::test]
+async fn an_open_item_of_another_kind_is_not_resolvable() {
+    let item = json!({"kind": "capability_change", "scope_digest": "0".repeat(64)});
+    let response = judge_item(&item, &"0".repeat(64));
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+    let body: Value = serde_json::from_slice(&bytes).expect("a json body");
+    assert_eq!(body["error"], "not_resolvable", "{body}");
+}
+
+/// While a source replays, the items are partial: a resolve answers 503
+/// naming it, never `not_found` for a request it cannot see yet.
+#[tokio::test]
+async fn a_resolve_while_a_source_replays_is_unavailable() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let (state, _store) = state_with(&log).await;
+    let shared = Arc::new(Shared::with_key([7; 32]));
+    shared.update(|set| {
+        set.set_health(Source::ControlPlane, Health::Ready);
+        set.set_health(Source::Capability, Health::Absent);
+        set.discovery_down();
+    });
+    state.meta_mcp.set_decisions(shared);
+    let body = deny_body(&"0".repeat(64)).to_string();
+    let (status, body) = resolve(&state, true, "any-id", &body).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+}
+
+#[tokio::test]
+async fn the_digest_follows_the_scope_not_the_arrival_order() {
+    let (state, log, id, digest, _keep) = one_request().await;
+    let now = crate::clock::utc_now().expect("a readable clock");
+    write(&log, note("stripe.refunds", now));
+    let body = served_when(&state, |body| scope_len(body) == 2).await;
+    let after = body["decisions"][0]["scope_digest"]
+        .as_str()
+        .expect("digest");
+    assert_ne!(after, digest, "a wider scope is a new digest");
+
+    let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "the listed digest is stale: {body}"
+    );
+    assert_eq!(body["scope"].as_array().map(Vec::len), Some(2), "{body}");
+}
+
+#[tokio::test]
+async fn two_resolves_do_not_overlap() {
+    let (state, _log, id, digest, _keep) = one_request().await;
+    let decisions = state.meta_mcp.decisions().expect("decisions");
+    let held = decisions.resolving().await;
+    let state2 = Arc::clone(&state);
+    let body = deny_body(&digest).to_string();
+    let pending = tokio::spawn(async move { resolve(&state2, true, &id, body).await });
+    // A deterministic handoff, not a wait: this runtime has one thread, so one
+    // yield runs the spawned resolve until it first returns Pending. Every step
+    // before the mutex is synchronous, so without the mutex it would finish in
+    // that one poll; with it, it is parked until `held` drops.
+    tokio::task::yield_now().await;
+    assert!(
+        !pending.is_finished(),
+        "a resolve ran while another held the mutex"
+    );
+    drop(held);
+    let (status, _) = pending.await.expect("joined");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn one_more_refusal_of_a_listed_capability_is_a_changed_request() {
+    let (state, log, id, digest, _keep) = one_request().await;
+    let later = crate::clock::utc_now().expect("a readable clock")
+        + crate::duration_bound::delta!(seconds, 5);
+    write(&log, note("stripe.charges", later));
+    let body = served_when(&state, |body| {
+        body["decisions"][0]["refused_calls"] == json!(2)
+    })
+    .await;
+    assert_eq!(scope_len(&body), 1, "the scope did not widen: {body}");
+    let after = body["decisions"][0]["scope_digest"]
+        .as_str()
+        .expect("digest");
+    assert_ne!(
+        after, digest,
+        "a refusal the admin never saw is a new digest"
+    );
+
+    let (status, body) = resolve(&state, true, &id, deny_body(&digest).to_string()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "scope_changed");
+    assert_eq!(body["scope_digest"], json!(after));
 }

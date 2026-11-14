@@ -25,7 +25,7 @@ async fn bare_check_record(
 ) -> Value {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
@@ -47,7 +47,7 @@ async fn bare_check_record(
 async fn a_decision_noted_after_the_invocation_record_landed_says_recorded() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
@@ -112,7 +112,7 @@ async fn refused_call(
 
 #[tokio::test]
 async fn a_gate_refused_call_with_its_invocation_record_is_recorded() {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
 
     refused_call(&dir, AuditFailurePolicy::BestEffort, false).await;
 
@@ -128,7 +128,7 @@ async fn a_refusal_whose_invocation_append_failed_is_an_unrecorded_decision() {
         AuditFailurePolicy::FailClosed,
         AuditFailurePolicy::BestEffort,
     ] {
-        let dir = Arc::new(tempfile::tempdir().unwrap());
+        let dir = crate::test_dir_keep::kept_tempdir();
 
         refused_call(&dir, policy, true).await;
 
@@ -144,7 +144,7 @@ async fn a_refusal_whose_invocation_append_failed_is_an_unrecorded_decision() {
 async fn a_withheld_note_outside_any_slot_is_written_at_once_unrecorded() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,
@@ -177,7 +177,7 @@ static DENY: crate::gateway::authz::DenyAll = crate::gateway::authz::DenyAll;
 async fn a_blocked_withheld_writer_never_holds_the_slots_answer() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::FailClosed);
@@ -215,7 +215,7 @@ async fn a_blocked_withheld_writer_never_holds_the_slots_answer() {
 async fn a_refused_stored_delivery_recheck_says_recorded() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,
@@ -250,7 +250,7 @@ async fn a_refused_stored_delivery_recheck_says_recorded() {
 async fn a_call_cancelled_during_its_invocation_append_is_one_recorded_decision() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = Arc::new(gateway(
         &endpoint,
@@ -293,7 +293,7 @@ async fn a_call_cancelled_during_its_invocation_append_is_one_recorded_decision(
 async fn an_append_that_outlives_its_caller_marks_the_decision_recorded() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,
@@ -329,7 +329,7 @@ async fn an_append_that_outlives_its_caller_marks_the_decision_recorded() {
 #[tokio::test]
 async fn a_slow_call_writes_its_decision_once_after_its_invocation_record() {
     let endpoint = Arc::new(Endpoint::start(true).await);
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = Arc::new(gateway(
         &endpoint,
@@ -366,7 +366,7 @@ async fn a_slow_call_writes_its_decision_once_after_its_invocation_record() {
 async fn a_caller_cancelled_during_the_flush_still_gets_its_withheld_note_written() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = Arc::new(gateway(

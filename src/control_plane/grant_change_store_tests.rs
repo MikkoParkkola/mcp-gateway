@@ -40,7 +40,7 @@ fn store(dir: &std::path::Path) -> FileControlPlaneStore {
 
 #[test]
 fn t11_grant_change_round_trips_through_the_file_store() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let s = store(dir.path());
     let mut full = GrantChangeRecord::new(GrantChangeVerb::Revoke);
     full.digest = Some("sha256:ab".to_string());

@@ -11,13 +11,13 @@ use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_settle_still_writing_when_the_test_ends_keeps_the_folder() {
-    let dir = Arc::new(tempfile::tempdir().expect("dir"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let root = dir.path().to_owned();
     let hub = delivery_hub(&dir);
     // The audit log is the services' file, open until they drop, and Windows
     // cannot remove a folder holding an open file: it lives in its own folder,
     // so this one holds only what the delivery writes.
-    let audit = tempfile::tempdir().expect("audit dir");
+    let audit = crate::test_dir_keep::kept_tempdir();
     let services = logged_services(audit.path());
     let (port, _accepted) = counting_callback().await;
     offer(&hub, &["webhook.c.r.received"]);

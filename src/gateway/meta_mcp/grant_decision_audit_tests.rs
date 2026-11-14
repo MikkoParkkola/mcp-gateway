@@ -151,7 +151,7 @@ pub(super) fn only(records: Vec<Value>, what: &str) -> Value {
 async fn grant_denial_writes_decision_record() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,
@@ -198,7 +198,7 @@ async fn grant_denial_writes_decision_record() {
 async fn grant_match_writes_allow_record() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
@@ -230,7 +230,7 @@ async fn public_capability_writes_no_decision() {
     for exposure in ["public", "shared"] {
         let (endpoint, dir) = (
             Endpoint::start(false).await,
-            Arc::new(tempfile::tempdir().unwrap()),
+            crate::test_dir_keep::kept_tempdir(),
         );
         let meta = gateway(
             &endpoint,
@@ -264,7 +264,7 @@ async fn public_capability_writes_no_decision() {
 async fn grant_decision_append_failure_is_audit_unavailable() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let log = logger(&dir, AuditFailurePolicy::FailClosed);
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
@@ -291,7 +291,7 @@ async fn grant_decision_record_carries_no_label() {
     for (who, (authority, subject)) in callers {
         let (endpoint, dir) = (
             Endpoint::start(false).await,
-            Arc::new(tempfile::tempdir().unwrap()),
+            crate::test_dir_keep::kept_tempdir(),
         );
         let meta = gateway(
             &endpoint,
@@ -323,7 +323,7 @@ async fn grant_decision_record_carries_no_label() {
 async fn listing_writes_no_decision() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,
@@ -352,7 +352,7 @@ async fn listing_writes_no_decision() {
 async fn direct_invoke_tool_writes_one_record() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
@@ -409,7 +409,7 @@ async fn no_logger_changes_nothing() {
 async fn surfaced_call_grant_denial_writes_one_record() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,

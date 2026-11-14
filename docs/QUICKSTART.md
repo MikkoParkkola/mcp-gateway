@@ -32,8 +32,10 @@ The wizard scans Claude Desktop, Claude Code, Cursor, Windsurf, Zed, Continue.de
 brew install MikkoParkkola/tap/mcp-gateway
 
 # Or from crates.io
-cargo install mcp-gateway
+cargo install --locked mcp-gateway
 ```
+
+`--locked` builds with the exact dependency versions this release was tested with. Without it Cargo picks the newest compatible versions on the day you install, which can differ from the ones the release was tested with. The release binaries and the container images are already built from the release's own lock file.
 
 ### 2. Create a Config
 

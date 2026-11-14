@@ -5,8 +5,6 @@
 //! grant reload landing between two evaluations must not leave a record that
 //! names a decision other than the refusal served.
 
-use std::sync::Arc;
-
 use serde_json::json;
 
 use super::super::grant_audit::{allow_unslotted_check_for_test, with_grant_slot};
@@ -24,7 +22,7 @@ static DENY: DenyAll = DenyAll;
 async fn a_reload_after_the_refusal_does_not_change_the_recorded_decision() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,
@@ -67,7 +65,7 @@ async fn a_reload_after_the_refusal_does_not_change_the_recorded_decision() {
 async fn an_allowed_call_records_no_decision_at_this_step() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let rows = vec![grant("g-alice", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::FailClosed);
@@ -90,7 +88,7 @@ async fn an_allowed_call_records_no_decision_at_this_step() {
 async fn a_refusal_before_the_grant_rule_still_records_the_decision() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let rows = vec![grant("g-alice", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::FailClosed);
@@ -116,7 +114,7 @@ async fn a_refusal_before_the_grant_rule_still_records_the_decision() {
 async fn an_unnoted_refusal_is_audit_unavailable() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
-        Arc::new(tempfile::tempdir().unwrap()),
+        crate::test_dir_keep::kept_tempdir(),
     );
     let meta = gateway(
         &endpoint,

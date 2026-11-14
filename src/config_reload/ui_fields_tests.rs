@@ -253,3 +253,20 @@ fn an_alert_field_cannot_be_removed() {
         );
     }
 }
+
+/// The CLI-caller refusal in the settings save keys on an `auth.` id prefix, so
+/// every setting stored under the `auth` section must carry that prefix, and no
+/// other setting may: a new auth setting cannot skip the refusal by naming
+/// itself differently.
+#[test]
+fn every_setting_under_auth_has_an_auth_id() {
+    for spec in FIELDS {
+        let under_auth = matches!(spec.path.first(), Some(super::Seg::Key("auth")));
+        assert_eq!(
+            under_auth,
+            spec.id.starts_with("auth."),
+            "{}: the CLI refusal keys on the id prefix",
+            spec.id
+        );
+    }
+}

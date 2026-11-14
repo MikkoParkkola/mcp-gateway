@@ -72,7 +72,7 @@ fn idp_backend() -> Arc<crate::backend::Backend> {
 /// names `alpha`, the server the call was admitted for (M1).
 #[tokio::test]
 async fn r1_a_surfaced_replay_records_the_admitted_server() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
     let who = api_key_caller();
     let retry = keyed("r1");
@@ -132,7 +132,7 @@ async fn r1_a_surfaced_replay_records_the_admitted_server() {
 /// target is built as `replay_origin_target` builds it.
 #[tokio::test]
 async fn r7_a_continuation_origin_replay_writes_no_record() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
     let who = api_key_caller();
     let retry = keyed("r7");
@@ -175,7 +175,7 @@ async fn r7_a_continuation_origin_replay_writes_no_record() {
 /// after the map moves (M5b).
 #[tokio::test]
 async fn r5b_a_failed_deferral_records_the_admitted_server() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let base = meta(Ok(ok_result()), &dir);
     assert!(
         base.backends.for_test().register(idp_backend()),
@@ -245,7 +245,7 @@ async fn r2_a_surfaced_replay_stages_its_receipt_for_the_admitted_server() {
     use crate::security::firewall::{
         CollusionAction, CollusionConfig, Firewall, FirewallConfig, RelayCaller,
     };
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -320,7 +320,7 @@ async fn r2_a_surfaced_replay_stages_its_receipt_for_the_admitted_server() {
 /// a replay without a key, so the route stage is called directly.
 #[tokio::test]
 async fn r8_an_unkeyed_named_replay_carries_the_admitted_server() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
     let who = api_key_caller();
     let ctx = context(&AllowAll, &who);
@@ -359,7 +359,7 @@ async fn r3_no_carried_server_records_and_stages_nothing() {
     use crate::security::firewall::{
         CollusionAction, CollusionConfig, Firewall, FirewallConfig, RelayCaller,
     };
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -419,7 +419,7 @@ async fn r3_no_carried_server_records_and_stages_nothing() {
 /// map moves, outcome and response hash included.
 #[tokio::test]
 async fn r5_a_refused_replay_records_the_admitted_server() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
     let who = api_key_caller();
     let retry = keyed("r5");
@@ -479,7 +479,7 @@ async fn r5_a_refused_replay_records_the_admitted_server() {
 /// already holds on base, so the row pins it.
 #[tokio::test]
 async fn l8_a_keyed_repeat_after_the_name_moves_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
     let who = api_key_caller();
     let retry = keyed("l8");

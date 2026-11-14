@@ -10,11 +10,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use axum::Json;
 use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::{Extension, Json};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
@@ -22,6 +22,7 @@ use serde_json::json;
 use super::config_file::{Gateway, read_gateway};
 use super::errors::{flat_error, stale, structured_error};
 use super::guard::Guard;
+use super::settings::caller_is_cli_key;
 use crate::config::{ApiKeyConfig, AuthConfig, Config, EnvOverlay};
 use crate::config_persistence::keyedit::{
     Change, FieldPath, Scalar, Segment, Template, edit_in_place,
@@ -31,6 +32,7 @@ use crate::config_reload::{
     RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced, refuse_multi_user_flip,
     replace_audited,
 };
+use crate::gateway::auth::SessionMintedBy;
 use crate::gateway::router::AppState;
 
 /// Under test, a request may carry the secret the route hands out, so a row
@@ -500,16 +502,31 @@ fn refused_write(
 }
 
 /// `POST /ui/api/keys`.
+/// A CLI key must not mint an unbound successor that outlives its approver.
 pub(super) async fn create_key(
     State(state): State<std::sync::Arc<AppState>>,
     guard: Guard,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    session: Option<Extension<SessionMintedBy>>,
     #[cfg(test)] known: Option<axum::Extension<KnownSecret>>,
-    #[cfg(test)] before_lock: Option<axum::Extension<BeforeLock>>,
-    #[cfg(test)] inject: Option<axum::Extension<InjectWriter>>,
+    #[cfg(test)] (before_lock, inject): (
+        Option<axum::Extension<BeforeLock>>,
+        Option<axum::Extension<InjectWriter>>,
+    ),
     body: Result<Json<CreateBody>, JsonRejection>,
 ) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
+    }
+    if caller_is_cli_key(
+        generation.auth(),
+        guard
+            .client
+            .as_ref()
+            .and_then(|client| client.quota_principal.as_ref()),
+        session.as_ref().map(|Extension(SessionMintedBy(key))| key),
+    ) {
+        return super::guard::Refused::Forbidden.into_response();
     }
     let Ok(Json(mut body)) = body else {
         return invalid_body();
