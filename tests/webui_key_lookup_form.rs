@@ -350,13 +350,13 @@ out(seen);
 /// text nodes. Mutant: build a row with `innerHTML`.
 #[test]
 fn a_hostile_subject_is_shown_as_text() {
-    let got = run(r#"
+    let got = run(r"
 replies = [page([row('<img src=x onerror=alert(1)>')])];
 await submit('ada@corp.test');
 const walk = (n) => [n.tag ?? '', n.text ?? '', ...(n.children ?? []).flatMap(walk)];
 const all = dom['kl-rows'].children.flatMap(walk);
 out({ all });
-"#);
+");
     let all: Vec<&str> = got["all"]
         .as_array()
         .unwrap()
