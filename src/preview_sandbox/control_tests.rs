@@ -239,6 +239,7 @@ fn t8_a_proc_directory_never_follows_a_reaped_pid() {
     use super::{boot_ticks, judge_dir, open_peer, read_peer};
     let uid = rustix::process::getuid().as_raw();
     let me = std::process::id();
+    let before = boot_ticks();
     let mut child = std::process::Command::new("sleep")
         .arg("30")
         .spawn()
@@ -252,6 +253,10 @@ fn t8_a_proc_directory_never_follows_a_reaped_pid() {
     assert!(
         judge_dir(&dir, 0, me, uid).is_err(),
         "a start after the accept"
+    );
+    assert!(
+        judge_dir(&dir, before.saturating_sub(1), me, uid).is_err(),
+        "a child spawned after the clock was read started after it"
     );
     assert!(
         judge_dir(&dir, boot_ticks(), me.wrapping_add(1), uid).is_err(),
