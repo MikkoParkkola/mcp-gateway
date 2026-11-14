@@ -74,7 +74,7 @@ fn assert_overflow(path: &Path) {
 /// `finish`: the last record at `u64::MAX`, no `.hwm`, a sealed sibling.
 #[test]
 fn a_final_counter_at_max_is_a_verdict() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let s0 = sealed_path(&path, 0);
     let sealed = write_chain(
@@ -95,7 +95,7 @@ fn a_final_counter_at_max_is_a_verdict() {
 /// `check_entry`: a record at `u64::MAX` followed by another.
 #[test]
 fn a_record_after_max_is_a_verdict() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     write_chain(&path, &path, "genesis", vec![(MAX, plain()), (0, plain())]);
     assert_overflow(&path);
@@ -104,7 +104,7 @@ fn a_record_after_max_is_a_verdict() {
 /// `first_record`: a seal at `u64::MAX` followed by an open record.
 #[test]
 fn an_open_record_after_a_seal_at_max_is_a_verdict() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let s0 = sealed_path(&path, 0);
     let sealed = write_chain(
@@ -125,7 +125,7 @@ fn an_open_record_after_a_seal_at_max_is_a_verdict() {
 /// `finish`: an expiry record whose `last_counter` is `u64::MAX`.
 #[test]
 fn an_expiry_last_counter_at_max_is_a_verdict() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let link = format!("sha256:{}", "a".repeat(64));
     write_chain(
@@ -146,7 +146,7 @@ fn an_expiry_last_counter_at_max_is_a_verdict() {
 /// The newest sealed segment numbered `u64::MAX`, with an active file.
 #[test]
 fn an_active_file_after_segment_max_is_a_verdict() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     write_chain(
         &path,
@@ -161,7 +161,7 @@ fn an_active_file_after_segment_max_is_a_verdict() {
 /// A seal naming no next segment in segment `u64::MAX`.
 #[test]
 fn a_seal_without_next_in_segment_max_is_a_verdict() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     write_chain(
         &path,

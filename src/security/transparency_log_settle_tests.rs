@@ -70,7 +70,7 @@ pub(super) fn records_of(path: &Path, token: &str) -> Vec<Value> {
 #[tokio::test]
 async fn settle_appends_the_payload_unchanged_into_the_bound_log() {
     // GIVEN: a live logger with a record
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     append(&l, 0);
@@ -101,7 +101,7 @@ async fn settle_bound_to_another_log_appends_nothing() {
     for presented in [false, true] {
         // GIVEN: a binding that is not the logger's id: another id, or the
         // logger presenting another (the Bind(OtherLog) seam)
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
         // `own` is the id settle sees as the logger's.
@@ -130,12 +130,12 @@ async fn settle_bound_to_another_log_appends_nothing() {
 #[tokio::test]
 async fn settle_after_its_log_was_replaced_lands_in_neither_log() {
     // GIVEN: a live logger, and another log swapped in under it
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     append(&l, 0);
     let binding = l.log_id();
-    let other = tempfile::tempdir().unwrap();
+    let other = crate::test_dir_keep::kept_tempdir();
     let theirs = log_path(&other);
     append(
         &TransparencyLogger::open(cfg(&theirs, 12, false)).unwrap(),
@@ -172,7 +172,7 @@ async fn a_refused_settle_appends_nothing() {
         // GIVEN: a live logger and the BeforeAppend seam, or a payload naming
         // a field settle (event, token), the chain (counter), the envelope
         // (outcome) or a segment (segment_seq) owns
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
         settled(&l, &l.log_id(), "w-0").await;
@@ -204,7 +204,7 @@ async fn a_refused_settle_appends_nothing() {
 #[tokio::test]
 async fn a_settle_failing_after_its_append_is_unconfirmed() {
     // GIVEN: the AfterAppend seam
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     l.arm_settle_fault(FailSettle::AfterAppend);
@@ -225,7 +225,7 @@ fn settle_events_name_their_role_and_callers_cannot_write_them() {
         (Role::Deferred, "config_write_deferred"),
         (Role::DeliveryStopped, "config_write_delivery_stopped"),
     ];
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     for (role, name) in roles {

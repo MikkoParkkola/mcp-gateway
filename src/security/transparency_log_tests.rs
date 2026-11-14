@@ -570,7 +570,7 @@ fn without_a_home_a_tilde_log_matches_the_exporter_and_warns_once() {
 
 #[test]
 fn with_a_home_a_tilde_log_warns_nothing() {
-    let home = tempfile::tempdir().unwrap();
+    let home = crate::test_dir_keep::kept_tempdir();
     let cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
         path: "~/transparency-home-test/log.jsonl".to_string(),
@@ -591,7 +591,7 @@ fn with_a_home_a_tilde_log_warns_nothing() {
 
 #[test]
 fn without_a_tilde_a_missing_home_warns_nothing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
         path: dir.path().join("log.jsonl").to_string_lossy().to_string(),

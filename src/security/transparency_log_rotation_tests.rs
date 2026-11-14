@@ -150,7 +150,7 @@ pub(super) fn strip_genesis_open(path: &Path) {
 
 #[test]
 fn rotates_at_max_segment_bytes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -160,7 +160,7 @@ fn rotates_at_max_segment_bytes() {
 
 #[test]
 fn chain_continues_across_segments() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 3);
@@ -184,7 +184,7 @@ fn chain_continues_across_segments() {
 /// Null control: must stay green on the unmutated build.
 #[test]
 fn verify_passes_multi_segment_log() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 3);
@@ -196,7 +196,7 @@ fn verify_passes_multi_segment_log() {
 
 #[test]
 fn verify_fails_on_missing_middle_segment() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 3);
@@ -208,7 +208,7 @@ fn verify_fails_on_missing_middle_segment() {
 
 #[test]
 fn verify_fails_on_hand_deleted_oldest() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 3);
@@ -220,7 +220,7 @@ fn verify_fails_on_hand_deleted_oldest() {
 
 #[test]
 fn verify_passes_after_retention_expiry() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
     rotate_n(&l, &path, 2);
@@ -246,7 +246,7 @@ fn verify_passes_after_retention_expiry() {
 
 #[test]
 fn verify_fails_on_swapped_segment_names() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 3);
@@ -270,7 +270,7 @@ fn verify_fails_on_swapped_segment_names() {
 
 #[test]
 fn verify_rejects_wrong_active_segment_seq() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 2);
@@ -285,7 +285,7 @@ fn verify_rejects_wrong_active_segment_seq() {
 
 #[test]
 fn list_segments_ignores_non_segment_siblings() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     for suffix in [
         "lock",
@@ -309,7 +309,7 @@ fn list_segments_ignores_non_segment_siblings() {
 
 #[test]
 fn deleted_active_is_a_verify_gap() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -328,7 +328,7 @@ fn deleted_active_is_a_verify_gap() {
 
 #[test]
 fn truncated_active_is_a_verify_gap() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -349,7 +349,7 @@ fn truncated_active_is_a_verify_gap() {
 
 #[test]
 fn deleted_hwm_fails_verify() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -359,7 +359,7 @@ fn deleted_hwm_fails_verify() {
 
 #[test]
 fn forged_hwm_fails_signed_verify() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, true)).unwrap();
     rotate_n(&l, &path, 1);
@@ -396,7 +396,7 @@ fn forged_hwm_fails_signed_verify() {
 
 #[test]
 fn torn_hwm_counts_as_missing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -411,12 +411,12 @@ fn torn_hwm_counts_as_missing() {
 
 #[test]
 fn archive_mode_accepts_copy_without_hwm() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 2);
     drop(l);
-    let copy = tempfile::tempdir().unwrap();
+    let copy = crate::test_dir_keep::kept_tempdir();
     let cpath = log_path(&copy);
     std::fs::copy(&path, &cpath).unwrap();
     for seg in list_segments(&path).unwrap() {
@@ -432,7 +432,7 @@ fn archive_mode_accepts_copy_without_hwm() {
 
 #[test]
 fn verify_runs_when_active_absent() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 2);
@@ -447,7 +447,7 @@ fn verify_runs_when_active_absent() {
 
 #[test]
 fn verify_with_live_appender_passes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     rotate_n(&l, &path, 1);
@@ -466,7 +466,7 @@ fn verify_with_live_appender_passes() {
 
 #[test]
 fn caller_cannot_append_segment_event() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let mut f = serde_json::Map::new();
@@ -479,7 +479,7 @@ fn caller_cannot_append_segment_event() {
 
 #[test]
 fn oversized_record_refused_without_degrading() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false))
         .unwrap()
@@ -495,7 +495,7 @@ fn oversized_record_refused_without_degrading() {
 /// `ErrorKind`, so a corrupt tail (`InvalidData`) on resync still degrades.
 #[test]
 fn corrupt_tail_on_resync_still_degrades() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false))
         .unwrap()
@@ -513,7 +513,7 @@ fn corrupt_tail_on_resync_still_degrades() {
 /// file agree, and two distinct files never do, whatever their timestamps.
 #[test]
 fn mik_1528_two_distinct_files_have_distinct_identities() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let (a, b) = (dir.path().join("a"), dir.path().join("b"));
     let fa = std::fs::File::create(&a).unwrap();
     let fb = std::fs::File::create(&b).unwrap();
@@ -569,7 +569,7 @@ fn assert_nothing_dated_zero(path: &Path) {
 /// rotation is skipped while the clock is dark (`rotate_n` finds no rotation).
 #[test]
 fn a_log_opened_on_a_dark_clock_is_undated_and_still_rotates_by_size() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let dark = crate::clock::test_clock::before_epoch();
     let l = TransparencyLogger::open(aged_cfg(&path)).unwrap();
@@ -609,7 +609,7 @@ fn a_log_opened_on_a_dark_clock_is_undated_and_still_rotates_by_size() {
 /// size only).
 #[test]
 fn a_reopened_segment_keeps_its_dated_or_undated_open_record() {
-    let dated = tempfile::tempdir().unwrap();
+    let dated = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dated);
     drop(TransparencyLogger::open(aged_cfg(&path)).unwrap());
     assert!(lines(&path)[0]["segment_opened_at"].is_u64());
@@ -619,7 +619,7 @@ fn a_reopened_segment_keeps_its_dated_or_undated_open_record() {
     append(&l, 1);
     assert_eq!(list_segments(&path).unwrap().len(), 1, "dated: age-rotates");
 
-    let undated = tempfile::tempdir().unwrap();
+    let undated = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&undated);
     let dark = crate::clock::test_clock::before_epoch();
     drop(TransparencyLogger::open(aged_cfg(&path)).unwrap());

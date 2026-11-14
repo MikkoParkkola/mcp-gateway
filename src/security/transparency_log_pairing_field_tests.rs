@@ -208,7 +208,7 @@ async fn settle_refuses_a_payload_that_breaks_its_roles_fields() {
     use super::settle::{FieldFault, FieldProblem, IntentKind, InvalidPayload, Role, Unsettled};
     use super::settle_tests::on_disk;
     use FieldProblem::{Forbidden, Missing, Mistyped};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = std::sync::Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     let own = l.log_id();
@@ -278,7 +278,7 @@ async fn settle_refuses_a_payload_that_breaks_its_roles_fields() {
 #[tokio::test]
 async fn settle_refuses_settled_by_on_every_role_but_outcome() {
     use super::settle::{FieldFault, FieldProblem, IntentKind, InvalidPayload, Role, Unsettled};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = std::sync::Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     let own = l.log_id();

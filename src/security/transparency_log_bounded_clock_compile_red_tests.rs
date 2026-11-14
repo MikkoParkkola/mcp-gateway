@@ -19,7 +19,7 @@ use crate::security::audit::AuditFailurePolicy;
 /// probe stamps `utc_now().unwrap_or(epoch)`.
 #[tokio::test(flavor = "current_thread")]
 async fn a_probe_row_on_a_dark_clock_is_undated() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     l.set_blocking_clock_before_epoch_for_test(true);
     l.append_bounded(super::TransparencyLogger::probe)

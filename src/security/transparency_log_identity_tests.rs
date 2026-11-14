@@ -88,7 +88,7 @@ pub(super) fn beta_shape(path: &Path) {
 fn a_log_with_the_former_separate_predecessor_record_verifies_unchanged() {
     // GIVEN: a log in the shape the separate predecessor record left: an
     // open record without the evidence field, then that record
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let id = l.log_id();
@@ -122,7 +122,7 @@ fn a_log_with_the_former_separate_predecessor_record_verifies_unchanged() {
 #[test]
 fn log_id_upgrade() {
     // GIVEN: a beta-shaped log that verifies
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&first, 0);
@@ -162,7 +162,7 @@ fn log_id_upgrade() {
 #[test]
 fn a_caller_cannot_append_an_audit_log_identified_record() {
     // GIVEN: a log with its minted id
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let id = l.log_id();
@@ -193,11 +193,11 @@ pub(super) fn swap_in(src: &Path, dst: &Path) {
 #[test]
 fn a_log_replaced_under_a_live_logger_is_adopted_with_its_id() {
     // GIVEN: a live logger on one log, and a second log with its own id
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&l, 0);
-    let other = tempfile::tempdir().unwrap();
+    let other = crate::test_dir_keep::kept_tempdir();
     let theirs = log_path(&other);
     let replacement = TransparencyLogger::open(cfg(&theirs, 12, false)).unwrap();
     append(&replacement, 0);
@@ -244,7 +244,7 @@ fn unfinish_genesis(path: &Path, marked: bool) {
 fn an_unfinished_genesis_gets_its_one_identified_record() {
     for marked in [true, false] {
         // GIVEN: a genesis open record carrying an id, and no identified record
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let id = TransparencyLogger::open(cfg(&path, 12, false))
             .unwrap()
@@ -273,7 +273,7 @@ fn an_unfinished_genesis_gets_its_one_identified_record() {
 fn a_log_whose_identified_record_expired_gets_no_second_one() {
     // GIVEN: a log rotated until retention expired the segment that held its
     // identified record, so open records carry the id and no record names it
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let id = l.log_id();
@@ -297,7 +297,7 @@ fn a_log_whose_identified_record_expired_with_no_segment_left_gets_no_second_one
     // GIVEN: a log whose identified record expired with its segment, and
     // every sealed segment then gone, as the disk-full path's expiries leave
     // it: nothing sealed, and an active open record carrying the id
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let id = l.log_id();
@@ -330,7 +330,7 @@ fn a_torn_identified_record_is_repaired_exactly_once() {
     let cuts: [fn(usize) -> usize; 2] = [|n| n / 2, |n| n - 1];
     for keep in cuts {
         // GIVEN: a genesis whose identified record was torn mid-write
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = log_path(&dir);
         let id = TransparencyLogger::open(cfg(&path, 12, false))
             .unwrap()
@@ -363,7 +363,7 @@ fn a_torn_identified_record_is_repaired_exactly_once() {
 fn the_id_scan_finds_an_identified_record_after_an_oversized_line() {
     // GIVEN: a beta active file whose identified record follows a line over
     // the record cap
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let open = r#"{"event":"audit_segment_opened","segment_seq":0,"counter":1}"#;
     let huge = "x".repeat(rotation::MAX_RECORD_BYTES + 16);

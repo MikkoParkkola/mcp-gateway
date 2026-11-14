@@ -23,7 +23,7 @@ fn assert_names(e: &io::Error, op: &str, path: &std::path::Path) {
 /// Opening the active file.
 #[test]
 fn open_names_the_active_file() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     std::fs::create_dir(&path).unwrap();
     let e = TransparencyLogger::open(cfg(&path, 2, false))
@@ -43,7 +43,7 @@ fn open_names_the_active_file() {
 /// Renaming the active file to its sealed name during rotation.
 #[test]
 fn rotation_rename_names_the_target() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
     std::fs::create_dir(sealed_path(&path, 0)).unwrap();
@@ -60,7 +60,7 @@ fn rotation_rename_names_the_target() {
 /// its place): the read before the remove fails first, and names it.
 #[test]
 fn retention_names_the_segment() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -81,7 +81,7 @@ fn retention_names_the_segment() {
 /// Reading a sealed segment during recovery.
 #[test]
 fn recovery_read_names_the_segment() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -102,7 +102,7 @@ fn recovery_read_names_the_segment() {
 /// shares delete, so a held lock file cannot be deleted by name.
 #[test]
 fn a_removed_directory_is_named_and_keeps_its_kind() {
-    let outer = tempfile::tempdir().unwrap();
+    let outer = crate::test_dir_keep::kept_tempdir();
     let dir = outer.path().join("logdir");
     std::fs::create_dir(&dir).unwrap();
     let path = dir.join("transparency.jsonl");
@@ -134,7 +134,7 @@ fn a_removed_directory_is_named_and_keeps_its_kind() {
 #[test]
 fn write_names_the_active_file() {
     use super::rotation::WriteFault;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
     l.arm_write_fault(Some(WriteFault::WriteError));
@@ -150,7 +150,7 @@ fn write_names_the_active_file() {
 #[test]
 fn sync_names_the_active_file() {
     use super::rotation::WriteFault;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
     l.arm_write_fault(Some(WriteFault::SyncError));
@@ -165,7 +165,7 @@ fn sync_names_the_active_file() {
 /// Listing the segments: the log's parent is a regular file.
 #[test]
 fn listing_names_the_parent() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let plain = dir.path().join("plain-file");
     std::fs::write(&plain, b"x").unwrap();
     let path = plain.join("transparency.jsonl");
@@ -176,7 +176,7 @@ fn listing_names_the_parent() {
 /// Writing the high-water mark at open (a log with records and no mark).
 #[test]
 fn hwm_write_names_the_mark_file() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     append(&TransparencyLogger::open(cfg(&path, 2, false)).unwrap(), 0);
     let hwm = super::segments::sibling(&path, "hwm");
@@ -193,7 +193,7 @@ fn hwm_write_names_the_mark_file() {
 /// with the key, the same record is written keyed.
 #[test]
 fn g_log_a_caller_key_record_without_the_record_key_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let mut l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
     l.record_key = None;
