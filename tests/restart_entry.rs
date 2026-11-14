@@ -20,9 +20,9 @@ mod yaml;
 
 const READY_BOUND: Duration = Duration::from_secs(60);
 
-/// The first line `tool completions bash` prints, recorded from the binary
-/// before slice 4a (test plan ENTRY-2).
-const COMPLETIONS_FIRST_LINE: &str = "_mcp-gateway() {";
+/// The first line `tool completions bash` prints: a static string in
+/// src/cli/completion.rs, which slice 4a does not touch (test plan ENTRY-2).
+const COMPLETIONS_FIRST_LINE: &str = "# mcp-gateway bash completion";
 
 fn write_config(root: &Path) -> PathBuf {
     let mut config = Config::default();

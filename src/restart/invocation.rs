@@ -11,8 +11,10 @@
 // Slice 4a ships the invocation ahead of its readers: slice 7 binds
 // the digest and file id, slice 4b's exec reads the stored fields. `expect`, so
 // the attribute fails the build once they land and it is no longer needed.
+// Off unix the stored invocation is never built, so the same items stay dead
+// in test builds there too.
 #![cfg_attr(
-    not(test),
+    any(not(test), not(unix)),
     expect(dead_code, reason = "readers land in restart slices 4b and 7")
 )]
 
@@ -38,6 +40,7 @@ pub(crate) enum UnavailableReason {
     /// `cli::run` has not captured (for example, an embedder's `Gateway::run`).
     NotCaptured,
     /// Restart is guidance-only on this platform.
+    #[cfg(not(unix))]
     Unsupported,
     /// The process was started with no argv0, or an empty one.
     NoArgv0,
