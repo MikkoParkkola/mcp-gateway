@@ -42,11 +42,14 @@ pub(crate) const CONTROL_BOUNDS: ControlBounds = ControlBounds {
 /// text of `/proc/<pid>/status`; anything unreadable refuses.
 pub(crate) fn peer_is_helper(status: &str, unshare_pid: u32, uid: u32) -> Result<(), Refusal> {
     let refuse = |why: &str| Refusal::Step(format!("the sandbox's control peer {why}"));
+    // Each field exactly once: a second copy (smuggled through the process
+    // name, say) refuses instead of racing the real line.
     let field = |name: &str| {
-        status
-            .lines()
-            .find_map(|line| line.strip_prefix(name))
-            .ok_or_else(|| refuse("has no readable parentage"))
+        let mut found = status.lines().filter_map(|line| line.strip_prefix(name));
+        match (found.next(), found.next()) {
+            (Some(value), None) => Ok(value),
+            _ => Err(refuse("has no readable parentage")),
+        }
     };
     let parent: u32 = field("PPid:")?
         .trim()
@@ -123,21 +126,21 @@ pub(crate) async fn read_line<R: AsyncBufRead + Unpin>(
             if buf.is_empty() {
                 return Err(refuse("was cut off by a close"));
             }
+            // The cap is checked before the buffer grows; the newline counts.
             if let Some(end) = buf.iter().position(|b| *b == b'\n') {
-                line.extend_from_slice(&buf[..end]);
-                reader.consume(end + 1);
-                // The newline counts toward the cap.
-                if line.len() >= MAX_LINE {
+                if line.len() + end >= MAX_LINE {
                     return Err(refuse("is over 1 KiB"));
                 }
+                line.extend_from_slice(&buf[..end]);
+                reader.consume(end + 1);
                 return Ok(line);
             }
             let taken = buf.len();
-            line.extend_from_slice(buf);
-            reader.consume(taken);
-            if line.len() >= MAX_LINE {
+            if line.len() + taken >= MAX_LINE {
                 return Err(refuse("is over 1 KiB"));
             }
+            line.extend_from_slice(buf);
+            reader.consume(taken);
         }
     };
     let line = tokio::time::timeout(bounds.frame, rest)
