@@ -10,6 +10,8 @@
 
 #[cfg(unix)]
 mod control;
+#[cfg(unix)]
+mod control_msg;
 mod fetch;
 #[cfg(target_os = "linux")]
 mod linux;
