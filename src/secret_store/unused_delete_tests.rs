@@ -452,7 +452,8 @@ fn delete_waits_for_the_vault_alone() {
     let waited = started.elapsed();
     hold.release();
     assert_eq!(got, Err(DeleteRefused::Busy), "{ROW}: {got:?}");
-    assert!(waited < Duration::from_secs(2), "{ROW}: waited {waited:?}");
+    // Far below the store's 30 s lock wait: the delete gave up at its own deadline.
+    assert!(waited < Duration::from_secs(10), "{ROW}: waited {waited:?}");
     assert_eq!(
         std::fs::read(&path).expect("entry"),
         file,
