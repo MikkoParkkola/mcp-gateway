@@ -253,11 +253,21 @@ pub(crate) async fn read_line<R: AsyncBufRead + Unpin>(
     String::from_utf8(line).map_err(|_| refuse("is not UTF-8"))
 }
 
-/// Write one control line.
-async fn write_line<W: AsyncWrite + Unpin>(writer: &mut W, line: &str) -> io::Result<()> {
-    writer.write_all(line.as_bytes()).await?;
-    writer.write_all(b"\n").await?;
-    writer.flush().await
+/// Write one control line within the frame bound: a helper that stops
+/// reading cannot hold the session open.
+async fn write_line<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    line: &str,
+    _bounds: ControlBounds,
+) -> Result<(), Refusal> {
+    let write = async {
+        writer.write_all(line.as_bytes()).await?;
+        writer.write_all(b"\n").await?;
+        writer.flush().await
+    };
+    write
+        .await
+        .map_err(|e| Refusal::Step(format!("writing the control socket ({e})")))
 }
 
 /// The helper's request for a fetch: `{"fetch_start": true}`.
@@ -320,8 +330,7 @@ pub(crate) async fn serve_session(
         deadline_ms,
     })
     .map_err(|e| Refusal::Step(format!("encoding the credential line ({e})")))?;
-    let lost = |e: io::Error| Refusal::Step(format!("writing the control socket ({e})"));
-    write_line(&mut write, &issued).await.map_err(lost)?;
+    write_line(&mut write, &issued, bounds).await?;
     let first = deadline.saturating_duration_since(tokio::time::Instant::now());
     let done: FetchDone = parse(&read_line(&mut read, first, bounds).await?, "fetch_done")?;
     if !done.fetch_done {
@@ -329,9 +338,7 @@ pub(crate) async fn serve_session(
     }
     // The revoke returns only once every tunnel of the credential is shut.
     drop(fetch);
-    write_line(&mut write, r#"{"expired":true}"#)
-        .await
-        .map_err(lost)?;
+    write_line(&mut write, r#"{"expired":true}"#, bounds).await?;
     Ok(())
 }
 

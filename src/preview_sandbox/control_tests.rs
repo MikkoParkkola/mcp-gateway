@@ -274,3 +274,40 @@ fn t8_a_proc_directory_never_follows_a_reaped_pid() {
         "the reaped child"
     );
 }
+
+/// A peer that stopped reading: no write ever completes.
+struct Stuck;
+
+impl tokio::io::AsyncWrite for Stuck {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        _: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::task::Poll::Pending
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Pending
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Pending
+    }
+}
+
+/// T4, kills "a write waits for the peer forever": a helper that stops
+/// reading its control socket cannot hold the session open past the bound.
+#[tokio::test(start_paused = true)]
+async fn t4_a_peer_that_stops_reading_is_cut_off() {
+    let written = tokio::time::timeout(GUARD, super::write_line(&mut Stuck, "x", B))
+        .await
+        .expect("the write did not end within the guard");
+    assert!(written.is_err());
+}
