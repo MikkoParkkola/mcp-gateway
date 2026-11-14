@@ -142,6 +142,9 @@ mod unix {
         capture_from(inputs(args, cwd, path_env), &given, &is_executable_regular)
     }
 
+    // track_caller: a failed expectation reports the calling row's line, not this helper's, so a mutant
+    // killed through a helper is read as killed at its row.
+    #[track_caller]
     fn ready(state: InvocationState) -> Invocation {
         match state {
             InvocationState::Ready(inv) => *inv,
@@ -149,6 +152,7 @@ mod unix {
         }
     }
 
+    #[track_caller]
     fn reason(state: InvocationState) -> UnavailableReason {
         match state {
             InvocationState::Ready(inv) => panic!("expected Unavailable, got Ready({inv:?})"),
@@ -447,7 +451,9 @@ mod unix {
             assert!(!mask.contains(Signal::SIGUSR2));
         })
         .join()
-        .unwrap();
+        // resume_unwind re-raises the thread's own failure as the only one, so it is reported at its
+        // assertion line and not again at this join.
+        .unwrap_or_else(|e| std::panic::resume_unwind(e));
     }
 
     /// INV-11: a subcommand stops before any PATH walk; the control walks it.
