@@ -452,3 +452,43 @@ fn capability_symlink_loop_refuses() {
     let got = naming(&sources, &name);
     assert_eq!(got, Err(super::CAP_UNREAD.to_owned()), "{ROW}");
 }
+
+/// The keychain guard's force switch exists only in test builds: every line of `unused.rs`
+/// that names it sits in the `#[cfg(test)]` seam module or directly under a `#[cfg(test)]`
+/// attribute, so no release build can force the macOS and Windows keychain guard off.
+#[test]
+fn keychain_guard_seam_is_test_only() {
+    const ROW: &str = "keychain_guard_seam_is_test_only";
+    let lines: Vec<&str> = include_str!("unused.rs").lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| line.trim() == "mod seam {")
+        .unwrap_or_else(|| panic!("{ROW}: no seam module"));
+    assert_eq!(
+        lines.get(start.wrapping_sub(1)).map(|line| line.trim()),
+        Some("#[cfg(test)]"),
+        "{ROW}: the seam module is not test-only"
+    );
+    let end = lines[start..]
+        .iter()
+        .position(|line| *line == "}")
+        .map(|offset| start + offset)
+        .unwrap_or_else(|| panic!("{ROW}: the seam module does not close"));
+    let named: Vec<usize> = (0..lines.len())
+        .filter(|&i| lines[i].contains("GUARD_KEYCHAIN"))
+        .collect();
+    assert!(
+        named.len() >= 2,
+        "{ROW}: the switch and its one read: {named:?}"
+    );
+    for i in named {
+        let in_seam = (start..=end).contains(&i);
+        let under_cfg = i > 0 && lines[i - 1].trim() == "#[cfg(test)]";
+        assert!(
+            in_seam || under_cfg,
+            "{ROW}: unused.rs:{} names the switch outside cfg(test): {}",
+            i + 1,
+            lines[i]
+        );
+    }
+}
