@@ -37,6 +37,7 @@ fn payload() -> Payload {
         hold_key: "exchange-1".to_string(),
         next_step: None,
         rounds_used: 0,
+        lookup_scope: None,
         // A backend `input_required` continuation: this file's envelopes are
         // the ones a backend retry redeems, not confirmation grants.
         purpose: ContinuationPurpose::BackendInput,
@@ -84,7 +85,12 @@ fn ac_mrtr_2_the_backends_state_is_not_readable_by_the_client() {
         assert!(
             !plain.contains(secret),
             "the client must not be able to read {secret:?} out of the \
-             envelope it echoes back"
+             envelope it echoes back (decoded {} bytes, header {:02x?}, \
+             starts with '{{': {}, offset of the match: {:?})",
+            decoded.len(),
+            &decoded[..decoded.len().min(2)],
+            plain.starts_with('{'),
+            plain.find(secret)
         );
     }
 }

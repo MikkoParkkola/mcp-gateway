@@ -79,6 +79,8 @@ mod stdio_single;
 mod stdio_startup;
 mod stdio_tasks;
 mod stdio_writer;
+#[cfg(test)]
+mod stop_budget_start_tests;
 mod task_runtime;
 #[cfg(test)]
 mod test_seams;
