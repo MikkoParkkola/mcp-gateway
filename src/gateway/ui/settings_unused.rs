@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::admin_audit::AuditDetail;
-use super::errors::{flat_error, structured_error};
+use super::errors::{no_reload_read, no_reload_write, structured_error};
 use crate::config_reload::{ConfigWriteError, RELOAD_LOCK_WAIT, ReloadContext};
 use crate::gateway::{router::AppState, ui::guard::Guard};
 use crate::secret_store::{
@@ -108,26 +108,6 @@ fn config_dir(path: &std::path::Path) -> &std::path::Path {
     path.parent().unwrap_or(std::path::Path::new("."))
 }
 
-/// The listing's 503 when this gateway has no reload context: a read cannot
-/// answer right now.
-fn no_reload() -> Response {
-    flat_error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Config reload is not enabled on this gateway",
-    )
-    .into_response()
-}
-
-/// The delete's answer with no reload context: nothing was attempted, so a 409
-/// (the listing, a read, keeps the 503 of [`no_reload`]).
-pub(super) fn delete_no_reload() -> Response {
-    flat_error(
-        StatusCode::CONFLICT,
-        "Config reload is not enabled on this gateway",
-    )
-    .into_response()
-}
-
 /// 503 `unreadable` with a fixed sentence.
 fn unreadable(message: &str) -> Response {
     structured_error(StatusCode::SERVICE_UNAVAILABLE, "unreadable", message).into_response()
@@ -139,7 +119,7 @@ pub(super) async fn list_unused(State(state): State<Arc<AppState>>, guard: Guard
         return refused.into_response();
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
-        return no_reload();
+        return no_reload_read().into_response();
     };
     match tokio::task::spawn_blocking(move || read_unused(&ctx)).await {
         Ok(Ok(listed)) => Json(list_body(&listed)).into_response(),
@@ -221,7 +201,7 @@ pub(super) async fn delete_unused_entry(
         .into_response();
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
-        return delete_no_reload();
+        return no_reload_write().into_response();
     };
     let held = match ctx.hold_config(RELOAD_LOCK_WAIT).await {
         Ok(held) => held,

@@ -68,7 +68,10 @@ fn secret<'de, D: Deserializer<'de>>(deserializer: D) -> Result<WipedBytes, D::E
     String::deserialize(deserializer).map(|s| WipedBytes::new(s.into_bytes()))
 }
 
-use super::errors::{config_refusal, flat_error, no_config_file, stale, structured_error};
+use super::errors::{
+    config_refusal, flat_error, no_config_file, no_reload_read, no_reload_write, stale,
+    structured_error,
+};
 use super::secret_slots::{self, Unopened};
 use crate::config_persistence::keyedit::{FiniteF64, GiveUp, Scalar};
 use crate::config_reload::ui_fields::{FieldId, Param, PreviewEdit, PreviewValue, ValueKind};
@@ -95,24 +98,6 @@ fn retry(mut response: Response) -> Response {
         .headers_mut()
         .insert(RETRY_AFTER, HeaderValue::from_static("1"));
     response
-}
-
-fn unavailable() -> Response {
-    flat_error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Config reload is not enabled on this gateway",
-    )
-    .into_response()
-}
-
-/// The save route's answer with no reload context: nothing was attempted, so a
-/// 409 (the diff route, which writes nothing, keeps the 503 of [`unavailable`]).
-fn write_unavailable() -> Response {
-    flat_error(
-        StatusCode::CONFLICT,
-        "Config reload is not enabled on this gateway",
-    )
-    .into_response()
 }
 
 fn field_error(id: FieldId, code: &'static str, reason: &str) -> Response {
@@ -184,7 +169,7 @@ pub(super) async fn settings_diff(
         return invalid_body();
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
-        return unavailable();
+        return no_reload_read().into_response();
     };
     let mut edit = PreviewEdit::default();
     for (entry, body) in body.fields.into_iter().enumerate() {
@@ -238,7 +223,7 @@ pub(super) async fn settings_save(
         return invalid_body();
     }
     let Some(ctx) = state.meta_mcp.reload_context() else {
-        return write_unavailable();
+        return no_reload_write().into_response();
     };
     let mut edit = SaveEdit::default();
     for (entry, body) in body.fields.into_iter().enumerate() {
