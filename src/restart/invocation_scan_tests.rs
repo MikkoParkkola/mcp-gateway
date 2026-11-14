@@ -58,12 +58,23 @@ fn inv22_capture_is_the_first_statement_of_cli_run() {
     );
 }
 
-/// MAIN-1: main.rs hands `Cli::parse()`'s value to `cli::run` unchanged.
+/// MAIN-1: main.rs parses the process's own argv and hands the parsed `Cli` to `cli::run` unchanged:
+/// `args` is an immutable binding of `std::env::args_os()`, a parse error exits, and nothing stands
+/// between the parse and the call. (Since the line's stdin-secrets change the parse is `try_parse_from`
+/// with a quiet error path, not `Cli::parse()`; the property is the same.)
 #[test]
 fn main1_main_passes_the_parsed_cli_unchanged() {
     let code = flat(&read("src/main.rs"));
     assert!(
-        code.contains("let cli = Cli::parse(); cli::run(cli)"),
+        code.contains("let args: Vec<std::ffi::OsString> = std::env::args_os().collect();"),
+        "{code}"
+    );
+    assert!(
+        code.contains(
+            "let cli = Cli::try_parse_from(&args) \
+             .unwrap_or_else(|error| parse_errors::quiet_for_secret_commands(&args, error).exit()); \
+             cli::run(cli)"
+        ),
         "{code}"
     );
 }
