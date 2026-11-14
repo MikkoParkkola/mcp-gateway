@@ -150,11 +150,16 @@ async fn a_start_after_the_early_stops_first_step_spawns_nothing() {
         futures::poll!(stop.as_mut()).is_pending(),
         "premise: the held locks keep the stop waiting"
     );
-    let started = second.ensure_started().await;
-    let refusal = started.err().map(|e| e.to_string()).unwrap_or_default();
     assert!(
-        refusal.contains("is stopping"),
-        "a start after the stop's first step was not refused as stopping: {refusal:?}"
+        second.replaced_transport_cleanups.lock().stopping,
+        "the stop's first step did not latch a backend whose own stop still waits"
+    );
+    // Refused by whichever check meets the latch first (the start's early-out
+    // or its stdio publish), always before dispatch.
+    let refusal = second.ensure_started().await.err();
+    assert!(
+        matches!(refusal, Some(crate::Error::BackendNotFound(_))),
+        "a start after the stop's first step was not refused before dispatch: {refusal:?}"
     );
     assert!(
         !second_dir.path().join("leader.pid").exists(),
