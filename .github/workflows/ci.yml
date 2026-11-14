@@ -194,6 +194,11 @@ jobs:
         run: |
           python3 scripts/ci/test_upgrading_step_bounds.py --self-test
           python3 scripts/ci/test_upgrading_step_bounds.py
+      # Which Coverage probe runs share a concurrency group: release-line pushes one, everything else its own.
+      - name: The coverage probe's concurrency groups
+        run: |
+          python3 scripts/ci/test_coverage_probe_concurrency.py --self-test
+          python3 scripts/ci/test_coverage_probe_concurrency.py
       # Under pipefail `x | grep -q` fails the pipeline on a match (MIK-8333).
       - name: No piped quiet grep
         run: |
@@ -1022,6 +1027,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      issues: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1029,6 +1035,26 @@ jobs:
           persist-credentials: false
       - name: The check's own rows
         run: python3 scripts/ci/test_os_sensitive_diff.py
+      # The label is a repository setting, not a file: a rename or a delete would make `gh pr edit --add-label os-int`
+      # fail for every OS-sensitive pull request and block it with a message that names a label nobody can add.
+      - name: The os-int label exists in the repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! out="$(gh api "repos/$GITHUB_REPOSITORY/labels/os-int" --jq .name 2>&1)"; then
+            case "$out" in
+              *"Not Found"*|*"HTTP 404"*)
+                echo "::error::the os-int label does not exist in $GITHUB_REPOSITORY (renamed or deleted?); this check and the macOS int lane depend on it. Recreate it: gh label create os-int --description 'run the macOS int shard on this pull request'" ;;
+              *)
+                echo "::error::could not read the os-int label (not a missing label; a permission or API error): $out" ;;
+            esac
+            exit 1
+          fi
+          # The lookup ignores case; the check below matches the name exactly, so a rename to another case must fail here.
+          if [ "$out" != "os-int" ]; then
+            echo "::error::the label is now named '$out'; the check and the macOS int lane match 'os-int' exactly. Rename it back: gh label edit '$out' --name os-int"
+            exit 1
+          fi
       # HEAD is the pull request's merge with the base, so its first parent is the base the merge was cut from and the
       # diff against it is exactly this pull request's, however far the base has moved since. The script refuses (exit 2)
       # a checkout whose second parent is not the pull request's head: HEAD^1 would then cover only the tip commit.
