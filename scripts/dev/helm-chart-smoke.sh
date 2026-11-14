@@ -376,6 +376,48 @@ fi
 "$HELM" template t "$CHART" --set audit.rotation.retainSegments=20 \
   --set audit.existingClaim=big >/dev/null 2>&1 || fail "a PVC must lift the emptyDir size guard"
 
+echo "== helm_stop_grace_covers_the_gateway_stop =="
+# The pod's stop grace is the gateway's stop total + 1 s, so the kubelet's
+# SIGKILL never lands inside the gateway's own stop. The rows come from the
+# table the gateway's parser and check-stop-grace.py also read; a bare number
+# is tried as a string, through --set (int64) and from a values file (float64).
+grace_of() { grep -E '^ *terminationGracePeriodSeconds: ' <<<"$1" | awk '{print $2}' || true; }
+if default="$(python3 "$(dirname "${BASH_SOURCE[0]}")/../ci/check-stop-grace.py" --print-default)"; then
+  got="$(grace_of "$dep")"
+  [ "$got" = "$((default + 1))" ] || fail "default stop grace is ${got:-unset}, want $((default + 1))"
+else
+  fail "check-stop-grace.py could not read the gateway's default stop timeout"
+fi
+rows=0
+while IFS=$'\t' read -r input want; do
+  case "$input" in '' | '#'*) continue ;; esac
+  forms=(--set-string)
+  [[ "$input" =~ ^[0-9]+$ ]] && forms+=(--set values-file)
+  for form in "${forms[@]}"; do
+    if [ "$form" = values-file ]; then
+      printf 'config:\n  server:\n    shutdown_timeout: %s\n' "$input" >"$pkgdir/grace.yaml"
+      args=(-f "$pkgdir/grace.yaml")
+    else
+      args=("$form" "config.server.shutdown_timeout=$input")
+    fi
+    if out="$("$HELM" template t "$CHART" --show-only templates/deployment.yaml "${args[@]}" 2>&1)"; then
+      got="$(grace_of "$out")"
+      [ "$got" = "$want" ] || fail "shutdown_timeout $input ($form) renders grace ${got:-unset}, want $want"
+    elif [ "$want" != refused ]; then
+      fail "shutdown_timeout $input ($form) is refused, want grace $want: $(tail -1 <<<"$out")"
+    elif ! grep -q 'config.server.shutdown_timeout is not a duration' <<<"$out"; then
+      fail "shutdown_timeout $input ($form) is refused without naming the setting: $(tail -1 <<<"$out")"
+    fi
+  done
+  rows=$((rows + 1))
+done <"$CHART/../../../tests/fixtures/stop_grace_cases.txt"
+[ "$rows" -ge 20 ] || fail "only $rows stop grace rows ran; the table lost its rows"
+# The chart's only timeout source is config.server.shutdown_timeout: it already
+# refuses every MCP_GATEWAY_* extraEnv name, this one included.
+"$HELM" template t "$CHART" --set 'extraEnv[0].name=MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT' \
+  --set 'extraEnv[0].value=60s' >/dev/null 2>&1 \
+  && fail "an extraEnv MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT rendered; the stop grace would not follow it"
+
 # shellcheck source=scripts/dev/helm-chart-auth-modes.sh
 source "$(dirname "${BASH_SOURCE[0]}")/helm-chart-auth-modes.sh"
 
