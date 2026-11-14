@@ -142,9 +142,11 @@ async fn s2_any_other_line_ends_the_session_and_revokes() {
                 .write_all(format!("{line}\n").as_bytes())
                 .await
                 .expect("write");
-            secret_of(&issued)
+            // The socket stays open until the session ends, so an error can
+            // only be the session's refusal, never a write to a closed peer.
+            (secret_of(&issued), read, write)
         };
-        let (served, secret) = tokio::join!(session, script);
+        let (served, (secret, _read, _write)) = tokio::join!(session, script);
         assert!(served.is_err(), "{line}");
         assert_eq!(status_under(&rig, &secret).await, 407, "{line}");
     }
