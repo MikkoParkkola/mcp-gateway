@@ -1,0 +1,23 @@
+head_sha	126e47e55f155833a683cda2850f04ffc99fda89
+#mutant named_check_skipped
+mcp_gateway	secret_store::unused::delete_tests::delete_refuses_named	src/secret_store/unused_delete_tests.rs:360
+#mutant env_source_ignored
+mcp_gateway	secret_store::unused::tests::named_by_every_source	src/secret_store/unused_tests.rs:332
+#mutant capability_source_ignored
+mcp_gateway	secret_store::unused::tests::named_by_every_source	src/secret_store/unused_tests.rs:332
+#mutant yaml_scalars_ignored
+mcp_gateway	secret_store::unused::tests::named_by_every_source	src/secret_store/unused_tests.rs:332
+#mutant source_error_reads_as_unnamed
+mcp_gateway	secret_store::unused::tests::unreadable_source_refuses	src/secret_store/unused_tests.rs:354
+#mutant digest_recheck_skipped
+mcp_gateway	secret_store::unused::seam_tests::delete_refuses_on_digest_change	src/secret_store/unused_seam_tests.rs:78
+#mutant digest_arm_skipped
+mcp_gateway	secret_store::unused::seam_tests::delete_refuses_on_unnaming_edit	src/secret_store/unused_seam_tests.rs:78
+#mutant entries_dir_from_config
+mcp_gateway	gateway::ui::settings::unused_route_tests::delete_refuses_hard_linked_entry_behind_symlinked_config	src/gateway/ui/settings_unused_tests.rs:502
+#mutant depth_unbounded
+mcp_gateway	secret_store::unused::tests::capability_walk_refuses_past_the_depth_bound	src/secret_store/unused_tests.rs:429
+#mutant loop_skipped
+mcp_gateway	secret_store::unused::tests::capability_symlink_loop_refuses	src/secret_store/unused_tests.rs:447
+#mutant yaml_keys_skipped
+mcp_gateway	secret_store::unused::tests::named_by_every_source	src/secret_store/unused_tests.rs:332
