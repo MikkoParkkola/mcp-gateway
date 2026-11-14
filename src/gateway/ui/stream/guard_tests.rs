@@ -161,6 +161,7 @@ async fn generations_survive_a_watcher_restart() {
 async fn b7_restart_record_changes_raise_only_the_status_generation() {
     use super::super::status::{StatusView, add_restart};
     use crate::gateway::restart_status::{RestartBoard, RestartCancel};
+    type Step = (&'static str, fn(&RestartBoard));
     let (hub, board) = (StreamHub::new(), RestartBoard::default());
     let rx = hub.subscribe();
     let publish = || {
@@ -172,7 +173,6 @@ async fn b7_restart_record_changes_raise_only_the_status_generation() {
         (snapshot.status_gen, snapshot.counts_gen)
     };
     let (mut status, counts) = publish();
-    type Step = (&'static str, fn(&RestartBoard));
     let steps: [Step; 8] = [
         ("null to a record", |b| {
             b.accept(1_000);
