@@ -1,0 +1,23 @@
+head_sha	c200abd86d8710287cb7f6ce7c6219b08e3bb0f3
+#mutant resume_without_replay
+mcp_gateway	gateway::restart_config_floor::contract_tests::held_write::k1_resume_replays_the_planted_trigger	src/gateway/config_floor_contract_tests.rs:310
+#mutant release_reopens
+mcp_gateway	gateway::ui::settings::floor_tests::k8_released_refuses_everything_stopping	src/gateway/ui/settings_floor_tests.rs:205
+#mutant release_replays
+mcp_gateway	gateway::restart_config_floor::contract_tests::held_write::k1_release_for_stop_replays_nothing	src/gateway/config_floor_contract_tests.rs:334
+#mutant commit_keeps_reload_guard
+mcp_gateway	gateway::ui::settings::floor_tests::k5_committed_write_refused_restarting	src/gateway/ui/settings_floor_tests.rs:553
+#mutant commit_drops_config_guard
+mcp_gateway	gateway::restart_config_floor::contract_tests::k6_cli_writer_waits_behind_commit	src/gateway/config_floor_contract_tests.rs:212
+#mutant resume_keeps_guards
+mcp_gateway	gateway::restart_config_floor::contract_tests::k4_certified_holds_both_until_recovery	src/gateway/config_floor_contract_tests.rs:75
+#mutant slot_ignores_superseded
+mcp_gateway	gateway::restart_config_floor::contract_tests::k3_superseded_attempt_hands_nothing	src/gateway/config_floor_contract_tests.rs:171
+#mutant late_guard_parked
+mcp_gateway	gateway::restart_config_floor::contract_tests::k2_dropped_checkpoint_holds_nothing	src/gateway/config_floor_contract_tests.rs:75
+#mutant settled_always_true
+mcp_gateway	gateway::restart_config_floor::contract_tests::k2_dropped_checkpoint_holds_nothing	src/gateway/config_floor_contract_tests.rs:92
+#mutant pause_inside_future
+mcp_gateway	gateway::restart_config_floor::contract_more_tests::k9_dropped_unpolled_pause_leaves_gate_paused_and_resume_replays	src/gateway/config_floor_contract_more_tests.rs:149
+#mutant admission_outside_mutex
+mcp_gateway	gateway::restart_config_floor::contract_more_tests::k10_submission_racing_resume_matches_its_recorded_state	src/gateway/config_floor_contract_more_tests.rs:259
