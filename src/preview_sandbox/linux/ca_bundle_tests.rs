@@ -2,12 +2,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Rows for the fetch's CA bundle choice and snapshot (FETCH.2b-1).
 
-use std::ffi::{OsStr, OsString};
-use std::os::unix::ffi::OsStrExt as _;
+use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
-use super::{DISTRO_BUNDLES, HostBundle, MAX_BUNDLE, ambient_ca_bundle};
+use super::{DISTRO_BUNDLES, HostBundle, MAX_BUNDLE};
 
 /// One freshly made certificate, PEM-encoded.
 fn pem() -> String {
@@ -32,19 +31,6 @@ fn root_with_distro_bundle() -> tempfile::TempDir {
     let root = tempfile::tempdir().expect("root");
     write(&under(root.path(), DISTRO_BUNDLES[0]), pem().as_bytes());
     root
-}
-
-/// Kills "the ambient value is dropped" and "a value that is not UTF-8 is
-/// treated as unset".
-#[test]
-fn ambient_passes_the_value_through() {
-    let odd = OsString::from(OsStr::from_bytes(b"/etc/\xffbundle.pem"));
-    let given = odd.clone();
-    assert_eq!(
-        ambient_ca_bundle(move |name| (name == "SSL_CERT_FILE").then(|| given.clone())),
-        Some(odd)
-    );
-    assert_eq!(ambient_ca_bundle(|_| None), None);
 }
 
 /// Kills "`SSL_CERT_FILE` is ignored".

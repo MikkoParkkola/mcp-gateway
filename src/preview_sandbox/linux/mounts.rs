@@ -46,8 +46,12 @@ fn staged(path: &str) -> PathBuf {
     Path::new(STAGE).join(path.trim_start_matches('/'))
 }
 
-/// Build the whole root under [`STAGE`], then read every mount back.
-pub(super) fn build_root(plan: &Plan) -> Step {
+/// Where the fetch's CA trust files sit in the root.
+pub(super) const PREVIEW_CONFIG: &str = "/etc/mcp-gateway-preview";
+
+/// Build the whole root under [`STAGE`], then read every mount back. `ca` is
+/// the fetch's CA snapshot, opened before staging covered host `/tmp`.
+pub(super) fn build_root(plan: &Plan, ca: Option<&rustix::fd::OwnedFd>) -> Step {
     let root = Path::new(STAGE);
     mount(
         "tmpfs",
@@ -106,8 +110,93 @@ pub(super) fn build_root(plan: &Plan) -> Step {
     mount_remount(&proc, proc_flags, proc_options)
         .map_err(io::Error::from)
         .map_err(at("remounting proc on", &proc))?;
+    // After the masks and hidden binds, so nothing covers it.
+    if let Some(ca) = ca {
+        preview_config(ca)?;
+    }
 
     verify(plan)
+}
+
+/// The preview config's files, checked directly once mounted: exactly
+/// `ca.pem`, `empty-certs` and `empty.npmrc`; the two empty ones empty and of
+/// their type; `ca.pem` the snapshot itself, by the device and inode the
+/// helper read from the descriptor it bound.
+pub(super) fn check_preview_config(snapshot: (u64, u64)) -> Step {
+    use std::os::unix::fs::MetadataExt as _;
+    let dir = staged(PREVIEW_CONFIG);
+    let fail = |why: &str| Err(format!("checking {} ({why})", dir.display()));
+    let mut names = Vec::new();
+    for entry in fs::read_dir(&dir).map_err(at("listing", &dir))? {
+        let entry = entry.map_err(at("listing", &dir))?;
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    names.sort();
+    if names != ["ca.pem", "empty-certs", "empty.npmrc"] {
+        return fail("unexpected entries");
+    }
+    let certs = dir.join("empty-certs");
+    let certs_meta = fs::symlink_metadata(&certs).map_err(at("reading", &certs))?;
+    if !certs_meta.is_dir()
+        || fs::read_dir(&certs)
+            .map_err(at("listing", &certs))?
+            .next()
+            .is_some()
+    {
+        return fail("empty-certs is not an empty directory");
+    }
+    let npmrc = dir.join("empty.npmrc");
+    let npmrc_meta = fs::symlink_metadata(&npmrc).map_err(at("reading", &npmrc))?;
+    if !npmrc_meta.is_file() || npmrc_meta.len() != 0 {
+        return fail("empty.npmrc is not an empty file");
+    }
+    let ca = dir.join("ca.pem");
+    let ca_meta = fs::symlink_metadata(&ca).map_err(at("reading", &ca))?;
+    if !ca_meta.is_file() || (ca_meta.dev(), ca_meta.ino()) != snapshot {
+        return fail("ca.pem is not the snapshot");
+    }
+    Ok(())
+}
+
+/// The fetch's CA trust files at [`PREVIEW_CONFIG`]: a tmpfs holding
+/// `ca.pem` (the snapshot, bound from its descriptor), an empty `empty-certs`
+/// and an empty `empty.npmrc`; the bind and the tmpfs then read-only.
+fn preview_config(ca: &rustix::fd::OwnedFd) -> Step {
+    use std::os::fd::AsRawFd as _;
+    let dir = staged(PREVIEW_CONFIG);
+    fs::create_dir_all(&dir).map_err(at("creating", &dir))?;
+    mount(
+        "tmpfs",
+        &dir,
+        "tmpfs",
+        MountFlags::NOSUID | MountFlags::NODEV,
+        plan::MASK_SIZE,
+    )
+    .map_err(io::Error::from)
+    .map_err(at("mounting a tmpfs on", &dir))?;
+    let ca_pem = dir.join("ca.pem");
+    fs::write(&ca_pem, b"").map_err(at("creating", &ca_pem))?;
+    let certs = dir.join("empty-certs");
+    fs::create_dir(&certs).map_err(at("creating", &certs))?;
+    let npmrc = dir.join("empty.npmrc");
+    fs::write(&npmrc, b"").map_err(at("creating", &npmrc))?;
+    let source = PathBuf::from(format!("/proc/self/fd/{}", ca.as_raw_fd()));
+    mount_bind(&source, &ca_pem)
+        .map_err(io::Error::from)
+        .map_err(at("binding the CA snapshot on", &ca_pem))?;
+    remount(
+        &ca_pem,
+        MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
+    )?;
+    // A tmpfs remount (no bind flag) makes its superblock read-only, as for
+    // the masks.
+    mount_remount(
+        &dir,
+        MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
+        plan::MASK_SIZE,
+    )
+    .map_err(io::Error::from)
+    .map_err(at("making the preview config read-only at", &dir))
 }
 
 /// Bind `path` at the same place in the new root, read-only with every
@@ -246,8 +335,14 @@ fn remount(target: &Path, wanted: MountFlags) -> Step {
 /// host's own `/tmp` and anything mounted under it are covered by the root
 /// tmpfs but still listed at the same paths.
 fn verify(plan: &Plan) -> Step {
+    verify_rows(plan, &mountinfo()?)
+}
+
+/// [`verify`] over mountinfo `rows`. With a fetch planned, the preview config
+/// must be exactly its read-only tmpfs and the read-only `ca.pem` bind (no
+/// mount nested under it, neither missing); with none planned, neither exists.
+fn verify_rows(plan: &Plan, rows: &[Mount]) -> Step {
     let root = Path::new(STAGE);
-    let rows = mountinfo()?;
     let root_id = rows
         .iter()
         .rev()
@@ -267,10 +362,32 @@ fn verify(plan: &Plan) -> Step {
         .chain(&plan.bound_back)
         .map(|p| staged(p))
         .collect();
-    for m in rows.iter().filter(|m| descends_from(&rows, m, root_id)) {
+    let config = staged(PREVIEW_CONFIG);
+    let ca_pem = config.join("ca.pem");
+    let (mut saw_config, mut saw_ca) = (false, false);
+    for m in rows.iter().filter(|m| descends_from(rows, m, root_id)) {
         let fail = |why: &str| Err(format!("verifying {} ({why})", m.point.display()));
         if !m.flags.contains(MountFlags::NOSUID) {
             return fail("not nosuid");
+        }
+        if m.point.starts_with(&config) {
+            if plan.fetch.is_none() {
+                return fail("a fetch mount with no fetch planned");
+            }
+            if m.point == config {
+                saw_config = true;
+            } else if m.point == ca_pem {
+                saw_ca = true;
+            } else {
+                return fail("nested under the preview config");
+            }
+            if !m.flags.contains(MountFlags::RDONLY) {
+                return fail("writable");
+            }
+            if !m.flags.contains(MountFlags::NODEV) {
+                return fail("not nodev");
+            }
+            continue;
         }
         if m.point == root || writable.contains(&m.point) {
             continue;
@@ -290,6 +407,12 @@ fn verify(plan: &Plan) -> Step {
         if !m.flags.contains(MountFlags::NODEV) {
             return fail("not nodev");
         }
+    }
+    if plan.fetch.is_some() && !(saw_config && saw_ca) {
+        return Err(format!(
+            "verifying {} (the preview config or its ca.pem is missing)",
+            config.display()
+        ));
     }
     Ok(())
 }
@@ -468,5 +591,94 @@ mod tests {
     fn a_backslash_not_followed_by_three_octal_digits_stays() {
         assert_eq!(unescape("a\\9b"), PathBuf::from("a\\9b"));
         assert_eq!(unescape("a\\134b"), PathBuf::from("a\\b"));
+    }
+
+    fn fetch_plan(fetch: bool) -> Plan {
+        Plan {
+            host: plan::HostNamespaces {
+                user: 1,
+                mnt: 1,
+                pid: 1,
+                net: 1,
+                ipc: 1,
+                uts: 1,
+            },
+            read_only: Vec::new(),
+            masked: Vec::new(),
+            hidden: Vec::new(),
+            bound_back: Vec::new(),
+            limits: plan::limits(1),
+            env: Vec::new(),
+            program: "/bin/true".into(),
+            target: vec!["true".into()],
+            fetch: fetch.then(|| plan::FetchPaths {
+                control: "/run/x/control.sock".into(),
+                ca: "/run/x/ca.pem".into(),
+            }),
+        }
+    }
+
+    fn row(id: u64, parent: u64, point: PathBuf, read_only: bool) -> Mount {
+        let mut flags = MountFlags::NOSUID | MountFlags::NODEV;
+        if read_only {
+            flags |= MountFlags::RDONLY;
+        }
+        Mount {
+            id,
+            parent,
+            point,
+            flags,
+        }
+    }
+
+    /// The staged root, the preview config tmpfs and its `ca.pem` bind, each
+    /// read-only as given.
+    fn rows(config: Option<bool>, ca: Option<bool>, nested: bool) -> Vec<Mount> {
+        let config_dir = staged(PREVIEW_CONFIG);
+        let mut rows = vec![row(10, 1, PathBuf::from(STAGE), false)];
+        if let Some(read_only) = config {
+            rows.push(row(11, 10, config_dir.clone(), read_only));
+        }
+        if let Some(read_only) = ca {
+            rows.push(row(12, 11, config_dir.join("ca.pem"), read_only));
+        }
+        if nested {
+            rows.push(row(13, 11, config_dir.join("empty-certs"), true));
+        }
+        rows
+    }
+
+    /// 2b-1, kills "verify accepts a missing, extra or writable preview
+    /// mount" and "a fetch mount passes with no fetch planned".
+    #[test]
+    fn verify_requires_exactly_the_read_only_preview_config() {
+        let fetch = fetch_plan(true);
+        assert!(verify_rows(&fetch, &rows(Some(true), Some(true), false)).is_ok());
+        assert!(
+            verify_rows(&fetch, &rows(None, None, false)).is_err(),
+            "tmpfs missing"
+        );
+        assert!(
+            verify_rows(&fetch, &rows(Some(true), None, false)).is_err(),
+            "ca.pem missing"
+        );
+        assert!(
+            verify_rows(&fetch, &rows(Some(true), Some(true), true)).is_err(),
+            "nested"
+        );
+        assert!(
+            verify_rows(&fetch, &rows(Some(true), Some(false), false)).is_err(),
+            "ca writable"
+        );
+        assert!(
+            verify_rows(&fetch, &rows(Some(false), Some(true), false)).is_err(),
+            "tmpfs writable"
+        );
+        let no_fetch = fetch_plan(false);
+        assert!(verify_rows(&no_fetch, &rows(None, None, false)).is_ok());
+        assert!(
+            verify_rows(&no_fetch, &rows(Some(true), Some(true), false)).is_err(),
+            "no fetch planned"
+        );
     }
 }
