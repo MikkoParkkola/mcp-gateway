@@ -255,6 +255,9 @@ fn delete_removes_one_entry() {
 fn delete_keeps_same_name_in_other_store() {
     const ROW: &str = "delete_keeps_same_name_in_other_store";
     let (dir, vault) = rig();
+    // The fault store reports the keychain kind; this row tests the delete's own
+    // store scoping, which the macOS and Windows keychain guard would refuse first.
+    super::seam::GUARD_KEYCHAIN.with(|cell| cell.set(Some(false)));
     let files = FilesStore::new(dir.path());
     let name = save_field(&vault, dir.path(), "f", b"v");
     let fault = Fault::new();

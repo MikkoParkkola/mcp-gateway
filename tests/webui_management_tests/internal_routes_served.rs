@@ -23,6 +23,8 @@ const SETTINGS_ROUTES: &str = "src/gateway/ui/settings_route_tests.rs";
 const UNUSED_ROUTES: &str = "src/gateway/ui/settings_unused_tests.rs";
 const KEY_CREATE: &str = "src/gateway/ui/keys_create_tests.rs";
 const DECISIONS_ROUTE: &str = "src/gateway/ui/decisions_tests.rs";
+/// The resolve route's rows, in their own file under the decisions tests.
+const DECISIONS_RESOLVE: &str = "src/gateway/ui/decisions_resolve_tests.rs";
 const SIGN_IN: &str = "src/gateway/ui/backends/signin_tests.rs";
 const DISCOVERY_WIRING: &str = "src/gateway/ui/discovery_wiring_tests.rs";
 const CP_WRITES: &[Citation] = &[(
@@ -109,7 +111,7 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         "/ui/api/decisions/{id}/resolve",
         Method::POST,
         &[(
-            DECISIONS_ROUTE,
+            DECISIONS_RESOLVE,
             "resolve_answers_one_status_per_state_and_writes_nothing",
         )],
     ),

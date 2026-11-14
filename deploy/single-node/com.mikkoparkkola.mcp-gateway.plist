@@ -28,6 +28,11 @@
     <string>json</string>
   </dict>
 
+  <!-- launchd's 20 s default SIGKILLs the gateway mid-stop; it needs its stop
+       timeout (30 s by default) + 1 s (docs/DEPLOYMENT.md, Stop grace). -->
+  <key>ExitTimeOut</key>
+  <integer>31</integer>
+
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>

@@ -34,6 +34,10 @@ pub(super) enum At {
     AbandonFileSynced,
     /// Handover: the journal and staged original are gone and the directory is synced.
     HandoverFinished,
+    /// File drain: a rewrite is renamed into place, its directory is not yet synced.
+    FileRewritten,
+    /// File drain: the drained file is unlinked, its directory is not yet synced.
+    FileUnlinked,
 }
 
 #[derive(Clone)]
@@ -168,6 +172,8 @@ pub(super) fn event(at: At) -> Event {
         At::AbandonFileDataSynced => Event::AbandonFileDataSynced,
         At::AbandonFileSynced => Event::AbandonFileSynced,
         At::HandoverFinished => Event::HandoverFinished,
+        At::FileRewritten => Event::FileRewritten,
+        At::FileUnlinked => Event::FileUnlinked,
     }
 }
 
@@ -220,6 +226,11 @@ impl Pause {
 }
 
 /// Inject only after the atomic replacement and before the real directory sync.
+/// The file drain's rewrite boundary: renamed into place, its directory not yet synced.
+pub(crate) fn file_rewritten(path: &Path) -> Result<(), JournalError> {
+    hit(path, At::FileRewritten)
+}
+
 pub(crate) fn before_decision_sync(path: &Path, state: &JournalV2) -> Result<(), JournalError> {
     decision_boundary(path, state, At::BeforeDecisionSync)
 }

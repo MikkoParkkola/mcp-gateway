@@ -30,7 +30,6 @@ use serde_json::{Value, json};
 
 use super::reader::{Cursor, Limits, Line, read_page};
 use super::{DEFAULT_LIMIT, MAX_LIMIT, PAGE_SCAN_BYTES, blocking};
-use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::Charge;
 use crate::gateway::ui::AppState;
 use crate::gateway::ui::admin_audit::attach_lookup;
@@ -38,6 +37,8 @@ use crate::gateway::ui::errors::flat_error;
 use crate::gateway::ui::guard::Guard;
 use crate::key_server::email_hash::{self, EmailHashKey};
 use crate::protocol::continuation::Payload;
+
+pub(super) use crate::gateway::ui::principal::cursor_principal;
 
 /// The most bytes of request body read; a lookup carries an email, a cursor
 /// and two timestamps.
@@ -116,44 +117,6 @@ impl Opened {
     /// moment it would be delivered.
     pub(super) fn alive_at(&self, now: u64) -> bool {
         now <= self.expires_at && now <= self.scope.born.saturating_add(CHAIN_CEILING_SECS)
-    }
-}
-
-/// The digest a token binds to; `None` when the caller has nothing to bind to,
-/// in which case no token is minted or opened. One function for both, so they
-/// cannot disagree.
-///
-/// A bearer or API key binds to its credential principal. Every dashboard
-/// session carries the same constant principal, so a session binds to its own
-/// cookie handle instead (hashed, never sent anywhere): two browser sessions
-/// cannot open each other's tokens.
-pub(super) fn cursor_principal(
-    client: Option<&AuthenticatedClient>,
-    headers: &axum::http::HeaderMap,
-) -> Option<String> {
-    use crate::security::audit::CredentialKind;
-    let client = client?;
-    let principal = client.credential_principal()?;
-    let digest = |tag: &str, material: &str| {
-        crate::hashing::sha256_hex(format!("{tag}\0{material}").as_bytes())
-    };
-    match client.credential_kind {
-        // Every dashboard session carries the same principal: its own cookie
-        // handle is what tells two sessions apart. An empty handle is no
-        // session.
-        CredentialKind::DashboardSession => {
-            let handle = crate::gateway::auth::session_cookie_value(headers)?;
-            (!handle.is_empty()).then(|| digest("dashboard-session", &handle))
-        }
-        // A digest of the one secret the caller presented.
-        CredentialKind::StaticBearer
-        | CredentialKind::ApiKey
-        | CredentialKind::KeyServerToken
-        | CredentialKind::OidcBearer => {
-            Some(digest("credential-principal", principal.storage_form()))
-        }
-        // Nothing to bind a token to: no token is minted or opened.
-        CredentialKind::None | CredentialKind::LocalTransport => None,
     }
 }
 
@@ -427,10 +390,14 @@ fn check_shape(
     Ok(())
 }
 
-/// What only a first page is judged on: the email and its window.
+/// What only a first page is judged on: the email and its window. The email is
+/// judged as the hash will see it: trimmed with the hash's own frozen
+/// `White_Space` list, and control characters taken from the fixed Cc ranges, so
+/// no toolchain Unicode table decides what is refused.
 fn check_first_page(raw: &str, from: Option<&str>, to: Option<&str>) -> Result<(), &'static str> {
-    let email = raw.trim();
-    if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(char::is_control) {
+    let email = email_hash::trim_v1(raw);
+    let control = |c: char| matches!(c, '\0'..='\u{1f}' | '\u{7f}'..='\u{9f}');
+    if email.is_empty() || email.len() > MAX_EMAIL || email.chars().any(control) {
         return Err("the email is not valid");
     }
     if from.is_some_and(|t| t.len() > MAX_TIME) || to.is_some_and(|t| t.len() > MAX_TIME) {
@@ -516,7 +483,7 @@ fn resolve(
 ) -> Result<Resolved, Box<Response>> {
     match ask {
         (Some(raw), None) => Ok(Resolved {
-            hash: key.hash(raw.trim()),
+            hash: key.hash(&raw),
             start: None,
             born: now,
             from: window.0,

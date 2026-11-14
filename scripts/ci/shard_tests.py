@@ -630,16 +630,62 @@ def prebuilt_rows() -> None:
         os.chmod(cargo_none, 0o755)
         assert export_lib(os.path.join(root, "out2"), (cargo_none,)) == 1
     # wait_for_lib: when int waits, and when it gives up and builds its half itself.
-    def waits(states, grace=600):
+    def waits(states, grace=600, warned=None):
         t = [0.0]
         seq = iter(states)
-        return wait_for_lib(lambda: next(seq), lambda s: t.__setitem__(0, t[0] + s), lambda: t[0], grace, 20)
+
+        def fetch():  # an exception in the list stands for a failed `gh api` call
+            s = next(seq)
+            if isinstance(s, Exception):
+                raise s
+            return s
+        warn = (warned.append if warned is not None else lambda _: None)
+        return wait_for_lib(fetch, lambda s: t.__setitem__(0, t[0] + s), lambda: t[0], grace, 20, warn=warn)
     assert waits([(False, "in_progress")] * 400 + [(True, "in_progress")]), "a slow producer was abandoned"
     assert waits([(True, None)]), "a binary from an earlier attempt was not reused"
     assert not waits([(False, "in_progress"), (False, "completed")]), "a producer that ended without it was awaited"
     assert not waits([(False, None)] * 40), "an absent producer (int rerun alone) was awaited past grace"
     assert not waits([(False, "queued")] * 40), "a producer queued past grace was awaited"
     assert waits([(False, "queued")] * 5 + [(True, "in_progress")]), "a briefly queued producer was abandoned"
+    # A failed fetch (one `gh api` blip) never fails the job: it warns with gh's own text and polls on;
+    # five failures in a row give up on the shared binary and build the half here. The literals pin the
+    # five: rows built from FETCH_FAILURE_LIMIT would pass with any value of it.
+    assert FETCH_FAILURE_LIMIT == 5, FETCH_FAILURE_LIMIT
+    blip = RuntimeError("gh api exited 1: HTTP 502 Bad Gateway")
+    warned = []
+    assert waits([blip, (True, "in_progress")], warned=warned), "one failed fetch lost a binary that was there"
+    assert any("HTTP 502 Bad Gateway" in w and "::warning::" in w for w in warned), f"gh's error not shown: {warned}"
+    assert waits([blip] * 4 + [(False, "in_progress")] + [blip] * 4 + [(True, "in_progress")]), \
+        "four failures, a good fetch and four more fell back: failures that never ran five in a row added up"
+    assert not waits([blip] * 5), "five failed fetches in a row did not fall back to building here"
+    # The production seam, as in the incident: a non-zero `gh api` exit goes through gh_api and the real
+    # fetch, and is a warning and a poll, never a crash. The fake honours check=True as subprocess.run
+    # does, so restoring check=True (the incident's CalledProcessError) fails this row.
+    def fake_run(answers):
+        seq = iter(answers)
+
+        def run(cmd, check=False, **_):
+            rc, out, err = next(seq)
+            if check and rc:
+                raise subprocess.CalledProcessError(rc, cmd, out, err)
+            return subprocess.CompletedProcess(cmd, rc, out, err)
+        return run
+    try:
+        gh_api("repos/o/r/actions/runs/1/artifacts?name=hidden", ".total_count",
+               run=fake_run([(1, "", "HTTP 502: Bad Gateway\n")]))
+    except RuntimeError as e:
+        msg = str(e)
+    else:
+        raise AssertionError("a failed gh api call returned instead of raising")
+    assert "exited 1" in msg and "HTTP 502: Bad Gateway" in msg, f"gh's exit and text not carried: {msg}"
+    assert "?" not in msg and "hidden" not in msg, f"the query string reached the log: {msg}"
+    blip_run = fake_run([(1, "", "HTTP 502: Bad Gateway\n"), (0, "1\n", ""), (0, "in_progress\n", "")])
+    fetch = lib_fetch("o/r", "1", "1", "macos-lib-tests", "macOS shard lib-b",
+                      gh=lambda p, j: gh_api(p, j, run=blip_run))
+    seen, t = [], [0.0]
+    assert wait_for_lib(fetch, lambda s: t.__setitem__(0, t[0] + s), lambda: t[0], 600, 20, warn=seen.append), \
+        "a failed gh api call through the real fetch lost a binary that was there"
+    assert len(seen) == 1 and "HTTP 502: Bad Gateway" in seen[0], f"expected one warning with gh's text: {seen}"
     # The rehearsal input skips the wait and asks for the fallback, touching no API.
     with tempfile.TemporaryDirectory() as root:
         out = os.path.join(root, "out")
@@ -815,15 +861,33 @@ def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
     return 1 if failed else 0
 
 
-def wait_for_lib(fetch, sleep, clock, grace: float = 600, interval: float = 20) -> bool:
+# Failed fetches in a row (one every `interval` s, so about 100 s of API trouble) before int gives up
+# on the shared binary and builds its half itself. A single failed `gh api` call never fails the job.
+FETCH_FAILURE_LIMIT = 5
+
+
+def wait_for_lib(fetch, sleep, clock, grace: float = 600, interval: float = 20, warn=print) -> bool:
     """Whether the exported lib binary arrives. `fetch()` gives (artifact present, producer job
     status in this attempt or None). Gives up, so the caller builds the half itself, when the
     producer finished without it, or is absent from this attempt (a rerun of int alone) or still
     queued `grace` seconds in (both macOS runners held by waiting jobs). An in-progress producer
-    is waited for: building again would cost more than waiting."""
+    is waited for: building again would cost more than waiting. A fetch that fails (a `gh api`
+    error) is shown as a warning with gh's own text and polled again; FETCH_FAILURE_LIMIT failures in
+    a row give up, as a missing binary does."""
     start = clock()
+    failures = 0
     while True:
-        present, status = fetch()
+        try:
+            present, status = fetch()
+        except (RuntimeError, OSError, ValueError) as e:
+            failures += 1
+            warn(f"::warning::wait-lib: fetch failed ({failures} in a row): {e}")
+            if failures >= FETCH_FAILURE_LIMIT:
+                warn(f"::warning::wait-lib: {failures} failed fetches in a row; building this half here")
+                return False
+            sleep(interval)
+            continue
+        failures = 0
         if present:
             return True
         if status == "completed":
@@ -831,6 +895,26 @@ def wait_for_lib(fetch, sleep, clock, grace: float = 600, interval: float = 20) 
         if status in (None, "queued", "waiting", "pending") and clock() - start >= grace:
             return False
         sleep(interval)
+
+
+def gh_api(path: str, jq: str, run=subprocess.run) -> str:
+    """One `gh api` call. A non-zero exit raises RuntimeError carrying gh's own text (rate limit, 5xx,
+    auth), which wait_for_lib shows as a warning before polling again. The logged path drops its query
+    string; the path holds no secret."""
+    p = run(["gh", "api", path, "--jq", jq], capture_output=True, text=True)
+    if p.returncode:
+        raise RuntimeError(f"gh api {path.split('?')[0]} exited {p.returncode}: {p.stderr.strip()[:300]}")
+    return p.stdout.strip()
+
+
+def lib_fetch(repo: str, run_id: str, attempt: str, artifact: str, producer: str, gh=gh_api):
+    """wait_for_lib's fetch: (artifact present in this run, producer job status in this attempt or None)."""
+    def fetch():
+        count = gh(f"repos/{repo}/actions/runs/{run_id}/artifacts?name={artifact}", ".total_count")
+        status = gh(f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100",
+                    f'[.jobs[] | select(.name == "{producer}") | .status][0] // ""')
+        return int(count or 0) > 0, status or None
+    return fetch
 
 
 def wait_lib(artifact: str, producer: str) -> int:
@@ -844,19 +928,9 @@ def wait_lib(artifact: str, producer: str) -> int:
     repo, run_id = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"]
     attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
 
-    def gh(path: str, jq: str) -> str:
-        return subprocess.run(["gh", "api", path, "--jq", jq], capture_output=True, text=True,
-                              check=True).stdout.strip()
-
-    def fetch():
-        count = gh(f"repos/{repo}/actions/runs/{run_id}/artifacts?name={artifact}", ".total_count")
-        status = gh(f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100",
-                    f'[.jobs[] | select(.name == "{producer}") | .status][0] // ""')
-        return int(count or 0) > 0, status or None
-
     import time
     start = time.monotonic()
-    found = wait_for_lib(fetch, time.sleep, time.monotonic)
+    found = wait_for_lib(lib_fetch(repo, run_id, attempt, artifact, producer), time.sleep, time.monotonic)
     waited = int(time.monotonic() - start)
     print(f"::notice::wait-lib: {artifact} {'found' if found else 'not coming; building this half here'}"
           f" after {waited} s")

@@ -24,7 +24,7 @@ fn read(path: &Path) -> Option<String> {
 
 #[test]
 fn first_line_allocates_on_the_order_of_the_line_not_the_window() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let first = format!("{{\"event\":\"opened\",\"pad\":\"{}\"}}", "x".repeat(170));
     let mut body = format!("{first}\n").into_bytes();
     body.extend(std::iter::repeat_n(b'y', 6 * 1024 * 1024));
@@ -36,39 +36,39 @@ fn first_line_allocates_on_the_order_of_the_line_not_the_window() {
 
 #[test]
 fn first_line_of_an_empty_file_is_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     assert_eq!(read(&file_with(&dir, b"")), None);
 }
 
 #[test]
 fn first_line_with_no_newline_within_the_cap_is_the_cap() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let line = read(&file_with(&dir, &vec![b'a'; WINDOW + 4096])).unwrap();
     assert_eq!(line.len(), WINDOW);
 }
 
 #[test]
 fn first_line_skips_blank_lines_and_strips_a_carriage_return() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = file_with(&dir, b"\n  \r\nsecond\r\nthird\n");
     assert_eq!(read(&path).as_deref(), Some("second"));
 }
 
 #[test]
 fn first_line_of_a_file_of_blank_lines_is_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     assert_eq!(read(&file_with(&dir, b"\n \n\r\n")), None);
 }
 
 #[test]
 fn first_line_keeps_a_bare_carriage_return_at_eof() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     assert_eq!(read(&file_with(&dir, b"abc\r")).as_deref(), Some("abc\r"));
 }
 
 #[test]
 fn first_line_keeps_a_carriage_return_at_the_window_cap_boundary() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     // The window ends on the `\r`; its `\n` lies beyond the cap, so the cap
     // cut the line and no terminating newline was removed.
     let mut body = vec![b'a'; WINDOW - 1];

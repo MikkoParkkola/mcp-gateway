@@ -118,6 +118,12 @@ impl MetaMcp {
             ui_calls: Arc::new(tokio::sync::Semaphore::new(
                 crate::gateway::ui_call::MAX_UI_CALLS,
             )),
+            // The process start is not reachable here; server start builds
+            // this handler right after it, so the two differ by start-up work.
+            recent_writes: Arc::new(crate::gateway::recent_writes::RecentWrites::new(
+                std::time::Instant::now(),
+            )),
+            restart_board: Arc::default(),
         }
     }
 

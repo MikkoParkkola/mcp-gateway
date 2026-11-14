@@ -201,6 +201,7 @@ pub(super) fn session(locked: &Locked, state: JournalV2) -> JournalSession {
     JournalSession {
         target: locked.target.clone(),
         state,
+        backing: super::Backing::Journal,
     }
 }
 

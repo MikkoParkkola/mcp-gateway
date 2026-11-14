@@ -50,6 +50,14 @@ pub(super) fn payload(bytes: &[u8]) -> Map<String, Value> {
     serde_json::from_slice(bytes).expect("literal object fixture")
 }
 
+/// What the log holds for a writer intent the journal says it already delivered. A journal copy
+/// that no longer parses (rotted after delivery) seeds the save payload the writer delivered
+/// before it rotted: the drain parks such a record before it reaches the log, so its rows need
+/// the counter, not these bytes.
+fn delivered_payload(bytes: &[u8]) -> Map<String, Value> {
+    serde_json::from_slice(bytes).unwrap_or_else(|_| payload(SAVE))
+}
+
 pub(super) fn actor() -> AuditWho {
     AuditWho::from_persisted(AUDIT_WHO_PRINCIPAL).expect("literal actor fixture")
 }
@@ -112,6 +120,7 @@ pub(super) fn reopen(locked: Locked) -> DrainSession {
         Some(OpenJournal::Current(state)) => Some(JournalSession {
             target: locked.target.clone(),
             state: *state,
+            backing: super::super::Backing::Journal,
         }),
         _ => None,
     };
@@ -127,6 +136,7 @@ pub(super) fn reread(owner: &mut DrainSession) {
         owner.journal = Some(JournalSession {
             target: owner.locked.target.clone(),
             state: *state,
+            backing: super::super::Backing::Journal,
         });
     }
 }
@@ -210,7 +220,7 @@ impl Live {
                 &self.log.log_id(),
                 &writer.intent_id.0,
                 writer.intent.role,
-                payload(&writer.intent.payload_json),
+                delivered_payload(&writer.intent.payload_json),
             ))
             .expect("seed surviving intent");
             assert_eq!(
