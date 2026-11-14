@@ -189,6 +189,11 @@ jobs:
         run: |
           python3 scripts/ci/check_toolchain_pin.py --self-test
           python3 scripts/ci/check_toolchain_pin.py
+      # Which Coverage probe runs share a concurrency group: release-line pushes one, everything else its own.
+      - name: The coverage probe's concurrency groups
+        run: |
+          python3 scripts/ci/test_coverage_probe_concurrency.py --self-test
+          python3 scripts/ci/test_coverage_probe_concurrency.py
       # Under pipefail `x | grep -q` fails the pipeline on a match (MIK-8333).
       - name: No piped quiet grep
         run: |
