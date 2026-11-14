@@ -75,10 +75,17 @@ globalThis.AuthRefused = class extends Error {};
 globalThis.uiFetch = async (url, opts) => {
   calls.push({ url, opts, emailField: dom['kl-email']?.value });
   const r = replies.shift();
-  if (r.gate) await r.gate;
+  // Like a browser: an abort rejects a request that has not answered yet.
+  if (r.gate) await Promise.race([r.gate, new Promise((_, no) => opts.signal?.addEventListener('abort',
+    () => no(new DOMException('aborted', 'AbortError'))))]);
   return { ok: r.status >= 200 && r.status < 300, status: r.status,
     headers: { get: (h) => (r.headers ?? {})[h.toLowerCase()] ?? null },
-    json: async () => { if (r.bad) throw new Error('not json'); return r.body; } };
+    json: async () => {
+      r.reading?.();
+      if (r.jsonGate) await r.jsonGate;
+      if (r.bad) throw new Error('not json');
+      return r.body;
+    } };
 };
 const page = (rows, extra = {}) => ({ status: 200, body: { rows, next_cursor: null,
   scan_exhausted: false, cursor_reset: false, unreadable: 0, scope: 'retained', ...extra } });
@@ -251,7 +258,8 @@ out({ scope: dom['kl-scope'].textContent, notes: dom['kl-notes'].textContent });
 
 /// UIFORM.2: a 429 shows the wait the server named, and keeps the pending
 /// page so the same button retries it; a missing or silly wait is not shown
-/// as a number. Mutant: ignore Retry-After, or drop the pending page.
+/// as a number; a throttled first page keeps nothing (it would be the email).
+/// Mutant: ignore Retry-After, drop the pending page, or keep any query.
 #[test]
 fn a_throttle_shows_the_wait_and_keeps_the_pending_page() {
     let got = run(r"
@@ -262,7 +270,11 @@ await keyLookupNext();
 const first = dom['kl-status'].textContent;
 const kept = keyLookupHeld !== null;
 await keyLookupNext();
-out({ first, kept, silly: dom['kl-status'].textContent });
+const silly = dom['kl-status'].textContent;
+keyLookupClear();
+replies = [{ status: 429, headers: { 'retry-after': '7' } }];
+await submit('ada@example.org');
+out({ first, kept, silly, firstPage: keyLookupHeld });
 ");
     assert!(
         got["first"].as_str().unwrap().contains("7 seconds"),
@@ -272,12 +284,18 @@ out({ first, kept, silly: dom['kl-status'].textContent });
     assert_eq!(got["kept"], true);
     let silly = got["silly"].as_str().unwrap();
     assert!(!silly.contains("99999999"), "{silly}");
+    assert_eq!(
+        got["firstPage"],
+        serde_json::Value::Null,
+        "a throttled first page must keep nothing, least of all the email"
+    );
 }
 
 /// UIFORM.2: anything but a well-formed answer shows one fixed line, renders
 /// no row and drops the held query: a failed status, a body that is not JSON,
-/// rows that are not an array, a row field that is not text, too many rows,
-/// a scope other than the retained rows the page says it searched.
+/// rows that are not an array, a row field or list that is not text, a flag
+/// that is not a flag, too many rows, a scope other than the retained rows the
+/// page says it searched; and a failed next page drops the held token.
 /// Mutant: `unwrap_or_default` style leniency, render what parses.
 #[test]
 fn a_bad_answer_shows_a_fixed_line_and_renders_no_rows() {
@@ -287,6 +305,8 @@ const bad = [
   page([{ ...row('s'), subject: { a: 1 } }]),
   page(Array.from({ length: 201 }, (_, i) => row('s' + i))),
   page([row('s')], { scope: 'all' }),
+  page([{ ...row('s'), tools: 'x' }]),
+  page([row('s')], { scan_exhausted: 'yes' }),
 ];
 const seen = [];
 for (const r of bad) {
@@ -294,6 +314,10 @@ for (const r of bad) {
   await submit('ada@example.org');
   seen.push([dom['kl-status'].textContent, dom['kl-rows'].children.length, keyLookupHeld]);
 }
+replies = [page([row('s')], { next_cursor: 'c1' }), { status: 500 }];
+await submit('ada@example.org');
+await keyLookupNext();
+seen.push([dom['kl-status'].textContent, dom['kl-rows'].children.length, keyLookupHeld]);
 out(seen);
 ");
     for case in got.as_array().unwrap() {
@@ -525,18 +549,22 @@ out({ afterToken, afterFirst: dom['kl-status'].textContent });
 fn an_answer_that_lands_after_a_drop_writes_nothing() {
     let got = run(r"
 const results = [];
-for (const how of ['clear', 'auth']) {
+for (const how of ['clear', 'auth', 'reading']) {
   let release;
   const gate = new Promise((ok) => { release = ok; });
+  let reading;
+  const started = new Promise((ok) => { reading = ok; });
   authState = 'admin';
-  replies = [{ ...page([row('late')], { next_cursor: 'c9' }), gate }];
+  const answer = page([row('late')], { next_cursor: 'c9' });
+  replies = [how === 'reading' ? { ...answer, jsonGate: gate, reading } : { ...answer, gate }];
   document.getElementById('kl-email').value = 'ada@corp.test';
   const pending = submitKeyLookup({ preventDefault() {} });
-  await Promise.resolve();
-  if (how === 'clear') keyLookupClear(); else authState = 'signed_in';
+  if (how === 'reading') await started; else await Promise.resolve();
+  if (how === 'auth') authState = 'signed_in'; else keyLookupClear();
   release();
   await pending;
-  results.push([how, keyLookupHeld, dom['kl-rows'].children.length, dom['kl-next'].hidden]);
+  results.push([how, keyLookupHeld, dom['kl-rows'].children.length, dom['kl-next'].hidden,
+    dom['kl-status'].textContent, calls.at(-1).opts.signal.aborted]);
   keyLookupClear();
 }
 out(results);
@@ -552,19 +580,24 @@ out(results);
             case[3], true,
             "Next page was offered after the drop: {case}"
         );
+        assert_eq!(case[4], "", "a message was written after the drop: {case}");
+        if case[0] == "clear" {
+            assert_eq!(case[5], true, "the drop must abort the request: {case}");
+        }
     }
 }
 
 /// A second submit while a lookup is running sends nothing: the new email is
 /// still emptied from its field (pressing Look up always empties it), the page
 /// says a lookup is running, no second request goes out, and the first answer
-/// is the one shown. Mutant: keep the field, or skip the busy check.
+/// is the one shown. Next pressed again while its page is in flight sends
+/// nothing either. Mutant: keep the field, or skip either busy check.
 #[test]
 fn a_second_submit_while_busy_changes_nothing() {
     let got = run(r"
 let release;
 const gate = new Promise((ok) => { release = ok; });
-replies = [{ ...page([row('first')]), gate }];
+replies = [{ ...page([row('first')], { next_cursor: 'c1' }), gate }];
 document.getElementById('kl-email').value = 'ada@corp.test';
 const pending = submitKeyLookup({ preventDefault() {} });
 await Promise.resolve();
@@ -574,7 +607,18 @@ const kept = dom['kl-email'].value;
 const said = dom['kl-status'].textContent;
 release();
 await pending;
-out({ kept, said, n: calls.length, rows: dom['kl-rows'].children.length });
+const n = calls.length;
+const rows = dom['kl-rows'].children.length;
+let release2;
+const gate2 = new Promise((ok) => { release2 = ok; });
+replies = [{ ...page([row('second')]), gate: gate2 }];
+const next = keyLookupNext();
+await Promise.resolve();
+await keyLookupNext();
+const nNext = calls.length;
+release2();
+await next;
+out({ kept, said, n, rows, nNext });
 ");
     assert_eq!(
         got["kept"], "",
@@ -585,6 +629,45 @@ out({ kept, said, n: calls.length, rows: dom['kl-rows'].children.length });
         "the refusal says why: {got}"
     );
     assert_eq!(got["n"], 1);
+    assert_eq!(got["rows"], 1);
+    assert_eq!(got["nNext"], 2, "Next pressed twice in flight sent twice");
+}
+
+/// A request dropped in flight that ends afterwards leaves the request that
+/// replaced it alone: the newer one still counts as running, keeps its abort
+/// handle, and a third submit is still refused. Mutant: reset the busy flag
+/// and the abort handle when any request ends, whatever its epoch.
+#[test]
+fn an_old_request_ending_leaves_the_newer_one_running() {
+    let got = run(r"
+let releaseB;
+const gateB = new Promise((ok) => { releaseB = ok; });
+replies = [{ ...page([row('a')]), gate: new Promise(() => {}) }, { ...page([row('b')]), gate: gateB }];
+document.getElementById('kl-email').value = 'ada@corp.test';
+const a = submitKeyLookup({ preventDefault() {} });
+await Promise.resolve();
+keyLookupClear();
+document.getElementById('kl-email').value = 'bob@corp.test';
+const b = submitKeyLookup({ preventDefault() {} });
+await a;
+const busy = keyLookupBusy;
+const handle = keyLookupAbort !== null;
+document.getElementById('kl-email').value = 'cy@corp.test';
+await submitKeyLookup({ preventDefault() {} });
+const n = calls.length;
+releaseB();
+await b;
+out({ busy, handle, n, rows: dom['kl-rows'].children.length });
+");
+    assert_eq!(
+        got["busy"], true,
+        "the newer lookup stopped counting: {got}"
+    );
+    assert_eq!(
+        got["handle"], true,
+        "the newer lookup lost its abort: {got}"
+    );
+    assert_eq!(got["n"], 2, "a third submit went out: {got}");
     assert_eq!(got["rows"], 1);
 }
 
