@@ -140,8 +140,7 @@ impl RestartBoard {
         board.record = Some(RestartStatus {
             id: board.last_id,
             phase: RestartPhase::Accepted,
-            // Red stub: a made-up deadline before the checkpoint sets one.
-            deadline_unix_ms: Some(0),
+            deadline_unix_ms: None,
             remaining_calls: 0,
             cancel: None,
         });
@@ -149,10 +148,11 @@ impl RestartBoard {
     }
 
     /// Accepted to Checkpoint, setting the checkpoint's deadline.
-    pub(crate) fn checkpoint(&self, _checkpoint_deadline_unix_ms: u64) {
+    pub(crate) fn checkpoint(&self, checkpoint_deadline_unix_ms: u64) {
         self.edit(|record, _| {
             if record.phase == RestartPhase::Accepted {
                 record.phase = RestartPhase::Checkpoint;
+                record.deadline_unix_ms = Some(checkpoint_deadline_unix_ms);
             }
         });
     }
