@@ -1,0 +1,40 @@
+head_sha	12e650924367a3428a5d5f805aab56d894e3b3d0
+#mutant b1
+mcp_gateway	gateway::task_service::store_tests::floor::o3_a_store_not_ready_is_unavailable_and_nothing_is_written	src/gateway/task_service/store_tests/floor.rs:344
+#mutant b2
+mcp_gateway	gateway::task_service::store_tests::floor::s3_an_empty_store_is_synced_and_a_failed_sync_does_not_poison	src/gateway/task_service/store_tests/floor.rs:135
+#mutant b3
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c4_a_superseded_resave_stops_at_its_next_record_and_a_new_attempt_certifies	src/gateway/task_service/store_tests/floor_contract.rs:365
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c4r_a_resave_superseded_by_a_stop_stops_at_its_next_record	src/gateway/task_service/store_tests/floor_contract.rs:365
+#mutant b4
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c3b_resume_from_paused_or_certified_opens_the_gate	src/gateway/task_service/store_tests/floor_contract.rs:200
+#mutant b5
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c3a_a_dropped_pause_or_checkpoint_is_cleared_by_resume_and_by_release	src/gateway/task_service/store_tests/floor_contract.rs:176
+#mutant b6
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c5_commit_from_certified_is_terminal_at_the_edge	src/gateway/task_service/store_tests/floor_contract.rs:408
+#mutant b7
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c3d_calls_while_draining_change_nothing_and_settled_waits_for_the_drain	src/gateway/task_service/store_tests/floor_contract.rs:263
+#mutant b8
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c4_a_superseded_resave_stops_at_its_next_record_and_a_new_attempt_certifies	src/gateway/task_service/store_tests/floor_contract.rs:357
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c4r_a_resave_superseded_by_a_stop_stops_at_its_next_record	src/gateway/task_service/store_tests/floor_contract.rs:357
+#mutant b9
+mcp_gateway	gateway::task_service::store_tests::floor::o2_a_panicking_resave_is_worker_lost_and_the_store_recovers	src/gateway/task_service/store_tests/floor.rs:323
+#mutant b10
+mcp_gateway	gateway::task_service::store_tests::floor::o3_a_store_not_ready_is_unavailable_and_nothing_is_written	src/gateway/task_service/store_tests/floor.rs:344
+mcp_gateway	gateway::task_service::store_tests::floor::s5_a_fault_after_rename_poisons_and_a_retry_is_unavailable	src/gateway/task_service/store_tests/floor.rs:221
+#mutant b11
+mcp_gateway	gateway::task_service::store_tests::floor::o1_an_admitted_write_failing_in_the_attempt_is_save_failed	src/gateway/task_service/store_tests/floor.rs:298
+#mutant b12
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c3e_checkpoint_outside_its_paused_attempt_is_unavailable	src/gateway/task_service/store_tests/floor_contract.rs:299
+#mutant b13
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c6_released_and_terminal_ignore_every_call	src/gateway/task_service/store_tests/floor_contract.rs:440
+#mutant b14
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c12_the_gate_takes_the_adapters_deadline_and_stop_budget	src/gateway/task_service/store_tests/floor_contract.rs:515
+#mutant b15
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c12_the_gate_takes_the_adapters_deadline_and_stop_budget	src/gateway/task_service/store_tests/floor.rs:39
+#mutant b16
+mcp_gateway	gateway::task_service::store_tests::floor_contract::c4_a_superseded_resave_stops_at_its_next_record_and_a_new_attempt_certifies	src/gateway/task_service/store_tests/floor_contract.rs:365
+#mutant b17
+mcp_gateway	gateway::task_service::store_tests::floor::s1_a_good_checkpoint_resaves_every_record_byte_for_byte	src/gateway/task_service/store_tests/floor.rs:116
+#mutant b20
+mcp_gateway	gateway::task_service::store_tests::floor::s1_a_good_checkpoint_resaves_every_record_byte_for_byte	src/gateway/task_service/store_tests/floor.rs:109
