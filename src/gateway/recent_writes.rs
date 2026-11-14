@@ -9,10 +9,18 @@ use std::time::Instant;
 use crate::security::decision_record::Effect;
 
 /// Seconds a sample covers besides the current partial one.
+#[allow(
+    dead_code,
+    reason = "only the web UI restart GET reads the sample; without the web UI nothing does"
+)]
 pub(crate) const WINDOW_SECS: u64 = 60;
 
 /// One read of the counter, taken under its lock. `Copy`, so a bound sample
 /// never changes after it is taken.
+#[allow(
+    dead_code,
+    reason = "only the web UI restart GET reads the sample; without the web UI nothing does"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WriteSample {
     /// Writes in the current partial second and the 60 complete ones before it.
@@ -74,6 +82,10 @@ impl RecentWrites {
     /// The window as of `now`: every bucket whose second is `now`'s or one of
     /// the 60 before it. A bucket stamped later than `now` (a note racing the
     /// sample) is outside it.
+    #[allow(
+        dead_code,
+        reason = "only the web UI restart GET reads the sample; without the web UI nothing does"
+    )]
     pub(crate) fn sample(&self, now: Instant) -> WriteSample {
         let second = self.second(now);
         let ring = self.ring.lock();
