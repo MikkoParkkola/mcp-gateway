@@ -15,6 +15,13 @@ use super::{debug, session_fp};
 
 impl MetaMcp {
     /// This boot's recent-write counter, fed by the dispatch hooks.
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(
+            dead_code,
+            reason = "red stub: the dispatch hooks read it in every build next"
+        )
+    )]
     pub(in crate::gateway) fn recent_writes(
         &self,
     ) -> &Arc<crate::gateway::recent_writes::RecentWrites> {
@@ -22,6 +29,13 @@ impl MetaMcp {
     }
 
     /// This boot's restart status board.
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(
+            dead_code,
+            reason = "the web UI status reads it; the restart coordinator will in every build"
+        )
+    )]
     pub(in crate::gateway) fn restart_board(
         &self,
     ) -> &Arc<crate::gateway::restart_status::RestartBoard> {

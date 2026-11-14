@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! R6: every meta arm, through `handle_tools_call`, moves the recent-write
 //! sample by its class. A Write arm counts once at its entry, even when its
-//! handler refuses; a Read arm never counts; Invoke, Execute and RunPlaybook
+//! handler refuses; a Read arm never counts; `Invoke`, `Execute` and `RunPlaybook`
 //! never count at the arm, only once per counted leaf they dispatch.
 //! Observation: the delta of `recent_writes().sample(now).writes_total`, which
 //! is exact and never slides out of the window.
@@ -177,7 +177,7 @@ steps:
 
 /// Each composite counts once per leaf it dispatched and nothing at the arm.
 /// The leaves are undeclared tools (no `tools/list` ran), which count by the
-/// one rule; a declared MayWrite leaf and a ReadOnly leaf are R1's (Fx), and
+/// one rule; a declared `MayWrite` leaf and a `ReadOnly` leaf are R1's (Fx), and
 /// the composites on Fx are R8's. The backend's own call count is the premise:
 /// the delta must equal the leaves that reached it.
 #[tokio::test]

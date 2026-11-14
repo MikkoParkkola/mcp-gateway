@@ -243,7 +243,7 @@ impl Model {
         };
         match call {
             Call::Checkpoint if r.phase == RestartPhase::Accepted => {
-                r.phase = RestartPhase::Checkpoint
+                r.phase = RestartPhase::Checkpoint;
             }
             Call::Cancel if live && !committed => {
                 r.phase = RestartPhase::Cancelled;
@@ -254,7 +254,7 @@ impl Model {
                 r.deadline_unix_ms = STOP_DL;
             }
             Call::Restarting if r.phase == RestartPhase::Checkpoint => {
-                forward(r, RestartPhase::Restarting)
+                forward(r, RestartPhase::Restarting);
             }
             Call::Saving => forward(r, RestartPhase::Saving),
             Call::Draining => forward(r, RestartPhase::Draining),
@@ -281,7 +281,7 @@ fn call(board: &RestartBoard, c: Call) {
 
 /// Every sequence of the eight mutating calls up to length 6, and every
 /// length-6 sequence that ends at Draining followed by each call; the ninth
-/// call, status(), is compared with the model after every step.
+/// call, `status()`, is compared with the model after every step.
 #[test]
 fn b3_board_matches_the_model_on_every_short_sequence() {
     let mut reached_draining = 0u32;

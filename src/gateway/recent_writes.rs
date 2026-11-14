@@ -6,6 +6,7 @@
 //! case: only a call its tool declares read-only goes uncounted.
 #![allow(
     dead_code,
+    clippy::unused_self,
     reason = "red stubs: the hooks and the restart GET read it in the implementation"
 )]
 

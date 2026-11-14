@@ -172,7 +172,8 @@ async fn b7_restart_record_changes_raise_only_the_status_generation() {
         (snapshot.status_gen, snapshot.counts_gen)
     };
     let (mut status, counts) = publish();
-    let steps: [(&str, fn(&RestartBoard)); 8] = [
+    type Step = (&'static str, fn(&RestartBoard));
+    let steps: [Step; 8] = [
         ("null to a record", |b| {
             b.accept(1_000);
         }),

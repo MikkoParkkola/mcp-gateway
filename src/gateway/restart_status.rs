@@ -6,6 +6,7 @@
 //! I/O while it is held; every method is infallible and returns at once.
 #![allow(
     dead_code,
+    clippy::unused_self,
     reason = "red stubs; the restart coordinator, a later slice, drives the transitions"
 )]
 
