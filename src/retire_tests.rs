@@ -236,7 +236,7 @@ fn the_watchdog_exits_75_at_its_slack_past_the_end() {
 fn the_watchdog_exits_with_the_stored_code() {
     // Production's order: armed at the stop, the code stored later by the tail.
     let stored = fresh_code();
-    let fired = armed(std::time::Instant::now(), stored);
+    let fired = armed(std::time::Instant::now() + Duration::from_secs(1), stored);
     stored.store(0, Ordering::SeqCst);
     let (code, _) = fired.recv_timeout(WATCHDOG).expect("the watchdog fired");
     assert_eq!(code, 0, "the watchdog ignored the stored code");
@@ -265,7 +265,7 @@ fn a_watchdog_armed_late_fires_at_once() {
 fn a_held_main_thread_exits_with_the_code_the_tail_stored() {
     // Armed at the stop, as in production; the tail's finish stores the code later.
     let stored = fresh_code();
-    let fired = armed(std::time::Instant::now(), stored);
+    let fired = armed(std::time::Instant::now() + Duration::from_secs(1), stored);
     let joined = StopOutcome::Joined(FlushEnd::Clean);
     let _ = finish(ExitCode::FAILURE, false, Some(&joined), stored);
     let (code, _) = fired.recv_timeout(WATCHDOG).expect("the watchdog fired");
@@ -360,7 +360,10 @@ fn the_plan_cell_is_wired_from_cli_run_to_the_stop_and_the_watchdog() {
     let entry = wired(include_str!("cli/entry.rs"));
     for link in [
         "RetireCell::default()",
-        "block_on(mode,&plan,",
+        "block_on(mode,&plan,dispatch(args,std::sync::Arc::clone(&plan)))",
+        "asyncfndispatch(cli:Cli,plan:crate::retire::RetireCell)",
+        "Box::pin(run_server(cli,plan))",
+        "asyncfnrun_server(cli:Cli,plan:crate::retire::RetireCell)",
         "gateway.set_retire_cell(plan)",
         "crate::retire::tail(code,left_running,plan.get().copied(),",
     ] {
