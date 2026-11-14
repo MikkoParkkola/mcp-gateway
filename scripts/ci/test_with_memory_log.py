@@ -49,7 +49,11 @@ def stubs(tmp: Path, with_free: bool = True, with_proc: bool = True) -> dict[str
 
 def run(cmd: str, env: dict[str, str], timeout: float = 20) -> tuple[int, str, str, float]:
     start = time.monotonic()
-    p = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True, timeout=timeout, cwd=ROOT)
+    try:
+        p = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True, timeout=timeout, cwd=ROOT)
+    except subprocess.TimeoutExpired:
+        # A hang is a failed row with its own message, not a crash that hides every later row.
+        return -1, "", f"HUNG past {timeout} s", time.monotonic() - start
     return p.returncode, p.stdout, p.stderr, time.monotonic() - start
 
 
@@ -112,6 +116,16 @@ def rows() -> list[tuple[str, bool, str]]:
         # W5: missing sources print n/a and never change the status.
         rc, so, se, t = run(f"{w} bash -c 'exit 5'", env)
         out.append(("W5 no free, no /proc files: n/a, rc unchanged", rc == 5 and "n/a" in se and "end, exit 5" in se, se[-300:]))
+    with tempfile.TemporaryDirectory() as d:
+        env = stubs(Path(d))
+        # W13: a command a signal kills before the wrapper first waits (here, while a slow `free` takes the start
+        # sample). bash 5.1 and 5.2 drop such a job from the job table, so `wait -n` never names it; the wrapper must
+        # still end promptly with 137, not loop on its sampling timer until the step limit. (bash 5.3 keeps the job,
+        # so this row turns red on the old wrapper only under bash 5.1 or 5.2.)
+        (Path(d) / "bin" / "free").write_text("#!/bin/sh\nsleep 1\n" + FREE.split("\n", 1)[1])
+        rc, so, se, t = run(f"{w} bash -c 'kill -9 $$'", env, timeout=15)
+        out.append(("W13 a command killed before the first wait: exit 137 within 10 s",
+                    rc == 137 and "end, exit 137" in se and t < 10, f"rc {rc}, {t:.1f}s, {se[-200:]!r}"))
     return out
 
 
