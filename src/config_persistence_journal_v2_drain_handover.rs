@@ -10,12 +10,10 @@ use std::path::Path;
 use super::super::JournalSession;
 use super::super::abandoned::{MAX_ABANDONED_BYTES, TornProof, encode_frame};
 use super::super::abandoned::{Placement, against_donor, frames_of, marked};
-// The one definition lives in the journal module, where the restart checkpoint names
-// it too; re-exported so the drain's `handover::abandoned_path` callers keep working.
-pub(crate) use super::super::abandoned_path;
 use super::super::{JournalV2, ParkReason};
 use super::DrainSession;
 use super::fault::{self, At};
+use crate::config_persistence::journal::v2::abandoned_path;
 use crate::config_persistence::sync_dir_of;
 use crate::security::transparency_log::rotation::file_id;
 use crate::security::transparency_log::settle::Role;

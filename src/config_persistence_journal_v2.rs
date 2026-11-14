@@ -234,7 +234,7 @@ impl JournalSession {
         if bytes.len() > abandoned::MAX_ABANDONED_BYTES {
             return Err(JournalError::Persist);
         }
-        let path = drain::handover::abandoned_path(&self.target);
+        let path = abandoned_path(&self.target);
         write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)
             .map_err(|_| JournalError::Persist)?;
         drain::fault::file_rewritten(&self.target)?;

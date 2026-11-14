@@ -13,10 +13,11 @@ use super::super::super::abandoned::{
 use super::super::super::fixtures::{collect_case, config, seed};
 use super::super::super::{FrozenRecord, IntentId, JournalSession, JournalV2, ParkReason, Phase};
 use super::super::fixtures::{Live, attempt, decided, reread, runtime, staged, state};
-use super::super::handover::{abandoned_path, hand_over};
+use super::super::handover::hand_over;
 use super::super::{DrainError, DrainSession};
 use super::{complete, drain_abandoned, state_from_frames};
 use crate::config_persistence::journal;
+use crate::config_persistence::journal::v2::abandoned_path;
 use crate::security::transparency_log::settle::Role;
 
 /// A donor bound to a live log, handed over: the abandoned file exists and the journal is gone.
