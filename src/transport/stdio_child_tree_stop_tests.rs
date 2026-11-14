@@ -660,3 +660,95 @@ async fn a_cut_during_the_late_sigterm_wait_still_kills_by_its_margin() {
     })
     .await;
 }
+
+/// Plan the tree (1 s EOF wait, 10 s SIGTERM wait) as started `back` before
+/// `s`, step it once there, make a short cut at `s` (the kill 50 ms after it),
+/// then step at `step_at`: all in one synchronous run, so the cut's set-time
+/// lands within microseconds of `s`. Returns the late step's instant and the
+/// SIGTERMs and group signals sent so far.
+fn cut_after_a_starved_plan(
+    tree: &mut ChildTree,
+    deadline: &Arc<super::super::super::reaper::StopDeadline>,
+    back: Duration,
+    step_at: Duration,
+) -> (std::time::Instant, usize, usize) {
+    use super::super::super::reaper::KILL_RESERVE;
+    let s = std::time::Instant::now();
+    tree.set_ending(
+        Ending::Graceful {
+            eof: Duration::from_secs(1),
+            term: Duration::from_secs(10),
+        },
+        Some(Arc::clone(deadline)),
+    );
+    assert!(
+        matches!(tree.reap_step(s - back), Reap::Pending),
+        "the plan starts"
+    );
+    deadline.move_earlier(s + Duration::from_millis(50) + KILL_RESERVE);
+    let step = s + step_at;
+    tree.reap_step(step);
+    (step, tree.term_signals_sent, tree.group_signals_sent)
+}
+
+/// A SIGTERM that came due before a short cut was made (the reaper starved
+/// through it) is still owed: the late step sends it and kills a minimum phase
+/// later, inside the cut's reserve slack.
+#[tokio::test]
+async fn a_sigterm_due_before_a_short_cut_was_made_is_still_sent() {
+    use super::super::super::reaper::MIN_PHASE;
+    let (w, t) = started(IGNORES_TERM_READY, None).await;
+    let end = EndOnDrop::new(&t);
+    poll_until("the TERM handler is installed", || {
+        w.path().join("ready.mark").exists()
+    })
+    .await;
+    let deadline = Arc::clone(end.deadline());
+    with_tree(&t, |tree| {
+        // term_at = s - 1 s: due before the cut at s.
+        let (step, terms, kills) = cut_after_a_starved_plan(
+            tree,
+            &deadline,
+            Duration::from_secs(2),
+            Duration::from_millis(20),
+        );
+        assert_eq!(terms, 1, "the owed SIGTERM went out");
+        assert_eq!(kills, 0, "and the kill waits for its minimum phase");
+        tree.reap_step(step + MIN_PHASE - Duration::from_millis(1));
+        assert_eq!(
+            tree.group_signals_sent, 0,
+            "the SIGTERM keeps its minimum phase"
+        );
+        tree.reap_step(step + MIN_PHASE);
+        assert!(
+            tree.group_signals_sent > 0,
+            "the kill lands a minimum phase later"
+        );
+    })
+    .await;
+}
+
+/// A short cut made before the SIGTERM came due still skips it: the stop left
+/// no room, and nothing was owed when it was made.
+#[tokio::test]
+async fn a_short_cut_made_before_the_sigterm_was_due_still_skips_it() {
+    let (w, t) = started(IGNORES_TERM_READY, None).await;
+    let end = EndOnDrop::new(&t);
+    poll_until("the TERM handler is installed", || {
+        w.path().join("ready.mark").exists()
+    })
+    .await;
+    let deadline = Arc::clone(end.deadline());
+    with_tree(&t, |tree| {
+        // term_at = s + 30 ms: after the cut at s, before the late step at s + 55 ms.
+        let (_, terms, kills) = cut_after_a_starved_plan(
+            tree,
+            &deadline,
+            Duration::from_millis(970),
+            Duration::from_millis(55),
+        );
+        assert_eq!(terms, 0, "no SIGTERM was owed when the cut was made");
+        assert!(kills > 0, "killed at once");
+    })
+    .await;
+}
