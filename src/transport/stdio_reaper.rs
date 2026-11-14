@@ -69,6 +69,9 @@ pub(crate) struct StopDeadline {
     hurried: std::sync::atomic::AtomicBool,
     /// Nanoseconds after [`STOP_EPOCH`]; `u64::MAX` while unset.
     at: std::sync::atomic::AtomicU64,
+    /// When `at` was last moved earlier, in the same nanoseconds; `u64::MAX` while
+    /// unset. A SIGTERM a tree's plan had due before then is still owed.
+    set_at: std::sync::atomic::AtomicU64,
     /// Every graceful handover under this deadline, so the stop can wait for
     /// their kills before it returns; finished ones are pruned on each add.
     handed: parking_lot::Mutex<Vec<watch::Receiver<Reaped>>>,
@@ -82,6 +85,7 @@ impl Default for StopDeadline {
         Self {
             hurried: std::sync::atomic::AtomicBool::new(false),
             at: std::sync::atomic::AtomicU64::new(u64::MAX),
+            set_at: std::sync::atomic::AtomicU64::new(u64::MAX),
             handed: parking_lot::Mutex::default(),
         }
     }
@@ -117,8 +121,21 @@ impl StopDeadline {
     pub(crate) fn move_earlier(&self, deadline: Instant) {
         let nanos = deadline.saturating_duration_since(*STOP_EPOCH).as_nanos();
         let nanos = u64::try_from(nanos).unwrap_or(u64::MAX - 1);
-        self.at
+        let before = self
+            .at
             .fetch_min(nanos, std::sync::atomic::Ordering::SeqCst);
+        if nanos < before {
+            // Stored after `at`: a reader that sees the new deadline with the
+            // older set-time takes the cut as made earlier, so a SIGTERM reads as
+            // owed less often, never more.
+            let set = Instant::now()
+                .saturating_duration_since(*STOP_EPOCH)
+                .as_nanos();
+            self.set_at.store(
+                u64::try_from(set).unwrap_or(u64::MAX - 1),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
     }
 
     /// Track a graceful handover, so [`Self::wait_handed`] covers it.
@@ -148,6 +165,18 @@ impl StopDeadline {
             u64::MAX => None,
             nanos => Some(*STOP_EPOCH + Duration::from_nanos(nanos)),
         }
+    }
+
+    /// The deadline, once set, and when it was last moved earlier: `None` for
+    /// an instant while a move stores it (the cut still applies, nothing reads
+    /// as owed).
+    pub(super) fn get_with_set_at(&self) -> Option<(Instant, Option<Instant>)> {
+        let at = self.get()?;
+        let set_at = match self.set_at.load(std::sync::atomic::Ordering::SeqCst) {
+            u64::MAX => None,
+            nanos => Some(*STOP_EPOCH + Duration::from_nanos(nanos)),
+        };
+        Some((at, set_at))
     }
 }
 

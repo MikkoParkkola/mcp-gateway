@@ -101,9 +101,13 @@ impl Ending {
 struct Grace {
     term_at: std::time::Instant,
     kill_at: std::time::Instant,
-    /// Whether SIGTERM went out; Windows has no SIGTERM step.
+    /// When SIGTERM went out; Windows has no SIGTERM step.
     #[cfg(unix)]
-    term_sent: bool,
+    term_sent_at: Option<std::time::Instant>,
+    /// The plan's SIGTERM came due before a cut was made: still owed, though the
+    /// cut left less than the minimum phase.
+    #[cfg(unix)]
+    term_owed: bool,
 }
 
 /// What the kernel says about the leader, without reaping it.
@@ -395,7 +399,9 @@ impl ChildTree {
                 term_at: now + eof,
                 kill_at: now + eof + term,
                 #[cfg(unix)]
-                term_sent: false,
+                term_sent_at: None,
+                #[cfg(unix)]
+                term_owed: false,
             },
             (None, Ending::Now) => return false,
         };
@@ -405,10 +411,21 @@ impl ChildTree {
         // deadline with the reap's own reserve left.
         let mut grace = grace;
         if let Some(deadline) = self.stop_deadline.as_ref()
-            && let Some(cut) = deadline.get()
+            && let Some((cut, set_at)) = deadline.get_with_set_at()
         {
             let cut = cut.checked_sub(super::reaper::KILL_RESERVE).unwrap_or(now);
             if cut < grace.kill_at {
+                // A SIGTERM the plan had due before this cut was made is owed,
+                // however little the cut leaves: the reaper missed it, not the stop.
+                #[cfg(unix)]
+                if grace.term_sent_at.is_none()
+                    && grace.term_at < grace.kill_at
+                    && set_at.is_some_and(|set| grace.term_at <= set)
+                {
+                    grace.term_owed = true;
+                }
+                #[cfg(not(unix))]
+                let _ = set_at;
                 // What is left is split as the plan was: its last third after
                 // SIGTERM, unless that third is under the minimum phase.
                 // A hurry preserves the minimum phase while it still fits.
@@ -426,25 +443,54 @@ impl ChildTree {
         if self.exited() {
             return false;
         }
-        if now >= grace.kill_at {
+        #[cfg(unix)]
+        let kill_due = self.step_term(&mut grace, now);
+        #[cfg(not(unix))]
+        let kill_due = grace.kill_at;
+        if now >= kill_due {
             tracing::warn!(
                 pid = self.wrapper.id(),
                 "stdio backend did not exit within its stop budget; killing its group"
             );
             return false;
         }
-        #[cfg(unix)]
-        if now >= grace.term_at && !grace.term_sent {
-            grace.term_sent = self.send_group_term();
-            if grace.term_sent {
+        self.grace = Some(grace);
+        true
+    }
+
+    /// The SIGTERM step of a graceful ending, and the instant its kill is due.
+    /// A due SIGTERM goes out on the first step that sees it, late or not, while
+    /// its minimum phase still fits before `kill_at` plus the reserve's slack past
+    /// the reap deadline; the kill then waits that phase, so a reaper woken late
+    /// never kills a backend without the SIGTERM its plan gave it. Past that
+    /// slack the stop's deadline wins: no SIGTERM, the kill at once.
+    #[cfg(unix)]
+    fn step_term(&mut self, grace: &mut Grace, now: std::time::Instant) -> std::time::Instant {
+        use super::reaper::{KILL_RESERVE, MIN_PHASE};
+        const _: () =
+            assert!(KILL_RESERVE.as_nanos() >= REAP_DEADLINE.as_nanos() + MIN_PHASE.as_nanos());
+        let slack_end = grace.kill_at + KILL_RESERVE.saturating_sub(REAP_DEADLINE);
+        let planned = grace.term_at < grace.kill_at || grace.term_owed;
+        let due = grace.term_owed || now >= grace.term_at;
+        let fits = now < grace.kill_at || now + MIN_PHASE <= slack_end;
+        if planned && due && fits && grace.term_sent_at.is_none() && self.send_group_term() {
+            grace.term_sent_at = Some(now);
+            if now >= grace.kill_at {
+                tracing::warn!(
+                    pid = self.wrapper.id(),
+                    late_ms = now.saturating_duration_since(grace.kill_at).as_millis(),
+                    "stdio backend's SIGTERM came due while the reaper ran late; sent it before the kill"
+                );
+            } else {
                 tracing::warn!(
                     pid = self.wrapper.id(),
                     "stdio backend did not exit after its stdin closed; sent SIGTERM"
                 );
             }
         }
-        self.grace = Some(grace);
-        true
+        grace.term_sent_at.map_or(grace.kill_at, |sent| {
+            (sent + MIN_PHASE).max(grace.kill_at).min(slack_end)
+        })
     }
 
     /// End the tree and reap the leader, one non-blocking step at a time, for
