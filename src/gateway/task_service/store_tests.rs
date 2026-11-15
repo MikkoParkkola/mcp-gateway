@@ -27,6 +27,9 @@ mod admission;
 mod clock_rows;
 mod durability;
 mod fallback_room;
+// The restart floor adapter's save, outcome and contract.
+mod floor;
+mod floor_contract;
 mod gateway_writes;
 mod input_round;
 mod qualification;

@@ -74,6 +74,8 @@ pub(super) struct TestSeams {
     clock_after_resume: std::sync::Mutex<Option<DateTime<Utc>>>,
     /// Answer writes that have entered the store, before its ordering lock.
     arrived: std::sync::atomic::AtomicUsize,
+    /// Calls of `close`: the restart floor's re-save must never close.
+    pub(super) closes: std::sync::atomic::AtomicUsize,
     /// Reads of a frozen clock before 1970, each refused.
     refused_reads: std::sync::atomic::AtomicUsize,
     /// Reads of a frozen clock that returned a time.
@@ -319,6 +321,15 @@ impl TaskStore {
             .seams
             .arrived
             .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// How many times `close` was called on this store.
+    #[cfg(test)]
+    pub(crate) fn closes_for_test(&self) -> usize {
+        self.0
+            .seams
+            .closes
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Hold the ordering lock, as a writer would.

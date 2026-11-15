@@ -39,6 +39,8 @@ mod disk;
 mod error;
 #[path = "store_expiry.rs"]
 mod expiry;
+#[path = "store_floor.rs"]
+pub(crate) mod floor;
 #[path = "store_gate.rs"]
 pub(crate) mod gate;
 #[cfg(test)]
@@ -354,6 +356,11 @@ impl TaskStore {
     /// has finished, so a second process cannot open the directory while this
     /// one is still writing to it.
     pub(super) async fn close(self) -> Result<(), StoreError> {
+        #[cfg(test)]
+        self.0
+            .seams
+            .closes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let shared = Arc::clone(&self.0);
         tokio::task::spawn_blocking(move || shared.close_blocking())
             .await
