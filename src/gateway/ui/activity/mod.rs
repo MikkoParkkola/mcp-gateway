@@ -436,7 +436,7 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
     let counts = joiner.into_inner();
     Json(json!({
         // Which Access this page applied. Status's admin flag does not say so.
-        "access": access.word(),
+        "access": access.scope(),
         "rows": rows,
         // Log-wide, even when every row here is valid.
         "signing_anchor": {
