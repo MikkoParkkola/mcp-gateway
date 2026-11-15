@@ -139,7 +139,10 @@ impl Drop for Reservation {
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, State::Finished) {
             State::Finished => {}
-            State::Reserved => self.free(),
+            State::Reserved => {
+                mutant!("m8", self.board.cancel(1, RestartCancel::AuditRefused), ());
+                self.free();
+            }
             State::Accepted(id) => {
                 mutant!("m2", (), self.board.cancel(id, RestartCancel::AuditRefused));
                 self.free();

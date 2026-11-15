@@ -253,7 +253,9 @@ impl RestartBoard {
                 record, committed, ..
             } = &mut *board;
             match record.as_mut() {
-                Some(record) if mutant!("m4", true, record.id == id) => {
+                Some(record)
+                    if mutant!("m4", true, mutant!("m9", record.id <= id, record.id == id)) =>
+                {
                     change(record, committed);
                     None
                 }
