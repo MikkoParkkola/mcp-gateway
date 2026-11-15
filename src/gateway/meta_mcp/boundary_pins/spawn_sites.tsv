@@ -17,9 +17,9 @@ src/capability/watcher.rs	start_walk	spawn-blocking	1	no-refusal-inside	fingerpr
 src/commands/cap.rs	cap_pin	spawn-blocking	1	outside-calls	CLI cap pin command: pins a capability file under its directory lock
 src/config_reload/override_audit.rs	start	spawn	1	no-refusal-inside	override-audit worker that drains a queue into the audit log
 src/config_reload/replace.rs	create_entries	spawn-blocking	1	outside-calls	creates vault secret entries for a web UI settings save; errors return to the UI handler, not a tool call
-src/config_reload/replace.rs	settle	spawn-blocking	1	no-refusal-inside	discards or keeps a refused save's pending secret entries
 src/config_reload/replace.rs	spawn_locked	spawn	1	outside-calls	web UI settings save or history restore of gateway.yaml plus reload; refusals return to the UI handler at join, not a tool call
 src/config_reload/replace_audit.rs	recover_held	spawn-blocking	1	outside-calls	recovers a config write's journal for the web UI settings save; no tool call's answer waits on it
+src/config_reload/replace_entries.rs	settle	spawn-blocking	1	no-refusal-inside	discards or keeps a refused save's pending secret entries
 src/config_reload/replace_validate.rs	validate_template	spawn-blocking	1	outside-calls	loads a config template for the web UI settings save; the refusal returns to the UI handler at join, not a tool call
 src/config_reload/watch_chain.rs	spawn_rewatch_task	spawn	1	outside-calls	config include-chain rewatch loop on file events and a retry timer
 src/config_reload/watcher.rs	spawn_reload_task	spawn	1	outside-calls	config file watcher loop that debounces and triggers reloads
@@ -40,6 +40,8 @@ src/gateway/meta_mcp/first_fill.rs	wait_surfaced_first_fill	spawn	1	no-refusal-i
 src/gateway/meta_mcp/grant_audit.rs	write_owned	spawn	1	raised-at-join	owned append of grant-decision records; a failed append returns through the join and the caller turns it into AuditUnavailable under FailClosed
 src/gateway/meta_mcp/listing_warm.rs	warm_listing_views	spawn	1	no-refusal-inside	fills a caller's listing view during a tools/list warm-up; a listing is not a call, so no call's delivery runs inside
 src/gateway/outbound/audit.rs	submit	spawn	1	no-refusal-inside	audits a tenant_read rejection to the log; the frame is withheld either way
+src/gateway/restart_config_locks.rs	spawn_check	spawn-blocking	1	raised-at-join	the restart checkpoint's read-only config checks; their fault returns through the channel the awaiting checkpoint reads
+src/gateway/restart_config_locks.rs	spawn_lock	spawn-blocking	1	raised-at-join	the restart checkpoint's config-lock wait; the guard or Busy returns through the channel the awaiting checkpoint reads
 src/gateway/router/handlers/sse.rs	mcp_sse_handler	spawn	1	no-refusal-inside	auto-subscribes a new SSE session to configured backends' notifications
 src/gateway/server/background.rs	poll_export_source	spawn-blocking	1	no-refusal-inside	reads the on-disk transparency log tail for SIEM export
 src/gateway/server/background.rs	spawn_export_task	spawn	1	outside-calls	SIEM evidence-export timer loop

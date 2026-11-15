@@ -11,8 +11,9 @@ use super::super::super::fixtures::{collect_case, config};
 use super::super::super::{JournalV2, Phase};
 use super::super::DrainSession;
 use super::super::fixtures::{decided, reopen, staged, state};
-use super::{HandoverError, abandoned_path, hand_over};
+use super::{HandoverError, hand_over};
 use crate::config_persistence::journal;
+use crate::config_persistence::journal::v2::abandoned_path;
 
 /// A journal ready to hand over: one decided writer whose outcome is not yet delivered, the
 /// change accepted, and the journal on disk. Returns the live donor beside the session.
