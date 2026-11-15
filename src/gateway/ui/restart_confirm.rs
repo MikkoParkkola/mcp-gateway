@@ -1,21 +1,41 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The private restart confirmation registry (restart slice 7b; design
-//! mik-9447 r3). RED STUB: the shape the rows need, no behaviour.
+//! mik-9447 r3): a single-use, 120 s confirmation bound to the caller's
+//! per-session principal, the boot id, the invocation digest, the target
+//! file and the recent-write sample the admin was shown. Only the SHA-256 of a
+//! token is kept; the token itself is never stored, logged or printed.
 #![cfg_attr(
     not(test),
     expect(dead_code, reason = "the restart routes, slice 7c, call the registry")
 )]
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 use crate::gateway::recent_writes::{RecentWrites, WriteSample};
 use crate::restart::invocation::{FileId, InvocationDigest};
+
+/// A confirmation is good while less than this has passed since its mint.
+const LIFETIME: Duration = Duration::from_secs(120);
+/// At most this many confirmations are held, one per principal.
+const MAX_ENTRIES: usize = 64;
+const PREFIX: &str = "rc1.";
+/// `rc1.` and the unpadded base64url of 32 bytes.
+const TOKEN_LEN: usize = PREFIX.len() + 43;
+
+fn expired(minted: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(minted) >= LIFETIME
+}
+
+fn digest(token: &str) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(token.as_bytes()).into()
+}
 
 /// The instance's clock.
 pub(crate) type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
@@ -129,34 +149,99 @@ impl RestartConfirm {
         self.enabled
     }
 
-    pub(crate) fn sample(&self, _counter: &RecentWrites) -> Option<WriteSample> {
-        None
+    /// The write sample the route shows and binds, read once per request.
+    pub(crate) fn sample(&self, counter: &RecentWrites) -> Option<WriteSample> {
+        match &self.samples {
+            SampleSource::Counter => Some(counter.sample((self.clock)())),
+            SampleSource::Scripted(script) => script
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pop_front()
+                .flatten(),
+        }
     }
 
-    pub(crate) fn mint(&self, _live: Live) -> Option<String> {
-        let _ = &self.fill;
-        Some(format!("rc1.{}", URL_SAFE_NO_PAD.encode([0u8; 32])))
+    /// A confirmation binding `live`, or None: the registry is full of other
+    /// principals' live entries, or the random source failed. A principal's
+    /// new confirmation replaces its earlier one; a failed mint replaces nothing.
+    pub(crate) fn mint(&self, live: Live) -> Option<String> {
+        let now = (self.clock)();
+        let mut entries = self.entries();
+        entries.retain(|_, entry| !expired(entry.minted, now));
+        let held = entries
+            .iter()
+            .find(|(_, entry)| entry.live.principal == live.principal)
+            .map(|(key, _)| *key);
+        if held.is_none() && entries.len() >= MAX_ENTRIES {
+            return None;
+        }
+        let mut bytes = [0u8; 32];
+        (self.fill)(&mut bytes).ok()?;
+        let token = format!("{PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes));
+        if let Some(key) = held {
+            entries.remove(&key);
+        }
+        entries.insert(digest(&token), Entry { live, minted: now });
+        Some(token)
     }
 
-    pub(crate) fn consume(
-        &self,
-        _token: &str,
-        _presented: &Presented,
-    ) -> Result<Accepted, Refusal> {
-        let _ = (&self.clock, &self.entries);
-        Ok(Accepted { writes_since: 0 })
+    /// Judge `token` against the values a POST read. The entry is removed
+    /// before it is judged, so a token is used once whatever the outcome.
+    pub(crate) fn consume(&self, token: &str, presented: &Presented) -> Result<Accepted, Refusal> {
+        // A string no mint could have made is refused before it is hashed.
+        if token.len() != TOKEN_LEN || !token.starts_with(PREFIX) {
+            return Err(Refusal::Invalid);
+        }
+        let now = (self.clock)();
+        let entry = self
+            .entries()
+            .remove(&digest(token))
+            .ok_or(Refusal::Invalid)?;
+        if expired(entry.minted, now) {
+            return Err(Refusal::Expired);
+        }
+        let bound = &entry.live;
+        if presented.principal.as_deref() != Some(bound.principal.as_str()) {
+            return Err(Refusal::PrincipalChanged);
+        }
+        if presented.boot != bound.boot {
+            return Err(Refusal::BootChanged);
+        }
+        if presented.invocation != Some(bound.invocation) {
+            return Err(Refusal::InvocationChanged);
+        }
+        if !matches!(&presented.target, Some(Ok(id)) if *id == bound.target) {
+            return Err(Refusal::TargetChanged);
+        }
+        let fresh = presented.sample.ok_or(Refusal::SampleMissing)?;
+        let writes_since = fresh
+            .writes_total
+            .checked_sub(bound.sample.writes_total)
+            .ok_or(Refusal::SampleInvalid)?;
+        // The admin confirmed "nothing is writing"; refuse once that is false.
+        if bound.sample.count == 0 && writes_since > 0 {
+            return Err(Refusal::WritesSincePreview);
+        }
+        Ok(Accepted { writes_since })
+    }
+
+    fn entries(&self) -> std::sync::MutexGuard<'_, HashMap<[u8; 32], Entry>> {
+        self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     #[cfg(test)]
     pub(crate) fn entry_count(&self) -> usize {
-        0
+        self.entries().len()
     }
 
     #[cfg(test)]
-    pub(crate) fn has_key(&self, _key: &[u8; 32]) -> bool {
-        false
+    pub(crate) fn has_key(&self, key: &[u8; 32]) -> bool {
+        self.entries().contains_key(key)
     }
 
     #[cfg(test)]
-    pub(crate) fn plant(&self, _key: [u8; 32], _live: Live) {}
+    pub(crate) fn plant(&self, key: [u8; 32], live: Live) {
+        let minted = (self.clock)();
+        self.entries().insert(key, Entry { live, minted });
+    }
 }
