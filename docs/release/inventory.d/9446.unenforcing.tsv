@@ -1,0 +1,8 @@
+src/gateway/server/health_floor.rs	owner	1	Names the health history as this restart floor owner; decides nothing about access
+src/gateway/server/health_floor.rs	pause	1	Closes the health floor gate so periodic health saves and samples wait during a restart checkpoint; refuses no request and grants nothing
+src/gateway/server/health_floor.rs	checkpoint	1	Saves one coherent health history snapshot for a restart; its fault only cancels the restart attempt, never a request or a start
+src/gateway/server/health_floor.rs	resume	1	Reopens the health floor gate after a cancelled restart and replays the skipped save and sample; decides nothing about access
+src/gateway/server/health_floor.rs	release_for_stop	1	Reopens the health floor gate when a stop signal wins, so periodic saves run until the stop; decides nothing about access
+src/gateway/server/health_floor.rs	commit	1	Makes the health floor gate final at the restart commit edge; periodic saves and samples then skip; refuses no request
+src/gateway/server/health_floor.rs	settled	1	Reports whether the health checkpoint or replay work is still running; decides nothing about access
+src/gateway/server/health_wiring.rs	start_history	1	Restores the health history, saves it once and starts its periodic save behind the floor gate; reports health, never refuses a request or a start
