@@ -254,6 +254,11 @@ impl ChildTree {
     /// (Unix): the close signal, then the pre-reap signal (A5) repeated while
     /// the group settles, never after the reap.
     fn send_group_signal(&mut self) {
+        // Test record only: whether the leader was seen exiting before this
+        // signal, so an ESRCH from an already-ended group is told apart from
+        // one a wrong group would give.
+        #[cfg(all(test, unix))]
+        let exited_before = matches!(self.leader_state(), Leader::Zombie | Leader::Gone);
         let sent = self.wrapper.start_kill();
         #[cfg(all(test, unix))]
         let sent = signal_log::injected(self.pid, sent);
@@ -262,10 +267,8 @@ impl ChildTree {
         {
             self.group_signals_sent += 1;
             #[cfg(unix)]
-            if sent.is_ok()
-                && let Some(pid) = self.pid
-            {
-                signal_log::record(pid, signal_log::Sent::Kill);
+            if let Some(pid) = self.pid {
+                signal_log::record(pid, signal_log::kill_outcome(&sent, exited_before));
             }
         }
         let _ = sent;

@@ -83,6 +83,22 @@ pub(super) fn injected(pid: Option<Pid>, sent: std::io::Result<()>) -> std::io::
     }
 }
 
+/// What a kill's syscall result records: the kill; or, for ESRCH after the
+/// leader was seen exiting, the kill of a group already gone; otherwise a
+/// failed kill.
+pub(super) fn kill_outcome(sent: &std::io::Result<()>, exited_before: bool) -> Sent {
+    match sent {
+        Ok(()) => Sent::Kill,
+        Err(e)
+            if exited_before
+                && e.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) =>
+        {
+            Sent::KillGone
+        }
+        Err(_) => Sent::KillFailed,
+    }
+}
+
 /// `pid`'s entries in order; it is disarmed.
 fn take(pid: Pid) -> Vec<Sent> {
     log()
@@ -119,18 +135,39 @@ fn skip_threshold() -> std::time::Duration {
         .saturating_sub(super::super::reaper::MIN_PHASE)
 }
 
-/// The SIGTERM and kill entries alone, in order.
-fn signals(sent: &[Sent]) -> Vec<Sent> {
+/// Whether a kill that found its group already gone counts as the kill.
+#[derive(Clone, Copy)]
+enum Gone {
+    IsKill,
+    NotKill,
+}
+
+/// The SIGTERM and kill entries alone, in order; a kill of a group already
+/// gone reads as the kill under `Gone::IsKill`, and stays apart otherwise.
+fn signals(sent: &[Sent], gone: Gone) -> Vec<Sent> {
     sent.iter()
-        .copied()
-        .filter(|s| matches!(s, Sent::Term | Sent::Kill))
+        .filter_map(|s| match (s, gone) {
+            (Sent::Term | Sent::Kill, _) => Some(*s),
+            (Sent::KillGone, Gone::IsKill) => Some(Sent::Kill),
+            (Sent::KillGone, Gone::NotKill) => Some(Sent::KillGone),
+            _ => None,
+        })
         .collect()
 }
 
 /// One SIGTERM first, then one or more kills and no later SIGTERM.
-fn term_then_kill(sent: &[Sent]) -> bool {
-    matches!(signals(sent).split_first(), Some((Sent::Term, rest))
+fn term_then_kill(sent: &[Sent], gone: Gone) -> bool {
+    matches!(signals(sent, gone).split_first(), Some((Sent::Term, rest))
         if !rest.is_empty() && rest.iter().all(|s| *s == Sent::Kill))
+}
+
+/// A failed kill anywhere is refused first, by name.
+fn no_failed_kill(sent: &[Sent]) -> Result<(), String> {
+    if sent.contains(&Sent::KillFailed) {
+        Err(format!("a kill failed: {sent:?}"))
+    } else {
+        Ok(())
+    }
 }
 
 fn has_skip(sent: &[Sent]) -> bool {
@@ -142,8 +179,12 @@ fn has_skip(sent: &[Sent]) -> bool {
 /// late skips whose lateness exceeds the threshold, then the kill. Any other
 /// shape is refused with its reason.
 fn judge_term_then_kill(sent: &[Sent]) -> Result<(), String> {
+    no_failed_kill(sent)?;
     if sent.contains(&Sent::Term) {
-        return if term_then_kill(sent) && !has_skip(sent) && !sent.contains(&Sent::LeaderGone) {
+        return if term_then_kill(sent, Gone::IsKill)
+            && !has_skip(sent)
+            && !sent.contains(&Sent::LeaderGone)
+        {
             Ok(())
         } else {
             Err(format!("not one SIGTERM followed by the kill: {sent:?}"))
@@ -174,7 +215,7 @@ fn judge_term_then_kill(sent: &[Sent]) -> Result<(), String> {
             ));
         }
     }
-    if sent.contains(&Sent::Kill) {
+    if signals(sent, Gone::IsKill).contains(&Sent::Kill) {
         Ok(())
     } else {
         Err(format!("no kill after the skip: {sent:?}"))
@@ -183,7 +224,8 @@ fn judge_term_then_kill(sent: &[Sent]) -> Result<(), String> {
 
 /// The normal path only: one SIGTERM, then the kill, with nothing skipped.
 fn judge_strict(sent: &[Sent]) -> Result<(), String> {
-    if term_then_kill(sent) && !has_skip(sent) && !sent.contains(&Sent::LeaderGone) {
+    no_failed_kill(sent)?;
+    if term_then_kill(sent, Gone::NotKill) && !has_skip(sent) && !sent.contains(&Sent::LeaderGone) {
         Ok(())
     } else {
         Err(format!("not one SIGTERM followed by the kill: {sent:?}"))
@@ -193,12 +235,13 @@ fn judge_strict(sent: &[Sent]) -> Result<(), String> {
 /// The kill with no SIGTERM; a late skip is allowed (these plans leave no
 /// room for one), any other unsent reason is refused.
 fn judge_kill_without_term(sent: &[Sent]) -> Result<(), String> {
+    no_failed_kill(sent)?;
     if sent.contains(&Sent::LeaderGone) || sent.contains(&Sent::Unproven) {
         return Err(format!(
             "a SIGTERM was due but not sent for another reason: {sent:?}"
         ));
     }
-    let signals = signals(sent);
+    let signals = signals(sent, Gone::IsKill);
     if !signals.is_empty() && signals.iter().all(|s| *s == Sent::Kill) {
         Ok(())
     } else {
