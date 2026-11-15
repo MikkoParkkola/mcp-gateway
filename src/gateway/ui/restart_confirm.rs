@@ -10,7 +10,9 @@
     expect(dead_code, reason = "the restart routes, slice 7c, call the registry")
 )]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -47,6 +49,7 @@ pub(crate) enum SampleSource {
     /// The gateway's own write counter.
     Counter,
     /// A test's samples, handed out in order; an empty script is no sample.
+    #[cfg(test)]
     Scripted(Arc<Mutex<VecDeque<Option<WriteSample>>>>),
 }
 
@@ -260,24 +263,6 @@ impl RestartConfirm {
         }
     }
 
-    /// RED STUB: readiness as the rows need it, no behaviour yet.
-    pub(crate) fn readiness(&self, _audit_log: bool) -> Readiness {
-        let _ = (&self.invocation, self.platform);
-        Readiness::Unavailable(Reason::PLATFORM)
-    }
-
-    /// RED STUB: the confirmation a `?confirm=1` GET adds, no behaviour yet.
-    pub(crate) fn confirmation(
-        &self,
-        _readiness: Readiness,
-        _sample: Option<WriteSample>,
-        _client: Option<&crate::gateway::auth::AuthenticatedClient>,
-        _headers: &axum::http::HeaderMap,
-        _boot: u64,
-    ) -> Option<String> {
-        None
-    }
-
     pub(crate) fn enabled(&self) -> bool {
         self.enabled
     }
@@ -286,12 +271,78 @@ impl RestartConfirm {
     pub(crate) fn sample(&self, counter: &RecentWrites) -> Option<WriteSample> {
         match &self.samples {
             SampleSource::Counter => Some(counter.sample((self.clock)())),
+            #[cfg(test)]
             SampleSource::Scripted(script) => script
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .pop_front()
                 .flatten(),
         }
+    }
+
+    /// Restart readiness for one request, first match wins: the platform,
+    /// then restart off or no restart target, then no transparency log
+    /// (`audit_log` false). The invocation binding is read once, here.
+    pub(crate) fn readiness(&self, audit_log: bool) -> Readiness {
+        if self.platform == Platform::Windows {
+            return Readiness::Unavailable(Reason::WindowsManualRestart);
+        }
+        if !self.enabled {
+            return Readiness::Unavailable(Reason::RestartNotAvailable);
+        }
+        let (Some(invocation), Some(Ok(target))) = self.binding() else {
+            return Readiness::Unavailable(Reason::RestartNotAvailable);
+        };
+        if !audit_log {
+            return Readiness::Unavailable(Reason::AuditLogRequired);
+        }
+        Readiness::Ready { invocation, target }
+    }
+
+    /// The process's invocation digest and its target's identity now.
+    fn binding(&self) -> (Option<InvocationDigest>, Option<std::io::Result<FileId>>) {
+        match &self.invocation {
+            InvocationSource::Process => {
+                let capture = crate::restart::invocation::invocation();
+                (capture.digest(), capture.target_file_id())
+            }
+            #[cfg(test)]
+            InvocationSource::Scripted(script) => {
+                script
+                    .reads
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                (
+                    script.digest,
+                    script.target.map(|read| read.map_err(std::io::Error::from)),
+                )
+            }
+        }
+    }
+
+    /// The confirmation a `?confirm=1` GET in the full admin view adds: a
+    /// mint binding the caller's per-session principal, the boot id, the
+    /// invocation and target read for `readiness`, and the sample the GET
+    /// shows. None when restart is not ready, there is no principal or no
+    /// sample, or the mint refuses.
+    pub(crate) fn confirmation(
+        &self,
+        readiness: Readiness,
+        sample: Option<WriteSample>,
+        client: Option<&crate::gateway::auth::AuthenticatedClient>,
+        headers: &axum::http::HeaderMap,
+        boot: u64,
+    ) -> Option<String> {
+        let Readiness::Ready { invocation, target } = readiness else {
+            return None;
+        };
+        let principal = super::principal::cursor_principal(client, headers)?;
+        self.mint(Live {
+            principal,
+            boot,
+            invocation,
+            target,
+            sample: sample?,
+        })
     }
 
     /// A confirmation binding `live`, or None: the registry is full of other

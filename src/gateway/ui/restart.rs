@@ -66,11 +66,26 @@ async fn availability(
     Json(body).into_response()
 }
 
-/// True only for a query holding exactly one `confirm`, and that one
-/// `confirm=1`; any other query answers as a plain GET, never a 400.
+/// True only for a well-formed query holding exactly one `confirm`, and that
+/// one `confirm=1`. A malformed query (a pair with two `=`, an empty key, a `%`
+/// not followed by two hex digits) answers as a plain GET, never a 400.
 fn asks_to_confirm(query: Option<&str>) -> bool {
+    let Some(query) = query else {
+        return false;
+    };
+    let well_formed = |pair: &str| {
+        let mut parts = pair.split('=');
+        let key = parts.next().unwrap_or("");
+        let escapes_ok = pair.match_indices('%').all(|(at, _)| {
+            pair.get(at + 1..at + 3)
+                .is_some_and(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        });
+        !key.is_empty() && parts.nth(1).is_none() && escapes_ok
+    };
+    if !query.split('&').all(well_formed) {
+        return false;
+    }
     let mut confirms = query
-        .unwrap_or("")
         .split('&')
         .filter(|pair| pair.split('=').next() == Some("confirm"));
     confirms.next() == Some("confirm=1") && confirms.next().is_none()
