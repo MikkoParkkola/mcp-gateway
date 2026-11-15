@@ -529,6 +529,11 @@ async fn each_listed_call_is_answered_by_its_handler() {
 
     let (router, _files, _store) = files_router().await;
     for (method, path) in send_order() {
+        // The costs route exists only with cost-governance (src/gateway/ui/mod.rs);
+        // without it the classic page's costs panel is meant to find nothing.
+        if !cfg!(feature = "cost-governance") && (method, path) == ("GET", "/ui/api/costs") {
+            continue;
+        }
         let verb = Method::from_bytes(method.as_bytes()).unwrap();
         let uri = concrete(path);
         let owned = payload(method, path);
