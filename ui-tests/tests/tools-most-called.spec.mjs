@@ -303,3 +303,25 @@ test('M16: text still being composed (an input method) does not leave the panel'
   await compose('b', false);
   await expect(page).toHaveURL('/ui/tools/status?view=all');
 });
+
+test('M17: See all tools opens the catalogue without reloading the page', async ({ page }) => {
+  await toolsScreen(page, { tools: RANKED });
+  await page.goto('/ui/tools/status');
+  await expect(mostCalled(page)).toBeVisible();
+  // A full reload would lose this, and with it a key held only in memory.
+  await page.evaluate(() => { window.__sameDocument = true; });
+  await mostCalled(page).getByRole('link', { name: 'See all 17 tools', exact: true }).click();
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
+  await expect(catalogueRows(page)).toHaveCount(17);
+  expect(await page.evaluate(() => window.__sameDocument)).toBe(true);
+});
+
+test('M18: Back to all tools opens the catalogue without reloading the page', async ({ page }) => {
+  await toolsScreen(page, { tools: RANKED });
+  await page.goto('/ui/tools/alpha%3Abirch/status');
+  await page.evaluate(() => { window.__sameDocument = true; });
+  await page.getByRole('link', { name: 'Back to all tools', exact: true }).click();
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
+  await expect(catalogueRows(page)).toHaveCount(17);
+  expect(await page.evaluate(() => window.__sameDocument)).toBe(true);
+});
