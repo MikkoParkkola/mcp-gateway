@@ -1,0 +1,15 @@
+head_sha	a9609bfb478466762e52cd664786be41c1225052
+#mutant m1
+mcp_gateway	gateway::restart_slot::slot_contract::the_real_slot_passes_the_slot_contract	src/gateway/restart_slot_tests.rs:64
+#mutant m2
+mcp_gateway	gateway::restart_slot::slot_contract::the_real_slot_passes_the_slot_contract	src/gateway/restart_slot_tests.rs:168
+#mutant m3
+mcp_gateway	gateway::restart_slot::slot_contract::the_real_slot_passes_the_slot_contract	src/gateway/restart_slot_tests.rs:155
+#mutant m4
+mcp_gateway	gateway::restart_status::tests::a_call_for_an_earlier_attempt_never_moves_the_current_one	src/gateway/restart_status_tests.rs:512
+#mutant m5
+mcp_gateway	gateway::restart_slot::slot_contract::the_real_slot_passes_the_slot_contract	src/gateway/restart_slot_tests.rs:134
+#mutant m6
+mcp_gateway	gateway::restart_slot::slot_contract::each_reservation_frees_the_slot_exactly_once	src/gateway/restart_slot_tests.rs:190
+#mutant m7
+mcp_gateway	gateway::restart_slot::slot_contract::the_real_slot_passes_the_slot_contract	src/gateway/restart_slot_tests.rs:124
