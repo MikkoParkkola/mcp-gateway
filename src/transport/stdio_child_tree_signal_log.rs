@@ -101,11 +101,18 @@ pub(super) fn answer(mode: Esrch, pid: Option<Pid>) -> std::io::Result<()> {
     if let (Esrch::AfterKillingLeader, Some(pid)) = (mode, pid) {
         use rustix::process::{WaitId, WaitIdOptions, waitid};
         // A setup failure is the injection's own, never a classified kill.
-        rustix::process::kill_process(pid, rustix::process::Signal::KILL)
-            .expect("the injected answer kills the leader");
+        match rustix::process::kill_process(pid, rustix::process::Signal::KILL) {
+            // macOS answers ESRCH for a leader already a zombie, as the
+            // sweep's SIGKILL leaves it just before the group kill.
+            Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+            Err(e) => panic!("the injected answer kills the leader: {e}"),
+        }
         let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
         let by = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while !matches!(waitid(WaitId::Pid(pid), options), Ok(Some(_))) {
+        while waitid(WaitId::Pid(pid), options)
+            .expect("the injected answer waits on the leader")
+            .is_none()
+        {
             assert!(
                 std::time::Instant::now() < by,
                 "the injected answer's leader was not a zombie within 30 s"
@@ -172,37 +179,23 @@ fn skip_threshold() -> std::time::Duration {
         .saturating_sub(super::super::reaper::MIN_PHASE)
 }
 
-/// Whether a kill that found its group already gone counts as the kill.
-#[derive(Clone, Copy)]
-enum Gone {
-    /// Always: the live and skip rules, whose child may exit before the kill.
-    IsKill,
-    /// Only after a kill that landed: the strict rule's child outlives SIGTERM,
-    /// so its first kill must find it, and only the settle repeats that follow
-    /// may find the group gone.
-    AfterKill,
-}
-
 /// The SIGTERM and kill entries alone, in order; a kill of a group already
-/// gone reads as the kill as `gone` allows, and stays apart otherwise.
-fn signals(sent: &[Sent], gone: Gone) -> Vec<Sent> {
-    let mut out = Vec::new();
-    for s in sent {
-        let landed = out.contains(&Sent::Kill);
-        match (s, gone) {
-            (Sent::Term | Sent::Kill, _) => out.push(*s),
-            (Sent::KillGone, Gone::IsKill) => out.push(Sent::Kill),
-            (Sent::KillGone, Gone::AfterKill) if landed => out.push(Sent::Kill),
-            (Sent::KillGone, Gone::AfterKill) => out.push(Sent::KillGone),
-            _ => {}
-        }
-    }
-    out
+/// gone reads as the kill. No rule can ask for a kill that landed: the sweep
+/// SIGKILLs the leader and its tree just before the group kill, so on macOS
+/// even a SIGTERM-resisting tree's first kill can find the group gone.
+fn signals(sent: &[Sent]) -> Vec<Sent> {
+    sent.iter()
+        .filter_map(|s| match s {
+            Sent::Term | Sent::Kill => Some(*s),
+            Sent::KillGone => Some(Sent::Kill),
+            _ => None,
+        })
+        .collect()
 }
 
 /// One SIGTERM first, then one or more kills and no later SIGTERM.
-fn term_then_kill(sent: &[Sent], gone: Gone) -> bool {
-    matches!(signals(sent, gone).split_first(), Some((Sent::Term, rest))
+fn term_then_kill(sent: &[Sent]) -> bool {
+    matches!(signals(sent).split_first(), Some((Sent::Term, rest))
         if !rest.is_empty() && rest.iter().all(|s| *s == Sent::Kill))
 }
 
@@ -226,10 +219,7 @@ fn has_skip(sent: &[Sent]) -> bool {
 fn judge_term_then_kill(sent: &[Sent]) -> Result<(), String> {
     no_failed_kill(sent)?;
     if sent.contains(&Sent::Term) {
-        return if term_then_kill(sent, Gone::IsKill)
-            && !has_skip(sent)
-            && !sent.contains(&Sent::LeaderGone)
-        {
+        return if term_then_kill(sent) && !has_skip(sent) && !sent.contains(&Sent::LeaderGone) {
             Ok(())
         } else {
             Err(format!("not one SIGTERM followed by the kill: {sent:?}"))
@@ -260,7 +250,7 @@ fn judge_term_then_kill(sent: &[Sent]) -> Result<(), String> {
             ));
         }
     }
-    if signals(sent, Gone::IsKill).contains(&Sent::Kill) {
+    if signals(sent).contains(&Sent::Kill) {
         Ok(())
     } else {
         Err(format!("no kill after the skip: {sent:?}"))
@@ -270,8 +260,7 @@ fn judge_term_then_kill(sent: &[Sent]) -> Result<(), String> {
 /// The normal path only: one SIGTERM, then the kill, with nothing skipped.
 fn judge_strict(sent: &[Sent]) -> Result<(), String> {
     no_failed_kill(sent)?;
-    if term_then_kill(sent, Gone::AfterKill) && !has_skip(sent) && !sent.contains(&Sent::LeaderGone)
-    {
+    if term_then_kill(sent) && !has_skip(sent) && !sent.contains(&Sent::LeaderGone) {
         Ok(())
     } else {
         Err(format!("not one SIGTERM followed by the kill: {sent:?}"))
@@ -287,7 +276,7 @@ fn judge_kill_without_term(sent: &[Sent]) -> Result<(), String> {
             "a SIGTERM was due but not sent for another reason: {sent:?}"
         ));
     }
-    let signals = signals(sent, Gone::IsKill);
+    let signals = signals(sent);
     if !signals.is_empty() && signals.iter().all(|s| *s == Sent::Kill) {
         Ok(())
     } else {
@@ -317,15 +306,28 @@ pub(crate) async fn assert_kill_without_term(pid: Pid, what: &str) {
     }
 }
 
-/// A kill that found the group gone after SIGTERM is recorded as such, and the
-/// live rule takes it as the kill.
-pub(crate) async fn assert_gone_kill_counts(pid: Pid, what: &str) {
+/// The rule a gone-kill row's record must also pass.
+#[derive(Clone, Copy)]
+pub(crate) enum Rule {
+    /// [`judge_term_then_kill`].
+    Live,
+    /// [`judge_strict`].
+    Strict,
+}
+
+/// A kill that found the group gone is recorded as such, and `rule` takes it
+/// as the kill.
+pub(crate) async fn assert_gone_kill_counts(pid: Pid, what: &str, rule: Rule) {
     let sent = after_the_kill(pid).await;
     assert!(
         sent.contains(&Sent::KillGone),
         "{what}: no kill of a group already gone recorded: {sent:?}"
     );
-    if let Err(why) = judge_term_then_kill(&sent) {
+    let judged = match rule {
+        Rule::Live => judge_term_then_kill(&sent),
+        Rule::Strict => judge_strict(&sent),
+    };
+    if let Err(why) = judged {
         panic!("{what}: {why}");
     }
 }
