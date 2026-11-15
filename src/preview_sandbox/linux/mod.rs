@@ -306,11 +306,10 @@ fn npm_fetch(
         .cloned()
         .collect();
     for (what, file) in [("npm", &npm), ("node", &node_dir.join("node"))] {
-        let real = fs::canonicalize(file).unwrap_or_else(|_| file.clone());
-        if !bound.iter().any(|tree| real.starts_with(tree)) {
+        if !placed(file, plan) {
             return Err(Refusal::Step(format!(
                 "placing {what} ({} is outside the trees bound into the root)",
-                real.display()
+                file.display()
             )));
         }
     }
@@ -449,6 +448,15 @@ fn build_plan(
         target: argv,
         fetch: None,
     })
+}
+
+/// Whether `plan`'s root shows `file`, its links followed first.
+fn placed(file: &Path, plan: &Plan) -> bool {
+    let real = fs::canonicalize(file).unwrap_or_else(|_| file.to_owned());
+    plan.read_only
+        .iter()
+        .chain(&plan.bound_back)
+        .any(|tree| real.starts_with(tree))
 }
 
 /// Whether the new root shows `p`: a hidden path never, a bind-back always,

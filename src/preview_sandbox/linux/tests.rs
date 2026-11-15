@@ -390,3 +390,21 @@ fn dispatch_ignores_ordinary_commands() {
     let args: Vec<OsString> = ["mcp-gateway", "serve", SANDBOX].map(Into::into).into();
     assert!(dispatch(&args).is_none());
 }
+
+/// Kills "a masked npm or node counts as placed": `/usr` is bound read-only
+/// but `/usr/local` is masked, so a node there (an `n` or tarball install)
+/// is not in the root until the plan binds it back; a hidden path never is,
+/// even under a bind-back.
+#[test]
+fn a_file_under_a_mask_is_not_placed() {
+    let mut plan = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let absent = Path::new("/usr/local/bin/preview-placed-row-node");
+    assert!(placed(Path::new("/usr/bin/env"), &plan), "a system file");
+    assert!(!placed(absent, &plan), "a file under the /usr/local mask");
+    plan.bound_back.push("/usr/local/bin".to_owned());
+    assert!(placed(absent, &plan), "a file bound back under the mask");
+    let hidden = PathBuf::from(plan.hidden.first().expect("the gateway's paths are hidden"));
+    let parent = hidden.parent().expect("a hidden path has a parent");
+    plan.bound_back.push(parent.display().to_string());
+    assert!(!placed(&hidden.join("node"), &plan), "a hidden path");
+}
