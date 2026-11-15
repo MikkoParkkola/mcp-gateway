@@ -718,7 +718,12 @@ pub(crate) mod signal_log {
         log().insert(pid.as_raw_nonzero().get(), Vec::new());
     }
 
-    pub(super) fn record(_pid: Pid, _sent: Sent) {}
+    /// Append `sent` for `pid` when a row armed it; otherwise nothing.
+    pub(super) fn record(pid: Pid, sent: Sent) {
+        if let Some(entries) = log().get_mut(&pid.as_raw_nonzero().get()) {
+            entries.push(sent);
+        }
+    }
 
     /// `pid`'s entries in order; it is disarmed.
     fn take(pid: Pid) -> Vec<Sent> {
