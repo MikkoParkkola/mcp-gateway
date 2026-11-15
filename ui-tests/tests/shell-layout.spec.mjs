@@ -132,6 +132,18 @@ test('L2 data that arrives while the loading state holds its minimum stays hidde
   expect(await shellShifts(page, { after: shownAt, inside: true }), 'no shift once the state showed').toEqual([]);
 });
 
+test('L2c focus a screen gives what it drew under the held state is there when the data shows', async ({ page }) => {
+  const probe = held();
+  await page.route(PROBE, async (r) => { await probe.gate; await r.fulfill({ json: { value: 'focus' } }); });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await expect(loading(page)).toBeVisible();
+  probe.release();
+  await expect(loading(page)).toHaveCount(0);
+  await expect(page.locator('#probe-link')).toBeVisible();
+  await expect(page.locator('#probe-link')).toBeFocused();
+});
+
 test('L2b the copy an error banner shows is the page as it was seen, not a hidden one', async ({ page }) => {
   const probe = held();
   let fail = false;
