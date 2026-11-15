@@ -1,0 +1,8 @@
+src/gateway/task_service/store_floor.rs	pause	1	critical	d	TaskFloor::pause	Closes the task store's gate for a new restart attempt, with its deadline and backstop; refuses (Unavailable) unless the gate is open
+src/gateway/task_service/store_floor.rs	checkpoint	1	critical	d	TaskFloor::checkpoint	Certifies the task store for a restart attempt only after admitted work settles and every record is re-saved; otherwise answers the floor fault that cancels the restart
+src/gateway/task_service/store_floor.rs	checkpoint_blocking	1	critical	d	Shared::checkpoint_blocking	Re-saves every loaded task record under the ordering lock without closing the store; refuses a store that is not ready and stops once its attempt is superseded
+src/gateway/task_service/store_floor.rs	resume	1	critical	d	TaskFloor::resume	Cancel recovery: reopens the task store's gate (parked work first) and supersedes a running re-save
+src/gateway/task_service/store_floor.rs	release_for_stop	1	critical	d	TaskFloor::release_for_stop	A stop signal won: releases the task store's gate so parked work completes, and supersedes a running re-save
+src/gateway/task_service/store_floor.rs	commit	1	critical	d	TaskFloor::commit	The commit edge: new external task-store writes are refused from here; parked and internal work proceed
+src/gateway/task_service/store_floor.rs	settled	1	critical	d	TaskFloor::settled	Decides whether a new restart attempt may start: false while a resumed cohort drains or an earlier re-save still runs
+src/gateway/task_service/store_floor.rs	new	1	standard	borderline	TaskFloor::new	Builds the adapter with no attempt and the stop budget that sets every attempt's backstop; a wrong budget moves when parked internal work proceeds
