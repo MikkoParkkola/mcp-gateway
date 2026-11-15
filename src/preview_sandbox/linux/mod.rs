@@ -440,27 +440,30 @@ fn build_plan(
 /// Make npm and node shown inside the root and return the path npm is
 /// executed by there; refuses by name when either is not shown.
 ///
-/// Under the masked `/usr/local` only node's real file and npm's package
-/// (`.../node_modules/npm`, which holds npm's own modules) are bound back,
-/// never the trees around them: an npx preview's run phase executes
-/// downloaded code, unlike a host-installed program, which gets its
-/// directory and sibling `lib`. A runtime tree (an NVM version) is bound
-/// whole, as for a program. Anything else is left unbound and refuses.
-/// npm's builtin `npmrc` is covered by an empty file either way.
-fn place_npm(plan: &mut Plan, _npx: &Path, npm: &Path, node: &Path) -> Result<PathBuf, Refusal> {
+/// In every layout the root shows the fetch only node's real file and npm's
+/// package (`.../node_modules/npm`, which holds npm's own modules), never
+/// the trees around them: an npx preview's run phase executes downloaded
+/// code, and a whole tree shows every globally installed package and the
+/// tree's own config. What was bound for npx as the program goes first, as
+/// the fetch never runs npx. Under the masked `/usr/local` the two are bound
+/// back; elsewhere they are bound read-only; a system root already shows
+/// them; a masked secret path or a hidden one refuses. npm's builtin `npmrc`
+/// is covered by an empty file either way.
+fn place_npm(plan: &mut Plan, npx: &Path, npm: &Path, node: &Path) -> Result<PathBuf, Refusal> {
     let real = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
-    let (npm_real, node_real) = (real(npm), real(node));
+    let (npx_real, npm_real, node_real) = (real(npx), real(npm), real(node));
     if node_real.is_dir() {
         return Err(Refusal::Step(format!(
             "placing node ({} is a directory)",
             node.display()
         )));
     }
-    // The fetch never runs npx, so the program bind made for it (all of
-    // `/usr/local/bin` and `/usr/local/lib` for a regular npx file there)
-    // goes; only what follows is bound back under `/usr/local`.
-    plan.bound_back
-        .retain(|b| !Path::new(b).starts_with("/usr/local"));
+    // npx's program bind: bind-backs under /usr/local, its runtime tree, or
+    // its lone real file.
+    plan.bound_back.clear();
+    let npx_tree = runtime_tree(&npx_real);
+    plan.read_only
+        .retain(|r| Path::new(r) != npx_real && npx_tree.as_deref() != Some(Path::new(r)));
     // npm's cli is `<package>/bin/npm-cli.js`.
     let package = npm_real
         .parent()
@@ -473,17 +476,13 @@ fn place_npm(plan: &mut Plan, _npx: &Path, npm: &Path, node: &Path) -> Result<Pa
     ] {
         // What must be shown: node's file, npm's whole package (its cli
         // can be shown while npm's own modules are not).
-        if placed(bind.as_deref().unwrap_or(file), plan) {
+        let Some(bind) = bind.filter(|b| !placed(b, plan)) else {
             continue;
-        }
+        };
         match program_bind(file, &plan.read_only) {
-            ProgramBind::UsrLocal(_) => {
-                if let Some(bind) = bind {
-                    plan.bound_back.push(utf8(&bind)?);
-                }
-            }
-            ProgramBind::Runtime(prefix) => plan.read_only.push(utf8(&prefix)?),
-            ProgramBind::System | ProgramBind::File(_) | ProgramBind::Refused => {}
+            ProgramBind::UsrLocal(_) => plan.bound_back.push(utf8(&bind)?),
+            ProgramBind::Runtime(_) | ProgramBind::File(_) => plan.read_only.push(utf8(&bind)?),
+            ProgramBind::System | ProgramBind::Refused => {}
         }
     }
     let npm_needs = package.as_deref().unwrap_or(&npm_real);
@@ -501,8 +500,8 @@ fn place_npm(plan: &mut Plan, _npx: &Path, npm: &Path, node: &Path) -> Result<Pa
     if let Some(package) = &package {
         plan.masked.push(utf8(&package.join("npmrc"))?);
     }
-    // The alias npx sat beside (`/usr/local/bin/npm`) may be hidden now;
-    // each literal step it takes must be shown, as for the program.
+    // The alias npx sat beside (`<bin>/npm`) may be hidden now; each literal
+    // step it takes must be shown, as for the program.
     let shown = |p: &Path| {
         shown_inside(
             p,
