@@ -105,8 +105,10 @@ impl HostBundle {
     }
 
     /// Write the validated bytes, never the source again, as `ca.pem` in
-    /// `dir` (the preview's private directory): created exclusively, mode
-    /// 0444 so the dropped fetch child can read it through its bind.
+    /// `dir` (the preview's private directory): created exclusively with mode
+    /// 0444 requested. The umask may clear the group and other bits; the
+    /// dropped fetch child still reads it as its owner, since it keeps the
+    /// namespace's uid 0, mapped to the gateway's uid.
     pub(super) fn snapshot(&self, dir: &Path) -> io::Result<PathBuf> {
         use std::io::Write as _;
         use std::os::unix::fs::OpenOptionsExt as _;
