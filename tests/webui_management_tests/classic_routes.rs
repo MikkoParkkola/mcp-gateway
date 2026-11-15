@@ -49,7 +49,7 @@ async fn exchange(
     uri: &str,
     body: Option<(&str, &str)>,
 ) -> Answer {
-    let mut builder = Request::builder()
+    let builder = Request::builder()
         .method(method)
         .uri(uri)
         .header("authorization", format!("Bearer {ADMIN_TOKEN}"));
@@ -97,12 +97,12 @@ fn capability_file() -> String {
 /// the shell document is HTML, so YAML is still the handler. A 404 or a 405
 /// counts only when its body is JSON. An empty 404, an empty 405 and the
 /// shell's HTML do not.
-fn handler_answered(method: Method, path: &str, answer: &Answer) -> bool {
+fn handler_answered(method: &Method, path: &str, answer: &Answer) -> bool {
     // A route that answers but fails is not a route that works.
     if answer.status.is_server_error() {
         return false;
     }
-    if method == Method::GET && path == capability_file() {
+    if *method == Method::GET && path == capability_file() {
         return media(&answer.content_type) == "text/yaml" && !answer.body.is_empty();
     }
     let json = media(&answer.content_type) == "application/json";
@@ -252,7 +252,7 @@ fn pair_from(inner: &str, lookup: &str) -> Option<(String, String)> {
     }
     let method = args
         .get(1)
-        .map(str::trim)
+        .map(|arg| arg.trim())
         .and_then(method_in)
         .unwrap_or_else(|| "GET".to_string());
     Some((method, path))
@@ -535,7 +535,7 @@ async fn each_listed_call_is_answered_by_its_handler() {
         let body = owned.as_ref().map(|(content_type, text)| (*content_type, text.as_str()));
         let answer = exchange(&router, verb.clone(), &uri, body).await;
         assert!(
-            handler_answered(verb, &uri, &answer),
+            handler_answered(&verb, &uri, &answer),
             "{method} {path} did not answer from its handler: {} {} {}",
             answer.status,
             answer.content_type,
@@ -557,7 +557,7 @@ async fn the_answer_check_rejects_an_unknown_get_and_a_wrong_method() {
     ] {
         let answer = exchange(&router, method.clone(), path, None).await;
         assert!(
-            !handler_answered(method, path, &answer),
+            !handler_answered(&method, path, &answer),
             "{method} {path} was accepted as a handler: {} {}",
             answer.status, answer.content_type,
         );
@@ -568,5 +568,5 @@ async fn the_answer_check_rejects_an_unknown_get_and_a_wrong_method() {
         content_type: "application/json".to_owned(),
         body: b"{}".to_vec(),
     };
-    assert!(!handler_answered(Method::GET, "/ui/api/status", &failed));
+    assert!(!handler_answered(&Method::GET, "/ui/api/status", &failed));
 }
