@@ -345,6 +345,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "inside the sandbox's own mount namespace: empty mountpoint files and /proc/self/mountinfo; no secret",
     ),
     (
+        "src/preview_sandbox/linux/probe.rs",
+        "the npm fetch's probe: whether npm, node and ip exist and where their real files are, and npm --version's stdout capped at 256 bytes; no secret",
+    ),
+    (
         "src/preview_sandbox/mod.rs",
         "the sandboxed child's stderr pipe, capped at 64 KiB, to classify a refusal; not a file",
     ),

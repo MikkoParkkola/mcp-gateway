@@ -65,7 +65,7 @@ pub(super) fn check_npm(npm: &Path, node_dir: &Path) -> Result<(), Refusal> {
         std::thread::sleep(Duration::from_millis(20));
     }
     let mut out = String::new();
-    if let Some(mut stdout) = child.stdout.take() {
+    if let Some(stdout) = child.stdout.take() {
         let _ = stdout.take(256).read_to_string(&mut out);
     }
     let version = out.trim();
