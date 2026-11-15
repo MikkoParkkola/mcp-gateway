@@ -40,6 +40,12 @@ if [[ -z "$range" ]]; then
     range="origin/main..HEAD"
   fi
 fi
+# A single revision is not a range: rev-list walks its whole history back to the root. A range with an end
+# that does not resolve lists no commits, which read as OK below. Both judge the wrong scope; both stop here.
+[[ "$range" == *..* ]] ||
+  { printf 'commit message hygiene: %s is not a range; pass <base>..HEAD, e.g. %s..HEAD\n' "$range" "$range" >&2; exit 2; }
+git rev-list -n 1 "$range" >/dev/null 2>&1 ||
+  { printf 'commit message hygiene: %s does not resolve; check both ends of the range\n' "$range" >&2; exit 2; }
 
 # Each entry is <pattern>::<reason>, split on the first "::" so an alternation
 # inside the pattern stays intact. Patterns are extended regular expressions

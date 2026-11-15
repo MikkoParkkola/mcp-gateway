@@ -393,6 +393,28 @@ pr_empty_body_title_case() {
 pr_empty_body_title_case with_empty_body ''
 pr_empty_body_title_case with_blank_body $'  \n\t\n'
 
+# A single revision walks the whole history, and a range that does not resolve lists no commits and read
+# as OK: each a verdict on the wrong scope. Both are refused with exit 2 before any commit is judged.
+range_refused_case() {
+  local name="$1" range="$2" expected="$3"
+  local repo="$tmp_root/$name" status=0
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email "test@example.com"
+  git -C "$repo" config user.name "Commit Hygiene Test"
+  printf 'base\n' >"$repo/file.txt"
+  git -C "$repo" add file.txt
+  git -C "$repo" commit -q -m "chore: seed the fixture"
+  (cd "$repo" && bash "$checker" "$range" >"$repo.out" 2>&1) || status=$?
+  if [[ "$status" -ne 2 ]] || ! grep -F -q -- "$expected" "$repo.out"; then
+    printf 'FAIL %s: expected exit 2 with "%s", got exit %d: %s\n' "$name" "$expected" "$status" "$(cat "$repo.out")" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+range_refused_case range_single_ref HEAD "HEAD is not a range; pass <base>..HEAD"
+range_refused_case range_unresolved 'no-such-ref..HEAD' "no-such-ref..HEAD does not resolve"
+
 
 if (( failures > 0 )); then
   printf 'Commit message hygiene fixtures failed: %d case(s).\n' "$failures" >&2
