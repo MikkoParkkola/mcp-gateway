@@ -139,6 +139,13 @@ test('L2c focus a screen gives what it drew under the held state is there when t
   await page.goto('/ui/policies/status');
   await expect(loading(page)).toBeVisible();
   probe.release();
+  // The premise: the data was drawn and hidden under the held state, so the restore is what is tested.
+  await page.waitForFunction(() => document.getElementById('probe-link'));
+  const during = await page.evaluate(() => ({
+    state: Boolean(document.querySelector('#content [data-state="loading"]')),
+    linkVisible: document.getElementById('probe-link').checkVisibility(),
+  }));
+  expect(during, 'the premise: drawn under the held state and hidden').toEqual({ state: true, linkVisible: false });
   await expect(loading(page)).toHaveCount(0);
   await expect(page.locator('#probe-link')).toBeVisible();
   await expect(page.locator('#probe-link')).toBeFocused();

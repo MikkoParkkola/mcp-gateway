@@ -1435,7 +1435,8 @@ function watchLoading(content, body, label, current) {
       if (hide) body.hidden = true;
       const finish = () => {
         node?.remove();
-        if (hide) {
+        // A superseded attempt's body stays hidden: its successor owns the page and the focus.
+        if (hide && current()) {
           body.hidden = false;
           if (focused?.isConnected && (document.activeElement === document.body || !document.activeElement)) {
             focused.focus({ preventScroll: true });
