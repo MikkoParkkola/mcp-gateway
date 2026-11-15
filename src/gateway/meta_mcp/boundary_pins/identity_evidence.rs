@@ -11,6 +11,12 @@ use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 
+/// The three identity leaf modules.
+const LEAVES: [&str; 3] = [
+    "src/identity_grants/subject.rs",
+    "src/key_server/oidc/verified.rs",
+    "src/mtls/identity/cert.rs",
+];
 /// The compile-time pairs: each a `compile_fail` block and its one-line twin.
 const EVIDENCE: &str = "src/identity_evidence.rs";
 
@@ -321,6 +327,30 @@ fn each_compile_fail_has_a_one_line_twin() {
     }
 }
 
+/// The names of the test fns in `text` (`#[test]` or an attribute ending in
+/// `::test`, such as `#[tokio::test]`), at any depth.
+fn test_fns(text: &str) -> Vec<String> {
+    struct Tests(Vec<String>);
+    impl<'ast> syn::visit::Visit<'ast> for Tests {
+        fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+            let is_test = item.attrs.iter().any(|attr| {
+                attr.path()
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "test")
+            });
+            if is_test {
+                self.0.push(item.sig.ident.to_string());
+            }
+            syn::visit::visit_item_fn(self, item);
+        }
+    }
+    let file = syn::parse_file(text).expect("the file parses");
+    let mut tests = Tests(Vec::new());
+    syn::visit::Visit::visit_file(&mut tests, &file);
+    tests.0
+}
+
 /// Every proof the table names exists: each `doc:` id is a pair in the
 /// evidence module, each `row:` names a fn in its file, and every pair in the
 /// module is named by some case.
@@ -340,8 +370,8 @@ fn every_proof_the_table_names_exists() {
             } else if let Some(row) = proof.strip_prefix("row:") {
                 let (file, name) = row.split_once('#').expect("row:<file>#<fn>");
                 assert!(
-                    source(file).contains(&format!("fn {name}(")),
-                    "{case}: {file} has no fn {name}"
+                    test_fns(&source(file)).iter().any(|test| test == name),
+                    "{case}: {file} has no test fn {name}"
                 );
             } else {
                 panic!("{case}: unknown proof {proof}");
@@ -513,29 +543,78 @@ fn a_journal_entry_carries_no_identity() {
     let _ = fields_are_not_identities;
 }
 
-/// The three identity leaf modules declare no child module
+/// Every `mod` item in `text`, at any depth (inside an inline module or a fn
+/// body too), whatever its visibility: each would see its ancestors' private
+/// fields.
+fn child_modules(text: &str) -> Vec<String> {
+    struct Mods(Vec<String>);
+    impl<'ast> syn::visit::Visit<'ast> for Mods {
+        fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+            self.0.push(item.ident.to_string());
+            syn::visit::visit_item_mod(self, item);
+        }
+    }
+    let file = syn::parse_file(text).expect("the text parses");
+    let mut mods = Mods(Vec::new());
+    syn::visit::Visit::visit_file(&mut mods, &file);
+    mods.0
+}
+
+/// The child scan sees every declaration form a production child could take.
+#[test]
+fn the_child_scan_sees_every_module_form() {
+    let forms = "mod a; pub mod b; pub(crate) mod c; pub(self) mod d; pub(super) mod e; \
+                 pub(in crate::x) mod f; mod g {} fn h() { mod i {} }";
+    assert_eq!(
+        child_modules(forms),
+        ["a", "b", "c", "d", "e", "f", "g", "i"]
+    );
+}
+
+/// EV.3: the three identity leaf modules declare no child module
 /// outside test code. A child would see the private fields, so a literal or a
 /// field write there would compile.
 #[test]
 fn identity_leaf_modules_declare_no_production_children() {
-    for leaf in [
-        "src/identity_grants/subject.rs",
-        "src/key_server/oidc/verified.rs",
-        "src/mtls/identity/cert.rs",
-    ] {
+    assert_eq!(
+        child_modules(&source("src/key_server/oidc/verified.rs")),
+        ["tests"],
+        "premise: the raw text shows verified.rs's test child, so blanking it is what passes"
+    );
+    for leaf in LEAVES {
         let production = crate::test_source_text::production_text(&source(leaf));
-        let children: Vec<&str> = production
-            .lines()
-            .map(str::trim_start)
-            .filter(|line| {
-                let line = line.strip_prefix("pub ").unwrap_or(line);
-                let line = line.strip_prefix("pub(crate) ").unwrap_or(line);
-                line.starts_with("mod ")
-            })
-            .collect();
+        let children = child_modules(&production);
         assert!(
             children.is_empty(),
             "{leaf} declares a production child: {children:?}"
         );
+    }
+}
+
+/// The identity types' fields stay private to their leaf module. The literal
+/// pairs run as an outside crate, so they cannot show that code in this crate
+/// is refused too; private fields show it for every module but the leaf's own.
+#[test]
+fn the_identity_types_fields_stay_private_to_their_leaf() {
+    for (leaf, ty) in LEAVES
+        .iter()
+        .zip(["GrantSubject", "VerifiedIdentity", "CertIdentity"])
+    {
+        let file = syn::parse_file(&source(leaf)).expect("the leaf parses");
+        let fields = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Struct(item) if item.ident == ty => Some(&item.fields),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{leaf} defines {ty}"));
+        assert!(!fields.is_empty(), "premise: {ty} has fields");
+        for field in fields {
+            assert!(
+                matches!(field.vis, syn::Visibility::Inherited),
+                "{leaf}: a field of {ty} is visible outside its module"
+            );
+        }
     }
 }
