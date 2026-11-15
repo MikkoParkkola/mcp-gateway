@@ -152,20 +152,58 @@ pub(super) async fn start_fetching(
     ca_bundle: Option<OsString>,
     runtime_dir: Option<OsString>,
 ) -> Result<Started, Refusal> {
+    use super::proxy::System;
+    use std::sync::Arc;
+    let ambient = Ambient {
+        ca_bundle,
+        runtime_dir,
+        path: std::env::var_os("PATH"),
+    };
+    start_fetching_with(
+        helper,
+        target,
+        protected,
+        deadline,
+        ambient,
+        Arc::new(System),
+        Arc::new(System),
+    )
+    .await
+}
+
+/// What `start_fetching` reads from the gateway's environment, passed in so
+/// the rows never change the process environment.
+struct Ambient {
+    ca_bundle: Option<OsString>,
+    runtime_dir: Option<OsString>,
+    path: Option<OsString>,
+}
+
+/// [`start_fetching`] with the proxy's resolver and dialer given: production
+/// passes `System` for both; only the rows' `cfg(test)` fakes pass others.
+async fn start_fetching_with(
+    helper: &Path,
+    target: &Target,
+    protected: &[PathBuf],
+    deadline: tokio::time::Instant,
+    ambient: Ambient,
+    resolve: std::sync::Arc<dyn super::proxy::Resolve>,
+    connect: std::sync::Arc<dyn super::proxy::Connect>,
+) -> Result<Started, Refusal> {
     use super::control::{CONTROL_BOUNDS, accept_helper, serve_session};
     use super::proxy::{AllowlistProxy, System};
     use std::sync::Arc;
 
+    let Ambient {
+        ca_bundle,
+        runtime_dir,
+        path,
+    } = ambient;
     let begun = tokio::time::Instant::now();
     let unshare = find_unshare()?;
-    let mut plan = build_plan(target, protected, std::env::var_os("PATH").as_deref())?;
-    let proxy = AllowlistProxy::bind(
-        runtime_dir,
-        Arc::new(System),
-        Arc::new(System),
-        Arc::new(System),
-    )
-    .map_err(|e| Refusal::Step(format!("starting the fetch proxy ({e})")))?;
+    let mut plan = build_plan(target, protected, path.as_deref())?;
+    let proxy = AllowlistProxy::bind(runtime_dir, resolve, connect, Arc::new(System))
+        .map_err(|e| Refusal::Step(format!("starting the fetch proxy ({e})")))?;
     // Beside the proxy socket, in the proxy's owner-only directory, removed
     // with it when the proxy drops.
     let control = proxy.unix_path().with_file_name("control.sock");
@@ -593,5 +631,9 @@ fn classify_with(stderr: &str, host: &HostFacts) -> Refusal {
     Refusal::Step(format!("starting the namespaces ({})", stderr.trim()))
 }
 
+#[cfg(test)]
+mod fetch_registry;
+#[cfg(test)]
+mod fetch_rows;
 #[cfg(test)]
 mod tests;
