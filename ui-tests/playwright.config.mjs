@@ -18,11 +18,13 @@ export default defineConfig({
   // `chromium` is the CI gate. `visual` compares against the design frames,
   // which are not in this repository: run it locally with FRAMES_DIR set
   // (`npx playwright test --project=visual`). `perf` measures LCP and CLS
-  // (`npx playwright test --project=perf`). CI runs only `chromium`.
+  // (`npx playwright test --project=perf`) with tracing off, because a retained
+  // trace would run inside every sample. CI runs `chromium` and also `perf`;
+  // the perf run does not block.
   projects: [
     { name: 'chromium', testDir: 'tests', use: { ...devices['Desktop Chrome'] } },
     { name: 'visual', testDir: 'visual', testMatch: '*.visual.mjs', use: { ...devices['Desktop Chrome'] } },
-    { name: 'perf', testDir: 'perf', testMatch: '*.perf.mjs', use: { ...devices['Desktop Chrome'] } },
+    { name: 'perf', testDir: 'perf', testMatch: '*.perf.mjs', use: { ...devices['Desktop Chrome'], trace: 'off' } },
   ],
   webServer: {
     command: 'node server.mjs',

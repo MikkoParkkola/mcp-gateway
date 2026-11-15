@@ -53,14 +53,44 @@ const TOOLS = SERVERS.flatMap((server) => Array.from({ length: 10 }, (_, i) => (
   class_source: i % 3 ? 'inferred' : 'declared',
 })));
 
+/** Fast 4G transfer time in ms: the preset's latency plus the body at its download rate. */
+function fast4gTransferMs(bytes) {
+  return FAST_4G.latency + (bytes / FAST_4G.downloadThroughput) * 1000;
+}
+
+// A body of this size, served by the fixture server as image/png. That type is
+// under compression.json's never-gzip prefixes, so the bytes on the wire are
+// this length. fetch() would inflate a gzipped body and the bar below would
+// describe a transfer that never happened.
+const PROBE_BYTES = 200_000;
+
 // Rank in the sorted list. p75 is index ceil(0.75 * n) - 1. p50 is index ceil(0.5 * n) - 1.
 function rank(sorted, fraction) {
   return sorted[Math.ceil(fraction * sorted.length) - 1];
 }
 
 function spread(values) {
+  if (values.length === 0) return { loads: 0, p50: null, p75: null, max: null };
   const sorted = [...values].sort((a, b) => a - b);
   return { loads: sorted.length, p50: rank(sorted, 0.5), p75: rank(sorted, 0.75), max: sorted.at(-1) };
+}
+
+/**
+ * Viewport for a cold context. Phone also sets the scale and the mobile flag
+ * here: Playwright reapplies the context's device metrics on navigation, which
+ * would otherwise put the scale back to 1 over a CDP override.
+ */
+function loadContextOptions(profile) {
+  const baseURL = test.info().project.use.baseURL;
+  if (profile === 'phone') {
+    return {
+      baseURL,
+      viewport: { width: 412, height: 823 },
+      deviceScaleFactor: 1.75,
+      isMobile: true,
+    };
+  }
+  return { baseURL, viewport: { width: 1440, height: 900 } };
 }
 
 /**
@@ -88,20 +118,43 @@ async function applyProfile(page, profile) {
   return client;
 }
 
-/** Record LCP and CLS before any paint, then read them after `ready` and a settle. */
+/**
+ * Record LCP and CLS before any paint, then read them after `ready` and a settle.
+ * CLS is the largest session window: shifts without recent input, grouped so a
+ * window ends after a 1 s gap from the previous shift or at 5 s from its first.
+ * The lifetime sum is not the metric. A missing LCP entry is a failed load.
+ */
 async function measure(page, url, profile, ready) {
   const session = await applyProfile(page, profile);
   await page.addInitScript(() => {
-    const vitals = { lcp: 0, cls: 0 };
+    const vitals = { lcp: null, cls: 0 };
     window.__vitals = vitals;
     // The last entry is the largest paint so far; later entries replace it.
     new PerformanceObserver((list) => {
       const last = list.getEntries().at(-1);
       if (last) vitals.lcp = last.startTime;
     }).observe({ type: 'largest-contentful-paint', buffered: true });
+    // Session windows, as the CLS metric defines them. A window ends when the
+    // next shift is 1 s or more after the previous one, or 5 s or more after
+    // the window's first shift. CLS is the largest window's sum.
+    const GAP_MS = 1000;
+    const WINDOW_MS = 5000;
+    let sessionValue = 0;
+    let sessionStart = 0;
+    let sessionLast = 0;
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
-        if (!entry.hadRecentInput) vitals.cls += entry.value;
+        if (entry.hadRecentInput) continue;
+        const inWindow = sessionValue
+          && entry.startTime - sessionLast < GAP_MS
+          && entry.startTime - sessionStart < WINDOW_MS;
+        if (inWindow) sessionValue += entry.value;
+        else {
+          sessionValue = entry.value;
+          sessionStart = entry.startTime;
+        }
+        sessionLast = entry.startTime;
+        if (sessionValue > vitals.cls) vitals.cls = sessionValue;
       }
     }).observe({ type: 'layout-shift', buffered: true });
   });
@@ -112,27 +165,44 @@ async function measure(page, url, profile, ready) {
   await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
   const vitals = await page.evaluate(() => window.__vitals);
   if (!vitals) throw new Error('the vitals observer did not run');
+  if (vitals.lcp === null) throw new Error('no largest-contentful-paint entry');
   void session;
   return { lcp: vitals.lcp, cls: vitals.cls };
 }
 
+/**
+ * page.route fulfill answers from this process (Fetch.fulfillRequest) and never
+ * enters Chrome's network throttler, so Network.emulateNetworkConditions does
+ * not slow these bodies. The fixture server answers GET /ui/api/<path> from
+ * fixtures/api/<path>.json. status.json is the signed-in answer, and there is
+ * no signed-out status and no tools catalogue, so the phone profile waits the
+ * Fast 4G transfer time before fulfilling.
+ */
+async function fulfillApi(route, profile, payload) {
+  const body = JSON.stringify(payload);
+  if (profile === 'phone') {
+    await new Promise((resolve) => setTimeout(resolve, fast4gTransferMs(Buffer.byteLength(body))));
+  }
+  await route.fulfill({ contentType: 'application/json', body });
+}
+
 /** Signed out, no key: the sign-in spec's status answer when the bearer is absent. */
-async function signedOut(page) {
-  await page.route('**/ui/api/status', (route) => route.fulfill({
-    json: { version: '4.0.0', auth: { enabled: true, signed_in: false, admin: false } },
+async function signedOut(page, { profile = 'desktop' } = {}) {
+  await page.route('**/ui/api/status', (route) => fulfillApi(route, profile, {
+    version: '4.0.0', auth: { enabled: true, signed_in: false, admin: false },
   }));
 }
 
 /** Signed in the way the screen specs are: an admin status, plus that screen's own answers. */
-async function signedIn(page, id, { holdMs = 0 } = {}) {
-  await page.route('**/ui/api/status', (route) => route.fulfill({
-    json: { auth: { enabled: true, signed_in: true, admin: true } },
+async function signedIn(page, id, { holdMs = 0, profile = 'desktop' } = {}) {
+  await page.route('**/ui/api/status', (route) => fulfillApi(route, profile, {
+    auth: { enabled: true, signed_in: true, admin: true },
   }));
   if (id === 'tools') {
     await page.route('**/ui/api/tools**', async (route) => {
       // Held in this process, so the phone's CPU throttle does not stretch the wait.
       if (holdMs) await new Promise((resolve) => setTimeout(resolve, holdMs));
-      await route.fulfill({ json: { tools: TOOLS, total: TOOLS.length } });
+      await fulfillApi(route, profile, { tools: TOOLS, total: TOOLS.length });
     });
   }
 }
@@ -176,17 +246,26 @@ function writeRow(result) {
 
 for (const row of ROWS) {
   for (const profile of ['phone', 'desktop']) {
-    test(`${row.page} ${profile}: lcp p75 under 2500 ms, cls p75 under 0.1`, async ({ page }) => {
+    test(`${row.page} ${profile}: lcp p75 under 2500 ms, cls p75 under 0.1`, async ({ browser }) => {
       const readings = [];
+      const errors = [];
+      let loadsAttempted = 0;
+      let loadsMeasured = 0;
       for (let i = 0; i < LOADS; i++) {
-        // A fresh page: an init script and a CDP session left on a reused page
-        // would record the next load twice and keep the previous throttle.
-        const fresh = await page.context().newPage();
+        // A fresh context per load, closed before the next one. A new page in
+        // a shared context would reuse the previous load's HTTP cache and storage.
+        loadsAttempted += 1;
+        let context;
         try {
-          await row.prepare(fresh);
+          context = await browser.newContext(loadContextOptions(profile));
+          const fresh = await context.newPage();
+          await row.prepare(fresh, { profile });
           readings.push(await measure(fresh, row.url, profile, row.ready));
+          loadsMeasured += 1;
+        } catch (err) {
+          errors.push(err instanceof Error ? err.message : String(err));
         } finally {
-          await fresh.close();
+          if (context) await context.close().catch(() => {});
         }
       }
       const lcp = spread(readings.map((r) => r.lcp));
@@ -194,26 +273,54 @@ for (const row of ROWS) {
       const result = {
         page: row.page,
         profile,
+        loadsAttempted,
+        loadsMeasured,
+        errors,
         lcp: { ...lcp, budget: LCP_BUDGET_MS },
         cls: { ...cls, budget: CLS_BUDGET },
       };
-      // On disk before the budget assertions, so a miss still reaches the summary.
+      // On disk before the assertions, so a miss or a partial run still reaches the summary.
       writeRow(result);
-      console.log(JSON.stringify({ page: row.page, profile, lcp, cls }));
+      console.log(JSON.stringify({ page: row.page, profile, loadsAttempted, loadsMeasured, errors, lcp, cls }));
+      if (errors.length) throw new Error(errors.join('\n'));
       expect(lcp.p75).toBeLessThan(LCP_BUDGET_MS);
       expect(cls.p75).toBeLessThan(CLS_BUDGET);
     });
   }
 }
 
-test('the phone profile is applied', async ({ page }) => {
-  // Separate pages so each burn is cold, and sequential so one burn is not
-  // the other's load. The band is around the 4x CPU rate.
-  const desktop = await page.context().newPage();
-  const phone = await page.context().newPage();
+test('the phone profile is applied', async ({ browser }) => {
+  // Separate contexts so each burn is cold, and sequential so one burn is not
+  // the other's load. No route on these contexts: a fulfilled or continued
+  // route bypasses the network throttler this check has to observe.
+  // The band is around the 4x CPU rate.
+  const desktopContext = await browser.newContext(loadContextOptions('desktop'));
+  const phoneContext = await browser.newContext(loadContextOptions('phone'));
+  const desktop = await desktopContext.newPage();
+  const phone = await phoneContext.newPage();
   try {
     const holdDesktop = await applyProfile(desktop, 'desktop');
     const holdPhone = await applyProfile(phone, 'phone');
+    // The shell document, not the classic stand-in. Classic has no viewport
+    // meta, so a mobile emulation lays it out at the 980px fallback and
+    // innerWidth is not the profile width. The shell sets width=device-width.
+    // Load finishes before the probe, so that request is the timed transfer.
+    await desktop.goto('/ui/overview/status', { waitUntil: 'load' });
+    await phone.goto('/ui/overview/status', { waitUntil: 'load' });
+    const metrics = await phone.evaluate(() => ({
+      innerWidth: window.innerWidth,
+      devicePixelRatio: window.devicePixelRatio,
+    }));
+    const probe = `/__compression?type=${encodeURIComponent('image/png')}&len=${PROBE_BYTES}`;
+    const timeTransfer = (p) => p.evaluate(async (path) => {
+      const start = performance.now();
+      const res = await fetch(path, { cache: 'no-store' });
+      const buf = await res.arrayBuffer();
+      return { ms: performance.now() - start, bytes: buf.byteLength, status: res.status };
+    }, probe);
+    const desktopNet = await timeTransfer(desktop);
+    const phoneNet = await timeTransfer(phone);
+    const transferMs = fast4gTransferMs(PROBE_BYTES);
     const burn = (p) => p.evaluate(() => {
       // A multiply the compiler does not fold away, timed after one warm run
       // so the ratio is the throttle and not the optimiser's first pass.
@@ -230,15 +337,36 @@ test('the phone profile is applied', async ({ page }) => {
     const desktopRun = await burn(desktop);
     const phoneRun = await burn(phone);
     const ratio = phoneRun.ms / desktopRun.ms;
-    console.log(JSON.stringify({ check: 'phone-profile', desktopMs: desktopRun.ms, phoneMs: phoneRun.ms, ratio }));
+    console.log(JSON.stringify({
+      check: 'phone-profile',
+      innerWidth: metrics.innerWidth,
+      devicePixelRatio: metrics.devicePixelRatio,
+      desktopMs: desktopNet.ms,
+      phoneMs: phoneNet.ms,
+      transferMs,
+      bytes: phoneNet.bytes,
+      cpuDesktopMs: desktopRun.ms,
+      cpuPhoneMs: phoneRun.ms,
+      ratio,
+    }));
+    expect(metrics.innerWidth).toBe(412);
+    expect(metrics.devicePixelRatio).toBe(1.75);
+    expect(desktopNet.status).toBe(200);
+    expect(phoneNet.status).toBe(200);
+    expect(desktopNet.bytes).toBe(PROBE_BYTES);
+    expect(phoneNet.bytes).toBe(PROBE_BYTES);
+    // At least the Fast 4G transfer time, so a run with no network throttle
+    // (the desktop figure beside it) fails this bar.
+    expect(phoneNet.ms).toBeGreaterThanOrEqual(transferMs);
+    expect(desktopNet.ms).toBeLessThan(transferMs);
     expect(desktopRun.x).not.toBe(0);
     expect(ratio).toBeGreaterThanOrEqual(3);
     expect(ratio).toBeLessThanOrEqual(5);
     void holdDesktop;
     void holdPhone;
   } finally {
-    await desktop.close();
-    await phone.close();
+    await desktopContext.close();
+    await phoneContext.close();
   }
 });
 
@@ -251,22 +379,44 @@ test('tools status held 3s reports lcp over 2500', async ({ page }) => {
   expect(reading.lcp).toBeGreaterThan(LCP_BUDGET_MS);
 });
 
-test('a block inserted above the content reports cls over 0.1', async ({ page }) => {
-  await signedIn(page, 'tools');
-  // After load, the catalogue is on screen. A block above it then moves that
-  // paint; inserted earlier it would land in an empty page and shift nothing.
-  await page.addInitScript(() => {
-    addEventListener('load', () => {
-      setTimeout(() => {
-        const block = document.createElement('div');
-        block.style.height = '200px';
-        document.getElementById('content').before(block);
-      }, 500);
+test('a block inserted above the sign-in reports cls over 0.1', async ({ browser }) => {
+  // The sign-in view's own CLS is about 0. The same view with a 200px block
+  // 500 ms after load must clear 0.1, and without the block must stay under
+  // it, so a pass is this shift. The body is a row and the section fills the
+  // viewport; the block stacks above that section or the section does not
+  // move. Inserted earlier, the block lands in an empty page and shifts nothing.
+  const open = async () => {
+    const context = await browser.newContext(loadContextOptions('desktop'));
+    const page = await context.newPage();
+    await signedOut(page);
+    return { context, page };
+  };
+  const quiet = await open();
+  const shifted = await open();
+  try {
+    await shifted.page.addInitScript(() => {
+      addEventListener('load', () => {
+        setTimeout(() => {
+          const block = document.createElement('div');
+          block.dataset.clsBlock = '';
+          block.style.cssText = 'height:200px;width:100%;flex:0 0 200px';
+          document.body.style.flexDirection = 'column';
+          document.getElementById('signin').before(block);
+        }, 500);
+      });
     });
-  });
-  const reading = await measure(page, '/ui/tools/status', 'desktop', readyBuilt('tools'));
-  console.log(JSON.stringify({ check: 'cls-can-fail', ...reading }));
-  expect(reading.cls).toBeGreaterThan(CLS_BUDGET);
+    const baseline = await measure(quiet.page, '/ui/overview/status', 'desktop', readySignIn);
+    const reading = await measure(shifted.page, '/ui/overview/status', 'desktop', async (page) => {
+      await readySignIn(page);
+      await page.waitForSelector('[data-cls-block]');
+    });
+    console.log(JSON.stringify({ check: 'cls-can-fail', baseline, shifted: reading }));
+    expect(baseline.cls).toBeLessThan(CLS_BUDGET);
+    expect(reading.cls).toBeGreaterThan(CLS_BUDGET);
+  } finally {
+    await quiet.context.close();
+    await shifted.context.close();
+  }
 });
 
 test.afterAll(() => {
@@ -283,10 +433,20 @@ test.afterAll(() => {
   for (const name of names.sort()) {
     const row = JSON.parse(readFileSync(`${PERF_DIR}${name}`, 'utf8'));
     summary[row.page] ??= {};
-    summary[row.page][row.profile] = { lcp: row.lcp, cls: row.cls };
+    const errors = row.errors ?? [];
+    summary[row.page][row.profile] = {
+      lcp: row.lcp,
+      cls: row.cls,
+      loadsAttempted: row.loadsAttempted,
+      loadsMeasured: row.loadsMeasured,
+      errors,
+      incomplete: row.loadsMeasured !== row.loadsAttempted || errors.length > 0,
+    };
   }
   const path = `${RESULTS}perf-summary.json`;
   mkdirSync(RESULTS, { recursive: true });
-  writeFileSync(path, `${JSON.stringify(summary, null, 2)}\n`);
+  const text = JSON.stringify(summary, null, 2);
+  writeFileSync(path, `${text}\n`);
   console.log(`summary ${path}`);
+  console.log(text);
 });
