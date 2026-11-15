@@ -24,6 +24,10 @@ impl CapabilityBackend {
     /// [`Self::mark_initial_scan_complete`] runs. Called by startup before it
     /// spawns the background load.
     pub(crate) fn begin_initial_scan(&self) {
+        // A new scan starts its completion count at zero.
+        #[cfg(test)]
+        self.scan_completions
+            .store(0, std::sync::atomic::Ordering::Release);
         self.initial_scan
             .store(0, std::sync::atomic::Ordering::Release);
     }
@@ -36,6 +40,11 @@ impl CapabilityBackend {
         let _ = self
             .records_at_scan_complete
             .set(self.rug_pull_records().len());
+        // Counted beside the flag: the flag stays true, so a second call is
+        // otherwise invisible.
+        #[cfg(test)]
+        self.scan_completions
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         // Release pairs with the Acquire below: a probe that sees `true` also
         // sees every capability the scan registered before marking.
         self.initial_scan
@@ -75,6 +84,14 @@ impl CapabilityBackend {
     #[must_use]
     pub(crate) fn initial_scan_complete(&self) -> bool {
         self.initial_scan.load(std::sync::atomic::Ordering::Acquire) & COMPLETE != 0
+    }
+
+    /// How many times [`Self::mark_initial_scan_complete`] has run since the
+    /// last [`Self::begin_initial_scan`].
+    #[cfg(test)]
+    pub(crate) fn scan_completions(&self) -> usize {
+        self.scan_completions
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Whether every configured directory loaded (meaningful once the scan

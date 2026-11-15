@@ -37,6 +37,7 @@ use crate::Result;
 use crate::protocol::{Content, Tool, ToolsCallResult};
 
 mod definition_access;
+mod handoff;
 mod initial_scan;
 mod path_selector;
 
@@ -173,6 +174,16 @@ pub struct CapabilityBackend {
     /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
     multi_user: std::sync::atomic::AtomicBool,
     initial_scan: std::sync::atomic::AtomicU8,
+    /// Park, attach and publish share this mutex. The stub records nothing
+    /// and delivers nothing. Nothing in production calls it yet.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "production call sites are a later slice; the tests are the caller until then"
+        )
+    )]
+    handoff: handoff::Handoff,
     /// Moves at every catalogue write, under the write lock (MIK-8037).
     catalogue_generation: std::sync::atomic::AtomicU64,
     /// What was listed when a listing change was last announced.
@@ -188,6 +199,10 @@ pub struct CapabilityBackend {
     /// check ran before readiness without racing it.
     #[cfg(test)]
     pub(crate) records_at_scan_complete: std::sync::OnceLock<usize>,
+    /// How many times the scan was marked complete. The flag cannot tell one
+    /// completion from two.
+    #[cfg(test)]
+    scan_completions: std::sync::atomic::AtomicUsize,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -218,6 +233,7 @@ impl CapabilityBackend {
             loaded_from: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
             initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
+            handoff: handoff::Handoff::new(),
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
             listing: parking_lot::Mutex::new(None),
             listing_wake: tokio::sync::Notify::new(),
@@ -225,7 +241,21 @@ impl CapabilityBackend {
             scan_panics_after_first_dir: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             records_at_scan_complete: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            scan_completions: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// The handoff to the live config. One per backend.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "production call sites are a later slice; the tests are the caller until then"
+        )
+    )]
+    pub(crate) fn handoff(&self) -> &handoff::Handoff {
+        &self.handoff
     }
 
     /// Declare whether the owning gateway serves more than one principal
