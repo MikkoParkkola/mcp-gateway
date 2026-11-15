@@ -69,7 +69,7 @@ pub(super) fn record(pid: Pid, sent: Sent) {
 pub(crate) enum Esrch {
     /// Nothing is sent: the kill names a group the leader is not in.
     Only,
-    /// The leader is SIGKILLed and seen a zombie first, as the descendant
+    /// The leader gets SIGKILL and is seen a zombie first, as the descendant
     /// sweep's kill can land between the check and the group kill; then the
     /// group kill finds no member.
     AfterKillingLeader,
