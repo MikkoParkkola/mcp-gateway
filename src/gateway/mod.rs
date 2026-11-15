@@ -90,6 +90,7 @@ mod replay_era_tests;
 mod restart_floor;
 #[cfg(test)]
 mod restart_floor_tests;
+mod restart_slot;
 mod restart_status;
 #[cfg(test)]
 mod route_check_matrix_tests;

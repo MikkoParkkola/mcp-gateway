@@ -104,6 +104,18 @@ pub(crate) struct RestartStatus {
 }
 
 impl RestartStatus {
+    /// The attempt this record belongs to (rows read it).
+    #[cfg(test)]
+    pub(crate) fn attempt_id(&self) -> u64 {
+        self.id
+    }
+
+    /// Why the attempt was cancelled, if it was (rows read it).
+    #[cfg(test)]
+    pub(crate) fn cancel_reason(&self) -> Option<RestartCancel> {
+        self.cancel
+    }
+
     /// The status edge's form: `{id, phase, deadline, remaining_calls,
     /// reason}`, the phase lowercase, the deadline in unix ms (null while the
     /// attempt is accepted, before its checkpoint sets one), the reason
@@ -149,8 +161,8 @@ impl RestartBoard {
     }
 
     /// Accepted to Checkpoint, setting the checkpoint's deadline.
-    pub(crate) fn checkpoint(&self, checkpoint_deadline_unix_ms: u64) {
-        self.edit(|record, _| {
+    pub(crate) fn checkpoint(&self, id: u64, checkpoint_deadline_unix_ms: u64) {
+        self.edit(id, |record, _| {
             if record.phase == RestartPhase::Accepted {
                 record.phase = RestartPhase::Checkpoint;
                 record.deadline_unix_ms = Some(checkpoint_deadline_unix_ms);
@@ -159,8 +171,8 @@ impl RestartBoard {
     }
 
     /// Cancel the attempt before its commit.
-    pub(crate) fn cancel(&self, reason: RestartCancel) {
-        self.edit(|record, committed| {
+    pub(crate) fn cancel(&self, id: u64, reason: RestartCancel) {
+        self.edit(id, |record, committed| {
             if !*committed && record.phase != RestartPhase::Cancelled {
                 record.phase = RestartPhase::Cancelled;
                 record.cancel = Some(reason);
@@ -169,8 +181,8 @@ impl RestartBoard {
     }
 
     /// The commit edge: the deadline becomes the stop's own.
-    pub(crate) fn commit(&self, stop_deadline_unix_ms: u64) {
-        self.edit(|record, committed| {
+    pub(crate) fn commit(&self, id: u64, stop_deadline_unix_ms: u64) {
+        self.edit(id, |record, committed| {
             if !*committed && record.phase == RestartPhase::Checkpoint {
                 *committed = true;
                 record.deadline_unix_ms = Some(stop_deadline_unix_ms);
@@ -180,9 +192,9 @@ impl RestartBoard {
 
     /// Checkpoint to Restarting, only after the commit; before it the call is
     /// ignored and logged.
-    pub(crate) fn restarting(&self) {
+    pub(crate) fn restarting(&self, id: u64) {
         let mut early = None;
-        self.edit(|record, committed| {
+        self.edit(id, |record, committed| {
             if *committed {
                 forward(record, RestartPhase::Restarting);
             } else {
@@ -199,8 +211,8 @@ impl RestartBoard {
     }
 
     /// Forward to Saving after the commit; otherwise silent.
-    pub(crate) fn saving(&self) {
-        self.edit(|record, committed| {
+    pub(crate) fn saving(&self, id: u64) {
+        self.edit(id, |record, committed| {
             if *committed {
                 forward(record, RestartPhase::Saving);
             }
@@ -208,8 +220,8 @@ impl RestartBoard {
     }
 
     /// Forward to Draining after the commit; otherwise silent.
-    pub(crate) fn draining(&self) {
-        self.edit(|record, committed| {
+    pub(crate) fn draining(&self, id: u64) {
+        self.edit(id, |record, committed| {
             if *committed {
                 forward(record, RestartPhase::Draining);
             }
@@ -217,8 +229,8 @@ impl RestartBoard {
     }
 
     /// The calls still running, after the commit; otherwise silent.
-    pub(crate) fn set_remaining_calls(&self, n: u64) {
-        self.edit(|record, committed| {
+    pub(crate) fn set_remaining_calls(&self, id: u64, n: u64) {
+        self.edit(id, |record, committed| {
             if *committed {
                 record.remaining_calls = n;
             }
@@ -232,7 +244,8 @@ impl RestartBoard {
 
     /// Apply `change` to the latest record and its commit flag; nothing
     /// before any accept.
-    fn edit(&self, change: impl FnOnce(&mut RestartStatus, &mut bool)) {
+    fn edit(&self, id: u64, change: impl FnOnce(&mut RestartStatus, &mut bool)) {
+        let _ = id;
         let mut board = self.board.lock();
         let Board {
             record, committed, ..
