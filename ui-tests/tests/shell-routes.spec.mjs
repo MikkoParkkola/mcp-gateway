@@ -73,14 +73,14 @@ test('R4 a screen module that fails to load shows the error state, and Retry loa
   await toolsApi(page);
   let fail = true;
   await page.route(`**${asset('tools', 'js')}*`, (r) => (fail ? r.fulfill({ status: 500, body: '' }) : r.continue()));
-  await page.goto('/ui/tools/status?view=all');
+  await page.goto('/ui/tools/status');
   const error = page.locator('#content [data-state="error"]');
   await expect(error).toBeVisible();
   const retry = error.getByRole('button', { name: 'Retry' });
   await expect(retry).toBeVisible();
   fail = false;
   await retry.click();
-  await expect(toolRows(page)).toHaveCount(1);
+  await expect(page.getByRole('region', { name: 'Most called, last hour', exact: true })).toBeVisible();
   await expect(error).toHaveCount(0);
 });
 
@@ -145,10 +145,10 @@ test('R7 a screen is not drawn while its stylesheet is held, even after its modu
   await expect(page.locator('.head .plate')).toHaveText('Tools');
   // Held: the content is the unmarked loading body, never the screen.
   await expect(page.locator('#content [data-rendered]')).toHaveCount(0);
-  // The sidebar lands on the most-called panel; its search box is drawn in both views.
-  await expect(page.locator('#content #tools-search')).toHaveCount(0);
+  // The sidebar lands on the most-called panel, which only the bare route draws.
+  await expect(page.getByRole('region', { name: 'Most called, last hour', exact: true })).toHaveCount(0);
   release();
-  await expect(page.locator('#content #tools-search')).toHaveCount(1);
+  await expect(page.getByRole('region', { name: 'Most called, last hour', exact: true })).toHaveCount(1);
 });
 
 test('R8 a manifest entry outside /ui/assets/ is refused as a load error and never fetched', async ({ page, baseURL }) => {

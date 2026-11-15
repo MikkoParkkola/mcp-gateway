@@ -152,6 +152,10 @@ test('M6: typing on Status opens the A-to-Z list and keeps every key', async ({ 
   await page.goBack();
   await expect(page).toHaveURL('/ui/tools/status');
   await expect(mostCalled(page)).toBeVisible();
+  // Forward returns to the catalogue with the query it had.
+  await page.goForward();
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
+  await expect(search(page)).toHaveValue('bravo');
 
   await page.goto('/ui/tools/status');
   await search(page).press('Enter');
@@ -247,6 +251,8 @@ test('M13: keys typed while the catalogue reads its tools all land', async ({ pa
   await page.keyboard.type('irch');
   release();
   await expect(search(page)).toHaveValue('birch');
+  await expect(search(page)).toBeFocused();
+  await expect.poll(() => catalogueNames(page)).toEqual(['birch']);
 });
 
 test('M14: a count the API did not measure is never shown as a number', async ({ page }) => {
