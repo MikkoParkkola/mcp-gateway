@@ -12,36 +12,62 @@ use crate::test_source_text::production_text;
 /// The fakes' names: the scan's list, each with its positive control below.
 const FAKES: [&str; 2] = ["TestDialer", "TestResolve"];
 
-/// Every `.rs` file under `dir` whose module declaration survives its
-/// parent's production text: the files a production build compiles.
+/// Every `.rs` file under `dir` whose module declaration survives the
+/// production text that declares it: the files a production build compiles.
+/// A leaf file can declare a sibling (`#[path]`), so the declaring text
+/// grows with every file found until nothing new turns up.
 fn production_files(dir: &Path, parent_text: &str, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).expect("read dir") {
-        let path = entry.expect("entry").path();
-        let name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_owned();
-        if path.is_dir() {
-            // A directory module's own text: `dir/mod.rs`, or `dir.rs` beside it.
-            let own = if path.join("mod.rs").exists() {
-                path.join("mod.rs")
-            } else {
-                path.with_extension("rs")
-            };
-            if declared(parent_text, &name, &path)
-                && let Ok(text) = std::fs::read_to_string(&own)
-            {
-                out.push(own);
-                production_files(&path, &production_text(&text), out);
+    let mut text = parent_text.to_owned();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    loop {
+        let found = seen.len();
+        for entry in std::fs::read_dir(dir).expect("read dir") {
+            let path = entry.expect("entry").path();
+            if seen.contains(&path) {
+                continue;
             }
-        } else if path.extension().is_some_and(|e| e == "rs")
-            && name != "mod"
-            && declared(parent_text, &name, &path)
-        {
-            out.push(path);
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            if path.is_dir() {
+                // A directory module's own text: `dir/mod.rs`, or `dir.rs` beside it.
+                let own = if path.join("mod.rs").exists() {
+                    path.join("mod.rs")
+                } else {
+                    path.with_extension("rs")
+                };
+                if declared(&text, &name, &path)
+                    && let Ok(own_text) = std::fs::read_to_string(&own)
+                {
+                    seen.push(path.clone());
+                    out.push(own);
+                    production_files(&path, &production_text(&own_text), out);
+                }
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && name != "mod"
+                && declared(&text, &name, &path)
+            {
+                let leaf = std::fs::read_to_string(&path).expect("source");
+                text.push_str(&production_text(&leaf));
+                seen.push(path.clone());
+                out.push(path);
+            }
+        }
+        if seen.len() == found {
+            break;
         }
     }
+}
+
+/// Every production file under `src/preview_sandbox`, module files included.
+fn production_sources() -> Vec<PathBuf> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/preview_sandbox");
+    let top = production_text(&std::fs::read_to_string(root.join("mod.rs")).expect("mod.rs"));
+    let mut files = vec![root.join("mod.rs")];
+    production_files(&root, &top, &mut files);
+    files
 }
 
 /// `mod name` (or a `#[path]` naming the file) in the parent's production text.
@@ -61,9 +87,7 @@ fn declared(parent_text: &str, name: &str, path: &Path) -> bool {
 #[test]
 fn t10_the_fetch_fakes_are_test_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/preview_sandbox");
-    let top = production_text(&std::fs::read_to_string(root.join("mod.rs")).expect("mod.rs"));
-    let mut files = vec![root.join("mod.rs")];
-    production_files(&root, &top, &mut files);
+    let files = production_sources();
     assert!(
         files.iter().any(|f| f.ends_with("linux/mod.rs")),
         "the scan reached the Linux module"
@@ -91,22 +115,24 @@ fn t10_the_fetch_fakes_are_test_only() {
     );
 }
 
-/// The only production call of `start_fetching_with` passes `System` as both
-/// the resolver and the dialer.
+/// The only production call of `start_fetching_with`, in any production
+/// file, is in the Linux module and passes `System` as both the resolver and
+/// the dialer.
 #[test]
 fn t10_production_passes_system_to_the_proxy() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/preview_sandbox/linux/mod.rs");
-    let text = production_text(&std::fs::read_to_string(path).expect("linux/mod.rs"));
-    let calls: Vec<&str> = text
-        .match_indices("start_fetching_with(")
-        .map(|(at, _)| &text[at..])
-        .collect();
-    let call: Vec<&&str> = calls
-        .iter()
-        .filter(|c| !text[..text.len() - c.len()].ends_with("fn "))
-        .collect();
-    assert_eq!(call.len(), 1, "one production call");
-    let args = &call[0][..call[0].find(".await").expect("the call is awaited")];
+    let mut calls: Vec<(PathBuf, String)> = Vec::new();
+    for file in production_sources() {
+        let text = production_text(&std::fs::read_to_string(&file).expect("source"));
+        for (at, _) in text.match_indices("start_fetching_with(") {
+            if !text[..at].ends_with("fn ") {
+                calls.push((file.clone(), text[at..].to_owned()));
+            }
+        }
+    }
+    assert_eq!(calls.len(), 1, "one production call: {calls:?}");
+    let (file, call) = &calls[0];
+    assert!(file.ends_with("linux/mod.rs"), "{}", file.display());
+    let args = &call[..call.find(".await").expect("the call is awaited")];
     assert_eq!(args.matches("Arc::new(System)").count(), 2, "{args}");
     assert_eq!(args.matches("Arc::new(").count(), 2, "{args}");
 }
