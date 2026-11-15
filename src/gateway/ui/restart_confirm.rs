@@ -29,7 +29,7 @@ const PREFIX: &str = "rc1.";
 const TOKEN_LEN: usize = PREFIX.len() + 43;
 
 fn expired(minted: Instant, now: Instant) -> bool {
-    now.saturating_duration_since(minted) >= LIFETIME
+    mutant!("m11", now.saturating_duration_since(minted) > LIFETIME, now.saturating_duration_since(minted) >= LIFETIME)
 }
 
 fn digest(token: &str) -> [u8; 32] {
@@ -117,7 +117,7 @@ impl RestartConfirm {
     /// Production seams; restart confirmation is off.
     pub(crate) fn new() -> Self {
         Self {
-            enabled: false,
+            enabled: mutant!("m1", true, false),
             clock: Arc::new(Instant::now),
             fill: Arc::new(|bytes: &mut [u8]| {
                 use ring::rand::SecureRandom as _;
@@ -152,7 +152,7 @@ impl RestartConfirm {
     /// The write sample the route shows and binds, read once per request.
     pub(crate) fn sample(&self, counter: &RecentWrites) -> Option<WriteSample> {
         match &self.samples {
-            SampleSource::Counter => Some(counter.sample((self.clock)())),
+            SampleSource::Counter => mutant!("m23", None, Some(counter.sample((self.clock)()))),
             SampleSource::Scripted(script) => script
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -166,27 +166,29 @@ impl RestartConfirm {
     /// new confirmation replaces its earlier one; a failed mint replaces nothing.
     pub(crate) fn mint(&self, live: Live) -> Option<String> {
         // A second line behind the route's own check: off mints nothing.
-        if !self.enabled {
+        if (mutant!("m2", false, !self.enabled)) {
             return None;
         }
         let mut entries = self.entries();
         // Read under the lock, so time spent waiting for it is not lost.
         let now = (self.clock)();
-        entries.retain(|_, entry| !expired(entry.minted, now));
+        if mutant!("m3", false, true) {
+            entries.retain(|_, entry| !expired(entry.minted, now));
+        }
         let held = entries
             .iter()
             .find(|(_, entry)| entry.live.principal == live.principal)
             .map(|(key, _)| *key);
-        if held.is_none() && entries.len() >= MAX_ENTRIES {
+        if (mutant!("m4", false, held.is_none() && entries.len() >= MAX_ENTRIES)) {
             return None;
         }
         let mut bytes = [0u8; 32];
-        (self.fill)(&mut bytes).ok()?;
+        mutant!("m5", { let _ = (self.fill)(&mut bytes); Some(()) }, (self.fill)(&mut bytes).ok())?;
         let token = format!("{PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes));
-        if let Some(key) = held {
+        if let Some(key) = held.filter(|_| mutant!("m6", false, true)) {
             entries.remove(&key);
         }
-        entries.insert(digest(&token), Entry { live, minted: now });
+        entries.insert(mutant!("m7", bytes, digest(&token)), Entry { live, minted: now });
         Some(token)
     }
 
@@ -194,7 +196,7 @@ impl RestartConfirm {
     /// before it is judged, so a token is used once whatever the outcome.
     pub(crate) fn consume(&self, token: &str, presented: &Presented) -> Result<Accepted, Refusal> {
         // A string no mint could have made is refused before it is hashed.
-        if token.len() != TOKEN_LEN || !token.starts_with(PREFIX) {
+        if (mutant!("m8", false, token.len() != TOKEN_LEN) || mutant!("m9", false, !token.starts_with(PREFIX))) {
             return Err(Refusal::Invalid);
         }
         let entry = {
@@ -202,32 +204,29 @@ impl RestartConfirm {
             // Read under the lock: a consume that waited for it is judged at
             // the time it ran, never earlier.
             let now = (self.clock)();
-            let entry = entries.remove(&digest(token)).ok_or(Refusal::Invalid)?;
+            let entry = mutant!("m10", entries.get(&digest(token)).map(|e| Entry { live: e.live.clone(), minted: e.minted }), entries.remove(&digest(token))).ok_or(Refusal::Invalid)?;
             if expired(entry.minted, now) {
                 return Err(Refusal::Expired);
             }
             entry
         };
         let bound = &entry.live;
-        if presented.principal.as_deref() != Some(bound.principal.as_str()) {
+        if (mutant!("m13", presented.principal.as_deref().is_some_and(|p| p != bound.principal), mutant!("m12", false, presented.principal.as_deref() != Some(bound.principal.as_str())))) {
             return Err(Refusal::PrincipalChanged);
         }
-        if presented.boot != bound.boot {
+        if (mutant!("m14", false, presented.boot != bound.boot)) {
             return Err(Refusal::BootChanged);
         }
-        if presented.invocation != Some(bound.invocation) {
+        if (mutant!("m16", presented.invocation.is_some_and(|i| i != bound.invocation), mutant!("m15", false, presented.invocation != Some(bound.invocation)))) {
             return Err(Refusal::InvocationChanged);
         }
-        if !matches!(&presented.target, Some(Ok(id)) if *id == bound.target) {
+        if (mutant!("m18", matches!(&presented.target, Some(Ok(id)) if *id != bound.target), mutant!("m17", false, !matches!(&presented.target, Some(Ok(id)) if *id == bound.target)))) {
             return Err(Refusal::TargetChanged);
         }
-        let fresh = presented.sample.ok_or(Refusal::SampleMissing)?;
-        let writes_since = fresh
-            .writes_total
-            .checked_sub(bound.sample.writes_total)
-            .ok_or(Refusal::SampleInvalid)?;
+        let fresh = mutant!("m19", Ok::<_, Refusal>(presented.sample.unwrap_or(bound.sample)), presented.sample.ok_or(Refusal::SampleMissing))?;
+        let writes_since = mutant!("m20", Ok::<u64, Refusal>(fresh.writes_total.saturating_sub(bound.sample.writes_total)), fresh.writes_total.checked_sub(bound.sample.writes_total).ok_or(Refusal::SampleInvalid))?;
         // The admin confirmed "nothing is writing"; refuse once that is false.
-        if bound.sample.count == 0 && writes_since > 0 {
+        if (mutant!("m22", fresh.count == 0 && writes_since > 0, mutant!("m21", false, bound.sample.count == 0 && writes_since > 0))) {
             return Err(Refusal::WritesSincePreview);
         }
         Ok(Accepted { writes_since })
