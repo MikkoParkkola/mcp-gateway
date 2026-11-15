@@ -196,7 +196,7 @@
   "text": "The firewall stopped this call or its answer. The agent got an error instead."
  },
  "activity.status.calls-made-with-your-key": {
-  "title": "Calls made with your key, ana. Members",
+  "title": "Calls made with your key",
   "text": "As a member you see your own key's calls. An admin or auditor sees every key."
  },
  "activity.status.caught-per-hour": {

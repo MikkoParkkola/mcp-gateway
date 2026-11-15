@@ -323,7 +323,7 @@ test('A9 member: the line follows the list\'s own access, not the status admin f
   await open(page, urls, '/ui/activity/status');
   const trigger = page.locator('#content .has-tip[data-tip="activity.status.calls-made-with-your-key"]');
   await expect(trigger.locator('button')).toBeVisible();
-  expect(await lineWithTip(page, 'activity.status.calls-made-with-your-key', 'Calls made with your key')).toBe('Calls made with your key');
+  expect(await lineWithTip(page, 'activity.status.calls-made-with-your-key', 'Showing only calls made with your key. Members see their own calls.')).toBe('Showing only calls made with your key. Members see their own calls.');
   await expect.poll(() => shownRows(page)).toHaveLength(5);
   const lineBox = await trigger.boundingBox();
   const rowBox = await rowLinks(page).first().boundingBox();

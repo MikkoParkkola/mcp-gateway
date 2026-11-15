@@ -5,7 +5,7 @@
 // Filters live in the page URL. Every server-supplied string goes in with
 // textContent. The shell is imported by its exact hashed name, so this page
 // registers in the same module instance the document loaded.
-import { register, segmented } from '/ui/assets/shell.260480aea22f.js';
+import { register, segmented } from '/ui/assets/shell.36c263e358bc.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
 function h(tag, attrs = {}, ...children) {
@@ -123,13 +123,14 @@ async function statusTab(body, ctx) {
   const moreLine = h('p', { class: 'activity-more-error', hidden: true });
 
   const root = h('div', { class: 'activity' });
-  // "Calls made with your key", above the list, only when the list answer says it holds
-  // only the caller's own calls (access "own"). Status's admin flag cannot say that: an
-  // auditor and a backend-scoped admin read false there and are served others' calls.
+  // The member line says why the rest is hidden. It shows above the list, only when the
+  // list answer says it holds only the caller's own calls (access "own"). Status's admin
+  // flag cannot say that: an auditor and a backend-scoped admin read false there and are
+  // served others' calls. No key name: the shell holds none for the signed-in key.
   // Its trigger is a button, so the line stays before the search: nothing focusable may
   // sit between the search and a row. Hidden, it is out of the Tab order.
   const memberTip = h('span', { class: 'activity-tip' });
-  const memberLine = h('p', { class: 'activity-member', hidden: true }, 'Calls made with your key', memberTip);
+  const memberLine = h('p', { class: 'activity-member', hidden: true }, 'Showing only calls made with your key. Members see their own calls.', memberTip);
   root.append(memberLine);
   root.append(outcomeRow, rangeGroup, search);
   if (filters.server || filters.key) root.append(active);
@@ -140,7 +141,7 @@ async function statusTab(body, ctx) {
   // every page's first paint. Not awaited: the controls are live from here, and a
   // slow or failing module must neither hold the list back nor open a window in
   // which a click reaches state not yet set up; it only leaves the labels without (i).
-  import('/ui/assets/tooltip.fc459693146e.js').then(({ tip }) => {
+  import('/ui/assets/tooltip.2b7c2fda2fb9.js').then(({ tip }) => {
     outcomeTip.append(tip('activity.status.outcome'));
     blockedTip.append(tip('activity.status.blocked'));
     memberTip.append(tip('activity.status.calls-made-with-your-key'));

@@ -21,12 +21,12 @@ const DOCUMENT: &str = include_str!("shell/index.html");
 /// asset gets a new name and a cached copy can never go stale.
 pub(super) const ASSETS: &[(&str, &[u8])] = &[
     (
-        "activity.0d2854c4f648.js",
-        include_bytes!("shell/activity.0d2854c4f648.js"),
-    ),
-    (
         "activity.237d685089d2.css",
         include_bytes!("shell/activity.237d685089d2.css"),
+    ),
+    (
+        "activity.8b890a724a42.js",
+        include_bytes!("shell/activity.8b890a724a42.js"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -45,32 +45,32 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/fonts/OverpassMono-400.9b51e031ff0d.woff2"),
     ),
     (
-        "shell.260480aea22f.js",
-        include_bytes!("shell/shell.260480aea22f.js"),
+        "shell.36c263e358bc.js",
+        include_bytes!("shell/shell.36c263e358bc.js"),
     ),
     (
         "shell.8a1ede0f5317.css",
         include_bytes!("shell/shell.8a1ede0f5317.css"),
     ),
     (
-        "tips.2b1d0c91519f.json",
-        include_bytes!("shell/tips.2b1d0c91519f.json"),
-    ),
-    (
-        "tools.00df8a33eb67.js",
-        include_bytes!("shell/tools.00df8a33eb67.js"),
+        "tips.981d49b6a829.json",
+        include_bytes!("shell/tips.981d49b6a829.json"),
     ),
     (
         "tools.24f226efcd24.css",
         include_bytes!("shell/tools.24f226efcd24.css"),
     ),
     (
-        "tooltip.5251c22696fd.css",
-        include_bytes!("shell/tooltip.5251c22696fd.css"),
+        "tools.cf1d3211a06b.js",
+        include_bytes!("shell/tools.cf1d3211a06b.js"),
     ),
     (
-        "tooltip.fc459693146e.js",
-        include_bytes!("shell/tooltip.fc459693146e.js"),
+        "tooltip.2b7c2fda2fb9.js",
+        include_bytes!("shell/tooltip.2b7c2fda2fb9.js"),
+    ),
+    (
+        "tooltip.5251c22696fd.css",
+        include_bytes!("shell/tooltip.5251c22696fd.css"),
     ),
 ];
 
