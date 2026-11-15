@@ -451,3 +451,41 @@ fn an_n_layout_binds_back_only_node_and_npms_package() {
     );
     assert_eq!(plan, base);
 }
+
+/// R-bind, kills "a covering bind-back keeps the trees whole": a regular npx
+/// file in `/usr/local/bin` gives the program bind `/usr/local/bin` and
+/// `/usr/local/lib` whole; the fetch never runs npx, so it replaces them
+/// with node's file and npm's package, and covers npm's builtin `npmrc`
+/// (a token stored there stays unreadable to the downloaded code).
+#[test]
+fn a_covering_usr_local_bind_back_is_replaced_by_the_narrow_binds() {
+    let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let package = "/usr/local/lib/preview-row/node_modules/npm";
+    let cli = format!("{package}/bin/npm-cli.js");
+    let node = "/usr/local/bin/preview-row-node";
+    let mut plan = base.clone();
+    plan.bound_back = vec!["/usr/local/bin".to_owned(), "/usr/local/lib".to_owned()];
+    place_npm(&mut plan, Path::new(&cli), Path::new(node)).expect("placed");
+    assert_eq!(plan.bound_back, [node, package]);
+    let npmrc = format!("{package}/npmrc");
+    assert_eq!(plan.masked, [base.masked.clone(), vec![npmrc]].concat());
+}
+
+/// Kills "a directory or a hidden path is taken for node": a node path that
+/// is a directory (shown or not) refuses by name, and so does one under the
+/// gateway's hidden paths.
+#[test]
+fn a_directory_or_hidden_node_refuses() {
+    let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let cli = Path::new("/usr/local/lib/preview-row/node_modules/npm/bin/npm-cli.js");
+    let hidden =
+        Path::new(base.hidden.first().expect("the gateway's paths are hidden")).join("node");
+    for node in [Path::new("/usr/lib"), hidden.as_path()] {
+        let refused = place_npm(&mut base.clone(), cli, node).expect_err("refused");
+        assert!(
+            matches!(&refused, Refusal::Step(s) if s.starts_with("placing node")),
+            "{}: {refused}",
+            node.display()
+        );
+    }
+}
