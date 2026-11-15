@@ -381,20 +381,16 @@ pub(crate) fn listing(
     stores: &[&dyn SecretStore],
     sources: &NamingSources,
 ) -> Listing {
-    listing_until(
-        vault,
-        stores,
-        sources,
-        Instant::now() + Duration::from_secs(30),
-    )
+    listing_within(vault, stores, sources, Duration::from_secs(30))
 }
 
-/// [`listing`], waiting for the vault lock until `deadline` (doctor waits less).
-pub(crate) fn listing_until(
+/// [`listing`], waiting up to `wait` for the vault lock (doctor waits less). The
+/// wait starts once the naming sources are read, so a slow read does not use it up.
+pub(crate) fn listing_within(
     vault: &Vault,
     stores: &[&dyn SecretStore],
     sources: &NamingSources,
-    deadline: Instant,
+    wait: Duration,
 ) -> Listing {
     let mut listed = Listing::default();
     let built = match corpus(sources) {
@@ -407,6 +403,7 @@ pub(crate) fn listing_until(
             return listed;
         }
     };
+    let deadline = Instant::now() + wait;
     for store in stores {
         match super::unused_entries_until(vault, &[*store], &BTreeSet::new(), deadline) {
             Err(error) => listed.errors.push((store.kind(), error.reason())),

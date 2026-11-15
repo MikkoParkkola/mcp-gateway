@@ -28,7 +28,7 @@ pub(crate) use save::{
     unused_entries_until,
 };
 // The unused-entry delete and listing are reached through the admin UI routes;
-// doctor's count calls `unused::listing_until` from `report`.
+// doctor's count calls `unused::listing_within` from `report`.
 #[cfg(feature = "webui")]
 pub(crate) use unused::{
     DeleteRefused, Deleted, Listing, NamingSources, delete_unused, is_generated_name, listing,

@@ -8,11 +8,11 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Serialize;
 
-use super::unused::{NamingSources, listing_until};
+use super::unused::{NamingSources, listing_within};
 use super::{FilesStore, SecretStore, StoreError, StoreKind, Vault, choice_str, choose_with};
 use crate::config::SecretStoreChoice;
 
@@ -144,7 +144,7 @@ fn count_unused(
     if let Some(os) = os {
         stores.push(os);
     }
-    let listed = listing_until(vault, &stores, &sources, Instant::now() + LOCK_WAIT);
+    let listed = listing_within(vault, &stores, &sources, LOCK_WAIT);
     if let Some((_, reason)) = listed.errors.into_iter().next() {
         return Err(reason);
     }

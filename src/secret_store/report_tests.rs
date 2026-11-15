@@ -344,3 +344,34 @@ fn an_entry_named_only_through_a_file_link_is_not_unused() {
         "file: link names {name}"
     );
 }
+
+#[test]
+fn naming_sources_that_cannot_be_read_leave_the_count_out_never_zero() {
+    let (config, locks, path, _) = saved_unused();
+    // One level past the scan's depth bound: the config loads, the corpus refuses.
+    let mut deep = config.path().join("caps");
+    for level in 0..=16 {
+        deep.push(format!("d{level}"));
+    }
+    std::fs::create_dir_all(&deep).expect("deep capability tree");
+    std::fs::write(deep.join("tool.yaml"), "name: tool\n").expect("capability file");
+    prepend(
+        &path,
+        &format!(
+            "capabilities:\n  directories:\n    - {}\n",
+            yaml_path(&config.path().join("caps"))
+        ),
+    );
+    let report = report_with(
+        &path,
+        SecretStoreChoice::Files,
+        Ok(vault_for(config.path(), locks.path())),
+        None,
+        &[],
+    );
+    assert_eq!(report.unused, None, "{report:?}");
+    assert_eq!(
+        report.unused_error.as_deref(),
+        Some("a capability directory is nested deeper than the scan reads")
+    );
+}
