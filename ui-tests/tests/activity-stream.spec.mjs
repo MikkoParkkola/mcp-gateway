@@ -479,3 +479,43 @@ test('A16 an answer that says its cursor was reset replaces the list instead of 
   // Only the reset answer's rows: page one's are gone, none twice.
   await expect.poll(() => texts(page)).toEqual(TEXT_TWO);
 });
+
+test('A17 a tooltip module that never loads blocks nothing: the list loads and a filter click works', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const urls = await install(page, { answer: () => list(ROWS) });
+  // Held forever: the screen must not wait for its (i) triggers.
+  await page.route('**/ui/assets/tooltip.*.js', () => {});
+  await page.goto('/ui/activity/status');
+  await expect.poll(() => urls.length).toBeGreaterThan(0);
+  await expect.poll(() => shownRows(page)).toHaveLength(5);
+  await page.getByRole('button', { name: 'blocked', exact: true }).click();
+  await expect.poll(() => filters(urls.at(-1)).outcome).toBe('blocked');
+  expect(errors).toEqual([]);
+});
+
+test('A18 an answer that lands after the user left asks for no further page', async ({ page }) => {
+  // Page one holds no rows but a cursor, which an Activity list on screen reads on from at once.
+  const urls = await install(page, { answer: (url) => (byCursor(url) === 'c2' ? list(PAGE_TWO) : list([], 'c2')) });
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let firstSeen = false;
+  await page.route('**/ui/api/activity**', async (r) => {
+    if (byCursor(r.request().url()) === null && !firstSeen) {
+      firstSeen = true;
+      await held;
+    }
+    return r.fallback();
+  });
+  await page.goto('/ui/activity/status');
+  await expect.poll(() => firstSeen).toBe(true);
+  await page.locator('nav.route-nav').getByRole('link', { name: 'Tools', exact: true }).click();
+  await expect(page).toHaveURL('/ui/tools/status');
+  const answered = page.waitForResponse((r) => r.url().includes('/ui/api/activity?') && byCursor(r.url()) === null);
+  release();
+  await answered;
+  await page.clock.runFor(100);
+  // Proving an absence needs a window: the broken code asks within milliseconds of the answer.
+  await new Promise((r) => { setTimeout(r, 500); });
+  expect(urls.map(byCursor)).toEqual([null]);
+});

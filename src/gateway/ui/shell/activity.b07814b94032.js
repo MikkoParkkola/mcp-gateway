@@ -138,15 +138,16 @@ async function statusTab(body, ctx) {
   body.append(root);
 
   // After the controls are drawn. A static import would put the module before
-  // every page's first paint; a failure leaves the labels standing without (i).
-  try {
-    const { tip } = await import('/ui/assets/tooltip.fc459693146e.js');
+  // every page's first paint. Not awaited: the controls are live from here, and a
+  // slow or failing module must neither hold the list back nor open a window in
+  // which a click reaches state not yet set up; it only leaves the labels without (i).
+  import('/ui/assets/tooltip.fc459693146e.js').then(({ tip }) => {
     outcomeTip.append(tip('activity.status.outcome'));
     blockedTip.append(tip('activity.status.blocked'));
     if (memberTip) memberTip.append(tip('activity.status.calls-made-with-your-key'));
-  } catch {
+  }).catch(() => {
     // The line stands without its (i).
-  }
+  });
 
   let epoch = 0;
   let tail = Promise.resolve();
@@ -251,14 +252,16 @@ async function statusTab(body, ctx) {
   function schedule(cursor) {
     const token = epoch;
     const append = cursor != null;
+    // A list the user has left asks for nothing more and draws nothing.
+    const current = () => token === epoch && root.isConnected;
     const job = tail.then(async () => {
-      if (token !== epoch) return;
+      if (!current()) return;
       try {
         const data = await ctx.api(`/ui/api/activity?${queryOf(cursor)}`);
-        if (token !== epoch) return;
+        if (!current()) return;
         paint(data, append);
       } catch {
-        if (token !== epoch) return;
+        if (!current()) return;
         if (append) failMore(cursor);
         else failList();
         return;
