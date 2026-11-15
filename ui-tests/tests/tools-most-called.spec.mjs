@@ -6,7 +6,7 @@
 // against the hour before. An empty hour offers the whole catalogue. Search and
 // ?view=all open today's A-to-Z list. The shell document is served as the
 // gateway serves it; /ui/api answers are mocked for a signed-in admin.
-import { test, expect } from './base.mjs';
+import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
 
 const HOSTILE = '<img src=x onerror="window.__pwned=1">';
 
@@ -129,7 +129,7 @@ test('M5: an hour with no calls shows the empty line and the catalogue link', as
   await expect(panel.locator('tr')).toHaveCount(0);
 });
 
-test('M6: search on Status opens the A-to-Z list', async ({ page }) => {
+test('M6: typing on Status opens the A-to-Z list and keeps every key', async ({ page }) => {
   // bravo_lookup matches by name. catalog_fetch matches by description.
   // delta_ping's server is bravo; today's search does not read the server.
   await toolsScreen(page, { tools: [
@@ -139,10 +139,19 @@ test('M6: search on Status opens the A-to-Z list', async ({ page }) => {
     tool('bravo_lookup', 'alpha', 9, 1, 'Looks up records'),
   ] });
   await page.goto('/ui/tools/status');
-  await search(page).fill('bravo');
+  await expect(mostCalled(page)).toBeVisible();
+  // Key by key: the first key opens the catalogue, and the keys after it must
+  // land in the catalogue's own search box.
+  await search(page).click();
+  await page.keyboard.type('bravo');
   await expect(page).toHaveURL('/ui/tools/status?view=all');
   await expect(search(page)).toHaveValue('bravo');
+  await expect(search(page)).toBeFocused();
   await expect.poll(() => catalogueNames(page)).toEqual(['bravo_lookup', 'catalog_fetch']);
+  // One history entry: Back returns to the panel in one step.
+  await page.goBack();
+  await expect(page).toHaveURL('/ui/tools/status');
+  await expect(mostCalled(page)).toBeVisible();
 
   await page.goto('/ui/tools/status');
   await search(page).press('Enter');
@@ -182,3 +191,39 @@ test('M9: a hostile tool name is text', async ({ page }) => {
   await expect(panel.locator('img')).toHaveCount(0);
   expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
 });
+
+test('M5b: one tool reads "See all 1 tool"', async ({ page }) => {
+  await toolsScreen(page, { tools: [tool('lonely', 'alpha', 0, 0)] });
+  await page.goto('/ui/tools/status');
+  await expect(mostCalled(page).getByRole('link', { name: 'See all 1 tool', exact: true })).toHaveAttribute('href', /\?view=all$/);
+});
+
+test('M11: a panel with rows also links to the whole catalogue', async ({ page }) => {
+  await toolsScreen(page, { tools: RANKED });
+  await page.goto('/ui/tools/status');
+  await expect(mostCalled(page).getByRole('link', { name: 'See all 17 tools', exact: true })).toHaveAttribute('href', /\?view=all$/);
+});
+
+test('M12: the panel search starts empty after a catalogue search', async ({ page }) => {
+  await toolsScreen(page, { tools: RANKED });
+  await page.goto('/ui/tools/status?view=all');
+  await search(page).fill('birch');
+  // In-app navigation keeps the screen's module state, where a stale query would live.
+  await page.locator('nav.route-nav a[data-page="tools"]').click();
+  await expect(page).toHaveURL('/ui/tools/status');
+  await expect(mostCalled(page)).toBeVisible();
+  await expect(search(page)).toHaveValue('');
+});
+
+for (const width of WIDTHS) {
+  test(`M10: the landing panel passes axe and never scrolls sideways at ${width} px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await toolsScreen(page, { tools: RANKED });
+    await page.goto('/ui/tools/status');
+    await expect(mostCalled(page).locator('tbody tr')).toHaveCount(10);
+    expect(await blockingViolations(page)).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    // The table scrolls in its own region, reachable from the keyboard.
+    await expect(page.getByRole('region', { name: 'Most called tools', exact: true })).toHaveAttribute('tabindex', '0');
+  });
+}
