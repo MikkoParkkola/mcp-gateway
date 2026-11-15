@@ -155,6 +155,15 @@ pub(crate) enum PreviewRefused {
     Unread(String),
 }
 
+/// Why a save is told to retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BusyReason {
+    /// Another write held the config past the wait.
+    Locked,
+    /// A restart is being prepared.
+    Restart,
+}
+
 /// Why `ui_diff` gave no preview, or `ui_save` wrote nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum UiRefused {
@@ -178,7 +187,9 @@ pub(crate) enum UiRefused {
     /// Save: the file changed, and its fresh preview refused.
     StaleUnpreviewable(String),
     /// Save: another write held the config past the wait.
-    Busy,
+    Busy(BusyReason),
+    /// Save: the gateway is restarting or stopping (the gate's final states).
+    Down(crate::gateway::restart_config_floor::Refusal),
     /// Save: the secret store refused; no file was written. A timed-out
     /// create may still land an entry, listed as unused.
     SecretsRefused {
@@ -424,6 +435,7 @@ pub(super) fn validate_refusal(e: &ReplaceError) -> UiRefused {
         }
         ReplaceError::Failed(_)
         | ReplaceError::Busy
+        | ReplaceError::Gated(_)
         | ReplaceError::Stale { .. }
         | ReplaceError::NoAuditLog
         | ReplaceError::AuditRefused(_)
