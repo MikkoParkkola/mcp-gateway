@@ -222,8 +222,8 @@ fn script_cases(script: &str) -> Vec<String> {
     cases
 }
 
-/// The table's case ids equal the cases the script catches: ALLOWED, READ_BACKS
-/// and RULE_SITES read from the script, plus H1-H8. A row added to or dropped
+/// The table's case ids equal the cases the script catches: `ALLOWED`, `READ_BACKS`
+/// and `RULE_SITES` read from the script, plus H1-H8. A row added to or dropped
 /// from the script fails here until the table follows.
 #[test]
 fn the_table_names_every_case_the_scanner_catches() {
