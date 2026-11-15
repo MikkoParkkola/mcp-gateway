@@ -413,43 +413,60 @@ fn a_file_under_a_mask_is_not_placed() {
 /// bind-back stays": an `n` layout (npm's cli inside its package under
 /// `/usr/local/lib`, node in `/usr/local/bin`) binds back exactly node's file
 /// and npm's package, never the trees around them, since an npx preview's
-/// run phase executes downloaded code; an NVM node binds its version tree
-/// once; a node elsewhere leaves the plan unchanged and refuses by name.
+/// run phase executes downloaded code.
 #[test]
 fn an_n_layout_binds_back_only_node_and_npms_package() {
     let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
     let package = "/usr/local/lib/preview-row/node_modules/npm";
     let cli = format!("{package}/bin/npm-cli.js");
     let node = "/usr/local/bin/preview-row-node";
+    let npx = Path::new("/usr/local/bin/preview-row-npx");
     let mut plan = base.clone();
     plan.bound_back = vec![format!("{package}/bin"), format!("{package}/lib")];
     let exec =
-        place_npm(&mut plan, Path::new(&cli), Path::new(node)).expect("an n layout is placed");
+        place_npm(&mut plan, npx, Path::new(&cli), Path::new(node)).expect("an n layout is placed");
     assert_eq!(plan.bound_back, [node, package]);
     assert_eq!(plan.read_only, base.read_only);
     assert_eq!(exec, PathBuf::from(&cli));
+}
 
-    let tree = "/home/preview-row/.nvm/versions/node/v20.0.0";
-    let mut plan = base.clone();
-    let cli = format!("{tree}/lib/node_modules/npm/bin/npm-cli.js");
-    let node = format!("{tree}/bin/node");
-    place_npm(&mut plan, Path::new(&cli), Path::new(&node)).expect("an NVM node is placed");
-    assert_eq!(
-        plan.read_only,
-        [base.read_only.clone(), vec![tree.to_owned()]].concat()
-    );
-    assert_eq!(plan.bound_back, base.bound_back);
-
-    let tool = "/opt/hostedtoolcache/node/20.1.0/x64";
-    let mut plan = base.clone();
-    let cli = format!("{tool}/lib/node_modules/npm/bin/npm-cli.js");
-    let node = format!("{tool}/bin/node");
-    let refused = place_npm(&mut plan, Path::new(&cli), Path::new(&node)).expect_err("refused");
-    assert!(
-        matches!(&refused, Refusal::Step(s) if s.starts_with("placing npm")),
-        "{refused}"
-    );
-    assert_eq!(plan, base);
+/// R-bind in any layout (lead ruling 11-15), kills "npx's runtime tree is
+/// kept" and "a runtime tree is bound whole": an NVM install shows only
+/// node's real file and npm's package, read-only; the tree npx was bound by
+/// as the program goes first (the fetch never runs npx), so the tree's
+/// global packages and its `etc/npmrc` are not shown. A node outside every
+/// known layout gets the same two binds, and npx's lone-file bind goes.
+#[test]
+fn any_layout_binds_only_node_and_npms_package() {
+    let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    for (prefix, npx_bind) in [
+        ("/home/preview-row/.nvm/versions/node/v20.0.0", None),
+        (
+            "/opt/hostedtoolcache/node/20.1.0/x64",
+            Some("lib/node_modules/npm/bin/npx-cli.js"),
+        ),
+    ] {
+        let package = format!("{prefix}/lib/node_modules/npm");
+        let npx = format!("{package}/bin/npx-cli.js");
+        let cli = format!("{package}/bin/npm-cli.js");
+        let node = format!("{prefix}/bin/node");
+        let mut plan = base.clone();
+        // What build_plan bound for npx as the program: its runtime tree,
+        // or its lone real file outside every known tree.
+        plan.read_only
+            .push(npx_bind.map_or_else(|| prefix.to_owned(), |f| format!("{prefix}/{f}")));
+        let exec = place_npm(
+            &mut plan,
+            Path::new(&npx),
+            Path::new(&cli),
+            Path::new(&node),
+        )
+        .expect("placed");
+        let want = [base.read_only.clone(), vec![node, package]].concat();
+        assert_eq!(plan.read_only, want, "{prefix}");
+        assert_eq!(plan.bound_back, base.bound_back, "{prefix}");
+        assert_eq!(exec, PathBuf::from(&cli), "{prefix}");
+    }
 }
 
 /// R-bind, kills "a covering bind-back keeps the trees whole": a regular npx
@@ -465,7 +482,8 @@ fn a_covering_usr_local_bind_back_is_replaced_by_the_narrow_binds() {
     let node = "/usr/local/bin/preview-row-node";
     let mut plan = base.clone();
     plan.bound_back = vec!["/usr/local/bin".to_owned(), "/usr/local/lib".to_owned()];
-    place_npm(&mut plan, Path::new(&cli), Path::new(node)).expect("placed");
+    let npx = Path::new("/usr/local/bin/preview-row-npx");
+    place_npm(&mut plan, npx, Path::new(&cli), Path::new(node)).expect("placed");
     assert_eq!(plan.bound_back, [node, package]);
     let npmrc = format!("{package}/npmrc");
     assert_eq!(plan.masked, [base.masked.clone(), vec![npmrc]].concat());
@@ -481,7 +499,8 @@ fn a_directory_or_hidden_node_refuses() {
     let hidden =
         Path::new(base.hidden.first().expect("the gateway's paths are hidden")).join("node");
     for node in [Path::new("/usr/lib"), hidden.as_path()] {
-        let refused = place_npm(&mut base.clone(), cli, node).expect_err("refused");
+        let npx = Path::new("/usr/local/bin/preview-row-npx");
+        let refused = place_npm(&mut base.clone(), npx, cli, node).expect_err("refused");
         assert!(
             matches!(&refused, Refusal::Step(s) if s.starts_with("placing node")),
             "{}: {refused}",

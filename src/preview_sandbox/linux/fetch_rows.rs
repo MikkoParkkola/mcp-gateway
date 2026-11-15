@@ -287,15 +287,15 @@ async fn l_tls1_a_registry_outside_the_bundle_is_refused() {
     ran.expect_err("an untrusted registry was used");
 }
 
-/// A writable copy of the host's npm and node in an NVM-shaped tree, both
-/// npmrc files npm reads from its own install (builtin and global) turning
-/// TLS off and trusting `hostile_ca`; returns the scratch dir and `bin`.
-fn hostile_npm(npx: &std::path::Path, hostile_ca: &str) -> (tempfile::TempDir, PathBuf) {
+/// A writable copy of the host's npm and node in an NVM-shaped tree: the
+/// scratch dir and the tree (`bin/node`, `bin/npm`, `bin/npx`, npm's package
+/// under `lib/node_modules/npm`, an empty `etc`).
+fn nvm_copy(npx: &std::path::Path, version: &str) -> (tempfile::TempDir, PathBuf) {
     let npx_real = std::fs::canonicalize(npx).expect("npx's real file");
     let npm_root = npx_real.ancestors().nth(2).expect("npm's package dir");
     let node = std::fs::canonicalize(npx.with_file_name("node")).expect("node beside npx");
     let scratch = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("scratch");
-    let tree = scratch.path().join(".nvm/versions/node/v0.0.0-hostile");
+    let tree = scratch.path().join(".nvm/versions/node").join(version);
     let modules = tree.join("lib/node_modules");
     for dir in [tree.join("bin"), tree.join("etc"), modules.clone()] {
         std::fs::create_dir_all(dir).expect("tree");
@@ -312,21 +312,28 @@ fn hostile_npm(npx: &std::path::Path, hostile_ca: &str) -> (tempfile::TempDir, P
         let cli = format!("../lib/node_modules/npm/bin/{tool}-cli.js");
         std::os::unix::fs::symlink(cli, tree.join("bin").join(tool)).expect("link");
     }
+    (scratch, tree)
+}
+
+/// [`nvm_copy`] with both npmrc files npm reads from its own install
+/// (builtin and global) turning TLS off and trusting `hostile_ca`; returns
+/// the scratch dir and `bin`.
+fn hostile_npm(npx: &std::path::Path, hostile_ca: &str) -> (tempfile::TempDir, PathBuf) {
+    let (scratch, tree) = nvm_copy(npx, "v0.0.0-hostile");
     let ca = tree.join("hostile-ca.pem");
     std::fs::write(&ca, hostile_ca).expect("hostile CA");
     let rc = format!("strict-ssl=false\ncafile={}\n", ca.display());
-    std::fs::write(modules.join("npm/npmrc"), &rc).expect("builtin npmrc");
+    std::fs::write(tree.join("lib/node_modules/npm/npmrc"), &rc).expect("builtin npmrc");
     std::fs::write(tree.join("etc/npmrc"), &rc).expect("global npmrc");
-    let bin = tree.join("bin");
-    (scratch, bin)
+    (scratch, tree.join("bin"))
 }
 
-/// L-tls2, kills m-strict-ssl and m-cafile (either left to npm's files):
-/// npm's own npmrc files turn TLS off and trust the registry's CA, which the
-/// bundle lacks; the fetch still refuses. The globalconfig and userconfig
-/// pins fall to R-env (npm ranks the environment above both files).
-/// Positive control: the same copied npm fetches when the bundle holds the
-/// registry's CA.
+/// L-tls2: npm's own npmrc files turn TLS off and trust the registry's CA,
+/// which the bundle lacks; the fetch still refuses. Kills m-cafile through
+/// its positive control (the same copied npm fetches when the bundle holds
+/// the registry's CA). The strict-ssl, globalconfig and userconfig pins rest
+/// on R-env: npm's builtin npmrc is covered by an empty file and the tree's
+/// `etc/npmrc` is not in the root, so no file here can undo them.
 #[tokio::test]
 async fn l_tls2_a_hostile_npmrc_in_the_npm_tree_changes_nothing() {
     let Some(gateway) = gateway_bin() else {
@@ -482,4 +489,59 @@ async fn l_npmrc_a_token_in_npms_builtin_npmrc_stays_unreadable() {
     };
     assert_eq!(seen, ["node-ran", "bin-ran"]);
     drop(planted);
+}
+
+/// L-nvm (lead ruling 11-15), kills "a runtime tree is bound whole" end to
+/// end: a copy of the host's npm and node in an NVM-shaped tree fetches and
+/// runs the package from the two narrow binds alone (npm fetched it, node
+/// runs in the run phase), while a token in the tree's `etc/npmrc` and a
+/// planted global package's config stay unreadable to the package.
+#[tokio::test]
+async fn l_nvm_npm_and_node_run_from_the_two_narrow_binds() {
+    let Some(gateway) = gateway_bin() else {
+        return;
+    };
+    let Some(npx) = host_npx() else {
+        return;
+    };
+    if !sandbox_runs(&gateway).await {
+        return;
+    }
+    let (_scratch, tree) = nvm_copy(&npx, "v0.0.0-narrow");
+    let global = tree.join("lib/node_modules/preview-canary");
+    std::fs::create_dir_all(&global).expect("global package");
+    let canaries = [tree.join("etc/npmrc"), global.join("config")];
+    for canary in &canaries {
+        std::fs::write(
+            canary,
+            b"//registry.npmjs.org/:_authToken=preview-canary-token\n",
+        )
+        .expect("canary");
+    }
+    let fake = Package {
+        name: "mcp-canary",
+        version: "1.0.0",
+        manifest: serde_json::json!({"bin": {"mcp-canary": "bin/cli.sh"}}),
+        files: vec![("bin/cli.sh", CANARY_BIN.to_vec(), 0o755)],
+    };
+    let registry = Registry::start(vec![fake], "fetch rows CA").await;
+    let mut path = OsString::from(tree.join("bin"));
+    path.push(":/usr/bin:/bin");
+    let target = Target {
+        program: PathBuf::from("npx"),
+        args: std::iter::once("mcp-canary".into())
+            .chain(canaries.iter().map(|c| c.clone().into_os_string()))
+            .collect(),
+    };
+    let ran = preview(
+        &gateway,
+        &target,
+        &registry.ca_pem,
+        registry.port,
+        Some(path),
+        GUARD,
+    )
+    .await;
+    let out = ran.expect("the copied npm fetched and node ran");
+    assert_eq!(lines(&out), ["node-ran", "bin-ran"], "{out}");
 }

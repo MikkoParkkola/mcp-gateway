@@ -299,7 +299,7 @@ fn npm_fetch(
         .map_err(|e| Refusal::Step(format!("finding {requested} ({e})")))?;
     let (npm, node_dir) = probe::npm_beside(&npx)?;
     probe::check_npm(&npm, &node_dir)?;
-    let npm = place_npm(plan, &npm, &node_dir.join("node"))?;
+    let npm = place_npm(plan, &npx, &npm, &node_dir.join("node"))?;
     let ip = probe::find_ip(&probe::IP_CANDIDATES, &|p: &Path| placed(p, plan))?;
     let run_args = phases
         .run_args
@@ -447,7 +447,7 @@ fn build_plan(
 /// directory and sibling `lib`. A runtime tree (an NVM version) is bound
 /// whole, as for a program. Anything else is left unbound and refuses.
 /// npm's builtin `npmrc` is covered by an empty file either way.
-fn place_npm(plan: &mut Plan, npm: &Path, node: &Path) -> Result<PathBuf, Refusal> {
+fn place_npm(plan: &mut Plan, _npx: &Path, npm: &Path, node: &Path) -> Result<PathBuf, Refusal> {
     let real = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
     let (npm_real, node_real) = (real(npm), real(node));
     if node_real.is_dir() {
