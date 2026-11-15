@@ -30,13 +30,15 @@ const BLOCKING = { lcp: true, cls: false };
 
 /**
  * The budgets a row misses, as text, split by whether they block. A p75 at or
- * over its budget is a miss; under it is not.
+ * over its budget is a miss; under it is not. A p75 that was never measured is
+ * a miss too: a gate must not pass on a number it does not have.
  */
 function misses(row, blocking = BLOCKING) {
   const found = { blocking: [], reported: [] };
   const check = (metric, p75, budget, unit) => {
-    if (p75 === null || p75 < budget) return;
-    found[blocking[metric] ? 'blocking' : 'reported'].push(`${metric} p75 ${p75}${unit} is not under ${budget}${unit}`);
+    const side = blocking[metric] ? 'blocking' : 'reported';
+    if (p75 === null || p75 === undefined) found[side].push(`${metric} p75 was not measured`);
+    else if (p75 >= budget) found[side].push(`${metric} p75 ${p75}${unit} is not under ${budget}${unit}`);
   };
   check('lcp', row.lcp.p75, LCP_BUDGET_MS, ' ms');
   check('cls', row.cls.p75, CLS_BUDGET, '');
@@ -267,26 +269,44 @@ function writeRow(result) {
 
 for (const row of ROWS) {
   for (const profile of ['phone', 'desktop']) {
-    test(`${row.page} ${profile}: lcp p75 under 2500 ms blocks, cls p75 against 0.1 is reported`, async ({ browser }) => {
+    const says = (metric, budget) => `${metric} p75 under ${budget} ${BLOCKING[metric] ? 'blocks' : 'is reported'}`;
+    test(`${row.page} ${profile}: ${says('lcp', '2500 ms')}, ${says('cls', '0.1')}`, async ({ browser }) => {
       const readings = [];
       const errors = [];
+      // A load that failed once and then measured on its retry. Kept in the row,
+      // so a runner that keeps dropping loads shows in the summary.
+      const retried = [];
       let loadsAttempted = 0;
       let loadsMeasured = 0;
-      for (let i = 0; i < LOADS; i++) {
-        // A fresh context per load, closed before the next one. A new page in
-        // a shared context would reuse the previous load's HTTP cache and storage.
-        loadsAttempted += 1;
+      // A fresh context per load, closed before the next one. A new page in
+      // a shared context would reuse the previous load's HTTP cache and storage.
+      const once = async () => {
         let context;
         try {
           context = await browser.newContext(loadContextOptions(profile));
           const fresh = await context.newPage();
           await row.prepare(fresh, { profile });
-          readings.push(await measure(fresh, row.url, profile, row.ready));
-          loadsMeasured += 1;
-        } catch (err) {
-          errors.push(err instanceof Error ? err.message : String(err));
+          return await measure(fresh, row.url, profile, row.ready);
         } finally {
           if (context) await context.close().catch(() => {});
+        }
+      };
+      const message = (err) => (err instanceof Error ? err.message : String(err));
+      for (let i = 0; i < LOADS; i++) {
+        loadsAttempted += 1;
+        // One retry: the job blocks on this row, and one dropped load on a shared
+        // runner is not a budget miss. A load that fails twice fails the row.
+        try {
+          readings.push(await once());
+          loadsMeasured += 1;
+        } catch (first) {
+          try {
+            readings.push(await once());
+            loadsMeasured += 1;
+            retried.push(message(first));
+          } catch (second) {
+            errors.push(message(second));
+          }
         }
       }
       const lcp = spread(readings.map((r) => r.lcp));
@@ -297,15 +317,17 @@ for (const row of ROWS) {
         loadsAttempted,
         loadsMeasured,
         errors,
+        retried,
         lcp: { ...lcp, budget: LCP_BUDGET_MS, blocks: BLOCKING.lcp },
         cls: { ...cls, budget: CLS_BUDGET, blocks: BLOCKING.cls },
       };
       const missed = misses(result);
+      result.blocking = missed.blocking;
       result.reported = missed.reported;
       // On disk before the assertions, so a miss or a partial run still reaches the summary.
       writeRow(result);
-      console.log(JSON.stringify({ page: row.page, profile, loadsAttempted, loadsMeasured, errors, lcp, cls, reported: missed.reported }));
-      // A failed load fails the row: a budget judged on fewer loads than asked is not judged.
+      console.log(JSON.stringify({ page: row.page, profile, loadsAttempted, loadsMeasured, errors, retried, lcp, cls, blocking: missed.blocking, reported: missed.reported }));
+      // A load that failed twice fails the row: a budget judged on fewer loads than asked is not judged.
       if (errors.length) throw new Error(errors.join('\n'));
       expect(missed.blocking, 'a blocking budget missed').toEqual([]);
     });
@@ -403,8 +425,8 @@ test('the gate: a blocking budget missed fails the row, a reported one does not'
   expect(misses(row(900, 0.1137))).toEqual({ blocking: [], reported: ['cls p75 0.1137 is not under 0.1'] });
   // The same reading blocks once CLS is turned on: the flag decides, not the number.
   expect(misses(row(900, 0.1137), { lcp: true, cls: true })).toEqual({ blocking: ['cls p75 0.1137 is not under 0.1'], reported: [] });
-  // A row with no loads measured judges nothing here; its errors fail it instead.
-  expect(misses(row(null, null))).toEqual({ blocking: [], reported: [] });
+  // A p75 that was never measured is a miss on its side: a blocking gate never passes on a missing number.
+  expect(misses(row(null, null))).toEqual({ blocking: ['lcp p75 was not measured'], reported: ['cls p75 was not measured'] });
 });
 
 test('tools status held 3s reports lcp over 2500', async ({ page }) => {
@@ -477,8 +499,10 @@ test.afterAll(() => {
       loadsAttempted: row.loadsAttempted,
       loadsMeasured: row.loadsMeasured,
       errors,
-      // Misses of budgets that do not block yet (BLOCKING), so the trend stays visible.
+      // Misses: those that failed the row, and those of budgets that do not block yet (BLOCKING).
+      blocking: row.blocking ?? [],
       reported: row.reported ?? [],
+      retried: row.retried ?? [],
       incomplete: row.loadsMeasured !== row.loadsAttempted || errors.length > 0,
     };
   }
