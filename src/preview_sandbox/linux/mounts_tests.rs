@@ -267,6 +267,8 @@ fn verify_requires_the_read_only_proxy_socket_only_with_an_npm_fetch() {
         "not nodev"
     );
     let no_npm = fetch_plan(true);
+    // Base rows pass without npm, so the refusal below is the proxy mount's.
+    assert!(verify_rows(&no_npm, &with(None)).is_ok());
     assert!(
         verify_rows(&no_npm, &with(Some(proxy(true, true)))).is_err(),
         "no npm fetch planned"

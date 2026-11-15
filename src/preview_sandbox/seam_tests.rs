@@ -71,6 +71,17 @@ fn production_sources() -> Vec<PathBuf> {
     let top = production_text(&std::fs::read_to_string(root.join("mod.rs")).expect("mod.rs"));
     let mut files = vec![root.join("mod.rs")];
     production_files(&root, &top, &mut files);
+    // A directory module written as `dir.rs` is reached as a directory and
+    // as a leaf: listed once.
+    files.sort();
+    files.dedup();
+    // Positive control: the scan reaches nested production files.
+    for known in ["linux/mod.rs", "linux/relay.rs", "linux/fetch_step.rs"] {
+        assert!(
+            files.iter().any(|f| f.ends_with(known)),
+            "the scan reached {known}"
+        );
+    }
     files
 }
 
