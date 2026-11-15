@@ -222,14 +222,22 @@ impl FloorAdapter for HealthFloor {
         let Some(path) = self.path.clone() else {
             return mutant!(
                 "path_none_certifies",
-                Box::pin(std::future::ready(Ok(()))),
+                {
+                    let mutated: BoxFuture<'_, Result<(), FloorFault>> =
+                        Box::pin(std::future::ready(Ok(())));
+                    mutated
+                },
                 refused()
             );
         };
         let Ok(now) = (self.clock)() else {
             return mutant!(
                 "clock_as_save_failed",
-                Box::pin(std::future::ready(Err(FloorFault::SaveFailed))),
+                {
+                    let mutated: BoxFuture<'_, Result<(), FloorFault>> =
+                        Box::pin(std::future::ready(Err(FloorFault::SaveFailed)));
+                    mutated
+                },
                 refused()
             );
         };
