@@ -335,9 +335,11 @@ test('A9 member: the line follows the list\'s own access, not the status admin f
     await shellReady(page);
     await expect.poll(() => urls.length).toBeGreaterThan(at);
     await expect.poll(() => shownRows(page)).toHaveLength(5);
-    // The trigger, not the text: an exact-text locator also matches nothing when the
-    // line is shown (it holds the trigger too), and hidden is true of nothing.
-    await expect(trigger.locator('button'), other).toBeHidden();
+    // The line itself, which is always in the page: the trigger may not be mounted
+    // yet, and hidden is true of nothing, so the count pins that it is there.
+    const line = page.locator('#content .activity-member');
+    await expect(line, other).toHaveCount(1);
+    await expect(line, other).toBeHidden();
   }
 });
 
@@ -468,6 +470,8 @@ test('A14 a next page that fails keeps the rows, says so, and Retry asks for the
   const retry = page.locator('#content').getByRole('button', { name: 'Retry', exact: true });
   await expect(retry).toBeVisible();
   await expect(page.locator('#content')).toContainText('More calls could not be read.');
+  await page.clock.runFor(2000);
+  await expect.poll(() => page.locator('#announcer').textContent()).toContain('More calls could not be read.');
   expect(await texts(page)).toEqual(TEXT_ONE);
   await retry.click();
   await expect.poll(() => texts(page)).toEqual([...TEXT_ONE, ...TEXT_TWO]);

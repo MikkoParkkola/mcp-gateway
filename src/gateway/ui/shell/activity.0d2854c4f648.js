@@ -241,6 +241,9 @@ async function statusTab(body, ctx) {
     });
     moreLine.replaceChildren('More calls could not be read. ', retry);
     moreLine.hidden = false;
+    // Said as well as shown: the rows above stay, so nothing else tells a screen
+    // reader that paging stopped.
+    ctx.announce('More calls could not be read.');
   }
 
   function clearMore() {

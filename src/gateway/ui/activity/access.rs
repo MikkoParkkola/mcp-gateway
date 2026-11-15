@@ -56,8 +56,10 @@ impl Access {
     pub(super) fn scope(&self) -> AccessScope {
         match self {
             Self::All => AccessScope::All,
-            Self::Own { .. } => AccessScope::Own,
-            Self::Scoped { .. } => AccessScope::Scoped,
+            // A scoped credential with an owner reads only that owner's calls (on its
+            // backends): whose calls they are is what the field says, so own.
+            Self::Own { .. } | Self::Scoped { owner: Some(_), .. } => AccessScope::Own,
+            Self::Scoped { owner: None, .. } => AccessScope::Scoped,
         }
     }
 

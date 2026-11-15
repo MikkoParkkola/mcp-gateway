@@ -89,6 +89,16 @@ async fn g2a_the_list_answer_names_the_access_applied() {
     )
     .await;
     assert_eq!(limited["access"], "scoped");
+    // A scoped credential with an owner reads only that owner's calls.
+    let scoped_own = scoped(
+        &fx,
+        &Access::Scoped {
+            owner: Some(("https://issuer.example".into(), "subject".into())),
+            backends: vec!["b".into()],
+        },
+    )
+    .await;
+    assert_eq!(scoped_own["access"], "own");
 }
 
 #[tokio::test]
