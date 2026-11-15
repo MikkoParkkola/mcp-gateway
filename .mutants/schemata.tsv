@@ -1,0 +1,3 @@
+head_sha	31a1080f1c0c05ea6d260f04581cde3370a32147
+#mutant admission_outside_mutex
+mcp_gateway	gateway::restart_config_floor::contract_more_tests::k10_admission_decides_and_counts_under_one_lock	src/gateway/config_floor_contract_more_tests.rs:311
