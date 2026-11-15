@@ -20,7 +20,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use windows_paths::{hostile_home, sh_path, yaml_single_quoted};
 
 use gateway_bin::{ANY_PORT, reported_port};
@@ -47,7 +47,8 @@ done
 "#;
 
 struct Gateway {
-    child: Child,
+    /// Reaped on stop and on drop, so no gateway outlives the test.
+    process: gateway_bin::Reaped,
     port: u16,
     log: PathBuf,
 }
@@ -57,24 +58,26 @@ impl Gateway {
         let log = home.join("gateway.log");
         let out = std::fs::File::create(&log).expect("log file");
         let err = out.try_clone().expect("log handle");
-        let child = Command::from(gateway_bin::command(
-            home,
-            gateway_bin::Inherit::Environment,
-        ))
-        .current_dir(home)
-        .env("MCP_GATEWAY_CONFIG_DIR", home.join("state"))
-        .env("RUST_LOG", "info")
-        .kill_on_drop(true)
-        .arg("serve")
-        .arg("--config")
-        .arg(config)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(out))
-        .stderr(Stdio::from(err))
-        .spawn()
-        .expect("the built mcp-gateway binary spawns");
+        let process = gateway_bin::Reaped::new(
+            Command::from(gateway_bin::command(
+                home,
+                gateway_bin::Inherit::Environment,
+            ))
+            .current_dir(home)
+            .env("MCP_GATEWAY_CONFIG_DIR", home.join("state"))
+            .env("RUST_LOG", "info")
+            .kill_on_drop(true)
+            .arg("serve")
+            .arg("--config")
+            .arg(config)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(out))
+            .stderr(Stdio::from(err))
+            .spawn()
+            .expect("the built mcp-gateway binary spawns"),
+        );
         let mut gateway = Self {
-            child,
+            process,
             port: ANY_PORT,
             log,
         };
@@ -98,8 +101,8 @@ impl Gateway {
         }
     }
 
-    async fn stop(mut self) {
-        self.child.kill().await.expect("the gateway stops");
+    async fn stop(self) {
+        self.process.stop().await;
     }
 
     fn logs(&self) -> String {
