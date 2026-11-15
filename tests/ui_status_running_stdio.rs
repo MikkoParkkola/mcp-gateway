@@ -142,7 +142,7 @@ fn gateway_config(home: &Path, live: &Path, dead: &Path) -> PathBuf {
     let bearer = yaml_single_quoted(BEARER);
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &config,
-        &format!(
+        format!(
             "server:\n  host: \"127.0.0.1\"\n  port: {ANY_PORT}\n\
              auth:\n  enabled: true\n  bearer_token: {bearer}\n  single_user: true\n\
              backends:\n  {LIVE}:\n    enabled: true\n    command: {live_cmd}\n  \
