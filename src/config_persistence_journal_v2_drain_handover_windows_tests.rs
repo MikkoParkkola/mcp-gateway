@@ -6,8 +6,9 @@
 use super::super::super::Phase;
 use super::super::super::fixtures::{config, seed};
 use super::super::fixtures::{decided, reopen, staged, state};
-use super::{HandoverError, abandoned_path, hand_over};
+use super::{HandoverError, hand_over};
 use crate::config_persistence::journal;
+use crate::config_persistence::journal::v2::abandoned_path;
 
 #[test]
 fn handover_refuses_off_unix_without_writing() {

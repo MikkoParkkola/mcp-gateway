@@ -294,7 +294,7 @@ pub(super) struct EnvReloadCounts {
     pub(super) attempts: std::sync::atomic::AtomicUsize,
     pub(super) warns: std::sync::atomic::AtomicUsize,
     /// Whether the last reload, whatever triggered it, failed.
-    failed: std::sync::atomic::AtomicBool,
+    failed: Arc<std::sync::atomic::AtomicBool>,
     /// Test-only: failed poll-started reloads whose report is logged, so a
     /// row waits for completed failures instead of sleeping (MIK-8360).
     #[cfg(test)]
@@ -302,6 +302,13 @@ pub(super) struct EnvReloadCounts {
 }
 
 impl EnvReloadCounts {
+    /// Registers the failed-reload flag with the gate, so a certification
+    /// refuses while a failed reload is still being retried. The gate keeps a
+    /// weak reference: this struct (held by the watcher task) owns the flag.
+    pub(super) fn register_with(&self, gate: &crate::gateway::restart_config_floor::ConfigGate) {
+        gate.register_owed(&self.failed);
+    }
+
     /// Whether the last reload failed.
     // Linux and macOS (MIK-8181), as the real-watcher rows (see `watch_chain_tests.rs`).
     #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
