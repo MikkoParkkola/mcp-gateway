@@ -15,9 +15,6 @@ use std::time::{Duration, Instant};
 
 use crate::preview_sandbox::Refusal;
 
-/// Where `ip` may live; the first that exists inside a bound tree is used.
-pub(super) const IP_CANDIDATES: [&str; 4] = ["/usr/sbin/ip", "/usr/bin/ip", "/sbin/ip", "/bin/ip"];
-
 /// npm older than this refuses the fetch.
 const NPM_FLOOR: u32 = 9;
 /// How long `npm --version` may take.
