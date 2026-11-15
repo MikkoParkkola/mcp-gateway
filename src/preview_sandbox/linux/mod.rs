@@ -7,6 +7,7 @@
 mod ca_bundle;
 mod control_client;
 mod drop;
+mod fetch_step;
 mod helper;
 mod mounts;
 pub(crate) mod plan;
