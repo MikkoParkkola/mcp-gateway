@@ -222,7 +222,7 @@ async function statusTab(body, ctx) {
     // them only by walking the links.
     if (!replace && added > 0) ctx.announce(`${added} more call${added === 1 ? '' : 's'}.`);
     // Empty only once the list has run out: a page with no rows but a cursor is a scan
-    // that stopped short on a sparse filter, and pump() reads on at once.
+    // that stopped short on a sparse filter, and pump() reads on.
     empty.replaceChildren();
     if (rowsEl.childElementCount === 0 && !pageCursor) empty.append(emptyNode());
     ctx.show(null);
@@ -281,8 +281,9 @@ async function statusTab(body, ctx) {
   }
 
   function pump() {
-    // A list with rows reads on when its end is in view; an empty one at once.
-    if (!pageCursor || (!onScreen && rowsEl.childElementCount > 0)) return;
+    // Reads on when the list's end is in view. An empty list (a scan that stopped
+    // short) puts the end in view, so it reads on from the observer too.
+    if (!onScreen || !pageCursor) return;
     const cursor = pageCursor;
     pageCursor = null;
     schedule(cursor);

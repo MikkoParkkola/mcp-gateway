@@ -417,8 +417,22 @@ const byCursor = (url) => new URL(url).searchParams.get('cursor');
 test('A13 a first page with no rows but a cursor is not the empty state: the next page is read and shown', async ({ page }) => {
   // A sparse filter: the server's scan ran out before it found a match, and says where to go on.
   const urls = await install(page, { answer: (url) => (byCursor(url) === 'c2' ? list(PAGE_TWO) : list([], 'c2')) });
+  // Page two is held, so the screen is read while only the empty first page is in.
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let c2Seen = false;
+  await page.route('**/ui/api/activity**', async (r) => {
+    if (byCursor(r.request().url()) === 'c2') {
+      c2Seen = true;
+      await held;
+    }
+    return r.fallback();
+  });
   await open(page, urls, '/ui/activity/status');
   await page.clock.runFor(100);
+  await expect.poll(() => c2Seen).toBe(true);
+  await expect(page.locator('#content [data-state="empty"]')).toHaveCount(0);
+  release();
   await expect.poll(() => texts(page)).toEqual(TEXT_TWO);
   await expect(page.locator('#content [data-state="empty"]')).toHaveCount(0);
 });
