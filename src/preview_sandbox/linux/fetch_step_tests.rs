@@ -42,7 +42,8 @@ fn the_npm_environment_is_exactly_the_designed_list() {
 
 /// Kills "the pipes are drained one after the other": the child fills
 /// stderr first, so a drain that waits on stdout first deadlocks with it.
-/// Both tails come back at the 64 KiB cap and the child exits.
+/// Both tails come back (lines, so the tail keeps whole lines just under the
+/// 64 KiB cap) and the child exits.
 #[test]
 fn both_pipes_drain_at_once() {
     use std::process::{Command, Stdio};
@@ -50,7 +51,7 @@ fn both_pipes_drain_at_once() {
     let mut child = Command::new("/bin/sh")
         .args([
             "-c",
-            "head -c 1048576 /dev/zero >&2; head -c 1048576 /dev/zero",
+            "yes 0123456789abcdef | head -c 1048576 >&2; yes 0123456789abcdef | head -c 1048576",
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -70,7 +71,10 @@ fn both_pipes_drain_at_once() {
     };
     assert!(status.expect("wait").success());
     let cap = crate::preview_sandbox::fetch_output::TAIL_BYTES;
-    assert_eq!((out.len(), err.len()), (cap, cap));
+    // Each tail starts at a line boundary: within one 17-byte line of the cap.
+    for tail in [&out, &err] {
+        assert!(tail.len() <= cap && tail.len() > cap - 17, "{}", tail.len());
+    }
 }
 
 /// Kills "the run keeps the plan's program or PATH" and "the spec's version
