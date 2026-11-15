@@ -101,13 +101,14 @@ jobs:
             ui-tests/test-results
           retention-days: 7
       # LCP and CLS budgets (motion spec, measured with Playwright and DevTools
-      # throttling). Not a gate yet: a browser budget blocks a build only after
-      # its spread on this runner (20 loads per page: p50, p75, max) is measured
-      # and clears it. Until then this step reports and never fails the job.
+      # throttling), 20 loads per page: p50, p75, max. A budget blocks once its
+      # spread on this runner clears it: LCP does (2x margin or more, max - p50
+      # at most 44 ms on every row), so an LCP miss fails the job. CLS is still
+      # reported only (BLOCKING in ui-tests/perf/vitals.perf.mjs) until the shell
+      # holds its layout from first paint.
       # One worker: parallel phone loads would measure each other's CPU use.
-      - name: Measure the page budgets' spread (non-blocking)
+      - name: Check the page budgets (LCP blocks, CLS is reported)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         env:
           CI: 'true'
           PERF_LOADS: '20'
