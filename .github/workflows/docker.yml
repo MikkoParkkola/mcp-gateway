@@ -60,6 +60,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The merge commit's two parents, so the decision below can list exactly what merging changes.
+          fetch-depth: 2
       - name: Decide
         id: decide
         env:
@@ -67,11 +69,9 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           HEAD_REF: ${{ github.head_ref }}
           SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           MERGE_SHA: ${{ github.sha }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -euo pipefail
           decide() { echo "run_build=$1" >> "$GITHUB_OUTPUT"; echo "run_build=$1 ($2)"; }
@@ -94,18 +94,19 @@ jobs:
           if [ "$SAME_REPO" = true ] && [[ $HEAD_REF == throwaway/* ]]; then
             decide false "same-repo throwaway branch"; exit 0
           fi
-          # Two-dot diff of the base tip and the head: it can list base-side
-          # changes too, which only errs toward building. Any git failure falls
-          # back to building rather than skipping.
-          git init -q probe
-          # The head through refs/pull/<n>/head, which the base repository
-          # holds for fork pull requests too.
-          if ! files=$(git -C probe fetch -q --depth=1 "$REPO_URL" "$BASE_SHA" \
-                "+refs/pull/$PR_NUMBER/head:refs/probe/head" 2>&1 \
-              && [ "$(git -C probe rev-parse refs/probe/head)" = "$HEAD_SHA" ] \
-              && git -C probe diff --name-only "$BASE_SHA" "$HEAD_SHA"); then
-            decide true "could not list changed files: $files"
-            compile true "could not list changed files"; exit 0
+          # The merge commit GitHub made for this event (the checkout) against its first parent, the base it
+          # was merged onto: exactly what merging the pull request changes. A two-dot diff of base and head
+          # also listed base-side changes when the branch was behind, and built the image for nothing.
+          # --no-renames lists both sides of a rename. Any failure falls back to building, naming its cause.
+          fail=""
+          [ "$(git rev-parse --verify -q HEAD)" = "$MERGE_SHA" ] || fail="the checkout is not the event's merge commit"
+          [ -n "$fail" ] || [ "$(git rev-parse --verify -q 'HEAD^2')" = "$HEAD_SHA" ] \
+            || fail="the checkout's second parent is not the pull request head"
+          [ -n "$fail" ] || files=$(git diff --name-only --no-renames HEAD^1 HEAD 2>&1) \
+            || fail="could not list changed files: $files"
+          if [ -n "$fail" ]; then
+            decide true "$fail"
+            compile true "$fail"; exit 0
           fi
           # Source changes do not build the image before merge (see
           # `release-compile`), but they do compile on the image's toolchains.
