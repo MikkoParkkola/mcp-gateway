@@ -515,27 +515,15 @@ fn a_journal_entry_carries_no_identity() {
             actor,
             os_account,
         } = entry;
-        let _: (
-            u32,
-            String,
-            String,
-            Option<String>,
-            String,
-            Option<DateTime<Utc>>,
-            DateTime<Utc>,
-            String,
-            Option<String>,
-        ) = (
-            v,
-            entry_id,
-            grant_id,
-            prev_digest,
-            digest,
-            expires_at,
-            at,
-            actor,
-            os_account,
-        );
+        let _: u32 = v;
+        let _: String = entry_id;
+        let _: String = grant_id;
+        let _: Option<String> = prev_digest;
+        let _: String = digest;
+        let _: Option<DateTime<Utc>> = expires_at;
+        let _: DateTime<Utc> = at;
+        let _: String = actor;
+        let _: Option<String> = os_account;
         match verb {
             JournalVerb::Add | JournalVerb::Replace | JournalVerb::Revoke => {}
         }
