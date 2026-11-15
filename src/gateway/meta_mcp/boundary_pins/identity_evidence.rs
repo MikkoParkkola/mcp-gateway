@@ -531,32 +531,69 @@ fn a_journal_entry_carries_no_identity() {
     let _ = fields_are_not_identities;
 }
 
-/// Every `mod` item in `text`, at any depth (inside an inline module or a fn
-/// body too), whatever its visibility: each would see its ancestors' private
-/// fields.
-fn child_modules(text: &str) -> Vec<String> {
-    struct Mods(Vec<String>);
+/// Which `mod` items [`child_modules`] reports.
+#[derive(Clone, Copy)]
+enum Scope {
+    /// Every one, test-only or not.
+    All,
+    /// Only those compiled outside tests: a test-only item, and everything
+    /// inside it, is skipped (the shared reader, `test_source_text::test_only`).
+    Production,
+}
+
+/// Every `mod` item in `text` within `scope`, at any depth (inside an inline
+/// module or a fn body too), whatever its visibility: each would see its
+/// ancestors' private fields.
+fn child_modules(text: &str, scope: Scope) -> Vec<String> {
+    struct Mods(Vec<String>, Scope);
+    impl Mods {
+        fn skips(&self, attrs: &[syn::Attribute]) -> bool {
+            matches!(self.1, Scope::Production) && crate::test_source_text::test_only(attrs)
+        }
+    }
     impl<'ast> syn::visit::Visit<'ast> for Mods {
         fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+            if self.skips(&item.attrs) {
+                return;
+            }
             self.0.push(item.ident.to_string());
             syn::visit::visit_item_mod(self, item);
         }
+        fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+            if !self.skips(&item.attrs) {
+                syn::visit::visit_item_fn(self, item);
+            }
+        }
+        fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+            if !self.skips(&item.attrs) {
+                syn::visit::visit_impl_item_fn(self, item);
+            }
+        }
+        fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+            if !self.skips(&item.attrs) {
+                syn::visit::visit_item_impl(self, item);
+            }
+        }
     }
     let file = syn::parse_file(text).expect("the text parses");
-    let mut mods = Mods(Vec::new());
+    let mut mods = Mods(Vec::new(), scope);
     syn::visit::Visit::visit_file(&mut mods, &file);
     mods.0
 }
 
-/// The child scan sees every declaration form a production child could take.
+/// The child scan sees every declaration form a production child could take,
+/// and skips only what is compiled under test alone.
 #[test]
 fn the_child_scan_sees_every_module_form() {
     let forms = "mod a; pub mod b; pub(crate) mod c; pub(self) mod d; pub(super) mod e; \
                  pub(in crate::x) mod f; mod g {} fn h() { mod i {} }";
-    assert_eq!(
-        child_modules(forms),
-        ["a", "b", "c", "d", "e", "f", "g", "i"]
-    );
+    let every = ["a", "b", "c", "d", "e", "f", "g", "i"];
+    assert_eq!(child_modules(forms, Scope::All), every);
+    assert_eq!(child_modules(forms, Scope::Production), every);
+    let gated = "#[cfg(test)] mod t {} #[cfg(test)] fn f() { mod u {} } \
+                 mod p { #[cfg(test)] mod q {} } #[cfg(any(test, unix))] mod r {}";
+    assert_eq!(child_modules(gated, Scope::All), ["t", "u", "p", "q", "r"]);
+    assert_eq!(child_modules(gated, Scope::Production), ["p", "r"]);
 }
 
 /// EV.3: the three identity leaf modules declare no child module
@@ -565,13 +602,12 @@ fn the_child_scan_sees_every_module_form() {
 #[test]
 fn identity_leaf_modules_declare_no_production_children() {
     assert_eq!(
-        child_modules(&source("src/key_server/oidc/verified.rs")),
+        child_modules(&source("src/key_server/oidc/verified.rs"), Scope::All),
         ["tests"],
-        "premise: the raw text shows verified.rs's test child, so blanking it is what passes"
+        "premise: verified.rs declares its test child, so skipping test-only items is what passes"
     );
     for leaf in LEAVES {
-        let production = crate::test_source_text::production_text(&source(leaf));
-        let children = child_modules(&production);
+        let children = child_modules(&source(leaf), Scope::Production);
         assert!(
             children.is_empty(),
             "{leaf} declares a production child: {children:?}"
