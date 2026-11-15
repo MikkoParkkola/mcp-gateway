@@ -171,7 +171,7 @@ async fn c8_resume_from_open_replays_nothing() {
     assert_eq!(rig.gate(), GateState::Open);
 }
 
-/// C9: a worker that panics is WorkerLost; nothing is written; the gate stays Paused.
+/// C9: a worker that panics is `WorkerLost`; nothing is written; the gate stays Paused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c9_a_worker_panic_is_worker_lost() {
     let _serial = file::saves_test_lock();

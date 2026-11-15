@@ -19,7 +19,7 @@ const WAIT: Duration = Duration::from_secs(30);
 /// The named points (test-plan P1-P8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Point {
-    /// P1: the saver, the last statement before SAVES.try_lock.
+    /// P1: the saver, the last statement before `SAVES.try_lock`.
     SaverBeforeLock,
     /// P2: a save, after its snapshot is encoded and before the write.
     AfterSnapshot,

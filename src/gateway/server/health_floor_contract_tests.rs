@@ -131,7 +131,7 @@ async fn c2_a_superseded_worker_writes_once_and_blocks_a_new_checkpoint() {
 }
 
 /// C3: resume replays each marked closure once, the sample before the save;
-/// release_for_stop replays nothing and lets the closures run again.
+/// `release_for_stop` replays nothing and lets the closures run again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c3_resume_replays_and_release_for_stop_does_not() {
     let _serial = file::saves_test_lock();
@@ -359,7 +359,7 @@ async fn c6b_skip_then_resume_runs_it_once() {
     }
 }
 
-/// C6(c): release_for_stop while parked: the closure sees Released, claims
+/// C6(c): `release_for_stop` while parked: the closure sees Released, claims
 /// its own mark and runs once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c6c_release_while_parked_runs_it_once_itself() {

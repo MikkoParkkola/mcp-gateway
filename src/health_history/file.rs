@@ -110,7 +110,7 @@ pub(crate) fn save(history: &HealthHistory, path: &Path, now: u64, wait: Wait) -
     save_with(history, path, now, wait, Check::None) == SaveOutcome::Saved
 }
 
-/// A save behind the health floor's gate: the periodic one (SkipIfBusy) or
+/// A save behind the health floor's gate: the periodic one (`SkipIfBusy`) or
 /// the adapter's resume replay (Block).
 pub(crate) fn save_gated(
     history: &HealthHistory,

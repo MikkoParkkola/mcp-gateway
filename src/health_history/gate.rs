@@ -36,7 +36,7 @@ pub(crate) enum Admit {
     Skip,
 }
 
-/// See the module doc. Every access is SeqCst: the mark-then-read in
+/// See the module doc. Every access is `SeqCst`: the mark-then-read in
 /// `admit` and the store-then-swap in the adapter's resume must not both miss.
 #[derive(Debug)]
 pub(crate) struct HealthGate {

@@ -462,7 +462,7 @@ pub(super) fn save_once(rig: &Rig) {
 }
 
 /// G4 (HEALTH.2): through the real coordinator, a checkpoint whose worker
-/// waits on SAVES past the deadline cancels with DeadlineExceeded; the worker
+/// waits on SAVES past the deadline cancels with `DeadlineExceeded`; the worker
 /// later ends without writing, and the next periodic save writes.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn g4_a_save_lock_held_past_the_deadline_cancels_and_saving_goes_on() {
@@ -533,7 +533,7 @@ async fn g4_a_save_lock_held_past_the_deadline_cancels_and_saving_goes_on() {
     );
 }
 
-/// G5 (HEALTH.3): a write error is SaveFailed; the flag is set; the gate stays Paused.
+/// G5 (HEALTH.3): a write error is `SaveFailed`; the flag is set; the gate stays Paused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g5_a_write_error_cancels_with_save_failed() {
     let _serial = file::saves_test_lock();
@@ -658,7 +658,7 @@ pub(super) async fn settle_tasks() {
     }
 }
 
-/// W1 (HEALTH.1): the production periodic save (start_history's own closure)
+/// W1 (HEALTH.1): the production periodic save (`start_history`'s own closure)
 /// skips and marks while Paused; resume replays it.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn w1_the_production_periodic_save_obeys_the_gate() {
@@ -711,7 +711,7 @@ async fn w1_the_production_periodic_save_obeys_the_gate() {
     saver.await.expect("the scheduler ends");
 }
 
-/// W2 (HEALTH.1): the production sampler (spawn_sampler's own closure) skips
+/// W2 (HEALTH.1): the production sampler (`spawn_sampler`'s own closure) skips
 /// and marks while Paused, leaving the history unchanged.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn w2_the_production_sampler_obeys_the_gate() {

@@ -126,7 +126,7 @@ pub(super) fn saver_closure(
     }
 }
 
-/// The periodic sample, behind the gate (spawn_sampler's closure; rows build
+/// The periodic sample, behind the gate (`spawn_sampler`'s closure; rows build
 /// the same). Without inputs set it does nothing.
 pub(super) fn sampler_closure(
     gate: Arc<HealthGate>,

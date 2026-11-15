@@ -154,7 +154,7 @@ impl HealthFloor {
         self.certified
     }
 
-    /// Make the next checkpoint worker panic (the WorkerLost row).
+    /// Make the next checkpoint worker panic (the `WorkerLost` row).
     #[cfg(test)]
     pub(crate) fn panic_next_worker(&mut self) {
         self.panic_next = true;
