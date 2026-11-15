@@ -1,0 +1,107 @@
+# Option E probe (throwaway; never merged): does the 4-vCPU, 14 GB Intel macOS runner cross-build the arm64 `--lib`
+# test binary faster than macOS lib-b builds it natively, and does that binary list and pass the same tests on arm64?
+# Falsifier: same --list, same ignored set, lib-b passes, transfer <= ~8 min, xbuild + transfer < native build.
+name: macOS xbuild probe
+
+on:
+  push:
+    branches: ["throwaway/macos-xbuild-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  xbuild:
+    name: Cross-build on Intel
+    runs-on: macos-15-intel
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+          targets: aarch64-apple-darwin
+      - name: Runner
+        run: echo "image $ImageOS $ImageVersion, $(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB, $(uname -m), CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-unset}"
+      - name: Sample swap and memory pressure during the build
+        run: |
+          (
+            while :; do
+              printf '%s swap %s | %s\n' "$(date -u +%H:%M:%S)" "$(sysctl -n vm.swapusage)" \
+                "$(memory_pressure -Q 2>/dev/null | tail -1)" >> "$RUNNER_TEMP/mac-sampler.log"
+              sleep 30
+            done
+          ) &
+      - name: Build the arm64 lib test binary
+        timeout-minutes: 120
+        env:
+          CARGO_BUILD_TARGET: aarch64-apple-darwin
+        run: python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
+      - name: Check the binary is arm64
+        run: file "$RUNNER_TEMP/lib-bin/lib-tests" | tee /dev/stderr | grep -q arm64
+      - name: Upload the binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xbuild-lib-tests
+          path: ${{ runner.temp }}/lib-bin/lib-tests
+          retention-days: 1
+          if-no-files-found: error
+      - name: Swap and memory pressure
+        if: always()
+        run: cat "$RUNNER_TEMP/mac-sampler.log" || true
+
+  native:
+    name: Native build (control)
+    runs-on: macos-latest
+    timeout-minutes: 150
+    env:
+      CARGO_BUILD_JOBS: 2  # as ci.yml's macOS shards
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - name: Runner
+        run: echo "image $ImageOS $ImageVersion, $(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB, $(uname -m)"
+      - name: Build the lib test binary
+        timeout-minutes: 120
+        run: python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
+      - name: List and ignored-set hashes
+        env:
+          BIN: ${{ runner.temp }}/lib-bin/lib-tests
+        run: |
+          export CARGO_MANIFEST_DIR="$PWD"
+          echo "list $("$BIN" --list --format terse | sort | tee "$RUNNER_TEMP/list.txt" | shasum -a 256) n=$(wc -l < "$RUNNER_TEMP/list.txt")"
+          echo "ignored $("$BIN" --list --ignored --format terse | sort | tee "$RUNNER_TEMP/ign.txt" | shasum -a 256) n=$(wc -l < "$RUNNER_TEMP/ign.txt")"
+
+  run:
+    name: Run the cross-built binary on arm64
+    needs: xbuild
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Runner
+        run: echo "image $ImageOS $ImageVersion, $(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB, $(uname -m)"
+      - name: Download the binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: xbuild-lib-tests
+          path: ${{ runner.temp }}/lib-bin
+      - name: List and ignored-set hashes
+        env:
+          BIN: ${{ runner.temp }}/lib-bin/lib-tests
+        run: |
+          chmod 755 "$BIN"
+          export CARGO_MANIFEST_DIR="$PWD"
+          echo "list $("$BIN" --list --format terse | sort | tee "$RUNNER_TEMP/list.txt" | shasum -a 256) n=$(wc -l < "$RUNNER_TEMP/list.txt")"
+          echo "ignored $("$BIN" --list --ignored --format terse | sort | tee "$RUNNER_TEMP/ign.txt" | shasum -a 256) n=$(wc -l < "$RUNNER_TEMP/ign.txt")"
+      - name: lib-b from the cross-built binary
+        timeout-minutes: 75
+        run: python3 scripts/ci/shard_tests.py run-prebuilt macos lib-b "$RUNNER_TEMP/lib-bin/lib-tests"
