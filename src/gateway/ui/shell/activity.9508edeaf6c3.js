@@ -121,6 +121,8 @@ async function statusTab(body, ctx) {
   // The observer's target, after the last row. Not focusable: Tab from the
   // search lands on the first row.
   const sentinel = h('div', { class: 'activity-more', 'aria-hidden': 'true' });
+  // Where a next page that could not be read says so, after the rows it would have followed.
+  const moreLine = h('p', { class: 'activity-more-error', hidden: true });
 
   const root = h('div', { class: 'activity' });
   // A member's line is above the list. Its trigger is a button, so it stays
@@ -132,7 +134,7 @@ async function statusTab(body, ctx) {
   }
   root.append(outcomeRow, rangeGroup, search);
   if (filters.server || filters.key) root.append(active);
-  root.append(empty, rowsEl, sentinel);
+  root.append(empty, rowsEl, moreLine, sentinel);
   body.append(root);
 
   // After the controls are drawn. A static import would put the module before
@@ -151,6 +153,16 @@ async function statusTab(body, ctx) {
   let pageCursor = null;
   let onScreen = false;
   let debounce = 0;
+  // One window per filter set: every page of it asks for the same from and to, so a
+  // cursor never continues a window that has slid on since the first page.
+  let windowFrom = '';
+  let windowTo = '';
+
+  function freezeWindow() {
+    const to = new Date();
+    windowTo = utcSeconds(to);
+    windowFrom = utcSeconds(new Date(to.getTime() - RANGES[filters.range]));
+  }
 
   const queryOf = (cursor) => {
     const params = new URLSearchParams();
@@ -158,10 +170,8 @@ async function statusTab(body, ctx) {
     if (filters.server) params.set('server', filters.server);
     if (filters.key) params.set('caller', filters.key);
     if (filters.q) params.set('q', filters.q);
-    const to = new Date();
-    const from = new Date(to.getTime() - RANGES[filters.range]);
-    params.set('from', utcSeconds(from));
-    params.set('to', utcSeconds(to));
+    params.set('from', windowFrom);
+    params.set('to', windowTo);
     if (cursor) params.set('cursor', cursor);
     return params.toString();
   };
@@ -197,18 +207,39 @@ async function statusTab(body, ctx) {
     const rows = Array.isArray(data?.rows) ? data.rows : [];
     const next = data?.next_cursor;
     pageCursor = typeof next === 'string' && next ? next : null;
-    if (!append) rowsEl.replaceChildren();
+    // A reset cursor starts again from the newest row: what is on screen would show twice.
+    if (!append || data?.cursor_reset === true) rowsEl.replaceChildren();
     for (const row of rows) {
       if (row && typeof row.id === 'string') rowsEl.append(rowLink(row));
     }
-    if (!append) {
-      empty.replaceChildren();
-      if (rowsEl.childElementCount === 0) empty.append(emptyNode());
-    }
+    // Empty only once the list has run out: a page with no rows but a cursor is a scan
+    // that stopped short on a sparse filter, and pump() reads on at once.
+    empty.replaceChildren();
+    if (rowsEl.childElementCount === 0 && !pageCursor) empty.append(emptyNode());
     ctx.show(null);
   }
 
+  // A next page that could not be read: the rows stay, the list says it stopped short,
+  // and Retry asks for the same cursor.
+  function failMore(cursor) {
+    const retry = h('button', { class: 'btn', type: 'button' }, 'Retry');
+    retry.addEventListener('click', () => {
+      // The button goes; focus stays in the list, on the row the next page follows.
+      rowsEl.lastElementChild?.focus();
+      clearMore();
+      schedule(cursor);
+    });
+    moreLine.replaceChildren('More calls could not be read. ', retry);
+    moreLine.hidden = false;
+  }
+
+  function clearMore() {
+    moreLine.hidden = true;
+    moreLine.replaceChildren();
+  }
+
   function failList() {
+    clearMore();
     pageCursor = null;
     rowsEl.replaceChildren();
     empty.replaceChildren();
@@ -227,8 +258,9 @@ async function statusTab(body, ctx) {
         if (token !== epoch) return;
         paint(data, append);
       } catch {
-        if (token !== epoch || append) return;
-        failList();
+        if (token !== epoch) return;
+        if (append) failMore(cursor);
+        else failList();
         return;
       }
       pump();
@@ -238,7 +270,8 @@ async function statusTab(body, ctx) {
   }
 
   function pump() {
-    if (!onScreen || !pageCursor) return;
+    // A list with rows reads on when its end is in view; an empty one at once.
+    if (!pageCursor || (!onScreen && rowsEl.childElementCount > 0)) return;
     const cursor = pageCursor;
     pageCursor = null;
     schedule(cursor);
@@ -250,6 +283,8 @@ async function statusTab(body, ctx) {
     if (!root.isConnected) return;
     epoch += 1;
     pageCursor = null;
+    clearMore();
+    freezeWindow();
     writeUrl();
     schedule(null);
   }
@@ -279,6 +314,7 @@ async function statusTab(body, ctx) {
   });
   io.observe(sentinel);
 
+  freezeWindow();
   await schedule(null);
 }
 

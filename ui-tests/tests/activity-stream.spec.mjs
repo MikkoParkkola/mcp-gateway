@@ -375,3 +375,107 @@ test('A12 columns: time, key, tool and outcome each start at the same place on e
     for (let k = 1; k < 4; k += 1) expect(row[k].x).toBeGreaterThan(row[k - 1].x);
   }
 });
+
+/** Scroll every scroller to its end and run a frame, so the list's end is in view (as A7 does). */
+async function reachEnd(page) {
+  await rowLinks(page).last().scrollIntoViewIfNeeded().catch(() => {});
+  await page.evaluate(() => {
+    const nodes = [document.scrollingElement, document.querySelector('#content')];
+    for (const el of document.querySelectorAll('#content *')) nodes.push(el);
+    for (const el of nodes) {
+      if (el && el.scrollHeight > el.clientHeight) el.scrollTop = el.scrollHeight;
+    }
+  });
+  // Intersection observers are delivered on a frame; the clock is paused.
+  await page.clock.runFor(100);
+}
+
+const PAGE_ONE = [
+  call('p-1', '2026-11-15T08:01:01Z', 'ana', 'alpha.one', 'ok'),
+  call('p-2', '2026-11-15T08:02:02Z', 'ana', 'bravo.two', 'ok'),
+  call('p-3', '2026-11-15T08:03:03Z', 'ana', 'charlie.three', 'ok'),
+];
+const PAGE_TWO = [
+  call('p-4', '2026-11-15T08:04:04Z', 'ana', 'delta.four', 'ok'),
+  call('p-5', '2026-11-15T08:05:05Z', 'ana', 'echo.five', 'failed'),
+];
+const TEXT_ONE = ['08:01:01 ana alpha.one ok', '08:02:02 ana bravo.two ok', '08:03:03 ana charlie.three ok'];
+const TEXT_TWO = ['08:04:04 ana delta.four ok', '08:05:05 ana echo.five failed'];
+const texts = async (page) => (await shownRows(page)).map((row) => row.text);
+const byCursor = (url) => new URL(url).searchParams.get('cursor');
+
+test('A13 a first page with no rows but a cursor is not the empty state: the next page is read and shown', async ({ page }) => {
+  // A sparse filter: the server's scan ran out before it found a match, and says where to go on.
+  const urls = await install(page, { answer: (url) => (byCursor(url) === 'c2' ? list(PAGE_TWO) : list([], 'c2')) });
+  await open(page, urls, '/ui/activity/status');
+  await page.clock.runFor(100);
+  await expect.poll(() => texts(page)).toEqual(TEXT_TWO);
+  await expect(page.locator('#content [data-state="empty"]')).toHaveCount(0);
+});
+
+test('A13b the empty state comes once the cursor runs out with no rows, and only then', async ({ page }) => {
+  const urls = await install(page, { answer: (url) => (byCursor(url) === 'c2' ? list([]) : list([], 'c2')) });
+  await open(page, urls, '/ui/activity/status');
+  await page.clock.runFor(100);
+  await expect(emptyState(page, 'No calls in the last 24 h')).toBeVisible();
+  expect(urls.map(byCursor)).toEqual([null, 'c2']);
+});
+
+test('A14 a next page that fails keeps the rows, says so, and Retry asks for the same cursor', async ({ page }) => {
+  let failNext = true;
+  const urls = await install(page, { answer: (url) => (byCursor(url) === 'c2' ? list(PAGE_TWO) : list(PAGE_ONE, 'c2')) });
+  // Registered after install, so it runs first: the first c2 request fails, later ones go on to install's handler.
+  await page.route('**/ui/api/activity**', (r) => {
+    if (byCursor(r.request().url()) === 'c2' && failNext) {
+      failNext = false;
+      return r.fulfill({ status: 500, json: { error: 'boom' } });
+    }
+    return r.fallback();
+  });
+  await open(page, urls, '/ui/activity/status');
+  await expect.poll(() => texts(page)).toEqual(TEXT_ONE);
+  await reachEnd(page);
+  const retry = page.locator('#content').getByRole('button', { name: 'Retry', exact: true });
+  await expect(retry).toBeVisible();
+  await expect(page.locator('#content')).toContainText('More calls could not be read.');
+  expect(await texts(page)).toEqual(TEXT_ONE);
+  await retry.click();
+  await expect.poll(() => texts(page)).toEqual([...TEXT_ONE, ...TEXT_TWO]);
+  expect(urls.filter((u) => byCursor(u) === 'c2')).toHaveLength(1);
+  await expect(retry).toHaveCount(0);
+});
+
+test('A15 a next page keeps the first page\'s window, though the clock has moved on', async ({ page }) => {
+  const urls = await install(page, { answer: (url) => (byCursor(url) === 'c2' ? list(PAGE_TWO) : list(PAGE_ONE, 'c2')) });
+  // Page one's answer is held while the clock moves a minute, so page two is asked for a minute later.
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let firstSeen = false;
+  await page.route('**/ui/api/activity**', async (r) => {
+    if (byCursor(r.request().url()) === null && !firstSeen) {
+      firstSeen = true;
+      await held;
+    }
+    return r.fallback();
+  });
+  await page.goto('/ui/activity/status');
+  await shellReady(page);
+  await expect.poll(() => firstSeen).toBe(true);
+  await page.clock.runFor(60_000);
+  release();
+  await expect.poll(() => texts(page)).toEqual([...TEXT_ONE, ...TEXT_TWO]);
+  expect(urls.filter((u) => byCursor(u) === 'c2')).toHaveLength(1);
+  const more = urls.find((u) => byCursor(u) === 'c2');
+  expect([filters(more).from, filters(more).to]).toEqual([FROM_24H, TO]);
+});
+
+test('A16 an answer that says its cursor was reset replaces the list instead of adding to it', async ({ page }) => {
+  const urls = await install(page, {
+    answer: (url) => (byCursor(url) === 'c2' ? { rows: PAGE_TWO, next_cursor: null, cursor_reset: true } : list(PAGE_ONE, 'c2')),
+  });
+  await open(page, urls, '/ui/activity/status');
+  await reachEnd(page);
+  await expect.poll(() => urls.filter((u) => byCursor(u) === 'c2').length).toBe(1);
+  // Only the reset answer's rows: page one's are gone, none twice.
+  await expect.poll(() => texts(page)).toEqual(TEXT_TWO);
+});
