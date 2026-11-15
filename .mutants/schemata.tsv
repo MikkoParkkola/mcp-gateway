@@ -1,0 +1,5 @@
+head_sha	433936040c59f6958792a1efc9d1bf52a773147f
+#mutant r1
+retire_process_exit	a_sigterm_on_the_listening_banner_drains_the_gateway	tests/retire_process_exit.rs:185
+#mutant r2
+retire_process_exit	a_sigterm_on_the_listening_banner_drains_the_gateway	tests/retire_process_exit.rs:185
