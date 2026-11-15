@@ -444,3 +444,26 @@ async fn c6e_two_marks_replay_once() {
         );
     }
 }
+
+/// C6(f): resume ran between the closure's first Paused read and its mark
+/// store, so resume's claim found nothing and started no replay: the closure's
+/// second read sees Open and it claims its own mark, exactly one run. No seam
+/// sits before the mark store, so the row stages resume's effect at that point
+/// (the gate Open, no replay) while the closure is parked after its mark.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn c6f_resume_before_the_mark_leaves_the_run_to_the_closure() {
+    let _serial = file::saves_test_lock_async().await;
+    for kind in Kind::BOTH {
+        let (rig, adapter, mut parked, closure, before) = parked_at_mark(kind).await;
+        rig.health.gate.store(GateState::Open);
+        parked.release();
+        closure.join().expect("the closure ends");
+        assert_eq!(
+            kind.effects(&rig) - before,
+            1,
+            "{kind:?}: not exactly one run"
+        );
+        assert!(!rig.marked(kind.which()), "{kind:?}: a mark is left behind");
+        assert!(adapter.settled(), "{kind:?}: a replay started");
+    }
+}

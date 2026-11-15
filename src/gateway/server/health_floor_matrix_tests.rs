@@ -315,6 +315,49 @@ async fn c10_a_save_overtaking_the_replay_converges() {
     assert_eq!(a.bytes(), b.bytes(), "the two orders left different files");
 }
 
+/// C10b: in one window, a new sample that runs before the replayed save is in
+/// the file that save writes (the snapshot current under SAVES, not one taken
+/// at resume) and converges to the replay-first order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn c10b_a_sample_before_the_replayed_save_converges() {
+    let _serial = file::saves_test_lock_async().await;
+    let (a, b) = (Rig::new(), Rig::new());
+    let (mut fa, mut fb) = (a.adapter(), b.adapter());
+    for (rig, adapter) in [(&a, &mut fa), (&b, &mut fb)] {
+        rig.set_replay_inputs(m2);
+        pause_and_mark(adapter, rig).await;
+    }
+    fa.resume();
+    wait_until("A never settled", || fa.settled());
+    (a.sampler(m3))();
+    save_once(&a);
+    let mut replay = arm(Point::ReplayBeforeSample, &b.hkey(), 1);
+    fb.resume();
+    replay.reached("resume did not replay the marked sample");
+    let before = b.writes();
+    (b.sampler(m3))();
+    assert_eq!(b.writes(), before, "premise: the replayed save already ran");
+    replay.release();
+    wait_until("B never settled", || fb.settled());
+    assert_eq!(
+        b.writes() - before,
+        1,
+        "the replayed save did not write once"
+    );
+    assert_eq!(
+        max_of(&b.on_disk(), "memory_max"),
+        Some(M3),
+        "the replayed save left out the sample that ran before it"
+    );
+    save_once(&b);
+    assert_eq!(
+        a.encoded(),
+        b.encoded(),
+        "the two orders left different histories"
+    );
+    assert_eq!(a.bytes(), b.bytes(), "the two orders left different files");
+}
+
 /// C12: the real coordinator, dropped mid-checkpoint, releases the gate for
 /// the stop: the worker writes nothing, nothing is replayed, closures run again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
