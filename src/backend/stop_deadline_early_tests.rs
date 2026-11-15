@@ -53,7 +53,8 @@ async fn ended_after_term(pid: Pid) {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    crate::transport::signal_log::assert_term_then_kill(pid, "the handed tree's graceful plan");
+    crate::transport::signal_log::assert_term_then_kill(pid, "the handed tree's graceful plan")
+        .await;
 }
 
 /// A registry with one started [`marking`] backend in `dir`, the premise

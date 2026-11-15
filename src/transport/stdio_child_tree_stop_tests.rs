@@ -224,7 +224,7 @@ async fn a_cut_stop_still_sends_sigterm_before_the_kill() {
     signal_log::arm(leader(&t).await);
     let pid = cut_close(&t, &end, Duration::from_secs(3)).await;
     assert_killed(pid).await;
-    signal_log::assert_term_then_kill(pid, "the cut stop");
+    signal_log::assert_term_then_kill(pid, "the cut stop").await;
 }
 
 /// A cut that leaves under the minimum phase skips SIGTERM: the kill comes
@@ -236,7 +236,7 @@ async fn a_cut_under_the_minimum_phase_skips_sigterm() {
     signal_log::arm(leader(&t).await);
     let pid = cut_close(&t, &end, Duration::from_millis(50)).await;
     assert_killed(pid).await;
-    signal_log::assert_kill_without_term(pid, "a cut with no time left for a SIGTERM");
+    signal_log::assert_kill_without_term(pid, "a cut with no time left for a SIGTERM").await;
 }
 
 /// A cut that leaves under the minimum phase skips SIGTERM even when the
@@ -260,7 +260,7 @@ async fn a_short_cut_drops_an_earlier_uncut_sigterm() {
     )
     .await;
     assert_killed(pid).await;
-    signal_log::assert_kill_without_term(pid, "a cut too short for the uncut plan's SIGTERM");
+    signal_log::assert_kill_without_term(pid, "a cut too short for the uncut plan's SIGTERM").await;
 }
 
 /// Hand `t`'s tree straight to the reaper with a graceful ending under
