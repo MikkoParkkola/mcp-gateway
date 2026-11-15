@@ -46,7 +46,14 @@ pub(crate) fn reserved_port() -> u16 {
         let n = HANDED_OUT.fetch_add(1, Ordering::Relaxed);
         let port = FIRST + offset.wrapping_add(n) % SPAN;
         if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            return port;
+            return mutant!(
+                "rp1",
+                {
+                    let ephemeral = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+                    ephemeral.local_addr().expect("address").port()
+                },
+                port
+            );
         }
     }
     panic!("no free port in {FIRST}..{}", FIRST + SPAN);
