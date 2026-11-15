@@ -207,7 +207,9 @@ async fn a_second_refusal_still_names_the_version_still_running() {
     };
     {
         let _clock = crate::clock::test_clock::at_secs(APPLIED_SECS);
-        ctx.reload_outcome().await.expect("the running file applies");
+        ctx.reload_outcome()
+            .await
+            .expect("the running file applies");
     }
     {
         let _clock = crate::clock::test_clock::at_secs(REFUSED_SECS);
@@ -222,7 +224,11 @@ async fn a_second_refusal_still_names_the_version_still_running() {
         .as_array()
         .and_then(|rows| rows.first().cloned())
         .expect("a refusal was recorded");
-    assert_eq!(refusal["repeats"], json!(2), "the same refusal, twice: {refusal}");
+    assert_eq!(
+        refusal["repeats"],
+        json!(2),
+        "the same refusal, twice: {refusal}"
+    );
     assert_eq!(refusal["running_since"], json!(APPLIED_AT), "{refusal}");
 }
 
@@ -232,7 +238,10 @@ fn v4_an_admin_write_omits_the_line_and_the_running_time() {
     // them: "x" and "y" classify as invalid config, as a reload's file would.
     let tally = std::sync::Arc::new(super::super::reload_tally::ReloadTally::default());
     tally.note_loaded();
-    assert!(tally.last_applied_at().is_some(), "the premise: a running time exists");
+    assert!(
+        tally.last_applied_at().is_some(),
+        "the premise: a running time exists"
+    );
     let ledger = RefusalLedger::with_clock(fixed_clock).observing(tally);
     ledger.record(RefusalKind::Add, Some("inventory"), "x", Some(5));
     ledger.record(RefusalKind::Edit, Some("billing"), "y", Some(5));
@@ -240,14 +249,8 @@ fn v4_an_admin_write_omits_the_line_and_the_running_time() {
     let rows = body.as_array().expect("a list");
     assert_eq!(rows.len(), 2, "{body}");
     for kind in ["add", "edit"] {
-        let refusal = rows
-            .iter()
-            .find(|row| row["kind"] == kind)
-            .expect(kind);
+        let refusal = rows.iter().find(|row| row["kind"] == kind).expect(kind);
         assert!(refusal.get("line").is_none(), "{kind}: {refusal}");
-        assert!(
-            refusal.get("running_since").is_none(),
-            "{kind}: {refusal}"
-        );
+        assert!(refusal.get("running_since").is_none(), "{kind}: {refusal}");
     }
 }

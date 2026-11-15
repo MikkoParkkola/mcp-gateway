@@ -466,15 +466,30 @@ async fn s12_only_the_newest_invalid_config_is_shown() {
     let (state, dir) = fixture(0, false).await;
     let (context, _path) = with_reload(&state, &dir);
     let ledger = context.refusals();
-    ledger.record(RefusalKind::Reload, None, "Failed to parse config: one", None);
-    ledger.record(RefusalKind::Reload, None, "Failed to parse config: one", None);
+    ledger.record(
+        RefusalKind::Reload,
+        None,
+        "Failed to parse config: one",
+        None,
+    );
+    ledger.record(
+        RefusalKind::Reload,
+        None,
+        "Failed to parse config: one",
+        None,
+    );
     ledger.record(
         RefusalKind::Edit,
         Some("edited"),
         "Failed to validate config: two",
         None,
     );
-    ledger.record(RefusalKind::Reload, None, "Failed to parse config: three", None);
+    ledger.record(
+        RefusalKind::Reload,
+        None,
+        "Failed to parse config: three",
+        None,
+    );
 
     let body = overview(&state).await;
 
@@ -630,7 +645,12 @@ async fn s7b_needs_you_orders_invalid_config_refused_then_limits() {
     inner.meta_mcp = Arc::new(meta);
     let (context, _path) = with_reload(&state, &dir);
     let ledger = context.refusals();
-    ledger.record(RefusalKind::Reload, None, "Failed to parse config: bad", None);
+    ledger.record(
+        RefusalKind::Reload,
+        None,
+        "Failed to parse config: bad",
+        None,
+    );
     for i in 0..25 {
         ledger.record(
             RefusalKind::Edit,

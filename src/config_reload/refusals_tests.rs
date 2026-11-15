@@ -48,7 +48,12 @@ fn cleartext_yaml() -> String {
 #[test]
 fn api4_3_a_cleartext_reload_refusal_is_classified_with_its_fix() {
     let ledger = RefusalLedger::with_clock(fixed_clock);
-    ledger.record(RefusalKind::Reload, None, &reload_error(&cleartext_yaml()), None);
+    ledger.record(
+        RefusalKind::Reload,
+        None,
+        &reload_error(&cleartext_yaml()),
+        None,
+    );
 
     let list = ledger.list();
     assert_eq!(list.len(), 1, "{list:?}");
@@ -68,7 +73,12 @@ fn api4_3_a_cleartext_reload_refusal_is_classified_with_its_fix() {
 #[test]
 fn api4_3_no_canary_reaches_the_served_body() {
     let ledger = RefusalLedger::new();
-    ledger.record(RefusalKind::Reload, None, &reload_error(&cleartext_yaml()), None);
+    ledger.record(
+        RefusalKind::Reload,
+        None,
+        &reload_error(&cleartext_yaml()),
+        None,
+    );
     ledger.record(
         RefusalKind::Add,
         Some("inventory"),
@@ -121,7 +131,12 @@ fn api4_3_an_applied_reload_resolves_earlier_reload_refusals_only() {
     // One clock instant for every entry: resolution must come from order,
     // not from timestamps.
     let ledger = RefusalLedger::with_clock(fixed_clock);
-    ledger.record(RefusalKind::Reload, None, "Failed to parse config: bad", None);
+    ledger.record(
+        RefusalKind::Reload,
+        None,
+        "Failed to parse config: bad",
+        None,
+    );
     ledger.record(
         RefusalKind::Add,
         Some("inventory"),
@@ -195,7 +210,12 @@ fn api4_3_the_ledger_is_bounded_newest_first() {
 fn api4_3_the_same_refusal_in_a_row_is_one_entry_with_repeats() {
     let ledger = RefusalLedger::new();
     for _ in 0..3 {
-        ledger.record(RefusalKind::Reload, None, &reload_error(&cleartext_yaml()), None);
+        ledger.record(
+            RefusalKind::Reload,
+            None,
+            &reload_error(&cleartext_yaml()),
+            None,
+        );
     }
     let list = ledger.list();
     assert_eq!(list.len(), 1, "{list:?}");
