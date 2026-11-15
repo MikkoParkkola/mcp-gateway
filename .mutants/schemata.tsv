@@ -1,0 +1,61 @@
+head_sha	4e77397ef4128a8e94a36285efbd61c1f70661f6
+#mutant sampler_admit_at_entry
+mcp_gateway	gateway::server::health_floor::tests::g3b_a_sampler_delayed_past_the_cut_changes_nothing	src/gateway/server/health_floor_tests.rs:378
+#mutant saver_admit_at_entry
+mcp_gateway	gateway::server::health_floor::tests::g2_a_saver_delayed_past_the_cut_skips_and_marks	src/gateway/server/health_floor_tests.rs:295
+#mutant sample_two_locks
+mcp_gateway	gateway::server::health_floor::tests::g3_the_sample_cut_runs_under_one_history_lock	src/gateway/server/health_floor_tests.rs:342
+#mutant no_live_check
+mcp_gateway	gateway::server::health_floor::tests::g4_a_save_lock_held_past_the_deadline_cancels_and_saving_goes_on	src/gateway/server/health_floor_tests.rs:517
+#mutant failed_as_unavailable
+mcp_gateway	gateway::server::health_floor::tests::g5_a_write_error_cancels_with_save_failed	src/gateway/server/health_floor_tests.rs:549
+#mutant clock_as_save_failed
+mcp_gateway	gateway::server::health_floor::tests::g6_an_invalid_clock_is_unavailable_without_a_worker	src/gateway/server/health_floor_tests.rs:571
+#mutant path_none_certifies
+mcp_gateway	gateway::server::health_floor::tests::g7_saves_off_is_unavailable_without_a_worker	src/gateway/server/health_floor_tests.rs:571
+#mutant stop_in_checkpoint
+mcp_gateway	gateway::server::health_floor::tests::g8_a_checkpoint_records_no_clean_stop	src/gateway/server/health_floor_tests.rs:633
+#mutant saver_ungated
+mcp_gateway	gateway::server::health_floor::tests::w1_the_production_periodic_save_obeys_the_gate	src/gateway/server/health_floor_tests.rs:691
+#mutant guard_keeps_live
+mcp_gateway	gateway::server::health_floor::contract_tests::c1a_the_drop_guard_alone_stops_the_write	src/gateway/server/health_floor_contract_tests.rs:83
+#mutant no_overlap_refusal
+mcp_gateway	gateway::server::health_floor::contract_tests::c2_a_superseded_worker_writes_once_and_blocks_a_new_checkpoint	src/gateway/server/health_floor_contract_tests.rs:107
+#mutant replay_on_release
+mcp_gateway	gateway::server::health_floor::contract_tests::c3_resume_replays_and_release_for_stop_does_not	src/gateway/server/health_floor_contract_tests.rs:160
+#mutant commit_stays_paused
+mcp_gateway	gateway::server::health_floor::contract_tests::c4_commit_is_terminal	src/gateway/server/health_floor_contract_tests.rs:184
+#mutant settled_always
+mcp_gateway	gateway::server::health_floor::contract_tests::c5_settled_tracks_the_checkpoint_worker	src/gateway/server/health_floor_contract_tests.rs:232
+#mutant closure_no_claim
+mcp_gateway	gateway::server::health_floor::contract_tests::c6a_resume_while_parked_runs_it_once_by_the_replay	src/gateway/server/health_floor_contract_tests.rs:334
+#mutant resume_no_claim
+mcp_gateway	gateway::server::health_floor::contract_tests::c6b_skip_then_resume_runs_it_once	src/gateway/server/health_floor_contract_tests.rs:354
+#mutant no_second_read
+mcp_gateway	gateway::server::health_floor::contract_tests::c6c_release_while_parked_runs_it_once_itself	src/gateway/server/health_floor_contract_tests.rs:373
+#mutant final_reopens
+mcp_gateway	gateway::server::health_floor::matrix_tests::c7_every_state_and_call_ends_where_the_contract_says	src/gateway/server/health_floor_matrix_tests.rs:129
+#mutant replay_always
+mcp_gateway	gateway::server::health_floor::matrix_tests::c8_resume_from_open_replays_nothing	src/gateway/server/health_floor_matrix_tests.rs:164
+#mutant lost_as_unavailable
+mcp_gateway	gateway::server::health_floor::matrix_tests::c9_a_worker_panic_is_worker_lost	src/gateway/server/health_floor_matrix_tests.rs:183
+#mutant pause_in_future
+mcp_gateway	gateway::server::health_floor::matrix_tests::c13_an_unpolled_pause_still_pauses	src/gateway/server/health_floor_matrix_tests.rs:203
+#mutant checkpoint_any_state
+mcp_gateway	gateway::server::health_floor::matrix_tests::c15_a_checkpoint_from_open_is_refused	src/gateway/server/health_floor_matrix_tests.rs:219
+#mutant guard_in_future
+mcp_gateway	gateway::server::health_floor::matrix_tests::c16_an_unpolled_checkpoint_dropped_writes_nothing	src/gateway/server/health_floor_matrix_tests.rs:244
+#mutant settled_ignores_replays
+mcp_gateway	gateway::server::health_floor::matrix_tests::c14b_a_second_replay_does_not_hide_the_first	src/gateway/server/health_floor_matrix_tests.rs:422
+#mutant inputs_by_value
+mcp_gateway	gateway::server::health_floor::matrix_tests::c17_an_adapter_built_before_the_sampler_replays_its_inputs	src/gateway/server/health_floor_matrix_tests.rs:449
+#mutant checkpoint_no_saves
+mcp_gateway	gateway::server::health_floor::tests::g1_an_in_flight_save_delays_the_cut	src/gateway/server/health_floor_tests.rs:264
+#mutant sampler_ungated
+mcp_gateway	gateway::server::health_floor::tests::w2_the_production_sampler_obeys_the_gate	src/gateway/server/health_floor_tests.rs:163
+#mutant busy_sets_flag
+mcp_gateway	health_history::tests::s2_a_busy_periodic_save_changes_nothing	src/health_history/tests.rs:559
+#mutant skip_sets_flag
+mcp_gateway	health_history::tests::s3_a_gate_skipped_save_changes_nothing	src/health_history/tests.rs:596
+#mutant block_write_skipped
+mcp_gateway	health_history::tests::s1_a_block_save_keeps_todays_behaviour	src/health_history/tests.rs:521
