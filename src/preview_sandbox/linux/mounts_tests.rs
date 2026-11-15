@@ -224,3 +224,51 @@ fn verify_requires_exactly_the_read_only_preview_config() {
         "no fetch planned"
     );
 }
+
+/// Kills "verify skips the proxy socket": with an npm fetch planned, the
+/// proxy socket's bind must be there, read-only and nodev; with none
+/// planned, a proxy socket mount refuses.
+#[test]
+fn verify_requires_the_read_only_proxy_socket_only_with_an_npm_fetch() {
+    let mut npm = fetch_plan(true);
+    if let Some(fetch) = npm.fetch.as_mut() {
+        fetch.npm = Some(plan::NpmFetch {
+            spec: "mcp-fake".into(),
+            run_args: Vec::new(),
+            npm: "/opt/npm/bin/npm-cli.js".into(),
+            node_dir: "/opt/node/bin".into(),
+            ip: "/usr/sbin/ip".into(),
+            proxy: "/run/x/proxy.sock".into(),
+        });
+    }
+    let proxy = |read_only: bool, nodev: bool| {
+        let mut mount = row(14, 10, staged(PROXY_SOCKET), read_only);
+        if !nodev {
+            mount.flags.remove(MountFlags::NODEV);
+        }
+        mount
+    };
+    let with = |extra: Option<Mount>| {
+        let mut all = rows(Some(true), Some(true), false);
+        all.extend(extra);
+        all
+    };
+    assert!(verify_rows(&npm, &with(Some(proxy(true, true)))).is_ok());
+    assert!(
+        verify_rows(&npm, &with(None)).is_err(),
+        "proxy socket missing"
+    );
+    assert!(
+        verify_rows(&npm, &with(Some(proxy(false, true)))).is_err(),
+        "writable"
+    );
+    assert!(
+        verify_rows(&npm, &with(Some(proxy(true, false)))).is_err(),
+        "not nodev"
+    );
+    let no_npm = fetch_plan(true);
+    assert!(
+        verify_rows(&no_npm, &with(Some(proxy(true, true)))).is_err(),
+        "no npm fetch planned"
+    );
+}
