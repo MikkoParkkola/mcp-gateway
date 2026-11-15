@@ -113,7 +113,9 @@ jobs:
           PERF_LOADS: '20'
         run: npx playwright test --project=perf --workers=1
       - name: Keep the page budgets' spread
-        if: ${{ !cancelled() }}
+        # always(), not !cancelled(): a job that hits its time limit is
+        # cancelled, and the rows it measured are the evidence most needed.
+        if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-perf-spread
