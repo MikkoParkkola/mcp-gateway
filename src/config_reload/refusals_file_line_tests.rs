@@ -100,10 +100,13 @@ async fn v2_a_posture_refusal_omits_the_line_and_the_running_time() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn v3_an_invalid_value_omits_the_line_and_serves_the_running_time() {
+async fn v3_a_value_of_the_wrong_type_serves_its_line_and_the_running_time() {
+    // `port: not-a-number` is a type error on line 2: the deserializer places it
+    // (yaml Error::location for a serde message), as frame 26i shows "line 48: expects
+    // a number".
     let refusal = served_after(INVALID_VALUE).await;
     assert_eq!(refusal["code"], json!("invalid_config"), "{refusal}");
-    assert!(refusal.get("line").is_none(), "{refusal}");
+    assert_eq!(refusal["line"], json!(2), "{refusal}");
     assert_eq!(refusal["running_since"], json!(APPLIED_AT), "{refusal}");
 }
 
