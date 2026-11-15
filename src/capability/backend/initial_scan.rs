@@ -15,6 +15,16 @@ use super::CapabilityBackend;
 /// `initial_scan` bits: the scan has loaded every directory; a directory
 /// failed to load.
 const COMPLETE: u8 = 0b01;
+
+/// Set the complete bit. `true` when this call is the one that set it.
+///
+/// The handoff and [`CapabilityBackend::mark_initial_scan_complete`] share
+/// the bit. A second caller sees `false` and must not treat that as another
+/// time the scan became ready.
+pub(super) fn note_scan_complete(bits: &std::sync::atomic::AtomicU8) -> bool {
+    let prev = bits.fetch_or(COMPLETE, std::sync::atomic::Ordering::Release);
+    prev & COMPLETE == 0
+}
 const FAILED: u8 = 0b10;
 /// A capability reload arrived before the scan completed and awaits its turn.
 const RELOAD_HELD: u8 = 0b100;

@@ -100,8 +100,13 @@ impl Gateway {
                 };
                 if !accounts_configured {
                     // Let the HTTP listener bind before large capability scans start.
+                    // Not under the operation lock: the pause is not a catalogue
+                    // operation, and a reload must not wait out the pause.
                     CapabilityBackend::settle_before_initial_scan().await;
                 }
+                // Load, the post-rug-pull snapshot and the publish are one
+                // operation. The guard drops at the end of this scan.
+                let _operation = cap_backend_for_load.lock_operation().await;
 
                 let mut total_caps = 0;
                 // Every capability the account admission gate refused during the
@@ -145,12 +150,11 @@ impl Gateway {
                 // Before readiness and before webhook routes are registered, so
                 // nothing it unloads keeps a route.
                 cap_backend_for_load.detect_rug_pulls().await;
-                // After the catalogue swap, with no catalogue lock held.
-                // The stub delivers nothing.
-                cap_backend_for_load.publish_revision(
-                    0,
-                    cap_backend_for_load.capability_snapshot(),
-                );
+                // Under the catalogue write lock, after rug-pull removal: the
+                // seq and the part name the catalogue the scan is serving.
+                // The publish runs after that lock drops.
+                let (seq, part) = cap_backend_for_load.take_served_revision();
+                let transitioned = cap_backend_for_load.publish_initial_scan(seq, part);
 
                 if webhooks_enabled {
                     for cap in cap_backend_for_load.list_capabilities() {
@@ -162,7 +166,15 @@ impl Gateway {
 
                 // Readiness waits on this (MIK-7268), and clients served during the
                 // scan hear of its catalogue; refusals are reported below.
-                cap_backend_for_load.finish_initial_scan(&registry_for_load);
+                // An unattached publish parks and does not mark ready: this
+                // startup has finished its directories, so it marks ready
+                // here. Attached, the publish already marked ready and only
+                // the announcement is left.
+                if !cap_backend_for_load.initial_scan_complete() {
+                    cap_backend_for_load.finish_initial_scan(&registry_for_load);
+                } else if transitioned {
+                    registry_for_load.nudge_catalogue_scanned(&capability_name);
+                }
                 if total_caps > 0 {
                     info!(capabilities = total_caps, name = %capability_name, "Capability backend ready");
                 }
@@ -388,10 +400,15 @@ struct ScanEnds {
 
 impl Drop for ScanEnds {
     fn drop(&mut self) {
-        if !self.backend.initial_scan_complete() {
-            self.backend.mark_initial_scan_failed();
-            self.backend.finish_initial_scan(&self.registry);
+        if self.backend.initial_scan_complete() {
+            return;
         }
+        // A scan that already published must not end failed: its publish and
+        // its end were one acquisition, and this drop is only the end.
+        if !self.backend.scan_has_published() {
+            self.backend.mark_initial_scan_failed();
+        }
+        self.backend.finish_initial_scan(&self.registry);
     }
 }
 

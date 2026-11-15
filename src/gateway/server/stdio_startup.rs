@@ -52,10 +52,15 @@ impl Gateway {
                 CapabilityBackend::new(&self.config.capabilities.name, executor)
                     .with_revision_key(meta_mcp.record_key().config_revision_key()),
             );
+            // Live config already exists. Attach before the first load so the
+            // scan's publish delivers into it instead of parking.
+            cap_backend.attach_revision(Arc::clone(live_config));
             // Registered before the load, as on HTTP: a directory whose load
             // fails is still checked for pin mismatches below.
             cap_backend.register_directories(&self.config.capabilities.directories);
             let mut refused = Vec::new();
+            // The load, the snapshot and the publish are one operation.
+            let _operation = cap_backend.lock_operation().await;
             // Before any directory is read: this startup's unreadable set
             // starts empty and is the one its catalogue carries.
             cap_backend.begin_incremental_coverage();
@@ -85,10 +90,17 @@ impl Gateway {
             // skipped by the load without a record: record it now, as the
             // file watcher records one that changes while it runs.
             cap_backend.detect_rug_pulls().await;
-            // After the catalogue swap, with no catalogue lock held.
-            // The stub delivers nothing.
-            cap_backend.publish_revision(0, cap_backend.capability_snapshot());
-            cap_backend.mark_initial_scan_complete();
+            // Under the catalogue write lock, after rug-pull removal. The
+            // publish runs after that lock drops, while the operation lock
+            // is still held.
+            let (seq, part) = cap_backend.take_served_revision();
+            let transitioned = cap_backend.publish_initial_scan(seq, part);
+            // A backend is born complete, so the attached publish does not
+            // count as the transition. Mark once, as this startup always has.
+            if !transitioned {
+                cap_backend.mark_initial_scan_complete();
+            }
+            drop(_operation);
             meta_mcp.set_capabilities(cap_backend);
         }
 

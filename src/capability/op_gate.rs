@@ -11,17 +11,49 @@
 
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::Mutex;
 use std::time::Duration;
 
 /// Where a row holds the operation.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Step {
+    /// Immediately before the operation takes the operation lock.
+    Acquire,
     /// Before the directory is read.
     Load,
     /// Inside the catalogue write lock, before the catalogue is replaced.
     Swap,
     /// After that lock is released, before the publish.
     BeforePublish,
+}
+
+/// Arrival order of steps a test actually held. Ungated reaches are not
+/// recorded: a reload that did not arm a step must not look like it arrived.
+/// Shared, not thread-local, because the two reloads in one row run on two
+/// threads and the order is the point.
+static ARRIVALS: Mutex<Vec<Step>> = Mutex::new(Vec::new());
+
+fn record_arrival(step: Step) {
+    ARRIVALS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .push(step);
+}
+
+/// Steps whose gates were consumed, in arrival order.
+pub(crate) fn arrivals() -> Vec<Step> {
+    ARRIVALS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone()
+}
+
+/// Drop arrivals from an earlier row on this process.
+pub(crate) fn clear_arrivals() {
+    ARRIVALS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clear();
 }
 
 pub(crate) struct Gate {
@@ -71,6 +103,9 @@ pub(crate) fn reach(step: Step) {
     let Some(gate) = gate else {
         return;
     };
+    // Before the wait, so the order is when the operation arrived, not when
+    // the test let it go.
+    record_arrival(step);
     gate.arrived
         .send(())
         .expect("the test stopped waiting for this step");

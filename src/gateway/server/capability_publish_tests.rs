@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! L3 and H2. The publish stub delivers nothing, so each row fails because
-//! no delivery happened. Expected ids are `config_revision` over a literal
-//! part. Nothing here calls attach or publish itself, and nothing sleeps.
+//! L3 and H2. Expected ids are `config_revision` over a literal part.
+//! Nothing here calls attach or publish itself, and nothing sleeps.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

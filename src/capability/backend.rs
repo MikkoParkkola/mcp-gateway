@@ -193,6 +193,27 @@ impl IndexedCapabilities {
     }
 }
 
+/// The capability part for `caps`. The caller holds the catalogue lock, so
+/// the entries and the coverage set are one catalogue. A source with no
+/// digest was loaded without a revision key and contributes no pair.
+fn part_from(caps: &IndexedCapabilities) -> CapabilityPart<PartDigest> {
+    let mut entries = Vec::new();
+    for source in caps.sources.iter().flatten() {
+        let Some(digest) = source.digest else {
+            continue;
+        };
+        entries.push((source.path.clone(), digest));
+    }
+    // Under the lock: a note that lands during this read is this catalogue's.
+    let partial = !caps.unread.is_empty();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    if partial {
+        CapabilityPart::Partial(entries)
+    } else {
+        CapabilityPart::Loaded(entries)
+    }
+}
+
 // ============================================================================
 // CapabilityBackend
 // ============================================================================
@@ -250,7 +271,7 @@ pub struct CapabilityBackend {
     /// they may be set in either order at startup. Read by
     /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
     multi_user: std::sync::atomic::AtomicBool,
-    initial_scan: std::sync::atomic::AtomicU8,
+    initial_scan: Arc<std::sync::atomic::AtomicU8>,
     /// Derived revision key for capability-file digests. Absent on a backend
     /// that is not the HTTP or stdio startup catalogue: the load still runs,
     /// and the source map then has a path and no digest.
@@ -258,33 +279,21 @@ pub struct CapabilityBackend {
     /// The catalogue operation now recording unreadable paths. Not what a
     /// snapshot reads: that reads the set stored on the catalogue.
     recording: parking_lot::Mutex<OperationUnread>,
-    /// Park, attach and publish share this mutex. The stub records nothing
-    /// and delivers nothing. Nothing in production calls it yet.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "production call sites are a later slice; the tests are the caller until then"
-        )
-    )]
+    /// Park, attach and publish share this mutex. Nothing is called while
+    /// that mutex is held.
     handoff: handoff::Handoff,
     /// The one lock a catalogue operation holds for its whole load, swap and
-    /// publish. Stub: the lock exists. No operation takes it.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "the stub never locks; a later slice takes it around load, swap and publish"
-        )
-    )]
+    /// publish. Released when the operation returns, after the delivery is
+    /// recorded, so a second operation cannot publish an older catalogue
+    /// over a newer one.
     operation: tokio::sync::Mutex<()>,
+    /// The next load sequence. Zero until the first operation takes one, so
+    /// that operation publishes seq 1. Taken under the catalogue write lock
+    /// together with the snapshot, after the catalogue it names is installed.
+    revision_seq: std::sync::atomic::AtomicU64,
     /// Installed by a row that must try the catalogue lock from inside a
-    /// delivery. The publish stub does not call it.
+    /// delivery.
     #[cfg(test)]
-    #[allow(
-        dead_code,
-        reason = "the publish stub does not deliver, so nothing reads the observer yet"
-    )]
     delivery_observer: parking_lot::Mutex<Option<DeliveryObserver>>,
     /// Moves at every catalogue write, under the write lock (MIK-8037).
     catalogue_generation: std::sync::atomic::AtomicU64,
@@ -302,9 +311,10 @@ pub struct CapabilityBackend {
     #[cfg(test)]
     pub(crate) records_at_scan_complete: std::sync::OnceLock<usize>,
     /// How many times the scan was marked complete. The flag cannot tell one
-    /// completion from two.
+    /// completion from two. Shared with the handoff, which completes a scan
+    /// the startup function does not.
     #[cfg(test)]
-    scan_completions: std::sync::atomic::AtomicUsize,
+    scan_completions: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -331,6 +341,12 @@ impl CapabilityBackend {
         let unread = OperationUnread::default();
         let mut catalogue = IndexedCapabilities::default();
         catalogue.unread = unread.clone();
+        // Shared with the handoff: it marks a scan complete, and the bit the
+        // rest of the backend reads has to be this one.
+        let initial_scan = Arc::new(std::sync::atomic::AtomicU8::new(1));
+        let handoff = handoff::Handoff::new(Arc::clone(&initial_scan));
+        #[cfg(test)]
+        let scan_completions = handoff.share_completions();
         Self {
             name: name.to_string(),
             executor,
@@ -339,11 +355,12 @@ impl CapabilityBackend {
             rug_pull_state: RwLock::new(HashMap::new()),
             loaded_from: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
-            initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
+            initial_scan,
             revision_key: None,
             recording: parking_lot::Mutex::new(unread),
-            handoff: handoff::Handoff::new(),
+            handoff,
             operation: tokio::sync::Mutex::new(()),
+            revision_seq: std::sync::atomic::AtomicU64::new(0),
             #[cfg(test)]
             delivery_observer: parking_lot::Mutex::new(take_delivery_observer()),
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
@@ -354,7 +371,7 @@ impl CapabilityBackend {
             #[cfg(test)]
             records_at_scan_complete: std::sync::OnceLock::new(),
             #[cfg(test)]
-            scan_completions: std::sync::atomic::AtomicUsize::new(0),
+            scan_completions,
         }
     }
 
@@ -386,24 +403,33 @@ impl CapabilityBackend {
     /// either way.
     pub(crate) fn capability_snapshot(&self) -> CapabilityPart<PartDigest> {
         let caps = self.capabilities.read();
-        let mut entries = Vec::new();
-        for source in caps.sources.iter().flatten() {
-            let Some(digest) = source.digest else {
-                continue;
-            };
-            entries.push((source.path.clone(), digest));
-        }
-        // After the entries, so a note that lands during this read counts.
-        // The catalogue lock is still held: the entries and this set are one
-        // catalogue, not a later operation's.
-        let partial = !caps.unread.is_empty();
-        drop(caps);
-        entries.sort_by(|left, right| left.0.cmp(&right.0));
-        if partial {
-            CapabilityPart::Partial(entries)
-        } else {
-            CapabilityPart::Loaded(entries)
-        }
+        part_from(&caps)
+    }
+
+    /// The next load sequence. The caller holds the catalogue write lock, so
+    /// the number and the snapshot name one catalogue.
+    fn alloc_seq(&self) -> u64 {
+        self.revision_seq
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1
+    }
+
+    /// Snapshot and sequence under the catalogue write lock. For a scan that
+    /// has already installed its catalogue: the lock is the swap, and the
+    /// publish happens after this returns.
+    pub(crate) fn take_served_revision(&self) -> (u64, CapabilityPart<PartDigest>) {
+        let caps = self.capabilities.write();
+        let seq = self.alloc_seq();
+        let part = part_from(&caps);
+        (seq, part)
+    }
+
+    /// The operation lock, taken immediately after the test's Acquire step.
+    /// Hold the guard across the load, the swap and the publish.
+    pub(crate) async fn lock_operation(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        #[cfg(test)]
+        super::op_gate::reach(super::op_gate::Step::Acquire);
+        self.operation.lock().await
     }
 
     /// A configured directory, or a file in a readable directory, could not
@@ -430,24 +456,30 @@ impl CapabilityBackend {
         *self.recording.lock() = OperationUnread::default();
     }
 
-    /// The handoff to the live config. One per backend.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "production call sites are a later slice; the tests are the caller until then"
-        )
-    )]
-    pub(crate) fn handoff(&self) -> &handoff::Handoff {
-        &self.handoff
-    }
-
     /// Publish `(seq, part)` after a catalogue swap, with no catalogue lock held.
     ///
-    /// Stub: the seq and the snapshot are dropped. The handoff is not called,
-    /// so nothing is delivered and a row's handoff step gate is not consumed.
+    /// The handoff records the part and, once a live config is attached,
+    /// delivers it after its own mutex is released. The observer runs after
+    /// that, so it can take the catalogue write lock.
     pub(crate) fn publish_revision(&self, seq: u64, part: CapabilityPart<PartDigest>) {
-        let _ = (seq, part);
+        self.handoff.publish(seq, part);
+        #[cfg(test)]
+        self.notify_delivery();
+    }
+
+    /// The startup scan's publish and its end, one handoff acquisition.
+    ///
+    /// `true` when this call marked the scan complete. Unattached, the scan
+    /// stays parked and this is `false`.
+    pub(crate) fn publish_initial_scan(
+        &self,
+        seq: u64,
+        part: CapabilityPart<PartDigest>,
+    ) -> bool {
+        let transitioned = self.handoff.publish_and_end(seq, part);
+        #[cfg(test)]
+        self.notify_delivery();
+        transitioned
     }
 
     /// Arm the observer the next [`Self::new`] on this thread copies in.
@@ -483,14 +515,10 @@ impl CapabilityBackend {
         free
     }
 
-    /// A real publish calls this after it has dropped every lock it holds.
-    /// The stub does not: a delivery that never happens must fail the row,
-    /// not pass a lock check nobody ran.
+    /// A publish calls this after the catalogue lock and the handoff mutex
+    /// are both dropped. The observer tries the catalogue write lock from
+    /// inside the delivery.
     #[cfg(test)]
-    #[allow(
-        dead_code,
-        reason = "the publish stub does not deliver, so the observer is never called"
-    )]
     fn notify_delivery(&self) {
         let observer = self.delivery_observer.lock().clone();
         if let Some(observer) = observer {
@@ -677,15 +705,18 @@ impl CapabilityBackend {
     ///
     /// Returns an error if reloading fails for all directories.
     pub async fn reload(&self) -> Result<usize> {
+        // Held until this function returns, which is after the publish.
+        let _operation = self.lock_operation().await;
         let dirs: Vec<String> = self.directories.read().clone();
 
         if dirs.is_empty() {
             debug!(backend = %self.name, "No directories to reload");
-            return Ok(0);
         }
 
         // Before any note, so this reload's set is not the one still stored
-        // on the catalogue. Install below is what stores it.
+        // on the catalogue. Install below is what stores it. An empty
+        // directory list still installs: the fresh set replaces a partial
+        // one left by an earlier operation.
         self.begin_reload_coverage();
 
         let mut loaded_files = Vec::new();
@@ -742,7 +773,9 @@ impl CapabilityBackend {
 
         // Atomic swap: rebuild index and tool cache in one write lock, then
         // bump the shared policy epoch while that lock is still held.
-        {
+        // The seq and the snapshot are taken here, after install, and the
+        // publish below runs only once this guard has dropped.
+        let (seq, part) = {
             let mut caps = self.capabilities.write();
             let incoming: HashMap<&str, &CapabilityDefinition> = admitted
                 .iter()
@@ -778,12 +811,17 @@ impl CapabilityBackend {
             self.executor.stop_unloaded_mcp(&|name| {
                 !revoked.contains(name) && caps.index.contains_key(name)
             });
-        }
-        // The catalogue lock is released. A row holds this gap, then the
-        // publish drops its arguments and delivers nothing.
+            // After install, still under this lock: the seq and the part name
+            // the catalogue this swap wrote, not the one it replaced.
+            let seq = self.alloc_seq();
+            let part = part_from(&caps);
+            (seq, part)
+        };
+        // The catalogue lock is released. A row holds this gap. The publish
+        // runs with that lock free; the operation lock is still held.
         #[cfg(test)]
         super::op_gate::reach(super::op_gate::Step::BeforePublish);
-        self.publish_revision(0, self.capability_snapshot());
+        self.publish_revision(seq, part);
         self.catalogue_changed();
         self.note_admitted(trusted, !partial);
 

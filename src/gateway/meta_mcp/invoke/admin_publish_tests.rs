@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! P4 and L2. The publish stub delivers nothing and no operation takes the
-//! operation lock, so each row fails at the assertion named in its message.
-//! Expected ids are `config_revision` over a literal part built here.
+//! P4, L2, and a reload with no directories. Expected ids are
+//! `config_revision` over a literal part built here.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -141,6 +140,7 @@ struct Releases {
     watcher_load: Option<std::sync::mpsc::SyncSender<()>>,
     watcher_swap: Option<std::sync::mpsc::SyncSender<()>>,
     watcher_publish: Option<std::sync::mpsc::SyncSender<()>>,
+    admin_acquire: Option<std::sync::mpsc::SyncSender<()>>,
     admin_load: Option<std::sync::mpsc::SyncSender<()>>,
     admin_swap: Option<std::sync::mpsc::SyncSender<()>>,
     admin_publish: Option<std::sync::mpsc::SyncSender<()>>,
@@ -151,6 +151,7 @@ impl Drop for Releases {
         let_go(&mut self.watcher_load);
         let_go(&mut self.watcher_swap);
         let_go(&mut self.watcher_publish);
+        let_go(&mut self.admin_acquire);
         let_go(&mut self.admin_load);
         let_go(&mut self.admin_swap);
         let_go(&mut self.admin_publish);
@@ -173,10 +174,14 @@ fn spawn_gated(
 }
 
 /// A watcher reload and an admin reload, each held at its load, at the swap,
-/// and between the unlock and the publish. The second waits for the first,
-/// and the last delivery names the catalogue installed last.
+/// and between the unlock and the publish. The admin reload is also held at
+/// Acquire, before it takes the operation lock, while the watcher still holds
+/// that lock. The second waits for the first, the admin's load is after the
+/// watcher's publish, and the last delivery names the catalogue installed last.
 #[test]
 fn l2_watcher_and_admin_reloads_are_ordered() {
+    // The arrival log is process-wide. This row is the one that reads it.
+    op_gate::clear_arrivals();
     let dir = tempfile::tempdir().expect("a temp dir");
     let root = root_of(&dir);
     let path = format!("{root}/alpha.yaml");
@@ -184,10 +189,14 @@ fn l2_watcher_and_admin_reloads_are_ordered() {
     let admin_bytes = yaml_bytes("alpha", "admin");
     let (backend, meta) = backend_in(&root);
 
+    // The watcher does not arm Acquire: that reach is not a held step, and
+    // an ungated reach is not recorded. The admin's Acquire is the proof
+    // that its path still takes the lock.
     let (watcher_load, watcher_load_arrived, watcher_load_release) = Gate::open(Step::Load);
     let (watcher_swap, watcher_swap_arrived, watcher_swap_release) = Gate::open(Step::Swap);
     let (watcher_publish, watcher_publish_arrived, watcher_publish_release) =
         Gate::open(Step::BeforePublish);
+    let (admin_acquire, admin_acquire_arrived, admin_acquire_release) = Gate::open(Step::Acquire);
     let (admin_load, admin_load_arrived, admin_load_release) = Gate::open(Step::Load);
     let (admin_swap, admin_swap_arrived, admin_swap_release) = Gate::open(Step::Swap);
     let (admin_publish, admin_publish_arrived, admin_publish_release) =
@@ -205,27 +214,34 @@ fn l2_watcher_and_admin_reloads_are_ordered() {
     };
     let admin = {
         let meta = Arc::clone(&meta);
-        spawn_gated(vec![admin_load, admin_swap, admin_publish], async move {
-            meta.reload_capabilities()
-                .await
-                .expect("the admin reload");
-        })
+        spawn_gated(
+            vec![admin_acquire, admin_load, admin_swap, admin_publish],
+            async move {
+                meta.reload_capabilities()
+                    .await
+                    .expect("the admin reload");
+            },
+        )
     };
 
     let mut releases = Releases {
         watcher_load: Some(watcher_load_release),
         watcher_swap: Some(watcher_swap_release),
         watcher_publish: Some(watcher_publish_release),
+        admin_acquire: Some(admin_acquire_release),
         admin_load: Some(admin_load_release),
         admin_swap: Some(admin_swap_release),
         admin_publish: Some(admin_publish_release),
     };
 
-    // The watcher is inside its load, which is where the operation lock is
-    // already held. The admin reload is not waited on here: under the lock
-    // it has not reached its own load yet.
+    // The watcher is inside its load, so it already holds the operation lock.
+    // Acquire is before that lock: releasing the admin here lets it try the
+    // lock while the watcher still holds it and is still parked at its load.
+    // Skipping the lock lets the admin reach its load before this release.
     wait_arrived(&watcher_load_arrived);
     let second_waited = backend.operation_lock_held();
+    wait_arrived(&admin_acquire_arrived);
+    let_go(&mut releases.admin_acquire);
     write_at(&dir.path().join("alpha.yaml"), &watcher_bytes);
     let_go(&mut releases.watcher_load);
 
@@ -261,5 +277,53 @@ fn l2_watcher_and_admin_reloads_are_ordered() {
         last.as_deref(),
         Some(installed_last.as_str()),
         "the last delivery names the catalogue installed last"
+    );
+    // First Load and first BeforePublish are the watcher's: its load is
+    // released, and its publish is reached, before the admin can pass the
+    // lock. The admin's load is the second Load. A path that skips the lock
+    // reaches that load before any BeforePublish.
+    let arrivals = op_gate::arrivals();
+    let first_before = arrivals
+        .iter()
+        .position(|step| *step == Step::BeforePublish)
+        .expect("the watcher reached BeforePublish");
+    let second_load = arrivals
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| **step == Step::Load)
+        .nth(1)
+        .map(|(index, _)| index)
+        .expect("the admin reached Load");
+    assert!(
+        second_load > first_before,
+        "the admin load comes after the watcher publish: the admin path skipped the operation lock"
+    );
+}
+
+/// A reload with no configured directories installs an empty catalogue and a
+/// fresh empty coverage set. A partial left by an earlier operation does not
+/// survive it.
+#[tokio::test]
+async fn reload_with_no_directories_replaces_a_stale_partial_with_an_empty_loaded_part() {
+    let backend = Arc::new(
+        CapabilityBackend::new("caps", Arc::new(CapabilityExecutor::new()))
+            .with_revision_key(key()),
+    );
+    backend.begin_incremental_coverage();
+    backend.note_unreadable("missing");
+    let stale = backend.capability_snapshot();
+    assert!(
+        matches!(stale, CapabilityPart::Partial(entries) if entries.is_empty()),
+        "an earlier operation left an empty partial catalogue"
+    );
+
+    within_30s(backend.reload())
+        .await
+        .expect("the reload with no directories");
+
+    let installed = backend.capability_snapshot();
+    assert!(
+        matches!(installed, CapabilityPart::Loaded(entries) if entries.is_empty()),
+        "a reload with no directories stores an empty loaded part; a stale partial survived it"
     );
 }

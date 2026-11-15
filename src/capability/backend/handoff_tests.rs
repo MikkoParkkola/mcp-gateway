@@ -4,10 +4,9 @@
 //! here. A step the row holds is parked on a channel; the wait is 30s. Nothing
 //! sleeps to open a window.
 //!
-//! The account-bound, background and stdio rows are integration rows. The
-//! startup functions that run those paths are private to the gateway server,
-//! and this slice does not retarget the scan's drop guard or call attach from
-//! there. Each row drives only the handoff order that path has.
+//! The account-bound, background and stdio rows here drive only the handoff
+//! order that path has. The startup functions are exercised by the rows in
+//! the gateway server.
 
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;

@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! How a capability snapshot reaches the live config.
 //!
-//! One mutex guards the handoff. Nothing is called while it is held. The
-//! bodies below are stubs: they take that mutex and then record nothing and
-//! deliver nothing, so today's scan end is unchanged. The test observer and
-//! the step gate are how a row holds park, attach, or the gap after the
-//! unlock, without sleeping.
+//! One mutex guards the handoff. Nothing is called while it is held: the
+//! live config is updated only after the guard drops. Park, attach and
+//! publish take that same mutex, so a scan cannot park after an attach
+//! that already looked.
 
+use std::sync::atomic::{AtomicU8, Ordering};
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -20,21 +22,13 @@ use crate::config_reload::revision::{CapabilityPart, PartDigest};
 type Part = CapabilityPart<PartDigest>;
 
 /// Unattached holds the newest part until a live config exists. Attached is
-/// that config. The stub never leaves [`State::Unattached`].
-#[allow(
-    dead_code,
-    reason = "the stub never stores a part or attaches; the real handoff writes both"
-)]
+/// that config.
 enum State {
     Unattached { held: Option<(u64, Part)> },
     Attached(Arc<LiveConfig>),
 }
 
 /// The startup scan has not ended, is waiting for attach, has ended, or failed.
-#[allow(
-    dead_code,
-    reason = "the stub never moves the scan off NotEnded; rows name the other three"
-)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scan {
     NotEnded,
@@ -43,122 +37,215 @@ enum Scan {
     Failed,
 }
 
-#[allow(
-    dead_code,
-    reason = "the stub keeps the initial value; the real handoff writes these fields"
-)]
 struct Inner {
     state: State,
     max_seq: u64,
     scan: Scan,
 }
 
+/// What [`stage`] decided for one publish.
+enum Staged {
+    /// `seq` was at or below the highest already accepted. Not stored.
+    Dropped,
+    /// Accepted while no live config was attached. The part is held.
+    Held,
+    /// Accepted while attached. Deliver this handle after the unlock.
+    Live(Arc<LiveConfig>),
+}
+
 /// Park, attach and publish share this mutex.
 pub(crate) struct Handoff {
     inner: Mutex<Inner>,
-    /// Every `(seq, part)` a delivery would hand to the live config. Stays
-    /// empty while the stub delivers nothing. Not the handoff mutex: the
-    /// design's one lock is `inner`.
+    /// The backend's scan-complete bit. Shared so marking ready here is the
+    /// same bit the backend reads, without the handoff holding the backend.
+    scan_bits: Arc<AtomicU8>,
+    /// Completions beside the bit. Shared with the backend so a row counting
+    /// [`CapabilityBackend::mark_initial_scan_complete`] sees this transition.
+    #[cfg(test)]
+    completions: Arc<AtomicUsize>,
+    /// Every `(seq, part)` accepted for delivery. Recorded once, when the
+    /// publish is accepted, including while nothing is attached: the reload
+    /// rows read this and have no live config. Attach does not record the
+    /// part again. Not the handoff mutex.
     #[cfg(test)]
     delivered: Mutex<Vec<(u64, Part)>>,
 }
 
 impl Handoff {
     /// A handoff that has not attached and whose scan has not ended.
-    pub(crate) fn new() -> Self {
+    /// `scan_bits` is the backend's bit, already complete for a backend that
+    /// was not put into a startup scan.
+    pub(crate) fn new(scan_bits: Arc<AtomicU8>) -> Self {
         Self {
             inner: Mutex::new(Inner {
                 state: State::Unattached { held: None },
                 max_seq: 0,
                 scan: Scan::NotEnded,
             }),
+            scan_bits,
+            #[cfg(test)]
+            completions: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             delivered: Mutex::new(Vec::new()),
         }
     }
 
-    /// Publish `(seq, part)`.
-    ///
-    /// Stub: lock and drop it. Records nothing. Delivers nothing.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "production call sites are a later slice; the tests are the caller until then"
-        )
-    )]
-    pub(crate) fn publish(&self, seq: u64, part: Part) {
-        {
-            let _held = self.inner.lock();
-            let _ = (seq, &part);
-        }
-        // After the unlock, before a delivery. The stub does not deliver.
-        #[cfg(test)]
-        reach(Step::Deliver);
-        let _ = part;
+    /// The completion counter, so the backend and this handoff increment one.
+    /// Visible to the parent module: `CapabilityBackend::new` shares it.
+    #[cfg(test)]
+    pub(super) fn share_completions(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.completions)
     }
 
-    /// The scan's publish and its end, one acquisition.
+    /// Publish `(seq, part)`. A seq at or below the highest accepted one is
+    /// dropped in every state. Unattached, the part is held. Attached, it is
+    /// delivered after this mutex is released.
+    pub(crate) fn publish(&self, seq: u64, part: Part) {
+        let staged = {
+            let mut inner = self.inner.lock();
+            stage(&mut inner, seq, &part)
+        };
+        self.remember(seq, &part, &staged);
+        #[cfg(test)]
+        reach(Step::Deliver);
+        if let Staged::Live(live) = staged {
+            live.set_capabilities(seq, part);
+        }
+    }
+
+    /// The scan's publish and its end, one acquisition. A cancellation cannot
+    /// fall between them, so a scan that published does not end failed.
     ///
-    /// Stub: lock and drop it. Records nothing. Delivers nothing. Does not
-    /// mark the scan complete.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "production call sites are a later slice; the tests are the caller until then"
-        )
-    )]
-    pub(crate) fn publish_and_end(&self, seq: u64, part: Part) {
-        {
-            let _held = self.inner.lock();
+    /// Returns whether this call is the one that marked the scan complete.
+    /// Unattached, the scan is parked and this returns false: readiness stays
+    /// false until attach takes the held part.
+    pub(crate) fn publish_and_end(&self, seq: u64, part: Part) -> bool {
+        let (staged, completes) = {
+            let mut inner = self.inner.lock();
             // Inside the acquisition, so a test can start attach while this
-            // scan still holds the mutex.
+            // scan still holds the mutex and before the park is stored.
             #[cfg(test)]
             reach(Step::Park);
-            let _ = (seq, part);
-        }
+            let staged = stage(&mut inner, seq, &part);
+            // Attached: this call ends the scan. Unattached: park, and do
+            // not mark ready — the rows read readiness while this returns.
+            let completes = match &inner.state {
+                State::Attached(_) => {
+                    inner.scan = Scan::Ended;
+                    true
+                }
+                State::Unattached { .. } => {
+                    inner.scan = Scan::Parked;
+                    false
+                }
+            };
+            (staged, completes)
+        };
+        self.remember(seq, &part, &staged);
         #[cfg(test)]
         reach(Step::Deliver);
+        if let Staged::Live(live) = staged {
+            live.set_capabilities(seq, part);
+        }
+        if completes { self.complete_scan() } else { false }
     }
 
-    /// Attach `live`. A second call is a programming error in the real
-    /// handoff; this stub never panics.
-    ///
-    /// Stub: lock and drop it. Takes nothing. Delivers nothing. Does not
-    /// finish the scan.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "production call sites are a later slice; the tests are the caller until then"
-        )
-    )]
+    /// Attach `live`. Always takes a held part, whatever the scan state.
+    /// A second call is a programming error and panics in debug builds.
     pub(crate) fn attach_revision(&self, live: Arc<LiveConfig>) {
-        {
-            let _held = self.inner.lock();
+        let (taken, completes) = {
+            let mut inner = self.inner.lock();
             #[cfg(test)]
             reach(Step::Attach);
-            let _ = &live;
-        }
+            if matches!(inner.state, State::Attached(_)) {
+                drop(inner);
+                #[cfg(debug_assertions)]
+                panic!("attach is once per backend; a second call would replace the live config");
+                #[cfg(not(debug_assertions))]
+                return self.deliver_attached(live, None, false);
+            }
+            let prev = std::mem::replace(&mut inner.state, State::Attached(Arc::clone(&live)));
+            let taken = match prev {
+                State::Unattached { held } => held,
+                State::Attached(_) => None,
+            };
+            // Only a parked scan is completed by attach. A scan that has not
+            // ended yet publishes and completes itself.
+            let completes = if inner.scan == Scan::Parked {
+                inner.scan = Scan::Ended;
+                true
+            } else {
+                false
+            };
+            (taken, completes)
+        };
+        self.deliver_attached(live, taken, completes);
+    }
+
+    /// Deliver a part attach took. Not recorded: the publish that stored it
+    /// recorded it once. The seq check is not applied again; the part already
+    /// passed it.
+    fn deliver_attached(&self, live: Arc<LiveConfig>, taken: Option<(u64, Part)>, completes: bool) {
         #[cfg(test)]
         reach(Step::Deliver);
-        let _ = live;
+        if let Some((seq, part)) = taken {
+            live.set_capabilities(seq, part);
+        }
+        if completes {
+            self.complete_scan();
+        }
     }
 
     /// The scan failed or was cancelled, as far as this mutex is concerned.
     ///
-    /// Stub: lock and drop it. Does not record [`Scan::Failed`]. The caller
-    /// runs today's completion outside the lock.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "production call sites are a later slice; the tests are the caller until then"
-        )
-    )]
+    /// A scan that already published (parked) ends `Ended` and is marked
+    /// complete here, before the caller checks readiness, so the caller does
+    /// not also mark it failed. A scan that had not published is `Failed`;
+    /// the caller marks it failed and completes it.
     fn end_failed(&self) {
-        let _held = self.inner.lock();
+        let completes = {
+            let mut inner = self.inner.lock();
+            match inner.scan {
+                Scan::NotEnded => {
+                    inner.scan = Scan::Failed;
+                    false
+                }
+                Scan::Parked => {
+                    inner.scan = Scan::Ended;
+                    true
+                }
+                Scan::Ended | Scan::Failed => false,
+            }
+        };
+        if completes {
+            self.complete_scan();
+        }
+    }
+
+    /// `true` when this call is the transition to complete.
+    fn complete_scan(&self) -> bool {
+        let fresh = super::initial_scan::note_scan_complete(&self.scan_bits);
+        if fresh {
+            #[cfg(test)]
+            self.completions.fetch_add(1, Ordering::AcqRel);
+        }
+        fresh
+    }
+
+    /// Record an accepted publish once. A dropped seq is not a delivery.
+    fn remember(&self, seq: u64, part: &Part, staged: &Staged) {
+        if matches!(staged, Staged::Dropped) {
+            return;
+        }
+        #[cfg(test)]
+        self.delivered.lock().push((seq, part.clone()));
+        #[cfg(not(test))]
+        let _ = (seq, part);
+    }
+
+    /// The scan published or ended. A failure before any publish is neither.
+    pub(crate) fn has_published(&self) -> bool {
+        matches!(self.inner.lock().scan, Scan::Parked | Scan::Ended)
     }
 
     #[cfg(test)]
@@ -178,17 +265,35 @@ impl Handoff {
     }
 }
 
+/// Accept `seq` or drop it. The highest seq is remembered in every state,
+/// including after the held part has been taken.
+fn stage(inner: &mut Inner, seq: u64, part: &Part) -> Staged {
+    if seq <= inner.max_seq {
+        return Staged::Dropped;
+    }
+    inner.max_seq = seq;
+    match &mut inner.state {
+        State::Unattached { held } => {
+            *held = Some((seq, part.clone()));
+            Staged::Held
+        }
+        State::Attached(live) => Staged::Live(Arc::clone(live)),
+    }
+}
+
 impl super::CapabilityBackend {
     /// The scan failed or was cancelled.
     ///
-    /// The handoff half records nothing. What follows is the startup scan's
-    /// drop guard, unchanged: an unfinished scan is marked failed and then
-    /// finished. Both run after the handoff mutex is released.
+    /// The handoff half runs first. A parked scan is already complete when
+    /// this returns, so the failure mark below does not apply to it. What
+    /// follows for a scan that never published is the startup scan's drop
+    /// guard: mark it failed, then finish it. Both run after the handoff
+    /// mutex is released.
     #[cfg_attr(
         not(test),
         allow(
             dead_code,
-            reason = "production call sites are a later slice; the tests are the caller until then"
+            reason = "the startup scan's drop guard completes a published scan itself; rows call this for a scan that had not published"
         )
     )]
     pub(crate) fn end_failed(&self, registry: &crate::backend::BackendRegistry) {
@@ -199,8 +304,30 @@ impl super::CapabilityBackend {
         }
     }
 
-    /// What a delivery would have handed over. Empty while the publish stub
-    /// delivers nothing.
+    /// Attach `live` to this backend's handoff. Once per backend.
+    pub(crate) fn attach_revision(&self, live: Arc<LiveConfig>) {
+        self.handoff.attach_revision(live);
+    }
+
+    /// The startup scan has published a part (parked or ended). A drop of the
+    /// scan after that must not mark the scan failed.
+    pub(crate) fn scan_has_published(&self) -> bool {
+        self.handoff.has_published()
+    }
+
+    /// The handoff to the live config. One per backend.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "production uses the methods on CapabilityBackend; rows hold the handoff directly"
+        )
+    )]
+    pub(crate) fn handoff(&self) -> &Handoff {
+        &self.handoff
+    }
+
+    /// What a delivery accepted. Empty until a publish is accepted.
     #[cfg(test)]
     pub(crate) fn delivered_revisions(&self) -> Vec<(u64, CapabilityPart<PartDigest>)> {
         self.handoff.delivered()
