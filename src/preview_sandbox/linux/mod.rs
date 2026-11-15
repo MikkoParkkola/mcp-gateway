@@ -452,7 +452,7 @@ fn build_plan(
 /// empty file either way.
 fn place_npm(plan: &mut Plan, npx: &Path, npm: &Path, node: &Path) -> Result<PathBuf, Refusal> {
     let real = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
-    let (npx_real, npm_real, node_real) = (real(npx), real(npm), real(node));
+    let (program_real, npm_real, node_real) = (real(npx), real(npm), real(node));
     if node_real.is_dir() {
         return Err(Refusal::Step(format!(
             "placing node ({} is a directory)",
@@ -462,9 +462,9 @@ fn place_npm(plan: &mut Plan, npx: &Path, npm: &Path, node: &Path) -> Result<Pat
     // npx's program bind: bind-backs under /usr/local, its runtime tree, or
     // its lone real file.
     plan.bound_back.clear();
-    let npx_tree = runtime_tree(&npx_real);
+    let program_tree = runtime_tree(&program_real);
     plan.read_only
-        .retain(|r| Path::new(r) != npx_real && npx_tree.as_deref() != Some(Path::new(r)));
+        .retain(|r| Path::new(r) != program_real && program_tree.as_deref() != Some(Path::new(r)));
     // npm's cli is `<package>/bin/npm-cli.js`.
     let package = npm_real
         .parent()
