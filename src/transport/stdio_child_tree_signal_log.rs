@@ -98,73 +98,101 @@ fn term_then_kill(sent: &[Sent]) -> bool {
         if !rest.is_empty() && rest.iter().all(|s| *s == Sent::Kill))
 }
 
-/// One SIGTERM, then the kill; or, on a host that starved the reaper past its
-/// slack, the kill after a recorded skip whose lateness exceeds the threshold.
-/// Any other shape fails by name.
-pub(crate) async fn assert_term_then_kill(pid: Pid, what: &str) {
-    let sent = after_the_kill(pid).await;
-    if term_then_kill(&sent) {
-        return;
+fn has_skip(sent: &[Sent]) -> bool {
+    sent.iter().any(|s| matches!(s, Sent::SkipLate { .. }))
+}
+
+/// The live rows' rule: one SIGTERM, then the kill, with no skip recorded; or,
+/// on a host that starved the reaper past its slack, no SIGTERM at all, only
+/// late skips whose lateness exceeds the threshold, then the kill. Any other
+/// shape is refused with its reason.
+fn judge_term_then_kill(sent: &[Sent]) -> Result<(), String> {
+    if sent.contains(&Sent::Term) {
+        return if term_then_kill(sent) && !has_skip(sent) && !sent.contains(&Sent::LeaderGone) {
+            Ok(())
+        } else {
+            Err(format!("not one SIGTERM followed by the kill: {sent:?}"))
+        };
     }
-    assert!(
-        !sent.contains(&Sent::Term),
-        "{what}: the reaper sent {sent:?}: a SIGTERM out of order"
-    );
-    assert!(
-        !sent.contains(&Sent::LeaderGone),
-        "{what}: SIGTERM not sent, the leader was already gone: {sent:?}"
-    );
-    let skips: Vec<std::time::Duration> = sent
-        .iter()
-        .filter_map(|s| match s {
-            Sent::SkipLate { late } => Some(*late),
-            _ => None,
-        })
-        .collect();
-    if skips.is_empty() {
-        assert!(
-            !sent.contains(&Sent::Unproven),
-            "{what}: SIGTERM not sent, the group's ownership was not shown: {sent:?}"
-        );
-        panic!("{what}: killed with no SIGTERM and no recorded reason: {sent:?}");
+    if sent.contains(&Sent::LeaderGone) {
+        return Err(format!(
+            "SIGTERM not sent, the leader was already gone: {sent:?}"
+        ));
+    }
+    if sent.contains(&Sent::Unproven) {
+        return Err(format!(
+            "SIGTERM not sent, the group's ownership was not shown: {sent:?}"
+        ));
+    }
+    if !has_skip(sent) {
+        return Err(format!(
+            "killed with no SIGTERM and no recorded reason: {sent:?}"
+        ));
     }
     let threshold = skip_threshold();
-    for late in skips {
-        assert!(
-            late > threshold,
-            "{what}: SIGTERM skipped {late:?} late, under the {threshold:?} the slack allows: {sent:?}"
-        );
+    for s in sent {
+        if let Sent::SkipLate { late } = s
+            && *late <= threshold
+        {
+            return Err(format!(
+                "SIGTERM skipped {late:?} late, under the {threshold:?} the slack allows: {sent:?}"
+            ));
+        }
     }
-    assert!(
-        signals(&sent).iter().all(|s| *s == Sent::Kill) && sent.contains(&Sent::Kill),
-        "{what}: the reaper sent {sent:?}, not the kill after its skip"
-    );
+    if sent.contains(&Sent::Kill) {
+        Ok(())
+    } else {
+        Err(format!("no kill after the skip: {sent:?}"))
+    }
 }
 
-/// The normal path only: one SIGTERM, then the kill, with no skip recorded.
-/// For a row on the full, uncut plan, which leaves the reaper seconds of room.
+/// The normal path only: one SIGTERM, then the kill, with nothing skipped.
+fn judge_strict(sent: &[Sent]) -> Result<(), String> {
+    if term_then_kill(sent) && !has_skip(sent) && !sent.contains(&Sent::LeaderGone) {
+        Ok(())
+    } else {
+        Err(format!("not one SIGTERM followed by the kill: {sent:?}"))
+    }
+}
+
+/// The kill with no SIGTERM; a late skip is allowed (these plans leave no
+/// room for one), any other unsent reason is refused.
+fn judge_kill_without_term(sent: &[Sent]) -> Result<(), String> {
+    if sent.contains(&Sent::LeaderGone) || sent.contains(&Sent::Unproven) {
+        return Err(format!(
+            "a SIGTERM was due but not sent for another reason: {sent:?}"
+        ));
+    }
+    let signals = signals(sent);
+    if !signals.is_empty() && signals.iter().all(|s| *s == Sent::Kill) {
+        Ok(())
+    } else {
+        Err(format!("not the kill alone: {sent:?}"))
+    }
+}
+
+/// See [`judge_term_then_kill`].
+pub(crate) async fn assert_term_then_kill(pid: Pid, what: &str) {
+    if let Err(why) = judge_term_then_kill(&after_the_kill(pid).await) {
+        panic!("{what}: {why}");
+    }
+}
+
+/// See [`judge_strict`]: for a row on the full, uncut plan, which leaves the
+/// reaper seconds of room.
 pub(crate) async fn assert_term_then_kill_strict(pid: Pid, what: &str) {
-    let sent = after_the_kill(pid).await;
-    assert!(
-        term_then_kill(&sent)
-            && !sent
-                .iter()
-                .any(|s| matches!(s, Sent::SkipLate { .. } | Sent::LeaderGone)),
-        "{what}: the reaper sent {sent:?}, not one SIGTERM followed by the kill"
-    );
+    if let Err(why) = judge_strict(&after_the_kill(pid).await) {
+        panic!("{what}: {why}");
+    }
 }
 
-/// One or more kills and no SIGTERM; a recorded late skip is allowed (these
-/// plans leave no room for one), any other unsent reason fails by name.
+/// See [`judge_kill_without_term`].
 pub(crate) async fn assert_kill_without_term(pid: Pid, what: &str) {
-    let sent = after_the_kill(pid).await;
-    assert!(
-        !sent.contains(&Sent::LeaderGone) && !sent.contains(&Sent::Unproven),
-        "{what}: a SIGTERM was due but not sent for another reason: {sent:?}"
-    );
-    let signals = signals(&sent);
-    assert!(
-        !signals.is_empty() && signals.iter().all(|s| *s == Sent::Kill),
-        "{what}: the reaper sent {sent:?}, not the kill alone"
-    );
+    if let Err(why) = judge_kill_without_term(&after_the_kill(pid).await) {
+        panic!("{what}: {why}");
+    }
 }
+
+#[cfg(test)]
+#[path = "stdio_child_tree_signal_log_tests.rs"]
+mod tests;
