@@ -370,3 +370,71 @@ async fn l_tls2_a_hostile_npmrc_in_the_npm_tree_changes_nothing() {
         .await
         .expect_err("npm's own npmrc turned TLS off or trusted another CA");
 }
+
+/// The canary package's bin: names each argument it can see, then shows
+/// node runs in the run phase.
+const CANARY_BIN: &[u8] =
+    b"#!/bin/sh\nfor f in \"$@\"; do test -e \"$f\" && echo \"visible $f\"; done\nnode -e 'console.log(\"node-ran\")'\necho bin-ran\n";
+
+/// Files planted beside node and beside npm under `/usr/local`, removed on drop.
+struct Canaries(Vec<PathBuf>);
+
+impl Canaries {
+    /// `None` (skip) where this host's `/usr/local` cannot take them.
+    fn plant() -> Option<Self> {
+        let name = format!("preview-canary-{}", std::process::id());
+        let paths = vec![
+            PathBuf::from("/usr/local/bin").join(&name),
+            PathBuf::from("/usr/local/lib/node_modules").join(&name),
+        ];
+        let mut canaries = Self(Vec::new());
+        for path in paths {
+            if let Err(e) = std::fs::write(&path, b"canary") {
+                return skip(&format!("cannot plant {} ({e})", path.display())).map(|n| match n {});
+            }
+            canaries.0.push(path);
+        }
+        Some(canaries)
+    }
+}
+
+impl Drop for Canaries {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// L-canary, kills "the fetch binds the /usr/local trees whole": on a
+/// `/usr/local` node (the hosted runner's), files planted beside node in
+/// `/usr/local/bin` and beside npm in `/usr/local/lib/node_modules` are not
+/// visible to the fetched package's run phase, while node itself runs there.
+#[tokio::test]
+async fn l_canary_a_usr_local_install_shows_the_package_only_node_and_npm() {
+    let Some(npx) = host_npx() else {
+        return;
+    };
+    let real = std::fs::canonicalize(&npx).expect("npx's real file");
+    if !real.starts_with("/usr/local") {
+        let _ = skip("npx is not a /usr/local install");
+        return;
+    }
+    let Some(canaries) = Canaries::plant() else {
+        return;
+    };
+    let fake = Package {
+        name: "mcp-canary",
+        version: "1.0.0",
+        manifest: serde_json::json!({"bin": {"mcp-canary": "bin/cli.sh"}}),
+        files: vec![("bin/cli.sh", CANARY_BIN.to_vec(), 0o755)],
+    };
+    let args: Vec<String> = canaries.0.iter().map(|p| p.display().to_string()).collect();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let Some(ran) = npx("mcp-canary", &args, vec![fake], Bundle::Registry).await else {
+        return;
+    };
+    let out = ran.expect("the fetch and the run succeeded");
+    assert_eq!(lines(&out), ["node-ran", "bin-ran"], "{out}");
+    drop(canaries);
+}

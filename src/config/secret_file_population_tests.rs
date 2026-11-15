@@ -350,7 +350,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/preview_sandbox/linux/fetch_rows.rs",
-        "test-only (cfg(test)): writes the fetch rows' CA bundle and a copy of the host's npm with hostile npmrc files into scratch dirs; no secret",
+        "test-only (cfg(test)): writes the fetch rows' CA bundle and a copy of the host's npm with hostile npmrc files into scratch dirs, and two canary files under /usr/local that it removes; no secret",
     ),
     (
         "src/preview_sandbox/linux/fetch_shim_rows.rs",
