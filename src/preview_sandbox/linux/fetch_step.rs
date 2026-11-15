@@ -99,10 +99,28 @@ pub(super) fn npm_run(
     run_args: &[String],
     node_dir: &str,
 ) -> Result<Run, crate::preview_sandbox::Refusal> {
-    let _ = (home, spec, run_args, node_dir);
-    Err(crate::preview_sandbox::Refusal::Step(
-        "the run after a fetch is not built yet".into(),
-    ))
+    let install = home.join("pkg");
+    let bin = crate::preview_sandbox::install::npm_bin(&install, npm_name(spec))?;
+    let program = bin.to_str().ok_or_else(|| {
+        crate::preview_sandbox::Refusal::Step("the package's entry point is not UTF-8".into())
+    })?;
+    let dot_bin = install.join("node_modules/.bin");
+    Ok(Run {
+        program: program.to_owned(),
+        argv: std::iter::once(program.to_owned())
+            .chain(run_args.iter().cloned())
+            .collect(),
+        path: format!("{node_dir}:{}", dot_bin.display()),
+    })
+}
+
+/// The package name in an npm spec: `name` or `@scope/name`, without the
+/// `@version` that may follow (an `@` after the first character).
+fn npm_name(spec: &str) -> &str {
+    match spec.get(1..).and_then(|rest| rest.find('@')) {
+        Some(at) => &spec[..=at],
+        None => spec,
+    }
 }
 
 #[cfg(test)]
