@@ -29,11 +29,11 @@ fn production_files(dir: &Path, parent_text: &str, out: &mut Vec<PathBuf>) {
             } else {
                 path.with_extension("rs")
             };
-            if declared(parent_text, &name, &path) {
-                let text = std::fs::read_to_string(&own)
-                    .map(|t| production_text(&t))
-                    .unwrap_or_default();
-                production_files(&path, &text, out);
+            if declared(parent_text, &name, &path)
+                && let Ok(text) = std::fs::read_to_string(&own)
+            {
+                out.push(own);
+                production_files(&path, &production_text(&text), out);
             }
         } else if path.extension().is_some_and(|e| e == "rs")
             && name != "mod"

@@ -349,6 +349,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the npm fetch inside the sandbox: the package-lock.json npm wrote (capped at 4 MiB) and /proc's pid list for the sweep; no secret",
     ),
     (
+        "src/preview_sandbox/linux/fetch_rows.rs",
+        "test-only (cfg(test)): writes the fetch rows' CA bundle into a temp dir; no secret",
+    ),
+    (
         "src/preview_sandbox/linux/probe.rs",
         "the npm fetch's probe: whether npm, node and ip exist and where their real files are, and npm --version's stdout capped at 256 bytes; no secret",
     ),
