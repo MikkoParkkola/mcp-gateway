@@ -27,6 +27,10 @@ pub(super) const S2: usize = 7;
 /// The hang guard for every bounded wait (the timing gate's floor is 10 s).
 pub(super) const GUARD: Duration = Duration::from_secs(30);
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the adapter's Clock type returns a Result"
+)]
 pub(super) fn at_t0() -> Result<u64, ClockBeforeEpoch> {
     Ok(T0)
 }
@@ -35,14 +39,26 @@ pub(super) fn no_clock() -> Result<u64, ClockBeforeEpoch> {
     Err(ClockBeforeEpoch)
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "SampleInputs.memory returns an Option"
+)]
 pub(super) fn m1() -> Option<u64> {
     Some(M1)
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "SampleInputs.memory returns an Option"
+)]
 pub(super) fn m2() -> Option<u64> {
     Some(M2)
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "SampleInputs.memory returns an Option"
+)]
 pub(super) fn m3() -> Option<u64> {
     Some(M3)
 }

@@ -81,21 +81,19 @@ fn expected(state: State, call: Call) -> (GateState, Option<Result<(), FloorFaul
     match (state, call) {
         (State::Open, Call::Pause) => (G::Paused, Some(Ok(())), false, 0),
         (State::Open, Call::Checkpoint) => (G::Open, refused, false, 0),
-        (State::Open, Call::Resume | Call::Commit) => (G::Open, None, false, 0),
+        (State::Open, Call::Resume | Call::Commit)
+        | (State::Paused | State::Certified, Call::Resume) => (G::Open, None, false, 0),
         (State::Open | State::Paused | State::Certified, Call::Release) => {
             (G::Released, None, false, 0)
         }
         (State::Paused, Call::Pause) => (G::Paused, refused, false, 0),
-        (State::Paused, Call::Checkpoint) => (G::Paused, Some(Ok(())), true, 1),
-        (State::Paused | State::Certified, Call::Resume) => (G::Open, None, false, 0),
+        (State::Paused | State::Certified, Call::Checkpoint) => (G::Paused, Some(Ok(())), true, 1),
         (State::Paused, Call::Commit) => (G::Paused, None, false, 0),
         (State::Certified, Call::Pause) => (G::Paused, refused, true, 0),
-        (State::Certified, Call::Checkpoint) => (G::Paused, Some(Ok(())), true, 1),
-        (State::Certified, Call::Commit) => (G::Terminal, None, true, 0),
         (State::Released, Call::Pause | Call::Checkpoint) => (G::Released, refused, false, 0),
         (State::Released, _) => (G::Released, None, false, 0),
         (State::Terminal, Call::Pause | Call::Checkpoint) => (G::Terminal, refused, true, 0),
-        (State::Terminal, _) => (G::Terminal, None, true, 0),
+        (State::Certified, Call::Commit) | (State::Terminal, _) => (G::Terminal, None, true, 0),
     }
 }
 
