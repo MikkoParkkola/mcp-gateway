@@ -8,15 +8,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use super::warmstart::{WarmStartMode, WarmerGuard};
 use super::Gateway;
+use super::warmstart::{WarmStartMode, WarmerGuard};
 use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
 use crate::config::Config;
+use crate::config_reload::LiveConfig;
+use crate::config_reload::refusals::ReloadReporting;
 use crate::config_reload::revision::{
     AppliedInputs, CapabilityPart, PartDigest, config_revision, part_digest,
 };
-use crate::config_reload::refusals::ReloadReporting;
-use crate::config_reload::LiveConfig;
 use crate::gateway::webhooks::WebhookRegistry;
 
 fn yaml_bytes(name: &str) -> Vec<u8> {
@@ -31,9 +31,7 @@ fn write_good(dir: &Path, name: &str, bytes: &[u8]) {
 }
 
 fn root_of(dir: &Path) -> String {
-    dir.to_str()
-        .expect("the temp path is utf-8")
-        .to_owned()
+    dir.to_str().expect("the temp path is utf-8").to_owned()
 }
 
 /// The id of `part` alone, under the process record key. The part is a
@@ -146,17 +144,28 @@ async fn start_http(
         .start_capability_watcher(&meta, &webhooks, &shutdown)
         .await
         .expect("the capability step starts");
-    let backend = meta
-        .get_capabilities()
-        .expect("the catalogue is installed");
-    if !account_bound {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-        while !backend.initial_scan_complete() {
-            if tokio::time::Instant::now() >= deadline {
-                panic!("hung past 30s");
-            }
-            tokio::task::yield_now().await;
+    let backend = meta.get_capabilities().expect("the catalogue is installed");
+    if account_bound {
+        // R22(a): the inline scan has published with nothing attached, so it
+        // parked. Its part is held and readiness waits for attach.
+        assert_eq!(
+            backend.delivered_revisions().len(),
+            1,
+            "premise: the account-bound scan published before the step returned"
+        );
+        assert!(
+            !backend.initial_scan_complete(),
+            "a parked scan is not ready before attach"
+        );
+    }
+    // As run does after this step, once LiveConfig is built and before the bind.
+    backend.attach_revision(Arc::new(LiveConfig::new(gateway.config.clone())));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !backend.initial_scan_complete() {
+        if tokio::time::Instant::now() >= deadline {
+            panic!("hung past 30s");
         }
+        tokio::task::yield_now().await;
     }
     Started {
         backend,
@@ -200,9 +209,7 @@ async fn start_stdio(
         Ok(Err(error)) => panic!("stdio startup refused: {error}"),
         Err(_) => panic!("hung past 30s"),
     }
-    let backend = meta
-        .get_capabilities()
-        .expect("the catalogue is installed");
+    let backend = meta.get_capabilities().expect("the catalogue is installed");
     (backend, meta.record_key().config_revision_key())
 }
 
@@ -237,6 +244,11 @@ fn covered(backend: &CapabilityBackend, key: &[u8; 32], path: &str, bytes: &[u8]
         backend.initial_scan_complete(),
         "{startup}: readiness is true"
     );
+    assert_eq!(
+        backend.scan_completions(),
+        1,
+        "{startup}: readiness turned true exactly once"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -268,6 +280,45 @@ async fn h2_background_http_startup_reaches_a_covered_part() {
         &format!("{root}/alpha.yaml"),
         &bytes,
         "background HTTP",
+    );
+}
+
+/// S1 at the publish point: an HTTP startup over two directories delivers
+/// once, after both are loaded, a part naming both files. A publish per
+/// directory would deliver twice, or deliver a part naming only the first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s1_a_two_directory_startup_delivers_one_part_naming_both() {
+    let (first, second) = (
+        tempfile::tempdir().expect("a temp dir"),
+        tempfile::tempdir().expect("a temp dir"),
+    );
+    let (alpha, beta) = (yaml_bytes("alpha"), yaml_bytes("beta"));
+    write_good(first.path(), "alpha", &alpha);
+    write_good(second.path(), "beta", &beta);
+    let dirs = [first.path().to_path_buf(), second.path().to_path_buf()];
+    let started = start_http(&dirs, false, None).await;
+    // The part is sorted by path, and the temp dirs' names order the two.
+    let mut files = vec![
+        (
+            format!("{}/alpha.yaml", root_of(first.path())),
+            part_digest(&started.key, &alpha),
+        ),
+        (
+            format!("{}/beta.yaml", root_of(second.path())),
+            part_digest(&started.key, &beta),
+        ),
+    ];
+    files.sort();
+    let both = CapabilityPart::Loaded(files);
+    assert_eq!(
+        started
+            .backend
+            .delivered_revisions()
+            .iter()
+            .map(|(_, part)| id_of(&started.key, part))
+            .collect::<Vec<_>>(),
+        vec![id_of(&started.key, &both)],
+        "one delivery, naming both directories' files"
     );
 }
 
@@ -305,9 +356,8 @@ async fn l3_every_publish_point_delivers_with_no_catalogue_lock_held() {
 
     let (reload_ran, reload_free, reload_observer) = watch_delivery();
     let backend = Arc::new(
-        CapabilityBackend::new("caps", Arc::new(CapabilityExecutor::new())).with_revision_key(
-            revision_key_of_process(),
-        ),
+        CapabilityBackend::new("caps", Arc::new(CapabilityExecutor::new()))
+            .with_revision_key(revision_key_of_process()),
     );
     backend.set_delivery_observer(reload_observer);
     let paths = [root.clone()];

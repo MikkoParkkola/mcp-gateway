@@ -174,10 +174,7 @@ impl CapabilityLoader {
 
             if path.is_dir() {
                 // Recurse into subdirectories
-                Box::pin(Self::load_directory_recursive(
-                    root, &path, files, failures,
-                ))
-                .await?;
+                Box::pin(Self::load_directory_recursive(root, &path, files, failures)).await?;
             } else if path
                 .extension()
                 .is_some_and(|ext| ext == "yaml" || ext == "yml")

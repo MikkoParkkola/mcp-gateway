@@ -181,7 +181,10 @@ fn startup_inputs_are_moved_into_the_first_publish_and_taken_once() {
     let live = LiveConfig::new(Config::default())
         .with_startup_revision(&record_key, live_env.take_startup_inputs());
     assert!(revision(&live).is_some(), "startup publishes a revision");
-    assert_eq!(live.running_revision().as_deref(), revision(&live).as_deref());
+    assert_eq!(
+        live.running_revision().as_deref(),
+        revision(&live).as_deref()
+    );
     assert!(
         live_env.take_startup_inputs().is_none(),
         "the slot is empty after the startup publish, and a second take gets nothing"

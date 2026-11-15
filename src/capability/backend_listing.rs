@@ -76,6 +76,13 @@ impl CapabilityBackend {
     /// MIK-7268), then announce once.
     pub(crate) fn finish_initial_scan(&self, registry: &BackendRegistry) {
         self.mark_initial_scan_complete();
+        self.announce_scanned(registry);
+    }
+
+    /// Announce the startup scan's catalogue, once the scan is complete: by
+    /// [`Self::finish_initial_scan`], by the scan's own publish, or by the
+    /// attach that delivers a parked scan's part.
+    pub(crate) fn announce_scanned(&self, registry: &BackendRegistry) {
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: the capability catalogue announcing its own listing"

@@ -11,15 +11,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::warmstart::{WarmStartMode, WarmerGuard};
 use super::Gateway;
+use super::warmstart::{WarmStartMode, WarmerGuard};
 use crate::capability::{CapabilityBackend, CapabilityWatcher};
 use crate::config::Config;
+use crate::config_reload::LiveConfig;
+use crate::config_reload::refusals::ReloadReporting;
 use crate::config_reload::revision::{
     AppliedInputs, CapabilityPart, PartDigest, config_revision, part_digest,
 };
-use crate::config_reload::refusals::ReloadReporting;
-use crate::config_reload::LiveConfig;
 use crate::gateway::webhooks::WebhookRegistry;
 
 fn yaml_bytes(name: &str) -> String {
@@ -104,9 +104,9 @@ async fn http_scan(dirs: &[PathBuf]) -> HttpScan {
         .start_capability_watcher(&meta, &webhooks, &shutdown)
         .await
         .expect("the capability step starts");
-    let backend = meta
-        .get_capabilities()
-        .expect("the catalogue is installed");
+    let backend = meta.get_capabilities().expect("the catalogue is installed");
+    // As run does after this step, once LiveConfig is built and before the bind.
+    backend.attach_revision(Arc::new(LiveConfig::new(gateway.config.clone())));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while !backend.initial_scan_complete() {
         if tokio::time::Instant::now() >= deadline {
@@ -150,9 +150,7 @@ async fn stdio_catalogue(dirs: &[String]) -> (Arc<CapabilityBackend>, [u8; 32]) 
         Ok(Err(error)) => panic!("stdio startup refused: {error}"),
         Err(_) => panic!("hung past 30s"),
     }
-    let backend = meta
-        .get_capabilities()
-        .expect("the catalogue is installed");
+    let backend = meta.get_capabilities().expect("the catalogue is installed");
     (backend, meta.record_key().config_revision_key())
 }
 

@@ -150,11 +150,7 @@ fn hold(step: Step, body: impl FnOnce() + Send + 'static) -> JoinHandle<()> {
 
 fn assert_scan_published(started: &Started) {
     let delivered = started.backend.handoff().delivered();
-    assert_eq!(
-        delivered.len(),
-        1,
-        "the held part delivered exactly once"
-    );
+    assert_eq!(delivered.len(), 1, "the held part delivered exactly once");
     assert!(
         delivered[0].0 == 1 && delivered[0].1 == started.part,
         "the delivered part is the scan's"
@@ -164,10 +160,7 @@ fn assert_scan_published(started: &Started) {
         1,
         "readiness turns true exactly once"
     );
-    assert!(
-        started.backend.initial_scan_complete(),
-        "readiness is true"
-    );
+    assert!(started.backend.initial_scan_complete(), "readiness is true");
     assert_eq!(
         published_id(&started.live),
         id_of(&started.part),
@@ -353,6 +346,9 @@ fn h1b_seq3_stays_published_in_both_orders() {
     );
 }
 
+/// A scan cancelled after it published while nothing was attached is parked:
+/// not Failed, not marked failed, and not ready (R3-C). The drop guard's end
+/// leaves it alone; attach delivers its part and makes it ready, once.
 #[test]
 fn h1c_cancel_after_publish_ends_ended_not_failed() {
     let started = scanning(scan_part());
@@ -364,17 +360,69 @@ fn h1c_cancel_after_publish_ends_ended_not_failed() {
     });
     assert_eq!(
         started.backend.handoff().scan(),
+        super::Scan::Parked,
+        "a scan cancelled after it published stays parked, not Failed"
+    );
+    assert!(
+        !started.backend.initial_scan_complete(),
+        "a parked scan is not ready before attach"
+    );
+    assert_eq!(started.backend.scan_completions(), 0, "not marked complete");
+    let backend = Arc::clone(&started.backend);
+    let live = Arc::clone(&started.live);
+    within_30s(move || backend.attach_revision(live));
+    assert_eq!(
+        started.backend.handoff().scan(),
         super::Scan::Ended,
-        "a scan cancelled after it published ends Ended, not Failed"
+        "attach ends the parked scan"
     );
     assert!(
         started.backend.initial_scan_loaded_every_directory(),
         "the cancellation does not mark the scan failed"
     );
+    assert_scan_published(&started);
+}
+
+/// F5: the attach that completes a parked scan announces the catalogue once,
+/// through the registry the scan left. An attach that finds the scan already
+/// complete announces nothing: that scan's own end announced it.
+#[test]
+fn h1d_attach_announces_the_parked_scan_once() {
+    let feed_of = || {
+        let registry = Arc::new(crate::backend::BackendRegistry::new());
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        registry.set_change_feed(tx);
+        (registry, rx)
+    };
+    let started = scanning(scan_part());
+    let (registry, mut feed) = feed_of();
+    started.backend.announce_scan_through(registry);
+    started
+        .backend
+        .handoff()
+        .publish_and_end(1, started.part.clone());
+    assert!(feed.try_recv().is_err(), "a parked scan announces nothing");
+    started.backend.attach_revision(Arc::clone(&started.live));
     assert_eq!(
-        started.backend.scan_completions(),
-        1,
-        "readiness turns true exactly once"
+        feed.try_recv(),
+        Ok(crate::backend::tools_nudge::ToolsNudge::CatalogueScanned {
+            name: "caps".into()
+        }),
+        "attach announces the scan it completed"
+    );
+    assert!(feed.try_recv().is_err(), "once");
+
+    let ended = scanning(scan_part());
+    let (registry, mut feed) = feed_of();
+    ended.backend.announce_scan_through(registry);
+    ended.backend.attach_revision(Arc::clone(&ended.live));
+    ended
+        .backend
+        .handoff()
+        .publish_and_end(1, ended.part.clone());
+    assert!(
+        feed.try_recv().is_err(),
+        "an attach before the scan's end announces nothing; the scan's caller does"
     );
 }
 

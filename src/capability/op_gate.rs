@@ -10,8 +10,8 @@
 //! other. Ungated, [`reach`] returns immediately.
 
 use std::cell::RefCell;
-use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::Mutex;
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::Duration;
 
 /// Where a row holds the operation.

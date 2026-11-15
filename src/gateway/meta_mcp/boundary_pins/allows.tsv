@@ -1,7 +1,7 @@
 # MIK-8387 T1b: every production allow of the registry ban (file, fn, kind, class, banned names inside with counts).
 src/backend/registry.rs	resolve_unwarmed	statement	Lifecycle	getx1
 src/capability/backend_listing.rs	announce_listing_change	statement	Lifecycle	nudge_cataloguex1
-src/capability/backend_listing.rs	finish_initial_scan	statement	Lifecycle	nudge_catalogue_scannedx1
+src/capability/backend_listing.rs	announce_scanned	statement	Lifecycle	nudge_catalogue_scannedx1
 src/clock.rs	-	module	the one place the wall clock is read	
 src/config_reload/grant_reload.rs	reload_identity_grants	statement	Lifecycle	allx1
 src/config_reload/apply.rs	apply_patch	statement	Lifecycle	getx1

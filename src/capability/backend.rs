@@ -471,11 +471,7 @@ impl CapabilityBackend {
     ///
     /// `true` when this call marked the scan complete. Unattached, the scan
     /// stays parked and this is `false`.
-    pub(crate) fn publish_initial_scan(
-        &self,
-        seq: u64,
-        part: CapabilityPart<PartDigest>,
-    ) -> bool {
+    pub(crate) fn publish_initial_scan(&self, seq: u64, part: CapabilityPart<PartDigest>) -> bool {
         let transitioned = self.handoff.publish_and_end(seq, part);
         #[cfg(test)]
         self.notify_delivery();
@@ -745,8 +741,7 @@ impl CapabilityBackend {
         }
 
         // The same admission gate the initial load applies.
-        let (mut admitted, mut trusted) =
-            (Vec::with_capacity(loaded_files.len()), Vec::new());
+        let (mut admitted, mut trusted) = (Vec::with_capacity(loaded_files.len()), Vec::new());
         let mut refused = std::collections::HashSet::new();
         for file in loaded_files {
             match validate_capability_account_binding(

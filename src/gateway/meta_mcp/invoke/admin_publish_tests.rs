@@ -65,7 +65,8 @@ async fn within_30s<T>(work: impl std::future::Future<Output = T>) -> T {
 
 fn backend_in(root: &str) -> (Arc<CapabilityBackend>, Arc<MetaMcp>) {
     let backend = Arc::new(
-        CapabilityBackend::new("caps", Arc::new(CapabilityExecutor::new())).with_revision_key(key()),
+        CapabilityBackend::new("caps", Arc::new(CapabilityExecutor::new()))
+            .with_revision_key(key()),
     );
     let paths = [root.to_string()];
     backend.register_directories(&paths);
@@ -217,9 +218,7 @@ fn l2_watcher_and_admin_reloads_are_ordered() {
         spawn_gated(
             vec![admin_acquire, admin_load, admin_swap, admin_publish],
             async move {
-                meta.reload_capabilities()
-                    .await
-                    .expect("the admin reload");
+                meta.reload_capabilities().await.expect("the admin reload");
             },
         )
     };

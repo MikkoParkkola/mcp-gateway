@@ -144,8 +144,8 @@ fn bare_decision(coverage: &str) -> String {
 /// Covered adds nothing.
 #[test]
 fn d1_absent_coverage_says_not_included_and_partial_names_the_directories() {
-    use super::read::capabilities_line;
     use super::Coverage;
+    use super::read::capabilities_line;
 
     for (variant, name) in [
         (Coverage::Covered, "covered"),
@@ -159,10 +159,9 @@ fn d1_absent_coverage_says_not_included_and_partial_names_the_directories() {
         );
     }
 
-    let absent: super::Decision = serde_json::from_str(
-        r#"{"v":2,"kind":"grant","decided":"fresh"}"#,
-    )
-    .expect("a record written before the field");
+    let absent: super::Decision =
+        serde_json::from_str(r#"{"v":2,"kind":"grant","decided":"fresh"}"#)
+            .expect("a record written before the field");
     assert_eq!(absent.config_revision_capabilities, None);
     assert_eq!(
         capabilities_line(absent.config_revision_capabilities),

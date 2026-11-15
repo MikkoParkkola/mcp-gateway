@@ -14,10 +14,10 @@ use std::time::Duration;
 use super::CapabilityBackend;
 use crate::capability::CapabilityExecutor;
 use crate::config::Config;
+use crate::config_reload::LiveConfig;
 use crate::config_reload::revision::{
     AppliedInputs, CapabilityPart, PartDigest, RawInputs, config_revision, part_digest,
 };
-use crate::config_reload::LiveConfig;
 
 const YAML: &[u8] = b"server:\n  port: 1\n";
 const RELOADED: &[u8] = b"server:\n  port: 2\n";
@@ -51,7 +51,10 @@ fn yaml_bytes(name: &str, description: &str) -> Vec<u8> {
 }
 
 fn root_of(dir: &tempfile::TempDir) -> String {
-    dir.path().to_str().expect("the temp path is utf-8").to_owned()
+    dir.path()
+        .to_str()
+        .expect("the temp path is utf-8")
+        .to_owned()
 }
 
 fn write_at(path: &Path, bytes: &[u8]) {
@@ -60,7 +63,8 @@ fn write_at(path: &Path, bytes: &[u8]) {
 
 fn keyed() -> Arc<CapabilityBackend> {
     Arc::new(
-        CapabilityBackend::new("caps", Arc::new(CapabilityExecutor::new())).with_revision_key(key()),
+        CapabilityBackend::new("caps", Arc::new(CapabilityExecutor::new()))
+            .with_revision_key(key()),
     )
 }
 
@@ -98,7 +102,11 @@ fn snapshot(backend: &Arc<CapabilityBackend>) -> CapabilityPart<PartDigest> {
         }
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("hung past 30s"),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            std::panic::resume_unwind(worker.join().expect_err("the snapshot ended without reporting"));
+            std::panic::resume_unwind(
+                worker
+                    .join()
+                    .expect_err("the snapshot ended without reporting"),
+            );
         }
     }
 }
@@ -182,7 +190,9 @@ async fn p2_identical_bytes_keep_the_id_and_membership_rounds_trip() {
     );
 
     write_at(&dir.path().join("beta.yaml"), &beta);
-    wait(backend.reload()).await.expect("the reload that adds a file");
+    wait(backend.reload())
+        .await
+        .expect("the reload that adds a file");
     let added = snapshot(&backend);
     let two = CapabilityPart::Loaded(vec![
         (format!("{root}/alpha.yaml"), part_digest(&key(), &alpha)),
@@ -211,10 +221,7 @@ async fn p2_identical_bytes_keep_the_id_and_membership_rounds_trip() {
 /// the next slice.
 #[tokio::test]
 async fn p3_yaml_reload_keeps_the_part_and_seq_until_a_capability_reload() {
-    let part = CapabilityPart::Loaded(vec![(
-        "caps/a.yaml".to_owned(),
-        part_digest(&key(), b"v1"),
-    )]);
+    let part = CapabilityPart::Loaded(vec![("caps/a.yaml".to_owned(), part_digest(&key(), b"v1"))]);
     let live = Arc::new(
         LiveConfig::new(Config::default())
             .with_revision_key(key())
@@ -340,10 +347,7 @@ async fn s2_refused_and_rug_pulled_capabilities_are_absent() {
     wait(backend.load_from_directory(&root))
         .await
         .expect("the directory loads");
-    assert!(
-        !backend.has_capability("refused"),
-        "admission refused it"
-    );
+    assert!(!backend.has_capability("refused"), "admission refused it");
     assert!(
         backend.has_capability("kept") && backend.has_capability("trusted"),
         "the other two are served"

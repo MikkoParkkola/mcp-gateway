@@ -7,10 +7,10 @@
 //! publish take that same mutex, so a scan cannot park after an attach
 //! that already looked.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use parking_lot::Mutex;
 
@@ -41,6 +41,10 @@ struct Inner {
     state: State,
     max_seq: u64,
     scan: Scan,
+    /// The registry the startup scan announces its catalogue through, left
+    /// before the scan publishes. A parked scan is completed by attach, and
+    /// attach announces through this, as the scan would have.
+    announce: Option<Arc<crate::backend::BackendRegistry>>,
 }
 
 /// What [`stage`] decided for one publish.
@@ -81,6 +85,7 @@ impl Handoff {
                 state: State::Unattached { held: None },
                 max_seq: 0,
                 scan: Scan::NotEnded,
+                announce: None,
             }),
             scan_bits,
             #[cfg(test)]
@@ -147,13 +152,24 @@ impl Handoff {
         if let Staged::Live(live) = staged {
             live.set_capabilities(seq, part);
         }
-        if completes { self.complete_scan() } else { false }
+        if completes {
+            self.complete_scan()
+        } else {
+            false
+        }
     }
 
     /// Attach `live`. Always takes a held part, whatever the scan state.
     /// A second call is a programming error and panics in debug builds.
-    pub(crate) fn attach_revision(&self, live: Arc<LiveConfig>) {
-        let (taken, completes) = {
+    ///
+    /// Returns the registry to announce through when this call completed a
+    /// parked scan and the scan left one; the caller announces after this
+    /// mutex is released.
+    pub(crate) fn attach_revision(
+        &self,
+        live: Arc<LiveConfig>,
+    ) -> Option<Arc<crate::backend::BackendRegistry>> {
+        let (taken, completes, announce) = {
             let mut inner = self.inner.lock();
             #[cfg(test)]
             reach(Step::Attach);
@@ -162,7 +178,10 @@ impl Handoff {
                 #[cfg(debug_assertions)]
                 panic!("attach is once per backend; a second call would replace the live config");
                 #[cfg(not(debug_assertions))]
-                return self.deliver_attached(live, None, false);
+                {
+                    self.deliver_attached(live, None, false);
+                    return None;
+                }
             }
             let prev = std::mem::replace(&mut inner.state, State::Attached(Arc::clone(&live)));
             let taken = match prev {
@@ -177,49 +196,47 @@ impl Handoff {
             } else {
                 false
             };
-            (taken, completes)
+            let announce = if completes {
+                inner.announce.take()
+            } else {
+                None
+            };
+            (taken, completes, announce)
         };
-        self.deliver_attached(live, taken, completes);
+        let fresh = self.deliver_attached(live, taken, completes);
+        announce.filter(|_| fresh)
     }
 
     /// Deliver a part attach took. Not recorded: the publish that stored it
     /// recorded it once. The seq check is not applied again; the part already
-    /// passed it.
-    fn deliver_attached(&self, live: Arc<LiveConfig>, taken: Option<(u64, Part)>, completes: bool) {
+    /// passed it. `true` when this call marked the scan complete.
+    fn deliver_attached(
+        &self,
+        live: Arc<LiveConfig>,
+        taken: Option<(u64, Part)>,
+        completes: bool,
+    ) -> bool {
         #[cfg(test)]
         reach(Step::Deliver);
         if let Some((seq, part)) = taken {
             live.set_capabilities(seq, part);
         }
-        if completes {
-            self.complete_scan();
-        }
+        completes && self.complete_scan()
     }
 
     /// The scan failed or was cancelled, as far as this mutex is concerned.
     ///
-    /// A scan that already published (parked) ends `Ended` and is marked
-    /// complete here, before the caller checks readiness, so the caller does
-    /// not also mark it failed. A scan that had not published is `Failed`;
-    /// the caller marks it failed and completes it.
-    fn end_failed(&self) {
-        let completes = {
-            let mut inner = self.inner.lock();
-            match inner.scan {
-                Scan::NotEnded => {
-                    inner.scan = Scan::Failed;
-                    false
-                }
-                Scan::Parked => {
-                    inner.scan = Scan::Ended;
-                    true
-                }
-                Scan::Ended | Scan::Failed => false,
-            }
-        };
-        if completes {
-            self.complete_scan();
+    /// A scan that already published is left as it is: an ended scan is
+    /// complete, and a parked one stays not ready until attach delivers its
+    /// part (R3-C). Only a scan that had not published becomes `Failed`;
+    /// `true` then, and the caller marks it failed and completes it.
+    fn end_failed(&self) -> bool {
+        let mut inner = self.inner.lock();
+        if inner.scan == Scan::NotEnded {
+            inner.scan = Scan::Failed;
+            return true;
         }
+        false
     }
 
     /// `true` when this call is the transition to complete.
@@ -241,11 +258,6 @@ impl Handoff {
         self.delivered.lock().push((seq, part.clone()));
         #[cfg(not(test))]
         let _ = (seq, part);
-    }
-
-    /// The scan published or ended. A failure before any publish is neither.
-    pub(crate) fn has_published(&self) -> bool {
-        matches!(self.inner.lock().scan, Scan::Parked | Scan::Ended)
     }
 
     #[cfg(test)]
@@ -282,37 +294,34 @@ fn stage(inner: &mut Inner, seq: u64, part: &Part) -> Staged {
 }
 
 impl super::CapabilityBackend {
-    /// The scan failed or was cancelled.
+    /// The startup scan's end when it did not complete itself: a panic, a
+    /// drop, or a return after parking. The scan's drop guard calls this.
     ///
-    /// The handoff half runs first. A parked scan is already complete when
-    /// this returns, so the failure mark below does not apply to it. What
-    /// follows for a scan that never published is the startup scan's drop
-    /// guard: mark it failed, then finish it. Both run after the handoff
-    /// mutex is released.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "the startup scan's drop guard completes a published scan itself; rows call this for a scan that had not published"
-        )
-    )]
+    /// A scan that published is left alone: ended is complete, and parked
+    /// waits for attach. A scan that never published, on a backend not
+    /// already complete, is marked failed and then finished, after the
+    /// handoff mutex is released.
     pub(crate) fn end_failed(&self, registry: &crate::backend::BackendRegistry) {
-        self.handoff.end_failed();
-        if !self.initial_scan_complete() {
+        if self.handoff.end_failed() && !self.initial_scan_complete() {
             self.mark_initial_scan_failed();
             self.finish_initial_scan(registry);
         }
     }
 
-    /// Attach `live` to this backend's handoff. Once per backend.
-    pub(crate) fn attach_revision(&self, live: Arc<LiveConfig>) {
-        self.handoff.attach_revision(live);
+    /// Leave `registry` for the startup scan's announcement. Called before
+    /// the scan publishes, so an attach that completes the parked scan finds
+    /// it under the same mutex.
+    pub(crate) fn announce_scan_through(&self, registry: Arc<crate::backend::BackendRegistry>) {
+        self.handoff.inner.lock().announce = Some(registry);
     }
 
-    /// The startup scan has published a part (parked or ended). A drop of the
-    /// scan after that must not mark the scan failed.
-    pub(crate) fn scan_has_published(&self) -> bool {
-        self.handoff.has_published()
+    /// Attach `live` to this backend's handoff. Once per backend. An attach
+    /// that completes a parked scan announces its catalogue, as the scan's
+    /// own end would have.
+    pub(crate) fn attach_revision(&self, live: Arc<LiveConfig>) {
+        if let Some(registry) = self.handoff.attach_revision(live) {
+            self.announce_scanned(&registry);
+        }
     }
 
     /// The handoff to the live config. One per backend.
@@ -354,7 +363,13 @@ struct StepGate {
 
 #[cfg(test)]
 impl StepGate {
-    fn open(step: Step) -> (Self, std::sync::mpsc::Receiver<()>, std::sync::mpsc::SyncSender<()>) {
+    fn open(
+        step: Step,
+    ) -> (
+        Self,
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::SyncSender<()>,
+    ) {
         let (arrived_tx, arrived_rx) = std::sync::mpsc::sync_channel(1);
         let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
         (
@@ -394,7 +409,10 @@ fn reach(step: Step) {
     gate.arrived
         .send(())
         .expect("the test stopped waiting for this step");
-    match gate.release.recv_timeout(std::time::Duration::from_secs(30)) {
+    match gate
+        .release
+        .recv_timeout(std::time::Duration::from_secs(30))
+    {
         Ok(()) => {}
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("hung past 30s"),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {

@@ -152,8 +152,10 @@ impl Gateway {
                 cap_backend_for_load.detect_rug_pulls().await;
                 // Under the catalogue write lock, after rug-pull removal: the
                 // seq and the part name the catalogue the scan is serving.
-                // The publish runs after that lock drops.
+                // The publish runs after that lock drops. The registry is left
+                // first, so an attach that completes a parked scan announces it.
                 let (seq, part) = cap_backend_for_load.take_served_revision();
+                cap_backend_for_load.announce_scan_through(Arc::clone(&registry_for_load));
                 let transitioned = cap_backend_for_load.publish_initial_scan(seq, part);
 
                 if webhooks_enabled {
@@ -166,14 +168,11 @@ impl Gateway {
 
                 // Readiness waits on this (MIK-7268), and clients served during the
                 // scan hear of its catalogue; refusals are reported below.
-                // An unattached publish parks and does not mark ready: this
-                // startup has finished its directories, so it marks ready
-                // here. Attached, the publish already marked ready and only
-                // the announcement is left.
-                if !cap_backend_for_load.initial_scan_complete() {
-                    cap_backend_for_load.finish_initial_scan(&registry_for_load);
-                } else if transitioned {
-                    registry_for_load.nudge_catalogue_scanned(&capability_name);
+                // Attached, the publish marked ready and only the announcement
+                // is left. Unattached, the scan parked: it stays not ready
+                // until attach delivers its part, and attach announces it.
+                if transitioned {
+                    cap_backend_for_load.announce_scanned(&registry_for_load);
                 }
                 if total_caps > 0 {
                     info!(capabilities = total_caps, name = %capability_name, "Capability backend ready");
@@ -392,7 +391,8 @@ impl Gateway {
 }
 
 /// Completes the startup capability scan when it ends without completing
-/// itself (a panic, or the scan dropped), marking it partial.
+/// itself (a panic, or the scan dropped), marking it partial. A scan that
+/// published is left to its publish or, parked, to attach.
 struct ScanEnds {
     backend: Arc<CapabilityBackend>,
     registry: Arc<crate::backend::BackendRegistry>,
@@ -400,15 +400,7 @@ struct ScanEnds {
 
 impl Drop for ScanEnds {
     fn drop(&mut self) {
-        if self.backend.initial_scan_complete() {
-            return;
-        }
-        // A scan that already published must not end failed: its publish and
-        // its end were one acquisition, and this drop is only the end.
-        if !self.backend.scan_has_published() {
-            self.backend.mark_initial_scan_failed();
-        }
-        self.backend.finish_initial_scan(&self.registry);
+        self.backend.end_failed(&self.registry);
     }
 }
 

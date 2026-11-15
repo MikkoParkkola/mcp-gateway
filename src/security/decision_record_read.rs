@@ -118,9 +118,7 @@ pub(crate) fn effect_line(decision: &Decision) -> Option<&'static str> {
 pub(crate) fn capabilities_line(coverage: Option<Coverage>) -> &'static str {
     match coverage {
         None | Some(Coverage::NotLoaded) => "capabilities not included",
-        Some(Coverage::Partial) => {
-            "capabilities included from the directories that could be read"
-        }
+        Some(Coverage::Partial) => "capabilities included from the directories that could be read",
         Some(Coverage::Covered) => "",
     }
 }
