@@ -83,12 +83,19 @@ const filters = { query: '', server: '' };
  * input it started on; one queue, so a second event in the same turn adds none.
  */
 let catalogueQueued = false;
-function queueCatalogue() {
+// Set when the catalogue is opened from the Status search: the catalogue then
+// takes the focus, so the keys typed after the first land in its search box.
+let focusCatalogueSearch = false;
+function queueCatalogue(from) {
   if (catalogueQueued || showingAll()) return;
   catalogueQueued = true;
   setTimeout(() => {
     catalogueQueued = false;
-    if (!showingAll()) go(CATALOGUE_PATH);
+    // Only while the user is still on this panel: a navigation that won the
+    // race must not be overridden by a jump to the catalogue.
+    if (showingAll() || !from.isConnected || location.pathname !== '/ui/tools/status') return;
+    focusCatalogueSearch = true;
+    go(CATALOGUE_PATH);
   }, 0);
 }
 
@@ -111,8 +118,7 @@ function searchBox(list) {
 
 /** Called in the last hour, highest first, ties by name then server, ten at most. */
 function topCalled(list) {
-  return list.filter((t) => t.calls_1h > 0).sort((a, b) => b.calls_1h - a.calls_1h
-    || a.name.localeCompare(b.name) || a.server.localeCompare(b.server)).slice(0, 10);
+  return list.filter((t) => t.calls_1h > 0).sort((a, b) => b.calls_1h - a.calls_1h || BYNAME(a, b)).slice(0, 10);
 }
 
 /** p == 0 is "new", before the ratio; a ratio that rounds to 0 is no change. */
@@ -124,29 +130,32 @@ function changeWord(hour, prev) {
 }
 
 function mostCalled(body, list) {
+  // Starts empty: a query left from an earlier catalogue visit would claim a
+  // filter this panel does not apply.
   const search = searchBox(list);
-  search.value = filters.query;
   // Typing, or Enter in an empty box, leaves this panel for the catalogue.
   search.addEventListener('input', () => {
     filters.query = search.value;
-    queueCatalogue();
+    queueCatalogue(search);
   });
   search.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Enter' || search.value !== '') return;
     ev.preventDefault();
     filters.query = '';
-    queueCatalogue();
+    queueCatalogue(search);
   });
   const rows = topCalled(list);
   const titleId = 'tools-called-title';
   const section = h('section', { class: 'tk tools-card', 'aria-labelledby': titleId },
-    h('div', { class: 'tools-card-head' }, h('h2', { class: 'kicker', id: titleId }, 'Most called, last hour')));
+    h('div', { class: 'tools-card-head' }, h('h2', { class: 'kicker', id: titleId }, 'Most called, last hour'),
+      // The whole catalogue is one click away, with or without calls this hour.
+      h('a', { class: 'lnk', href: CATALOGUE_PATH }, `See all ${plural(list.length, 'tool', 'tools')}`)));
   if (rows.length === 0) {
     section.append(h('div', { class: 'tools-called-empty' },
-      h('p', { class: 'muted' }, 'No tool calls in the last hour.'),
-      h('p', {}, h('a', { class: 'lnk', href: CATALOGUE_PATH }, `See all ${list.length.toLocaleString('en')} tools`))));
+      h('p', { class: 'muted' }, 'No tool calls in the last hour.')));
   } else {
-    section.append(h('div', { class: 'tools-scroll' }, h('table', { class: 't tools-called' },
+    // Scrolls in its own region on a narrow screen, reachable from the keyboard.
+    section.append(h('div', { class: 'tools-scroll', tabindex: 0, role: 'region', 'aria-label': 'Most called tools' }, h('table', { class: 't tools-called' },
       h('thead', {}, h('tr', {},
         h('th', { scope: 'col' }, 'Tool'), h('th', { scope: 'col' }, 'Server'),
         h('th', { scope: 'col' }, 'Calls, last hour'), h('th', { scope: 'col' }, 'Change'))),
@@ -176,6 +185,11 @@ function catalogue(body, list, servers) {
     none, h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' }));
   body.append(h('div', { class: 'tools-bar' }, search, pick, loadNote()), card);
   search.value = filters.query;
+  if (focusCatalogueSearch) {
+    focusCatalogueSearch = false;
+    search.focus();
+    search.setSelectionRange(search.value.length, search.value.length);
+  }
   pick.value = servers.includes(filters.server) ? filters.server : '';
 
   const draw = () => {
