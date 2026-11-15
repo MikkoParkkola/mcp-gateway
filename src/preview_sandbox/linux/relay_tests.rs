@@ -119,10 +119,14 @@ fn a_stalled_proxy_fails_the_stop_within_its_bound() {
     let _queued = UnixStream::connect(&path).expect("fills the backlog");
     let relay = Relay::start(&path, MAX_PAIRS).expect("relay");
     let _stream = client(&relay);
-    let begun = std::time::Instant::now();
-    let stopped = relay.stop(STOP_BOUND);
+    // On its own thread, so a stop that ignores its bound fails the row at
+    // the guard instead of hanging it.
+    let (sent, stopped) = std::sync::mpsc::channel();
+    std::thread::spawn(move || sent.send(relay.stop(STOP_BOUND)));
+    let stopped = stopped
+        .recv_timeout(GUARD)
+        .expect("stop returned within the guard");
     assert!(stopped.is_err(), "a pair stuck in connect was not reported");
-    assert!(begun.elapsed() < GUARD, "stop outlived its bound");
 }
 
 /// Kills "the pair cap is not enforced": with a cap of one, a second client
