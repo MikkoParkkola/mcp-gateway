@@ -170,9 +170,9 @@ pub(super) fn npm(control: &mut UnixStream, npm: &NpmFetch, limits: Limits) -> R
     .map_err(|r| r.to_string())
 }
 
-/// The fetch's one deadline, `ms` from now; `None` when that lies past
-/// what an instant can hold (refused, never a panic with the credential
-/// live).
+/// The fetch's one deadline, `ms` from now; `None` when `ms` does not fit
+/// in milliseconds or the sum lies past what an instant can hold (refused,
+/// never a panic with the credential live).
 fn fetch_deadline(ms: u128) -> Option<Instant> {
     let left = u64::try_from(ms).ok()?;
     Instant::now().checked_add(Duration::from_millis(left))

@@ -14,8 +14,9 @@ const FAKES: [&str; 2] = ["TestDialer", "TestResolve"];
 
 /// Every `.rs` file under `dir` whose module declaration survives the
 /// production text that declares it: the files a production build compiles.
-/// A leaf file can declare a sibling (`#[path]`), so the declaring text
-/// grows with every file found until nothing new turns up.
+/// A leaf file can declare a sibling through `#[path]` (its plain `mod x;`
+/// means `leaf/x.rs`, not a sibling), so the quoted file names in every leaf
+/// found join the declaring text until nothing new turns up.
 fn production_files(dir: &Path, parent_text: &str, out: &mut Vec<PathBuf>) {
     let mut text = parent_text.to_owned();
     let mut seen: Vec<PathBuf> = Vec::new();
@@ -49,8 +50,11 @@ fn production_files(dir: &Path, parent_text: &str, out: &mut Vec<PathBuf>) {
                 && name != "mod"
                 && declared(&text, &name, &path)
             {
-                let leaf = std::fs::read_to_string(&path).expect("source");
-                text.push_str(&production_text(&leaf));
+                let leaf = production_text(&std::fs::read_to_string(&path).expect("source"));
+                // Only the quoted names: `declared` matches a `#[path]` by them.
+                for quoted in leaf.split('"').skip(1).step_by(2) {
+                    text.push_str(&format!(" \"{quoted}\""));
+                }
                 seen.push(path.clone());
                 out.push(path);
             }
