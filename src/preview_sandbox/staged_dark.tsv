@@ -6,5 +6,6 @@ src/preview_sandbox/fetch.rs	the fetch session and helper fetch step (the sandbo
 src/preview_sandbox/fetch_output.rs	the fetch session and helper fetch step (the sandbox fetch part)
 src/preview_sandbox/install.rs	the fetch session and helper fetch step (the sandbox fetch part)
 src/preview_sandbox/linux/fetch_step.rs	the helper's npm fetch step (the sandbox fetch part)
+src/preview_sandbox/linux/probe.rs	the helper's npm fetch step (the sandbox fetch part)
 src/preview_sandbox/linux/relay.rs	the helper's npm fetch step (the sandbox fetch part)
 src/preview_sandbox/proxy.rs	the fetch session (the sandbox fetch part)

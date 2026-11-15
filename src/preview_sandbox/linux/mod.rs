@@ -11,6 +11,7 @@ mod fetch_step;
 mod helper;
 mod mounts;
 pub(crate) mod plan;
+mod probe;
 mod relay;
 pub(crate) mod seccomp;
 
