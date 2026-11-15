@@ -340,33 +340,36 @@ where
 
 /// Shutdown signal handler.
 ///
-/// Resolves on Ctrl+C (all platforms) or SIGTERM (Unix only), then broadcasts
-/// the shutdown signal to all subscriber tasks.
-pub(super) async fn shutdown_signal(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
-    let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
-    };
-
+/// Installs the Ctrl+C handler (all platforms) and the SIGTERM handler (Unix
+/// only) when called, so a signal that arrives before the returned future is
+/// first polled starts the stop instead of taking the default action. The
+/// future resolves on the first of them, then broadcasts the shutdown signal
+/// to all subscriber tasks.
+pub(super) fn shutdown_signal(
+    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+) -> impl std::future::Future<Output = ()> + Send + 'static {
     #[cfg(unix)]
-    let terminate = async {
+    let (mut interrupt, mut terminate) = (
+        signal::unix::signal(signal::unix::SignalKind::interrupt())
+            .expect("Failed to install Ctrl+C handler"),
         signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler")
-            .recv()
-            .await;
-    };
+            .expect("Failed to install SIGTERM handler"),
+    );
+    #[cfg(windows)]
+    let mut ctrl_c = signal::windows::ctrl_c().expect("Failed to install Ctrl+C handler");
 
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+    async move {
+        #[cfg(unix)]
+        tokio::select! {
+            _ = interrupt.recv() => {},
+            _ = terminate.recv() => {},
+        }
+        #[cfg(windows)]
+        ctrl_c.recv().await;
 
-    tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
+        info!("Shutdown signal received");
+        let _ = shutdown_tx.send(());
     }
-
-    info!("Shutdown signal received");
-    let _ = shutdown_tx.send(());
 }
 
 /// Build a `PersistedCosts` snapshot from the save's own snapshot. It takes

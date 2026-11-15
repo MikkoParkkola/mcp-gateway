@@ -566,6 +566,17 @@ impl Gateway {
         #[cfg(test)]
         self.test_seams.report_bound_port(&listener);
 
+        // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
+        // A test may start the same shutdown without a signal.
+        // Its handlers install here, before the banner reports the port.
+        #[cfg(test)]
+        let shutdown = test_seams::shutdown_signal_or_trigger(
+            shutdown_tx.clone(),
+            self.test_seams.take_shutdown_trigger(),
+        );
+        #[cfg(not(test))]
+        let shutdown = support::shutdown_signal(shutdown_tx.clone());
+
         log_startup_banner(
             &self.config,
             &self.backends,
@@ -659,15 +670,6 @@ impl Gateway {
             .await
         };
 
-        // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
-        // A test may start the same shutdown without a signal (MIK-8156).
-        #[cfg(test)]
-        let shutdown = test_seams::shutdown_signal_or_trigger(
-            shutdown_tx,
-            self.test_seams.take_shutdown_trigger(),
-        );
-        #[cfg(not(test))]
-        let shutdown = support::shutdown_signal(shutdown_tx);
         // The stop's total starts at the trigger, however the listener returns.
         let total = self.config.server.shutdown_timeout;
         let fired = Arc::new(std::sync::OnceLock::<tokio::time::Instant>::new());
