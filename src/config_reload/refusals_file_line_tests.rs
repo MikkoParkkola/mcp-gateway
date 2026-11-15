@@ -183,6 +183,49 @@ async fn a_refused_reload_before_any_apply_serves_the_startup_load_time() {
     assert_eq!(refusal["at"], json!(APPLIED_AT), "{refusal}");
 }
 
+/// A second refusal, later still, names the same running version. The first
+/// refusal is recorded before the tally counts it, so only a second one can
+/// show a refusal that moved the running time.
+#[tokio::test(flavor = "current_thread")]
+async fn a_second_refusal_still_names_the_version_still_running() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let ctx = {
+        let _clock = crate::clock::test_clock::at_secs(STARTUP_SECS);
+        crate::gateway::test_helpers::write_owner_only(&path, RUNNING)
+            .expect("write the running config");
+        let running = crate::config::Config::load(Some(&path)).expect("startup loads");
+        crate::config_reload::ReloadContext::new(
+            path.clone(),
+            std::sync::Arc::new(crate::config_reload::LiveConfig::new(running)),
+            std::sync::Arc::new(crate::backend::BackendRegistry::new()),
+            crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        )
+        .expect("the registry pairs with the config")
+        .with_reporting(super::ReloadReporting::default())
+    };
+    {
+        let _clock = crate::clock::test_clock::at_secs(APPLIED_SECS);
+        ctx.reload_outcome().await.expect("the running file applies");
+    }
+    {
+        let _clock = crate::clock::test_clock::at_secs(REFUSED_SECS);
+        crate::gateway::test_helpers::write_owner_only(&path, SYNTAX_ON_LINE_7)
+            .expect("write the refused config");
+        ctx.reload_outcome().await.expect_err("the first refusal");
+    }
+    let _clock = crate::clock::test_clock::at_secs(REFUSED_SECS + 600);
+    ctx.reload_outcome().await.expect_err("the second refusal");
+    let list = serde_json::to_value(ctx.refusals().list()).expect("serialises");
+    let refusal = list
+        .as_array()
+        .and_then(|rows| rows.first().cloned())
+        .expect("a refusal was recorded");
+    assert_eq!(refusal["repeats"], json!(2), "the same refusal, twice: {refusal}");
+    assert_eq!(refusal["running_since"], json!(APPLIED_AT), "{refusal}");
+}
+
 #[test]
 fn v4_an_admin_write_omits_the_line_and_the_running_time() {
     // A line is offered and the tally has a time, so only the kind can drop
