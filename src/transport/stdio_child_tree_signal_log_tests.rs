@@ -30,7 +30,7 @@ fn check(judge: fn(&[Sent]) -> Result<(), String>, cases: &[(&[Sent], Option<&st
 
 #[test]
 fn the_live_rule_accepts_sigterm_then_kill_or_a_justified_late_skip_only() {
-    use Sent::{Kill, LeaderGone, Term, Unproven};
+    use Sent::{Kill, KillFailed, KillGone, LeaderGone, Term, Unproven};
     check(
         judge_term_then_kill,
         &[
@@ -39,6 +39,13 @@ fn the_live_rule_accepts_sigterm_then_kill_or_a_justified_late_skip_only() {
             (&[Unproven, Term, Kill], None),
             (&[LATE, Kill], None),
             (&[LATE, LATE, Kill, Kill], None),
+            (&[Term, KillGone], None),
+            (&[Term, KillGone, KillGone], None),
+            (&[Term, Kill, KillGone], None),
+            (&[LATE, KillGone], None),
+            (&[Term, KillFailed], Some("a kill failed")),
+            (&[Term, KillFailed, KillGone], Some("a kill failed")),
+            (&[KillGone, Term, KillGone], Some("not one SIGTERM")),
             (&[Kill], Some("no recorded reason")),
             (&[Unproven, Kill], Some("ownership was not shown")),
             (&[Unproven, LATE, Kill], Some("ownership was not shown")),
@@ -56,7 +63,7 @@ fn the_live_rule_accepts_sigterm_then_kill_or_a_justified_late_skip_only() {
 
 #[test]
 fn the_strict_rule_accepts_the_normal_path_only() {
-    use Sent::{Kill, LeaderGone, Term, Unproven};
+    use Sent::{Kill, KillFailed, KillGone, LeaderGone, Term, Unproven};
     check(
         judge_strict,
         &[
@@ -66,19 +73,25 @@ fn the_strict_rule_accepts_the_normal_path_only() {
             (&[LATE, Term, Kill], Some("not one SIGTERM")),
             (&[LeaderGone, Term, Kill], Some("not one SIGTERM")),
             (&[Kill], Some("not one SIGTERM")),
+            (&[Term, KillGone], Some("not one SIGTERM")),
+            (&[Term, KillFailed], Some("a kill failed")),
         ],
     );
 }
 
 #[test]
 fn the_skip_rule_accepts_the_kill_alone() {
-    use Sent::{Kill, LeaderGone, Term, Unproven};
+    use Sent::{Kill, KillFailed, KillGone, LeaderGone, Term, Unproven};
     check(
         judge_kill_without_term,
         &[
             (&[Kill], None),
             (&[Kill, Kill], None),
             (&[EARLY, Kill], None),
+            (&[KillGone], None),
+            (&[Kill, KillGone], None),
+            (&[KillFailed], Some("a kill failed")),
+            (&[Term, KillGone], Some("not the kill alone")),
             (&[Term, Kill], Some("not the kill alone")),
             (&[], Some("not the kill alone")),
             (&[Unproven, Kill], Some("another reason")),

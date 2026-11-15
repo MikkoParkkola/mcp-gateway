@@ -255,6 +255,8 @@ impl ChildTree {
     /// the group settles, never after the reap.
     fn send_group_signal(&mut self) {
         let sent = self.wrapper.start_kill();
+        #[cfg(all(test, unix))]
+        let sent = signal_log::injected(self.pid, sent);
         self.signals_closed = true;
         #[cfg(test)]
         {

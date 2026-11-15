@@ -79,6 +79,42 @@ async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
     gone(child).await;
 }
 
+/// macOS's answer, on any host: a backend that exits on SIGTERM leaves only
+/// exited members, so the kill that follows finds no process (ESRCH, injected
+/// here) and is recorded as the kill of a group already gone, which the live
+/// rule takes as the kill.
+#[tokio::test]
+async fn a_kill_that_finds_the_group_gone_after_sigterm_counts_as_the_kill() {
+    let (w, t) = started(
+        "trap 'exit 0' TERM\necho ready > ready.mark\nwhile :; do sleep 0.05; done",
+        None,
+    )
+    .await;
+    poll_until("the TERM handler is installed", || {
+        w.path().join("ready.mark").exists()
+    })
+    .await;
+    let pid = leader(&t).await;
+    signal_log::arm(pid);
+    signal_log::inject_gone(pid);
+    t.close().await.expect("close");
+    signal_log::assert_term_then_kill(pid, "a group gone at the kill").await;
+}
+
+/// ESRCH from a kill while the leader still runs, as a group that was never
+/// the child's would answer, is no kill: it is recorded as failed and refused.
+#[tokio::test]
+async fn a_kill_that_finds_no_group_while_the_leader_runs_is_refused() {
+    let (w, t) = started_unhurried(&resists_term(), None).await;
+    let child = descendant(w.path()).await;
+    let pid = leader(&t).await;
+    signal_log::arm(pid);
+    signal_log::inject_gone(pid);
+    t.close().await.expect("close");
+    signal_log::assert_failed_kill_refused(pid, "ESRCH while the leader ran").await;
+    gone(child).await;
+}
+
 /// A tree already in its exit waits when the gateway stop begins (an
 /// orphaned fresh build, closed under a long budget of its own) is cut to the
 /// stop's deadline: its kill lands with the reap's reserve left, not when its

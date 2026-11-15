@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Test-only: what the reaper sent to an armed leader's process group, in
-//! order. An entry is recorded only when its syscall returned Ok, so a row
-//! proves "SIGTERM, then the kill" from the sender's side; a child's own
-//! handler proves it only when a loaded host schedules the child inside the
-//! gap. Only armed pids are recorded, so parallel rows never share entries.
+//! order. A SIGTERM is recorded only when its syscall returned Ok, and every
+//! kill with its outcome, so a row proves "SIGTERM, then the kill" from the
+//! sender's side; a child's own handler proves it only when a loaded host
+//! schedules the child inside the gap. Only armed pids are recorded, so
+//! parallel rows never share entries.
 use rustix::process::Pid;
 
 /// One entry: a signal the reaper sent to a group, or why a due SIGTERM was
@@ -13,6 +14,13 @@ use rustix::process::Pid;
 pub(crate) enum Sent {
     Term,
     Kill,
+    /// The kill was sent and found no process (ESRCH), and the leader had been
+    /// seen exiting before it was sent: the group had already ended. macOS
+    /// answers so for a group whose members have all exited; Linux answers Ok.
+    KillGone,
+    /// A kill's syscall failed, and not as `KillGone`: the group may not have
+    /// been the child's.
+    KillFailed,
     /// A due SIGTERM skipped: the step landed `late` past the kill instant,
     /// with no room left for SIGTERM's minimum phase inside the stop's slack.
     SkipLate {
@@ -48,6 +56,33 @@ pub(super) fn record(pid: Pid, sent: Sent) {
     }
 }
 
+static GONE: std::sync::Mutex<std::collections::BTreeSet<i32>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// Make every kill of `pid`'s group answer ESRCH, as macOS answers for a group
+/// whose members have all exited; the kill itself is still sent.
+pub(crate) fn inject_gone(pid: Pid) {
+    GONE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(pid.as_raw_nonzero().get());
+}
+
+/// `sent`, or ESRCH when a row injected it for `pid`.
+pub(super) fn injected(pid: Option<Pid>, sent: std::io::Result<()>) -> std::io::Result<()> {
+    let gone = pid.is_some_and(|pid| {
+        GONE.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&pid.as_raw_nonzero().get())
+    });
+    if gone {
+        Err(std::io::Error::from_raw_os_error(
+            rustix::io::Errno::SRCH.raw_os_error(),
+        ))
+    } else {
+        sent
+    }
+}
+
 /// `pid`'s entries in order; it is disarmed.
 fn take(pid: Pid) -> Vec<Sent> {
     log()
@@ -55,17 +90,17 @@ fn take(pid: Pid) -> Vec<Sent> {
         .unwrap_or_default()
 }
 
-/// `pid`'s entries once a kill is among them (30 s watchdog). The reaper
+/// `pid`'s entries once a kill, of any outcome, is among them (30 s watchdog). The reaper
 /// records a send after its syscall returns, so a row that saw the group
 /// end can read the log just before the kill's entry lands; every kill goes
 /// through `send_group_signal`, and sends are sequential, so a SIGTERM is
 /// always in before the kill that follows it.
 async fn after_the_kill(pid: Pid) -> Vec<Sent> {
     let by = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while !log()
-        .get(&pid.as_raw_nonzero().get())
-        .is_some_and(|sent| sent.contains(&Sent::Kill))
-    {
+    while !log().get(&pid.as_raw_nonzero().get()).is_some_and(|sent| {
+        sent.iter()
+            .any(|s| matches!(s, Sent::Kill | Sent::KillGone | Sent::KillFailed))
+    }) {
         if std::time::Instant::now() >= by {
             return take(pid);
         }
@@ -190,6 +225,20 @@ pub(crate) async fn assert_term_then_kill_strict(pid: Pid, what: &str) {
 pub(crate) async fn assert_kill_without_term(pid: Pid, what: &str) {
     if let Err(why) = judge_kill_without_term(&after_the_kill(pid).await) {
         panic!("{what}: {why}");
+    }
+}
+
+/// A kill that failed while the leader was not seen exiting is recorded as a
+/// failed kill, and the live rule refuses it by that name.
+pub(crate) async fn assert_failed_kill_refused(pid: Pid, what: &str) {
+    let sent = after_the_kill(pid).await;
+    assert!(
+        sent.contains(&Sent::KillFailed),
+        "{what}: no failed kill recorded: {sent:?}"
+    );
+    match judge_term_then_kill(&sent) {
+        Err(why) if why.contains("a kill failed") => {}
+        other => panic!("{what}: a failed kill was not refused by name: {other:?}"),
     }
 }
 
