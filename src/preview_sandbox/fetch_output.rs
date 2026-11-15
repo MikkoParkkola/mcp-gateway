@@ -3,6 +3,10 @@
 //! The fetch's output (ADR-027 N4): drained to EOF so the pipe never blocks,
 //! its last 64 KiB kept, and the last line, which a failing fetch refuses
 //! with, stripped of the fetch credential and of any URL userinfo.
+#![cfg_attr(
+    not(any(test, target_os = "linux")),
+    expect(dead_code, reason = "only the Linux fetch step drives it so far")
+)]
 
 use std::io::{self, Read};
 

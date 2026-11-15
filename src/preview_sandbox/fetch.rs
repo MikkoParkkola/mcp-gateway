@@ -3,6 +3,10 @@
 //! The command plan (ADR-027): whether a typed command fetches a registry
 //! package before it runs. `npx` and `uvx` fetch exactly one npm or `PyPI`
 //! package named by a plain registry spec; any other program runs as typed.
+#![cfg_attr(
+    not(any(test, target_os = "linux")),
+    expect(dead_code, reason = "only the Linux fetch step drives it so far")
+)]
 
 use std::ffi::OsString;
 

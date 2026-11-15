@@ -328,9 +328,8 @@ fn sweep(bound: Duration) -> Result<(), String> {
         let no_child = loop {
             match wait(WaitOptions::NOHANG) {
                 Ok(Some(_)) => {}
-                Ok(None) => break false,
                 Err(rustix::io::Errno::CHILD) => break true,
-                Err(_) => break false,
+                Ok(None) | Err(_) => break false,
             }
         };
         if others.is_empty() && no_child {

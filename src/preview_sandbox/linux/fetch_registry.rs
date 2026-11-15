@@ -77,7 +77,7 @@ impl Package {
 fn ustar_header(path: &str, size: usize, mode: u32) -> [u8; 512] {
     let mut h = [0u8; 512];
     let put = |h: &mut [u8; 512], at: usize, text: &str| {
-        h[at..at + text.len()].copy_from_slice(text.as_bytes())
+        h[at..at + text.len()].copy_from_slice(text.as_bytes());
     };
     put(&mut h, 0, path);
     put(&mut h, 100, &format!("{mode:07o}\0"));

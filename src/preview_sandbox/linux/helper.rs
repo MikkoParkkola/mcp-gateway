@@ -51,7 +51,7 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
         eprintln!("preview-sandbox: refused at {step}");
         return ExitCode::from(super::REFUSED);
     }
-    supervise(plan, run)
+    supervise(plan, run.as_ref())
 }
 
 fn setup(plan: &Plan) -> Result<Option<UnixStream>, String> {
@@ -191,7 +191,7 @@ fn check_descriptors() -> Result<(), String> {
 
 /// Start the target through `__preview-drop` and stay as PID 1 until it
 /// exits, reaping every orphan the namespace hands this process.
-fn supervise(plan: &Plan, run: Option<super::fetch_step::Run>) -> ExitCode {
+fn supervise(plan: &Plan, run: Option<&super::fetch_step::Run>) -> ExitCode {
     let limits = match serde_json::to_string(&plan.limits) {
         Ok(limits) => limits,
         Err(e) => {
@@ -201,11 +201,11 @@ fn supervise(plan: &Plan, run: Option<super::fetch_step::Run>) -> ExitCode {
     };
     // After an npm fetch the run is the package's own bin, with PATH holding
     // node and the install's bin directory; the plan's program is unused.
-    let (program, target) = match &run {
+    let (program, target) = match run {
         Some(run) => (run.program.as_str(), run.argv.as_slice()),
         None => (plan.program.as_str(), plan.target.as_slice()),
     };
-    let env = plan.env.iter().map(|(k, v)| match &run {
+    let env = plan.env.iter().map(|(k, v)| match run {
         Some(run) if k == "PATH" => (k.as_str(), run.path.as_str()),
         _ => (k.as_str(), v.as_str()),
     });
