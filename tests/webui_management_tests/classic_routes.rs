@@ -172,10 +172,7 @@ fn send_order() -> Vec<(&'static str, &'static str)> {
 }
 
 fn is_create(pair: (&str, &str)) -> bool {
-    matches!(
-        pair,
-        ("POST", "/ui/api/backends") | ("POST", "/ui/api/capabilities")
-    )
+    matches!(pair, ("POST", "/ui/api/backends" | "/ui/api/capabilities"))
 }
 
 fn is_delete(pair: (&str, &str)) -> bool {
@@ -187,7 +184,7 @@ fn is_delete(pair: (&str, &str)) -> bool {
 /// omits `confirm` because that token is what starts the backend.
 fn payload(method: &str, path: &str) -> Option<(&'static str, String)> {
     match (method, path) {
-        ("POST", "/ui/api/backends") | ("POST", "/ui/api/previews") => Some((
+        ("POST", "/ui/api/backends" | "/ui/api/previews") => Some((
             "application/json",
             json!({"name": BACKEND, "command": "echo hello"}).to_string(),
         )),
@@ -199,7 +196,7 @@ fn payload(method: &str, path: &str) -> Option<(&'static str, String)> {
             "application/json",
             json!({"email": "admin@example.com"}).to_string(),
         )),
-        ("POST", "/ui/api/import/openapi") | ("POST", "/ui/api/import/openapi/preview") => {
+        ("POST", "/ui/api/import/openapi" | "/ui/api/import/openapi/preview") => {
             Some(("application/json", "{}".to_string()))
         }
         // The page sends the file text. Without If-Match the handler refuses
@@ -356,7 +353,7 @@ fn method_in(opts: &str) -> Option<String> {
                 let quote = *rest.as_bytes().first()?;
                 if quote == b'\'' || quote == b'"' {
                     let end = rest[1..].find(quote as char)?;
-                    return Some(rest[1..1 + end].to_string());
+                    return Some(rest[1..=end].to_string());
                 }
                 i += "method".len();
             }
@@ -565,8 +562,8 @@ async fn classic_page_lists_these_api_calls() {
 async fn each_listed_call_is_answered_by_its_handler() {
     let mut sent = send_order();
     let mut listed = CALLS.to_vec();
-    sent.sort();
-    listed.sort();
+    sent.sort_unstable();
+    listed.sort_unstable();
     assert_eq!(sent, listed, "every listed call is sent once");
 
     let (router, _files, _store) = files_router().await;
