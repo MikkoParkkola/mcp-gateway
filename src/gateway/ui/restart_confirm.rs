@@ -90,6 +90,96 @@ pub(crate) struct Accepted {
     pub(crate) writes_since: u64,
 }
 
+/// Why restart is unavailable, in the order readiness checks them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Reason {
+    /// Windows: the service or process manager restarts the gateway.
+    WindowsManualRestart,
+    /// Restart is off, or this process has no restart target it can re-exec.
+    RestartNotAvailable,
+    /// No transparency log: an accepted restart would have nowhere to be audited.
+    AuditLogRequired,
+}
+
+impl Reason {
+    /// The reason this platform gives before anything else is checked.
+    pub(crate) const PLATFORM: Self = if cfg!(windows) {
+        Self::WindowsManualRestart
+    } else {
+        Self::RestartNotAvailable
+    };
+
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::WindowsManualRestart => "windows_manual_restart",
+            Self::RestartNotAvailable => "restart_not_available",
+            Self::AuditLogRequired => "audit_log_required",
+        }
+    }
+
+    pub(crate) const fn recovery(self) -> &'static str {
+        match self {
+            Self::WindowsManualRestart => {
+                "Restart the service or process through its service or process manager."
+            }
+            Self::RestartNotAvailable => {
+                "This process cannot tell which supervisor runs it; use your supervisor's restart command, \
+                 for example systemctl restart, brew services restart, or docker restart."
+            }
+            Self::AuditLogRequired => {
+                "Turn on the transparency log (security.transparency_log.enabled): a restart is refused \
+                 without its audit record."
+            }
+        }
+    }
+}
+
+/// Restart readiness, read once per request; the availability body and the
+/// mint both take this one value, so they cannot disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Readiness {
+    /// Ready, with the invocation and target identity read for this request.
+    Ready {
+        invocation: InvocationDigest,
+        target: FileId,
+    },
+    Unavailable(Reason),
+}
+
+/// The platform readiness checks first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Platform {
+    Unix,
+    Windows,
+}
+
+impl Platform {
+    const fn current() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Unix
+        }
+    }
+}
+
+/// Where readiness reads the process's restart binding.
+pub(crate) enum InvocationSource {
+    /// The capture taken once at CLI entry.
+    Process,
+    /// A test's binding, with a count of the reads.
+    #[cfg(test)]
+    Scripted(Arc<ScriptedInvocation>),
+}
+
+/// A test's invocation digest and target identity.
+#[cfg(test)]
+pub(crate) struct ScriptedInvocation {
+    pub(crate) digest: Option<InvocationDigest>,
+    pub(crate) target: Option<Result<FileId, std::io::ErrorKind>>,
+    pub(crate) reads: std::sync::atomic::AtomicUsize,
+}
+
 struct Entry {
     live: Live,
     minted: Instant,
@@ -101,6 +191,8 @@ pub(crate) struct RestartConfirm {
     clock: Clock,
     fill: Fill,
     samples: SampleSource,
+    invocation: InvocationSource,
+    platform: Platform,
     entries: Mutex<HashMap<[u8; 32], Entry>>,
 }
 
@@ -124,6 +216,8 @@ impl RestartConfirm {
                 ring::rand::SystemRandom::new().fill(bytes).map_err(|_| ())
             }),
             samples: SampleSource::Counter,
+            invocation: InvocationSource::Process,
+            platform: Platform::current(),
             entries: Mutex::new(HashMap::new()),
         }
     }
@@ -143,6 +237,45 @@ impl RestartConfirm {
     #[cfg(test)]
     pub(crate) fn with_samples(self, samples: SampleSource) -> Self {
         Self { samples, ..self }
+    }
+
+    /// A test's invocation binding.
+    #[cfg(test)]
+    pub(crate) fn with_invocation(self, invocation: InvocationSource) -> Self {
+        Self { invocation, ..self }
+    }
+
+    /// A test's platform.
+    #[cfg(test)]
+    pub(crate) fn with_platform(self, platform: Platform) -> Self {
+        Self { platform, ..self }
+    }
+
+    /// The same seams with confirmation off.
+    #[cfg(test)]
+    pub(crate) fn switched_off(self) -> Self {
+        Self {
+            enabled: false,
+            ..self
+        }
+    }
+
+    /// RED STUB: readiness as the rows need it, no behaviour yet.
+    pub(crate) fn readiness(&self, _audit_log: bool) -> Readiness {
+        let _ = (&self.invocation, self.platform);
+        Readiness::Unavailable(Reason::PLATFORM)
+    }
+
+    /// RED STUB: the confirmation a `?confirm=1` GET adds, no behaviour yet.
+    pub(crate) fn confirmation(
+        &self,
+        _readiness: Readiness,
+        _sample: Option<WriteSample>,
+        _client: Option<&crate::gateway::auth::AuthenticatedClient>,
+        _headers: &axum::http::HeaderMap,
+        _boot: u64,
+    ) -> Option<String> {
+        None
     }
 
     pub(crate) fn enabled(&self) -> bool {
