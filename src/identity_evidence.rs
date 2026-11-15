@@ -5,7 +5,7 @@
 //! `compile_fail` block and a twin that differs from it in exactly one line.
 //! Stable rustdoc does not check a `compile_fail` block's error code, so the
 //! twin carries the cause: everything else in the block compiles, and only the
-//! one changed line does not. `identity_evidence_tests` reads these pairs and
+//! one changed line does not. `boundary_pins::identity_evidence` reads these pairs and
 //! checks the shape. Compiled only when rustdoc collects doctests.
 //!
 //! evidence: LIT-VI

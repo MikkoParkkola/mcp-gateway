@@ -391,7 +391,8 @@ fn each_compile_fail_has_a_one_line_twin() {
 }
 
 /// The names of the test fns in `text` (`#[test]` or an attribute ending in
-/// `::test`, such as `#[tokio::test]`), at any depth.
+/// `::test`, such as `#[tokio::test]`), at any depth; an `#[ignore]`d one does
+/// not count, since it proves nothing in a normal run.
 fn test_fns(text: &str) -> Vec<String> {
     struct Tests(Vec<String>);
     impl<'ast> syn::visit::Visit<'ast> for Tests {
@@ -402,7 +403,8 @@ fn test_fns(text: &str) -> Vec<String> {
                     .last()
                     .is_some_and(|segment| segment.ident == "test")
             });
-            if is_test {
+            let ignored = item.attrs.iter().any(|attr| attr.path().is_ident("ignore"));
+            if is_test && !ignored {
                 self.0.push(item.sig.ident.to_string());
             }
             syn::visit::visit_item_fn(self, item);
@@ -692,16 +694,48 @@ fn identity_leaf_modules_declare_no_production_children() {
 #[test]
 fn the_evidence_module_is_collected_by_rustdoc() {
     let lib = syn::parse_file(&source("src/lib.rs")).expect("lib.rs parses");
-    let declared = lib.items.iter().any(|item| {
-        matches!(item, syn::Item::Mod(item)
-        if item.ident == "identity_evidence"
-            && item.attrs.iter().any(|attr| {
-                attr.path().is_ident("cfg")
-                    && attr.parse_args::<syn::Path>().is_ok_and(|p| p.is_ident("doctest"))
-            }))
+    let declared: Vec<&syn::ItemMod> = lib
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Mod(item) if item.ident == "identity_evidence" => Some(item),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        declared.len(),
+        1,
+        "src/lib.rs declares identity_evidence once"
+    );
+    let item = declared[0];
+    assert!(
+        item.content.is_none(),
+        "an external file, not an inline module"
+    );
+    let attrs: Vec<String> = item
+        .attrs
+        .iter()
+        .filter(|attr| !attr.path().is_ident("doc"))
+        .map(|attr| {
+            attr.path()
+                .get_ident()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(
+        attrs,
+        ["cfg"],
+        "only a cfg, no #[path] or other gate: {attrs:?}"
+    );
+    let doctest = item.attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<syn::Path>()
+                .is_ok_and(|p| p.is_ident("doctest"))
     });
     assert!(
-        declared,
+        doctest,
         "src/lib.rs must declare `#[cfg(doctest)] mod identity_evidence;`"
     );
 }
