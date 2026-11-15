@@ -36,6 +36,7 @@ src/gateway/server/construct.rs	new_evaluated_with_account_http	-	Gateway constr
 src/gateway/server/construct.rs	new_with_env	-	Gateway construction, once at startup
 src/gateway/server/construct.rs	new_with_path	-	Gateway construction, once at startup
 src/gateway/server/construct.rs	reload_path	-	startup and config-watcher accessor, not per call
+src/gateway/server/construct.rs	set_retire_cell	-	stores the boot's retirement plan cell at startup, once per boot
 src/gateway/server/construct.rs	shutdown_account_custody	-	account-custody shutdown
 src/gateway/server/construct.rs	shutdown_account_custody_by	-	account-custody shutdown, bounded by the stop deadline, once per stop
 src/gateway/server/construct.rs	start_account_custody	-	startup account custody, once per serve
