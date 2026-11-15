@@ -159,6 +159,19 @@ fn save_core(
     wait: Wait,
     check: Check<'_>,
 ) -> SaveOutcome {
+    if mutant!(
+        "checkpoint_no_saves",
+        matches!(check, Check::Live(_)),
+        false
+    ) {
+        let outcome = snapshot_and_write(history, path, now);
+        history.set_incomplete(outcome.is_err());
+        return if outcome.is_ok() {
+            SaveOutcome::Saved
+        } else {
+            SaveOutcome::Failed
+        };
+    }
     let outcome = {
         let _one_at_a_time = match wait {
             Wait::Block => SAVES.lock(),
