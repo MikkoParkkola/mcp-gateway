@@ -154,9 +154,10 @@ pub(super) fn npm(control: &mut UnixStream, npm: &NpmFetch, limits: Limits) -> R
         }
     };
     // One deadline for the whole fetch: both npm steps and the lock check.
-    let left = u64::try_from(issued.deadline_ms).unwrap_or(u64::MAX);
-    let deadline = Instant::now() + Duration::from_millis(left);
-    let fetched = install(npm, &issued.credential, relay.port(), deadline, limits);
+    let fetched = match fetch_deadline(issued.deadline_ms) {
+        Some(deadline) => install(npm, &issued.credential, relay.port(), deadline, limits),
+        None => Err("the gateway's fetch deadline is out of range".into()),
+    };
     let torn = teardown(control, relay);
     fetched?;
     torn?;
@@ -167,6 +168,12 @@ pub(super) fn npm(control: &mut UnixStream, npm: &NpmFetch, limits: Limits) -> R
         &npm.node_dir,
     )
     .map_err(|r| r.to_string())
+}
+
+/// The fetch's one deadline, `ms` from now.
+fn fetch_deadline(ms: u128) -> Option<Instant> {
+    let left = u64::try_from(ms).unwrap_or(u64::MAX);
+    Some(Instant::now() + Duration::from_millis(left))
 }
 
 /// The teardown, in order, every step attempted; the first failure is

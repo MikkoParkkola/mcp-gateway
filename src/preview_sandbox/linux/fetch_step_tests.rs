@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Rows for the helper's npm fetch step (R-env, R-lock-cap).
 
-use super::{LOCK_CAP, npm_env, read_lock};
+use super::{LOCK_CAP, fetch_deadline, npm_env, read_lock};
 
 /// Kills "a variable is added, dropped or changed": the npm environment is
 /// exactly this list, the credential and relay port substituted.
@@ -131,4 +131,15 @@ fn a_lock_over_four_mib_refuses() {
     read_lock(&lock(LOCK_CAP)).expect("a 4 MiB lock is read");
     let refused = read_lock(&lock(LOCK_CAP + 1)).expect_err("a lock past 4 MiB refuses");
     assert_eq!(refused, "reading the lock (over 4 MiB)");
+}
+
+/// Kills "an oversized deadline panics with the credential live": a deadline
+/// past what an instant can hold gives no deadline (the fetch refuses and
+/// tears down), and an ordinary one lies ahead.
+#[test]
+fn an_oversized_fetch_deadline_gives_none() {
+    assert_eq!(fetch_deadline(u128::MAX), None);
+    assert_eq!(fetch_deadline(u128::from(u64::MAX)), None);
+    let now = std::time::Instant::now();
+    assert!(fetch_deadline(1_500).is_some_and(|d| d > now));
 }
