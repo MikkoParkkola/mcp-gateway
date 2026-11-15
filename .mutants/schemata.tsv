@@ -1,0 +1,4 @@
+head_sha	02108ce40bf092ee21db1a145f8756d3dd3ab05d
+#mutant m5
+mcp_gateway	retire::tests::the_watchdog_exits_with_the_stored_code	src/retire_tests.rs:242
+mcp_gateway	retire::tests::a_held_main_thread_exits_with_the_code_the_tail_stored	src/retire_tests.rs:272
