@@ -1,0 +1,331 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//
+// The Activity stream: Activity › Status lists the gateway's rows in answer
+// order, filters by outcome, search, range, server and key, and opens a row
+// from the keyboard. The shell document is served as the gateway serves it;
+// /ui/api answers are mocked. The clock is paused before the page loads so
+// from/to are exact UTC seconds.
+import { test, expect } from './base.mjs';
+import { shellReady } from './shell.mjs';
+
+test.use({ timezoneId: 'UTC' });
+
+const AT = '2026-11-15T12:00:00Z';
+const FROM_24H = '2026-11-14T12:00:00Z';
+const FROM_1H = '2026-11-15T11:00:00Z';
+const FROM_7D = '2026-11-08T12:00:00Z';
+const TO = '2026-11-15T12:00:00Z';
+const HOSTILE = '<img src=x onerror="window.__pwned=1">';
+const EMPTY_LINE = 'Calls, caught calls, decisions and changes appear here as they happen. Widen the range, or connect a client.';
+
+const call = (id, timestamp, account, tool, outcome) => ({
+  id,
+  kind: 'call',
+  timestamp,
+  outcome,
+  who: { credential_kind: 'api_key', account, authority: 'https://issuer.example', subject: `sub-${id}` },
+  server: 'docs',
+  tool,
+});
+
+const ROWS = [
+  call('c-1', '2026-11-15T08:05:05Z', 'ana', 'create_issue', 'ok'),
+  call('c-2', '2026-11-15T08:01:01Z', 'support-agent', 'web.fetch', 'failed'),
+  call('c-3', '2026-11-15T08:04:04Z', 'deploy-bot', 'kb.search', 'blocked'),
+  call('c-4', '2026-11-15T08:02:02Z', 'ana', 'tickets.get', 'ok'),
+  call('c-5', '2026-11-15T08:03:03Z', 'ci', 'tickets.update', 'failed'),
+];
+
+const SHOWN = [
+  '08:05:05 ana create_issue ok',
+  '08:01:01 support-agent web.fetch failed',
+  '08:04:04 deploy-bot kb.search blocked',
+  '08:02:02 ana tickets.get ok',
+  '08:03:03 ci tickets.update failed',
+];
+
+const rowLinks = (page) => page.locator('#content a[href^="/ui/activity/"][href$="/status"]:not([href="/ui/activity/status"])');
+
+function filters(url) {
+  const q = new URL(url).searchParams;
+  return {
+    outcome: q.get('outcome'),
+    server: q.get('server'),
+    caller: q.get('caller'),
+    q: q.get('q'),
+    from: q.get('from'),
+    to: q.get('to'),
+    cursor: q.get('cursor'),
+  };
+}
+
+/** The row link's own text, without a tooltip trigger nested inside it. */
+async function shownRows(page) {
+  return rowLinks(page).evaluateAll((els) => els.map((el) => {
+    const clone = el.cloneNode(true);
+    for (const tip of clone.querySelectorAll('.has-tip')) tip.remove();
+    return {
+      href: el.getAttribute('href'),
+      text: (clone.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    };
+  }));
+}
+
+/**
+ * Mock status and the activity list. `admin` may be a boolean or a function
+ * read on each status request. The clock is installed before the caller navigates.
+ */
+async function install(page, { admin = true, answer }) {
+  const urls = [];
+  const adminNow = () => (typeof admin === 'function' ? admin() : admin);
+  // Installed early, then paused at AT: Date.now() reads AT and no timer fires
+  // until a row runs the clock (setFixedTime alone keeps timers running).
+  await page.clock.install({ time: Date.parse(AT) - 60_000 });
+  await page.clock.pauseAt(Date.parse(AT));
+  await page.route('**/ui/api/status', (r) => r.fulfill({
+    json: { auth: { enabled: true, signed_in: true, admin: adminNow() } },
+  }));
+  await page.route('**/ui/api/activity**', (r) => {
+    const url = r.request().url();
+    if (new URL(url).pathname !== '/ui/api/activity') return r.continue();
+    urls.push(url);
+    return r.fulfill({ json: answer(url) });
+  });
+  return urls;
+}
+
+async function open(page, urls, path) {
+  await page.goto(path);
+  await shellReady(page);
+  await expect.poll(() => urls.length).toBeGreaterThan(0);
+}
+
+const list = (rows, next = null) => ({ rows, next_cursor: next });
+
+const searchBox = (page) => {
+  const name = { name: 'Call id, tool, key or rule' };
+  return page.getByRole('searchbox', name).or(page.getByRole('textbox', name));
+};
+
+/** The shell's empty state (`state('empty')`), the one that carries this title. */
+const emptyState = (page, title) => page.locator('#content [data-state="empty"]').filter({
+  has: page.getByRole('heading', { name: title, exact: true }),
+});
+
+/** The text of the line that holds a tooltip trigger, tips themselves excluded. */
+async function lineWithTip(page, id, want) {
+  return page.locator(`#content .has-tip[data-tip="${id}"]`).evaluate((el, want) => {
+    const textOf = (node) => {
+      if (!node) return '';
+      const clone = node.cloneNode(true);
+      for (const tip of clone.querySelectorAll('.has-tip')) tip.remove();
+      return (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
+    };
+    if (textOf(el.previousElementSibling) === want) return want;
+    let node = el.parentElement;
+    while (node && node.id !== 'content') {
+      if (textOf(node) === want) return want;
+      node = node.parentElement;
+    }
+    return textOf(el.parentElement);
+  }, want);
+}
+
+test('A1 landing: the last 24 h, five rows in answer order', async ({ page }) => {
+  const urls = await install(page, { answer: () => list(ROWS) });
+  await open(page, urls, '/ui/activity/status');
+  await expect.poll(() => urls.length).toBe(1);
+  const sent = filters(urls[0]);
+  expect(sent.from).toBe(FROM_24H);
+  expect(sent.to).toBe(TO);
+  expect(sent.outcome).toBeNull();
+  expect(sent.server).toBeNull();
+  expect(sent.caller).toBeNull();
+  expect(sent.q).toBeNull();
+  expect(sent.cursor).toBeNull();
+  await expect(page.locator('nav.tabs a')).toHaveText(['Status']);
+  await expect.poll(() => shownRows(page)).toEqual(ROWS.map((row, i) => ({
+    href: `/ui/activity/${row.id}/status`,
+    text: SHOWN[i],
+  })));
+  // The blocked tooltip sits beside the outcome filter's "blocked" choice, never
+  // inside a row: a row is one link and holds nothing else a keyboard can reach.
+  await expect(page.locator('#content .has-tip[data-tip="activity.status.blocked"] button')).toHaveCount(1);
+  await expect(rowLinks(page).locator('a, button, input, select, [tabindex]')).toHaveCount(0);
+});
+
+test('A2 outcome: blocked sends outcome=blocked, All sends none', async ({ page }) => {
+  const urls = await install(page, { answer: () => list(ROWS) });
+  await open(page, urls, '/ui/activity/status');
+  const outcome = page.getByRole('group', { name: 'Outcome' });
+  await expect(outcome.getByRole('button')).toHaveText(['All', 'ok', 'failed', 'blocked']);
+  await expect(page.locator('#content .has-tip[data-tip="activity.status.outcome"] button')).toBeVisible();
+  await outcome.getByRole('button', { name: 'blocked', exact: true }).click();
+  await expect.poll(() => filters(urls.at(-1)).outcome).toBe('blocked');
+  expect(filters(urls.at(-1)).from).toBe(FROM_24H);
+  expect(filters(urls.at(-1)).to).toBe(TO);
+  await expect.poll(() => new URL(page.url()).searchParams.get('outcome')).toBe('blocked');
+  await outcome.getByRole('button', { name: 'All', exact: true }).click();
+  await expect.poll(() => filters(urls.at(-1)).outcome).toBeNull();
+  await expect.poll(() => new URL(page.url()).searchParams.has('outcome')).toBe(false);
+});
+
+test('A3 search: web.fetch is one request after typing stops, and q is in the URL', async ({ page }) => {
+  const urls = await install(page, { answer: () => list(ROWS) });
+  await open(page, urls, '/ui/activity/status');
+  const before = urls.length;
+  const box = searchBox(page);
+  await box.focus();
+  // The clock is paused, so a debounce timer cannot fire between keys.
+  await box.pressSequentially('web.fetch');
+  expect(urls.length).toBe(before);
+  // No debounce length is specified. One second after the last key is "typing stopped".
+  await page.clock.runFor(1000);
+  await expect.poll(() => urls.length).toBe(before + 1);
+  expect(filters(urls.at(-1)).q).toBe('web.fetch');
+  expect(filters(urls.at(-1)).from).toBe(FROM_24H);
+  expect(filters(urls.at(-1)).to).toBe(TO);
+  await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('web.fetch');
+});
+
+test('A4 range: Last 1 h sends that window; the first request was 24 h', async ({ page }) => {
+  const urls = await install(page, { answer: () => list(ROWS) });
+  await open(page, urls, '/ui/activity/status');
+  expect(filters(urls[0]).from).toBe(FROM_24H);
+  expect(filters(urls[0]).to).toBe(TO);
+  await page.getByRole('button', { name: 'Last 1 h', exact: true }).click();
+  await expect.poll(() => filters(urls.at(-1)).from).toBe(FROM_1H);
+  expect(filters(urls.at(-1)).to).toBe(TO);
+});
+
+test('A5 keyboard: Tab from the search reaches the first row, Enter opens it', async ({ page }) => {
+  const urls = await install(page, { answer: () => list(ROWS) });
+  await open(page, urls, '/ui/activity/status');
+  await expect.poll(() => shownRows(page)).toHaveLength(5);
+  await searchBox(page).focus();
+  await page.keyboard.press('Tab');
+  const first = rowLinks(page).first();
+  await expect(first).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL('/ui/activity/c-1/status');
+});
+
+test('A6 deep links: server=github and key=support-agent', async ({ page }) => {
+  // Neither value appears in a row, so the visible word is the active filter.
+  const quiet = [
+    call('c-1', '2026-11-15T08:05:05Z', 'ana', 'create_issue', 'ok'),
+    call('c-2', '2026-11-15T08:01:01Z', 'deploy-bot', 'web.fetch', 'failed'),
+  ];
+  const urls = await install(page, { answer: () => list(quiet) });
+  await open(page, urls, '/ui/activity/status?server=github');
+  expect(filters(urls[0]).server).toBe('github');
+  expect(filters(urls[0]).caller).toBeNull();
+  expect(filters(urls[0]).from).toBe(FROM_24H);
+  expect(filters(urls[0]).to).toBe(TO);
+  await expect(page.locator('#content').getByText('github', { exact: true })).toBeVisible();
+  expect(new URL(page.url()).searchParams.get('server')).toBe('github');
+  const at = urls.length;
+  await page.goto('/ui/activity/status?key=support-agent');
+  await shellReady(page);
+  await expect.poll(() => urls.length).toBeGreaterThan(at);
+  const sent = filters(urls.at(-1));
+  expect(sent.caller).toBe('support-agent');
+  expect(sent.server).toBeNull();
+  expect(sent.from).toBe(FROM_24H);
+  expect(sent.to).toBe(TO);
+  await expect(page.locator('#content').getByText('support-agent', { exact: true })).toBeVisible();
+  const url = new URL(page.url());
+  expect(url.searchParams.get('key')).toBe('support-agent');
+  expect(url.searchParams.has('caller')).toBe(false);
+});
+
+test('A7 more: next_cursor c2 loads the next page after the first', async ({ page }) => {
+  const first = [
+    call('p-1', '2026-11-15T08:01:01Z', 'ana', 'alpha.one', 'ok'),
+    call('p-2', '2026-11-15T08:02:02Z', 'ana', 'bravo.two', 'ok'),
+    call('p-3', '2026-11-15T08:03:03Z', 'ana', 'charlie.three', 'ok'),
+  ];
+  const second = [
+    call('p-4', '2026-11-15T08:04:04Z', 'ana', 'delta.four', 'ok'),
+    call('p-5', '2026-11-15T08:05:05Z', 'ana', 'echo.five', 'failed'),
+  ];
+  const urls = await install(page, {
+    answer: (url) => (new URL(url).searchParams.get('cursor') === 'c2'
+      ? list(second)
+      : list(first, 'c2')),
+  });
+  await open(page, urls, '/ui/activity/status');
+  expect(filters(urls[0]).cursor).toBeNull();
+  await expect(rowLinks(page).first()).toBeVisible();
+  await rowLinks(page).last().scrollIntoViewIfNeeded();
+  await page.evaluate(() => {
+    const nodes = [document.scrollingElement, document.querySelector('#content')];
+    for (const el of document.querySelectorAll('#content *')) nodes.push(el);
+    for (const el of nodes) {
+      if (el && el.scrollHeight > el.clientHeight) el.scrollTop = el.scrollHeight;
+    }
+  });
+  // Intersection observers are delivered on a frame; the clock is paused.
+  await page.clock.runFor(100);
+  await expect.poll(() => urls.filter((u) => filters(u).cursor === 'c2').length).toBe(1);
+  const more = urls.find((u) => filters(u).cursor === 'c2');
+  expect(filters(more).from).toBe(FROM_24H);
+  expect(filters(more).to).toBe(TO);
+  await expect.poll(async () => (await shownRows(page)).map((row) => row.text)).toEqual([
+    '08:01:01 ana alpha.one ok',
+    '08:02:02 ana bravo.two ok',
+    '08:03:03 ana charlie.three ok',
+    '08:04:04 ana delta.four ok',
+    '08:05:05 ana echo.five failed',
+  ]);
+});
+
+test('A8 empty: the 24 h empty state, then Last 7 days removes the button', async ({ page }) => {
+  const urls = await install(page, { answer: () => list([]) });
+  await open(page, urls, '/ui/activity/status');
+  const day = emptyState(page, 'No calls in the last 24 h');
+  await expect(day).toBeVisible();
+  await expect(day).toContainText(EMPTY_LINE);
+  await expect(day.getByRole('button')).toHaveText(['Last 7 days']);
+  await day.getByRole('button', { name: 'Last 7 days', exact: true }).click();
+  await expect.poll(() => filters(urls.at(-1)).from).toBe(FROM_7D);
+  expect(filters(urls.at(-1)).to).toBe(TO);
+  const week = emptyState(page, 'No calls in the last 7 days');
+  await expect(week).toBeVisible();
+  await expect(week).toContainText(EMPTY_LINE);
+  await expect(week.getByRole('button')).toHaveCount(0);
+});
+
+test('A9 member: admin false shows the key line and its tooltip; admin true does not', async ({ page }) => {
+  let admin = false;
+  const urls = await install(page, { admin: () => admin, answer: () => list(ROWS) });
+  await open(page, urls, '/ui/activity/status');
+  const trigger = page.locator('#content .has-tip[data-tip="activity.status.calls-made-with-your-key"]');
+  await expect(trigger.locator('button')).toBeVisible();
+  expect(await lineWithTip(page, 'activity.status.calls-made-with-your-key', 'Calls made with your key')).toBe('Calls made with your key');
+  await expect.poll(() => shownRows(page)).toHaveLength(5);
+  const lineBox = await trigger.boundingBox();
+  const rowBox = await rowLinks(page).first().boundingBox();
+  expect(lineBox.y).toBeLessThan(rowBox.y);
+  admin = true;
+  const at = urls.length;
+  await page.goto('/ui/activity/status');
+  await shellReady(page);
+  await expect.poll(() => urls.length).toBeGreaterThan(at);
+  await expect.poll(() => shownRows(page)).toHaveLength(5);
+  await expect(page.getByText('Calls made with your key', { exact: true })).toHaveCount(0);
+  await expect(page.locator('#content .has-tip[data-tip="activity.status.calls-made-with-your-key"]')).toHaveCount(0);
+});
+
+test('A10 hostile: a tool and a key render as text', async ({ page }) => {
+  const rows = [call('h-1', '2026-11-15T08:01:01Z', HOSTILE, HOSTILE, 'ok')];
+  const urls = await install(page, { answer: () => list(rows) });
+  await open(page, urls, '/ui/activity/status');
+  await expect.poll(() => shownRows(page)).toEqual([{
+    href: '/ui/activity/h-1/status',
+    text: `08:01:01 ${HOSTILE} ${HOSTILE} ok`,
+  }]);
+  await expect(page.locator('#content img')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
+});
