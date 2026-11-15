@@ -410,16 +410,33 @@ pub(super) async fn run_tick(ctx: &ReloadContext, state: &mut TickState, wake: W
     if !due && !gate.replay_owed() {
         return;
     }
+    mutant!(
+        "replay_owed_cleared_early",
+        {
+            if let Ok(guard) = gate.admit(crate::gateway::restart_config_floor::AdmitKind::Watcher) {
+                gate.take_replay_owed(&guard);
+            }
+        },
+        ()
+    );
     #[cfg(test)]
     gate.call_admitted(
         crate::gateway::restart_config_floor::seams::AdmittedPoint::WatcherBeforeAdmission,
     );
+    let kept = mutant!(
+        "trigger_taken_before_admission",
+        state.pending_trigger.take(),
+        None::<ReloadTrigger>
+    );
     let guard = match gate.admit(crate::gateway::restart_config_floor::AdmitKind::Watcher) {
-        Ok(guard) => guard,
+        Ok(guard) => mutant!("watcher_guard_skipped", { drop(guard); None }, Some(guard)),
         Err(refusal) => {
             // Restarting and Stopping are final: the trigger is dropped with the
             // gateway. A pause keeps it for the tick that follows the resume.
-            if matches!(refusal, Refusal::Restarting | Refusal::Stopping) {
+            if matches!(refusal, Refusal::Restarting | Refusal::Stopping | Refusal::ReplayOwed) {
+                if !mutant!("certified_drops_watcher_trigger", true, matches!(refusal, Refusal::Restarting | Refusal::Stopping)) {
+                    return;
+                }
                 state.pending_trigger = None;
             }
             return;
@@ -436,12 +453,11 @@ pub(super) async fn run_tick(ctx: &ReloadContext, state: &mut TickState, wake: W
             reason = "only the test reload record names its source"
         )
     )]
-    let replay = gate.take_replay_owed(&guard);
+    let replay = mutant!("watcher_guard_skipped", false, guard.as_ref().is_some_and(|guard| gate.take_replay_owed(guard)));
     // Whatever its debounce state: the reload re-reads everything, and the
     // trigger it reports should be the one that was waiting.
-    let trigger = state
-        .pending_trigger
-        .take()
+    let trigger = kept
+        .or_else(|| state.pending_trigger.take())
         .unwrap_or(ReloadTrigger::ConfigFile);
     state.last_event = None;
     env_poll::log_trigger(&trigger);

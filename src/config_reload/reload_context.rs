@@ -363,7 +363,7 @@ impl ReloadContext {
     pub async fn manual_reload_outcome(&self) -> std::result::Result<ReloadOutcome, String> {
         use crate::gateway::restart_config_floor::{AdmitKind, Refusal};
         let gate = self.registry.config_gate();
-        let _admitted = gate.admit(AdmitKind::ManualReload).map_err(|refusal| {
+        let admitted = gate.admit(AdmitKind::ManualReload).map_err(|refusal| {
             match refusal {
                 Refusal::Restarting => RELOAD_RESTARTING,
                 Refusal::Stopping => RELOAD_STOPPING,
@@ -371,6 +371,7 @@ impl ReloadContext {
             }
             .to_owned()
         })?;
+        let _admitted = mutant!("manual_guard_skipped", { drop(admitted); None }, Some(admitted));
         #[cfg(test)]
         gate.call_admitted(
             crate::gateway::restart_config_floor::seams::AdmittedPoint::ManualAfterAdmission,
