@@ -106,8 +106,8 @@ impl ConfigFloor {
     /// exists now (`None`: a fileless run, not configured).
     fn configured_path(&self) -> Option<PathBuf> {
         match &self.source {
-            ConfigSource::Booted(path) => Some(path.clone()),
-            ConfigSource::Defaults => certify::first_existing(self.candidates_now()),
+            ConfigSource::Booted(path) => mutant!("booted_missing_certified_absent", path.exists().then(|| path.clone()), Some(path.clone())),
+            ConfigSource::Defaults => mutant!("defaults_as_booted", self.candidates_now().first().cloned(), certify::first_existing(self.candidates_now())),
         }
     }
 

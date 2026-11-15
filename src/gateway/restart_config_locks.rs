@@ -192,9 +192,16 @@ pub(super) async fn take_check(
     rx: oneshot::Receiver<Result<Certification, FloorFault>>,
     deadline: Instant,
 ) -> Result<Certification, FloorFault> {
-    until(deadline, rx)
-        .await
-        .map_err(|_| FloorFault::WorkerLost)?
+    mutant!(
+        "join_error_as_ok",
+        until(deadline, rx).await.unwrap_or(Ok(Certification {
+            sha256: String::new(),
+            revision: 0,
+        })),
+        until(deadline, rx)
+            .await
+            .map_err(|_| FloorFault::WorkerLost)?
+    )
 }
 
 /// The two guards of a certified adapter, owned until a recovery call.
