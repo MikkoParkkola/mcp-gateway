@@ -522,8 +522,23 @@ fn place_npm(
         )
     };
     let exec = reachable_inside(npm, &shown).unwrap_or(npm_real);
-    let node_dir = node.parent().unwrap_or(Path::new("/")).to_path_buf();
-    Ok((exec, node_dir))
+    // `env node` searches PATH by name: the alias's own directory when the
+    // root shows the alias, else the real file's, which only works when the
+    // real file is itself called `node`.
+    let node_dir = if reachable_inside(node, &shown).is_some() {
+        node.parent()
+    } else if node_real.file_name() == Some(std::ffi::OsStr::new("node")) {
+        node_real.parent()
+    } else {
+        None
+    };
+    let node_dir = node_dir.ok_or_else(|| {
+        Refusal::Step(format!(
+            "placing node ({} is reached through a link the root does not show)",
+            node.display()
+        ))
+    })?;
+    Ok((exec, node_dir.to_path_buf()))
 }
 
 /// Whether `plan`'s root shows `file`, its links followed first.
