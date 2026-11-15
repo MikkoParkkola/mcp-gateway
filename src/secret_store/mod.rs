@@ -27,7 +27,8 @@ pub(crate) use save::{
     LOCK_WAIT, NewSecret, SaveError, UnusedEntry, Vault, save_secrets, unused_entries,
     unused_entries_until,
 };
-// The unused-entry delete and listing are reached only through the admin UI routes.
+// The unused-entry delete and listing are reached through the admin UI routes;
+// doctor's count calls `unused::listing_until` from `report`.
 #[cfg(feature = "webui")]
 pub(crate) use unused::{
     DeleteRefused, Deleted, Listing, NamingSources, delete_unused, is_generated_name, listing,

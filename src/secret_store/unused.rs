@@ -381,6 +381,21 @@ pub(crate) fn listing(
     stores: &[&dyn SecretStore],
     sources: &NamingSources,
 ) -> Listing {
+    listing_until(
+        vault,
+        stores,
+        sources,
+        Instant::now() + Duration::from_secs(30),
+    )
+}
+
+/// [`listing`], waiting for the vault lock until `deadline` (doctor waits less).
+pub(crate) fn listing_until(
+    vault: &Vault,
+    stores: &[&dyn SecretStore],
+    sources: &NamingSources,
+    deadline: Instant,
+) -> Listing {
     let mut listed = Listing::default();
     let built = match corpus(sources) {
         Ok(built) => built,
@@ -392,7 +407,6 @@ pub(crate) fn listing(
             return listed;
         }
     };
-    let deadline = Instant::now() + Duration::from_secs(30);
     for store in stores {
         match super::unused_entries_until(vault, &[*store], &BTreeSet::new(), deadline) {
             Err(error) => listed.errors.push((store.kind(), error.reason())),

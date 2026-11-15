@@ -5,18 +5,15 @@
 //! an admin. Read-only: the probe never writes, and nothing in the config
 //! directory is created or changed.
 
-use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use super::{
-    FilesStore, SecretStore, StoreError, StoreKind, Vault, choice_str, choose_with,
-    unused_entries_until,
-};
+use super::unused::{NamingSources, listing_until};
+use super::{FilesStore, SecretStore, StoreError, StoreKind, Vault, choice_str, choose_with};
 use crate::config::SecretStoreChoice;
 
 /// How long doctor waits for a save holding the vault lock.
@@ -119,18 +116,16 @@ pub(super) fn report_with(
 }
 
 /// Entries in either store count, whichever the setting now picks: an
-/// entry made before a switch is still waiting for an admin.
+/// entry made before a switch is still waiting for an admin. Named or not is
+/// the Settings listing's own check, over every source doctor can see.
 fn count_unused(
     config_path: &Path,
     config_dir: &Path,
     vault: &Vault,
     os: Option<&(dyn SecretStore + Send + Sync)>,
-    _process_env: &[OsString],
+    process_env: &[OsString],
 ) -> Result<usize, String> {
-    // The same mode-checked read the loader uses: no FIFO, no wide modes.
-    let text = crate::config::read_checked_file(config_path, crate::config::CheckedFile::Config)
-        .map_err(|e| e.to_string())?;
-    let named = named_in_yaml(&text)?;
+    let sources = offline_sources(config_path, config_dir, process_env)?;
     // No lock file means no save ever ran, so nothing is indexed; taking the
     // lock would create the file, and the report writes nothing. An index
     // with no lock beside it is not counted rather than reported as zero.
@@ -149,48 +144,44 @@ fn count_unused(
     if let Some(os) = os {
         stores.push(os);
     }
-    let unused = unused_entries_until(vault, &stores, &named, Instant::now() + LOCK_WAIT)
-        .map_err(|e| e.reason())?;
-    Ok(unused.len())
+    let listed = listing_until(vault, &stores, &sources, Instant::now() + LOCK_WAIT);
+    if let Some((_, reason)) = listed.errors.into_iter().next() {
+        return Err(reason);
+    }
+    Ok(listed.entries.len())
 }
 
-/// The entry names in every string of the parsed config, so a YAML escape
-/// cannot hide a live reference. A config that does not parse is not counted.
-fn named_in_yaml(text: &str) -> Result<BTreeSet<String>, String> {
-    // A parser error can quote the config text around it, which may hold a
-    // literal secret, so only a fixed sentence is reported.
-    let value: serde_json::Value = crate::yaml::from_str(text)
-        .map_err(|_| "gateway.yaml did not parse, so references were not read".to_owned())?;
-    let mut names = BTreeSet::new();
-    let mut pending = vec![&value];
-    while let Some(next) = pending.pop() {
-        match next {
-            serde_json::Value::String(s) => names.extend(named(s)),
-            serde_json::Value::Array(items) => pending.extend(items),
-            serde_json::Value::Object(map) => pending.extend(map.values()),
-            _ => {}
-        }
-    }
-    Ok(names)
-}
-
-/// Every entry name `text` mentions, as a `keychain:` reference or a
-/// `file:secrets/` path alike: each maximal run of name characters that
-/// starts with the fresh-name prefix (ADR-028 rule 1). Applied to each
-/// decoded string value, so a commented-out reference is not live and its
-/// entry counts as unused.
-fn named(text: &str) -> BTreeSet<String> {
-    const PREFIX: &str = "mcp-gateway.";
-    let is_name = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-';
-    let mut names = BTreeSet::new();
-    let mut rest = text;
-    while let Some(at) = rest.find(PREFIX) {
-        let tail = &rest[at..];
-        let len = tail.find(|c: char| !is_name(c)).unwrap_or(tail.len());
-        names.insert(tail[..len].trim_end_matches('.').to_owned());
-        rest = &tail[len.max(PREFIX.len())..];
-    }
-    names
+/// Every naming source doctor can see, read as startup reads them: the config,
+/// the env files its `env_files` name and the values they assign, this
+/// process's environment, and the config's capability directories. A running
+/// gateway's listing also reads its live config's directories, which offline
+/// doctor cannot. A config that does not load is not counted, with a fixed
+/// sentence: a loader error can quote config text that holds a literal secret.
+fn offline_sources(
+    config_path: &Path,
+    config_dir: &Path,
+    process_env: &[OsString],
+) -> Result<NamingSources, String> {
+    let loaded = crate::config::Config::load_evaluated(Some(config_path))
+        .map_err(|_| "gateway.yaml did not load, so references were not read".to_owned())?;
+    Ok(NamingSources {
+        config: config_path.to_path_buf(),
+        entries_dir: FilesStore::new(config_dir).entries_dir().to_path_buf(),
+        env_files: loaded.env_paths.as_paths().to_vec(),
+        env_values: loaded
+            .overlay
+            .assigned_values()
+            .map(str::to_owned)
+            .collect(),
+        process_env: process_env.to_vec(),
+        capability_dirs: loaded
+            .config
+            .capabilities
+            .directories
+            .iter()
+            .map(PathBuf::from)
+            .collect(),
+    })
 }
 
 #[cfg(test)]

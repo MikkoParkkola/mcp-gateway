@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::super::tests::Fake;
 use super::super::{FilesStore, NewSecret, SecretStore, StoreError, Vault, save_secrets};
-use super::{named, named_in_yaml, report_with};
+use super::report_with;
 use crate::config::SecretStoreChoice;
 
 const SENTINEL: &[u8] = b"kc-sentinel-7f3a";
@@ -147,30 +147,6 @@ fn explicit_keychain_with_a_failing_probe_reports_that_saves_are_refused() {
 }
 
 #[test]
-fn a_config_names_entries_by_keychain_reference_and_by_file_path() {
-    let text = "a: keychain:mcp-gateway.auth-bearer-token.1.00ff\n\
-                b: \"file:secrets/mcp-gateway.key-server.2.abcd\"\n\
-                c: mcp-gateway.\n";
-    let names = named(text);
-    assert!(
-        names.contains("mcp-gateway.auth-bearer-token.1.00ff"),
-        "{names:?}"
-    );
-    assert!(names.contains("mcp-gateway.key-server.2.abcd"), "{names:?}");
-}
-
-#[test]
-fn a_reference_hidden_by_a_yaml_escape_is_still_named() {
-    let text = "auth:\n  bearer_token: \"keychain:mcp-gateway\\u002eauth-bearer-token.1.00ff\"\n";
-    let names = named_in_yaml(text).expect("parses");
-    assert!(
-        names.contains("mcp-gateway.auth-bearer-token.1.00ff"),
-        "{names:?}"
-    );
-    assert!(named_in_yaml("a: [unclosed").is_err());
-}
-
-#[test]
 fn with_no_vault_lock_yet_the_count_is_zero_and_no_lock_is_made() {
     let config = tempfile::tempdir().expect("tempdir");
     let locks = tempfile::tempdir().expect("tempdir");
@@ -238,6 +214,11 @@ fn an_escaped_reference_and_a_broken_config_go_through_the_whole_report() {
         &[],
     );
     assert_eq!(report.unused, None, "{report:?}");
+    // A fixed sentence: a loader error can quote config text holding a secret.
+    assert_eq!(
+        report.unused_error.as_deref(),
+        Some("gateway.yaml did not load, so references were not read")
+    );
 }
 
 /// [`saved`], plus the name of its first entry, which `gateway.yaml` does not
