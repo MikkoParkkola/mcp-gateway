@@ -1,0 +1,25 @@
+head_sha	02386447595ddc50921d62b9961d8dbf49988096
+#mutant pause_skipped
+mcp_gateway	gateway::ui::settings::floor_tests::p4_paused_save_refused_and_replay_once	src/gateway/ui/settings_floor_tests.rs:205
+#mutant settle_skipped
+mcp_gateway	gateway::restart_config_floor::settle_tests::p1_held_write_keeps_checkpoint_pending_then_certifies	src/gateway/config_floor_settle_tests.rs:88
+#mutant watcher_guard_skipped multi=2
+mcp_gateway	gateway::restart_config_floor::settle_tests::p3_watcher_reload_held_after_admission	src/gateway/config_floor_settle_tests.rs:99
+#mutant manual_guard_skipped
+mcp_gateway	gateway::restart_config_floor::settle_tests::p3_manual_reload_held_after_admission	src/gateway/config_floor_settle_tests.rs:99
+#mutant entries_cleanup_handle_dropped_early
+mcp_gateway	gateway::restart_config_floor::settle_tests::p2_dead_write_cleanup_alone_keeps_checkpoint_pending	src/gateway/config_floor_settle_tests.rs:236
+#mutant lost_wakeup
+mcp_gateway	gateway::restart_config_floor::settle_tests::p1_settle_wakes_when_the_last_guard_drops_inside_the_window	src/gateway/config_floor_settle_tests.rs:78
+#mutant replay_owed_cleared_early
+mcp_gateway	gateway::restart_config_floor::settle_more_tests::p7_replay_owed_survives_a_refused_watcher_admission	src/gateway/config_floor_settle_more_tests.rs:105
+#mutant replay_owed_ignored
+mcp_gateway	gateway::ui::settings::floor_tests::p5_ui_reload_refused_then_replayed	src/gateway/ui/settings_floor_tests.rs:322
+#mutant certified_admits_writes
+mcp_gateway	gateway::ui::settings::floor_tests::p9a_certified_write_refused_without_replay	src/gateway/ui/settings_floor_tests.rs:60
+#mutant certified_drops_manual_reload
+mcp_gateway	gateway::ui::settings::floor_tests::p9b_certified_manual_reload_owes_a_replay	src/gateway/ui/settings_floor_tests.rs:498
+#mutant certified_drops_watcher_trigger
+mcp_gateway	gateway::ui::settings::floor_tests::p9c_certified_outside_edit_kept_for_replay	src/gateway/ui/settings_floor_tests.rs:541
+#mutant trigger_taken_before_admission
+mcp_gateway	gateway::restart_config_floor::settle_more_tests::p10_pause_before_watcher_admission_keeps_trigger_for_one_replay	src/gateway/config_floor_settle_more_tests.rs:189
