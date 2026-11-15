@@ -30,6 +30,8 @@ use crate::security::{TransparencyLogConfig, TransparencyLogger};
 
 const URI: &str = "/ui/api/gateway/restart";
 const ADMIN: &str = "restart-admin";
+/// An admin scoped to one backend: not the full admin view.
+const SCOPED: &str = "restart-scoped";
 
 /// Which gateway a row runs against.
 #[derive(Clone, Copy)]
@@ -115,6 +117,9 @@ async fn fixture(gateway: Gateway, registry: Option<RestartConfirm>) -> Fixture 
         Gateway::AuthWithLog => serde_json::from_value(json!({"enabled": true, "api_keys": [{
             "key_sha256": crate::config::api_key_digest_spec(ADMIN.as_bytes()),
             "name": ADMIN, "admin": true, "backends": ["*"]
+        }, {
+            "key_sha256": crate::config::api_key_digest_spec(SCOPED.as_bytes()),
+            "name": SCOPED, "admin": true, "backends": ["alpha"]
         }]}))
         .unwrap(),
         Gateway::AuthOffNoLog => AuthConfig::default(),
@@ -243,8 +248,8 @@ async fn no_transparency_log_answers_audit_log_required() {
 async fn only_confirm_1_mints_and_its_answer_is_not_stored() {
     let inv = ready_invocation();
     let shown = sample(2, 10);
-    // One sample per GET; this row makes nine.
-    let script = samples(&[Some(shown); 12]);
+    // One sample per GET; this row makes twelve.
+    let script = samples(&[Some(shown); 16]);
     let fx = fixture(Gateway::AuthWithLog, Some(confirm(&inv, &script))).await;
     let (plain, plain_headers) = get(&fx, "").await;
     assert_eq!(token(&plain), None, "a plain GET never mints: {plain}");
@@ -260,6 +265,9 @@ async fn only_confirm_1_mints_and_its_answer_is_not_stored() {
         "?confirm",
         "?confirm=1&confirm=1",
         "?confirm=1=1",
+        "?confirm=1&bad=%ZZ",
+        "?confirm=1&=x",
+        "?confirm=1&",
     ] {
         let (body, _) = get(&fx, query).await;
         assert_eq!(body, plain, "{query} answers exactly like a plain GET");
@@ -385,11 +393,28 @@ async fn the_platform_reason_comes_before_the_missing_log() {
     let fx = fixture(Gateway::AuthOffNoLog, Some(rc)).await;
     let (body, _) = get(&fx, "").await;
     assert_eq!(body["reason"], "windows_manual_restart", "{body}");
+    // Restart off, or no restart target, also comes before the missing log.
+    for (name, inv, off) in [
+        ("switched off", ready_invocation(), true),
+        (
+            "no target",
+            invocation(Some(InvocationDigest::for_test([9; 32])), None),
+            false,
+        ),
+    ] {
+        let script = samples(&[Some(sample(0, 1))]);
+        let mut rc = confirm(&inv, &script);
+        if off {
+            rc = rc.switched_off();
+        }
+        let fx = fixture(Gateway::AuthOffNoLog, Some(rc)).await;
+        let (body, _) = get(&fx, "").await;
+        assert_eq!(body["reason"], "restart_not_available", "{name}: {body}");
+    }
 }
 
-// T-GET-PRECOND, the halves HTTP cannot reach: a caller with no per-session
-// principal mints nothing. (A view other than the full admin view is refused
-// 403 before the handler, so only the handler's `view == Full` check guards it.)
+// T-GET-PRECOND, the half HTTP cannot reach: a caller with no per-session
+// principal mints nothing. (The view leg is the scoped-admin row below.)
 #[test]
 fn no_principal_or_a_partial_view_mints_nothing() {
     let inv = ready_invocation();
@@ -441,4 +466,81 @@ async fn one_get_reads_each_source_once_and_binds_what_it_shows() {
             .is_ok(),
         "the token binds the sample the GET showed"
     );
+}
+
+// D3 (lead): every override seam on the registry is compiled only into test
+// builds. The registry's source with test-only items blanked holds none of
+// them, while the raw source does, so the scan cannot pass on an empty read.
+#[test]
+fn the_registry_override_seams_exist_only_in_test_builds() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/gateway/ui/restart_confirm.rs"
+    );
+    let raw = std::fs::read_to_string(path).expect("read restart_confirm.rs");
+    let shipped = crate::test_source_text::production_text(&raw);
+    for seam in [
+        "fn for_test(",
+        "fn with_samples(",
+        "fn with_invocation(",
+        "fn with_platform(",
+        "fn switched_off(",
+        "fn plant(",
+        "Scripted(",
+        "struct ScriptedInvocation",
+    ] {
+        assert!(raw.contains(seam), "premise: {seam} is in the source");
+        assert!(
+            !shipped.contains(seam),
+            "{seam} is compiled into a release build"
+        );
+    }
+}
+
+// T-NOLOG-LINE, its GET leg (GET.1): a minting GET writes the token to no log
+// line at any level. The POST legs are slice 7c-POST's.
+#[test]
+fn a_minting_get_logs_no_token() {
+    let (body, logs) = crate::test_log_capture::capture_at(tracing::Level::TRACE, || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let inv = ready_invocation();
+            let script = samples(&[Some(sample(1, 5))]);
+            let fx = fixture(Gateway::AuthWithLog, Some(confirm(&inv, &script))).await;
+            tracing::info!("restart-get-log-probe");
+            get(&fx, "?confirm=1").await.0
+        })
+    });
+    let token = token(&body).expect("the GET minted");
+    assert!(
+        logs.contains("restart-get-log-probe"),
+        "premise: the capture is live"
+    );
+    assert!(!logs.contains(token), "the token reached a log line");
+}
+
+// T-GET-PRECOND, the view leg: an admin scoped to one backend does not get
+// the full admin view; its `?confirm=1` is refused 403 and mints nothing.
+#[tokio::test]
+async fn a_scoped_admins_confirm_request_is_refused_and_mints_nothing() {
+    let inv = ready_invocation();
+    let script = samples(&[Some(sample(0, 1)); 2]);
+    let fx = fixture(Gateway::AuthWithLog, Some(confirm(&inv, &script))).await;
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("{URI}?confirm=1"))
+        .header("authorization", format!("Bearer {SCOPED}"))
+        .body(Body::empty())
+        .expect("request");
+    let response = fx.router.clone().oneshot(req).await.expect("response");
+    assert_eq!(response.status().as_u16(), 403);
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("confirm"),
+        "no token in a refusal"
+    );
+    assert_eq!(registry(&fx).entry_count(), 0, "no entry");
 }
