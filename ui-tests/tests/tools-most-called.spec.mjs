@@ -310,10 +310,25 @@ test('M17: See all tools opens the catalogue without reloading the page', async 
   await expect(mostCalled(page)).toBeVisible();
   // A full reload would lose this, and with it a key held only in memory.
   await page.evaluate(() => { window.__sameDocument = true; });
-  await mostCalled(page).getByRole('link', { name: 'See all 17 tools', exact: true }).click();
+  const seeAll = mostCalled(page).getByRole('link', { name: 'See all 17 tools', exact: true });
+  // A ctrl-click is the browser's (a new tab): the link must not cancel it. The
+  // listener on document runs after the link's own, records, then cancels so no tab opens.
+  const cancelled = await seeAll.evaluate((a) => {
+    let seen = null;
+    const note = (ev) => { seen = ev.defaultPrevented; ev.preventDefault(); };
+    document.addEventListener('click', note);
+    a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0, ctrlKey: true }));
+    document.removeEventListener('click', note);
+    return seen;
+  });
+  expect(cancelled).toBe(false);
+  await expect(page).toHaveURL('/ui/tools/status');
+  await seeAll.click();
   await expect(page).toHaveURL('/ui/tools/status?view=all');
   await expect(catalogueRows(page)).toHaveCount(17);
   expect(await page.evaluate(() => window.__sameDocument)).toBe(true);
+  // Focus moves to the new content, as it does for every other in-app link.
+  await expect(page.locator('#content')).toBeFocused();
 });
 
 test('M18: Back to all tools opens the catalogue without reloading the page', async ({ page }) => {
@@ -324,4 +339,44 @@ test('M18: Back to all tools opens the catalogue without reloading the page', as
   await expect(page).toHaveURL('/ui/tools/status?view=all');
   await expect(catalogueRows(page)).toHaveCount(17);
   expect(await page.evaluate(() => window.__sameDocument)).toBe(true);
+  await expect(page.locator('#content')).toBeFocused();
+});
+
+/** Narrow the open catalogue by text and by server: one tool, quiet_two on bravo. */
+async function narrowCatalogue(page) {
+  await page.locator('#tools-search').fill('quiet');
+  await page.locator('#tools-server').selectOption('bravo');
+  await expect(catalogueRows(page)).toHaveCount(1);
+}
+
+test('M19: See all tools lists every tool, whatever the catalogue was last narrowed to', async ({ page }) => {
+  await toolsScreen(page, { tools: RANKED });
+  await page.goto('/ui/tools/status');
+  const seeAll = mostCalled(page).getByRole('link', { name: 'See all 17 tools', exact: true });
+  await seeAll.click();
+  await narrowCatalogue(page);
+  await page.goBack();
+  await expect(page).toHaveURL('/ui/tools/status');
+  await seeAll.click();
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
+  // Clearing only one of the two would still leave 1 or 3 rows.
+  await expect(catalogueRows(page)).toHaveCount(17);
+  await expect(page.locator('#tools-search')).toHaveValue('');
+  await expect(page.locator('#tools-server')).toHaveValue('');
+});
+
+test('M20: Back to all tools returns to the catalogue as it was narrowed', async ({ page }) => {
+  await toolsScreen(page, { tools: RANKED });
+  await page.goto('/ui/tools/status');
+  await mostCalled(page).getByRole('link', { name: 'See all 17 tools', exact: true }).click();
+  await narrowCatalogue(page);
+  await catalogueRows(page).getByRole('button', { name: 'quiet_two', exact: true }).click();
+  await page.getByRole('link', { name: 'Open quiet_two', exact: true }).click();
+  await expect(page).toHaveURL('/ui/tools/bravo%3Aquiet_two/status');
+  await page.getByRole('link', { name: 'Back to all tools', exact: true }).click();
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
+  await expect(catalogueRows(page)).toHaveCount(1);
+  await expect(catalogueRows(page)).toHaveText([/^▸ quiet_two\s*bravo/]);
+  await expect(page.locator('#tools-search')).toHaveValue('quiet');
+  await expect(page.locator('#tools-server')).toHaveValue('bravo');
 });

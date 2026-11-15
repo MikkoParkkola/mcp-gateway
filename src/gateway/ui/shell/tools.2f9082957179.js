@@ -33,13 +33,22 @@ const showingAll = () => new URLSearchParams(location.search).get('view') === 'a
  * A link to the catalogue that the router follows in place. The shell leaves a link
  * with a query to the browser, and a full reload would lose a key held only in
  * memory; a modified click (new tab or window) keeps the browser's own behaviour.
+ * `narrowing` is 'keep' (return to the catalogue as it was left) or 'clear' (a link
+ * that promises every tool must not open a subset).
  */
-function catalogueLink(text) {
+function catalogueLink(text, narrowing) {
   const a = h('a', { class: 'lnk', href: CATALOGUE_PATH }, text);
   a.addEventListener('click', (ev) => {
     if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
     ev.preventDefault();
+    if (narrowing === 'clear') {
+      filters.query = '';
+      filters.server = '';
+    }
     go(CATALOGUE_PATH);
+    // The shell's own link handler skips a cancelled click, so hand focus to the
+    // new content here, as it does for every other in-app link.
+    document.getElementById('content').focus({ preventScroll: true });
   });
   return a;
 }
@@ -174,7 +183,7 @@ function mostCalled(body, read) {
   const section = h('section', { class: 'tk tools-card', 'aria-labelledby': titleId },
     h('div', { class: 'tools-card-head' }, h('h2', { class: 'kicker', id: titleId }, 'Most called, last hour'),
       // The whole catalogue is one click away, with or without calls this hour.
-      catalogueLink(`See all ${plural(list.length, 'tool', 'tools')}`)));
+      catalogueLink(`See all ${plural(list.length, 'tool', 'tools')}`, 'clear')));
   if (rows.length === 0) {
     section.append(h('div', { class: 'tools-called-empty' },
       h('p', { class: 'muted' }, 'No tool calls in the last hour.')));
@@ -281,7 +290,7 @@ async function toolPage(body, ctx) {
   if (!t) {
     ctx.header({ title: 'No such tool', subtitle: null });
     body.append(ctx.state('empty', { title: 'No such tool', body: 'The gateway offers no tool by that name.' }),
-      h('p', {}, catalogueLink('Back to all tools')));
+      h('p', {}, catalogueLink('Back to all tools', 'keep')));
     return;
   }
   // The plate names the tool; it draws in capitals, and a tool's name is
@@ -296,7 +305,7 @@ async function toolPage(body, ctx) {
     h('p', { class: 'kicker' }, 'Input schema'),
     schemaBlock(t),
     h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' })),
-  h('p', {}, catalogueLink('Back to all tools')));
+  h('p', {}, catalogueLink('Back to all tools', 'keep')));
 }
 
 register('tools', {
