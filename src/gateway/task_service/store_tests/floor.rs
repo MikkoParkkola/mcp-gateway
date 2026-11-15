@@ -232,18 +232,16 @@ async fn s5_a_fault_after_rename_poisons_and_a_retry_is_unavailable() {
 async fn s6_skipped_files_and_the_lease_are_left_alone() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks");
-    let (store, ids) = seeded(&path, 2).await;
+    let (store, ids) = seeded(&path, 3).await;
     store.close().await.unwrap();
     let reserved = path.join(format!("{}.json", ids[1]));
     let mut value: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&reserved).unwrap()).unwrap();
     value["model"]["task"]["lastUpdatedAt"] = serde_json::json!("2026-09-06T00:00:00Z");
     std::fs::write(&reserved, serde_json::to_vec(&value).unwrap()).unwrap();
-    // Owner-only, as the store requires of every file it finds.
-    seed_private(
-        &path.join("task-00000000-0000-4000-8000-000000000001.json"),
-        b"{not json",
-    );
+    // Corrupted in place: an existing record file keeps the owner-only access
+    // the store requires of every record it finds, on Windows too.
+    std::fs::write(path.join(format!("{}.json", ids[2])), b"{not json").unwrap();
     seed_private(&path.join(format!("{}.json.tmp.1.0", ids[0])), b"partial");
     let store = open(&path).await;
     let live = format!("{}.json", ids[0]);
