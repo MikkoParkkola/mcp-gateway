@@ -67,9 +67,37 @@ jobs:
           toolchain: 1.99.1
       - name: Runner
         run: echo "image $ImageOS $ImageVersion, $(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB, $(uname -m)"
+      # P7 (lead 2026-11-15): where the native build's minutes go. A wrapper first on PATH adds --timings to the one
+      # cargo call export-lib makes (shard_tests.py unchanged); the HTML is uploaded below.
+      - name: Add --timings to cargo
+        run: |
+          mkdir -p "$RUNNER_TEMP/cargo-timings-wrap"
+          printf '#!/bin/sh\nexec "%s" "$@" --timings\n' "$(command -v cargo)" > "$RUNNER_TEMP/cargo-timings-wrap/cargo"
+          chmod 755 "$RUNNER_TEMP/cargo-timings-wrap/cargo"
+          echo "$RUNNER_TEMP/cargo-timings-wrap" >> "$GITHUB_PATH"
+      - name: Sample swap and memory pressure during the build
+        run: |
+          (
+            while :; do
+              printf '%s swap %s | %s\n' "$(date -u +%H:%M:%S)" "$(sysctl -n vm.swapusage)" \
+                "$(memory_pressure -Q 2>/dev/null | tail -1)" >> "$RUNNER_TEMP/mac-sampler.log"
+              sleep 30
+            done
+          ) &
       - name: Build the lib test binary
         timeout-minutes: 120
         run: python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
+      - name: Upload the build timings
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-cargo-timings
+          path: target/cargo-timings/cargo-timing.html
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Swap and memory pressure
+        if: always()
+        run: cat "$RUNNER_TEMP/mac-sampler.log" || true
       - name: List and ignored-set hashes
         env:
           BIN: ${{ runner.temp }}/lib-bin/lib-tests
