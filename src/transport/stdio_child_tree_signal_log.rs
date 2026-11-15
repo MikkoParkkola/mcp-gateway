@@ -95,16 +95,21 @@ pub(super) fn injection(pid: Option<Pid>) -> Option<Esrch> {
 }
 
 /// The injected answer: ESRCH, after the leader is killed and seen a zombie
-/// for `Esrch::AfterKillingLeader` (bounded at 30 s).
+/// for `Esrch::AfterKillingLeader` (bounded at 30 s; a setup failure panics by
+/// name rather than reading as a classified kill).
 pub(super) fn answer(mode: Esrch, pid: Option<Pid>) -> std::io::Result<()> {
     if let (Esrch::AfterKillingLeader, Some(pid)) = (mode, pid) {
         use rustix::process::{WaitId, WaitIdOptions, waitid};
-        let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+        // A setup failure is the injection's own, never a classified kill.
+        rustix::process::kill_process(pid, rustix::process::Signal::KILL)
+            .expect("the injected answer kills the leader");
         let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
         let by = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while !matches!(waitid(WaitId::Pid(pid), options), Ok(Some(_)))
-            && std::time::Instant::now() < by
-        {
+        while !matches!(waitid(WaitId::Pid(pid), options), Ok(Some(_))) {
+            assert!(
+                std::time::Instant::now() < by,
+                "the injected answer's leader was not a zombie within 30 s"
+            );
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
