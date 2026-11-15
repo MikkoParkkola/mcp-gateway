@@ -117,6 +117,8 @@ impl ConfigGate {
             inner.replay_owed = true;
         }
         #[cfg(test)]
+        self.seams.call_admit_window();
+        #[cfg(test)]
         self.seams
             .record_decision(inner.state, kind, refusal.is_none());
         if let Some(refusal) = refusal {

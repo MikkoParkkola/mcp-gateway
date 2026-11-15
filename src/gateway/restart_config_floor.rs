@@ -351,6 +351,10 @@ pub(crate) mod seams {
     /// the await; the row's closure drops a test-owned guard synchronously.
     pub(crate) type SettleWindow = Arc<dyn Fn() + Send + Sync>;
 
+    /// Runs inside `admit` after the decision and before it is recorded and
+    /// counted, while the gate's mutex is held: a row parks a submission there.
+    pub(crate) type AdmitWindow = Arc<dyn Fn() + Send + Sync>;
+
     /// One admission decision: the state the gate held at that decision.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) struct GateDecision {
@@ -391,6 +395,7 @@ pub(crate) mod seams {
     pub(crate) struct ConfigGateSeams {
         pub(crate) admitted_hook: Arc<Mutex<Option<AdmittedHook>>>,
         pub(crate) settle_window: Arc<Mutex<Option<SettleWindow>>>,
+        pub(crate) admit_window: Arc<Mutex<Option<AdmitWindow>>>,
         pub(crate) decisions: SeamLog<GateDecision>,
         pub(crate) reloads: SeamLog<ReloadEntry>,
         pub(crate) pokes: SeamLog<WatcherPoke>,
@@ -412,6 +417,14 @@ pub(crate) mod seams {
         /// The settle loop's window: the count read above zero, nothing awaited yet.
         pub(crate) fn call_settle_window(&self) {
             let hook = self.settle_window.lock().unwrap().clone();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+
+        /// The admission's window: decided, not yet recorded or counted.
+        pub(crate) fn call_admit_window(&self) {
+            let hook = self.admit_window.lock().unwrap().clone();
             if let Some(hook) = hook {
                 hook();
             }
@@ -521,6 +534,15 @@ pub(crate) mod seams {
 
         pub(crate) fn set_settle_window(&self, hook: Option<SettleWindow>) {
             *self.seams.settle_window.lock().unwrap() = hook;
+        }
+
+        pub(crate) fn set_admit_window(&self, hook: Option<AdmitWindow>) {
+            *self.seams.admit_window.lock().unwrap() = hook;
+        }
+
+        /// Whether any thread holds the gate's mutex now; never takes it.
+        pub(crate) fn gate_mutex_held(&self) -> bool {
+            self.inner.is_locked()
         }
 
         /// A guard holder calls this at a named point while it holds its guard.

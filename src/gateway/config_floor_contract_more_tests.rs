@@ -12,7 +12,7 @@ use tokio::time::Instant;
 
 use super::seams::{AttemptEvent, LockVerdict, ReloadSource};
 use super::support::{self, Booted};
-use super::{AdmitKind, GateState};
+use super::{AdmitKind, GateState, Refusal};
 use crate::gateway::restart_floor::{CancelReason, FloorAdapter, FloorStage, run_checkpoint};
 
 /// Polls a checkpoint future once: true when it is still pending.
@@ -270,6 +270,61 @@ async fn k10_submission_racing_resume_matches_its_recorded_state() {
     assert!(
         admitted > 0 && refused > 0,
         "{ROW}: both outcomes: {admitted}/{refused}"
+    );
+}
+
+/// K10 lock boundary: the decision and the count are one critical section. A
+/// submission parked at the test-only pause point between them still holds the
+/// gate's mutex, so a racing `resume()` waits behind it: the submission is
+/// decided and recorded under Paused, and only then does the gate reopen.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn k10_admission_decides_and_counts_under_one_lock() {
+    const ROW: &str = "K10 lock";
+    // GIVEN: a paused gate whose pause point reports whether the gate's mutex is
+    // held, then parks the submission until the row releases it
+    let booted = Booted::new(support::BASE);
+    let mut floor = paused(&booted).await;
+    let (reached_tx, reached_rx) = std::sync::mpsc::channel::<bool>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let release_rx = std::sync::Mutex::new(release_rx);
+    let probe = booted.gate.clone();
+    booted.gate.set_admit_window(Some(Arc::new(move || {
+        reached_tx
+            .send(probe.gate_mutex_held())
+            .expect("the row listens");
+        support::recv_bounded(
+            &release_rx.lock().unwrap(),
+            "K10 lock: the submission's release",
+        );
+    })));
+    // WHEN: a Write submission parks at the pause point and resume() starts behind it
+    let gate = booted.gate.clone();
+    let submit = std::thread::spawn(move || gate.admit(AdmitKind::Write).map(drop));
+    let held = support::recv_bounded(&reached_rx, "K10 lock: the submission at the pause point");
+    let resume = std::thread::spawn(move || floor.resume());
+    release_tx.send(()).expect("release the submission");
+    let got = support::join_bounded(submit, "K10 lock: the submission");
+    support::join_bounded(resume, "K10 lock: resume");
+    booted.gate.set_admit_window(None);
+    // THEN: the mutex was held at the pause point, so resume ran only after the
+    // submission was decided, recorded and refused under Paused
+    assert!(
+        held,
+        "{ROW}: the gate's mutex is held between the decision and the count"
+    );
+    let log = booted.gate.decisions();
+    assert_eq!(log.len(), 1, "{ROW}: one decision recorded: {log:?}");
+    assert_eq!(
+        log[0].state,
+        GateState::Paused(1),
+        "{ROW}: decided and recorded under Paused"
+    );
+    assert!(!log[0].admitted, "{ROW}: a write is refused while paused");
+    assert_eq!(got, Err(Refusal::Busy), "{ROW}: the submission's answer");
+    assert_eq!(
+        booted.gate.gate_state(),
+        GateState::Open,
+        "{ROW}: resume reopened the gate after the submission"
     );
 }
 
