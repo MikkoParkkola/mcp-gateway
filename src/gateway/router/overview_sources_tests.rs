@@ -18,6 +18,12 @@ use crate::clock::test_clock;
 use crate::config::{BackendConfig, FailsafeConfig};
 use crate::counters::{Call, CounterStore, Label, MarkerKind, Tally};
 
+/// A reload refused with no backend named and no parser line.
+fn reload_refused(ledger: &crate::config_reload::refusals::RefusalLedger, text: &str) {
+    use crate::config_reload::refusals::RefusalKind;
+    ledger.record(RefusalKind::Reload, None, text, None);
+}
+
 /// 2026-06-15T12:00:00Z.
 pub(super) const NOW: u64 = 1_781_524_800;
 const HOUR: u64 = 3600;
@@ -466,30 +472,15 @@ async fn s12_only_the_newest_invalid_config_is_shown() {
     let (state, dir) = fixture(0, false).await;
     let (context, _path) = with_reload(&state, &dir);
     let ledger = context.refusals();
-    ledger.record(
-        RefusalKind::Reload,
-        None,
-        "Failed to parse config: one",
-        None,
-    );
-    ledger.record(
-        RefusalKind::Reload,
-        None,
-        "Failed to parse config: one",
-        None,
-    );
+    reload_refused(ledger, "Failed to parse config: one");
+    reload_refused(ledger, "Failed to parse config: one");
     ledger.record(
         RefusalKind::Edit,
         Some("edited"),
         "Failed to validate config: two",
         None,
     );
-    ledger.record(
-        RefusalKind::Reload,
-        None,
-        "Failed to parse config: three",
-        None,
-    );
+    reload_refused(ledger, "Failed to parse config: three");
 
     let body = overview(&state).await;
 
@@ -645,12 +636,7 @@ async fn s7b_needs_you_orders_invalid_config_refused_then_limits() {
     inner.meta_mcp = Arc::new(meta);
     let (context, _path) = with_reload(&state, &dir);
     let ledger = context.refusals();
-    ledger.record(
-        RefusalKind::Reload,
-        None,
-        "Failed to parse config: bad",
-        None,
-    );
+    reload_refused(ledger, "Failed to parse config: bad");
     for i in 0..25 {
         ledger.record(
             RefusalKind::Edit,
