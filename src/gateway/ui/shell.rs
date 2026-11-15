@@ -21,12 +21,12 @@ const DOCUMENT: &str = include_str!("shell/index.html");
 /// asset gets a new name and a cached copy can never go stale.
 pub(super) const ASSETS: &[(&str, &[u8])] = &[
     (
-        "activity.94ae64f92d8a.css",
-        include_bytes!("shell/activity.94ae64f92d8a.css"),
+        "activity.20ebcb22bf2b.js",
+        include_bytes!("shell/activity.20ebcb22bf2b.js"),
     ),
     (
-        "activity.b07814b94032.js",
-        include_bytes!("shell/activity.b07814b94032.js"),
+        "activity.94ae64f92d8a.css",
+        include_bytes!("shell/activity.94ae64f92d8a.css"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",

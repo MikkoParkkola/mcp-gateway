@@ -209,10 +209,18 @@ async function statusTab(body, ctx) {
     const next = data?.next_cursor;
     pageCursor = typeof next === 'string' && next ? next : null;
     // A reset cursor starts again from the newest row: what is on screen would show twice.
-    if (!append || data?.cursor_reset === true) rowsEl.replaceChildren();
+    const replace = !append || data?.cursor_reset === true;
+    if (replace) rowsEl.replaceChildren();
+    let added = 0;
     for (const row of rows) {
-      if (row && typeof row.id === 'string') rowsEl.append(rowLink(row));
+      if (row && typeof row.id === 'string') {
+        rowsEl.append(rowLink(row));
+        added += 1;
+      }
     }
+    // Rows added below the reader say so: a screen-reader user would otherwise find
+    // them only by walking the links.
+    if (!replace && added > 0) ctx.announce(`${added} more call${added === 1 ? '' : 's'}.`);
     // Empty only once the list has run out: a page with no rows but a cursor is a scan
     // that stopped short on a sparse filter, and pump() reads on at once.
     empty.replaceChildren();

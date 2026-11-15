@@ -177,22 +177,32 @@ test('A3 search: web.fetch is one request after typing stops, and q is in the UR
   const before = urls.length;
   const box = searchBox(page);
   await box.focus();
-  // The clock is paused, so a debounce timer cannot fire between keys.
-  await box.pressSequentially('web.fetch');
+  // 100 ms between keys: a wait that a key does not restart would end during the
+  // typing (300 ms after the first key) and ask for a prefix.
+  for (const key of 'web.fetch') {
+    await box.press(key);
+    await page.clock.runFor(100);
+  }
   expect(urls.length).toBe(before);
-  // The wait is 300 ms after the last key: nothing at 250 ms, one request by 350 ms.
+  // The wait is 300 ms after the last key (100 ms have passed): nothing at 250 ms,
+  // one request by 350 ms.
   // The search commits by writing q into the address, synchronously in its timer,
   // so the address read inside the page tells whether the wait has ended.
   const committedQ = () => page.evaluate(() => new URLSearchParams(location.search).get('q'));
-  await page.clock.runFor(250);
+  await page.clock.runFor(150);
   expect(await committedQ()).toBeNull();
   expect(urls.length).toBe(before);
   await page.clock.runFor(100);
   expect(await committedQ()).toBe('web.fetch');
   await expect.poll(() => urls.length).toBe(before + 1);
+  // Still one once every timer has had its turn.
+  await page.clock.runFor(1000);
+  expect(urls.length).toBe(before + 1);
   expect(filters(urls.at(-1)).q).toBe('web.fetch');
-  expect(filters(urls.at(-1)).from).toBe(FROM_24H);
-  expect(filters(urls.at(-1)).to).toBe(TO);
+  // A filter change takes its window when it commits: 1.2 s after landing (nine keys
+  // 100 ms apart, then the 300 ms wait), so to is one second on.
+  expect(filters(urls.at(-1)).from).toBe('2026-11-14T12:00:01Z');
+  expect(filters(urls.at(-1)).to).toBe('2026-11-15T12:00:01Z');
   await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('web.fetch');
 });
 
@@ -518,4 +528,30 @@ test('A18 an answer that lands after the user left asks for no further page', as
   // Proving an absence needs a window: the broken code asks within milliseconds of the answer.
   await new Promise((r) => { setTimeout(r, 500); });
   expect(urls.map(byCursor)).toEqual([null]);
+});
+
+test.describe('in Amsterdam', () => {
+  test.use({ timezoneId: 'Europe/Amsterdam' });
+
+  test('A19 times are the browser\'s local clock, and a filter change adds no history entry', async ({ page }) => {
+    const urls = await install(page, { answer: () => list(ROWS) });
+    await open(page, urls, '/ui/activity/status');
+    // 08:05:05Z is 09:05:05 in Amsterdam in November (UTC+1).
+    await expect.poll(async () => (await texts(page))[0]).toBe('09:05:05 ana create_issue ok');
+    const before = await page.evaluate(() => history.length);
+    await page.getByRole('button', { name: 'blocked', exact: true }).click();
+    await expect.poll(() => filters(urls.at(-1)).outcome).toBe('blocked');
+    await expect(page).toHaveURL(/[?&]outcome=blocked/);
+    expect(await page.evaluate(() => history.length)).toBe(before);
+  });
+});
+
+test('A20 a next page says how many calls it added, through the live region', async ({ page }) => {
+  const urls = await install(page, { answer: (url) => (byCursor(url) === 'c2' ? list(PAGE_TWO) : list(PAGE_ONE, 'c2')) });
+  await open(page, urls, '/ui/activity/status');
+  await reachEnd(page);
+  await expect.poll(() => texts(page)).toEqual([...TEXT_ONE, ...TEXT_TWO]);
+  // The announcer writes after its dwell; the clock is paused.
+  await page.clock.runFor(2000);
+  await expect.poll(() => page.locator('#announcer').textContent()).toContain('2 more calls.');
 });
