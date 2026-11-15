@@ -5,8 +5,8 @@
 //! checkpoint certifies the literal bytes once the work is released.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, channel};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 
 use futures::future::BoxFuture;
 use tokio::time::Instant;
@@ -17,10 +17,12 @@ use super::{AdmitKind, ConfigFloor, ConfigGate, FloorFault};
 use crate::gateway::restart_floor::FloorAdapter;
 
 /// Work parked at one named point: the hook reports it was reached, then waits
-/// for `release`. Only the first call at the point is held.
+/// for `release`, at most `BOUND`. Only the first call at the point is held. A
+/// row that fails before it releases frees the holder when its `Hold` drops, so
+/// a parked worker never keeps the test's runtime from shutting down.
 struct Hold {
     reached: Receiver<()>,
-    release: Arc<Barrier>,
+    release: Sender<()>,
 }
 
 fn hold_at(gate: &ConfigGate, point: AdmittedPoint) -> Hold {
@@ -35,8 +37,9 @@ fn hold_with_panic(
 ) -> Hold {
     let (tx, reached) = channel();
     let tx = Mutex::new(tx);
-    let release = Arc::new(Barrier::new(2));
-    let (gate_release, taken) = (Arc::clone(&release), AtomicBool::new(false));
+    let (release, release_rx) = channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let taken = AtomicBool::new(false);
     let died = AtomicBool::new(false);
     gate.set_admitted_hook(Some(Arc::new(move |at| {
         let panic_now = Some(at) == panic_at && !died.swap(true, Ordering::SeqCst);
@@ -46,7 +49,7 @@ fn hold_with_panic(
         );
         if at == point && !taken.swap(true, Ordering::SeqCst) {
             tx.lock().unwrap().send(()).ok();
-            gate_release.wait();
+            let _ = release_rx.lock().unwrap().recv_timeout(BOUND);
         }
     })));
     Hold { reached, release }
@@ -58,7 +61,13 @@ impl Hold {
     }
 
     fn release(&self) {
-        self.release.wait();
+        self.release.send(()).ok();
+    }
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        self.release.send(()).ok();
     }
 }
 
