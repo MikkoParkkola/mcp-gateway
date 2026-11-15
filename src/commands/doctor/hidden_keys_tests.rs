@@ -385,7 +385,11 @@ fn a_newly_hidden_key_and_variable_still_take_effect_and_doctor_names_the_key() 
     use crate::gateway::test_helpers::write_owner_only;
     let dir = crate::test_dir_keep::kept_tempdir();
     let env = dir.path().join("hidden.env");
-    write_owner_only(&env, "MCP_GATEWAY_SERVER__PORT=39641\n").expect("env file");
+    write_owner_only(
+        &env,
+        "MCP_GATEWAY_SERVER__PUBLIC_URL=https://gw-9641.example\n",
+    )
+    .expect("env file");
     let path = dir.path().join("gateway.yaml");
     let config = format!(
         "env_files:\n  - '{}'\nsecurity:\n  tool_policy:\n    deny: ['sentinel_tool_9641']\n    log_denied: false\n",
@@ -394,8 +398,11 @@ fn a_newly_hidden_key_and_variable_still_take_effect_and_doctor_names_the_key() 
     write_owner_only(&path, config).expect("config");
     let cfg =
         crate::config::Config::load(Some(&path)).expect("a config with hidden settings loads");
-    // The variable's effect: the overlay sets the listen port.
-    assert_eq!(cfg.server.port, 39641);
+    // The variable's effect: the overlay sets the public URL.
+    assert_eq!(
+        cfg.server.public_url.as_deref(),
+        Some("https://gw-9641.example")
+    );
     // The key's effect: a denied call writes no warning, where the default
     // writes one.
     let warnings = |policy: &crate::security::policy::ToolPolicy| {
@@ -440,16 +447,39 @@ fn a_hand_written_api_key_kind_is_not_a_hidden_setting() {
     assert_eq!(set_hidden_keys(&raw), vec!["auth.api_keys[].cli_host"]);
 }
 
-/// A `cache` section holding only the retired `enabled` switch applies no
-/// hidden setting, so doctor names none; a real cache setting is named.
+/// A hidden section holding only a retired key applies no hidden setting, so
+/// doctor names none, while the loader still warns about the retired key.
 #[test]
-fn a_retired_cache_switch_alone_names_no_hidden_setting() {
-    let raw = yaml("cache:\n  enabled: false\n");
+fn a_section_holding_only_a_retired_key_names_no_hidden_setting() {
+    use crate::gateway::test_helpers::write_owner_only;
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, "cache:\n  enabled: false\n").expect("config");
     assert!(
-        set_hidden_keys(&raw).is_empty(),
-        "{:?}",
-        set_hidden_keys(&raw)
+        check_hidden_keys(&path).is_none(),
+        "doctor names no hidden cache setting"
     );
-    let raw = yaml("cache:\n  enabled: false\n  max_entries: 10\n");
-    assert_eq!(set_hidden_keys(&raw), vec!["cache.max_entries"]);
+    let logs = crate::test_log_capture::records(|| {
+        assert!(crate::config::Config::load(Some(&path)).is_ok(), "loads");
+    });
+    assert_eq!(
+        crate::test_log_capture::count(&logs, "WARN", "`cache.enabled` is ignored since 4.0"),
+        1,
+        "the loader's retired-key warning still fires: {logs:?}"
+    );
+}
+
+/// A real hidden key in that section is named, with or without the retired one.
+#[test]
+fn a_real_hidden_key_beside_a_retired_one_is_named() {
+    for text in [
+        "cache:\n  max_entries: 10\n",
+        "cache:\n  enabled: false\n  max_entries: 10\n",
+    ] {
+        assert_eq!(
+            set_hidden_keys(&yaml(text)),
+            vec!["cache.max_entries"],
+            "{text}"
+        );
+    }
 }

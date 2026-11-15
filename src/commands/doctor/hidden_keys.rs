@@ -45,6 +45,7 @@ pub(super) const HIDDEN_CONFIG_KEYS: &[&str] = &[
     "backends.<name>.protocol_version",
     "backends.<name>.streamable_http",
     "backends.<name>.ws_url",
+    "cache",
     "cache.default_ttl",
     "cache.max_entries",
     "capabilities.files.downloads_quota_bytes",
@@ -127,12 +128,17 @@ pub(super) const HIDDEN_CONFIG_KEYS: &[&str] = &[
 ];
 
 /// Hidden keys that `config` sets, in table order. A key is left out when a
-/// longer key under it is also set, so a section and its field are not both named.
+/// longer key under it is also set, so a section and its field are not both
+/// named, and a section holding only retired keys is not set: the loader
+/// ignores those and warns about each itself.
 pub(super) fn set_hidden_keys(config: &Dict) -> Vec<&'static str> {
     let set: Vec<&'static str> = HIDDEN_CONFIG_KEYS
         .iter()
         .copied()
-        .filter(|key| is_set(config, &key.split('.').collect::<Vec<_>>()))
+        .filter(|key| {
+            let path: Vec<&str> = key.split('.').collect();
+            is_set(config, &path) && !holds_only_retired(config, &path)
+        })
         .collect();
     set.iter()
         .copied()
@@ -144,6 +150,33 @@ pub(super) fn set_hidden_keys(config: &Dict) -> Vec<&'static str> {
             })
         })
         .collect()
+}
+
+/// Whether the section at the plain `path` (no `<name>` or `[]` segment)
+/// holds keys and every one is retired, so it applies no hidden setting.
+fn holds_only_retired(config: &Dict, path: &[&str]) -> bool {
+    if path
+        .iter()
+        .any(|seg| *seg == "<name>" || seg.ends_with("[]"))
+    {
+        return false;
+    }
+    let mut map = config;
+    for (at, seg) in path.iter().enumerate() {
+        let Some(Value::Dict(_, inner)) = map.get(*seg) else {
+            return false;
+        };
+        if at + 1 < path.len() {
+            map = inner;
+            continue;
+        }
+        return !inner.is_empty()
+            && inner.keys().all(|key| {
+                let full: Vec<&str> = path.iter().copied().chain([key.as_str()]).collect();
+                crate::config::is_retired_key(&full)
+            });
+    }
+    false
 }
 
 /// Whether `map` holds something at `path`. `<name>` matches any map key; a
