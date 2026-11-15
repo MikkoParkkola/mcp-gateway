@@ -161,10 +161,14 @@ impl ReloadContext {
                 self.reporting.tally.applied();
             }
             Err(refusal) => {
+                // The text is all that is left: the typed YAML error was
+                // flattened to a string before this reload could see it, so
+                // there is no line to pass.
                 refusals.record(
                     crate::config_reload::refusals::RefusalKind::Reload,
                     None,
                     &refusal.text,
+                    None,
                 );
                 self.reporting.tally.refused();
             }

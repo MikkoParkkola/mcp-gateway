@@ -58,6 +58,14 @@ pub struct Refusal {
     pub active: bool,
     /// How many times this same refusal was recorded in a row.
     pub repeats: u32,
+    /// Syntax line of a YAML refusal. Omitted while unset: a line quotes no
+    /// configured value, but the ledger does not store one yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    /// When the configuration still running was applied. Omitted while unset:
+    /// only an invalid-config reload carries it, and nothing fills it yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub running_since: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// What every reload context of one gateway reports into: one refusal ledger,
@@ -165,7 +173,18 @@ impl RefusalLedger {
     /// Record a refused reload or admin write from its error text. A refusal
     /// caused by shutdown is not recorded: nothing about the config is wrong.
     /// `backend_hint` names the backend an add or edit was for.
-    pub fn record(&self, kind: RefusalKind, backend_hint: Option<&str>, error: &str) {
+    ///
+    /// `line` is the syntax refusal's line when the caller still holds the
+    /// typed parse error. It is dropped: nothing served reads it yet, so a
+    /// caller can pass it without changing the record.
+    pub fn record(
+        &self,
+        kind: RefusalKind,
+        backend_hint: Option<&str>,
+        error: &str,
+        line: Option<u32>,
+    ) {
+        let _ = line;
         if super::reload_failure(error) == super::ReloadFailure::ShuttingDown {
             return;
         }
@@ -260,6 +279,8 @@ impl RefusalLedger {
                     fix: e.fix,
                     active: is_active(e, inner.reload_applied, written),
                     repeats: e.repeats,
+                    line: None,
+                    running_since: None,
                 }
             })
             .collect()
@@ -302,6 +323,8 @@ pub(crate) fn startup_refusal(
         fix,
         active: true,
         repeats: 1,
+        line: None,
+        running_since: None,
     }
 }
 
@@ -439,3 +462,7 @@ impl super::ReloadContext {
 #[cfg(test)]
 #[path = "refusals_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "refusals_file_line_tests.rs"]
+mod file_line_tests;
