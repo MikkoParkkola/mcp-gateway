@@ -103,8 +103,9 @@ async function open(page, urls, path) {
 
 const list = (rows, next = null) => ({ rows, next_cursor: next });
 
+// Named for what the API's q matches: a tool name, or a call's exact trace id.
 const searchBox = (page) => {
-  const name = { name: 'Call id, tool, key or rule' };
+  const name = { name: 'Tool or trace id', exact: true };
   return page.getByRole('searchbox', name).or(page.getByRole('textbox', name));
 };
 

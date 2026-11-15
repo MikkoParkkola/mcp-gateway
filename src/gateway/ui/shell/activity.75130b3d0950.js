@@ -104,8 +104,10 @@ async function statusTab(body, ctx) {
   const search = h('input', {
     class: 'input activity-search',
     type: 'search',
-    'aria-label': 'Call id, tool, key or rule',
-    placeholder: 'Call id, tool, key or rule',
+    // What q matches today (a tool name, or a call's exact trace id), not the frame's
+    // "Call id, tool, key or rule": a key or a rule typed here would find nothing.
+    'aria-label': 'Tool or trace id',
+    placeholder: 'Tool or trace id',
     autocomplete: 'off',
     spellcheck: 'false',
   });
