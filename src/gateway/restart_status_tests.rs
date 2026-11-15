@@ -309,13 +309,13 @@ fn call(board: &RestartBoard, c: Call) {
         Call::Accept => {
             board.accept();
         }
-        Call::Checkpoint => board.checkpoint(cur(&board), CHECKPOINT_DL),
-        Call::Cancel => board.cancel(cur(&board), RestartCancel::StopSignal),
-        Call::Commit => board.commit(cur(&board), STOP_DL),
-        Call::Restarting => board.restarting(cur(&board)),
-        Call::Saving => board.saving(cur(&board)),
-        Call::Draining => board.draining(cur(&board)),
-        Call::SetRemaining => board.set_remaining_calls(cur(&board), 3),
+        Call::Checkpoint => board.checkpoint(cur(board), CHECKPOINT_DL),
+        Call::Cancel => board.cancel(cur(board), RestartCancel::StopSignal),
+        Call::Commit => board.commit(cur(board), STOP_DL),
+        Call::Restarting => board.restarting(cur(board)),
+        Call::Saving => board.saving(cur(board)),
+        Call::Draining => board.draining(cur(board)),
+        Call::SetRemaining => board.set_remaining_calls(cur(board), 3),
     }
 }
 
@@ -482,21 +482,22 @@ fn second_attempt(stage: RestartPhase, committed: bool) -> RestartBoard {
 /// changes it, each staged where that call visibly applies.
 #[test]
 fn a_call_for_an_earlier_attempt_never_moves_the_current_one() {
-    let cases: [(&str, RestartPhase, bool, fn(&RestartBoard, u64)); 6] = [
+    type Case = (&'static str, RestartPhase, bool, fn(&RestartBoard, u64));
+    let cases: [Case; 6] = [
         ("checkpoint", RestartPhase::Accepted, false, |b, id| {
-            b.checkpoint(id, CHECKPOINT_DL)
+            b.checkpoint(id, CHECKPOINT_DL);
         }),
         ("cancel", RestartPhase::Accepted, false, |b, id| {
-            b.cancel(id, RestartCancel::Recheck)
+            b.cancel(id, RestartCancel::Recheck);
         }),
         ("restarting", RestartPhase::Checkpoint, true, |b, id| {
-            b.restarting(id)
+            b.restarting(id);
         }),
         ("saving", RestartPhase::Checkpoint, true, |b, id| {
-            b.saving(id)
+            b.saving(id);
         }),
         ("draining", RestartPhase::Checkpoint, true, |b, id| {
-            b.draining(id)
+            b.draining(id);
         }),
         (
             "set_remaining_calls",

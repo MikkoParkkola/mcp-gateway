@@ -126,6 +126,11 @@ pub(crate) fn rows<S: SlotUnderTest>(make: impl Fn(Arc<RestartBoard>) -> S) {
         "activate before accept: the slot is free"
     );
 
+    accepted_rows(&fresh);
+}
+
+/// The contract rows that accept an attempt, on slots from `fresh`.
+fn accepted_rows<S: SlotUnderTest>(fresh: &dyn Fn() -> (S, Arc<RestartBoard>)) {
     // Accept is the board's id, from 1, the same id again.
     let (slot, board) = fresh();
     let mut first = slot.try_reserve().expect("accept: reserves");

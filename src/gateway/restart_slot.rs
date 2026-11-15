@@ -129,7 +129,7 @@ impl Reservation {
 
 impl Drop for Reservation {
     /// Not activated and not refused: frees the slot; an accepted attempt is
-    /// recorded as cancelled with AuditRefused first (the backstop). Finished
+    /// recorded as cancelled with `AuditRefused` first (the backstop). Finished
     /// does nothing, so no path frees twice.
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, State::Finished) {
