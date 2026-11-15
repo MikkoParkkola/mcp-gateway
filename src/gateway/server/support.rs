@@ -349,6 +349,7 @@ where
 pub(super) fn shutdown_signal(
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
+    // invariant: every caller runs on the gateway's runtime, built with enable_all, so its signal driver is on, and SIGINT and SIGTERM are always valid signals to register.
     #[cfg(unix)]
     let (mut interrupt, mut terminate) = (
         signal::unix::signal(signal::unix::SignalKind::interrupt())
@@ -356,6 +357,7 @@ pub(super) fn shutdown_signal(
         signal::unix::signal(signal::unix::SignalKind::terminate())
             .expect("Failed to install SIGTERM handler"),
     );
+    // invariant: every caller runs on the gateway's runtime, and the console Ctrl+C handler always registers there.
     #[cfg(windows)]
     let mut ctrl_c = signal::windows::ctrl_c().expect("Failed to install Ctrl+C handler");
 
