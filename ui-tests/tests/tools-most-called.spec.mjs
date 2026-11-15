@@ -253,6 +253,8 @@ test('M13: keys typed while the catalogue reads its tools all land', async ({ pa
   await expect(search(page)).toHaveValue('birch');
   await expect(search(page)).toBeFocused();
   await expect.poll(() => catalogueNames(page)).toEqual(['birch']);
+  // The catalogue drew from the panel's read: one read in all.
+  expect(reads).toBe(1);
 });
 
 test('M14: a count the API did not measure is never shown as a number', async ({ page }) => {
@@ -288,6 +290,13 @@ test('M16: text still being composed (an input method) does not leave the panel'
   await page.locator('#tools-search').dispatchEvent('compositionstart');
   await compose('ｂ', true);
   // Two timer turns: the jump is queued on one, so after two it would have run.
+  await page.evaluate(() => new Promise((r) => setTimeout(() => setTimeout(r, 0), 0)));
+  await expect(page).toHaveURL('/ui/tools/status');
+  // Enter that confirms a composition is not a submit.
+  await page.locator('#tools-search').evaluate((el) => {
+    el.value = '';
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true }));
+  });
   await page.evaluate(() => new Promise((r) => setTimeout(() => setTimeout(r, 0), 0)));
   await expect(page).toHaveURL('/ui/tools/status');
   await page.locator('#tools-search').dispatchEvent('compositionend');

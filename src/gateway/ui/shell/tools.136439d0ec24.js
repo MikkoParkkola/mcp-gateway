@@ -142,13 +142,14 @@ function mostCalled(body, read) {
   const search = searchBox(list);
   // Typing, or Enter in an empty box, leaves this panel for the catalogue.
   search.addEventListener('input', (ev) => {
-    filters.query = search.value;
-    // An input method's text is not typed until it is committed.
+    // An input method's text is not typed until it is committed: neither the
+    // query nor the jump sees it before then.
     if (ev.isComposing) return;
+    filters.query = search.value;
     queueCatalogue(search, read);
   });
   search.addEventListener('keydown', (ev) => {
-    if (ev.key !== 'Enter' || search.value !== '') return;
+    if (ev.isComposing || ev.key !== 'Enter' || search.value !== '') return;
     ev.preventDefault();
     filters.query = '';
     queueCatalogue(search, read);
