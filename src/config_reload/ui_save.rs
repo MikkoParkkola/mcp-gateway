@@ -24,7 +24,11 @@ use crate::config_reload::{ReloadContext, ReloadOutcome};
 use crate::secret_store::{NewSecretOwned, SaveError, SecretStore, StoreError, Vault};
 use crate::wiped_bytes::WipedBytes;
 
-use super::ui_diff::{LOADER_REFUSED, PreviewRefused, Shown, UiRefused, changes_for, ui_diff};
+use crate::gateway::restart_config_floor::Refusal;
+
+use super::ui_diff::{
+    BusyReason, LOADER_REFUSED, PreviewRefused, Shown, UiRefused, changes_for, ui_diff,
+};
 use super::{
     AuditPosture, Expected, FileRevision, IntentKind, Replace, ReplaceError, Replaced, SecretStep,
     replace_audited,
@@ -235,7 +239,11 @@ fn map_error(error: ReplaceError, halt: Option<Halt>) -> Mapped {
         // way the audit the save requires is not there, and nothing was
         // written (the adopt route answers both alike).
         ReplaceError::NoAuditLog | ReplaceError::AuditRefused(_) => UiRefused::NoAuditLog,
-        ReplaceError::Busy => UiRefused::Busy,
+        ReplaceError::Busy => UiRefused::Busy(BusyReason::Locked),
+        ReplaceError::Gated(Refusal::Busy | Refusal::ReplayOwed) => {
+            UiRefused::Busy(BusyReason::Restart)
+        }
+        ReplaceError::Gated(down) => UiRefused::Down(down),
         ReplaceError::Secrets(SaveError::Refused(e) | SaveError::Store(e)) => match e {
             StoreError::Failed(_) => UiRefused::Failed(FAILED.to_owned()),
             StoreError::TimedOut => UiRefused::SecretsRefused { timeout: true },

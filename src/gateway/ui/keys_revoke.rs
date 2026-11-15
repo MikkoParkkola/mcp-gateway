@@ -14,7 +14,7 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 
 use super::config_file::{Gateway, read_gateway};
-use super::errors::{flat_error, stale, structured_error};
+use super::errors::{flat_error, gate_refusal, stale, structured_error};
 use super::guard::Guard;
 use crate::config_persistence::keyedit::{Change, FieldPath, Segment, edit_in_place};
 use crate::config_reload::{
@@ -173,6 +173,7 @@ fn revoke_response(name: &str, result: Result<serde_json::Value, ReplaceError>) 
 fn refused(name: &str, error: ReplaceError) -> Response {
     let (status, message) = match error {
         ReplaceError::Stale { current } => return stale(&current).into_response(),
+        ReplaceError::Gated(refusal) => return gate_refusal(refusal),
         ReplaceError::Busy => (
             StatusCode::SERVICE_UNAVAILABLE,
             "the config is being written; retry",

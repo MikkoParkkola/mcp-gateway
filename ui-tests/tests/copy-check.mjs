@@ -10,6 +10,13 @@ import { fileURLToPath } from 'node:url';
 export const SHELL_DIR = fileURLToPath(new URL('../../src/gateway/ui/shell/', import.meta.url));
 const TABS = ['status', 'actions', 'settings'];
 const ID = /^[a-z0-9-]+\.(status|actions|settings)\.[a-z0-9-]+$/;
+// The copy asset's bookkeeping keys, never copy entries. `_pending` lists ids by
+// page while the page or tab is unbuilt; `_pending_later` maps an id under a
+// built tab to the part of the page that will draw it, so a page can land part
+// by part. Before cutover both must be empty (the pending list's own check).
+const META = new Set(['_pending', '_pending_later']);
+// A part is named in plain words; the length cap keeps it a name, not a note.
+const PART_MAX = 60;
 
 /** The text inside `tabs: { … }` of the register() call at `from`, braces balanced; null when absent. */
 function tabsBlock(src, from) {
@@ -101,8 +108,12 @@ export function scanScreens(sources) {
 export function shapeProblems(copy) {
   const out = [];
   const str = (v) => typeof v === 'string' && v.trim() !== '';
+  const later = copy._pending_later;
+  if (later !== undefined && (!later || typeof later !== 'object' || Array.isArray(later))) {
+    out.push('_pending_later: not an object');
+  }
   for (const [id, e] of Object.entries(copy)) {
-    if (id === '_pending') continue;
+    if (META.has(id)) continue;
     if (!e || typeof e !== 'object' || Array.isArray(e)) { out.push(`${id}: not an object`); continue; }
     const extra = Object.keys(e).filter((k) => !['title', 'text', 'rows'].includes(k));
     if (extra.length) out.push(`${id}: unexpected key ${extra.join(', ')}`);
@@ -120,14 +131,18 @@ export function shapeProblems(copy) {
 
 /**
  * C1 and C2, by page and tab: an id drawn by a screen must have copy; a copy id
- * must be drawn, or pending because its page is unregistered or its tab is null.
+ * must be drawn, or pending because its page is unregistered or its tab is null,
+ * or pending-later under a built tab, naming the part of the page that draws it.
  */
 export function pairingProblems(copy, { drawn, nonLiteral, tabs }) {
   const out = [];
   if (nonLiteral) out.push(`${nonLiteral} tip() call(s) with a non-literal id`);
   const pending = new Set(Object.values(copy._pending ?? {}).flat());
-  const ids = Object.keys(copy).filter((k) => k !== '_pending');
-  for (const id of [...drawn, ...ids, ...pending]) if (!ID.test(id)) out.push(`${id}: not <page>.<tab>.<subject>`);
+  const later = copy._pending_later ?? {};
+  const ids = Object.keys(copy).filter((k) => !META.has(k));
+  for (const id of [...drawn, ...ids, ...pending, ...Object.keys(later)]) {
+    if (!ID.test(id)) out.push(`${id}: not <page>.<tab>.<subject>`);
+  }
   for (const id of drawn) if (!(id in copy)) out.push(`${id}: drawn with no copy`);
   for (const id of ids) {
     const [page, tab] = id.split('.');
@@ -136,8 +151,19 @@ export function pairingProblems(copy, { drawn, nonLiteral, tabs }) {
       if (pending.has(id)) out.push(`${id}: drawn but still listed as pending`);
       continue;
     }
+    if (Object.hasOwn(later, id)) continue; // judged with the pending-later map below
     if (!pending.has(id)) out.push(`${id}: neither drawn nor pending`);
     else if (built) out.push(`${id}: pending under built ${page}.${tab}`);
+  }
+  for (const [id, part] of Object.entries(later)) {
+    const [page, tab] = id.split('.');
+    if (pending.has(id)) out.push(`${id}: pending twice`);
+    else if (!(id in copy)) out.push(`${id}: pending-later with no copy`);
+    else if (drawn.has(id)) out.push(`${id}: pending-later but drawn`);
+    else if (tabs[page]?.[tab] !== true) out.push(`${id}: pending-later under unbuilt ${page}.${tab}, list it in _pending`);
+    else if (typeof part !== 'string' || part.trim() === '' || part.length > PART_MAX) {
+      out.push(`${id}: pending-later names no part`);
+    }
   }
   for (const id of pending) if (!(id in copy)) out.push(`${id}: pending with no copy`);
   return out;

@@ -21,7 +21,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::super::errors::{
-    config_path_unavailable, config_refusal, flat_error, no_config_file, stale, structured_error,
+    config_path_unavailable, config_refusal, flat_error, gate_refusal, no_config_file, stale,
+    structured_error,
 };
 use super::super::guard::Guard;
 use super::super::secret_slots::{self, Store, Unopened};
@@ -116,6 +117,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         // An add always changes the bytes; unchanged ones mean nothing was added.
         Ok(ReplaceOutcome { revision: None, .. }) => failed("unchanged"),
         Err(ReplaceError::Stale { current }) => stale(&current).into_response(),
+        Err(ReplaceError::Gated(refusal)) => gate_refusal(refusal),
         Err(ReplaceError::Busy) => fixed(
             StatusCode::SERVICE_UNAVAILABLE,
             "the config is being written; retry",
