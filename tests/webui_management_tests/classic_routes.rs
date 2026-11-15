@@ -106,10 +106,43 @@ fn handler_answered(method: &Method, path: &str, answer: &Answer) -> bool {
         return media(&answer.content_type) == "text/yaml" && !answer.body.is_empty();
     }
     let json = media(&answer.content_type) == "application/json";
-    if answer.status == StatusCode::NOT_FOUND || answer.status == StatusCode::METHOD_NOT_ALLOWED {
-        return json && serde_json::from_slice::<Value>(&answer.body).is_ok();
+    // A 204 carries no body by definition; every other JSON answer must parse,
+    // so a JSON header on an empty or garbled body is not taken for a handler.
+    if answer.status == StatusCode::NO_CONTENT {
+        return json;
     }
-    json
+    json && serde_json::from_slice::<Value>(&answer.body).is_ok()
+}
+
+/// Every quoted `/ui/api/` path the page names, as a route: `${...}` or a literal
+/// ending in `/` (concatenated with a name) becomes `{name}`, a query is dropped.
+fn paths_named_in(page: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for quote in ['\'', '"', '`'] {
+        let needle = format!("{quote}/ui/api/");
+        let mut rest = page;
+        while let Some(at) = rest.find(&needle) {
+            let body = &rest[at + 1..];
+            let end = body.find(quote).unwrap_or(body.len());
+            out.push(route_of(&body[..end]));
+            rest = &body[end..];
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn route_of(literal: &str) -> String {
+    let path = literal.split('?').next().unwrap_or(literal);
+    let path = path
+        .find("${")
+        .map_or(path.to_owned(), |at| format!("{}{{name}}", &path[..at]));
+    if path.ends_with('/') {
+        format!("{path}{{name}}")
+    } else {
+        path
+    }
 }
 
 fn concrete(path: &str) -> String {
@@ -162,9 +195,10 @@ fn payload(method: &str, path: &str) -> Option<(&'static str, String)> {
             "application/json",
             json!({"yaml": VALID_YAML, "name": CAPABILITY}).to_string(),
         )),
-        ("POST", "/ui/api/key-server/audit/lookup-email") => {
-            Some(("application/json", json!({"email": "admin@example.com"}).to_string()))
-        }
+        ("POST", "/ui/api/key-server/audit/lookup-email") => Some((
+            "application/json",
+            json!({"email": "admin@example.com"}).to_string(),
+        )),
         ("POST", "/ui/api/import/openapi") | ("POST", "/ui/api/import/openapi/preview") => {
             Some(("application/json", "{}".to_string()))
         }
@@ -515,6 +549,14 @@ async fn classic_page_lists_these_api_calls() {
     found.sort();
     found.dedup();
     assert_eq!(found, owned_calls(CALLS));
+    // A call written in a fourth shape would escape the extractor; every path the
+    // page names must be one the extracted calls cover.
+    for path in paths_named_in(&page) {
+        assert!(
+            found.iter().any(|(_, p)| *p == path),
+            "{path} is named in the page but no extracted call reaches it"
+        );
+    }
 }
 
 // ── K2 ───────────────────────────────────────────────────────────────────────
@@ -537,7 +579,9 @@ async fn each_listed_call_is_answered_by_its_handler() {
         let verb = Method::from_bytes(method.as_bytes()).unwrap();
         let uri = concrete(path);
         let owned = payload(method, path);
-        let body = owned.as_ref().map(|(content_type, text)| (*content_type, text.as_str()));
+        let body = owned
+            .as_ref()
+            .map(|(content_type, text)| (*content_type, text.as_str()));
         let answer = exchange(&router, verb.clone(), &uri, body).await;
         assert!(
             handler_answered(&verb, &uri, &answer),
@@ -546,6 +590,15 @@ async fn each_listed_call_is_answered_by_its_handler() {
             answer.content_type,
             String::from_utf8_lossy(&answer.body[..answer.body.len().min(180)]),
         );
+        // The {name} routes after this address what the creates made: a failed
+        // create would leave them answering a handler's 404, and still pass.
+        if is_create((method, path)) {
+            assert!(
+                answer.status.is_success(),
+                "{method} {path} must create, got {}",
+                answer.status
+            );
+        }
     }
 }
 
@@ -564,7 +617,8 @@ async fn the_answer_check_rejects_an_unknown_get_and_a_wrong_method() {
         assert!(
             !handler_answered(&method, path, &answer),
             "{method} {path} was accepted as a handler: {} {}",
-            answer.status, answer.content_type,
+            answer.status,
+            answer.content_type,
         );
     }
     // A handler that answers JSON but fails does not count as a working route.
