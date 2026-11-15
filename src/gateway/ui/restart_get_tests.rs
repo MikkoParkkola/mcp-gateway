@@ -38,7 +38,13 @@ const SCOPED: &str = "restart-scoped";
 enum Gateway {
     /// Auth on, an unscoped admin key, and a transparency log.
     AuthWithLog,
+    /// Auth on, the admin keys, and no transparency log: a state config
+    /// validation refuses (auth on requires the log), built only so the
+    /// readiness check for a missing log stays covered.
+    AuthWithoutLog,
     /// Auth off and no transparency log, the only config that allows it.
+    /// Every caller is anonymous there, so the admin-only restart routes
+    /// refuse each request.
     AuthOffNoLog,
 }
 
@@ -114,14 +120,16 @@ fn confirm(
 
 async fn fixture(gateway: Gateway, registry: Option<RestartConfirm>) -> Fixture {
     let auth: AuthConfig = match gateway {
-        Gateway::AuthWithLog => serde_json::from_value(json!({"enabled": true, "api_keys": [{
-            "key_sha256": crate::config::api_key_digest_spec(ADMIN.as_bytes()),
-            "name": ADMIN, "admin": true, "backends": ["*"]
-        }, {
-            "key_sha256": crate::config::api_key_digest_spec(SCOPED.as_bytes()),
-            "name": SCOPED, "admin": true, "backends": ["alpha"]
-        }]}))
-        .unwrap(),
+        Gateway::AuthWithLog | Gateway::AuthWithoutLog => {
+            serde_json::from_value(json!({"enabled": true, "api_keys": [{
+                "key_sha256": crate::config::api_key_digest_spec(ADMIN.as_bytes()),
+                "name": ADMIN, "admin": true, "backends": ["*"]
+            }, {
+                "key_sha256": crate::config::api_key_digest_spec(SCOPED.as_bytes()),
+                "name": SCOPED, "admin": true, "backends": ["alpha"]
+            }]}))
+            .unwrap()
+        }
         Gateway::AuthOffNoLog => AuthConfig::default(),
     };
     let audit = crate::test_dir_keep::kept_tempdir();
@@ -146,7 +154,7 @@ async fn fixture(gateway: Gateway, registry: Option<RestartConfirm>) -> Fixture 
     Fixture {
         router: create_router(Arc::clone(&state)),
         state,
-        admin: matches!(gateway, Gateway::AuthWithLog),
+        admin: !matches!(gateway, Gateway::AuthOffNoLog),
         _audit: audit,
         _store: store,
     }
@@ -223,13 +231,15 @@ async fn restart_switched_off_mints_nothing_even_when_ready() {
     assert_eq!(body["reason"], "restart_not_available", "{body}");
 }
 
-// T-NOLOG-GET (lead): auth off and no transparency log, everything else
-// ready: `audit_log_required` is the only reason left.
+// T-NOLOG-GET (lead), readiness half: no transparency log, everything else
+// ready: `audit_log_required` is the only reason left. Shown on an auth-on
+// state with no log, which config refuses; the real auth-off gateway is the
+// next row.
 #[tokio::test]
 async fn no_transparency_log_answers_audit_log_required() {
     let inv = ready_invocation();
     let script = samples(&[Some(sample(0, 10))]);
-    let fx = fixture(Gateway::AuthOffNoLog, Some(confirm(&inv, &script))).await;
+    let fx = fixture(Gateway::AuthWithoutLog, Some(confirm(&inv, &script))).await;
     let (body, _) = get(&fx, "?confirm=1").await;
     assert_eq!(body["available"], false, "{body}");
     assert_eq!(body["reason"], "audit_log_required", "{body}");
@@ -389,7 +399,7 @@ async fn the_platform_reason_comes_before_the_missing_log() {
     let inv = ready_invocation();
     let script = samples(&[Some(sample(0, 1))]);
     let rc = confirm(&inv, &script).with_platform(Platform::Windows);
-    let fx = fixture(Gateway::AuthOffNoLog, Some(rc)).await;
+    let fx = fixture(Gateway::AuthWithoutLog, Some(rc)).await;
     let (body, _) = get(&fx, "").await;
     assert_eq!(body["reason"], "windows_manual_restart", "{body}");
     // Restart off, or no restart target, also comes before the missing log.
@@ -406,7 +416,7 @@ async fn the_platform_reason_comes_before_the_missing_log() {
         if off {
             rc = rc.switched_off();
         }
-        let fx = fixture(Gateway::AuthOffNoLog, Some(rc)).await;
+        let fx = fixture(Gateway::AuthWithoutLog, Some(rc)).await;
         let (body, _) = get(&fx, "").await;
         assert_eq!(body["reason"], "restart_not_available", "{name}: {body}");
     }
@@ -581,4 +591,28 @@ async fn a_minting_get_carries_exactly_available_recent_writes_and_confirm() {
     let mut rest = minted.clone();
     rest.as_object_mut().expect("an object").remove("confirm");
     assert_eq!(rest, plain, "confirm is the only member the mint adds");
+}
+
+// T-NOLOG-GET (lead), route half: the real gateway with no transparency log
+// is an auth-off one, where every caller is anonymous; the admin-only restart
+// GET refuses each request, so no confirmation the POST would refuse is ever
+// offered.
+#[tokio::test]
+async fn an_auth_off_gateway_refuses_every_restart_get() {
+    let inv = ready_invocation();
+    let script = samples(&[Some(sample(0, 1)); 2]);
+    let fx = fixture(Gateway::AuthOffNoLog, Some(confirm(&inv, &script))).await;
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("{URI}?confirm=1"))
+        .body(Body::empty())
+        .expect("request");
+    let response = fx.router.clone().oneshot(req).await.expect("response");
+    assert_eq!(response.status().as_u16(), 403);
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("confirm"),
+        "no token in a refusal"
+    );
+    assert_eq!(registry(&fx).entry_count(), 0, "no entry");
 }
