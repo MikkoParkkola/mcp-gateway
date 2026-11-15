@@ -343,11 +343,10 @@ async fn read_500_and_path_404_keep_their_error_mapping() {
 
 #[tokio::test]
 async fn refused_connection_is_network_through_real_transport() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let base = format!("http://{}", listener.local_addr().expect("address"));
-    drop(listener);
+    // Held, never listening, until after the last connect below: every
+    // connect is refused, and no parallel test can be handed the port.
+    let held = crate::test_ports::refusing_socket();
+    let base = format!("http://{}", held.local_addr().expect("address"));
     for json_output in [false, true] {
         let mut args = args("/ui/api/keys");
         args.method = ApiMethod::Post;
@@ -372,6 +371,7 @@ async fn refused_connection_is_network_through_real_transport() {
             None,
         );
     }
+    drop(held);
 }
 
 #[tokio::test]
