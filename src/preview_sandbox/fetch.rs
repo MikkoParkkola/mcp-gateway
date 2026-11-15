@@ -3,10 +3,6 @@
 //! The command plan (ADR-027): whether a typed command fetches a registry
 //! package before it runs. `npx` and `uvx` fetch exactly one npm or `PyPI`
 //! package named by a plain registry spec; any other program runs as typed.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Linux fetch step, a later part, calls plan")
-)]
 
 use std::ffi::OsString;
 

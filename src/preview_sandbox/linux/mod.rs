@@ -220,9 +220,11 @@ async fn start_fetching_with(
                 bundle.source.display()
             ))
         })?;
+    let npm = npm_fetch(target, &plan, path.as_deref(), proxy.unix_path())?;
     plan.fetch = Some(plan::FetchPaths {
         control: utf8(&control)?,
         ca: utf8(&ca)?,
+        npm,
     });
     let mut child = launch(unshare, helper, &plan)?;
     let outcome = match child.id() {
@@ -274,6 +276,61 @@ async fn helper_ended(child: &mut tokio::process::Child) -> Refusal {
 }
 
 /// A step refusal with the time it came after the fetch step began.
+/// The npm fetch a target needs, or `None` when it names no package (the
+/// handshake alone). npm and node are the ones beside the target's `npx`, its
+/// version floor checked; `ip` and both must lie in the plan's bound trees,
+/// where the root shows them at the same paths. uv is refused here until its
+/// fetch is built.
+fn npm_fetch(
+    target: &Target,
+    plan: &Plan,
+    path: Option<&OsStr>,
+    proxy: &Path,
+) -> Result<Option<plan::NpmFetch>, Refusal> {
+    use super::fetch::Fetch;
+    let phases = super::fetch::plan(target)?;
+    let spec = match phases.fetch {
+        None => return Ok(None),
+        Some(Fetch::Uv(_)) => return Err(Refusal::Step("the uv fetch is not built yet".into())),
+        Some(Fetch::Npm(spec)) => spec,
+    };
+    let requested = target.program.to_str().unwrap_or("npx");
+    let npx = resolve_command(requested, path, None)
+        .map_err(|e| Refusal::Step(format!("finding {requested} ({e})")))?;
+    let (npm, node_dir) = probe::npm_beside(&npx)?;
+    probe::check_npm(&npm, &node_dir)?;
+    let bound: Vec<String> = plan
+        .read_only
+        .iter()
+        .chain(&plan.bound_back)
+        .cloned()
+        .collect();
+    for (what, file) in [("npm", &npm), ("node", &node_dir.join("node"))] {
+        let real = fs::canonicalize(file).unwrap_or_else(|_| file.clone());
+        if !bound.iter().any(|tree| real.starts_with(tree)) {
+            return Err(Refusal::Step(format!(
+                "placing {what} ({} is outside the trees bound into the root)",
+                real.display()
+            )));
+        }
+    }
+    let ip = probe::find_ip(&probe::IP_CANDIDATES, &bound)?;
+    let run_args = phases
+        .run_args
+        .iter()
+        .map(|a| a.to_str().map(str::to_owned))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| Refusal::Step("reading an argument (not UTF-8)".to_owned()))?;
+    Ok(Some(plan::NpmFetch {
+        spec,
+        run_args,
+        npm: utf8(&npm)?,
+        node_dir: utf8(&node_dir)?,
+        ip,
+        proxy: utf8(proxy)?,
+    }))
+}
+
 fn with_elapsed(refusal: Refusal, begun: tokio::time::Instant) -> Refusal {
     match refusal {
         Refusal::Step(why) => Refusal::Step(format!(

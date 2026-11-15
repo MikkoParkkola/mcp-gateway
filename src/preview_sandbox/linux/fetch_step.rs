@@ -3,15 +3,20 @@
 //! The helper's npm fetch step (ADR-027 step 6): what the fetch command runs
 //! with. Its environment is cleared and holds exactly these variables, so no
 //! host proxy, `NODE_OPTIONS` or npm configuration reaches it.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the npm fetch step, a later commit, runs it")
-)]
 
+use std::fs;
+use std::os::unix::net::UnixStream;
+use std::path::Path;
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
-use super::mounts::PREVIEW_CONFIG;
-use crate::preview_sandbox::fetch_output::read_tail;
+use super::control_client::{self, HELPER_BOUNDS};
+use super::mounts::{PREVIEW_CONFIG, PROXY_SOCKET};
+use super::plan::{self, Limits, NpmFetch};
+use super::relay::{MAX_PAIRS, Relay};
+use crate::preview_sandbox::fetch_output::{last_line, read_tail};
+use crate::preview_sandbox::install::check_lock;
 
 /// The npm fetch command's whole environment: the D5 list (proxy through the
 /// relay with the fetch credential, no scripts, no git, the public registry)
@@ -120,6 +125,224 @@ fn npm_name(spec: &str) -> &str {
     match spec.get(1..).and_then(|rest| rest.find('@')) {
         Some(at) => &spec[..=at],
         None => spec,
+    }
+}
+
+/// How long `ip link set lo up` may take.
+const LO_BOUND: Duration = Duration::from_secs(2);
+/// How long the sweep may take to leave only PID 1.
+const SWEEP_BOUND: Duration = Duration::from_secs(2);
+/// How long the relay's threads may take to end once stopped.
+const RELAY_BOUND: Duration = Duration::from_secs(2);
+/// The largest `package-lock.json` read.
+const LOCK_CAP: u64 = 4 * 1024 * 1024;
+
+/// The helper's npm fetch step (ADR-027 step 6). Setup that can fail comes
+/// before the credential: `lo` up, then the relay. From `fetch_start` on,
+/// every exit goes through one teardown (sweep, relay stopped, `fetch_done`
+/// and `expired`, the proxy socket removed), and the run is returned only
+/// when the fetch and all of the teardown succeeded.
+pub(super) fn npm(control: &mut UnixStream, npm: &NpmFetch, limits: Limits) -> Result<Run, String> {
+    lo_up(&npm.ip)?;
+    let relay = Relay::start(Path::new(PROXY_SOCKET), MAX_PAIRS)
+        .map_err(|e| format!("starting the relay ({e})"))?;
+    let issued = match control_client::start_fetch(control, HELPER_BOUNDS) {
+        Ok(issued) => issued,
+        Err(step) => {
+            let _ = relay.stop(RELAY_BOUND);
+            return Err(step);
+        }
+    };
+    // One deadline for the whole fetch: both npm steps and the lock check.
+    let left = u64::try_from(issued.deadline_ms).unwrap_or(u64::MAX);
+    let deadline = Instant::now() + Duration::from_millis(left);
+    let fetched = install(npm, &issued.credential, relay.port(), deadline, limits);
+    let torn = teardown(control, relay);
+    fetched?;
+    torn?;
+    npm_run(
+        Path::new(plan::HOME),
+        &npm.spec,
+        &npm.run_args,
+        &npm.node_dir,
+    )
+    .map_err(|r| r.to_string())
+}
+
+/// The teardown, in order, every step attempted; the first failure is
+/// returned.
+fn teardown(control: &mut UnixStream, relay: Relay) -> Result<(), String> {
+    let swept = sweep(SWEEP_BOUND);
+    let stopped = relay.stop(RELAY_BOUND);
+    let finished = control_client::finish_fetch(control, HELPER_BOUNDS);
+    let removed = super::mounts::remove_proxy_socket();
+    swept.and(stopped).and(finished).and(removed)
+}
+
+/// `ip link set lo up`, run by the helper itself (it keeps the namespace's
+/// capabilities; `ip` is the host's own binary), environment cleared.
+fn lo_up(ip: &str) -> Result<(), String> {
+    let mut child = Command::new(ip)
+        .args(["link", "set", "lo", "up"])
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("bringing lo up ({e})"))?;
+    match wait_until(&mut child, Instant::now() + LO_BOUND) {
+        Some(status) if status.success() => Ok(()),
+        Some(status) => Err(format!("bringing lo up (ip {status})")),
+        None => Err("bringing lo up (ip did not end within 2 s)".into()),
+    }
+}
+
+/// `child`'s exit status by `deadline`, or `None` after killing it there.
+fn wait_until(child: &mut Child, deadline: Instant) -> Option<ExitStatus> {
+    loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            return Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The two npm steps with the lock check between them, under one deadline.
+fn install(
+    npm: &NpmFetch,
+    credential: &str,
+    port: u16,
+    deadline: Instant,
+    limits: Limits,
+) -> Result<(), String> {
+    let pkg = Path::new(plan::HOME).join("pkg");
+    fs::create_dir_all(&pkg).map_err(|e| format!("creating {} ({e})", pkg.display()))?;
+    let prefix = pkg.to_str().ok_or("the install prefix is not UTF-8")?;
+    let npm_dir = Path::new(&npm.npm)
+        .parent()
+        .and_then(Path::to_str)
+        .unwrap_or(&npm.node_dir);
+    let env = npm_env(credential, port, &format!("{}:{npm_dir}", npm.node_dir));
+    let lock_only = [
+        "install",
+        "--package-lock-only",
+        "--ignore-scripts",
+        "--prefix",
+        prefix,
+        npm.spec.as_str(),
+    ];
+    run_npm(&npm.npm, &lock_only, &env, deadline, limits, credential)?;
+    check_lock(&read_lock(&pkg.join("package-lock.json"))?).map_err(|r| r.to_string())?;
+    run_npm(
+        &npm.npm,
+        &["ci", "--ignore-scripts", "--prefix", prefix],
+        &env,
+        deadline,
+        limits,
+        credential,
+    )
+}
+
+/// The lock npm wrote, at most [`LOCK_CAP`] bytes.
+fn read_lock(path: &Path) -> Result<serde_json::Value, String> {
+    use std::io::Read as _;
+    let file = fs::File::open(path).map_err(|e| format!("reading the lock ({e})"))?;
+    let mut bytes = Vec::new();
+    file.take(LOCK_CAP + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("reading the lock ({e})"))?;
+    if bytes.len() as u64 > LOCK_CAP {
+        return Err("reading the lock (over 4 MiB)".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|e| format!("reading the lock ({e})"))
+}
+
+/// One npm step through `__preview-drop`, its environment exactly `env`, its
+/// output drained; the sweep runs before the drains are joined, so a
+/// descendant holding a pipe cannot stall it. A failure refuses with npm's
+/// last line, the credential redacted.
+fn run_npm(
+    npm: &str,
+    args: &[&str],
+    env: &[(String, String)],
+    deadline: Instant,
+    limits: Limits,
+    credential: &str,
+) -> Result<(), String> {
+    let limits =
+        serde_json::to_string(&limits).map_err(|e| format!("encoding the limits ({e})"))?;
+    let mut child = Command::new("/proc/self/exe")
+        .arg(super::DROP)
+        .arg(limits)
+        .arg(npm)
+        .arg("--")
+        .arg("npm")
+        .args(args)
+        .env_clear()
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .current_dir(plan::HOME)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("starting npm ({e})"))?;
+    let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) else {
+        return Err("starting npm (no output pipes)".into());
+    };
+    let drains = drain(out, err);
+    let status = wait_until(&mut child, deadline);
+    sweep(SWEEP_BOUND)?;
+    let (out, err) = drains.join();
+    match status {
+        Some(status) if status.success() => Ok(()),
+        Some(_) => {
+            let line = last_line(if err.is_empty() { &out } else { &err }, credential);
+            Err(format!("fetching the package ({line})"))
+        }
+        None => Err("fetching the package (the fetch passed its deadline)".into()),
+    }
+}
+
+/// SIGKILL every process in the namespace but PID 1 (this helper) and reap,
+/// until `/proc` lists only PID 1 and no child is left; one still there after
+/// `bound` refuses.
+fn sweep(bound: Duration) -> Result<(), String> {
+    use rustix::process::{Pid, Signal, WaitOptions, kill_process, wait};
+    let deadline = Instant::now() + bound;
+    loop {
+        let others: Vec<i32> = fs::read_dir("/proc")
+            .map_err(|e| format!("sweeping the fetch ({e})"))?
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+            .filter(|&pid| pid != 1)
+            .collect();
+        for pid in &others {
+            if let Some(pid) = Pid::from_raw(*pid) {
+                let _ = kill_process(pid, Signal::KILL);
+            }
+        }
+        let no_child = loop {
+            match wait(WaitOptions::NOHANG) {
+                Ok(Some(_)) => {}
+                Ok(None) => break false,
+                Err(rustix::io::Errno::CHILD) => break true,
+                Err(_) => break false,
+            }
+        };
+        if others.is_empty() && no_child {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "sweeping the fetch ({} processes outlived 2 s)",
+                others.len()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 

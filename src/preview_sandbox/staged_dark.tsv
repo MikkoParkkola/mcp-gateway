@@ -2,10 +2,5 @@
 # The ratchet row in staged_tests.rs keeps this list exact; the sandbox ticket closes when it is empty.
 src/preview_sandbox/control.rs	the macOS fetch step (live on Linux since the helper's handshake)
 src/preview_sandbox/control_msg.rs	the macOS fetch step (live on Linux since the helper's handshake)
-src/preview_sandbox/fetch.rs	the fetch session and helper fetch step (the sandbox fetch part)
-src/preview_sandbox/fetch_output.rs	the fetch session and helper fetch step (the sandbox fetch part)
-src/preview_sandbox/install.rs	the fetch session and helper fetch step (the sandbox fetch part)
-src/preview_sandbox/linux/fetch_step.rs	the helper's npm fetch step (the sandbox fetch part)
-src/preview_sandbox/linux/probe.rs	the helper's npm fetch step (the sandbox fetch part)
-src/preview_sandbox/linux/relay.rs	the helper's npm fetch step (the sandbox fetch part)
+src/preview_sandbox/install.rs	the uv fetch step (the sandbox fetch part)
 src/preview_sandbox/proxy.rs	the fetch session (the sandbox fetch part)

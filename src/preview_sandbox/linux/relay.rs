@@ -4,10 +4,6 @@
 //! URL, and the gateway's proxy serves a Unix socket, so the helper listens
 //! on 127.0.0.1 inside the preview's network namespace and copies each
 //! stream to its own connection to the proxy socket.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the npm fetch step, a later commit, starts it")
-)]
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};

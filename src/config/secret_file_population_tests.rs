@@ -345,6 +345,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "inside the sandbox's own mount namespace: empty mountpoint files and /proc/self/mountinfo; no secret",
     ),
     (
+        "src/preview_sandbox/linux/fetch_step.rs",
+        "the npm fetch inside the sandbox: the package-lock.json npm wrote (capped at 4 MiB) and /proc's pid list for the sweep; no secret",
+    ),
+    (
         "src/preview_sandbox/linux/probe.rs",
         "the npm fetch's probe: whether npm, node and ip exist and where their real files are, and npm --version's stdout capped at 256 bytes; no secret",
     ),
