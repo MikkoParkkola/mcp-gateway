@@ -198,6 +198,9 @@ impl FloorAdapter for HealthFloor {
         if self.gate.state() != GateState::Paused || !self.worker_done() {
             return refused();
         }
+        // A new attempt ends any earlier certification: only its own Ok
+        // certifies again, so a failed re-checkpoint never commits a stale cut.
+        self.certified = false;
         let (Some(path), Ok(now)) = (self.path.clone(), (self.clock)()) else {
             return refused();
         };

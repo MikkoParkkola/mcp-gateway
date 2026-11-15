@@ -125,7 +125,6 @@ impl Inner {
         }
     }
 
-    /// Accrue running time to `now` and mark the half-hours it covers.
     /// One sample: the current window's memory and session maxima.
     fn sample(&mut self, memory: Option<u64>, sessions: u64, now: u64) {
         let Some(half) = self.half_mut(now) else {
@@ -137,6 +136,7 @@ impl Inner {
         half.sessions_max = Some(half.sessions_max.map_or(sessions, |m| m.max(sessions)));
     }
 
+    /// Accrue running time to `now` and mark the half-hours it covers.
     fn tick(&mut self, now: u64) {
         if now <= self.last_tick {
             return;

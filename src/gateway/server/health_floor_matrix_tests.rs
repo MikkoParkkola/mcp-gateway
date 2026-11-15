@@ -192,6 +192,34 @@ async fn c9_a_worker_panic_is_worker_lost() {
     adapter.resume();
 }
 
+/// C9b: a re-checkpoint that fails while Certified ends the certification, so
+/// a commit after it leaves the gate Paused instead of closing on the old cut.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn c9b_a_failed_recheckpoint_ends_the_certification() {
+    let _serial = file::saves_test_lock_async().await;
+    let rig = Rig::new();
+    let mut adapter = rig.adapter();
+    reach(State::Certified, &mut adapter, &rig).await;
+    assert!(adapter.certified(), "premise: certified");
+    adapter.panic_next_worker();
+    assert_eq!(
+        adapter.checkpoint(deadline()).await,
+        Err(FloorFault::WorkerLost)
+    );
+    assert!(
+        !adapter.certified(),
+        "a failed re-checkpoint kept the certification"
+    );
+    wait_until("the adapter never settled", || adapter.settled());
+    adapter.commit();
+    assert_eq!(
+        rig.gate(),
+        GateState::Paused,
+        "commit closed the gate on a stale cut"
+    );
+    adapter.resume();
+}
+
 /// C13: a pause future dropped unpolled still leaves the gate Paused; resume reopens it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c13_an_unpolled_pause_still_pauses() {

@@ -13,13 +13,13 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::SeqCst};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GateState {
     /// Saves and samples run as normal.
-    Open,
+    Open = 0,
     /// A restart attempt holds the gate: closures skip and mark themselves.
-    Paused,
+    Paused = 1,
     /// The restart committed: closures skip without marking.
-    Terminal,
+    Terminal = 2,
     /// A stop signal won: closures run as normal until their schedulers end.
-    Released,
+    Released = 3,
 }
 
 /// Which periodic closure is asking.
