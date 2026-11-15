@@ -293,6 +293,15 @@ fn verdict_share_is_capped(kind: &str, nonce: impl Fn(&str) -> Option<Value>, ex
                 readings[0],
                 readings[1]
             );
+            // One tagged line per reading (forwarded by the isolated child): the
+            // per-user extra the ceiling is set from, and its parts.
+            println!(
+                "\n{TAG}ALLOC.2 {kind} size={size} extra={} large={} large_bytes={} small_bytes={}",
+                share.large_bytes + share.small_bytes,
+                share.large,
+                share.large_bytes,
+                share.small_bytes
+            );
             shares.push(share);
         }
         let slope = plain_bytes[1].saturating_sub(plain_bytes[0]) / 2;
