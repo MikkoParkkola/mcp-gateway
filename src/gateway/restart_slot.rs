@@ -50,9 +50,13 @@ impl RestartSlot {
     pub(crate) fn try_reserve(&self) -> Option<Reservation> {
         // Acquire pairs with the Release in `free`: the next holder sees the
         // board calls the last one made before it freed the slot.
-        self.held
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .ok()?;
+        mutant!(
+            "m1",
+            Ok::<bool, bool>(false),
+            self.held
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        )
+        .ok()?;
         Some(Reservation {
             board: Arc::clone(&self.board),
             held: Arc::clone(&self.held),
@@ -90,7 +94,7 @@ impl Reservation {
     /// the attempt id for the 202 and the audit. Again returns the same id.
     pub(crate) fn accept(&mut self) -> u64 {
         match self.state {
-            State::Accepted(id) => id,
+            State::Accepted(id) => mutant!("m5", self.board.accept(), id),
             State::Reserved | State::Finished => {
                 let id = self.board.accept();
                 self.state = State::Accepted(id);
@@ -104,7 +108,7 @@ impl Reservation {
     /// no attempt: the slot is freed and nothing reaches the board.
     pub(crate) fn activate(mut self) {
         let was = std::mem::replace(&mut self.state, State::Finished);
-        if was == State::Reserved {
+        if mutant!("m7", false, was == State::Reserved) {
             self.free();
         }
     }
@@ -112,9 +116,10 @@ impl Reservation {
     /// Refuse the attempt (the route's failed audit): records `reason` on the
     /// board for an accepted attempt, disarms, then frees the slot.
     pub(crate) fn refuse(mut self, reason: RestartCancel) {
-        let was = std::mem::replace(&mut self.state, State::Finished);
+        let keep = mutant!("m6", self.state, State::Finished);
+        let was = std::mem::replace(&mut self.state, keep);
         if let State::Accepted(id) = was {
-            self.board.cancel(id, reason);
+            mutant!("m3", (), self.board.cancel(id, reason));
         }
         self.free();
     }
@@ -136,7 +141,7 @@ impl Drop for Reservation {
             State::Finished => {}
             State::Reserved => self.free(),
             State::Accepted(id) => {
-                self.board.cancel(id, RestartCancel::AuditRefused);
+                mutant!("m2", (), self.board.cancel(id, RestartCancel::AuditRefused));
                 self.free();
             }
         }
