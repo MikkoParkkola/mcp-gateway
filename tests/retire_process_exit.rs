@@ -165,25 +165,28 @@ async fn an_mtls_gateway_exits_inside_its_stop_total() {
 
 /// RETIRE.2 from the first moment: a SIGTERM sent as soon as the log shows the
 /// `Listening` banner drains the gateway like any other, exit code 0 with the
-/// shutdown logged, on every one of twenty starts. A start that dies of the
-/// signal fails the row with its log.
+/// shutdown logged, on every one of twenty starts over plain HTTP and twenty
+/// over mTLS. A start that dies of the signal fails the row with its log.
 #[tokio::test]
 async fn a_sigterm_on_the_listening_banner_drains_the_gateway() {
     const STARTS: usize = 20;
     let mut undrained = Vec::new();
-    for start_no in 0..STARTS {
-        let (mut reaped, log) = start(HTTP_MINIMUM, false, Watch::Tight).await;
-        let status = reaped.reap_within(HTTP_MINIMUM + GRACE).await;
-        let text = std::fs::read_to_string(&log).unwrap_or_default();
-        if !status.success() || !text.contains("Shutdown signal received") {
-            undrained.push(format!("start {start_no}: {status}\n{text}"));
+    for tls in [false, true] {
+        for start_no in 0..STARTS {
+            let (mut reaped, log) = start(HTTP_MINIMUM, tls, Watch::Tight).await;
+            let status = reaped.reap_within(HTTP_MINIMUM + GRACE).await;
+            let text = std::fs::read_to_string(&log).unwrap_or_default();
+            if !status.success() || !text.contains("Shutdown signal received") {
+                undrained.push(format!("start {start_no} (mTLS: {tls}): {status}\n{text}"));
+            }
+            reaped.stop().await;
         }
-        reaped.stop().await;
     }
     assert!(
         undrained.is_empty(),
-        "{} of {STARTS} starts did not drain; the first:\n{}",
+        "{} of {} starts did not drain; the first:\n{}",
         undrained.len(),
+        2 * STARTS,
         undrained.first().map_or("", String::as_str)
     );
 }

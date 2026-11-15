@@ -342,7 +342,8 @@ where
 ///
 /// Installs the Ctrl+C handler (all platforms) and the SIGTERM handler (Unix
 /// only) when called, so a signal that arrives before the returned future is
-/// first polled starts the stop instead of taking the default action. The
+/// first polled starts the stop instead of taking the default action: the
+/// signal is held until that poll. Call it inside the Tokio runtime. The
 /// future resolves on the first of them, then broadcasts the shutdown signal
 /// to all subscriber tasks.
 pub(super) fn shutdown_signal(
