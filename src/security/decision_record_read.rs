@@ -7,7 +7,7 @@
 use serde::Deserialize as _;
 use serde_json::Value;
 
-use super::{Decided, Decision, Effect};
+use super::{Coverage, Decided, Decision, Effect};
 
 /// The decision object version that writes request findings and the declared
 /// effect. A record below it predates both.
@@ -108,6 +108,13 @@ pub(crate) fn effect_line(decision: &Decision) -> Option<&'static str> {
         Some(Effect::Undeclared) => Some(UNDECLARED),
         Some(Effect::ReadOnly | Effect::MayWrite) => None,
     }
+}
+
+/// Receipt and API wording for the capability coverage a record carries.
+///
+/// Stub: a fixed empty string, so a row that expects either sentence fails.
+pub(crate) fn capabilities_line(_coverage: Option<Coverage>) -> &'static str {
+    ""
 }
 
 /// How the call was decided, in the receipt's words.

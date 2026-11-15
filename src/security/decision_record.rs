@@ -87,12 +87,30 @@ pub(crate) struct DecisionFinding {
     pub location: String,
 }
 
+/// How much of the capability catalogue a config revision covers.
+///
+/// Serialized snake_case: `covered`, `not_loaded`, `partial`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Coverage {
+    /// Every configured directory was read.
+    Covered,
+    /// The files had not been read.
+    NotLoaded,
+    /// A configured directory or file could not be read.
+    Partial,
+}
+
 /// The decision object as written and as read back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Decision {
     pub v: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_revision: Option<String>,
+    /// Whether `config_revision` covers capability files. Absent on a record
+    /// written before the field existed: that id does not cover them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_revision_capabilities: Option<Coverage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub running_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -354,6 +372,8 @@ impl Noted {
         Decision {
             v: DECISION_VERSION,
             config_revision,
+            // Stub: the field is omitted. The wording is `capabilities_line`.
+            config_revision_capabilities: None,
             running_revision,
             pending_restart: applied
                 .map(|a| a.pending_restart.iter().map(|f| (*f).to_owned()).collect())
