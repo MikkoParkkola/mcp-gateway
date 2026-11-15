@@ -108,6 +108,10 @@ export function scanScreens(sources) {
 export function shapeProblems(copy) {
   const out = [];
   const str = (v) => typeof v === 'string' && v.trim() !== '';
+  const later = copy._pending_later;
+  if (later !== undefined && (!later || typeof later !== 'object' || Array.isArray(later))) {
+    out.push('_pending_later: not an object');
+  }
   for (const [id, e] of Object.entries(copy)) {
     if (META.has(id)) continue;
     if (!e || typeof e !== 'object' || Array.isArray(e)) { out.push(`${id}: not an object`); continue; }

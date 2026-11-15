@@ -119,6 +119,19 @@ test.describe('C2 pending later', () => {
   test('the pending-later map is not read as a copy entry', () => {
     expect(shapeProblems(LATER)).toEqual([]);
   });
+  test('a pending-later map that is not a plain object fails its shape', () => {
+    expect(shapeProblems({ ...LATER, _pending_later: ['servers.status.load'] })).toEqual(['_pending_later: not an object']);
+    expect(shapeProblems({ ...LATER, _pending_later: 'the 24 h chart' })).toEqual(['_pending_later: not an object']);
+  });
+  test('a pending-later id on a page no screen registers fails: it belongs in _pending', () => {
+    const copy = { ...OK, 'billing.status.due': LOAD, _pending_later: { 'billing.status.due': 'the invoice list' } };
+    expect(pair(copy, "tip('servers.status.paused');"))
+      .toEqual(['billing.status.due: pending-later under unbuilt billing.status, list it in _pending']);
+  });
+  test('a screen cannot draw the bookkeeping key itself', () => {
+    expect(pair(LATER, "tip('servers.status.paused'); tip('_pending_later');"))
+      .toContain('_pending_later: not <page>.<tab>.<subject>');
+  });
 });
 
 test.describe('C8 planted faults', () => {
