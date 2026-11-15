@@ -1,0 +1,24 @@
+head_sha	85dc058ffb35b88ec9a766ab73dc07b78232584f
+#mutant m1
+mcp_gateway	cli::entry::runtime::tests::a_plan_bounds_the_runtime_wait_by_the_cap_and_its_deadline	src/cli/main_runtime_tests.rs:217
+mcp_gateway	cli::entry::runtime::tests::a_planned_shutdown_leaves_a_stuck_task_behind_within_the_cap	src/cli/main_runtime_tests.rs:270
+mcp_gateway	cli::entry::runtime::tests::a_spent_runtime_deadline_gives_a_zero_wait	src/cli/main_runtime_tests.rs:240
+mcp_gateway	cli::entry::runtime::tests::block_on_bounds_its_shutdown_by_the_plan_stored_during_the_run	src/cli/main_runtime_tests.rs:309
+#mutant m2
+mcp_gateway	retire::tests::the_logger_bound_is_the_sooner_of_its_two_seconds_and_the_logger_end	src/retire_tests.rs:391
+mcp_gateway	retire::tests::the_tail_cuts_a_stuck_logger_at_the_plans_logger_end	src/retire_tests.rs:72
+#mutant m3
+mcp_gateway	retire::tests::an_overrun_or_unjoined_tail_exits_75_and_a_clean_one_keeps_its_code	src/retire_tests.rs:143
+#mutant m4
+mcp_gateway	retire::tests::an_overrun_or_unjoined_tail_exits_75_and_a_clean_one_keeps_its_code	src/retire_tests.rs:157
+#mutant m5
+mcp_gateway	retire::tests::the_watchdog_exits_with_the_stored_code	src/retire_tests.rs:242
+mcp_gateway	retire::tests::a_held_main_thread_exits_with_the_code_the_tail_stored	src/retire_tests.rs:272
+#mutant m6
+mcp_gateway	retire::tests::the_watchdog_exits_75_at_its_slack_past_the_end	src/retire_tests.rs:228
+#mutant m7
+mcp_gateway	gateway::stop_budget::tests::a_restart_takes_its_exec_share_from_the_logger_only	src/gateway/stop_budget_tests.rs:383
+#mutant m8
+mcp_gateway	retire::tests::without_a_plan_the_tail_keeps_todays_status	src/retire_tests.rs:189
+#mutant m9
+mcp_gateway	cli::entry::runtime::tests::block_on_bounds_its_shutdown_by_the_plan_stored_during_the_run	src/cli/main_runtime_tests.rs:309
