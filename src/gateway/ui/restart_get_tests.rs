@@ -544,3 +544,42 @@ async fn a_scoped_admins_confirm_request_is_refused_and_mints_nothing() {
     );
     assert_eq!(registry(&fx).entry_count(), 0, "no entry");
 }
+
+// ui's condition on D2: the route adds `confirm` next to the availability
+// body. A minting full-view GET carries exactly the three members the dialog
+// reads; a GET that does not mint carries no `confirm`.
+#[tokio::test]
+async fn a_minting_get_carries_exactly_available_recent_writes_and_confirm() {
+    let inv = ready_invocation();
+    let script = samples(&[Some(sample(3, 30)); 2]);
+    let fx = fixture(Gateway::AuthWithLog, Some(confirm(&inv, &script))).await;
+    let (minted, _) = get(&fx, "?confirm=1").await;
+    let mut keys: Vec<&str> = minted
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["available", "confirm", "recent_writes"], "{minted}");
+    assert_eq!(minted["available"], true, "{minted}");
+    assert_eq!(
+        minted["recent_writes"],
+        json!({"count": 3, "complete_secs": 60}),
+        "{minted}"
+    );
+    assert!(
+        minted["confirm"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("rc1.")),
+        "{minted}"
+    );
+    let (plain, _) = get(&fx, "").await;
+    assert!(
+        plain.get("confirm").is_none(),
+        "a GET that does not mint: {plain}"
+    );
+    let mut rest = minted.clone();
+    rest.as_object_mut().expect("an object").remove("confirm");
+    assert_eq!(rest, plain, "confirm is the only member the mint adds");
+}
