@@ -439,8 +439,44 @@ fn build_plan(
 
 /// Make npm and node shown inside the root and return the path npm is
 /// executed by there; refuses by name when either is not shown.
+///
+/// Under the masked `/usr/local` only node's real file and npm's package
+/// (`.../node_modules/npm`, which holds npm's own modules) are bound back,
+/// never the trees around them: an npx preview's run phase executes
+/// downloaded code, unlike a host-installed program, which gets its
+/// directory and sibling `lib`. A runtime tree (an NVM version) is bound
+/// whole, as for a program. Anything else is left unbound and refuses.
 fn place_npm(plan: &mut Plan, npm: &Path, node: &Path) -> Result<PathBuf, Refusal> {
-    for (what, file) in [("npm", npm), ("node", node)] {
+    let real = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
+    let (npm_real, node_real) = (real(npm), real(node));
+    // npm's cli is `<package>/bin/npm-cli.js`.
+    let package = npm_real
+        .parent()
+        .and_then(Path::parent)
+        .filter(|p| p.ends_with("node_modules/npm"))
+        .map(Path::to_path_buf);
+    for (file, bind) in [
+        (&node_real, Some(node_real.clone())),
+        (&npm_real, package.clone()),
+    ] {
+        // What must be shown: node's file, npm's whole package (its cli
+        // alone may be shown already, by npx's own bind-backs).
+        if placed(bind.as_deref().unwrap_or(file), plan) {
+            continue;
+        }
+        match program_bind(file, &plan.read_only) {
+            ProgramBind::UsrLocal(_) => {
+                if let Some(bind) = bind {
+                    plan.bound_back.retain(|b| !Path::new(b).starts_with(&bind));
+                    plan.bound_back.push(utf8(&bind)?);
+                }
+            }
+            ProgramBind::Runtime(prefix) => plan.read_only.push(utf8(&prefix)?),
+            ProgramBind::System | ProgramBind::File(_) | ProgramBind::Refused => {}
+        }
+    }
+    let npm_needs = package.as_deref().unwrap_or(&npm_real);
+    for (what, file) in [("npm", npm_needs), ("node", node_real.as_path())] {
         if !placed(file, plan) {
             return Err(Refusal::Step(format!(
                 "placing {what} ({} is not shown inside the root)",
@@ -448,7 +484,18 @@ fn place_npm(plan: &mut Plan, npm: &Path, node: &Path) -> Result<PathBuf, Refusa
             )));
         }
     }
-    Ok(npm.to_owned())
+    // The alias npx sat beside (`/usr/local/bin/npm`) may be hidden now;
+    // each literal step it takes must be shown, as for the program.
+    let shown = |p: &Path| {
+        shown_inside(
+            p,
+            &plan.read_only,
+            &plan.bound_back,
+            &plan.masked,
+            &plan.hidden,
+        )
+    };
+    Ok(reachable_inside(npm, &shown).unwrap_or(npm_real))
 }
 
 /// Whether `plan`'s root shows `file`, its links followed first.
