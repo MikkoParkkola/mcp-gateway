@@ -78,6 +78,33 @@ impl Drains {
     }
 }
 
+/// What the run phase runs after an npm fetch.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Run {
+    /// The file the drop step execs.
+    pub(super) program: String,
+    /// `argv[0]` (the bin) and the server's own arguments.
+    pub(super) argv: Vec<String>,
+    /// node's directory, then the install's bin directory.
+    pub(super) path: String,
+}
+
+/// The run after an npm fetch of `spec` installed under `home`: the
+/// package's own bin (`npm_bin` confines it to the package's directory),
+/// exec'd directly with `run_args`, and PATH holding node's directory
+/// `node_dir` and the install's `.bin`, never the plan's own program or PATH.
+pub(super) fn npm_run(
+    home: &std::path::Path,
+    spec: &str,
+    run_args: &[String],
+    node_dir: &str,
+) -> Result<Run, crate::preview_sandbox::Refusal> {
+    let _ = (home, spec, run_args, node_dir);
+    Err(crate::preview_sandbox::Refusal::Step(
+        "the run after a fetch is not built yet".into(),
+    ))
+}
+
 #[cfg(test)]
 #[path = "fetch_step_tests.rs"]
 mod tests;
