@@ -343,3 +343,33 @@ async fn l3_every_publish_point_delivers_with_no_catalogue_lock_held() {
         "reload delivers with no catalogue lock held"
     );
 }
+
+/// Kills the mutant "the HTTP attach in `Gateway::run` deleted or moved". No
+/// row can run `Gateway::run` (it binds a listener), so its position is pinned
+/// in the production source: after the meta-mcp takes the `LiveConfig`, before
+/// the listener binds, exactly once. Deleted, the scan's held part would never
+/// reach the live config and nothing else would fail.
+#[test]
+fn h2_http_run_attaches_after_live_config_and_before_the_bind() {
+    let code = crate::test_source_text::sanitize(&crate::test_source_text::production_text(
+        include_str!("run.rs"),
+    ));
+    let set = code
+        .find("meta_mcp.set_live_config(")
+        .expect("run gives the meta-mcp its LiveConfig");
+    let attach = code
+        .find(".attach_revision(Arc::clone(&live_config))")
+        .expect("run attaches the capability handoff to that LiveConfig");
+    let bind = code
+        .find("TcpListener::bind(")
+        .expect("run binds its listener");
+    assert!(
+        set < attach && attach < bind,
+        "the attach sits after the LiveConfig is set ({set}) and before the bind ({bind}), at {attach}"
+    );
+    assert_eq!(
+        code.matches(".attach_revision(").count(),
+        1,
+        "run attaches once"
+    );
+}
