@@ -411,48 +411,6 @@ fn the_frozen_tables_match_their_pinned_digest() {
     );
 }
 
-/// The text of the lines of `Cargo.toml` that name `krate` as a dependency.
-fn dependency_lines(krate: &str) -> Vec<String> {
-    let manifest = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
-    )
-    .expect("Cargo.toml")
-    .replace('\r', "");
-    manifest
-        .lines()
-        .filter(|l| {
-            l.starts_with(&format!("{krate} = ")) || l.starts_with(&format!("{krate}={krate}"))
-        })
-        .map(str::to_owned)
-        .collect()
-}
-
-/// NORM.2: the NFC crate and its data crate are pinned to an exact version in
-/// `Cargo.toml`, where `cargo install` honours it (it ignores Cargo.lock), and
-/// neither may become a caret range again.
-/// Mutant: loosen either to a plain or caret version, or drop the data crate.
-#[test]
-fn the_nfc_crates_are_pinned_exactly_in_cargo_toml() {
-    for krate in [
-        "icu_normalizer",
-        "icu_normalizer_data",
-        "icu_properties",
-        "icu_properties_data",
-    ] {
-        let lines = dependency_lines(krate);
-        assert_eq!(
-            lines.len(),
-            1,
-            "{krate} must be a direct dependency, once: {lines:?}"
-        );
-        assert!(
-            lines[0].contains("version = \"=") || lines[0].contains(" = \"="),
-            "{krate} must be pinned with an exact `=` version: {}",
-            lines[0]
-        );
-    }
-}
-
 /// NORM.2: the data pin cannot be cleaned away as an unused dependency: the
 /// code names the crate, with a comment saying why. And the Cargo.lock copy of
 /// the same pin (the old guard) still holds.
@@ -783,6 +741,9 @@ fn issuance_hashes_a_padded_claim_like_a_clean_one() {
         "an empty claim carries no email hash, as before"
     );
 }
+
+#[path = "email_hash_pin_tests.rs"]
+mod pins;
 
 #[path = "email_hash_key_tests.rs"]
 mod key_rows;

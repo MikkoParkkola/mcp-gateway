@@ -784,7 +784,9 @@ impl Gateway {
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
-        self.backends.stop_all_by(stop_deadline).await;
+        self.backends
+            .stop_all_by(stop_deadline, crate::backend::Handover::AtEntry)
+            .await;
 
         // Whatever the custody stage did not release (it was skipped or cut):
         // never drop the store on this thread when `self` drops.
