@@ -33,6 +33,7 @@ use crate::gateway::stop_budget::{DRAIN_CAP, StopBudget};
 use crate::gateway::streaming::NotificationMultiplexer;
 use crate::gateway::webhooks::WebhookRegistry;
 use crate::playbook::PlaybookEngine;
+use crate::retire::{Exit, RetirePlan};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
 use crate::{Error, Result};
@@ -689,6 +690,13 @@ impl Gateway {
                 .unwrap_or_else(tokio::time::Instant::now),
             total,
         );
+        // The one store of the retirement plan: the exit ends in this total, under the watchdog.
+        if let Some(cell) = &self.retire {
+            let plan = RetirePlan::new(budget.end(), budget.runtime_end(), Exit::Plain);
+            if cell.set(plan).is_ok() {
+                crate::retire::arm(&plan);
+            }
+        }
 
         // Saved under one deadline, off the runtime's threads (MIK-8157).
         #[cfg(feature = "cost-governance")]

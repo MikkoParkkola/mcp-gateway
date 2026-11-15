@@ -120,6 +120,7 @@ mod mutant_scan;
 #[doc(hidden)]
 pub mod oauth;
 mod observer;
+mod retire;
 // Unix readers and the install's metadata reader use it; elsewhere it opens plainly.
 pub(crate) mod open_nonblocking;
 pub(crate) mod personal_accounts;
@@ -302,6 +303,15 @@ fn cap_handshake_logging(filter: EnvFilter) -> EnvFilter {
 #[doc(hidden)]
 #[must_use = "hold the returned guard for the life of the process: dropping it flushes the log queue"]
 pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<impl Sized + use<>> {
+    setup_tracing_flush(level, format)
+}
+
+/// [`setup_tracing`], returning the concrete flush guard, so `cli::run` can end
+/// the log writer with its terminal stop inside an HTTP stop's total.
+pub(crate) fn setup_tracing_flush(
+    level: &str,
+    format: Option<&str>,
+) -> Result<log_writer::LogFlush> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
     let filter = cap_handshake_logging(filter);
     let notice = match format {
