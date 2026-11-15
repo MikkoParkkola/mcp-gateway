@@ -189,6 +189,10 @@ pub struct DirectoryLoad {
     pub unreadable: Vec<String>,
 }
 
+/// A row's look at one delivery. The publish stub never calls it.
+#[cfg(test)]
+type DeliveryObserver = Arc<dyn Fn(&CapabilityBackend) + Send + Sync>;
+
 /// Backend that exposes capabilities as MCP tools
 ///
 /// This backend is thread-safe and supports hot-reloading via the
@@ -233,6 +237,24 @@ pub struct CapabilityBackend {
         )
     )]
     handoff: handoff::Handoff,
+    /// The one lock a catalogue operation holds for its whole load, swap and
+    /// publish. Stub: the lock exists. No operation takes it.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "the stub never locks; a later slice takes it around load, swap and publish"
+        )
+    )]
+    operation: tokio::sync::Mutex<()>,
+    /// Installed by a row that must try the catalogue lock from inside a
+    /// delivery. The publish stub does not call it.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "the publish stub does not deliver, so nothing reads the observer yet"
+    )]
+    delivery_observer: parking_lot::Mutex<Option<DeliveryObserver>>,
     /// Moves at every catalogue write, under the write lock (MIK-8037).
     catalogue_generation: std::sync::atomic::AtomicU64,
     /// What was listed when a listing change was last announced.
@@ -284,6 +306,9 @@ impl CapabilityBackend {
             initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
             revision_key: None,
             handoff: handoff::Handoff::new(),
+            operation: tokio::sync::Mutex::new(()),
+            #[cfg(test)]
+            delivery_observer: parking_lot::Mutex::new(take_delivery_observer()),
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
             listing: parking_lot::Mutex::new(None),
             listing_wake: tokio::sync::Notify::new(),
@@ -346,6 +371,62 @@ impl CapabilityBackend {
     )]
     pub(crate) fn handoff(&self) -> &handoff::Handoff {
         &self.handoff
+    }
+
+    /// Publish `(seq, part)` after a catalogue swap, with no catalogue lock held.
+    ///
+    /// Stub: the seq and the snapshot are dropped. The handoff is not called,
+    /// so nothing is delivered and a row's handoff step gate is not consumed.
+    pub(crate) fn publish_revision(&self, seq: u64, part: CapabilityPart<PartDigest>) {
+        let _ = (seq, part);
+    }
+
+    /// Arm the observer the next [`Self::new`] on this thread copies in.
+    /// Taken once, so a later backend on the same thread does not keep it.
+    #[cfg(test)]
+    pub(crate) fn install_next_delivery_observer(observer: DeliveryObserver) {
+        NEXT_DELIVERY_OBSERVER.with(|slot| *slot.borrow_mut() = Some(observer));
+    }
+
+    /// Arm the observer on a backend the row already holds.
+    #[cfg(test)]
+    pub(crate) fn set_delivery_observer(&self, observer: DeliveryObserver) {
+        *self.delivery_observer.lock() = Some(observer);
+    }
+
+    /// `true` while some caller holds the operation lock. The guard from a
+    /// free lock is dropped here, so the check does not keep it.
+    #[cfg(test)]
+    pub(crate) fn operation_lock_held(&self) -> bool {
+        let guard = self.operation.try_lock();
+        let held = guard.is_err();
+        drop(guard);
+        held
+    }
+
+    /// `true` when the catalogue write lock is free. The guard is dropped
+    /// here, so the check does not keep it.
+    #[cfg(test)]
+    pub(crate) fn catalogue_write_free(&self) -> bool {
+        let guard = self.capabilities.try_write();
+        let free = guard.is_some();
+        drop(guard);
+        free
+    }
+
+    /// A real publish calls this after it has dropped every lock it holds.
+    /// The stub does not: a delivery that never happens must fail the row,
+    /// not pass a lock check nobody ran.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "the publish stub does not deliver, so the observer is never called"
+    )]
+    fn notify_delivery(&self) {
+        let observer = self.delivery_observer.lock().clone();
+        if let Some(observer) = observer {
+            observer(self);
+        }
     }
 
     /// Declare whether the owning gateway serves more than one principal
@@ -607,6 +688,10 @@ impl CapabilityBackend {
                     revoked.insert(name.clone());
                 }
             }
+            // A row holds the swap here, before the catalogue is replaced,
+            // while this write lock is still held.
+            #[cfg(test)]
+            super::op_gate::reach(super::op_gate::Step::Swap);
             caps.install(admitted);
             caps.settle_absent(refused);
             // With the swap, under the same lock: `catalogue_snapshot` never
@@ -618,6 +703,11 @@ impl CapabilityBackend {
                 !revoked.contains(name) && caps.index.contains_key(name)
             });
         }
+        // The catalogue lock is released. A row holds this gap, then the
+        // publish drops its arguments and delivers nothing.
+        #[cfg(test)]
+        super::op_gate::reach(super::op_gate::Step::BeforePublish);
+        self.publish_revision(0, self.capability_snapshot());
         self.catalogue_changed();
         self.note_admitted(trusted, !partial);
 
@@ -904,6 +994,17 @@ impl CapabilityBackend {
     pub fn watched_directories(&self) -> Vec<String> {
         self.directories.read().clone()
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static NEXT_DELIVERY_OBSERVER: std::cell::RefCell<Option<DeliveryObserver>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn take_delivery_observer() -> Option<DeliveryObserver> {
+    NEXT_DELIVERY_OBSERVER.with(|slot| slot.borrow_mut().take())
 }
 
 fn build_success_tool_result(capability: &CapabilityDefinition, result: Value) -> ToolsCallResult {

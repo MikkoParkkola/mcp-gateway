@@ -99,6 +99,10 @@ impl CapabilityLoader {
     ///
     /// As [`Self::load_directory`].
     pub(crate) async fn load_directory_with_paths(path: &str) -> Result<DirectoryFiles> {
+        // Before the directory is read, and before any await, so a row can
+        // hold this operation at its load on the thread that is polling it.
+        #[cfg(test)]
+        super::op_gate::reach(super::op_gate::Step::Load);
         let root = path;
         let path = Path::new(path);
 

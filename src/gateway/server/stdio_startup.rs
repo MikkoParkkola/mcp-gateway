@@ -82,6 +82,9 @@ impl Gateway {
             // skipped by the load without a record: record it now, as the
             // file watcher records one that changes while it runs.
             cap_backend.detect_rug_pulls().await;
+            // After the catalogue swap, with no catalogue lock held.
+            // The stub delivers nothing.
+            cap_backend.publish_revision(0, cap_backend.capability_snapshot());
             cap_backend.mark_initial_scan_complete();
             meta_mcp.set_capabilities(cap_backend);
         }

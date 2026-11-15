@@ -142,6 +142,12 @@ impl Gateway {
                 // Before readiness and before webhook routes are registered, so
                 // nothing it unloads keeps a route.
                 cap_backend_for_load.detect_rug_pulls().await;
+                // After the catalogue swap, with no catalogue lock held.
+                // The stub delivers nothing.
+                cap_backend_for_load.publish_revision(
+                    0,
+                    cap_backend_for_load.capability_snapshot(),
+                );
 
                 if webhooks_enabled {
                     for cap in cap_backend_for_load.list_capabilities() {

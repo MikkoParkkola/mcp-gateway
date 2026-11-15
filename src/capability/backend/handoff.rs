@@ -198,6 +198,13 @@ impl super::CapabilityBackend {
             self.finish_initial_scan(registry);
         }
     }
+
+    /// What a delivery would have handed over. Empty while the publish stub
+    /// delivers nothing.
+    #[cfg(test)]
+    pub(crate) fn delivered_revisions(&self) -> Vec<(u64, CapabilityPart<PartDigest>)> {
+        self.handoff.delivered()
+    }
 }
 
 /// Which step a test is holding. A gate pauses only at its own step, so the

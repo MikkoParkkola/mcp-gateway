@@ -57,6 +57,8 @@ mod run_steps;
 // Unix only: the rows deny access through the mode bits.
 #[cfg(all(test, unix))]
 mod capability_snapshot_tests;
+#[cfg(test)]
+mod capability_publish_tests;
 mod run_wiring;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
