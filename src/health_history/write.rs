@@ -288,19 +288,38 @@ impl HealthHistory {
         sessions: u64,
         now: u64,
     ) -> super::gate::Admit {
+        let open_at_entry = mutant!(
+            "sampler_admit_at_entry",
+            matches!(
+                gate.state(),
+                super::gate::GateState::Open | super::gate::GateState::Released
+            ),
+            false
+        );
         #[cfg(test)]
         super::pause_points::at(super::pause_points::Point::SamplerBeforeLock, &self.key());
         let mut inner = self.0.lock();
-        let admitted = gate.admit(super::gate::Closure::Sample, || {
-            #[cfg(test)]
-            super::pause_points::at(super::pause_points::Point::AdmissionMark, &self.key());
-        });
+        let admitted = if open_at_entry {
+            super::gate::Admit::Run
+        } else {
+            gate.admit(super::gate::Closure::Sample, || {
+                #[cfg(test)]
+                super::pause_points::at(super::pause_points::Point::AdmissionMark, &self.key());
+            })
+        };
         if admitted == super::gate::Admit::Skip {
             return admitted;
         }
         inner.sample(memory, sessions, now);
         #[cfg(test)]
         count_sample(&self.key());
+        if mutant!("sample_two_locks", true, false) {
+            drop(inner);
+            #[cfg(test)]
+            super::pause_points::at(super::pause_points::Point::SampleBeforeTick, &self.key());
+            self.0.lock().tick(now);
+            return admitted;
+        }
         #[cfg(test)]
         super::pause_points::at(super::pause_points::Point::SampleBeforeTick, &self.key());
         inner.tick(now);

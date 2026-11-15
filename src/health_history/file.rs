@@ -119,9 +119,21 @@ pub(crate) fn save_gated(
     gate: &super::gate::HealthGate,
     wait: Wait,
 ) -> SaveOutcome {
+    let check = mutant!(
+        "saver_admit_at_entry",
+        if matches!(
+            gate.state(),
+            super::gate::GateState::Open | super::gate::GateState::Released
+        ) {
+            Check::None
+        } else {
+            Check::Gate(gate)
+        },
+        Check::Gate(gate)
+    );
     #[cfg(test)]
     super::pause_points::at(super::pause_points::Point::SaverBeforeLock, &path_key(path));
-    save_with(history, path, now, wait, Check::Gate(gate))
+    save_with(history, path, now, wait, check)
 }
 
 /// The checkpoint worker's save: it waits for SAVES, then writes only while
@@ -152,9 +164,21 @@ fn save_core(
             Wait::Block => SAVES.lock(),
             Wait::SkipIfBusy => match SAVES.try_lock() {
                 Some(guard) => guard,
-                None => return SaveOutcome::Busy,
+                None => {
+                    if mutant!("busy_sets_flag", true, false) {
+                        history.set_incomplete(true);
+                    }
+                    return SaveOutcome::Busy;
+                }
             },
         };
+        if mutant!(
+            "block_write_skipped",
+            wait == Wait::Block && matches!(check, Check::None),
+            false
+        ) {
+            return SaveOutcome::Busy;
+        }
         match check {
             Check::None => {}
             Check::Gate(gate) => {
@@ -166,11 +190,18 @@ fn save_core(
                     );
                 });
                 if admitted == super::gate::Admit::Skip {
+                    if mutant!("skip_sets_flag", true, false) {
+                        history.set_incomplete(true);
+                    }
                     return SaveOutcome::GateSkipped;
                 }
             }
             Check::Live(live) => {
-                if !live.load(std::sync::atomic::Ordering::SeqCst) {
+                if mutant!(
+                    "no_live_check",
+                    false,
+                    !live.load(std::sync::atomic::Ordering::SeqCst)
+                ) {
                     return SaveOutcome::Superseded;
                 }
             }

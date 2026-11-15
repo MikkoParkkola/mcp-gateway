@@ -95,10 +95,10 @@ impl HealthGate {
             GateState::Paused => {
                 self.flag(which).store(true, SeqCst);
                 at_mark();
-                match self.state() {
+                match mutant!("no_second_read", GateState::Paused, self.state()) {
                     GateState::Paused | GateState::Terminal => Admit::Skip,
                     GateState::Open | GateState::Released => {
-                        if self.claim(which) {
+                        if mutant!("closure_no_claim", true, self.claim(which)) {
                             Admit::Run
                         } else {
                             Admit::Skip

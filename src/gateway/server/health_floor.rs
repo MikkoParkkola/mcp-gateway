@@ -52,7 +52,9 @@ impl LiveGuard {
 
 impl Drop for LiveGuard {
     fn drop(&mut self) {
-        if let Some(live) = self.0.take() {
+        if let Some(live) = self.0.take()
+            && !mutant!("guard_keeps_live", true, false)
+        {
             live.store(false, SeqCst);
         }
     }
@@ -114,7 +116,14 @@ impl HealthFloor {
             Arc::clone(&self.history),
             self.path.clone(),
         );
-        let (inputs, clock) = (Arc::clone(&self.sample_inputs), self.clock);
+        let (inputs, clock) = (
+            mutant!(
+                "inputs_by_value",
+                Arc::new(OnceLock::new()),
+                Arc::clone(&self.sample_inputs)
+            ),
+            self.clock,
+        );
         std::thread::Builder::new()
             .name("health replay".to_owned())
             .spawn(move || {
@@ -180,6 +189,13 @@ impl FloorAdapter for HealthFloor {
     /// Open -> Paused, stored here, before the (ready) future: an unpolled or
     /// dropped pause still leaves the gate closed for resume or release.
     fn pause(&mut self, _deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>> {
+        if mutant!("pause_in_future", true, false) {
+            let gate = Arc::clone(&self.gate);
+            return Box::pin(async move {
+                gate.store(GateState::Paused);
+                Ok(())
+            });
+        }
         let outcome = if self.gate.state() == GateState::Open {
             self.gate.store(GateState::Paused);
             self.certified = false;
@@ -195,11 +211,27 @@ impl FloorAdapter for HealthFloor {
     /// coordinator's: this future only waits, and its guard ends the attempt
     /// if it is dropped first.
     fn checkpoint(&mut self, _deadline: Instant) -> BoxFuture<'_, Result<(), FloorFault>> {
-        if self.gate.state() != GateState::Paused || !self.worker_done() {
+        if mutant!(
+            "checkpoint_any_state",
+            false,
+            self.gate.state() != GateState::Paused
+        ) || mutant!("no_overlap_refusal", false, !self.worker_done())
+        {
             return refused();
         }
-        let (Some(path), Ok(now)) = (self.path.clone(), (self.clock)()) else {
-            return refused();
+        let Some(path) = self.path.clone() else {
+            return mutant!(
+                "path_none_certifies",
+                Box::pin(std::future::ready(Ok(()))),
+                refused()
+            );
+        };
+        let Ok(now) = (self.clock)() else {
+            return mutant!(
+                "clock_as_save_failed",
+                Box::pin(std::future::ready(Err(FloorFault::SaveFailed))),
+                refused()
+            );
         };
         let live = Arc::new(AtomicBool::new(true));
         let (history, worker_live) = (Arc::clone(&self.history), Arc::clone(&live));
@@ -208,11 +240,21 @@ impl FloorAdapter for HealthFloor {
         let handle = tokio::task::spawn_blocking(move || {
             #[cfg(test)]
             assert!(!panic_now, "the WorkerLost row's worker panic");
+            if mutant!("stop_in_checkpoint", true, false) {
+                history.stop(now);
+            }
             file::checkpoint_save(&history, &path, now, &worker_live)
         });
         self.worker = Some((handle, Arc::clone(&live)));
-        let mut guard = LiveGuard(Some(live));
+        let (mut guard, late) = mutant!(
+            "guard_in_future",
+            (LiveGuard(None), Some(Arc::clone(&live))),
+            (LiveGuard(Some(live)), None)
+        );
         Box::pin(async move {
+            if let Some(late) = late {
+                guard = LiveGuard(Some(late));
+            }
             let Some((handle, _)) = self.worker.as_mut() else {
                 return Err(FloorFault::WorkerLost);
             };
@@ -223,11 +265,19 @@ impl FloorAdapter for HealthFloor {
                     self.certified = true;
                     Ok(())
                 }
-                Ok(SaveOutcome::Failed) => Err(FloorFault::SaveFailed),
+                Ok(SaveOutcome::Failed) => Err(mutant!(
+                    "failed_as_unavailable",
+                    FloorFault::Unavailable,
+                    FloorFault::SaveFailed
+                )),
                 Ok(SaveOutcome::Superseded | SaveOutcome::Busy | SaveOutcome::GateSkipped) => {
                     Err(FloorFault::Unavailable)
                 }
-                Err(_) => Err(FloorFault::WorkerLost),
+                Err(_) => Err(mutant!(
+                    "lost_as_unavailable",
+                    FloorFault::Unavailable,
+                    FloorFault::WorkerLost
+                )),
             }
         })
     }
@@ -235,14 +285,25 @@ impl FloorAdapter for HealthFloor {
     /// Reopen and replay what was coalesced: claim each mark (the claimant
     /// owns the single run) and run the claimed work on one new thread.
     fn resume(&mut self) {
-        if matches!(self.gate.state(), GateState::Released | GateState::Terminal) {
+        if mutant!(
+            "final_reopens",
+            false,
+            matches!(self.gate.state(), GateState::Released | GateState::Terminal)
+        ) {
             return;
         }
         self.end_attempt();
         self.certified = false;
         self.gate.store(GateState::Open);
-        let sample = self.gate.claim(Closure::Sample);
-        let save = self.gate.claim(Closure::Save);
+        let (sample, save) = mutant!(
+            "resume_no_claim",
+            (false, false),
+            (
+                self.gate.claim(Closure::Sample),
+                self.gate.claim(Closure::Save)
+            )
+        );
+        let save = mutant!("replay_always", true, save);
         self.replays.retain(|replay| !replay.is_finished());
         if !(sample || save) {
             return;
@@ -262,22 +323,44 @@ impl FloorAdapter for HealthFloor {
         self.end_attempt();
         self.certified = false;
         self.gate.store(GateState::Released);
+        if mutant!("replay_on_release", true, false) {
+            let (sample, save) = (
+                self.gate.claim(Closure::Sample),
+                self.gate.claim(Closure::Save),
+            );
+            if (sample || save)
+                && let Ok(replay) = self.spawn_replay(sample, save)
+            {
+                self.replays.push(replay);
+            }
+        }
     }
 
     fn commit(&mut self) {
         if self.gate.state() == GateState::Paused && self.certified {
-            self.gate.store(GateState::Terminal);
+            self.gate.store(mutant!(
+                "commit_stays_paused",
+                GateState::Paused,
+                GateState::Terminal
+            ));
         } else {
             tracing::debug!("health floor: commit without a certified checkpoint; ignored");
         }
     }
 
     fn settled(&self) -> bool {
-        self.worker_done()
-            && self
-                .replays
-                .iter()
-                .all(std::thread::JoinHandle::is_finished)
+        mutant!(
+            "settled_always",
+            true,
+            self.worker_done()
+                && mutant!(
+                    "settled_ignores_replays",
+                    true,
+                    self.replays
+                        .iter()
+                        .all(std::thread::JoinHandle::is_finished)
+                )
+        )
     }
 }
 

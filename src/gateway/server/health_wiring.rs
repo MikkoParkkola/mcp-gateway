@@ -121,7 +121,11 @@ pub(super) fn saver_closure(
 ) -> impl Fn() + Send + Sync + 'static {
     move || {
         if let (Some(path), Ok(now)) = (&path, clock()) {
-            file::save_gated(&history, path, now, &gate, file::Wait::SkipIfBusy);
+            if mutant!("saver_ungated", true, false) {
+                file::save(&history, path, now, file::Wait::SkipIfBusy);
+            } else {
+                file::save_gated(&history, path, now, &gate, file::Wait::SkipIfBusy);
+            }
         }
     }
 }
@@ -137,6 +141,11 @@ pub(super) fn sampler_closure(
     move || {
         if let (Some(inputs), Ok(now)) = (inputs.get(), clock()) {
             let memory = (inputs.memory)();
+            let gate = mutant!(
+                "sampler_ungated",
+                Arc::new(HealthGate::default()),
+                Arc::clone(&gate)
+            );
             history.sample_and_tick_gated(&gate, memory, (inputs.sessions)() as u64, now);
         }
     }
