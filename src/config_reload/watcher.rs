@@ -415,7 +415,7 @@ pub(super) async fn run_tick(ctx: &ReloadContext, state: &mut TickState, wake: W
         crate::gateway::restart_config_floor::seams::AdmittedPoint::WatcherBeforeAdmission,
     );
     let guard = match gate.admit(crate::gateway::restart_config_floor::AdmitKind::Watcher) {
-        Ok(guard) => guard,
+        Ok(guard) => mutant!("watcher_guard_skipped", { drop(guard); None }, Some(guard)),
         Err(refusal) => {
             // Restarting and Stopping are final: the trigger is dropped with the
             // gateway. A pause keeps it for the tick that follows the resume.
@@ -436,7 +436,7 @@ pub(super) async fn run_tick(ctx: &ReloadContext, state: &mut TickState, wake: W
             reason = "only the test reload record names its source"
         )
     )]
-    let replay = gate.take_replay_owed(&guard);
+    let replay = mutant!("watcher_guard_skipped", false, guard.as_ref().is_some_and(|guard| gate.take_replay_owed(guard)));
     // Whatever its debounce state: the reload re-reads everything, and the
     // trigger it reports should be the one that was waiting.
     let trigger = state
