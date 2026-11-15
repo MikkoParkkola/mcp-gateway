@@ -25,15 +25,18 @@ impl<T: serde::Serialize> Probe<T> {
 }
 
 /// Kills "a key type implements Serialize again": the probe reads true for a
-/// type that does (positive control) and false for both key types.
+/// type that does (positive control) and false for both key types. Checked
+/// at compile time, so the mutant is a build failure; the row names it.
 #[test]
 fn neither_key_type_is_serialize() {
-    assert!(Probe::<ApiKeyBinding>::IS_SERIALIZE, "positive control");
-    assert!(!Probe::<ApiKeyConfig>::IS_SERIALIZE, "ApiKeyConfig");
-    assert!(
-        !Probe::<crate::gateway::auth::ResolvedApiKey>::IS_SERIALIZE,
-        "ResolvedApiKey"
-    );
+    const _: () = {
+        assert!(Probe::<ApiKeyBinding>::IS_SERIALIZE, "positive control");
+        assert!(!Probe::<ApiKeyConfig>::IS_SERIALIZE, "ApiKeyConfig");
+        assert!(
+            !Probe::<crate::gateway::auth::ResolvedApiKey>::IS_SERIALIZE,
+            "ResolvedApiKey"
+        );
+    };
 }
 
 fn at(rfc3339: &str) -> chrono::DateTime<chrono::Utc> {
@@ -169,7 +172,7 @@ fn keys_are_written_exactly_as_before() {
     let config_yaml = crate::yaml::to_string(&config).expect("config yaml");
     let nested: String = GOLDEN_YAML
         .lines()
-        .map(|line| format!("  {line}\n"))
+        .flat_map(|line| ["  ", line, "\n"])
         .collect();
     assert!(
         config_yaml.contains(&format!("auth:\n{nested}")),
