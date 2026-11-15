@@ -33,6 +33,10 @@ async fn drop_while_waiting(adapter: &mut HealthFloor, rig: &Rig) {
 /// C1: a checkpoint dropped while its worker waits writes nothing; resume
 /// replays the marked sample and then the marked save, once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "holding SAVES while the dropped attempt's worker waits is the window under test; the serialisation lock keeps other rows out of it"
+)]
 async fn c1_a_dropped_checkpoint_then_resume_replays_once() {
     let _serial = file::saves_test_lock();
     let rig = Rig::new();
@@ -68,6 +72,10 @@ async fn c1_a_dropped_checkpoint_then_resume_replays_once() {
 /// C1a: the drop guard alone stops the worker's write (SAVES is released
 /// before any resume or release could clear the attempt).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "holding SAVES while the dropped attempt's worker waits is the window under test; the serialisation lock keeps other rows out of it"
+)]
 async fn c1a_the_drop_guard_alone_stops_the_write() {
     let _serial = file::saves_test_lock();
     let rig = Rig::new();
