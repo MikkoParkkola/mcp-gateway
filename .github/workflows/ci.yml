@@ -1103,7 +1103,8 @@ jobs:
     name: Linux lib test binary
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
-    # The lib test binary's 25 min and the gateway binary's 15 min, plus the 10 min reserve check_swap_jobs.py keeps.
+    # Step limits (25 min for the lib test binary, 15 for the gateway binary) plus the 10 min reserve
+    # check_swap_jobs.py keeps must stay under the job's limit: 50 would equal it and fail, so 55.
     timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1139,7 +1140,7 @@ jobs:
         timeout-minutes: 15
         run: |
           echo "phase compile: the gateway binary at $(date -u +%T)"
-          cargo build --all-features --bin mcp-gateway
+          scripts/ci/with-memory-log.sh cargo build --all-features --bin mcp-gateway
           mkdir -p "$RUNNER_TEMP/gateway-bin"
           cp target/debug/mcp-gateway "$RUNNER_TEMP/gateway-bin/mcp-gateway"
       - name: Hand the gateway binary to the lib shards
