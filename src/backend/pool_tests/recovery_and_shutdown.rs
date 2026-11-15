@@ -570,9 +570,9 @@ done
     // A gate that times out ends the child: it never reaches the handshake.
     // Spawning the child's shell can take seconds on a loaded host, so its pid
     // is awaited for the shared hang bound, not a guess at a quick start.
-    let deadline = std::time::Instant::now() + crate::test_wait::HANG_BOUND;
+    let pid_by = std::time::Instant::now() + crate::test_wait::HANG_BOUND;
     while !std::fs::read_to_string(&pidfile).is_ok_and(|pid| !pid.trim().is_empty())
-        && std::time::Instant::now() < deadline
+        && std::time::Instant::now() < pid_by
     {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
