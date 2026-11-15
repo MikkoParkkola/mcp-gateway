@@ -342,15 +342,14 @@ fn h1b_seq3_stays_published_in_both_orders() {
         "the two parts name different revisions"
     );
     let attach_first = race_after_unlock(Release::AttachFirst, seq2.clone(), seq3.clone());
+    let expected = id_of(&seq3);
     let publish_first = race_after_unlock(Release::PublishFirst, seq2, seq3);
     assert_eq!(
-        attach_first,
-        id_of(&seq3),
+        attach_first, expected,
         "seq 3's id stays published when attach is released first"
     );
     assert_eq!(
-        publish_first,
-        id_of(&seq3),
+        publish_first, expected,
         "seq 3's id stays published when the publish is released first"
     );
 }
