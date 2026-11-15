@@ -238,6 +238,9 @@ async function statusTab(body, ctx) {
   }
 
   function commit() {
+    // A search wait can end after the user has left: the address is then another
+    // page's, and this list is no longer on screen.
+    if (!root.isConnected) return;
     epoch += 1;
     pageCursor = null;
     writeUrl();

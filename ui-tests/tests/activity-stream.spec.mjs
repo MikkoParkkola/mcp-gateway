@@ -336,3 +336,18 @@ test('A10 hostile: a tool and a key render as text', async ({ page }) => {
   await expect(page.locator('#content img')).toHaveCount(0);
   expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
 });
+
+test('A11 search left mid-wait: the next page keeps its own address, and no list request goes out', async ({ page }) => {
+  const urls = await install(page, { answer: () => list(ROWS) });
+  await open(page, urls, '/ui/activity/status');
+  await expect.poll(() => shownRows(page)).toHaveLength(5);
+  const before = urls.length;
+  // Typed, then a row opened before the 300 ms wait ends (the clock is paused).
+  await searchBox(page).pressSequentially('web.fetch');
+  await rowLinks(page).first().click();
+  await expect(page).toHaveURL('/ui/activity/c-1/status');
+  await page.clock.runFor(400);
+  // The wait ending must not write the list's filters into this page's address.
+  expect(await page.evaluate(() => `${location.pathname}${location.search}`)).toBe('/ui/activity/c-1/status');
+  expect(urls.length).toBe(before);
+});
