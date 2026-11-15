@@ -120,6 +120,11 @@ impl Parked {
         );
     }
 
+    /// Whether a thread has arrived here (non-blocking; consumes the signal).
+    pub(crate) fn arrived(&self) -> bool {
+        self.reached.try_recv().is_ok()
+    }
+
     /// Let the parked thread go on.
     pub(crate) fn release(&mut self) {
         if let Some(release) = self.release.take() {

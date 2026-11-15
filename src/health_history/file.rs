@@ -140,7 +140,7 @@ pub(crate) fn checkpoint_save(
 /// The one save core: SAVES per `wait`, `check` under it, then the snapshot
 /// and the write. Only a write attempt sets the incomplete flag (under SAVES,
 /// so two saves set it in the order they wrote); a skip never touches it.
-fn save_with(
+fn save_core(
     history: &HealthHistory,
     path: &Path,
     now: u64,
@@ -199,6 +199,21 @@ fn save_with(
     SaveOutcome::Failed
 }
 
+/// The save core with, under test, its outcome kept per path (rows tell a busy
+/// skip from a gate skip).
+fn save_with(
+    history: &HealthHistory,
+    path: &Path,
+    now: u64,
+    wait: Wait,
+    check: Check<'_>,
+) -> SaveOutcome {
+    let outcome = save_core(history, path, now, wait, check);
+    #[cfg(test)]
+    outcomes().lock().insert(path_key(path), outcome);
+    outcome
+}
+
 /// The snapshot and its atomic write; the caller holds [`SAVES`].
 fn snapshot_and_write(history: &HealthHistory, path: &Path, now: u64) -> Result<(), Unsaved> {
     let bytes = history.encode(now).ok_or(Unsaved::Encode)?;
@@ -232,6 +247,25 @@ fn writes() -> &'static parking_lot::Mutex<std::collections::HashMap<String, u64
 #[cfg(test)]
 fn count_write(path: &Path) {
     *writes().lock().entry(path_key(path)).or_default() += 1;
+}
+
+#[cfg(test)]
+fn outcomes() -> &'static parking_lot::Mutex<std::collections::HashMap<String, SaveOutcome>> {
+    static OUTCOMES: OnceLock<parking_lot::Mutex<std::collections::HashMap<String, SaveOutcome>>> =
+        OnceLock::new();
+    OUTCOMES.get_or_init(Default::default)
+}
+
+/// Forget `path`'s last outcome, so a row can wait for the next one.
+#[cfg(test)]
+pub(crate) fn forget_outcome(path: &Path) {
+    outcomes().lock().remove(&path_key(path));
+}
+
+/// The last save outcome for `path` (a test probe).
+#[cfg(test)]
+pub(crate) fn last_outcome(path: &Path) -> Option<SaveOutcome> {
+    outcomes().lock().get(&path_key(path)).copied()
 }
 
 /// Completed writes to `path` in this process (a test probe; rows assert deltas).

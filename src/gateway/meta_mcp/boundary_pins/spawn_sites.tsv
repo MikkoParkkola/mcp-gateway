@@ -45,6 +45,7 @@ src/gateway/server/background.rs	poll_export_source	spawn-blocking	1	no-refusal-
 src/gateway/server/background.rs	spawn_export_task	spawn	1	outside-calls	SIEM evidence-export timer loop
 src/gateway/server/background.rs	spawn_health_loop	spawn	1	outside-calls	backend health-check loop
 src/gateway/server/background.rs	spawn_idle_reaper	spawn	1	outside-calls	idle per-user backend reaper loop
+src/gateway/server/health_floor.rs	checkpoint	spawn-blocking	1	raised-at-join	the restart checkpoint's health save on the blocking pool; a write error returns as Failed and a panic as a join error, both mapped by the awaiting checkpoint (SaveFailed, WorkerLost)
 src/gateway/server/listener.rs	serve	spawn	1	outside-calls	bridges the shutdown signal to the HTTP server's graceful shutdown
 src/gateway/server/persistence.rs	spawn_periodic_save	spawn	1	outside-calls	periodic state save loop
 src/gateway/server/run.rs	run	spawn	1	outside-calls	waits for shutdown and cancels the reload token
