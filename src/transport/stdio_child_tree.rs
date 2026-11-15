@@ -396,8 +396,20 @@ impl ChildTree {
                 let _ = sent;
                 true
             }
-            (Leader::Zombie | Leader::Gone, _) => true,
-            (Leader::Running | Leader::Unproven, _) => false,
+            (Leader::Zombie | Leader::Gone, _) => {
+                #[cfg(test)]
+                if let Some(pid) = self.pid {
+                    signal_log::record(pid, signal_log::Sent::LeaderGone);
+                }
+                true
+            }
+            (Leader::Running | Leader::Unproven, _) => {
+                #[cfg(test)]
+                if let Some(pid) = self.pid {
+                    signal_log::record(pid, signal_log::Sent::Unproven);
+                }
+                false
+            }
         }
     }
 
@@ -489,6 +501,16 @@ impl ChildTree {
         let planned = grace.term_at < grace.kill_at || grace.term_owed;
         let due = grace.term_owed || now >= grace.term_at;
         let fits = now < grace.kill_at || now + MIN_PHASE <= slack_end;
+        #[cfg(test)]
+        if planned
+            && due
+            && !fits
+            && grace.term_sent_at.is_none()
+            && let Some(pid) = self.pid
+        {
+            let late = now.saturating_duration_since(grace.kill_at);
+            signal_log::record(pid, signal_log::Sent::SkipLate { late });
+        }
         if planned && due && fits && grace.term_sent_at.is_none() && self.send_group_term() {
             grace.term_sent_at = Some(now);
             if now >= grace.kill_at {

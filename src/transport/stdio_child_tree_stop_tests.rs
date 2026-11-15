@@ -63,6 +63,7 @@ async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
     let (w, t) = started_unhurried(&resists_term(), None).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
+    signal_log::arm(pid);
     let started_at = std::time::Instant::now();
     tokio::time::timeout(BOUND, t.close())
         .await
@@ -74,6 +75,7 @@ async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
         started_at.elapsed()
     );
     assert_killed(pid).await;
+    signal_log::assert_term_then_kill_strict(pid, "the uncut plan").await;
     gone(child).await;
 }
 
