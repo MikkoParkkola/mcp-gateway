@@ -12,7 +12,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use super::{SaveEdit, SaveValue, SecretTarget, UiSaved, ui_save};
 use crate::config_persistence::keyedit::Scalar;
 use crate::config_reload::ReloadContext;
-use crate::config_reload::reload_context::replace::ui_diff::{Shown, UiRefused, ui_diff};
+use crate::config_reload::reload_context::replace::ui_diff::{
+    BusyReason, Shown, UiRefused, ui_diff,
+};
 use crate::config_reload::reload_context::replace::{AuditPosture, FileRevision, GatewayAuth};
 use crate::config_reload::replace_test_support::{WAIT, context, read, refusing_context};
 use crate::config_reload::ui_fields::{FieldId, Param, PreviewEdit, PreviewValue};
@@ -488,7 +490,11 @@ fn every_writer_result_maps_to_one_refusal() {
     use crate::secret_store::SaveError;
 
     let rows = [
-        (ReplaceError::Busy, None, Mapped::Refusal(UiRefused::Busy)),
+        (
+            ReplaceError::Busy,
+            None,
+            Mapped::Refusal(UiRefused::Busy(BusyReason::Locked)),
+        ),
         (
             ReplaceError::Stale {
                 current: FileRevision::of(b"x"),

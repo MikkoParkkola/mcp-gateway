@@ -196,6 +196,13 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// The reader this thread's [`with_test_keychain`] installed, if any, for a task that
+/// runs the evaluation on another thread.
+#[cfg(test)]
+pub(crate) fn current_test_keychain() -> Option<Arc<dyn KeychainRead>> {
+    TEST_READER.with(|slot| slot.borrow().clone())
+}
+
 /// Runs `body` with every overlay built on this thread reading from `reader`.
 #[cfg(test)]
 pub(crate) fn with_test_keychain<T>(reader: Arc<dyn KeychainRead>, body: impl FnOnce() -> T) -> T {
