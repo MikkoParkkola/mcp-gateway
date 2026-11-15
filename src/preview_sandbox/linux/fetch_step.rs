@@ -8,7 +8,10 @@
     expect(dead_code, reason = "the npm fetch step, a later commit, runs it")
 )]
 
+use std::thread::JoinHandle;
+
 use super::mounts::PREVIEW_CONFIG;
+use crate::preview_sandbox::fetch_output::read_tail;
 
 /// The npm fetch command's whole environment: the D5 list (proxy through the
 /// relay with the fetch credential, no scripts, no git, the public registry)
@@ -50,60 +53,29 @@ pub(super) fn npm_env(credential: &str, port: u16, path: &str) -> Vec<(String, S
 /// child writing a lot to one cannot block while the other is read. Joined
 /// only after the sweep, when every holder of either pipe is gone.
 pub(super) struct Drains {
-    out: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    out: JoinHandle<std::io::Result<Vec<u8>>>,
+    err: JoinHandle<std::io::Result<Vec<u8>>>,
 }
 
-/// Start draining `stdout` and `stderr`, each to its last 64 KiB.
+/// Start draining `stdout` and `stderr`, each on its own thread to its last
+/// 64 KiB.
 pub(super) fn drain(
-    stdout: std::process::ChildStdout,
-    stderr: std::process::ChildStderr,
+    mut stdout: std::process::ChildStdout,
+    mut stderr: std::process::ChildStderr,
 ) -> Drains {
-    let out = std::thread::spawn(move || {
-        let (mut stdout, mut stderr) = (stdout, stderr);
-        let _ = crate::preview_sandbox::fetch_output::read_tail(&mut stdout)?;
-        crate::preview_sandbox::fetch_output::read_tail(&mut stderr)
-    });
-    Drains { out }
+    let out = std::thread::spawn(move || read_tail(&mut stdout));
+    let err = std::thread::spawn(move || read_tail(&mut stderr));
+    Drains { out, err }
 }
 
 impl Drains {
     /// Both tails, stdout's then stderr's; a failed read leaves that tail empty.
     pub(super) fn join(self) -> (Vec<u8>, Vec<u8>) {
-        let err = self
-            .out
-            .join()
-            .ok()
-            .and_then(Result::ok)
-            .unwrap_or_default();
-        (Vec::new(), err)
+        let tail = |handle: JoinHandle<std::io::Result<Vec<u8>>>| {
+            handle.join().ok().and_then(Result::ok).unwrap_or_default()
+        };
+        (tail(self.out), tail(self.err))
     }
-}
-
-/// What the run phase runs after an npm fetch.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) struct Run {
-    /// The file the drop step execs.
-    pub(super) program: String,
-    /// `argv[0]` (the bin) and the server's own arguments.
-    pub(super) argv: Vec<String>,
-    /// node's directory, then the install's bin directory.
-    pub(super) path: String,
-}
-
-/// The run after an npm fetch of `spec` installed under `home`: the
-/// package's own bin (`npm_bin` confines it to the package's directory),
-/// exec'd directly with `run_args`, and PATH holding node's directory
-/// `node_dir` and the install's `.bin`, never the plan's own program or PATH.
-pub(super) fn npm_run(
-    home: &std::path::Path,
-    spec: &str,
-    run_args: &[String],
-    node_dir: &str,
-) -> Result<Run, crate::preview_sandbox::Refusal> {
-    let _ = (home, spec, run_args, node_dir);
-    Err(crate::preview_sandbox::Refusal::Step(
-        "the run after a fetch is not built yet".into(),
-    ))
 }
 
 #[cfg(test)]
