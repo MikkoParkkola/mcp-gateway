@@ -11,9 +11,9 @@ use super::super::super::abandoned::{
 };
 use super::super::DrainError;
 use super::super::fixtures::{Live, actor, attributed, runtime};
-use super::super::handover::abandoned_path;
 use super::drain_abandoned;
 use super::tests::{DrainRig, drain_rig, unfrozen};
+use crate::config_persistence::journal::v2::abandoned_path;
 
 /// Replace the abandoned file with `bytes`, private to this user as a handover leaves it.
 fn plant(rig: &DrainRig, bytes: &[u8]) {

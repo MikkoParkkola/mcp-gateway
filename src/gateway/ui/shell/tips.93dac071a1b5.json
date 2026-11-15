@@ -50,12 +50,6 @@
    "gateway.status.memory-now",
    "gateway.status.reloaded-at-10-31-after"
   ],
-  "gateway.settings": [
-   "gateway.settings.2-which-key-does-it",
-   "gateway.settings.and-memory-just-brought-in",
-   "gateway.settings.environment-name",
-   "gateway.settings.sentry-the-server-you-just"
-  ],
   "overview": [
    "overview.status.answering-grouped-by-the-gateway",
    "overview.status.calls-per-30-min",
@@ -132,6 +126,12 @@
   "tools": [
    "tools.actions.run-as"
   ]
+ },
+ "_pending_later": {
+  "gateway.settings.2-which-key-does-it": "Gateway › Settings: Connect a client",
+  "gateway.settings.and-memory-just-brought-in": "Gateway › Settings: Connect a client",
+  "gateway.settings.environment-name": "Gateway › Settings: the editable environment name",
+  "gateway.settings.sentry-the-server-you-just": "Gateway › Settings: Connect a client"
  },
  "access.actions.keys": {
   "title": "Keys",

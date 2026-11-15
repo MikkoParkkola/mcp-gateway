@@ -280,7 +280,9 @@ fn enclosing_fn(lines: &[&str], at: usize) -> Option<String> {
 
 // G6 (pin once green): no mutation spawns blocking work without the gate. Every
 // `spawn_blocking` in the store's own files sits in the admitting helper, or in
-// `open` and `close`, which never run during a restart attempt.
+// `open` and `close`, which never run during a restart attempt, or is the
+// restart checkpoint's own re-save (store_floor.rs, fn checkpoint), which runs
+// while the gate is closed.
 #[test]
 fn every_blocking_store_write_goes_through_the_gate() {
     const ALLOWED: [&str; 3] = ["admitted", "open", "close"];
@@ -307,7 +309,8 @@ fn every_blocking_store_write_goes_through_the_gate() {
                 continue;
             }
             let owner = enclosing_fn(&lines, at).unwrap_or_default();
-            if !ALLOWED.contains(&owner.as_str()) {
+            let resave = name == "store_floor.rs" && owner == "checkpoint";
+            if !ALLOWED.contains(&owner.as_str()) && !resave {
                 strays.push(format!("{name}:{} in fn {owner}", at + 1));
             }
         }

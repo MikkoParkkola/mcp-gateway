@@ -273,6 +273,8 @@ pub use diff::{ConfigPatch, compute_diff};
 pub use reload_context::ReloadContext;
 pub(crate) use reload_context::SurfacedHook;
 use reload_context::replace::startup_recovery_intent;
+#[cfg(feature = "webui")]
+pub(crate) use reload_context::{RELOAD_RESTARTING, RELOAD_STOPPING, is_gate_refusal};
 
 /// Recover a byte write a crash left behind, before a serving gateway first
 /// loads `config`, recording the recovery in the audit log of the config it
@@ -300,7 +302,7 @@ pub(crate) use reload_context::replace::{
 // already pub(crate) in its module; the rest of the two modules stays private.
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::ui_diff::{
-    Patch, PatchStep, PreviewRefused, Shown, UiPreview, UiRefused, path_text, ui_diff,
+    BusyReason, Patch, PatchStep, PreviewRefused, Shown, UiPreview, UiRefused, path_text, ui_diff,
 };
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::ui_save::{SaveEdit, SaveValue, SecretTarget, ui_save};
@@ -309,6 +311,8 @@ use reload_context::{
     EvaluatedReload, changed_startup_env_keys, load_config_patch, with_pending_restart,
 };
 pub use watcher::ConfigWatcher;
+#[cfg(test)]
+pub(crate) use watcher::HandTick;
 use watcher::{ReloadTrigger, watch_dir_of};
 #[cfg(test)]
 use watcher::{absolute_watch_path, config_watch_paths, is_config_event, is_config_event_for};
@@ -387,6 +391,8 @@ mod firewall_shape_reload_tests;
 mod grant_audit_crash_tests;
 #[cfg(test)]
 mod grant_audit_journal_tests;
+#[cfg(test)]
+mod grant_audit_plan_tests;
 #[cfg(test)]
 mod grant_audit_reload_tests;
 #[cfg(test)]

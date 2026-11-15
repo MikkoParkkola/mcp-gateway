@@ -67,16 +67,16 @@ fn secret<'de, D: Deserializer<'de>>(deserializer: D) -> Result<WipedBytes, D::E
 }
 
 use super::errors::{
-    config_refusal, flat_error, no_config_file, no_reload_read, no_reload_write, stale,
-    structured_error,
+    RESTART_BUSY, config_refusal, flat_error, gate_refusal, no_config_file, no_reload_read,
+    no_reload_write, stale, structured_error,
 };
 use super::secret_slots::{self, Unopened};
 use crate::config_persistence::keyedit::{FiniteF64, GiveUp, Scalar};
 use crate::config_reload::ui_fields::{FieldId, Param, PreviewEdit, PreviewValue, ValueKind};
 use crate::config_reload::{
-    AuditPosture, FileRevision, GatewayAuth, NO_AUDIT_LOG, Patch, PatchStep, PreviewRefused,
-    RELOAD_LOCK_WAIT, RefusalClass, ReloadOutcome, SaveEdit, SaveValue, SecretTarget, Shown,
-    UiPreview, UiRefused, path_text, ui_diff, ui_save,
+    AuditPosture, BusyReason, FileRevision, GatewayAuth, NO_AUDIT_LOG, Patch, PatchStep,
+    PreviewRefused, RELOAD_LOCK_WAIT, RefusalClass, ReloadOutcome, SaveEdit, SaveValue,
+    SecretTarget, Shown, UiPreview, UiRefused, path_text, ui_diff, ui_save,
 };
 use crate::gateway::auth::{MintingKey, QuotaPrincipal, ResolvedAuthConfig, SessionMintedBy};
 use axum::http::{
@@ -368,7 +368,8 @@ fn answer_for(refusal: UiRefused, fields: &[&str]) -> Response {
         UiRefused::Stale(_) => "stale",
         UiRefused::StaleUnpreviewable(_) => "stale_unpreviewable",
         UiRefused::Preview(_) => "preview",
-        UiRefused::Busy => "busy",
+        UiRefused::Busy(_) => "busy",
+        UiRefused::Down(_) => "down",
         UiRefused::SecretsRefused { .. } => "secrets_refused",
         UiRefused::Failed(_) => "failed",
     };
@@ -421,11 +422,11 @@ fn bad_value(id: FieldId, reason: &str) -> Response {
 }
 
 /// The refusals a client may retry as they are: the design lists Retry-After
-/// for these 503s only; the others need someone to change the config first.
+/// for these only; the others need someone to change the config first.
 fn retryable(refusal: &UiRefused) -> bool {
     matches!(
         refusal,
-        UiRefused::Busy
+        UiRefused::Busy(_)
             | UiRefused::StaleUnpreviewable(_)
             | UiRefused::Preview(PreviewRefused::Recovering)
             | UiRefused::SecretsRefused { timeout: true }
@@ -516,9 +517,15 @@ fn answer(refusal: UiRefused) -> Response {
         }
         // Refused before anything was attempted: a 4xx (a 5xx means the outcome is
         // not confirmed). Still retryable, so it keeps its Retry-After.
-        UiRefused::Busy => {
-            flat_error(StatusCode::CONFLICT, "the config is being written; retry").into_response()
-        }
+        UiRefused::Busy(reason) => flat_error(
+            StatusCode::CONFLICT,
+            match reason {
+                BusyReason::Locked => "the config is being written; retry",
+                BusyReason::Restart => RESTART_BUSY,
+            },
+        )
+        .into_response(),
+        UiRefused::Down(down) => gate_refusal(down),
         UiRefused::SecretsRefused { timeout: true } => flat_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "the secret store did not answer; retry",
@@ -586,6 +593,9 @@ mod answer_tests;
 #[cfg(test)]
 #[path = "settings_cli_tests.rs"]
 mod cli_tests;
+#[cfg(test)]
+#[path = "settings_floor_tests.rs"]
+mod floor_tests;
 #[cfg(test)]
 #[path = "settings_route_secret_tests.rs"]
 mod route_secret_tests;

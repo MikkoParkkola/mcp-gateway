@@ -388,6 +388,7 @@ fn h8c_a_failed_save_marks_the_run_incomplete_until_one_succeeds() {
 /// made while the second save waits; it must be in the file.
 #[test]
 fn h6b_a_save_waits_for_the_one_in_progress() {
+    let _serial = file::saves_test_lock();
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("health.json");
     let h = std::sync::Arc::new(fresh(T0));
@@ -419,6 +420,7 @@ fn h6b_a_save_waits_for_the_one_in_progress() {
 /// waited fails the row instead of hanging it.
 #[test]
 fn h6c_a_periodic_save_skips_while_another_save_runs() {
+    let _serial = file::saves_test_lock();
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("health.json");
     let h = fresh(T0);
@@ -504,4 +506,93 @@ fn h9d_a_dropped_gap_still_makes_coverage_incomplete() {
     let (h, _) = HealthHistory::start(Some(&bytes), Restores::Counted(35), at);
     // The first gap, [T0+10, T0+100), is the one the cap dropped.
     assert!(!h.uptime(T0, T0 + 100).coverage_complete);
+}
+
+/// S1 (restart slice 6b): the plain Block save keeps today's behaviour through
+/// the save core: a write clears the flag; a failure sets it and logs once.
+#[test]
+fn s1_a_block_save_keeps_todays_behaviour() {
+    let _serial = file::saves_test_lock();
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let path = dir.path().join("health.json");
+    let h = fresh(T0);
+    h.set_incomplete(true);
+    let before = file::write_count(&path);
+    assert!(
+        file::save(&h, &path, T0, file::Wait::Block),
+        "the save did not complete"
+    );
+    assert_eq!(file::write_count(&path) - before, 1);
+    assert!(!h.incomplete(), "a completed save left the flag set");
+    let blocked = dir.path().join("blocked");
+    std::fs::create_dir(&blocked).expect("a directory where the file goes");
+    let (saved, logs) = crate::test_log_capture::capture_warnings(|| {
+        file::save(&h, &blocked, T0, file::Wait::Block)
+    });
+    assert!(!saved, "a failed save reported success");
+    assert!(h.incomplete(), "a failed save left the flag clear");
+    assert_eq!(
+        logs.matches("Failed to save the health history").count(),
+        1,
+        "{logs}"
+    );
+}
+
+/// S2 (restart slice 6b): a periodic save that finds SAVES busy changes
+/// nothing: not the file, not the flag (from either value), not the log.
+#[test]
+fn s2_a_busy_periodic_save_changes_nothing() {
+    let _serial = file::saves_test_lock();
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let path = dir.path().join("health.json");
+    let h = fresh(T0);
+    let gate = gate::HealthGate::default();
+    let held = file::hold_saves();
+    for flag in [false, true] {
+        h.set_incomplete(flag);
+        let before = file::write_count(&path);
+        let (outcome, logs) = crate::test_log_capture::capture_warnings(|| {
+            file::save_gated(&h, &path, T0, &gate, file::Wait::SkipIfBusy)
+        });
+        assert_eq!(outcome, file::SaveOutcome::Busy);
+        assert_eq!(file::write_count(&path), before, "a busy save wrote");
+        assert_eq!(h.incomplete(), flag, "a busy save touched the flag");
+        assert!(logs.is_empty(), "a busy save logged: {logs}");
+    }
+    drop(held);
+}
+
+/// S3 (restart slice 6b): a periodic save the gate turns away changes
+/// nothing: not the file, not the flag (from either value).
+#[test]
+fn s3_a_gate_skipped_save_changes_nothing() {
+    let _serial = file::saves_test_lock();
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let path = dir.path().join("health.json");
+    let h = fresh(T0);
+    let gate = gate::HealthGate::default();
+    gate.store(gate::GateState::Paused);
+    for flag in [false, true] {
+        h.set_incomplete(flag);
+        let before = file::write_count(&path);
+        let mut outcome = file::save_gated(&h, &path, T0, &gate, file::Wait::SkipIfBusy);
+        for _ in 0..1_000 {
+            if outcome != file::SaveOutcome::Busy {
+                break;
+            }
+            std::thread::yield_now();
+            outcome = file::save_gated(&h, &path, T0, &gate, file::Wait::SkipIfBusy);
+        }
+        assert_eq!(
+            outcome,
+            file::SaveOutcome::GateSkipped,
+            "the gate did not turn the save away"
+        );
+        assert_eq!(
+            file::write_count(&path),
+            before,
+            "a gate-skipped save wrote"
+        );
+        assert_eq!(h.incomplete(), flag, "a gate-skipped save touched the flag");
+    }
 }

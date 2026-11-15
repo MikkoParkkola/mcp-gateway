@@ -41,36 +41,36 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.b94efb111bf1.js",
-        include_bytes!("shell/gateway.b94efb111bf1.js"),
+        "gateway.54be98229a14.js",
+        include_bytes!("shell/gateway.54be98229a14.js"),
     ),
     (
-        "shell.85514d082c34.js",
-        include_bytes!("shell/shell.85514d082c34.js"),
+        "shell.4dc4dc7764c1.js",
+        include_bytes!("shell/shell.4dc4dc7764c1.js"),
     ),
     (
         "shell.8a1ede0f5317.css",
         include_bytes!("shell/shell.8a1ede0f5317.css"),
     ),
     (
-        "tips.4e880b89494e.json",
-        include_bytes!("shell/tips.4e880b89494e.json"),
+        "tips.93dac071a1b5.json",
+        include_bytes!("shell/tips.93dac071a1b5.json"),
+    ),
+    (
+        "tools.1c15a848613d.js",
+        include_bytes!("shell/tools.1c15a848613d.js"),
     ),
     (
         "tools.24f226efcd24.css",
         include_bytes!("shell/tools.24f226efcd24.css"),
     ),
     (
-        "tools.d6737570d8e0.js",
-        include_bytes!("shell/tools.d6737570d8e0.js"),
-    ),
-    (
         "tooltip.5251c22696fd.css",
         include_bytes!("shell/tooltip.5251c22696fd.css"),
     ),
     (
-        "tooltip.8bb0b1b77c28.js",
-        include_bytes!("shell/tooltip.8bb0b1b77c28.js"),
+        "tooltip.d82a4a9834d8.js",
+        include_bytes!("shell/tooltip.d82a4a9834d8.js"),
     ),
 ];
 

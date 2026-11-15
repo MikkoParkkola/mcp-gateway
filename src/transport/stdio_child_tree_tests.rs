@@ -611,26 +611,6 @@ async fn a_held_tree_delays_no_other_in_the_reaper_loop() {
     );
 }
 
-/// MIK-7923 P5: a tree spawned by a start the retire overtook after its
-/// pre-spawn check is refused at install and ended by the reaper, never
-/// installed.
-#[tokio::test]
-async fn a_tree_installed_after_a_retire_is_refused_and_ended() {
-    let (_w, t) = started("while IFS= read -r l; do :; done", None).await;
-    t.retire_tree_now();
-    let mut cmd = tokio::process::Command::new("sh");
-    cmd.args(["-c", "exec sleep 60"]);
-    let tree = ChildTree::new(super::super::spawn_in_own_tree(cmd).expect("spawn"));
-    let pid = pid_of(tree.pid().expect("leader pid"));
-    let refused = t.install_tree(tree);
-    assert!(
-        matches!(refused, Err(crate::Error::BackendNotFound(_))),
-        "a retired transport installed a tree: {refused:?}"
-    );
-    assert!(t.child.lock().tree.is_none(), "nothing was installed");
-    assert_eq!(finished(pid).await.refused, 0, "the reaper ended it");
-}
-
 /// MIK-7923: a transport dropped without `close` hands its tree to the
 /// reaper, so it gets the settle and the reap a close gets, not the single
 /// fallback signal of `ChildTree`'s Drop.
@@ -718,30 +698,6 @@ async fn gone_or_zombie(mut child: std::process::Child) {
     }
 }
 
-/// MIK-8229: `start`'s install refusal. A retire that lands between the
-/// spawn and the install (one from another thread can) refuses a restart,
-/// installs nothing, and drops the previous start's stdin, so no later write
-/// can reach a stale child.
-#[tokio::test]
-async fn a_retire_between_spawn_and_install_refuses_the_start() {
-    let (_w, t) = started("while IFS= read -r l; do :; done", None).await;
-    assert!(
-        t.writer.lock().await.is_some(),
-        "precondition: the first start's stdin"
-    );
-    t.retire_after_spawn_for_test();
-    let refused = t.start().await;
-    assert!(
-        matches!(&refused, Err(crate::Error::BackendNotFound(m)) if m.contains("while it started")),
-        "refused at install: {refused:?}"
-    );
-    assert!(
-        t.writer.lock().await.is_none(),
-        "the old stdin was released"
-    );
-    assert!(t.child.lock().tree.is_none(), "nothing was installed");
-}
-
 /// The reader's dropped-transport exit (MIK-8229): a member that escaped the
 /// group keeps stdout and writes after the transport is gone, so the reader
 /// gets a line it can no longer deliver, logs why, and stops. Handshaked, not
@@ -776,6 +732,9 @@ fn a_line_after_the_transport_dropped_stops_the_reader() {
     });
 }
 
+/// A retire or a graceful handover that lands before or during a start.
+#[path = "stdio_child_tree_handover_tests.rs"]
+mod handover;
 /// The MCP stdio stop order (EOF, wait, SIGTERM, wait, kill) and its gateway
 /// stop deadline.
 #[path = "stdio_child_tree_stop_tests.rs"]

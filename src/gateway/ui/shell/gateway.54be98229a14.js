@@ -8,7 +8,7 @@
 // and the list is read again, so a kept entry stays listed. Status and Actions
 // come with the rest of this page; until then they are not drawn. Every
 // server-supplied string goes in with textContent.
-import { register, render, el as h } from '/ui/assets/shell.85514d082c34.js';
+import { register, render, el as h } from '/ui/assets/shell.4dc4dc7764c1.js';
 
 const STORES = { files: 'Files', keychain: 'Keychain' };
 const storeWord = (s) => STORES[s] ?? String(s);
@@ -92,10 +92,8 @@ async function settingsTab(body, ctx) {
 
 register('gateway', {
   title: 'Gateway',
-  // Settings is built in parts: this one draws the unused secret entries. The tooltip copy
-  // check holds the later parts' tips in a pending group named gateway.settings for exactly
-  // as long as this says so; the screen that completes the tab removes both.
-  inParts: ['settings'],
+  // Settings is built in parts: this one draws the unused secret entries. The later parts'
+  // tooltips wait in the copy's _pending_later, each naming the part that will draw it.
   tabs: {
     // Status and Actions are the rest of this page's work; null keeps them off the tab bar.
     status: null,

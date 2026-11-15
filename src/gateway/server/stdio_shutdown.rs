@@ -330,13 +330,14 @@ impl Gateway {
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
-        let stop = self.backends.stop_all_by(stop_deadline);
+        let stop = self
+            .backends
+            .stop_all_by(stop_deadline, crate::backend::Handover::WhenHurried);
         tokio::pin!(stop);
         tokio::select! {
             biased;
             cut = hurry.wait(), if hurried.is_none() => {
-                self.backends
-                    .hand_over_now(cut.saturating_duration_since(Instant::now()));
+                self.backends.hand_over_now(cut);
                 bounded_step(deadline.min(cut), "backend stop", stop).await;
             }
             () = async {

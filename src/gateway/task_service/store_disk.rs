@@ -573,9 +573,14 @@ pub(super) fn write_record(
         let _ = fs::remove_file(&temp);
         return Err(Fault::BeforeRename(error));
     }
-    fire(hook, StoreWriteStage::DirectorySync)
-        .and_then(|()| sync_dir(dir))
-        .map_err(Fault::AfterRename)
+    sync_store_dir(dir, hook).map_err(Fault::AfterRename)
+}
+
+/// Sync the store directory itself, through the hook's `DirectorySync` stage:
+/// the last step of every record write, and the whole of an empty store's
+/// checkpoint.
+pub(super) fn sync_store_dir(dir: &Path, hook: Option<&CommitHook>) -> io::Result<()> {
+    fire(hook, StoreWriteStage::DirectorySync).and_then(|()| sync_dir(dir))
 }
 
 /// Claim a private temporary file, retrying past a name some earlier attempt

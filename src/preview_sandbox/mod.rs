@@ -8,9 +8,13 @@
 //! and, where one exists, the one-time step that fixes it. There is no
 //! unsandboxed fallback and no setting that turns the sandbox off.
 
+#[cfg(unix)]
+mod control;
 mod fetch;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(unix)]
+mod proxy;
 #[cfg(target_os = "linux")]
 use linux as os;
 
@@ -244,3 +248,5 @@ pub async fn availability() -> &'static Result<(), Refusal> {
 }
 
 mod fetch_output;
+#[cfg(test)]
+mod staged_tests;
