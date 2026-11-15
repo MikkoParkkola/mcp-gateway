@@ -257,7 +257,7 @@ async fn no_transparency_log_answers_audit_log_required() {
 async fn only_confirm_1_mints_and_its_answer_is_not_stored() {
     let inv = ready_invocation();
     let shown = sample(2, 10);
-    // One sample per GET; this row makes twelve.
+    // One sample per GET; this row makes sixteen.
     let script = samples(&[Some(shown); 16]);
     let fx = fixture(Gateway::KeysWithLog, Some(confirm(&inv, &script))).await;
     let (plain, plain_headers) = get(&fx, "").await;
@@ -277,6 +277,10 @@ async fn only_confirm_1_mints_and_its_answer_is_not_stored() {
         "?confirm=1&bad=%ZZ",
         "?confirm=1&=x",
         "?confirm=1&",
+        "?confirm=1&a=%4",
+        "?%63onfirm=1",
+        "?confirm=%31",
+        "?confirm=1&confirm=0",
     ] {
         let (body, _) = get(&fx, query).await;
         assert_eq!(body, plain, "{query} answers exactly like a plain GET");
@@ -504,6 +508,21 @@ fn the_registry_override_seams_exist_only_in_test_builds() {
             "{seam} is compiled into a release build"
         );
     }
+    // The hook that swaps a registry into the process facts is a seam too.
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/gateway/router/process_facts.rs"
+    );
+    let raw = std::fs::read_to_string(path).expect("read process_facts.rs");
+    let shipped = crate::test_source_text::production_text(&raw);
+    assert!(
+        raw.contains("fn with_restart_confirm("),
+        "premise: the hook is in the source"
+    );
+    assert!(
+        !shipped.contains("fn with_restart_confirm("),
+        "with_restart_confirm is compiled into a release build"
+    );
 }
 
 // T-NOLOG-LINE, its GET leg (GET.1): a minting GET writes the token to no log
@@ -615,4 +634,52 @@ async fn an_auth_off_gateway_refuses_every_restart_get() {
         "no token in a refusal"
     );
     assert_eq!(registry(&fx).entry_count(), 0, "no entry");
+}
+
+// D2 (ui's B6 rows depend on it): while restart is not ready, the body is
+// byte for byte the one shipped before 7c-GET, as an exact string (keys in
+// serde_json's sorted order), with and without the full view's sample.
+#[test]
+fn the_not_ready_body_is_byte_identical_to_the_shipped_one() {
+    use super::restart::availability_body;
+    use super::restart_confirm::Reason;
+    use super::status::StatusView;
+    #[cfg(not(windows))]
+    let (reason, recovery) = (
+        "restart_not_available",
+        "This process cannot tell which supervisor runs it; use your supervisor's restart command, \
+         for example systemctl restart, brew services restart, or docker restart.",
+    );
+    #[cfg(windows)]
+    let (reason, recovery) = (
+        "windows_manual_restart",
+        "Restart the service or process through its service or process manager.",
+    );
+    let off = Readiness::Unavailable(Reason::PLATFORM);
+    let shown = WriteSample {
+        count: 7,
+        complete_secs: 42,
+        taken_at_mono: Instant::now(),
+        writes_total: 99,
+    };
+    assert_eq!(
+        serde_json::to_string(&availability_body(StatusView::Full, Some(shown), off)).unwrap(),
+        format!(
+            r#"{{"available":false,"reason":"{reason}","recent_writes":{{"complete_secs":42,"count":7}},"recovery":"{recovery}"}}"#
+        )
+    );
+    assert_eq!(
+        serde_json::to_string(&availability_body(StatusView::CountsOnly, None, off)).unwrap(),
+        format!(r#"{{"available":false,"reason":"{reason}","recovery":"{recovery}"}}"#)
+    );
+}
+
+// T-GET-OPTIN: other well-formed pairs beside exactly one confirm=1 still mint.
+#[tokio::test]
+async fn other_well_formed_pairs_beside_confirm_1_still_mint() {
+    let inv = ready_invocation();
+    let script = samples(&[Some(sample(1, 5)); 2]);
+    let fx = fixture(Gateway::KeysWithLog, Some(confirm(&inv, &script))).await;
+    let (body, _) = get(&fx, "?tab=actions&confirm=1&lang=en%2Dgb").await;
+    assert!(token(&body).is_some(), "{body}");
 }
