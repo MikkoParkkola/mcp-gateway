@@ -52,9 +52,27 @@ pub(crate) fn reserved_port() -> u16 {
     panic!("no free port in {FIRST}..{}", FIRST + SPAN);
 }
 
+/// A TCP socket bound to a loopback port that never listens. While the caller
+/// holds it, a connect to its address is refused and no other bind can take
+/// the port. It is bound without address reuse, so on Linux and macOS a
+/// reuse-address bind (the way tokio listeners bind) is refused too. Hold it
+/// until the last connect: dropping it frees the port, and a parallel test's
+/// port-0 bind could then be handed it and answer.
+///
+/// # Panics
+/// When the socket cannot be created or bound.
+pub(crate) fn refusing_socket() -> tokio::net::TcpSocket {
+    let socket = tokio::net::TcpSocket::new_v4().expect("socket");
+    socket.set_reuseaddr(false).expect("no address reuse");
+    socket
+        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .expect("bind without listening");
+    socket
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{FIRST, SPAN, reserved_port};
+    use super::{FIRST, SPAN, refusing_socket, reserved_port};
 
     /// Whether the dynamic range `a`-`b` (either order: XNU accepts a
     /// descending pair) misses the reserved range entirely.
@@ -133,5 +151,38 @@ mod tests {
         assert!((FIRST..FIRST + SPAN).contains(&a), "{a}");
         assert!((FIRST..FIRST + SPAN).contains(&b), "{b}");
         assert_ne!(a, b, "each call gets its own port");
+    }
+
+    /// A held refusing socket keeps its port: while it is held, a bind of its
+    /// address fails as in use and a connect to it is refused.
+    #[test]
+    fn a_held_refusing_socket_keeps_its_port_and_refuses() {
+        let held = refusing_socket();
+        let addr = held.local_addr().expect("address");
+        assert_eq!(
+            std::net::TcpListener::bind(addr)
+                .map(|_| ())
+                .map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::AddrInUse),
+            "a plain bind of the held port {addr} did not fail as in use"
+        );
+        #[cfg(unix)]
+        {
+            let reuse = tokio::net::TcpSocket::new_v4().expect("socket");
+            reuse.set_reuseaddr(true).expect("address reuse");
+            assert_eq!(
+                reuse.bind(addr).map_err(|e| e.kind()),
+                Err(std::io::ErrorKind::AddrInUse),
+                "a reuse-address bind of the held port {addr} did not fail as in use"
+            );
+        }
+        assert_eq!(
+            std::net::TcpStream::connect(addr)
+                .map(|_| ())
+                .map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::ConnectionRefused),
+            "a connect to the held port was not refused"
+        );
+        drop(held);
     }
 }

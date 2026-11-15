@@ -272,10 +272,12 @@ async fn an_answer_that_is_not_the_typed_shape_is_an_error() {
 /// MIK-9456.CLI.2: a gateway that is not there is an error.
 #[tokio::test]
 async fn an_unreachable_gateway_is_an_error() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    drop(listener);
+    // Held, never listening, for the whole row: no parallel test can be
+    // handed the port and answer.
+    let held = crate::test_ports::refusing_socket();
+    let base = format!("http://{}", held.local_addr().unwrap());
     assert!(ask(&base).await.is_err());
+    drop(held);
 }
 
 /// MIK-9456.CLI.3: a redirect is not followed (the next hop was not checked
@@ -460,14 +462,16 @@ async fn the_composed_command_exits_nonzero_on_every_failure_class() {
         fail,
         "wrong shape"
     );
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let dead = format!("http://{}", listener.local_addr().unwrap());
-    drop(listener);
+    // Held, never listening, until after the "unreachable" call: no parallel
+    // test can be handed the port and answer.
+    let held = crate::test_ports::refusing_socket();
+    let dead = format!("http://{}", held.local_addr().unwrap());
     assert_eq!(
         code(run(&dead, EMAIL.as_bytes(), Some(TOKEN)).await),
         fail,
         "unreachable"
     );
+    drop(held);
 }
 
 async fn run_page(base: &str, input: &[u8]) -> std::process::ExitCode {

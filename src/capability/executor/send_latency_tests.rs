@@ -247,10 +247,10 @@ async fn an_http_send_past_its_timeout_notes_timed_out() {
 /// backoff between them is not), Failed at the end.
 #[tokio::test]
 async fn retried_http_sends_note_once() {
-    // A port nothing listens on: every attempt fails to connect.
-    let closed = TcpListener::bind("127.0.0.1:0").expect("a port");
-    let url = format!("http://{}/", closed.local_addr().expect("addr"));
-    drop(closed);
+    // Held, never listening, for the whole row: every attempt is refused, and
+    // no parallel test can be handed the port and answer.
+    let held = crate::test_ports::refusing_socket();
+    let url = format!("http://{}/", held.local_addr().expect("addr"));
     let health = crate::failsafe::HealthTracker::new("test");
     seam::inject(SEND);
     let (result, notes) = with_dispatch_scope(async {
@@ -272,4 +272,5 @@ async fn retried_http_sends_note_once() {
         Some((SEND * attempts, End::Failed)),
         "each attempt timed, the backoff not"
     );
+    drop(held);
 }
