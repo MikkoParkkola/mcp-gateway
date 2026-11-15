@@ -25,7 +25,20 @@ const EVIDENCE: &str = "src/identity_evidence.rs";
 const NEW_IS_CHECKED: &[&str] = &[
     "doc:NEW-GS",
     "row:src/identity_grants_subject_tests.rs#new_refuses_a_subject_naming_no_one_and_names_the_empty_part",
+    SOURCES_PIN,
 ];
+/// The source pin: every constructor call and every struct literal of the three
+/// types is a reviewed row with its count, and each defining file is pinned by
+/// the hash of its bytes, so a new site, inside a leaf too, fails it.
+const SOURCES_PIN: &str = "row:src/gateway/meta_mcp/boundary_pins/identity_sources_tests.rs#every_identity_source_is_a_reviewed_row";
+/// Every field of the three types is private (the source pin's own row).
+const PRIVATE_FIELDS: &str = "row:src/gateway/meta_mcp/boundary_pins/identity_sources_tests.rs#every_field_of_each_sealed_type_is_private";
+/// No production child module in a leaf (EV.3).
+const NO_CHILDREN: &str = "row:src/gateway/meta_mcp/boundary_pins/identity_evidence.rs#identity_leaf_modules_declare_no_production_children";
+/// Neither `VerifiedIdentity` nor `CertIdentity` can be deserialized.
+const NOT_DESERIALIZABLE: &str = "row:src/gateway/meta_mcp/boundary_pins/identity_evidence.rs#verified_and_cert_identities_cannot_be_deserialized";
+/// Every literal in the evidence names exactly its struct's fields.
+const LITERALS_COMPLETE: &str = "row:src/gateway/meta_mcp/boundary_pins/identity_evidence.rs#each_evidence_literal_names_every_field_of_its_struct";
 
 /// One row per case the scanner catches: the case as the script keys it, then
 /// its proofs. A proof is `doc:<ID>` (a pair in [`EVIDENCE`]) or
@@ -33,15 +46,33 @@ const NEW_IS_CHECKED: &[&str] = &[
 const CASES: &[(&str, &[&str])] = &[
     (
         "ALLOWED src/key_server/oidc/verified.rs checked VerifiedIdentity {",
-        &["doc:LIT-VI"],
+        &[
+            "doc:LIT-VI",
+            PRIVATE_FIELDS,
+            NO_CHILDREN,
+            SOURCES_PIN,
+            LITERALS_COMPLETE,
+        ],
     ),
     (
         "ALLOWED src/identity_grants/subject.rs new GrantSubject {",
-        &["doc:LIT-GS"],
+        &[
+            "doc:LIT-GS",
+            PRIVATE_FIELDS,
+            NO_CHILDREN,
+            SOURCES_PIN,
+            LITERALS_COMPLETE,
+        ],
     ),
     (
         "ALLOWED src/mtls/identity/cert.rs parse CertIdentity {",
-        &["doc:LIT-CI"],
+        &[
+            "doc:LIT-CI",
+            PRIVATE_FIELDS,
+            NO_CHILDREN,
+            SOURCES_PIN,
+            LITERALS_COMPLETE,
+        ],
     ),
     (
         "ALLOWED src/decisions/mod.rs access_key GrantSubject::new(",
@@ -134,6 +165,7 @@ const CASES: &[(&str, &[&str])] = &[
         "H1",
         &[
             "doc:H1",
+            NOT_DESERIALIZABLE,
             "row:src/gateway/meta_mcp/boundary_pins/identity_evidence.rs#h1_an_aliased_derive_refuses_a_grant_subject_naming_no_one",
         ],
     ),
@@ -141,15 +173,26 @@ const CASES: &[(&str, &[&str])] = &[
         "H2",
         &[
             "doc:H2",
+            NOT_DESERIALIZABLE,
             "row:src/gateway/meta_mcp/boundary_pins/identity_evidence.rs#h2_an_array_of_grant_subjects_refuses_one_naming_no_one",
         ],
     ),
-    ("H3", &["doc:H3"]),
+    (
+        "H3",
+        &[
+            "doc:H3",
+            PRIVATE_FIELDS,
+            NO_CHILDREN,
+            SOURCES_PIN,
+            LITERALS_COMPLETE,
+        ],
+    ),
     (
         "H4",
         &[
             "doc:H4",
             "doc:H4-SPACED",
+            NOT_DESERIALIZABLE,
             "row:src/gateway/meta_mcp/boundary_pins/identity_evidence.rs#h4_an_aliased_deserializer_refuses_a_grant_subject_naming_no_one",
         ],
     ),
@@ -157,6 +200,7 @@ const CASES: &[(&str, &[&str])] = &[
         "H5",
         &[
             "doc:H5",
+            NOT_DESERIALIZABLE,
             "row:src/gateway/meta_mcp/boundary_pins/identity_evidence.rs#h5_a_self_read_back_refuses_a_grant_subject_naming_no_one",
         ],
     ),
@@ -164,11 +208,30 @@ const CASES: &[(&str, &[&str])] = &[
         "H6",
         &[
             "doc:H6",
+            NOT_DESERIALIZABLE,
             "row:src/gateway/meta_mcp/boundary_pins/identity_evidence.rs#h6_a_block_initializer_refuses_a_grant_subject_naming_no_one",
         ],
     ),
-    ("H7", &["doc:H7"]),
-    ("H8", &["doc:H8"]),
+    (
+        "H7",
+        &[
+            "doc:H7",
+            PRIVATE_FIELDS,
+            NO_CHILDREN,
+            SOURCES_PIN,
+            LITERALS_COMPLETE,
+        ],
+    ),
+    (
+        "H8",
+        &[
+            "doc:H8",
+            PRIVATE_FIELDS,
+            NO_CHILDREN,
+            SOURCES_PIN,
+            LITERALS_COMPLETE,
+        ],
+    ),
 ];
 
 /// A source file of this crate (always packaged, so never a skip).
@@ -208,10 +271,10 @@ fn script_cases(script: &str) -> Vec<String> {
                 .map(|key| format!("READ_BACKS {}", key.join(" "))),
         )
         .collect();
-    let rule_sites = script
-        .lines()
-        .find(|line| line.starts_with("RULE_SITES = {"))
-        .expect("the script defines RULE_SITES");
+    // The whole set, up to its closing brace, so a set split over lines reads too.
+    let open = "RULE_SITES = {";
+    let start = script.find(open).expect("the script defines RULE_SITES") + open.len();
+    let rule_sites = &script[start..start + script[start..].find('}').expect("RULE_SITES closes")];
     cases.extend(
         quoted(rule_sites)
             .into_iter()
@@ -396,10 +459,13 @@ trait AmbiguousIfDeserialize<A> {
 }
 impl<T: ?Sized> AmbiguousIfDeserialize<()> for T {}
 impl<T: serde::de::DeserializeOwned> AmbiguousIfDeserialize<u8> for T {}
-const _: fn() = || {
+/// The ambiguity check as a named row: it compiles only while neither type
+/// implements `DeserializeOwned`, so the evidence table can cite it.
+#[test]
+fn verified_and_cert_identities_cannot_be_deserialized() {
     let _ = <VerifiedIdentity as AmbiguousIfDeserialize<_>>::some_item;
     let _ = <CertIdentity as AmbiguousIfDeserialize<_>>::some_item;
-};
+}
 
 /// A pair naming no one, and the same pair naming someone.
 const NAMELESS: &str = r#"{"authority":"api_key","subject":""}"#;
@@ -490,6 +556,12 @@ async fn a_json_grants_file_naming_no_one_is_refused_by_parse_refusal() {
         error.contains("1 row(s) name no one: grant 'g-empty' (empty subject)"),
         "the row and its empty part are named: {error}"
     );
+    let named = file.replacen(r#""subject":"""#, r#""subject":"bob""#, 1);
+    assert_ne!(named, file, "premise: the control names the subject");
+    crate::gateway::test_helpers::write_owner_only(&path, &named).expect("write");
+    crate::identity_grants::read_identity_grants_file(&path)
+        .await
+        .expect("control: the same file naming its subject loads");
 }
 
 /// `parse_journal` reads `JournalEntry`: grant ids and digests, no identity.
@@ -615,30 +687,85 @@ fn identity_leaf_modules_declare_no_production_children() {
     }
 }
 
-/// The identity types' fields stay private to their leaf module. The literal
-/// pairs run as an outside crate, so they cannot show that code in this crate
-/// is refused too; private fields show it for every module but the leaf's own.
+/// The doctest module stays registered: `src/lib.rs` declares
+/// `identity_evidence` under `#[cfg(doctest)]`, so rustdoc collects its pairs.
 #[test]
-fn the_identity_types_fields_stay_private_to_their_leaf() {
-    for (leaf, ty) in LEAVES
+fn the_evidence_module_is_collected_by_rustdoc() {
+    let lib = syn::parse_file(&source("src/lib.rs")).expect("lib.rs parses");
+    let declared = lib.items.iter().any(|item| {
+        matches!(item, syn::Item::Mod(item)
+        if item.ident == "identity_evidence"
+            && item.attrs.iter().any(|attr| {
+                attr.path().is_ident("cfg")
+                    && attr.parse_args::<syn::Path>().is_ok_and(|p| p.is_ident("doctest"))
+            }))
+    });
+    assert!(
+        declared,
+        "src/lib.rs must declare `#[cfg(doctest)] mod identity_evidence;`"
+    );
+}
+
+/// The field names of the one struct named `ty` in `leaf`.
+fn struct_fields(leaf: &str, ty: &str) -> Vec<String> {
+    let file = syn::parse_file(&source(leaf)).expect("the leaf parses");
+    let found: Vec<&syn::Fields> = file
+        .items
         .iter()
-        .zip(["GrantSubject", "VerifiedIdentity", "CertIdentity"])
-    {
-        let file = syn::parse_file(&source(leaf)).expect("the leaf parses");
-        let fields = file
-            .items
-            .iter()
-            .find_map(|item| match item {
-                syn::Item::Struct(item) if item.ident == ty => Some(&item.fields),
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("{leaf} defines {ty}"));
-        assert!(!fields.is_empty(), "premise: {ty} has fields");
-        for field in fields {
-            assert!(
-                matches!(field.vis, syn::Visibility::Inherited),
-                "{leaf}: a field of {ty} is visible outside its module"
-            );
+        .filter_map(|item| match item {
+            syn::Item::Struct(item) if item.ident == ty => Some(&item.fields),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(found.len(), 1, "{leaf} defines {ty} exactly once");
+    let mut names: Vec<String> = found[0]
+        .iter()
+        .filter_map(|field| field.ident.as_ref().map(ToString::to_string))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Every struct literal in the evidence names exactly its struct's fields, so a
+/// literal block fails on privacy alone, never on a missing, renamed or extra
+/// field (the twin cannot see the literal line it replaces).
+#[test]
+fn each_evidence_literal_names_every_field_of_its_struct() {
+    let types = [
+        ("VerifiedIdentity", LEAVES[1]),
+        ("GrantSubject", LEAVES[0]),
+        ("CertIdentity", LEAVES[2]),
+    ];
+    let mut checked = 0;
+    for pair in pairs(&source(EVIDENCE)) {
+        for line in &pair.fail {
+            for (ty, leaf) in types {
+                let Some(at) = line.find(&format!("{ty} {{ ")) else {
+                    continue;
+                };
+                let body = &line[at + ty.len() + 3..];
+                let body = &body[..body.rfind('}').expect("the literal closes")];
+                let mut named: Vec<String> = body
+                    .split(',')
+                    .filter_map(|field| {
+                        field
+                            .split_once(':')
+                            .map(|(name, _)| name.trim().to_owned())
+                    })
+                    .collect();
+                named.sort();
+                assert_eq!(
+                    named,
+                    struct_fields(leaf, ty),
+                    "{}: the {ty} literal's fields",
+                    pair.id
+                );
+                checked += 1;
+            }
         }
     }
+    assert_eq!(
+        checked, 6,
+        "premise: LIT-VI, LIT-GS, LIT-CI, H3, H7 and H8 each hold one literal"
+    );
 }
