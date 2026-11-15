@@ -116,6 +116,23 @@ impl ConfigGate {
         if refusal == Some(Refusal::ReplayOwed) && kind == AdmitKind::ManualReload {
             inner.replay_owed = true;
         }
+        mutant!(
+            "admission_outside_mutex",
+            {
+                drop(inner);
+                #[cfg(test)]
+                self.seams.call_admit_window();
+                let mut inner = self.inner.lock();
+                #[cfg(test)]
+                self.seams
+                    .record_decision(inner.state, kind, refusal.is_none());
+                if let Some(refusal) = refusal {
+                    return Err(refusal);
+                }
+                inner.in_flight += 1;
+                Ok(AdmissionGuard { gate: self.clone() })
+            },
+            {
         #[cfg(test)]
         self.seams.call_admit_window();
         #[cfg(test)]
@@ -126,6 +143,8 @@ impl ConfigGate {
         }
         inner.in_flight += 1;
         Ok(AdmissionGuard { gate: self.clone() })
+            }
+        )
     }
 
     /// Wait until no admitted work is in flight. Enable-then-re-read: a signal
