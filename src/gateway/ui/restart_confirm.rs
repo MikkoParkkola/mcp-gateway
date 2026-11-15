@@ -212,7 +212,7 @@ impl RestartConfirm {
     /// Production seams; restart confirmation is off.
     pub(crate) fn new() -> Self {
         Self {
-            enabled: false,
+            enabled: mutant!("g3", true, false),
             clock: Arc::new(Instant::now),
             fill: Arc::new(|bytes: &mut [u8]| {
                 use ring::rand::SecureRandom as _;
@@ -292,16 +292,16 @@ impl RestartConfirm {
     /// then restart off or no restart target, then no transparency log
     /// (`audit_log` false). The invocation binding is read once, here.
     pub(crate) fn readiness(&self, audit_log: bool) -> Readiness {
-        if self.platform == Platform::Windows {
+        if (mutant!("g8", false, self.platform == Platform::Windows)) {
             return Readiness::Unavailable(Reason::WindowsManualRestart);
         }
-        if !self.enabled {
+        if (mutant!("g9", false, !self.enabled)) {
             return Readiness::Unavailable(Reason::RestartNotAvailable);
         }
         let (Some(invocation), Some(Ok(target))) = self.binding() else {
             return Readiness::Unavailable(Reason::RestartNotAvailable);
         };
-        if !audit_log {
+        if (mutant!("g11", false, !audit_log)) {
             return Readiness::Unavailable(Reason::AuditLogRequired);
         }
         Readiness::Ready { invocation, target }
@@ -343,7 +343,7 @@ impl RestartConfirm {
         let Readiness::Ready { invocation, target } = readiness else {
             return None;
         };
-        let principal = super::principal::cursor_principal(client, headers)?;
+        let principal = mutant!("g16", Some(super::principal::cursor_principal(client, headers).unwrap_or_default()), super::principal::cursor_principal(client, headers))?;
         self.mint(Live {
             principal,
             boot,
@@ -373,7 +373,7 @@ impl RestartConfirm {
             return None;
         }
         let mut bytes = [0u8; 32];
-        (self.fill)(&mut bytes).ok()?;
+        mutant!("g17", { let _ = (self.fill)(&mut bytes); Some(()) }, (self.fill)(&mut bytes).ok())?;
         let token = format!("{PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes));
         if let Some(key) = held {
             entries.remove(&key);

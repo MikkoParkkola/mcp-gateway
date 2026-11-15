@@ -54,13 +54,14 @@ async fn availability(
     let mut body = availability_body(view, sample, readiness);
     // Only the restart dialog asks for a confirmation: polling never mints,
     // so it cannot replace the token an open dialog shows.
-    if view == StatusView::Full && asks_to_confirm(query.as_deref()) {
+    if view == StatusView::Full && mutant!("g5", true, asks_to_confirm(query.as_deref())) {
         let boot = state.dashboard_bootstrap.stream_hub().boot();
         if let Some(token) =
-            confirm.confirmation(readiness, sample, guard.client.as_ref(), &headers, boot)
+            confirm.confirmation(mutant!("g15", confirm.readiness(state.transparency_log.is_some()), readiness), mutant!("g14", confirm.sample(state.meta_mcp.recent_writes()), sample), guard.client.as_ref(), &headers, boot)
         {
+            mutant!("g1", tracing::info!(confirm = %token, "restart confirmation"), ());
             body["confirm"] = token.into();
-            return ([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response();
+            return mutant!("g7", Json(body).into_response(), ([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response());
         }
     }
     Json(body).into_response()
@@ -82,7 +83,7 @@ fn asks_to_confirm(query: Option<&str>) -> bool {
         });
         !key.is_empty() && parts.nth(1).is_none() && escapes_ok
     };
-    if !query.split('&').all(well_formed) {
+    if (mutant!("g4", false, !query.split('&').all(well_formed))) {
         return false;
     }
     let mut confirms = query
@@ -100,7 +101,7 @@ pub(super) fn availability_body(
     readiness: Readiness,
 ) -> Value {
     let mut body = match readiness {
-        Readiness::Ready { .. } => json!({"available": true}),
+        Readiness::Ready { .. } => json!({"available": mutant!("g13", false, true)}),
         Readiness::Unavailable(reason) => json!({
             "available": false,
             "reason": reason.code(),
