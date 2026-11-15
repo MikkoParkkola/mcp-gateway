@@ -48,10 +48,10 @@ impl Gateway {
                     .with_account_strategies(account_strategies)
                     .with_stop_deadline(self.backends.stop_deadline()),
             );
-            let cap_backend = Arc::new(CapabilityBackend::new(
-                &self.config.capabilities.name,
-                executor,
-            ));
+            let cap_backend = Arc::new(
+                CapabilityBackend::new(&self.config.capabilities.name, executor)
+                    .with_revision_key(meta_mcp.record_key().config_revision_key()),
+            );
             // Registered before the load, as on HTTP: a directory whose load
             // fails is still checked for pin mismatches below.
             cap_backend.register_directories(&self.config.capabilities.directories);
@@ -60,10 +60,14 @@ impl Gateway {
                 match cap_backend.load_from_directory_reporting(dir).await {
                     Ok(report) => {
                         let admitted = report.admitted;
+                        for path in &report.unreadable {
+                            cap_backend.note_unreadable(path);
+                        }
                         debug!(target: PARENT_TARGET, directory = %dir, count = admitted, "Loaded capabilities (stdio)");
                         refused.extend(report.rejected);
                     }
                     Err(error) => {
+                        cap_backend.note_unreadable(dir);
                         debug!(target: PARENT_TARGET, directory = %dir, %error, "Failed to load optional capabilities (stdio)");
                     }
                 }

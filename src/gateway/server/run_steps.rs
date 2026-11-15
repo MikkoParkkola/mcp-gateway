@@ -41,10 +41,10 @@ impl Gateway {
                     .with_account_strategies(account_strategies)
                     .with_stop_deadline(self.backends.stop_deadline()),
             );
-            let cap_backend = Arc::new(CapabilityBackend::new(
-                &self.config.capabilities.name,
-                executor,
-            ));
+            let cap_backend = Arc::new(
+                CapabilityBackend::new(&self.config.capabilities.name, executor)
+                    .with_revision_key(meta_mcp.record_key().config_revision_key()),
+            );
             #[cfg(test)]
             cap_backend.scan_panics_after_first_dir.store(
                 self.test_seams
@@ -115,11 +115,15 @@ impl Gateway {
                     {
                         Ok(report) => {
                             total_caps += report.admitted;
+                            for path in &report.unreadable {
+                                cap_backend_for_load.note_unreadable(path);
+                            }
                             debug!(directory = %dir, count = report.admitted, "Loaded capabilities");
                             refused.extend(report.rejected);
                         }
                         Err(e) => {
                             cap_backend_for_load.mark_initial_scan_failed(); // not fatal
+                            cap_backend_for_load.note_unreadable(dir);
                             debug!(directory = %dir, error = %e, "Failed to load capabilities");
                         }
                     }

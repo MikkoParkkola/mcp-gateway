@@ -301,6 +301,22 @@ impl LiveConfig {
         let _ = (seq, part, &self.inner);
     }
 
+    /// The capability load sequence the last publish recorded.
+    ///
+    /// Stub: nothing records that sequence, so a gateway.yaml reload has no
+    /// sequence to keep. This is always zero.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "production call sites are a later slice; the tests are the caller until then"
+        )
+    )]
+    pub(crate) fn capability_seq(&self) -> u64 {
+        let _ = &self.inner;
+        0
+    }
+
     fn replace_part(&self, change: impl FnOnce(&[u8; 32], &mut AppliedInputs)) {
         let _gate = self.admission.write();
         let mut inner = self.inner.write();

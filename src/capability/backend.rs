@@ -34,6 +34,7 @@ use super::{
     validate_personal_capability_identity,
 };
 use crate::Result;
+use crate::config_reload::revision::{CapabilityPart, PartDigest, part_digest};
 use crate::protocol::{Content, Tool, ToolsCallResult};
 
 mod definition_access;
@@ -57,6 +58,9 @@ use path_selector::path_selector_type_error;
 struct IndexedCapabilities {
     /// Stable insertion-order storage.
     entries: Vec<CapabilityDefinition>,
+    /// One slot per `entries` entry, in the same order, including two files
+    /// that share a name. `None` is a capability registered with no file.
+    sources: Vec<Option<ServedSource>>,
     /// O(1) name → `entries` index.
     index: HashMap<String, usize>,
     /// Pre-built MCP `Tool` representations — rebuilt whenever `entries` changes.
@@ -64,6 +68,20 @@ struct IndexedCapabilities {
     /// Read yet absent: gate refusals (rebuilt by each reload) and unloads (until admitted).
     refused: std::collections::HashSet<String>,
     unloaded: std::collections::HashSet<String>,
+}
+
+/// The file one served capability was loaded from, and the digest of the
+/// bytes the parse accepted. The bytes themselves are not kept. `digest` is
+/// absent when this backend was built without a revision key.
+///
+/// The snapshot stub does not read this yet. Install and remove still keep
+/// one slot per served entry, so the later read has the map.
+#[allow(dead_code, reason = "the snapshot stub does not read the source map yet")]
+struct ServedSource {
+    /// Configured directory as written, joined with the walk's relative path.
+    path: String,
+    /// Digest of the bytes the parse accepted, when a revision key was set.
+    digest: Option<PartDigest>,
 }
 
 /// True when `new` differs from `old` in any serialised field. A definition
@@ -78,31 +96,52 @@ fn definition_changed(old: &CapabilityDefinition, new: &CapabilityDefinition) ->
 impl IndexedCapabilities {
     /// Insert or replace a capability, maintaining index and tool cache consistency.
     fn upsert(&mut self, cap: CapabilityDefinition) {
+        self.upsert_sourced(cap, None);
+    }
+
+    /// [`Self::upsert`] recording which file `cap` came from.
+    ///
+    /// A name already served is replaced in place, so one name still has one
+    /// slot. A second file of the same name stays only when [`Self::install`]
+    /// rebuilds the vec.
+    fn upsert_sourced(&mut self, cap: CapabilityDefinition, source: Option<ServedSource>) {
         let tool = cap.to_mcp_tool();
         if let Some(&pos) = self.index.get(&cap.name) {
             self.entries[pos] = cap;
             self.tools[pos] = tool;
+            self.sources[pos] = source;
         } else {
             let pos = self.entries.len();
             self.index.insert(cap.name.clone(), pos);
             self.entries.push(cap);
             self.tools.push(tool);
+            self.sources.push(source);
         }
     }
 
     /// Replace all entries atomically, rebuilding both index and tool cache.
+    ///
+    /// No file: callers that install definitions they did not read from a path.
     fn replace_all(&mut self, caps: Vec<CapabilityDefinition>) {
+        self.install(caps.into_iter().map(|cap| (cap, None)).collect());
+    }
+
+    /// [`Self::replace_all`] that keeps every pair, including two files that
+    /// share a capability name. The name index points at the last of them.
+    fn install(&mut self, caps: Vec<(CapabilityDefinition, Option<ServedSource>)>) {
         self.index.clear();
         self.tools.clear();
         self.entries = Vec::with_capacity(caps.len());
+        self.sources = Vec::with_capacity(caps.len());
         self.tools = Vec::with_capacity(caps.len());
         self.index = HashMap::with_capacity(caps.len());
-        for cap in caps {
+        for (cap, source) in caps {
             let tool = cap.to_mcp_tool();
             let pos = self.entries.len();
             self.index.insert(cap.name.clone(), pos);
             self.entries.push(cap);
             self.tools.push(tool);
+            self.sources.push(source);
         }
     }
 
@@ -142,6 +181,12 @@ pub struct DirectoryLoad {
     pub admitted: usize,
     /// `"<capability>: <error>"` for each refused capability, in load order.
     pub rejected: Vec<String>,
+    /// Files in this directory that could not be read or parsed, in walk order.
+    ///
+    /// The directory itself being unreadable is not here: that is the `Err`
+    /// the load returned. The catalogue does not treat these as a partial
+    /// catalogue; coverage does, once a later slice records them.
+    pub unreadable: Vec<String>,
 }
 
 /// Backend that exposes capabilities as MCP tools
@@ -174,6 +219,10 @@ pub struct CapabilityBackend {
     /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
     multi_user: std::sync::atomic::AtomicBool,
     initial_scan: std::sync::atomic::AtomicU8,
+    /// Derived revision key for capability-file digests. Absent on a backend
+    /// that is not the HTTP or stdio startup catalogue: the load still runs,
+    /// and the source map then has a path and no digest.
+    revision_key: Option<[u8; 32]>,
     /// Park, attach and publish share this mutex. The stub records nothing
     /// and delivers nothing. Nothing in production calls it yet.
     #[cfg_attr(
@@ -233,6 +282,7 @@ impl CapabilityBackend {
             loaded_from: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
             initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
+            revision_key: None,
             handoff: handoff::Handoff::new(),
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
             listing: parking_lot::Mutex::new(None),
@@ -244,6 +294,46 @@ impl CapabilityBackend {
             #[cfg(test)]
             scan_completions: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// Digest capability bytes with `key`. The caller derived it. Digests are
+    /// taken at load, outside the catalogue lock.
+    #[must_use]
+    pub(crate) fn with_revision_key(mut self, key: [u8; 32]) -> Self {
+        self.revision_key = Some(key);
+        self
+    }
+
+    /// The file `path`'s bytes digest to, when this backend has a revision key.
+    fn source_of(&self, path: &str, bytes: &[u8]) -> ServedSource {
+        ServedSource {
+            path: path.to_string(),
+            digest: self.revision_key.map(|key| part_digest(&key, bytes)),
+        }
+    }
+
+    /// The capability part for what is installed now.
+    ///
+    /// Stub: the empty loaded part. It does not take the catalogue lock and
+    /// does not read the source map. Coverage stays `Loaded` — an unreadable
+    /// directory or file is not `Partial` until a later slice records it.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "production call sites are a later slice; the tests are the caller until then"
+        )
+    )]
+    pub(crate) fn capability_snapshot(&self) -> CapabilityPart<PartDigest> {
+        CapabilityPart::Loaded(Vec::new())
+    }
+
+    /// A configured directory, or a file in a readable directory, could not
+    /// be read. The operation calls this so coverage can become `Partial`.
+    ///
+    /// Stub: the path is dropped. The snapshot stays `Loaded`.
+    pub(crate) fn note_unreadable(&self, path: &str) {
+        let _ = path;
     }
 
     /// The handoff to the live config. One per backend.
@@ -292,6 +382,7 @@ impl CapabilityBackend {
         let removed = if let Some(&pos) = caps.index.get(name) {
             caps.entries.remove(pos);
             caps.tools.remove(pos);
+            caps.sources.remove(pos);
             caps.index.remove(name);
             caps.unloaded.insert(name.to_owned());
             // Shift remaining indices down.
@@ -384,8 +475,13 @@ impl CapabilityBackend {
     pub async fn load_from_directory_reporting(&self, path: &str) -> Result<DirectoryLoad> {
         let loaded = CapabilityLoader::load_directory_with_paths(path).await?;
         let mut report = DirectoryLoad {
-            admitted: loaded.len(),
+            admitted: loaded.files.len(),
             rejected: Vec::new(),
+            unreadable: loaded
+                .failures
+                .iter()
+                .map(|failure| failure.path.clone())
+                .collect(),
         };
 
         // Register directory for future hot-reloads.
@@ -400,9 +496,11 @@ impl CapabilityBackend {
         // admission gate. A refused capability is LOGGED and dropped rather
         // than published: the operator gets a named error, and no caller gets a
         // tool whose account reference cannot resolve.
-        for (file, cap) in loaded {
-            let capability = cap.name.clone();
-            if let Err(error) = self.admit_from(file, cap) {
+        for file in loaded.files {
+            let capability = file.definition.name.clone();
+            // Digest outside the catalogue lock. The bytes are not stored.
+            let source = self.source_of(&file.path, &file.bytes);
+            if let Err(error) = self.admit_from(file.path, file.definition, Some(source)) {
                 warn!(
                     backend = %self.name,
                     capability = %capability,
@@ -436,40 +534,51 @@ impl CapabilityBackend {
             return Ok(0);
         }
 
-        let mut paths = Vec::new();
+        let mut loaded_files = Vec::new();
         let mut total = 0;
         // A directory that could not be read leaves the catalogue partial:
         // its capabilities are missing from this load, not deleted (MIK-8028).
+        // A file that could not be read does not: the directory was listed,
+        // and that file is simply not served. Coverage hears both.
         let mut partial = false;
 
         for dir in &dirs {
             match CapabilityLoader::load_directory_with_paths(dir).await {
                 Ok(loaded) => {
-                    total += loaded.len();
-                    paths.extend(loaded);
+                    total += loaded.files.len();
+                    for failure in &loaded.failures {
+                        self.note_unreadable(&failure.path);
+                    }
+                    loaded_files.extend(loaded.files);
                 }
                 Err(e) => {
                     partial = true;
+                    self.note_unreadable(dir);
                     warn!(backend = %self.name, directory = %dir, error = %e, "Failed to reload directory");
                 }
             }
         }
 
         // The same admission gate the initial load applies.
-        let (mut admitted, mut trusted) = (Vec::with_capacity(paths.len()), Vec::new());
+        let (mut admitted, mut trusted) =
+            (Vec::with_capacity(loaded_files.len()), Vec::new());
         let mut refused = std::collections::HashSet::new();
-        for (file, cap) in paths {
-            match validate_capability_account_binding(&cap, self.executor.account_strategies()) {
+        for file in loaded_files {
+            match validate_capability_account_binding(
+                &file.definition,
+                self.executor.account_strategies(),
+            ) {
                 Ok(()) => {
-                    trusted.push((file, cap.name.clone()));
-                    admitted.push(cap);
+                    let source = self.source_of(&file.path, &file.bytes);
+                    trusted.push((file.path, file.definition.name.clone()));
+                    admitted.push((file.definition, Some(source)));
                 }
                 Err(error) => {
                     total -= 1;
-                    refused.insert(cap.name.clone());
+                    refused.insert(file.definition.name.clone());
                     warn!(
                         backend = %self.name,
-                        capability = %cap.name,
+                        capability = %file.definition.name,
                         error = %error,
                         "Capability refused on reload: its account binding does not resolve"
                     );
@@ -481,8 +590,10 @@ impl CapabilityBackend {
         // bump the shared policy epoch while that lock is still held.
         {
             let mut caps = self.capabilities.write();
-            let incoming: HashMap<&str, &CapabilityDefinition> =
-                admitted.iter().map(|c| (c.name.as_str(), c)).collect();
+            let incoming: HashMap<&str, &CapabilityDefinition> = admitted
+                .iter()
+                .map(|(cap, _)| (cap.name.as_str(), cap))
+                .collect();
             // Revoke the in-flight calls of a capability that is gone OR edited,
             // and stop its children: a call holding the old definition must not
             // start or replace a child under the new one (MIK-7870, MIK-7925).
@@ -496,7 +607,7 @@ impl CapabilityBackend {
                     revoked.insert(name.clone());
                 }
             }
-            caps.replace_all(admitted);
+            caps.install(admitted);
             caps.settle_absent(refused);
             // With the swap, under the same lock: `catalogue_snapshot` never
             // sees one without the other.
@@ -830,3 +941,7 @@ mod pin_tests;
 #[cfg(test)]
 #[path = "backend_output_root_tests.rs"]
 mod output_root_tests;
+
+#[cfg(test)]
+#[path = "backend_snapshot_tests.rs"]
+mod snapshot_tests;
