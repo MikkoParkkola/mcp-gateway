@@ -6,3 +6,13 @@ src/gateway/server/health_floor.rs	release_for_stop	1	Reopens the health floor g
 src/gateway/server/health_floor.rs	commit	1	Makes the health floor gate final at the restart commit edge; periodic saves and samples then skip; refuses no request
 src/gateway/server/health_floor.rs	settled	1	Reports whether the health checkpoint or replay work is still running; decides nothing about access
 src/gateway/server/health_wiring.rs	start_history	1	Restores the health history, saves it once and starts its periodic save behind the floor gate; reports health, never refuses a request or a start
+src/gateway/server/health_floor.rs	disarm	1	Keeps a finished checkpoint attempt live; bookkeeping inside the health restart checkpoint, decides nothing about access
+src/gateway/server/health_floor.rs	drop	1	Ends a dropped health checkpoint attempt so its late worker writes nothing; decides nothing about access
+src/gateway/server/health_floor.rs	new	1	Builds the health floor adapter over the run's gate, history and file; decides nothing about access
+src/gateway/server/health_floor.rs	end_attempt	1	Ends the current health checkpoint attempt; decides nothing about access
+src/gateway/server/health_floor.rs	worker_done	1	Reports whether the health checkpoint worker has ended; decides nothing about access
+src/gateway/server/health_floor.rs	spawn_replay	1	Replays a skipped periodic health save or sample after a cancelled restart; refuses no request and grants nothing
+src/gateway/server/health_floor.rs	refused	1	The ready Unavailable answer of a health checkpoint that cannot run; it only cancels a restart attempt, never a request
+src/gateway/server/health_wiring.rs	saver_closure	1	The periodic health save behind the floor gate; records health, never refuses a request or a start
+src/gateway/server/health_wiring.rs	sampler_closure	1	The periodic health sample behind the floor gate; records numbers only
+src/gateway/server/health_wiring.rs	floor_adapter	1	Builds the health floor adapter for a restart attempt; decides nothing about access
