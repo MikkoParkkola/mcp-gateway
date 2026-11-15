@@ -232,7 +232,7 @@ pub(super) fn deadline() -> tokio::time::Instant {
 /// snapshot; the checkpoint waits for it and then writes the newer cut.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g1_an_in_flight_save_delays_the_cut() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     (rig.sampler(m1))();
     let mut in_flight = arm(Point::AfterSnapshot, &rig.key(), 1);
@@ -274,7 +274,7 @@ async fn g1_an_in_flight_save_delays_the_cut() {
 /// SAVES after the cut sees Paused under SAVES, marks, and writes nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g2_a_saver_delayed_past_the_cut_skips_and_marks() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     // An unrelated test's save can hold SAVES when the delayed saver tries it:
     // that attempt is a busy skip, which proves nothing here, so it runs again.
     for _ in 0..100 {
@@ -319,7 +319,7 @@ async fn g2_a_saver_delayed_past_the_cut_skips_and_marks() {
 /// sampler holds it includes that sample.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g3_the_sample_cut_runs_under_one_history_lock() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     (rig.sampler(m1))();
     let mut adapter = rig.adapter();
@@ -364,7 +364,7 @@ async fn g3_the_sample_cut_runs_under_one_history_lock() {
 /// mutant (it read Open at entry) fails here too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g3b_a_sampler_delayed_past_the_cut_changes_nothing() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     let mut delayed = arm(Point::SamplerBeforeLock, &rig.hkey(), 1);
     let late = on_thread(rig.sampler(m2));
@@ -465,11 +465,15 @@ pub(super) fn save_once(rig: &Rig) {
 /// waits on SAVES past the deadline cancels with `DeadlineExceeded`; the worker
 /// later ends without writing, and the next periodic save writes.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "holding SAVES past the deadline is the window under test"
+)]
 async fn g4_a_save_lock_held_past_the_deadline_cancels_and_saving_goes_on() {
     use crate::gateway::restart_floor::{
         CancelReason, Cancelled, FloorOwner, FloorStage, run_checkpoint,
     };
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     let held = file::hold_saves();
     let mut adapters = vec![
@@ -536,7 +540,7 @@ async fn g4_a_save_lock_held_past_the_deadline_cancels_and_saving_goes_on() {
 /// G5 (HEALTH.3): a write error is `SaveFailed`; the flag is set; the gate stays Paused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g5_a_write_error_cancels_with_save_failed() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     std::fs::create_dir(&rig.path).expect("a directory where the file goes");
     let mut adapter = rig.adapter();
@@ -590,7 +594,7 @@ pub(super) async fn refused_without_a_worker(mut adapter: HealthFloor, rig: &Rig
 /// G6 (HEALTH.3): an invalid clock refuses at once, with no worker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g6_an_invalid_clock_is_unavailable_without_a_worker() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     refused_without_a_worker(rig.health.floor_adapter(no_clock), &rig).await;
 }
@@ -599,7 +603,7 @@ async fn g6_an_invalid_clock_is_unavailable_without_a_worker() {
 /// moved aside) refuses at once, with no worker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g7_saves_off_is_unavailable_without_a_worker() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let mut rig = Rig::new();
     rig.health.path = super::super::health_wiring::save_path(
         true,
@@ -616,7 +620,7 @@ async fn g7_saves_off_is_unavailable_without_a_worker() {
 /// the ordinary stop's shutdown save still does.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g8_a_checkpoint_records_no_clean_stop() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     (rig.sampler(m1))();
     let mut adapter = rig.adapter();
@@ -662,7 +666,7 @@ pub(super) async fn settle_tasks() {
 /// skips and marks while Paused; resume replays it.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn w1_the_production_periodic_save_obeys_the_gate() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("health.json");
     let (stop, stopped) = tokio::sync::broadcast::channel(1);
@@ -715,7 +719,7 @@ async fn w1_the_production_periodic_save_obeys_the_gate() {
 /// and marks while Paused, leaving the history unchanged.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn w2_the_production_sampler_obeys_the_gate() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let dir = crate::test_dir_keep::kept_tempdir();
     let (stop, stopped) = tokio::sync::broadcast::channel(2);
     let (health, saver) =

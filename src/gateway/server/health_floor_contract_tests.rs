@@ -38,7 +38,7 @@ async fn drop_while_waiting(adapter: &mut HealthFloor, rig: &Rig) {
     reason = "holding SAVES while the dropped attempt's worker waits is the window under test; the serialisation lock keeps other rows out of it"
 )]
 async fn c1_a_dropped_checkpoint_then_resume_replays_once() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     rig.set_replay_inputs(m2);
     let mut adapter = rig.adapter();
@@ -77,7 +77,7 @@ async fn c1_a_dropped_checkpoint_then_resume_replays_once() {
     reason = "holding SAVES while the dropped attempt's worker waits is the window under test; the serialisation lock keeps other rows out of it"
 )]
 async fn c1a_the_drop_guard_alone_stops_the_write() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     let mut adapter = rig.adapter();
     pause_and_mark(&mut adapter, &rig).await;
@@ -98,7 +98,7 @@ async fn c1a_the_drop_guard_alone_stops_the_write() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c2_a_superseded_worker_writes_once_and_blocks_a_new_checkpoint() {
     use futures::FutureExt as _;
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     let mut adapter = rig.adapter();
     pause(&mut adapter, &rig).await;
@@ -142,7 +142,7 @@ async fn c2_a_superseded_worker_writes_once_and_blocks_a_new_checkpoint() {
 /// `release_for_stop` replays nothing and lets the closures run again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c3_resume_replays_and_release_for_stop_does_not() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let (a, b) = (Rig::new(), Rig::new());
     a.set_replay_inputs(m2);
     b.set_replay_inputs(m2);
@@ -183,7 +183,7 @@ async fn c3_resume_replays_and_release_for_stop_does_not() {
 /// marking, resume replays nothing, and the shutdown save still records the stop.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c4_commit_is_terminal() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let (a, b) = (Rig::new(), Rig::new());
     let mut fa = a.adapter();
     pause(&mut fa, &a).await;
@@ -229,8 +229,12 @@ async fn c4_commit_is_terminal() {
 
 /// C5: `settled()` is false while a checkpoint worker runs and true otherwise.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "holding SAVES while the checkpoint worker waits is the window under test"
+)]
 async fn c5_settled_tracks_the_checkpoint_worker() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     let mut adapter = rig.adapter();
     assert!(adapter.settled(), "settled() false before any call");
@@ -332,7 +336,7 @@ async fn parked_at_mark(
 /// skips, the replay runs it: exactly one run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c6a_resume_while_parked_runs_it_once_by_the_replay() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     for kind in Kind::BOTH {
         let (rig, mut adapter, mut parked, closure, before) = parked_at_mark(kind).await;
         adapter.resume();
@@ -351,7 +355,7 @@ async fn c6a_resume_while_parked_runs_it_once_by_the_replay() {
 /// C6(b): the closure skips first (still Paused), then resume replays it once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c6b_skip_then_resume_runs_it_once() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     for kind in Kind::BOTH {
         let (rig, mut adapter, mut parked, closure, before) = parked_at_mark(kind).await;
         parked.release();
@@ -371,7 +375,7 @@ async fn c6b_skip_then_resume_runs_it_once() {
 /// its own mark and runs once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c6c_release_while_parked_runs_it_once_itself() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     for kind in Kind::BOTH {
         let (rig, mut adapter, mut parked, closure, before) = parked_at_mark(kind).await;
         adapter.release_for_stop();
@@ -391,7 +395,7 @@ async fn c6c_release_while_parked_runs_it_once_itself() {
 /// sees Terminal and skips; nothing runs later.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c6d_commit_while_parked_skips_for_good() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     for kind in Kind::BOTH {
         let rig = Rig::new();
         rig.set_replay_inputs(m2);
@@ -417,7 +421,7 @@ async fn c6d_commit_while_parked_skips_for_good() {
 /// C6(e): two marks of one closure before one resume replay it once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c6e_two_marks_replay_once() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     for kind in Kind::BOTH {
         let rig = Rig::new();
         rig.set_replay_inputs(m2);

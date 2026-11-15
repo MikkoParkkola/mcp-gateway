@@ -280,8 +280,18 @@ pub(crate) fn write_count(path: &Path) -> u64 {
 
 /// Serialises the rows that hold SAVES or count writes, so they never see
 /// each other's saves (legacy saves elsewhere can still hold SAVES briefly).
+/// An async-aware mutex, so an async row may hold it across its awaits.
 #[cfg(test)]
-pub(crate) fn saves_test_lock() -> parking_lot::MutexGuard<'static, ()> {
-    static LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
-    LOCK.lock()
+static SAVES_TEST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The serialisation lock for a synchronous row.
+#[cfg(test)]
+pub(crate) fn saves_test_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    SAVES_TEST.blocking_lock()
+}
+
+/// The serialisation lock for an async row.
+#[cfg(test)]
+pub(crate) async fn saves_test_lock_async() -> tokio::sync::MutexGuard<'static, ()> {
+    SAVES_TEST.lock().await
 }

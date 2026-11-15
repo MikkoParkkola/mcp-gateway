@@ -102,7 +102,7 @@ fn expected(state: State, call: Call) -> (GateState, Option<Result<(), FloorFaul
 /// C7: every state x call cell ends where the contract table and the design delta say.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c7_every_state_and_call_ends_where_the_contract_says() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let states = [
         State::Open,
         State::Paused,
@@ -155,7 +155,7 @@ async fn c7_every_state_and_call_ends_where_the_contract_says() {
 /// C8: resume from Open (no pause ever started) replays nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c8_resume_from_open_replays_nothing() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     rig.set_replay_inputs(m2);
     let mut adapter = rig.adapter();
@@ -174,7 +174,7 @@ async fn c8_resume_from_open_replays_nothing() {
 /// C9: a worker that panics is `WorkerLost`; nothing is written; the gate stays Paused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c9_a_worker_panic_is_worker_lost() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     let mut adapter = rig.adapter();
     pause(&mut adapter, &rig).await;
@@ -212,7 +212,7 @@ async fn c13_an_unpolled_pause_still_pauses() {
 /// C15: a checkpoint from Open is refused, with no worker and no write.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c15_a_checkpoint_from_open_is_refused() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     let mut adapter = rig.adapter();
     let before = rig.writes();
@@ -228,7 +228,7 @@ async fn c15_a_checkpoint_from_open_is_refused() {
 /// its drop guard stops the write.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c16_an_unpolled_checkpoint_dropped_writes_nothing() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     let mut adapter = rig.adapter();
     pause(&mut adapter, &rig).await;
@@ -254,7 +254,7 @@ async fn c16_an_unpolled_checkpoint_dropped_writes_nothing() {
 /// to the same history and the same file as the replay-first order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c10_a_save_overtaking_the_replay_converges() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let (a, b) = (Rig::new(), Rig::new());
     let (mut fa, mut fb) = (a.adapter(), b.adapter());
     for (rig, adapter) in [(&a, &mut fa), (&b, &mut fb)] {
@@ -292,9 +292,13 @@ async fn c10_a_save_overtaking_the_replay_converges() {
 /// C12: the real coordinator, dropped mid-checkpoint, releases the gate for
 /// the stop: the worker writes nothing, nothing is replayed, closures run again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "holding SAVES while the coordinator reaches the health checkpoint is the window under test"
+)]
 async fn c12_a_dropped_coordinator_releases_for_the_stop() {
     use crate::gateway::restart_floor::{FloorOwner, run_checkpoint};
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     rig.set_replay_inputs(m2);
     let (let_go, hold) = tokio::sync::oneshot::channel();
@@ -369,7 +373,7 @@ async fn c12_a_dropped_coordinator_releases_for_the_stop() {
 /// replay keeps `settled()` false.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c14_a_failed_replay_spawn_heals_on_the_next_tick() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     rig.set_replay_inputs(m2);
     let mut adapter = rig.adapter();
@@ -406,7 +410,7 @@ async fn c14_a_failed_replay_spawn_heals_on_the_next_tick() {
 /// false until the first replay ends, even after the second one finished.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c14b_a_second_replay_does_not_hide_the_first() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     rig.set_replay_inputs(m2);
     let mut adapter = rig.adapter();
@@ -428,7 +432,7 @@ async fn c14b_a_second_replay_does_not_hide_the_first() {
 /// sampler sets later.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn c17_an_adapter_built_before_the_sampler_replays_its_inputs() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     let mut adapter = rig.adapter();
     let (stop, stopped) = tokio::sync::broadcast::channel(1);
@@ -459,7 +463,7 @@ async fn c17_an_adapter_built_before_the_sampler_replays_its_inputs() {
 /// replayed save still writes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c18_with_no_sampler_the_replay_still_saves() {
-    let _serial = file::saves_test_lock();
+    let _serial = file::saves_test_lock_async().await;
     let rig = Rig::new();
     let mut adapter = rig.adapter();
     pause_and_mark(&mut adapter, &rig).await;
