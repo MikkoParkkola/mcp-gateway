@@ -6,6 +6,7 @@
 //! directory is created or changed.
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -49,11 +50,13 @@ pub struct SecretStoreReport {
 pub fn doctor_report(config_path: &Path, choice: SecretStoreChoice) -> SecretStoreReport {
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     let vault = Vault::for_config_dir(config_dir);
+    let process_env: Vec<OsString> = std::env::vars_os().map(|(_, value)| value).collect();
     report_with(
         config_path,
         choice,
         vault,
         crate::config::keychain::os_secret_store().as_ref(),
+        &process_env,
     )
 }
 
@@ -63,6 +66,7 @@ pub(super) fn report_with(
     choice: SecretStoreChoice,
     vault: Result<Vault, StoreError>,
     os: Option<&Arc<dyn SecretStore + Send + Sync>>,
+    process_env: &[OsString],
 ) -> SecretStoreReport {
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     let (chosen, reason, fell_back) = match choose_with(choice, config_dir, os.cloned()) {
@@ -91,9 +95,15 @@ pub(super) fn report_with(
         }
         Err(error) => (None, error.reason(), false),
     };
-    let counted = vault
-        .map_err(|e| e.reason())
-        .and_then(|vault| count_unused(config_path, config_dir, &vault, os.map(|os| &**os)));
+    let counted = vault.map_err(|e| e.reason()).and_then(|vault| {
+        count_unused(
+            config_path,
+            config_dir,
+            &vault,
+            os.map(|os| &**os),
+            process_env,
+        )
+    });
     let (unused, unused_error) = match counted {
         Ok(count) => (Some(count), None),
         Err(why) => (None, Some(why)),
@@ -115,6 +125,7 @@ fn count_unused(
     config_dir: &Path,
     vault: &Vault,
     os: Option<&(dyn SecretStore + Send + Sync)>,
+    _process_env: &[OsString],
 ) -> Result<usize, String> {
     // The same mode-checked read the loader uses: no FIFO, no wide modes.
     let text = crate::config::read_checked_file(config_path, crate::config::CheckedFile::Config)

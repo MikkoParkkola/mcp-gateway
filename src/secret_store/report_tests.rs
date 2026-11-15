@@ -94,6 +94,7 @@ fn the_report_writes_nothing_and_counts_the_entry_no_config_names() {
             choice,
             Ok(vault_for(config.path(), locks.path())),
             store.as_ref(),
+            &[],
         );
         assert_eq!(report.unused, Some(1), "{report:?}");
         assert_eq!(
@@ -112,6 +113,7 @@ fn the_report_names_no_entry_and_carries_no_value() {
         SecretStoreChoice::Auto,
         Ok(vault_for(config.path(), locks.path())),
         Some(&os(Err(StoreError::Unavailable("no session bus".into())))),
+        &[],
     );
     assert!(report.fell_back);
     assert_eq!(report.chosen, Some("files"));
@@ -137,6 +139,7 @@ fn explicit_keychain_with_a_failing_probe_reports_that_saves_are_refused() {
         SecretStoreChoice::Keychain,
         Ok(vault_for(config.path(), locks.path())),
         Some(&os(Err(StoreError::Unavailable("locked".into())))),
+        &[],
     );
     assert_eq!(report.chosen, None, "{report:?}");
     assert!(report.reason.contains("saves are refused"), "{report:?}");
@@ -179,6 +182,7 @@ fn with_no_vault_lock_yet_the_count_is_zero_and_no_lock_is_made() {
         SecretStoreChoice::Files,
         Ok(vault_for(config.path(), locks.path())),
         None,
+        &[],
     );
     assert_eq!(report.unused, Some(0), "{report:?}");
     assert!(
@@ -196,6 +200,7 @@ fn an_index_without_a_vault_lock_is_not_counted_as_zero() {
         SecretStoreChoice::Files,
         Ok(vault_for(config.path(), locks.path())),
         None,
+        &[],
     );
     assert_eq!(report.unused, None, "{report:?}");
     assert!(
@@ -216,6 +221,7 @@ fn an_escaped_reference_and_a_broken_config_go_through_the_whole_report() {
         SecretStoreChoice::Files,
         Ok(vault_for(config.path(), locks.path())),
         None,
+        &[],
     );
     assert_eq!(
         report.unused,
@@ -229,6 +235,131 @@ fn an_escaped_reference_and_a_broken_config_go_through_the_whole_report() {
         SecretStoreChoice::Files,
         Ok(vault_for(config.path(), locks.path())),
         None,
+        &[],
     );
     assert_eq!(report.unused, None, "{report:?}");
+}
+
+/// [`saved`], plus the name of its first entry, which `gateway.yaml` does not
+/// name: the one entry each row below names through a single other source.
+fn saved_unused() -> (tempfile::TempDir, tempfile::TempDir, PathBuf, String) {
+    let (config, locks, path) = saved();
+    assert_eq!(
+        count(config.path(), locks.path(), &path, &[]),
+        Some(1),
+        "premise: exactly one entry is unused before any other source names it"
+    );
+    let live = std::fs::read_to_string(&path).expect("read");
+    let entries = FilesStore::new(config.path()).entries_dir().to_path_buf();
+    let name = std::fs::read_dir(&entries)
+        .expect("entries dir")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .into_string()
+                .expect("utf8")
+        })
+        .find(|name| name.starts_with("mcp-gateway.") && !live.contains(name.as_str()))
+        .expect("the unused entry");
+    (config, locks, path, name)
+}
+
+/// The doctor count over the files store, with `process_env` as the environment.
+fn count(
+    config: &Path,
+    locks: &Path,
+    path: &Path,
+    process_env: &[std::ffi::OsString],
+) -> Option<usize> {
+    report_with(
+        path,
+        SecretStoreChoice::Files,
+        Ok(vault_for(config, locks)),
+        None,
+        process_env,
+    )
+    .unused
+}
+
+/// `path` written as a double-quoted YAML string (a Windows path's backslashes escaped).
+fn yaml_path(path: &Path) -> String {
+    format!("\"{}\"", path.display().to_string().replace('\\', "\\\\"))
+}
+
+/// Prepends `head` to `gateway.yaml`, keeping its owner-only mode.
+fn prepend(path: &Path, head: &str) {
+    let text = std::fs::read_to_string(path).expect("read");
+    std::fs::write(path, format!("{head}{text}")).expect("write");
+    owner_only(path);
+}
+
+#[test]
+fn an_entry_named_only_by_an_env_file_is_not_unused() {
+    let (config, locks, path, name) = saved_unused();
+    let env = config.path().join("names.env");
+    std::fs::write(&env, format!("SPARE_TOKEN=keychain:{name}\n")).expect("env file");
+    owner_only(&env);
+    prepend(&path, &format!("env_files:\n  - {}\n", yaml_path(&env)));
+    assert_eq!(
+        count(config.path(), locks.path(), &path, &[]),
+        Some(0),
+        "env file names {name}"
+    );
+}
+
+#[test]
+fn an_entry_named_only_by_a_process_environment_value_is_not_unused() {
+    let (config, locks, path, name) = saved_unused();
+    let env = [std::ffi::OsString::from(format!("keychain:{name}"))];
+    assert_eq!(
+        count(config.path(), locks.path(), &path, &env),
+        Some(0),
+        "process env names {name}"
+    );
+}
+
+#[test]
+fn an_entry_named_only_by_a_capability_file_is_not_unused() {
+    let (config, locks, path, name) = saved_unused();
+    let caps = config.path().join("caps");
+    std::fs::create_dir(&caps).expect("caps dir");
+    std::fs::write(
+        caps.join("tool.yaml"),
+        format!("name: tool\ndescription: keychain:{name}\n"),
+    )
+    .expect("capability file");
+    prepend(
+        &path,
+        &format!(
+            "capabilities:\n  directories:\n    - {}\n",
+            yaml_path(&caps)
+        ),
+    );
+    assert_eq!(
+        count(config.path(), locks.path(), &path, &[]),
+        Some(0),
+        "capability file names {name}"
+    );
+}
+
+#[test]
+fn an_entry_named_only_through_a_file_link_is_not_unused() {
+    let (config, locks, path, name) = saved_unused();
+    let entry = FilesStore::new(config.path()).entries_dir().join(&name);
+    let alias = config.path().join("alias");
+    std::fs::hard_link(&entry, &alias).expect("hard link to the entry");
+    let env = config.path().join("link.env");
+    std::fs::write(&env, format!("SPARE_FILE=file:{}\n", alias.display())).expect("env file");
+    owner_only(&env);
+    prepend(&path, &format!("env_files:\n  - {}\n", yaml_path(&env)));
+    assert!(
+        !std::fs::read_to_string(&env).expect("read").contains(&name),
+        "premise: the env file names the entry only through the link"
+    );
+    assert_eq!(
+        count(config.path(), locks.path(), &path, &[]),
+        Some(0),
+        "file: link names {name}"
+    );
 }
