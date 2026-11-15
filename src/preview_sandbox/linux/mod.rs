@@ -446,9 +446,10 @@ fn build_plan(
 /// code, and a whole tree shows every globally installed package and the
 /// tree's own config. What was bound for npx as the program goes first, as
 /// the fetch never runs npx. Under the masked `/usr/local` the two are bound
-/// back; elsewhere they are bound read-only; a system root already shows
-/// them; a masked secret path or a hidden one refuses. npm's builtin `npmrc`
-/// is covered by an empty file either way.
+/// back; in a known runtime tree (NVM) they are bound read-only; a system
+/// root already shows them. Anywhere else, or under a masked secret path or
+/// a hidden one, refuses by name. npm's builtin `npmrc` is covered by an
+/// empty file either way.
 fn place_npm(plan: &mut Plan, npx: &Path, npm: &Path, node: &Path) -> Result<PathBuf, Refusal> {
     let real = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
     let (npx_real, npm_real, node_real) = (real(npx), real(npm), real(node));
@@ -481,8 +482,10 @@ fn place_npm(plan: &mut Plan, npx: &Path, npm: &Path, node: &Path) -> Result<Pat
         };
         match program_bind(file, &plan.read_only) {
             ProgramBind::UsrLocal(_) => plan.bound_back.push(utf8(&bind)?),
-            ProgramBind::Runtime(_) | ProgramBind::File(_) => plan.read_only.push(utf8(&bind)?),
-            ProgramBind::System | ProgramBind::Refused => {}
+            ProgramBind::Runtime(_) => plan.read_only.push(utf8(&bind)?),
+            // Outside the known trees a directory named `node_modules/npm`
+            // proves nothing about what it holds: refused by name below.
+            ProgramBind::File(_) | ProgramBind::System | ProgramBind::Refused => {}
         }
     }
     let npm_needs = package.as_deref().unwrap_or(&npm_real);
@@ -496,9 +499,10 @@ fn place_npm(plan: &mut Plan, npx: &Path, npm: &Path, node: &Path) -> Result<Pat
     }
     // npm's builtin config may hold a registry token someone stored there;
     // the pinned environment outranks it, and the downloaded code never
-    // reads it: an empty file covers it.
-    if let Some(package) = &package {
-        plan.masked.push(utf8(&package.join("npmrc"))?);
+    // reads it: an empty file covers it, whatever npm's directory is called
+    // (Debian's `/usr/share/nodejs/npm`). Covering only ever hides.
+    if let Some(root) = npm_real.parent().and_then(Path::parent) {
+        plan.masked.push(utf8(&root.join("npmrc"))?);
     }
     // The alias npx sat beside (`<bin>/npm`) may be hidden now; each literal
     // step it takes must be shown, as for the program.
