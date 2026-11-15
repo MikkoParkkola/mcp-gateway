@@ -3,10 +3,10 @@
 //! Rows for the restart confirmation registry (`restart_confirm`), written
 //! before the code. Each names its test-plan row (mik-9447 test plan r3).
 //!
-//! A missing presented value maps to its binding's kind (principal None ->
-//! PrincipalChanged, invocation None -> InvocationChanged, target None or Err
-//! -> TargetChanged, sample None -> SampleMissing): the design's kind list has
-//! no separate "missing" kinds except the sample's.
+//! A missing presented value maps to its binding's kind (principal `None` ->
+//! `PrincipalChanged`, invocation `None` -> `InvocationChanged`, target `None`
+//! or `Err` -> `TargetChanged`, sample `None` -> `SampleMissing`): the
+//! design's kind list has no separate "missing" kinds except the sample's.
 //!
 //! The registry compares `FileId` values only. That a real rename or an
 //! in-place rewrite yields a different `FileId` is slice 4's row INV-20
@@ -25,6 +25,8 @@ use crate::gateway::router::{ProcessFacts, ProcessStart};
 use crate::restart::invocation::{FileId, InvocationDigest};
 
 const LIFETIME: Duration = Duration::from_secs(120);
+/// `LIFETIME` less one nanosecond: the last instant a confirmation is good.
+const LAST_GOOD: Duration = Duration::new(119, 999_999_999);
 
 /// A clock a row moves by hand.
 #[derive(Clone)]
@@ -202,7 +204,7 @@ fn the_sixty_fifth_principal_is_refused_while_sixty_four_are_live() {
     );
     assert_eq!(rc.entry_count(), 64);
     // One tick before they expire, the 64 are still live.
-    clock.advance(LIFETIME - Duration::from_nanos(1));
+    clock.advance(LAST_GOOD);
     assert_eq!(
         rc.mint(live("p64", clock.now())),
         None,
@@ -257,7 +259,7 @@ fn a_failed_re_mint_keeps_the_principals_earlier_token() {
 fn a_token_expires_at_exactly_its_lifetime_and_after_but_not_one_tick_before() {
     let (rc, clock, now) = registry();
     let token = rc.mint(live("p", now)).expect("mint");
-    clock.advance(LIFETIME - Duration::from_nanos(1));
+    clock.advance(LAST_GOOD);
     assert!(
         rc.consume(&token, &same(&live("p", now))).is_ok(),
         "one tick before: good"
@@ -295,7 +297,8 @@ fn consume_once(presented: impl FnOnce(&Live) -> Presented) -> Result<(), Refusa
 // T-PRESENTED: each missing value is its own refusal, and the token burns.
 #[test]
 fn each_missing_presented_value_is_refused_and_burns_the_token() {
-    let cases: [(&str, fn(&Live) -> Presented, Refusal); 5] = [
+    type Case = (&'static str, fn(&Live) -> Presented, Refusal);
+    let cases: [Case; 5] = [
         (
             "principal None",
             |l| Presented {
