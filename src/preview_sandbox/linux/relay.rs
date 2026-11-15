@@ -71,6 +71,12 @@ impl Relay {
         self.port
     }
 
+    /// The pairs it holds now, so a row can wait for an accept it cannot see.
+    #[cfg(test)]
+    pub(super) fn pair_count(&self) -> usize {
+        lock(&self.pairs).len()
+    }
+
     /// Stop accepting, shut both ends of every pair and join every thread
     /// within `bound`; a thread still running after it is an error.
     pub(super) fn stop(self, bound: Duration) -> Result<(), String> {

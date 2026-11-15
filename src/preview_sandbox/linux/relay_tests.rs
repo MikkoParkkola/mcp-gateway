@@ -119,6 +119,16 @@ fn a_stalled_proxy_fails_the_stop_within_its_bound() {
     let _queued = UnixStream::connect(&path).expect("fills the backlog");
     let relay = Relay::start(&path, MAX_PAIRS).expect("relay");
     let _stream = client(&relay);
+    // The accept loop polls, so wait for the pair to exist (its connect is
+    // what blocks); a stop before that has no pair to report.
+    let deadline = std::time::Instant::now() + GUARD;
+    while relay.pair_count() == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the relay never took the client"
+        );
+        std::thread::yield_now();
+    }
     // On its own thread, so a stop that ignores its bound fails the row at
     // the guard instead of hanging it.
     let (sent, stopped) = std::sync::mpsc::channel();
