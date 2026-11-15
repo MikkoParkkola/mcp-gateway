@@ -74,6 +74,14 @@ pub(crate) enum InvocationState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InvocationDigest([u8; 32]);
 
+/// A digest a confirmation registry row binds (restart slice 7b).
+#[cfg(all(test, feature = "webui"))]
+impl InvocationDigest {
+    pub(crate) fn for_test(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+}
+
 impl InvocationDigest {
     /// The raw bytes, for the golden-vector row only: never logged or sent.
     #[cfg(test)]

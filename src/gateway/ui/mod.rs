@@ -57,6 +57,9 @@ mod preview_identity;
 mod principal;
 mod refusals;
 mod restart;
+pub(crate) mod restart_confirm;
+#[cfg(test)]
+mod restart_confirm_tests;
 #[cfg(test)]
 mod restart_tests;
 mod secret_slots;

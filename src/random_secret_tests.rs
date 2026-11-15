@@ -211,6 +211,10 @@ const RANDOM_BASE64URL_REVIEWED: &[(&str, &str)] = &[
         "a 16-byte sign-in attempt id",
     ),
     (
+        "src/gateway/ui/restart_confirm.rs",
+        "a single-use 120 s restart confirmation, never a credential; an RNG failure mints nothing",
+    ),
+    (
         "src/oauth/client/mod.rs",
         "16-byte state and client ids; its PKCE verifier calls random_secret",
     ),
