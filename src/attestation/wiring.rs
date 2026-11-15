@@ -381,7 +381,7 @@ mod tests {
 
         let request = TokenRequest {
             agent_identity: "agent".to_string(),
-            task_uuid: uuid::Uuid::new_v4(),
+            task_uuid: crate::ids::new_v4(),
             capabilities: vec![],
         };
         let now = Utc::now();

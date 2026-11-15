@@ -21,4 +21,7 @@ disallowed-methods = [
     { path = "chrono::Utc::now", reason = "read the wall clock through crate::clock (MIK-8202)" },
     { path = "chrono::Local::now", reason = "read the wall clock through crate::clock (MIK-8202)" },
     { path = "jsonwebtoken::get_current_timestamp", reason = "read the wall clock through crate::clock (MIK-8202)" },
+    # A v4 UUID is an identifier, never a secret; it is drawn in
+    # one place, src/ids.rs, whose callers are pinned (random_secret_tests).
+    { path = "uuid::Uuid::new_v4", reason = "an identifier: crate::ids::new_v4; a secret: crate::random_secret" },
 ]

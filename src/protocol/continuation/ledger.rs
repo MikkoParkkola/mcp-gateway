@@ -249,7 +249,7 @@ impl InFlight {
         }
         // Named by the gateway, never by the client: two exchanges against one
         // backend must not collide, and no caller may name another's.
-        let key = format!("{backend_id}:{}", uuid::Uuid::new_v4());
+        let key = format!("{backend_id}:{}", crate::ids::new_v4());
         held.insert(
             key.clone(),
             (self.replica.clone(), expires_at, quota.clone()),
@@ -452,7 +452,7 @@ impl ContinuationState {
         // inside the envelope and read only by the replica that minted it, so
         // any per-process value works and a generated one cannot collide with
         // a restarted predecessor's.
-        let replica = uuid::Uuid::new_v4().to_string();
+        let replica = crate::ids::new_v4().to_string();
         Self {
             keyring: Keyring::new(&[(1, key)]).expect("a single 32-byte key is a valid keyring"),
             ledger: ConsumedLedger::new(CONSUMED_LEDGER_CAPACITY),

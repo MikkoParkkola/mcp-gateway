@@ -121,11 +121,11 @@ const CALLERS: &[(&str, usize)] = &[
     ("src/personal_accounts/journey/ops.rs", 4),
 ];
 
-/// `random_secret` as a whole word: `random_secret_tests` and
+/// `word` as a whole word: for `random_secret`, `random_secret_tests` and
 /// `is_random_secret` are other identifiers.
-fn whole_words(code: &str) -> usize {
+fn whole_words(code: &str, word: &str) -> usize {
     let ident = |c: char| c.is_alphanumeric() || c == '_';
-    code.match_indices("random_secret")
+    code.match_indices(word)
         .filter(|(at, word)| {
             !code[..*at].ends_with(ident) && !code[at + word.len()..].starts_with(ident)
         })
@@ -139,7 +139,7 @@ fn random_secret_is_called_only_where_listed() {
         .filter(|(file, _)| file != "src/random_secret.rs")
         .filter_map(|(file, code)| {
             // Comments and string literals are blanked in `code`.
-            let count = whole_words(&code);
+            let count = whole_words(&code, "random_secret");
             (count > 0).then_some((file, count))
         })
         .collect();
@@ -174,6 +174,95 @@ fn random_secret_is_never_imported_under_another_name() {
     assert!(
         imports.is_empty(),
         "call crate::random_secret::random_secret( in full: {imports:?}"
+    );
+}
+
+/// Every production file that names `ids::new_v4`, with how often: each one
+/// is `crate::ids::new_v4()`, naming a record, request, task or temp file
+/// (tokio's `TcpSocket::new_v4` is another function). An id must never become a credential, so a new caller fails
+/// here until it is reviewed and listed.
+const ID_CALLERS: &[(&str, usize)] = &[
+    ("src/a2a/client.rs", 1),
+    ("src/a2a/types.rs", 1),
+    ("src/attestation/launcher.rs", 1),
+    ("src/attestation/signer.rs", 2),
+    ("src/attestation/wiring.rs", 1),
+    ("src/backend/ops.rs", 2),
+    ("src/capability/executor/cli_run.rs", 1),
+    ("src/capability/executor/jsonrpc.rs", 1),
+    ("src/capability/executor/mod.rs", 2),
+    ("src/chains/executor.rs", 1),
+    ("src/config_persistence_journal_v2_drain.rs", 1),
+    ("src/config_reload/grant_audit.rs", 1),
+    ("src/events/backend_source.rs", 1),
+    ("src/events/lease.rs", 1),
+    ("src/events/upstream_session_notes.rs", 2),
+    ("src/events/webhook_source.rs", 1),
+    ("src/gateway/input_bridge.rs", 1),
+    ("src/gateway/meta_mcp/chain_interim.rs", 2),
+    ("src/gateway/oauth/jwks.rs", 1),
+    ("src/gateway/proxy.rs", 3),
+    ("src/gateway/streaming.rs", 1),
+    ("src/gateway/trace.rs", 1),
+    ("src/gateway/webhooks/mod.rs", 1),
+    ("src/identity_grants/journal.rs", 1),
+    ("src/identity_propagation/mod.rs", 1),
+    ("src/identity_propagation/token_exchange.rs", 1),
+    ("src/key_server/store.rs", 1),
+    ("src/protocol/continuation/ledger.rs", 2),
+    ("src/protocol/continuation/payload.rs", 1),
+    ("src/protocol/tasks.rs", 1),
+    ("src/security/transparency_log_identity.rs", 1),
+    ("src/transport/notification_sink.rs", 1),
+    ("src/transport/websocket.rs", 1),
+];
+
+#[test]
+fn ids_new_v4_is_called_only_where_listed() {
+    let mut found: Vec<(String, usize)> = production_sources()
+        .into_iter()
+        .filter(|(file, _)| file != "src/ids.rs")
+        .filter_map(|(file, code)| {
+            let count = whole_words(&code, "ids::new_v4");
+            (count > 0).then_some((file, count))
+        })
+        .collect();
+    found.sort();
+    let want: Vec<(String, usize)> = ID_CALLERS
+        .iter()
+        .map(|(file, count)| ((*file).to_owned(), *count))
+        .collect();
+    assert_eq!(
+        found, want,
+        "a new caller of crate::ids::new_v4: review it and list it here"
+    );
+}
+
+/// The id counts hold only while every caller names `ids::new_v4` in full:
+/// importing the function itself, an alias, a glob or a grouped import would
+/// let a listed file call it uncounted.
+#[test]
+fn ids_new_v4_is_never_imported_under_another_name() {
+    let imports: Vec<(String, &str)> = production_sources()
+        .into_iter()
+        .filter(|(file, _)| file != "src/ids.rs")
+        .flat_map(|(file, code)| {
+            [
+                "ids::new_v4;",
+                "ids::new_v4 as",
+                "::ids::*",
+                "::ids::{",
+                " ids::*",
+                " ids::{",
+            ]
+            .into_iter()
+            .filter(move |form| code.contains(form))
+            .map(move |form| (file.clone(), form))
+        })
+        .collect();
+    assert!(
+        imports.is_empty(),
+        "call crate::ids::new_v4( in full: {imports:?}"
     );
 }
 
