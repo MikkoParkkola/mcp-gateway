@@ -10,6 +10,7 @@ mod drop;
 mod helper;
 mod mounts;
 pub(crate) mod plan;
+mod relay;
 pub(crate) mod seccomp;
 
 use std::ffi::{OsStr, OsString};
