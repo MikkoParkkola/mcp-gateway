@@ -449,7 +449,7 @@ body { margin: 0; background: var(--color-bg-canvas); color: var(--color-text-pr
 .btn.primary:hover { background: var(--color-accent-tint); }
 .btn.quiet { border-color: transparent; color: var(--color-text-secondary); }
 .btn.danger { background: var(--color-status-danger-fg); border-color: var(--color-status-danger-fg); color: var(--color-text-inverse); }
-@media (pointer: coarse) { .btn, .input, .tabs a, .stn { min-height: var(--size-touch); } }
+@media (pointer: coarse) { .btn, .input, .tabs a, .tabs:empty::before, .stn { min-height: var(--size-touch); } }
 
 /* Route-line navigation: the sidebar is a line; each page is a station. */
 .route-nav { position: relative; display: grid; gap: 0; padding-left: 4px; }
@@ -463,7 +463,7 @@ body { margin: 0; background: var(--color-bg-canvas); color: var(--color-text-pr
 
 /* Tabs */
 .tabs { display: flex; gap: var(--space-6); border-bottom: var(--size-rule) solid var(--color-border-default); }
-.tabs a { padding: var(--space-2) 0 var(--space-2); font: var(--type-kicker); font-size: 13px; letter-spacing: var(--type-kicker-tracking); text-transform: uppercase;
+.tabs a, .tabs:empty::before { padding: var(--space-2) 0 var(--space-2); font: var(--type-kicker); font-size: 13px; letter-spacing: var(--type-kicker-tracking); text-transform: uppercase;
   color: var(--color-text-secondary); text-decoration: none; border-bottom: 3px solid transparent; margin-bottom: -1px; }
 .tabs a[aria-selected="true"] { color: var(--color-text-primary); border-color: var(--color-accent-default); }
 
@@ -528,9 +528,15 @@ a { color: inherit; text-decoration: none; }
 .head h1 { display: inline-flex; font: inherit; }
 .head h1 .plate { font: var(--type-plate); letter-spacing: var(--type-plate-tracking); text-transform: uppercase; display: inline-flex; padding: 7px 16px 5px; border-radius: var(--radius-md); background: var(--color-plate-fill); color: var(--color-plate-on); box-shadow: inset 0 0 0 2px var(--color-plate-fill), inset 0 0 0 calc(2px + var(--size-plate-keyline)) var(--color-plate-keyline); }
 .head .sub { margin-top: 6px; }
+/* The subtitle line and the tab row keep their height before a page fills them, so a subtitle
+   or tabs drawn after the first paint move nothing below (CLS). Empty, each holds one line. */
+.head .sub[hidden] { display: block; visibility: hidden; }
+.head .sub:empty::before { content: "\00a0"; }
+/* The plate too: before the page's title arrives it holds a line of the plate's type. */
+.head h1 .plate:empty::before { content: "\00a0"; }
 .tabs { padding: 14px 24px 0; }
-.tabs:empty { display: none; }
-.tabs a { color: var(--color-text-secondary); border-bottom: 3px solid transparent; }
+.tabs:empty::before { content: "\00a0"; visibility: hidden; }
+.tabs a, .tabs:empty::before { color: var(--color-text-secondary); border-bottom: 3px solid transparent; }
 .tabs a[aria-current="page"] { color: var(--color-text-primary); border-color: var(--color-accent-default); }
 #content { position: relative; flex: 1; padding: 18px 24px; outline: none; }
 #content .state h2 { font: var(--type-title); letter-spacing: var(--type-title-tracking); text-transform: uppercase; }
@@ -565,13 +571,13 @@ a { color: inherit; text-decoration: none; }
   .head h1 .plate { padding: 5px 12px 3px; }
   .head .sub { margin-top: 2px; }
   .tabs { padding: 6px 16px 0; gap: 4px; }
-  .tabs a { min-height: 44px; display: flex; align-items: center; padding: 0 12px; }
+  .tabs a, .tabs:empty::before { min-height: 44px; display: flex; align-items: center; padding: 0 12px; }
   #content { padding: 14px 12px 24px; }
 }
 
 /* Coarse pointers: every target the shell draws is at least 44 px. */
 @media (pointer: coarse) {
-  .stn, .tabs a, .skip, .lnk, button { min-height: var(--size-touch); min-width: var(--size-touch); display: inline-flex; align-items: center; }
+  .stn, .tabs a, .tabs:empty::before, .skip, .lnk, button { min-height: var(--size-touch); min-width: var(--size-touch); display: inline-flex; align-items: center; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -584,11 +590,11 @@ a { color: inherit; text-decoration: none; }
 /* Signed out, the sign-in is the only thing on the page (its own rules are in the rest). */
 body.signed-out > .side, body.signed-out > .main, body.signed-out > .skip { display: none; }
 </style>
-<script type="module" src="/ui/assets/shell.260480aea22f.js"></script>
+<script type="module" src="/ui/assets/shell.0adcc4072b4e.js"></script>
 <!-- Screens, by page id. The shell loads the current route's screen before it renders it,
      and the rest after the first paint, so a new screen adds nothing to the first paint.
      Each module imports the shell by its hashed name and calls register(). -->
-<script type="application/json" id="screens">{"tools": {"js": "/ui/assets/tools.00df8a33eb67.js", "css": "/ui/assets/tools.24f226efcd24.css"}}</script>
+<script type="application/json" id="screens">{"tools": {"js": "/ui/assets/tools.6406a73263e9.js", "css": "/ui/assets/tools.24f226efcd24.css"}}</script>
 </head>
 <body>
 <a class="skip" href="#content">Skip to content</a>
