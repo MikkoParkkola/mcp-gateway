@@ -575,7 +575,14 @@ impl Gateway {
             self.test_seams.take_shutdown_trigger(),
         );
         #[cfg(not(test))]
-        let shutdown = support::shutdown_signal(shutdown_tx.clone());
+        let shutdown: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> = {
+            let tx = shutdown_tx.clone();
+            mutant!(
+                "r2",
+                Box::pin(async move { support::shutdown_signal(tx).await }),
+                Box::pin(support::shutdown_signal(tx))
+            )
+        };
 
         log_startup_banner(
             &self.config,

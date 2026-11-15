@@ -350,16 +350,22 @@ pub(super) fn shutdown_signal(
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
     #[cfg(unix)]
-    let (mut interrupt, mut terminate) = (
-        signal::unix::signal(signal::unix::SignalKind::interrupt())
-            .expect("Failed to install Ctrl+C handler"),
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler"),
-    );
+    let install = || {
+        (
+            signal::unix::signal(signal::unix::SignalKind::interrupt())
+                .expect("Failed to install Ctrl+C handler"),
+            signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("Failed to install SIGTERM handler"),
+        )
+    };
+    #[cfg(unix)]
+    let eager = mutant!("r1", None, Some(install()));
     #[cfg(windows)]
     let mut ctrl_c = signal::windows::ctrl_c().expect("Failed to install Ctrl+C handler");
 
     async move {
+        #[cfg(unix)]
+        let (mut interrupt, mut terminate) = eager.unwrap_or_else(install);
         #[cfg(unix)]
         tokio::select! {
             _ = interrupt.recv() => {},
