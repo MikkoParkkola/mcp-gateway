@@ -165,8 +165,13 @@ impl RestartConfirm {
     /// principals' live entries, or the random source failed. A principal's
     /// new confirmation replaces its earlier one; a failed mint replaces nothing.
     pub(crate) fn mint(&self, live: Live) -> Option<String> {
-        let now = (self.clock)();
+        // A second line behind the route's own check: off mints nothing.
+        if !self.enabled {
+            return None;
+        }
         let mut entries = self.entries();
+        // Read under the lock, so time spent waiting for it is not lost.
+        let now = (self.clock)();
         entries.retain(|_, entry| !expired(entry.minted, now));
         let held = entries
             .iter()
@@ -192,14 +197,17 @@ impl RestartConfirm {
         if token.len() != TOKEN_LEN || !token.starts_with(PREFIX) {
             return Err(Refusal::Invalid);
         }
-        let now = (self.clock)();
-        let entry = self
-            .entries()
-            .remove(&digest(token))
-            .ok_or(Refusal::Invalid)?;
-        if expired(entry.minted, now) {
-            return Err(Refusal::Expired);
-        }
+        let entry = {
+            let mut entries = self.entries();
+            // Read under the lock: a consume that waited for it is judged at
+            // the time it ran, never earlier.
+            let now = (self.clock)();
+            let entry = entries.remove(&digest(token)).ok_or(Refusal::Invalid)?;
+            if expired(entry.minted, now) {
+                return Err(Refusal::Expired);
+            }
+            entry
+        };
         let bound = &entry.live;
         if presented.principal.as_deref() != Some(bound.principal.as_str()) {
             return Err(Refusal::PrincipalChanged);

@@ -162,12 +162,17 @@ fn key(token: &str) -> [u8; 32] {
     sha2::Sha256::digest(token.as_bytes()).into()
 }
 
-// T-DEFAULT-OFF (pin: nothing turns restart on yet, so this cannot be red).
+// T-DEFAULT-OFF: off by default, and an instance that is off mints nothing.
 #[test]
 fn restart_confirmation_ships_switched_off() {
     assert!(
         !RestartConfirm::new().enabled(),
         "the shipped default must be off"
+    );
+    assert_eq!(
+        RestartConfirm::new().mint(live("p", Instant::now())),
+        None,
+        "an instance that is off mints nothing, whatever its caller checked"
     );
     let facts = ProcessFacts::new(ProcessStart::now(), None);
     assert!(
@@ -512,12 +517,17 @@ fn the_registry_keys_by_the_digest_of_the_exact_string() {
 }
 
 // T-SAMPLE: mint with a bound sample, present a fresh one.
-fn with_samples(bound_count: u64, bound_total: u64, fresh_total: u64) -> Result<u64, Refusal> {
+fn with_counts(
+    bound_count: u64,
+    fresh_count: u64,
+    bound_total: u64,
+    fresh_total: u64,
+) -> Result<u64, Refusal> {
     let (rc, _clock, now) = registry();
     let mut bound = live("p", now);
     bound.sample = sample(now, bound_count, bound_total);
     let token = rc.mint(bound.clone()).expect("mint");
-    let fresh = sample(now, bound_count, fresh_total);
+    let fresh = sample(now, fresh_count, fresh_total);
     rc.consume(
         &token,
         &Presented {
@@ -526,6 +536,10 @@ fn with_samples(bound_count: u64, bound_total: u64, fresh_total: u64) -> Result<
         },
     )
     .map(|accepted| accepted.writes_since)
+}
+
+fn with_samples(bound_count: u64, bound_total: u64, fresh_total: u64) -> Result<u64, Refusal> {
+    with_counts(bound_count, bound_count, bound_total, fresh_total)
 }
 
 #[test]
@@ -573,3 +587,14 @@ fn the_sample_comes_from_the_instances_source() {
 }
 
 // T-SLOT-CONTRACT is a 7c row: it needs shutdown's real RestartSlot.
+
+#[test]
+fn the_warning_rule_reads_the_count_the_admin_was_shown() {
+    // Shown quiet, busy now: still the quiet decision, refused.
+    assert_eq!(
+        with_counts(0, 5, 100, 101),
+        Err(Refusal::WritesSincePreview)
+    );
+    // Shown busy, quiet now: the admin confirmed writes, accepted.
+    assert_eq!(with_counts(3, 0, 100, 105), Ok(5));
+}
