@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// The Tools screen, first slice: Tools › Status lists every tool the gateway
-// offers, A to Z, filters it by text and server, opens a row to its input
-// schema, and links each tool to its own page. It reads GET /ui/api/tools
-// once per render. Every server-supplied string goes in with textContent.
-// The shell is imported by its exact hashed name, so this page registers in
-// the same module instance the document loaded.
-import { register } from '/ui/assets/shell.260480aea22f.js';
+// The Tools screen: Tools › Status opens on the tools called in the last
+// hour, and ?view=all lists every tool A to Z, filters it by text and
+// server, opens a row to its input schema, and links each tool to its own
+// page. It reads GET /ui/api/tools once per render. Every server-supplied
+// string goes in with textContent. The shell is imported by its exact hashed
+// name, so this page registers in the same module instance the document loaded.
+import { go, register } from '/ui/assets/shell.260480aea22f.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
 function h(tag, attrs = {}, ...children) {
@@ -24,6 +24,10 @@ const BYNAME = (a, b) => a.name.localeCompare(b.name) || a.server.localeCompare(
 /** The object segment of a tool's own page: its server and name. */
 const objectOf = (t) => `${t.server}:${t.name}`;
 const toolPath = (t) => `/ui/tools/${encodeURIComponent(objectOf(t))}/status`;
+
+/** The catalogue. The most-called panel is this route with no view. */
+const CATALOGUE_PATH = '/ui/tools/status?view=all';
+const showingAll = () => new URLSearchParams(location.search).get('view') === 'all';
 
 /** Read every tool, sorted A to Z, with the server list beside it. */
 async function readTools(api) {
@@ -71,15 +75,93 @@ function matching(list, query, server) {
 // back, as the classic tab's did (it never unmounted).
 const filters = { query: '', server: '' };
 
-async function statusTab(body, ctx) {
-  const { list, servers } = await readTools(ctx.api);
-  ctx.header({ subtitle: `${plural(list.length, 'tool', 'tools')} from ${plural(servers.length, 'server', 'servers')}. Agents find them through search and invoke.` });
-  if (list.length === 0) {
-    body.append(ctx.state('empty', { title: 'No tools yet', body: 'No tools yet. Add a server and its tools appear here.' }));
-    return;
-  }
+/**
+ * The first keystroke on Status opens the catalogue and pushes one history
+ * entry, so Back from a tool page returns to the search and Back again to
+ * Status. go() is that push (shell.js go). Later keystrokes happen on the
+ * catalogue, which does not push. Deferred so the keystroke finishes on the
+ * input it started on; one queue, so a second event in the same turn adds none.
+ */
+let catalogueQueued = false;
+function queueCatalogue() {
+  if (catalogueQueued || showingAll()) return;
+  catalogueQueued = true;
+  setTimeout(() => {
+    catalogueQueued = false;
+    if (!showingAll()) go(CATALOGUE_PATH);
+  }, 0);
+}
 
-  const search = h('input', { class: 'input', type: 'search', id: 'tools-search', 'aria-label': 'Search tools', autocomplete: 'off', spellcheck: 'false', placeholder: `Search ${plural(list.length, 'tool', 'tools')} by name or what they do` });
+/** Frame 48s: how agents reach this catalogue, beside the search (copy D11). */
+function loadNote() {
+  const load = h('p', { class: 't3 tools-load' }, 'Agents load 11 tools and reach the rest through search and invoke ');
+  // The tooltip module loads after the catalogue is drawn and never holds it up: a static
+  // import would put its bytes before every page's first paint, and if it fails to load
+  // the sentence simply stands without its (i).
+  import('/ui/assets/tooltip.fc459693146e.js').then(({ tip }) => load.append(tip('tools.status.load-11-tools-and-reach')), () => {});
+  return load;
+}
+
+function searchBox(list) {
+  return h('input', {
+    class: 'input', type: 'search', id: 'tools-search', 'aria-label': 'Search tools', autocomplete: 'off', spellcheck: 'false',
+    placeholder: `Search ${plural(list.length, 'tool', 'tools')} by name or what they do`,
+  });
+}
+
+/** Called in the last hour, highest first, ties by name then server, ten at most. */
+function topCalled(list) {
+  return list.filter((t) => t.calls_1h > 0).sort((a, b) => b.calls_1h - a.calls_1h
+    || a.name.localeCompare(b.name) || a.server.localeCompare(b.server)).slice(0, 10);
+}
+
+/** p == 0 is "new", before the ratio; a ratio that rounds to 0 is no change. */
+function changeWord(hour, prev) {
+  if (prev === 0) return 'new this hour';
+  const d = Math.round(Math.abs(hour - prev) / prev * 100);
+  if (d === 0) return '→ no change';
+  return `${hour > prev ? '↗' : '↘'} ${d}% vs hour before`;
+}
+
+function mostCalled(body, list) {
+  const search = searchBox(list);
+  search.value = filters.query;
+  // Typing, or Enter in an empty box, leaves this panel for the catalogue.
+  search.addEventListener('input', () => {
+    filters.query = search.value;
+    queueCatalogue();
+  });
+  search.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' || search.value !== '') return;
+    ev.preventDefault();
+    filters.query = '';
+    queueCatalogue();
+  });
+  const rows = topCalled(list);
+  const titleId = 'tools-called-title';
+  const section = h('section', { class: 'tk tools-card', 'aria-labelledby': titleId },
+    h('div', { class: 'tools-card-head' }, h('h2', { class: 'kicker', id: titleId }, 'Most called, last hour')));
+  if (rows.length === 0) {
+    section.append(h('div', { class: 'tools-called-empty' },
+      h('p', { class: 'muted' }, 'No tool calls in the last hour.'),
+      h('p', {}, h('a', { class: 'lnk', href: CATALOGUE_PATH }, `See all ${list.length.toLocaleString('en')} tools`))));
+  } else {
+    section.append(h('div', { class: 'tools-scroll' }, h('table', { class: 't tools-called' },
+      h('thead', {}, h('tr', {},
+        h('th', { scope: 'col' }, 'Tool'), h('th', { scope: 'col' }, 'Server'),
+        h('th', { scope: 'col' }, 'Calls, last hour'), h('th', { scope: 'col' }, 'Change'))),
+      h('tbody', {}, ...rows.map((t) => h('tr', {},
+        h('td', {}, h('a', { href: toolPath(t) }, t.name)),
+        h('td', { class: 't2' }, t.server),
+        h('td', {}, t.calls_1h.toLocaleString('en')),
+        h('td', {}, changeWord(t.calls_1h, t.calls_prev_1h))))))));
+  }
+  section.append(h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' }));
+  body.append(h('div', { class: 'tools-bar' }, search, loadNote()), section);
+}
+
+function catalogue(body, list, servers) {
+  const search = searchBox(list);
   const pick = h('select', { class: 'input', id: 'tools-server', 'aria-label': 'Server' }, h('option', { value: '' }, 'All servers'), ...servers.map((s) => h('option', { value: s }, s)));
   const meta = h('span', { class: 't3 tools-meta' });
   const tbody = h('tbody');
@@ -92,13 +174,7 @@ async function statusTab(body, ctx) {
     h('div', { class: 'tools-card-head' }, h('h2', { class: 'kicker', id: 'tools-card-title' }, 'All tools'), meta),
     h('div', { class: 'tools-scroll', tabindex: 0, role: 'region', 'aria-label': 'Tool list' }, table),
     none, h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' }));
-  // Frame 48s: how agents reach this catalogue, beside the search (copy D11).
-  const load = h('p', { class: 't3 tools-load' }, 'Agents load 11 tools and reach the rest through search and invoke ');
-  // The tooltip module loads after the catalogue is drawn and never holds it up: a static
-  // import would put its bytes before every page's first paint, and if it fails to load
-  // the sentence simply stands without its (i).
-  import('/ui/assets/tooltip.fc459693146e.js').then(({ tip }) => load.append(tip('tools.status.load-11-tools-and-reach')), () => {});
-  body.append(h('div', { class: 'tools-bar' }, search, pick, load), card);
+  body.append(h('div', { class: 'tools-bar' }, search, pick, loadNote()), card);
   search.value = filters.query;
   pick.value = servers.includes(filters.server) ? filters.server : '';
 
@@ -147,13 +223,24 @@ async function statusTab(body, ctx) {
   draw();
 }
 
+async function statusTab(body, ctx) {
+  const { list, servers } = await readTools(ctx.api);
+  ctx.header({ subtitle: `${plural(list.length, 'tool', 'tools')} from ${plural(servers.length, 'server', 'servers')}. Agents find them through search and invoke.` });
+  if (list.length === 0) {
+    body.append(ctx.state('empty', { title: 'No tools yet', body: 'No tools yet. Add a server and its tools appear here.' }));
+    return;
+  }
+  if (showingAll()) catalogue(body, list, servers);
+  else mostCalled(body, list);
+}
+
 async function toolPage(body, ctx) {
   const { list } = await readTools(ctx.api);
   const t = list.find((x) => objectOf(x) === ctx.object);
   if (!t) {
     ctx.header({ title: 'No such tool', subtitle: null });
     body.append(ctx.state('empty', { title: 'No such tool', body: 'The gateway offers no tool by that name.' }),
-      h('p', {}, h('a', { class: 'lnk', href: '/ui/tools/status' }, 'Back to all tools')));
+      h('p', {}, h('a', { class: 'lnk', href: CATALOGUE_PATH }, 'Back to all tools')));
     return;
   }
   // The plate names the tool; it draws in capitals, and a tool's name is
@@ -168,7 +255,7 @@ async function toolPage(body, ctx) {
     h('p', { class: 'kicker' }, 'Input schema'),
     schemaBlock(t),
     h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' })),
-  h('p', {}, h('a', { class: 'lnk', href: '/ui/tools/status' }, 'Back to all tools')));
+  h('p', {}, h('a', { class: 'lnk', href: CATALOGUE_PATH }, 'Back to all tools')));
 }
 
 register('tools', {

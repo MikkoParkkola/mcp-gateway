@@ -128,8 +128,9 @@ test('T5: Open goes to the tool page, and an unknown tool says so', async ({ pag
   await expect(page.getByRole('region', { name: `Input schema of ${t.name}` })).toBeVisible();
   const word = `${t.class} (${t.class_source === 'declared' ? 'declared' : 'guessed from the name'})`;
   await expect(page.locator('.tool-facts')).toContainText(word);
+  // "All tools" is the A-to-Z catalogue; Status alone is the most-called panel.
   await page.getByRole('link', { name: 'Back to all tools' }).click();
-  await expect(page).toHaveURL('/ui/tools/status');
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
   await page.goto(`/ui/tools/${encodeURIComponent('alpha:no_such_tool')}/status`);
   await expect(page.locator('#content')).toContainText('No such tool');
 });
