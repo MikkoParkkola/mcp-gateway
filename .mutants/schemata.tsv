@@ -1,0 +1,19 @@
+head_sha	805d7460197f83b7c51a3c53cb73fe6adb6fdd71
+#mutant m1
+mcp_gateway	gateway::restart_slot::slot_contract::the_real_slot_passes_the_slot_contract	src/gateway/restart_slot_tests.rs:76
+#mutant m2
+mcp_gateway	gateway::restart_slot::slot_contract::the_real_slot_passes_the_slot_contract	src/gateway/restart_slot_tests.rs:195
+#mutant m3
+mcp_gateway	gateway::restart_slot::slot_contract::the_real_slot_passes_the_slot_contract	src/gateway/restart_slot_tests.rs:181
+#mutant m4
+mcp_gateway	gateway::restart_status::tests::a_call_for_an_earlier_attempt_never_moves_the_current_one	src/gateway/restart_status_tests.rs:516
+#mutant m5
+mcp_gateway	gateway::restart_slot::slot_contract::the_real_slot_passes_the_slot_contract	src/gateway/restart_slot_tests.rs:160
+#mutant m6
+mcp_gateway	gateway::restart_slot::slot_contract::the_real_slot_passes_the_slot_contract	src/gateway/restart_slot_tests.rs:122
+#mutant m7
+mcp_gateway	gateway::restart_slot::slot_contract::the_real_slot_passes_the_slot_contract	src/gateway/restart_slot_tests.rs:122
+#mutant m8
+mcp_gateway	gateway::restart_slot::slot_contract::the_real_slot_passes_the_slot_contract	src/gateway/restart_slot_tests.rs:117
+#mutant m9
+mcp_gateway	gateway::restart_status::tests::a_call_for_an_earlier_attempt_never_moves_the_current_one	src/gateway/restart_status_tests.rs:516
