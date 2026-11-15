@@ -18,7 +18,10 @@ use crate::preview_sandbox::{Refusal, Target};
 const LOCK: &str = r#"{"lockfileVersion":3,"packages":{"":{"dependencies":{"mcp-shim":"1.0.0"}},"node_modules/mcp-shim":{"version":"1.0.0","resolved":"https://registry.npmjs.org/mcp-shim/-/mcp-shim-1.0.0.tgz"}}}"#;
 
 /// The installed bin: every record the npm steps left, then its arguments.
+/// The run's PATH holds only node's and the install's bin directories, so it
+/// names the system tools' directories itself.
 const RUN_BIN: &str = r#"#!/bin/sh
+PATH=/usr/bin:/bin
 for f in install.argv install.env ci.argv ci.env report; do
   o="${SHIM_HOME:-/preview-home}/obs/$f"
   if [ -e "$o" ]; then echo "== $f"; cat "$o"; fi
@@ -28,9 +31,11 @@ echo "bin-ran $*"
 
 /// npm as a shell script: `--version` answers on the host; `install` and
 /// `ci` record their argv and exact environment, write `lock` or the bin,
-/// then run `hook` with `$step` set.
+/// then run `hook` with `$step` set. The fetch's PATH holds only node's and
+/// npm's directories, so the shim names the system tools' directories after
+/// reading its own environment (`/proc/$$/environ` keeps the exec'd one).
 fn npm_shim(tree: &Path, lock: &str, hook: &str) -> String {
-    let run_bin = tree.join("run-bin.sh");
+    let run_bin = run_bin_in(tree);
     format!(
         r#"#!/bin/sh
 case "$1" in
@@ -38,6 +43,8 @@ case "$1" in
 install|ci) step=$1;;
 *) echo "shim: unexpected $1" >&2; exit 2;;
 esac
+PATH=/usr/bin:/bin
+export PATH
 home=${{SHIM_HOME:-/preview-home}}
 obs=$home/obs
 pkg=$home/pkg
@@ -58,13 +65,20 @@ exit 0
     )
 }
 
+/// Where the run bin lives: inside npm's package, the one directory of the
+/// tree besides node's file that the root shows.
+fn run_bin_in(tree: &Path) -> PathBuf {
+    tree.join("lib/node_modules/npm/run-bin.sh")
+}
+
 fn script(path: &Path, body: &str) {
     std::fs::write(path, body).expect("script");
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("mode");
 }
 
 /// A fake node install outside `/tmp` (the plan refuses to bind a program
-/// there), shaped like an NVM version so the plan binds the whole tree.
+/// there), shaped like an NVM version: the root shows its node file and
+/// npm's package, nothing else of the tree.
 struct Shim {
     _scratch: tempfile::TempDir,
     bin: PathBuf,
@@ -83,7 +97,7 @@ impl Shim {
         let npm_pkg = tree.join("lib/node_modules/npm/bin");
         std::fs::create_dir_all(&bin).expect("bin");
         std::fs::create_dir_all(&npm_pkg).expect("npm package");
-        script(&tree.join("run-bin.sh"), RUN_BIN);
+        script(&run_bin_in(&tree), RUN_BIN);
         script(&npm_pkg.join("npm-cli.js"), &npm_shim(&tree, lock, hook));
         script(&npm_pkg.join("npx-cli.js"), "#!/bin/sh\nexit 3\n");
         script(&bin.join("node"), "#!/bin/sh\nexit 3\n");
@@ -203,7 +217,7 @@ async fn l5_an_escapee_holding_the_pipes_is_swept() {
 fi"#;
     let shim = Shim::new(hook);
     std::fs::write(
-        shim.bin.parent().expect("tree").join("run-bin.sh"),
+        run_bin_in(shim.bin.parent().expect("tree")),
         format!(
             "{RUN_BIN}pid=$(cat /preview-home/obs/escapee.pid)\ntest -d /proc/$pid && echo escapee-alive || echo escapee-gone\nfor d in /proc/[0-9]*; do p=${{d#/proc/}}; [ \"$p\" = \"$$\" ] || echo \"other $p\"; done\n"
         ),
@@ -225,8 +239,11 @@ fi"#;
 /// twice it.
 #[tokio::test]
 async fn l_deadline2_the_two_npm_steps_share_one_deadline() {
-    let limit = Duration::from_secs(7);
-    let shim = Shim::new("sleep 4");
+    // Each step takes most of the deadline, leaving room for a slow sandbox
+    // start before fetch_start: two steps pass one deadline, but each fits
+    // inside a deadline of its own.
+    let limit = Duration::from_secs(30);
+    let shim = Shim::new("sleep 18");
     let Some(ran) = shim.npx(&[], limit).await else {
         return;
     };
@@ -324,7 +341,7 @@ fi"#
     );
     let shim = Shim::new(&hook);
     std::fs::write(
-        shim.bin.parent().expect("tree").join("run-bin.sh"),
+        run_bin_in(shim.bin.parent().expect("tree")),
         format!(
             "{RUN_BIN}{PROBE}probe 127.0.0.1 \"$(cat /preview-home/obs/relay.port)\" run-relay\nprobe 127.0.0.1 \"$1\" run-host\nprobe 104.16.0.10 443 run-out\n"
         ),
@@ -364,7 +381,7 @@ async fn f2_t2b_the_fetch_child_holds_no_control_connection() {
 fi"#;
     let shim = Shim::new(hook);
     std::fs::write(
-        shim.bin.parent().expect("tree").join("run-bin.sh"),
+        run_bin_in(shim.bin.parent().expect("tree")),
         format!("{RUN_BIN}cat /preview-home/obs/fds\n"),
     )
     .expect("run bin");
@@ -373,6 +390,8 @@ fi"#;
     };
     let out = ran.expect("the fetch and the run succeeded");
     assert_eq!(record(&out, "report"), ["listed"], "{out}");
+    // Positive control: the listing rendered (the step's output pipes).
+    assert!(out.contains("pipe:"), "{out}");
     assert!(!out.contains("socket:"), "{out}");
 }
 
