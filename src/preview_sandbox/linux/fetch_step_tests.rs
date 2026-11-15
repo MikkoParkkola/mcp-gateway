@@ -72,3 +72,42 @@ fn both_pipes_drain_at_once() {
     let cap = crate::preview_sandbox::fetch_output::TAIL_BYTES;
     assert_eq!((out.len(), err.len()), (cap, cap));
 }
+
+/// Kills "the run keeps the plan's program or PATH" and "the spec's version
+/// stays in the package name": a scoped, version-pinned spec runs the bin
+/// named after the package, with the server's arguments, and PATH is node's
+/// directory then the install's `.bin`, exactly.
+#[test]
+fn the_run_after_a_fetch_is_the_packages_bin() {
+    let home = tempfile::tempdir().expect("home");
+    let package = home.path().join("pkg/node_modules/@s/pkg");
+    std::fs::create_dir_all(package.join("bin")).expect("dirs");
+    std::fs::write(
+        package.join("package.json"),
+        br#"{"name":"@s/pkg","bin":{"pkg":"bin/cli.js","other":"bin/o.js"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(package.join("bin/cli.js"), b"#!/usr/bin/env node\n").expect("bin");
+    std::fs::write(package.join("bin/o.js"), b"#!/usr/bin/env node\n").expect("other");
+    let run = super::npm_run(
+        home.path(),
+        "@s/pkg@1.2.3",
+        &["--flag".into()],
+        "/opt/node/bin",
+    )
+    .expect("run");
+    let bin = package
+        .join("bin/cli.js")
+        .canonicalize()
+        .expect("canonical");
+    let bin = bin.to_str().expect("utf-8").to_owned();
+    let dot_bin = home.path().join("pkg/node_modules/.bin");
+    assert_eq!(
+        run,
+        super::Run {
+            program: bin.clone(),
+            argv: vec![bin, "--flag".into()],
+            path: format!("/opt/node/bin:{}", dot_bin.display()),
+        }
+    );
+}
