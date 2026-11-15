@@ -37,7 +37,7 @@ function misses(row, blocking = BLOCKING) {
   const found = { blocking: [], reported: [] };
   const check = (metric, p75, budget, unit) => {
     const side = blocking[metric] ? 'blocking' : 'reported';
-    if (p75 === null || p75 === undefined) found[side].push(`${metric} p75 was not measured`);
+    if (!Number.isFinite(p75)) found[side].push(`${metric} p75 was not measured`);
     else if (p75 >= budget) found[side].push(`${metric} p75 ${p75}${unit} is not under ${budget}${unit}`);
   };
   check('lcp', row.lcp.p75, LCP_BUDGET_MS, ' ms');
@@ -305,7 +305,8 @@ for (const row of ROWS) {
             loadsMeasured += 1;
             retried.push(message(first));
           } catch (second) {
-            errors.push(message(second));
+            // Both errors: the first may carry the cause the retry only repeats.
+            errors.push(`${message(first)} (retry: ${message(second)})`);
           }
         }
       }
@@ -427,6 +428,7 @@ test('the gate: a blocking budget missed fails the row, a reported one does not'
   expect(misses(row(900, 0.1137), { lcp: true, cls: true })).toEqual({ blocking: ['cls p75 0.1137 is not under 0.1'], reported: [] });
   // A p75 that was never measured is a miss on its side: a blocking gate never passes on a missing number.
   expect(misses(row(null, null))).toEqual({ blocking: ['lcp p75 was not measured'], reported: ['cls p75 was not measured'] });
+  expect(misses(row(Number.NaN, 0.05)).blocking).toEqual(['lcp p75 was not measured']);
 });
 
 test('tools status held 3s reports lcp over 2500', async ({ page }) => {
