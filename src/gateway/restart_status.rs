@@ -244,14 +244,29 @@ impl RestartBoard {
 
     /// Apply `change` to the latest record and its commit flag; nothing
     /// before any accept.
+    /// A call naming another attempt than the current record's changes
+    /// nothing; it is logged at debug, after the lock is released.
     fn edit(&self, id: u64, change: impl FnOnce(&mut RestartStatus, &mut bool)) {
-        let _ = id;
-        let mut board = self.board.lock();
-        let Board {
-            record, committed, ..
-        } = &mut *board;
-        if let Some(record) = record.as_mut() {
-            change(record, committed);
+        let stale = {
+            let mut board = self.board.lock();
+            let Board {
+                record, committed, ..
+            } = &mut *board;
+            match record.as_mut() {
+                Some(record) if record.id == id => {
+                    change(record, committed);
+                    None
+                }
+                Some(record) => Some(record.id),
+                None => None,
+            }
+        };
+        if let Some(current) = stale {
+            tracing::debug!(
+                attempt = id,
+                current,
+                "restart status: a call for another attempt, ignored"
+            );
         }
     }
 }

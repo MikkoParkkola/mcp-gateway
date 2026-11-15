@@ -12,7 +12,7 @@
 )]
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::restart_status::{RestartBoard, RestartCancel};
 
@@ -48,6 +48,11 @@ impl RestartSlot {
 
     /// The slot, or `None` while another attempt holds it (the route's 409).
     pub(crate) fn try_reserve(&self) -> Option<Reservation> {
+        // Acquire pairs with the Release in `free`: the next holder sees the
+        // board calls the last one made before it freed the slot.
+        self.held
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .ok()?;
         Some(Reservation {
             board: Arc::clone(&self.board),
             held: Arc::clone(&self.held),
@@ -84,23 +89,58 @@ impl Reservation {
     /// Accept the attempt on the board, after the confirmation is consumed:
     /// the attempt id for the 202 and the audit. Again returns the same id.
     pub(crate) fn accept(&mut self) -> u64 {
-        0
+        match self.state {
+            State::Accepted(id) => id,
+            State::Reserved | State::Finished => {
+                let id = self.board.accept();
+                self.state = State::Accepted(id);
+                id
+            }
+        }
     }
 
-    /// Hand the accepted attempt over; never waits.
-    pub(crate) fn activate(self) {}
+    /// Hand the accepted attempt over; never waits. The slot stays held until
+    /// the attempt's end (the coordinator releases it). Before accept there is
+    /// no attempt: the slot is freed and nothing reaches the board.
+    pub(crate) fn activate(mut self) {
+        let was = std::mem::replace(&mut self.state, State::Finished);
+        if was == State::Reserved {
+            self.free();
+        }
+    }
 
     /// Refuse the attempt (the route's failed audit): records `reason` on the
-    /// board for an accepted attempt, then frees the slot.
-    pub(crate) fn refuse(self, reason: RestartCancel) {
-        let _ = reason;
+    /// board for an accepted attempt, disarms, then frees the slot.
+    pub(crate) fn refuse(mut self, reason: RestartCancel) {
+        let was = std::mem::replace(&mut self.state, State::Finished);
+        if let State::Accepted(id) = was {
+            self.board.cancel(id, reason);
+        }
+        self.free();
+    }
+
+    /// Release the slot for the next attempt.
+    fn free(&self) {
+        self.held.store(false, Ordering::Release);
+        #[cfg(test)]
+        self.frees.fetch_add(1, Ordering::SeqCst);
     }
 }
 
 impl Drop for Reservation {
     /// Not activated and not refused: frees the slot; an accepted attempt is
-    /// recorded as cancelled with AuditRefused first (the backstop).
-    fn drop(&mut self) {}
+    /// recorded as cancelled with AuditRefused first (the backstop). Finished
+    /// does nothing, so no path frees twice.
+    fn drop(&mut self) {
+        match std::mem::replace(&mut self.state, State::Finished) {
+            State::Finished => {}
+            State::Reserved => self.free(),
+            State::Accepted(id) => {
+                self.board.cancel(id, RestartCancel::AuditRefused);
+                self.free();
+            }
+        }
+    }
 }
 
 #[cfg(test)]
