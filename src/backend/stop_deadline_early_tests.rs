@@ -352,19 +352,24 @@ async fn a_deadline_spent_mid_handover_gives_the_rest_a_zero_budget() {
 }
 
 /// R5 (HANDOVER.1 wiring): the HTTP stop's backend stage is the one
-/// `stop_all_by` call in run.rs, and it hands over at entry. `run` is driven
-/// by no row, so its source text is the evidence.
+/// `stop_all_by` call in `Gateway::run` and the blocks it moved into
+/// run_wiring.rs (`stop_custody_and_backends`), and it hands over at entry.
+/// `run` is driven by no row, so its source text is the evidence.
 #[test]
 fn the_http_backend_stage_hands_over_at_entry() {
-    let code: String = crate::test_source_text::sanitize(
-        &crate::test_source_text::production_text(include_str!("../gateway/server/run.rs")),
-    )
+    let code: String = [
+        include_str!("../gateway/server/run.rs"),
+        include_str!("../gateway/server/run_wiring.rs"),
+    ]
+    .iter()
+    .map(|text| crate::test_source_text::sanitize(&crate::test_source_text::production_text(text)))
+    .collect::<String>()
     .split_whitespace()
     .collect();
     let calls: Vec<&str> = code.split("stop_all_by(").skip(1).collect();
     let [call] = calls.as_slice() else {
         panic!(
-            "run.rs must hold exactly one stop_all_by call, found {}",
+            "run.rs and run_wiring.rs must hold exactly one stop_all_by call, found {}",
             calls.len()
         );
     };
