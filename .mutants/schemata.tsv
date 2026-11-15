@@ -1,0 +1,47 @@
+head_sha	8b940025d113eeb25b910abbaa51277de7f1400c
+#mutant m1
+mcp_gateway	gateway::ui::restart_confirm_tests::restart_confirmation_ships_switched_off	src/gateway/ui/restart_confirm_tests.rs:168
+#mutant m2
+mcp_gateway	gateway::ui::restart_confirm_tests::restart_confirmation_ships_switched_off	src/gateway/ui/restart_confirm_tests.rs:172
+#mutant m3
+mcp_gateway	gateway::ui::restart_confirm_tests::sixty_four_expired_entries_admit_a_sixty_fifth_principal	src/gateway/ui/restart_confirm_tests.rs:230
+#mutant m4
+mcp_gateway	gateway::ui::restart_confirm_tests::the_sixty_fifth_principal_is_refused_while_sixty_four_are_live	src/gateway/ui/restart_confirm_tests.rs:205
+#mutant m5
+mcp_gateway	gateway::ui::restart_confirm_tests::a_failed_re_mint_keeps_the_principals_earlier_token	src/gateway/ui/restart_confirm_tests.rs:251
+#mutant m6
+mcp_gateway	gateway::ui::restart_confirm_tests::a_second_mint_by_one_principal_replaces_the_first	src/gateway/ui/restart_confirm_tests.rs:191
+#mutant m7
+mcp_gateway	gateway::ui::restart_confirm_tests::the_registry_keys_by_the_digest_of_the_exact_string	src/gateway/ui/restart_confirm_tests.rs:494
+#mutant m8
+mcp_gateway	gateway::ui::restart_confirm_tests::a_wrong_length_or_unprefixed_token_is_refused_before_it_is_hashed	src/gateway/ui/restart_confirm_tests.rs:473
+#mutant m9
+mcp_gateway	gateway::ui::restart_confirm_tests::a_wrong_length_or_unprefixed_token_is_refused_before_it_is_hashed	src/gateway/ui/restart_confirm_tests.rs:473
+#mutant m10
+mcp_gateway	gateway::ui::restart_confirm_tests::each_missing_presented_value_is_refused_and_burns_the_token	src/gateway/ui/restart_confirm_tests.rs:294
+#mutant m11
+mcp_gateway	gateway::ui::restart_confirm_tests::a_token_expires_at_exactly_its_lifetime_and_after_but_not_one_tick_before	src/gateway/ui/restart_confirm_tests.rs:276
+#mutant m12
+mcp_gateway	gateway::ui::restart_confirm_tests::each_changed_binding_is_refused_and_burns_the_token	src/gateway/ui/restart_confirm_tests.rs:417
+#mutant m13
+mcp_gateway	gateway::ui::restart_confirm_tests::each_missing_presented_value_is_refused_and_burns_the_token	src/gateway/ui/restart_confirm_tests.rs:349
+#mutant m14
+mcp_gateway	gateway::ui::restart_confirm_tests::each_changed_binding_is_refused_and_burns_the_token	src/gateway/ui/restart_confirm_tests.rs:417
+#mutant m15
+mcp_gateway	gateway::ui::restart_confirm_tests::each_changed_binding_is_refused_and_burns_the_token	src/gateway/ui/restart_confirm_tests.rs:417
+#mutant m16
+mcp_gateway	gateway::ui::restart_confirm_tests::each_missing_presented_value_is_refused_and_burns_the_token	src/gateway/ui/restart_confirm_tests.rs:349
+#mutant m17
+mcp_gateway	gateway::ui::restart_confirm_tests::each_changed_binding_is_refused_and_burns_the_token	src/gateway/ui/restart_confirm_tests.rs:417
+#mutant m18
+mcp_gateway	gateway::ui::restart_confirm_tests::each_missing_presented_value_is_refused_and_burns_the_token	src/gateway/ui/restart_confirm_tests.rs:349
+#mutant m19
+mcp_gateway	gateway::ui::restart_confirm_tests::each_missing_presented_value_is_refused_and_burns_the_token	src/gateway/ui/restart_confirm_tests.rs:349
+#mutant m20
+mcp_gateway	gateway::ui::restart_confirm_tests::a_regressed_write_total_is_refused_never_wrapped	src/gateway/ui/restart_confirm_tests.rs:547
+#mutant m21
+mcp_gateway	gateway::ui::restart_confirm_tests::writes_after_a_quiet_preview_are_refused	src/gateway/ui/restart_confirm_tests.rs:554
+#mutant m22
+mcp_gateway	gateway::ui::restart_confirm_tests::the_warning_rule_reads_the_count_the_admin_was_shown	src/gateway/ui/restart_confirm_tests.rs:594
+#mutant m23
+mcp_gateway	gateway::ui::restart_confirm_tests::the_sample_comes_from_the_instances_source	src/gateway/ui/restart_confirm_tests.rs:575
