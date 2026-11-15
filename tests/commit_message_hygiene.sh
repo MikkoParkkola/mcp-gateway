@@ -415,6 +415,32 @@ range_refused_case() {
 range_refused_case range_single_ref HEAD "HEAD is not a range; pass <base>..HEAD"
 range_refused_case range_unresolved 'no-such-ref..HEAD' "no-such-ref..HEAD does not resolve"
 
+# Every range form git accepts still runs, an empty valid range included.
+range_accepted_case() {
+  local name="$1" range="$2" expected="$3"
+  local repo="$tmp_root/$name" status=0
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email "test@example.com"
+  git -C "$repo" config user.name "Commit Hygiene Test"
+  for n in 1 2 3; do
+    printf '%s\n' "$n" >>"$repo/file.txt"
+    git -C "$repo" add file.txt
+    git -C "$repo" commit -q -m "chore: add line $n to the fixture"
+  done
+  (cd "$repo" && bash "$checker" "$range" >"$repo.out" 2>&1) || status=$?
+  if [[ "$status" -ne 0 ]] || ! grep -F -q -- "$expected" "$repo.out"; then
+    printf 'FAIL %s: expected exit 0 with "%s", got exit %d: %s\n' "$name" "$expected" "$status" "$(cat "$repo.out")" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+range_accepted_case range_two_dot 'HEAD~2..HEAD' "OK: 2 commit(s) in HEAD~2..HEAD"
+range_accepted_case range_three_dot 'HEAD~2...HEAD' "OK: 2 commit(s) in HEAD~2...HEAD"
+range_accepted_case range_tip_only 'HEAD^!' "OK: 1 commit(s) in HEAD^!"
+range_accepted_case range_parent_minus 'HEAD^-' "OK: 1 commit(s) in HEAD^-"
+range_accepted_case range_empty 'HEAD..HEAD' "OK: no commits in HEAD..HEAD"
+
 
 if (( failures > 0 )); then
   printf 'Commit message hygiene fixtures failed: %d case(s).\n' "$failures" >&2
