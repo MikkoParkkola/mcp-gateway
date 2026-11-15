@@ -47,6 +47,14 @@ fn log() -> std::sync::MutexGuard<'static, Log> {
 /// before the kernel reused the pid: it is replaced.
 pub(crate) fn arm(pid: Pid) {
     log().insert(pid.as_raw_nonzero().get(), Vec::new());
+    forget_gone(pid);
+}
+
+/// Drop an injection a stale row left for `pid`, or the one a finished row set.
+fn forget_gone(pid: Pid) {
+    GONE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&pid.as_raw_nonzero().get());
 }
 
 /// Append `sent` for `pid` when a row armed it; otherwise nothing.
@@ -101,6 +109,7 @@ pub(super) fn kill_outcome(sent: &std::io::Result<()>, exited_before: bool) -> S
 
 /// `pid`'s entries in order; it is disarmed.
 fn take(pid: Pid) -> Vec<Sent> {
+    forget_gone(pid);
     log()
         .remove(&pid.as_raw_nonzero().get())
         .unwrap_or_default()
@@ -138,21 +147,29 @@ fn skip_threshold() -> std::time::Duration {
 /// Whether a kill that found its group already gone counts as the kill.
 #[derive(Clone, Copy)]
 enum Gone {
+    /// Always: the live and skip rules, whose child may exit before the kill.
     IsKill,
-    NotKill,
+    /// Only after a kill that landed: the strict rule's child outlives SIGTERM,
+    /// so its first kill must find it, and only the settle repeats that follow
+    /// may find the group gone.
+    AfterKill,
 }
 
 /// The SIGTERM and kill entries alone, in order; a kill of a group already
-/// gone reads as the kill under `Gone::IsKill`, and stays apart otherwise.
+/// gone reads as the kill as `gone` allows, and stays apart otherwise.
 fn signals(sent: &[Sent], gone: Gone) -> Vec<Sent> {
-    sent.iter()
-        .filter_map(|s| match (s, gone) {
-            (Sent::Term | Sent::Kill, _) => Some(*s),
-            (Sent::KillGone, Gone::IsKill) => Some(Sent::Kill),
-            (Sent::KillGone, Gone::NotKill) => Some(Sent::KillGone),
-            _ => None,
-        })
-        .collect()
+    let mut out = Vec::new();
+    for s in sent {
+        let landed = out.contains(&Sent::Kill);
+        match (s, gone) {
+            (Sent::Term | Sent::Kill, _) => out.push(*s),
+            (Sent::KillGone, Gone::IsKill) => out.push(Sent::Kill),
+            (Sent::KillGone, Gone::AfterKill) if landed => out.push(Sent::Kill),
+            (Sent::KillGone, Gone::AfterKill) => out.push(Sent::KillGone),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// One SIGTERM first, then one or more kills and no later SIGTERM.
@@ -225,7 +242,8 @@ fn judge_term_then_kill(sent: &[Sent]) -> Result<(), String> {
 /// The normal path only: one SIGTERM, then the kill, with nothing skipped.
 fn judge_strict(sent: &[Sent]) -> Result<(), String> {
     no_failed_kill(sent)?;
-    if term_then_kill(sent, Gone::NotKill) && !has_skip(sent) && !sent.contains(&Sent::LeaderGone) {
+    if term_then_kill(sent, Gone::AfterKill) && !has_skip(sent) && !sent.contains(&Sent::LeaderGone)
+    {
         Ok(())
     } else {
         Err(format!("not one SIGTERM followed by the kill: {sent:?}"))
@@ -267,6 +285,19 @@ pub(crate) async fn assert_term_then_kill_strict(pid: Pid, what: &str) {
 /// See [`judge_kill_without_term`].
 pub(crate) async fn assert_kill_without_term(pid: Pid, what: &str) {
     if let Err(why) = judge_kill_without_term(&after_the_kill(pid).await) {
+        panic!("{what}: {why}");
+    }
+}
+
+/// A kill that found the group gone after SIGTERM is recorded as such, and the
+/// live rule takes it as the kill.
+pub(crate) async fn assert_gone_kill_counts(pid: Pid, what: &str) {
+    let sent = after_the_kill(pid).await;
+    assert!(
+        sent.contains(&Sent::KillGone),
+        "{what}: no kill of a group already gone recorded: {sent:?}"
+    );
+    if let Err(why) = judge_term_then_kill(&sent) {
         panic!("{what}: {why}");
     }
 }

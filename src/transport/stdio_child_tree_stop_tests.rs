@@ -98,7 +98,7 @@ async fn a_kill_that_finds_the_group_gone_after_sigterm_counts_as_the_kill() {
     signal_log::arm(pid);
     signal_log::inject_gone(pid);
     t.close().await.expect("close");
-    signal_log::assert_term_then_kill(pid, "a group gone at the kill").await;
+    signal_log::assert_gone_kill_counts(pid, "a group gone at the kill").await;
 }
 
 /// ESRCH from a kill while the leader still runs, as a group that was never

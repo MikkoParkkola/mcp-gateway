@@ -74,6 +74,9 @@ fn the_strict_rule_accepts_the_normal_path_only() {
             (&[LeaderGone, Term, Kill], Some("not one SIGTERM")),
             (&[Kill], Some("not one SIGTERM")),
             (&[Term, KillGone], Some("not one SIGTERM")),
+            (&[Term, KillGone, Kill], Some("not one SIGTERM")),
+            (&[Term, Kill, KillGone], None),
+            (&[Term, Kill, KillGone, KillGone], None),
             (&[Term, KillFailed], Some("a kill failed")),
         ],
     );
@@ -98,4 +101,24 @@ fn the_skip_rule_accepts_the_kill_alone() {
             (&[LeaderGone, Kill], Some("another reason")),
         ],
     );
+}
+
+#[test]
+fn a_kill_records_its_outcome() {
+    use rustix::io::Errno;
+    let err = |e: Errno| Err(std::io::Error::from_raw_os_error(e.raw_os_error()));
+    let cases: [(std::io::Result<()>, bool, Sent); 5] = [
+        (Ok(()), false, Sent::Kill),
+        (Ok(()), true, Sent::Kill),
+        (err(Errno::SRCH), true, Sent::KillGone),
+        (err(Errno::SRCH), false, Sent::KillFailed),
+        (err(Errno::PERM), true, Sent::KillFailed),
+    ];
+    for (sent, exited, want) in cases {
+        assert_eq!(
+            kill_outcome(&sent, exited),
+            want,
+            "{sent:?}, exited: {exited}"
+        );
+    }
 }
