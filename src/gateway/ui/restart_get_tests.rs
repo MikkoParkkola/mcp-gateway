@@ -180,8 +180,7 @@ fn presented(fx: &Fixture, shown: WriteSample) -> Presented {
         .live_config
         .generation()
         .auth()
-        .validate_token(ADMIN)
-        .ok();
+        .validate_token(ADMIN);
     Presented {
         principal: super::principal::cursor_principal(client.as_ref(), &HeaderMap::new()),
         boot: fx.state.dashboard_bootstrap.stream_hub().boot(),
