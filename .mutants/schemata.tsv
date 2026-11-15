@@ -1,0 +1,9 @@
+head_sha	c73d6a76709fd4fb58a7a45eefa122218d0bba23
+#mutant settle_skipped
+mcp_gateway	gateway::restart_config_floor::settle_tests::p1_held_write_keeps_checkpoint_pending_then_certifies	src/gateway/config_floor_settle_tests.rs:97
+#mutant watcher_guard_skipped multi=2
+mcp_gateway	gateway::restart_config_floor::settle_tests::p3_watcher_reload_held_after_admission	src/gateway/config_floor_settle_tests.rs:108
+#mutant manual_guard_skipped
+mcp_gateway	gateway::restart_config_floor::settle_tests::p3_manual_reload_held_after_admission	src/gateway/config_floor_settle_tests.rs:108
+#mutant entries_cleanup_handle_dropped_early
+mcp_gateway	gateway::restart_config_floor::settle_tests::p2_dead_write_cleanup_alone_keeps_checkpoint_pending	src/gateway/config_floor_settle_tests.rs:245
