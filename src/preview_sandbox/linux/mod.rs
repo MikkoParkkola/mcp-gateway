@@ -299,21 +299,15 @@ fn npm_fetch(
         .map_err(|e| Refusal::Step(format!("finding {requested} ({e})")))?;
     let (npm, node_dir) = probe::npm_beside(&npx)?;
     probe::check_npm(&npm, &node_dir)?;
-    let bound: Vec<String> = plan
-        .read_only
-        .iter()
-        .chain(&plan.bound_back)
-        .cloned()
-        .collect();
     for (what, file) in [("npm", &npm), ("node", &node_dir.join("node"))] {
         if !placed(file, plan) {
             return Err(Refusal::Step(format!(
-                "placing {what} ({} is outside the trees bound into the root)",
+                "placing {what} ({} is not shown inside the root)",
                 file.display()
             )));
         }
     }
-    let ip = probe::find_ip(&probe::IP_CANDIDATES, &bound)?;
+    let ip = probe::find_ip(&probe::IP_CANDIDATES, &|p: &Path| placed(p, plan))?;
     let run_args = phases
         .run_args
         .iter()
@@ -453,10 +447,13 @@ fn build_plan(
 /// Whether `plan`'s root shows `file`, its links followed first.
 fn placed(file: &Path, plan: &Plan) -> bool {
     let real = fs::canonicalize(file).unwrap_or_else(|_| file.to_owned());
-    plan.read_only
-        .iter()
-        .chain(&plan.bound_back)
-        .any(|tree| real.starts_with(tree))
+    shown_inside(
+        &real,
+        &plan.read_only,
+        &plan.bound_back,
+        &plan.masked,
+        &plan.hidden,
+    )
 }
 
 /// Whether the new root shows `p`: a hidden path never, a bind-back always,

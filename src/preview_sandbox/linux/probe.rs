@@ -80,15 +80,18 @@ pub(super) fn check_npm(npm: &Path, node_dir: &Path) -> Result<(), Refusal> {
     }
 }
 
-/// The first of `candidates` that exists, followed to its real file, and lies
-/// under one of `bound` (the plan's read-only trees).
-pub(super) fn find_ip(candidates: &[&str], bound: &[String]) -> Result<String, Refusal> {
+/// The first of `candidates` that exists, followed to its real file, and is
+/// `shown` inside the root.
+pub(super) fn find_ip(
+    candidates: &[&str],
+    shown: &dyn Fn(&Path) -> bool,
+) -> Result<String, Refusal> {
     for candidate in candidates {
         let Ok(real) = std::fs::canonicalize(candidate) else {
             continue;
         };
         if let Some(real) = real.to_str()
-            && bound.iter().any(|tree| Path::new(real).starts_with(tree))
+            && shown(Path::new(real))
         {
             return Ok(real.to_owned());
         }

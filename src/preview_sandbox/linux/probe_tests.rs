@@ -77,13 +77,13 @@ fn ip_must_lie_inside_a_bound_tree() {
     let ip = dir.path().join("ip");
     script(&ip, "true");
     let ip = ip.to_str().expect("utf-8");
-    let bound = [dir.path().display().to_string()];
+    let bound = |p: &Path| p.starts_with(dir.path());
     assert_eq!(
         find_ip(&["/nonexistent/ip", ip], &bound).expect("found"),
         ip
     );
     assert!(
-        find_ip(&[ip], &["/usr".to_owned()]).is_err(),
+        find_ip(&[ip], &|p: &Path| p.starts_with("/usr")).is_err(),
         "ip outside the binds"
     );
     assert!(find_ip(&["/nonexistent/ip"], &bound).is_err(), "no ip");
