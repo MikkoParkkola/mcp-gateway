@@ -1428,11 +1428,19 @@ function watchLoading(content, body, label, current) {
       // Data drawn under a state that must stay a while longer stays hidden until the state
       // goes, then shows in the same task: it never shows under the state and then jumps up
       // into its place (a layout shift).
-      const hide = wait > 0 && body.hasChildNodes() && !body.hidden;
+      // Only this attempt's own body, still current: a stale release leaves it alone.
+      const hide = wait > 0 && current() && body.hasChildNodes() && !body.hidden;
+      // Hiding drops focus the screen gave inside the body; it comes back when the body shows.
+      const focused = hide && body.contains(document.activeElement) ? document.activeElement : null;
       if (hide) body.hidden = true;
       const finish = () => {
         node?.remove();
-        if (hide) body.hidden = false;
+        if (hide) {
+          body.hidden = false;
+          if (focused?.isConnected && (document.activeElement === document.body || !document.activeElement)) {
+            focused.focus({ preventScroll: true });
+          }
+        }
         done?.();
       };
       if (wait > 0) setTimeout(finish, wait);

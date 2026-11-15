@@ -518,7 +518,7 @@ a { color: inherit; text-decoration: none; }
 .head .sub[hidden] { display: block; visibility: hidden; }
 .head .sub:empty::before { content: "\00a0"; }
 /* The plate too: before the page's title arrives it holds a line of the plate's type. */
-.head h1 .plate:empty::before { content: "\00a0"; }
+.head h1 .plate:empty::before { content: "\00a0"; visibility: hidden; }
 .tabs { padding: 14px 24px 0; }
 .tabs:empty::before { content: "\00a0"; visibility: hidden; }
 .tabs a, .tabs:empty::before { color: var(--color-text-secondary); border-bottom: 3px solid transparent; }

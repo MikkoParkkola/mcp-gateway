@@ -533,7 +533,7 @@ a { color: inherit; text-decoration: none; }
 .head .sub[hidden] { display: block; visibility: hidden; }
 .head .sub:empty::before { content: "\00a0"; }
 /* The plate too: before the page's title arrives it holds a line of the plate's type. */
-.head h1 .plate:empty::before { content: "\00a0"; }
+.head h1 .plate:empty::before { content: "\00a0"; visibility: hidden; }
 .tabs { padding: 14px 24px 0; }
 .tabs:empty::before { content: "\00a0"; visibility: hidden; }
 .tabs a, .tabs:empty::before { color: var(--color-text-secondary); border-bottom: 3px solid transparent; }
@@ -590,11 +590,11 @@ a { color: inherit; text-decoration: none; }
 /* Signed out, the sign-in is the only thing on the page (its own rules are in the rest). */
 body.signed-out > .side, body.signed-out > .main, body.signed-out > .skip { display: none; }
 </style>
-<script type="module" src="/ui/assets/shell.0adcc4072b4e.js"></script>
+<script type="module" src="/ui/assets/shell.17a6ca423585.js"></script>
 <!-- Screens, by page id. The shell loads the current route's screen before it renders it,
      and the rest after the first paint, so a new screen adds nothing to the first paint.
      Each module imports the shell by its hashed name and calls register(). -->
-<script type="application/json" id="screens">{"tools": {"js": "/ui/assets/tools.6406a73263e9.js", "css": "/ui/assets/tools.24f226efcd24.css"}}</script>
+<script type="application/json" id="screens">{"tools": {"js": "/ui/assets/tools.929f283580ad.js", "css": "/ui/assets/tools.24f226efcd24.css"}}</script>
 </head>
 <body>
 <a class="skip" href="#content">Skip to content</a>
