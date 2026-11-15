@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Rows for the helper's npm fetch step (R-env).
+//! Rows for the helper's npm fetch step (R-env, R-lock-cap).
 
-use super::npm_env;
+use super::{LOCK_CAP, npm_env, read_lock};
 
 /// Kills "a variable is added, dropped or changed": the npm environment is
 /// exactly this list, the credential and relay port substituted.
@@ -114,4 +114,21 @@ fn the_run_after_a_fetch_is_the_packages_bin() {
             path: format!("/opt/node/bin:{}", dot_bin.display()),
         }
     );
+}
+
+/// R-lock-cap, kills "the lock is read whole" and an off-by-one cap: a lock
+/// of exactly 4 MiB is read, one byte more refuses without parsing.
+#[test]
+fn a_lock_over_four_mib_refuses() {
+    let dir = tempfile::tempdir().expect("dir");
+    let lock = |len: u64| {
+        let head = r#"{"packages":{},"pad":""#;
+        let pad = usize::try_from(len).expect("len") - head.len() - 2;
+        let path = dir.path().join(format!("lock-{len}.json"));
+        std::fs::write(&path, format!("{head}{}\"}}", "x".repeat(pad))).expect("lock");
+        path
+    };
+    read_lock(&lock(LOCK_CAP)).expect("a 4 MiB lock is read");
+    let refused = read_lock(&lock(LOCK_CAP + 1)).expect_err("a lock past 4 MiB refuses");
+    assert_eq!(refused, "reading the lock (over 4 MiB)");
 }

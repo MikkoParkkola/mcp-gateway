@@ -698,4 +698,6 @@ mod fetch_registry;
 #[cfg(test)]
 mod fetch_rows;
 #[cfg(test)]
+mod fetch_shim_rows;
+#[cfg(test)]
 mod tests;
