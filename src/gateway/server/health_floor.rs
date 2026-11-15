@@ -250,7 +250,7 @@ impl FloorAdapter for HealthFloor {
         match self.spawn_replay(sample, save) {
             Ok(replay) => self.replays.push(replay),
             Err(error) => {
-                tracing::warn!(%error, "health replay could not start a thread; the next periodic tick saves and samples")
+                tracing::warn!(%error, "health replay could not start a thread; the next periodic tick saves and samples");
             }
         }
     }

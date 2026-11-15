@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Rows for the health floor adapter (restart slice 6b, test plan r3): the
 //! HEALTH rows G1-G8, the wiring rows W1-W2 and the fixtures every row shares
-//! (the contract rows are in health_floor_contract_tests.rs and
-//! health_floor_matrix_tests.rs). Every row that saves takes
+//! (the contract rows are in `health_floor_contract_tests.rs` and
+//! `health_floor_matrix_tests.rs`). Every row that saves takes
 //! `file::saves_test_lock()`, counts writes as deltas, and ends once
 //! `settled()` is true, so nothing writes after it.
 

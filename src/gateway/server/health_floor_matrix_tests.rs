@@ -334,7 +334,7 @@ async fn c12_a_dropped_coordinator_releases_for_the_stop() {
             "the sampler did not mark while Paused"
         );
         (writes, samples) = (rig.writes(), rig.health.history.sample_count());
-        let held = file::hold_saves();
+        let saves = file::hold_saves();
         let _ = let_go.send(());
         assert!(
             futures::poll!(&mut run).is_pending(),
@@ -348,7 +348,7 @@ async fn c12_a_dropped_coordinator_releases_for_the_stop() {
             GateState::Released,
             "the dropped run did not release the gate"
         );
-        drop(held);
+        drop(saves);
     }
     wait_until("the health adapter never settled", || adapters[0].settled());
     assert_eq!(
@@ -366,7 +366,7 @@ async fn c12_a_dropped_coordinator_releases_for_the_stop() {
 
 /// C14: a replay that cannot start a thread is logged, leaves the adapter
 /// settled, and the next periodic save and sample run as normal; a running
-/// replay keeps settled() false.
+/// replay keeps `settled()` false.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c14_a_failed_replay_spawn_heals_on_the_next_tick() {
     let _serial = file::saves_test_lock();
@@ -402,7 +402,7 @@ async fn c14_a_failed_replay_spawn_heals_on_the_next_tick() {
     wait_until("the adapter never settled", || adapter.settled());
 }
 
-/// C14b: a second resume never hides the first one's replay: settled() stays
+/// C14b: a second resume never hides the first one's replay: `settled()` stays
 /// false until the first replay ends, even after the second one finished.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c14b_a_second_replay_does_not_hide_the_first() {

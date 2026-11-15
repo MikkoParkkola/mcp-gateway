@@ -23,7 +23,7 @@ pub(crate) enum Point {
     SaverBeforeLock,
     /// P2: a save, after its snapshot is encoded and before the write.
     AfterSnapshot,
-    /// P3: the checkpoint worker, just before SAVES.lock().
+    /// P3: the checkpoint worker, just before `SAVES.lock()`.
     WorkerWaiting,
     /// P4: the checkpoint worker, after its live check passed.
     AfterLiveCheck,

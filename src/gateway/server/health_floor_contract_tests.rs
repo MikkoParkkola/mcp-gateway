@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Contract rows C1-C6 for the health floor adapter (restart slice 6b): drops,
-//! superseded workers, resume versus release, commit, settled() and the races.
+//! superseded workers, resume versus release, commit, `settled()` and the races.
 
 use super::HealthFloor;
 use super::tests::{
@@ -219,7 +219,7 @@ async fn c4_commit_is_terminal() {
     wait_until("A never settled", || fa.settled());
 }
 
-/// C5: settled() is false while a checkpoint worker runs and true otherwise.
+/// C5: `settled()` is false while a checkpoint worker runs and true otherwise.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c5_settled_tracks_the_checkpoint_worker() {
     let _serial = file::saves_test_lock();
