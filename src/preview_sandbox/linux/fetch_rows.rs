@@ -371,70 +371,115 @@ async fn l_tls2_a_hostile_npmrc_in_the_npm_tree_changes_nothing() {
         .expect_err("npm's own npmrc turned TLS off or trusted another CA");
 }
 
-/// The canary package's bin: names each argument it can see, then shows
-/// node runs in the run phase.
+/// The canary package's bin: names each argument it can read content from,
+/// then shows node runs in the run phase.
 const CANARY_BIN: &[u8] =
-    b"#!/bin/sh\nfor f in \"$@\"; do test -e \"$f\" && echo \"visible $f\"; done\nnode -e 'console.log(\"node-ran\")'\necho bin-ran\n";
+    b"#!/bin/sh\nfor f in \"$@\"; do test -s \"$f\" && echo \"readable $f\"; done\nnode -e 'console.log(\"node-ran\")'\necho bin-ran\n";
 
-/// Files planted beside node and beside npm under `/usr/local`, removed on drop.
-struct Canaries(Vec<PathBuf>);
+/// Host files written for a row: each restored to what it held, or removed
+/// when it was not there, on drop.
+struct Planted(Vec<(PathBuf, Option<Vec<u8>>)>);
 
-impl Canaries {
-    /// `None` (skip) where this host's `/usr/local` cannot take them.
-    fn plant() -> Option<Self> {
-        let name = format!("preview-canary-{}", std::process::id());
-        let paths = vec![
-            PathBuf::from("/usr/local/bin").join(&name),
-            PathBuf::from("/usr/local/lib/node_modules").join(&name),
-        ];
-        let mut canaries = Self(Vec::new());
-        for path in paths {
-            if let Err(e) = std::fs::write(&path, b"canary") {
+impl Planted {
+    /// `None` (skip) where this host cannot take one of them.
+    fn plant(files: Vec<(PathBuf, Vec<u8>)>) -> Option<Self> {
+        let mut planted = Self(Vec::new());
+        for (path, bytes) in files {
+            let before = std::fs::read(&path).ok();
+            if let Err(e) = std::fs::write(&path, bytes) {
                 return skip(&format!("cannot plant {} ({e})", path.display())).map(|n| match n {});
             }
-            canaries.0.push(path);
+            planted.0.push((path, before));
         }
-        Some(canaries)
+        Some(planted)
     }
 }
 
-impl Drop for Canaries {
+impl Drop for Planted {
     fn drop(&mut self) {
-        for path in &self.0 {
-            let _ = std::fs::remove_file(path);
+        for (path, before) in &self.0 {
+            let _ = match before {
+                Some(bytes) => std::fs::write(path, bytes),
+                None => std::fs::remove_file(path),
+            };
         }
     }
 }
 
-/// L-canary, kills "the fetch binds the /usr/local trees whole": on a
-/// `/usr/local` node (the hosted runner's), files planted beside node in
-/// `/usr/local/bin` and beside npm in `/usr/local/lib/node_modules` are not
-/// visible to the fetched package's run phase, while node itself runs there.
-#[tokio::test]
-async fn l_canary_a_usr_local_install_shows_the_package_only_node_and_npm() {
-    let Some(npx) = host_npx() else {
-        return;
-    };
+/// npm's package directory when npx is a `/usr/local` install, else `None`
+/// (skip).
+fn usr_local_npm() -> Option<PathBuf> {
+    let npx = host_npx()?;
     let real = std::fs::canonicalize(&npx).expect("npx's real file");
-    if !real.starts_with("/usr/local") {
-        let _ = skip("npx is not a /usr/local install");
-        return;
+    let package = real
+        .ancestors()
+        .nth(2)
+        .filter(|p| p.starts_with("/usr/local") && p.ends_with("node_modules/npm"));
+    match package {
+        Some(package) => Some(package.to_owned()),
+        None => skip("npm is not a /usr/local install").map(|n| match n {}),
     }
-    let Some(canaries) = Canaries::plant() else {
-        return;
-    };
+}
+
+/// `npx mcp-canary <paths>`: the run's stdout lines; `None` to skip.
+async fn canary_run(paths: &[&PathBuf]) -> Option<Vec<String>> {
     let fake = Package {
         name: "mcp-canary",
         version: "1.0.0",
         manifest: serde_json::json!({"bin": {"mcp-canary": "bin/cli.sh"}}),
         files: vec![("bin/cli.sh", CANARY_BIN.to_vec(), 0o755)],
     };
-    let args: Vec<String> = canaries.0.iter().map(|p| p.display().to_string()).collect();
+    let args: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let Some(ran) = npx("mcp-canary", &args, vec![fake], Bundle::Registry).await else {
+    let ran = npx("mcp-canary", &args, vec![fake], Bundle::Registry).await?;
+    let out = ran.expect("the fetch and the run succeeded");
+    Some(lines(&out).into_iter().map(str::to_owned).collect())
+}
+
+/// L-canary, kills "the fetch binds the /usr/local trees whole": on a
+/// `/usr/local` node (the hosted runner's), files planted beside node in
+/// `/usr/local/bin` and beside npm in `/usr/local/lib/node_modules` are not
+/// readable by the fetched package's run phase, while node itself runs there.
+#[tokio::test]
+async fn l_canary_a_usr_local_install_shows_the_package_only_node_and_npm() {
+    if usr_local_npm().is_none() {
+        return;
+    }
+    let name = format!("preview-canary-{}", std::process::id());
+    let canaries = [
+        PathBuf::from("/usr/local/bin").join(&name),
+        PathBuf::from("/usr/local/lib/node_modules").join(&name),
+    ];
+    let files = canaries
+        .iter()
+        .map(|p| (p.clone(), b"canary".to_vec()))
+        .collect();
+    let Some(planted) = Planted::plant(files) else {
         return;
     };
-    let out = ran.expect("the fetch and the run succeeded");
-    assert_eq!(lines(&out), ["node-ran", "bin-ran"], "{out}");
-    drop(canaries);
+    let Some(seen) = canary_run(&canaries.iter().collect::<Vec<_>>()).await else {
+        return;
+    };
+    assert_eq!(seen, ["node-ran", "bin-ran"]);
+    drop(planted);
+}
+
+/// L-npmrc, kills npmrc-unmasked: a registry token planted in npm's builtin
+/// `npmrc` on a `/usr/local` install cannot be read by the fetched package
+/// (an empty file covers it in the root), and the fetch still works.
+#[tokio::test]
+async fn l_npmrc_a_token_in_npms_builtin_npmrc_stays_unreadable() {
+    let Some(package) = usr_local_npm() else {
+        return;
+    };
+    let npmrc = package.join("npmrc");
+    let token = b"//registry.npmjs.org/:_authToken=preview-canary-token\n".to_vec();
+    let Some(planted) = Planted::plant(vec![(npmrc.clone(), token)]) else {
+        return;
+    };
+    let Some(seen) = canary_run(&[&npmrc]).await else {
+        return;
+    };
+    assert_eq!(seen, ["node-ran", "bin-ran"]);
+    drop(planted);
 }
