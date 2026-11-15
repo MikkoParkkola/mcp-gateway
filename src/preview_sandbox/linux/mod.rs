@@ -299,7 +299,7 @@ fn npm_fetch(
         .map_err(|e| Refusal::Step(format!("finding {requested} ({e})")))?;
     let (npm, node_dir) = probe::npm_beside(&npx)?;
     probe::check_npm(&npm, &node_dir)?;
-    let npm = place_npm(plan, &npx, &npm, &node_dir.join("node"))?;
+    let (npm, node_dir) = place_npm(plan, &npx, &npm, &node_dir.join("node"))?;
     let ip = probe::find_ip(&probe::IP_CANDIDATES, &|p: &Path| placed(p, plan))?;
     let run_args = phases
         .run_args
@@ -438,7 +438,8 @@ fn build_plan(
 }
 
 /// Make npm and node shown inside the root and return the path npm is
-/// executed by there; refuses by name when either is not shown.
+/// executed by there and the directory that holds `node` there (for PATH);
+/// refuses by name when either is not shown.
 ///
 /// In every layout the root shows the fetch only node's real file and npm's
 /// package (`.../node_modules/npm`, which holds npm's own modules), never
@@ -450,7 +451,12 @@ fn build_plan(
 /// root already shows them. Anywhere else, or under a masked secret path or
 /// a hidden one, refuses by name. npm's builtin `npmrc` is covered by an
 /// empty file either way.
-fn place_npm(plan: &mut Plan, npx: &Path, npm: &Path, node: &Path) -> Result<PathBuf, Refusal> {
+fn place_npm(
+    plan: &mut Plan,
+    npx: &Path,
+    npm: &Path,
+    node: &Path,
+) -> Result<(PathBuf, PathBuf), Refusal> {
     let real = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
     let (program_real, npm_real, node_real) = (real(npx), real(npm), real(node));
     if node_real.is_dir() {
@@ -515,7 +521,9 @@ fn place_npm(plan: &mut Plan, npx: &Path, npm: &Path, node: &Path) -> Result<Pat
             &plan.hidden,
         )
     };
-    Ok(reachable_inside(npm, &shown).unwrap_or(npm_real))
+    let exec = reachable_inside(npm, &shown).unwrap_or(npm_real);
+    let node_dir = node.parent().unwrap_or(Path::new("/")).to_path_buf();
+    Ok((exec, node_dir))
 }
 
 /// Whether `plan`'s root shows `file`, its links followed first.

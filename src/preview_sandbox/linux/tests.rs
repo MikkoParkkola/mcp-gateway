@@ -419,12 +419,13 @@ fn an_n_layout_binds_back_only_node_and_npms_package() {
     let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
     let package = "/usr/local/lib/preview-row/node_modules/npm";
     let cli = format!("{package}/bin/npm-cli.js");
-    let node = "/usr/local/bin/preview-row-node";
+    let node = "/usr/local/preview-row/bin/node";
     let npx = Path::new("/usr/local/bin/preview-row-npx");
     let mut plan = base.clone();
     plan.bound_back = vec![format!("{package}/bin"), format!("{package}/lib")];
-    let exec =
+    let (exec, node_dir) =
         place_npm(&mut plan, npx, Path::new(&cli), Path::new(node)).expect("an n layout is placed");
+    assert_eq!(node_dir, PathBuf::from("/usr/local/preview-row/bin"));
     assert_eq!(plan.bound_back, [node, package]);
     assert_eq!(plan.read_only, base.read_only);
     assert_eq!(exec, PathBuf::from(&cli));
@@ -449,7 +450,7 @@ fn any_layout_binds_only_node_and_npms_package() {
     let mut plan = base.clone();
     // What build_plan bound for npx as the program: its runtime tree.
     plan.read_only.push(tree.to_owned());
-    let exec = place_npm(
+    let (exec, _) = place_npm(
         &mut plan,
         Path::new(&npx),
         Path::new(&cli),
@@ -492,7 +493,7 @@ fn a_covering_usr_local_bind_back_is_replaced_by_the_narrow_binds() {
     let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
     let package = "/usr/local/lib/preview-row/node_modules/npm";
     let cli = format!("{package}/bin/npm-cli.js");
-    let node = "/usr/local/bin/preview-row-node";
+    let node = "/usr/local/preview-row/bin/node";
     let mut plan = base.clone();
     plan.bound_back = vec!["/usr/local/bin".to_owned(), "/usr/local/lib".to_owned()];
     let npx = Path::new("/usr/local/bin/preview-row-npx");
@@ -522,7 +523,7 @@ fn a_directory_or_hidden_node_refuses() {
     } // An npm-shaped package under a masked secret path is never bound.
     let secret = Path::new("/etc/ssl/private/node_modules/npm/bin/npm-cli.js");
     let npx = Path::new("/usr/local/bin/preview-row-npx");
-    let node = Path::new("/usr/local/bin/preview-row-node");
+    let node = Path::new("/usr/local/preview-row/bin/node");
     let refused = place_npm(&mut base.clone(), npx, secret, node).expect_err("refused");
     assert!(
         matches!(&refused, Refusal::Step(s) if s.starts_with("placing npm")),
@@ -540,11 +541,49 @@ fn a_system_npms_builtin_npmrc_is_covered() {
     let root = "/usr/share/preview-row/nodejs/npm";
     let cli = format!("{root}/bin/npm-cli.js");
     let npx = Path::new("/usr/bin/preview-row-npx");
-    let node = Path::new("/usr/bin/preview-row-node");
+    let node = Path::new("/usr/preview-row/bin/node");
     let mut plan = base.clone();
     place_npm(&mut plan, npx, Path::new(&cli), node).expect("a system npm is placed");
     let npmrc = format!("{root}/npmrc");
     assert_eq!(plan.masked, [base.masked.clone(), vec![npmrc]].concat());
     assert_eq!(plan.read_only, base.read_only);
     assert_eq!(plan.bound_back, base.bound_back);
+}
+
+/// Kills "PATH keeps a node alias the root hides": when node in npx's
+/// directory is a link to a real file elsewhere (another version tree, as a
+/// Homebrew or versioned install lays out), only the real file is bound, so
+/// the link is not shown inside the root; PATH then names the real file's
+/// own directory, where `env node` finds it.
+#[test]
+fn a_linked_node_is_found_on_path_through_its_real_directory() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    let scratch = scratch();
+    let versions = scratch.path().join(".nvm/versions/node");
+    let (linked, real) = (versions.join("v1"), versions.join("v2"));
+    let package = linked.join("lib/node_modules/npm");
+    for dir in [linked.join("bin"), real.join("bin"), package.join("bin")] {
+        std::fs::create_dir_all(dir).expect("tree");
+    }
+    for file in [
+        real.join("bin/node"),
+        package.join("bin/npm-cli.js"),
+        package.join("bin/npx-cli.js"),
+    ] {
+        std::fs::write(&file, "#!/bin/sh\n").expect("file");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    }
+    symlink(real.join("bin/node"), linked.join("bin/node")).expect("node link");
+    let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let mut plan = base.clone();
+    plan.read_only.push(linked.display().to_string());
+    let (_, node_dir) = place_npm(
+        &mut plan,
+        &package.join("bin/npx-cli.js"),
+        &package.join("bin/npm-cli.js"),
+        &linked.join("bin/node"),
+    )
+    .expect("a linked node is placed");
+    let real_bin = std::fs::canonicalize(real.join("bin")).expect("real bin");
+    assert_eq!(node_dir, real_bin);
 }
