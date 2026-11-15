@@ -73,10 +73,36 @@ fn write_config(root: &Path, total: Duration, tls: Option<&Path>) -> PathBuf {
     config
 }
 
+/// How the start watches the log for the `Listening` banner.
+#[derive(Clone, Copy)]
+enum Watch {
+    /// Every 50 ms.
+    Relaxed,
+    /// Yielding between reads only, so a SIGTERM sent next lands as close to
+    /// the banner as the test can see it.
+    Tight,
+}
+
 /// Start a gateway with stop total `total`, stop it with SIGTERM once it
 /// listens, and return how long its exit took. The reap kills a gateway still
 /// running at the total + 1 s and fails the row there.
 async fn stop_took(total: Duration, tls: bool) -> Duration {
+    let (mut reaped, log) = start(total, tls, Watch::Relaxed).await;
+    let started = Instant::now();
+    let status = reaped.reap_within(total + GRACE).await;
+    let took = started.elapsed();
+    assert!(
+        status.success(),
+        "the stopped gateway exited with {status}\n{}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+    reaped.stop().await;
+    took
+}
+
+/// A gateway with stop total `total`, once its log holds the `Listening`
+/// banner, and the log's path.
+async fn start(total: Duration, tls: bool, watch: Watch) -> (gateway_bin::Reaped, PathBuf) {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path().to_path_buf();
     if tls {
@@ -110,14 +136,12 @@ async fn stop_took(total: Duration, tls: bool) -> Duration {
             "the gateway never listened\n{}",
             std::fs::read_to_string(&log).unwrap_or_default()
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        match watch {
+            Watch::Relaxed => tokio::time::sleep(Duration::from_millis(50)).await,
+            Watch::Tight => tokio::task::yield_now().await,
+        }
     }
-    let started = Instant::now();
-    let status = reaped.reap_within(total + GRACE).await;
-    let took = started.elapsed();
-    assert!(status.success(), "the stopped gateway exited with {status}");
-    reaped.stop().await;
-    took
+    (reaped, log)
 }
 
 /// RETIRE.2 over plain HTTP: at the minimum total and at the 30 s default the
@@ -137,4 +161,29 @@ async fn an_mtls_gateway_exits_inside_its_stop_total() {
         let took = stop_took(total, true).await;
         assert!(took < total + GRACE, "{total:?}: the exit took {took:?}");
     }
+}
+
+/// RETIRE.2 from the first moment: a SIGTERM sent as soon as the log shows the
+/// `Listening` banner drains the gateway like any other, exit code 0 with the
+/// shutdown logged, on every one of twenty starts. A start that dies of the
+/// signal fails the row with its log.
+#[tokio::test]
+async fn a_sigterm_on_the_listening_banner_drains_the_gateway() {
+    const STARTS: usize = 20;
+    let mut undrained = Vec::new();
+    for start_no in 0..STARTS {
+        let (mut reaped, log) = start(HTTP_MINIMUM, false, Watch::Tight).await;
+        let status = reaped.reap_within(HTTP_MINIMUM + GRACE).await;
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if !status.success() || !text.contains("Shutdown signal received") {
+            undrained.push(format!("start {start_no}: {status}\n{text}"));
+        }
+        reaped.stop().await;
+    }
+    assert!(
+        undrained.is_empty(),
+        "{} of {STARTS} starts did not drain; the first:\n{}",
+        undrained.len(),
+        undrained.first().map_or("", String::as_str)
+    );
 }
