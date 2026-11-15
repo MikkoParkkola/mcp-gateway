@@ -46,6 +46,9 @@ impl ReservationUnderTest for Reservation {
     }
 }
 
+/// A way to end a reservation before accept, by name.
+type End<R> = (&'static str, fn(R));
+
 fn cancelled(board: &RestartBoard, id: u64) -> Option<RestartCancel> {
     let status = board.status()?;
     if status.attempt_id() == id {
@@ -98,7 +101,7 @@ where
 
     // Before accept, a drop, a refuse and an activate each free the slot once
     // and leave the board as it was: empty, or holding an earlier attempt.
-    let ends: [(&str, fn(S::Reservation)); 3] = [
+    let ends: [End<S::Reservation>; 3] = [
         ("drop", drop),
         ("refuse", |r| r.refuse(RestartCancel::Recheck)),
         ("activate", ReservationUnderTest::activate),
