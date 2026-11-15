@@ -62,7 +62,7 @@ test('T1: /ui/tools lands on Status with no Actions or Settings tab, and counts 
 
 test('T2: every tool is listed A to Z with its server and description', async ({ page }) => {
   await toolsScreen(page);
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   await expect(rows(page)).toHaveCount(40);
   const names = await rows(page).locator('td:nth-child(1)').allTextContents();
   // The open marker is a hidden span ahead of the name.
@@ -75,7 +75,7 @@ test('T2: every tool is listed A to Z with its server and description', async ({
 
 test('T3: search and the server filter narrow the list, together and apart', async ({ page }) => {
   await toolsScreen(page);
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   await search(page).fill('thing 3');
   await expect(rows(page)).toHaveCount(4);
   await search(page).fill('j_alpha');
@@ -95,7 +95,7 @@ test('T3: search and the server filter narrow the list, together and apart', asy
 
 test('T4: a tool name opens its detail, and the schema scrolls from the keyboard', async ({ page }) => {
   await toolsScreen(page);
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   const toggle = page.getByRole('button', { name: sorted[0].name, exact: true });
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await toggle.focus();
@@ -115,7 +115,7 @@ test('T4: a tool name opens its detail, and the schema scrolls from the keyboard
 
 test('T5: Open goes to the tool page, and an unknown tool says so', async ({ page }) => {
   await toolsScreen(page);
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   const t = sorted[3];
   await page.getByRole('button', { name: t.name, exact: true }).click();
   await page.getByRole('link', { name: `Open ${t.name}` }).click();
@@ -136,7 +136,7 @@ test('T5: Open goes to the tool page, and an unknown tool says so', async ({ pag
 
 test('T6: markup in a tool description renders as text', async ({ page }) => {
   await toolsScreen(page);
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   await expect(rows(page)).toHaveCount(40);
   await expect(page.locator('#content img')).toHaveCount(0);
   await expect(page.locator('#content')).toContainText(HOSTILE);
@@ -157,7 +157,7 @@ test('T6b: markup in a tool name and a server name stays text, in labels and lin
   const name = 'x"><img src=x onerror="window.__pwned=1">';
   const server = 'srv<img src=x onerror="window.__pwned=2">';
   await toolsScreen(page, { tools: [{ name, server, description: 'Hostile names', schema: {}, class: 'read', class_source: 'declared' }] });
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   const toggle = page.getByRole('button', { name, exact: true });
   await expect(toggle).toBeVisible();
   await expect(page.locator('#content img')).toHaveCount(0);
@@ -173,7 +173,7 @@ test.describe('on a touch screen', () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
   test('T18: a tool name is a full touch target', async ({ page }) => {
     await toolsScreen(page);
-    await page.goto('/ui/tools/status');
+    await page.goto('/ui/tools/status?view=all');
     const box = await page.getByRole('button', { name: sorted[0].name, exact: true }).boundingBox();
     expect(box.height).toBeGreaterThanOrEqual(44);
   });
@@ -181,7 +181,7 @@ test.describe('on a touch screen', () => {
 
 test('T11: Enter and Space each toggle a tool once', async ({ page }) => {
   await toolsScreen(page);
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   const toggle = page.getByRole('button', { name: sorted[0].name, exact: true });
   await toggle.focus();
   for (const [key, open] of [['Enter', true], ['Space', false], ['Space', true], ['Enter', false]]) {
@@ -196,7 +196,7 @@ test('T12: the same tool name on two servers opens the right one', async ({ page
     { name: 'search', server: 'docs', description: 'Search the docs', schema: {}, class: 'read', class_source: 'declared' },
   ];
   await toolsScreen(page, { tools: twins });
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   await expect(rows(page)).toHaveCount(2);
   await expect(rows(page).nth(0).locator('td:nth-child(2)')).toHaveText('docs');
   await page.getByRole('button', { name: 'search', exact: true }).nth(1).click();
@@ -241,7 +241,7 @@ test('T15: about 1,300 tools render and filter within budget', async ({ page }) 
   }));
   await toolsScreen(page, { tools: many });
   const start = Date.now();
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   await expect(rows(page)).toHaveCount(1300);
   const rendered = Date.now() - start;
   const t0 = Date.now();
@@ -284,7 +284,8 @@ test('T10: the journey from the sidebar to a tool and back', async ({ page }) =>
   await page.getByRole('link', { name: 'Open j_charlie_tool' }).click();
   await expect(page.getByRole('heading', { level: 2, name: 'j_charlie_tool', exact: true })).toBeVisible();
   await page.goBack();
-  await expect(page).toHaveURL('/ui/tools/status');
+  // Typing on Status opened the A-to-Z list, so going back returns there.
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
   // The search survives the visit, as it did on the classic tab.
   await expect(search(page)).toHaveValue('j_charlie');
   await expect(rows(page)).toHaveCount(1);
@@ -293,7 +294,7 @@ test('T10: the journey from the sidebar to a tool and back', async ({ page }) =>
 test('T16: on a phone the page never scrolls sideways; the table scrolls in its own region', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await toolsScreen(page);
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   await expect(rows(page)).toHaveCount(40);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   const region = page.getByRole('region', { name: 'Tool list' });
@@ -304,7 +305,7 @@ for (const scheme of ['light', 'dark']) {
   test(`T17: axe finds no blocking violation in the ${scheme} theme`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: scheme });
     await toolsScreen(page);
-    await page.goto('/ui/tools/status');
+    await page.goto('/ui/tools/status?view=all');
     await expect(rows(page)).toHaveCount(40);
     await page.getByRole('button', { name: sorted[0].name, exact: true }).click();
     expect(await blockingViolations(page)).toEqual([]);
@@ -315,7 +316,7 @@ for (const width of WIDTHS) {
   test(`T7: axe finds no blocking violation on the list, an open row and a tool page at ${width} px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await toolsScreen(page);
-    await page.goto('/ui/tools/status');
+    await page.goto('/ui/tools/status?view=all');
     await expect(rows(page)).toHaveCount(40);
     expect(await blockingViolations(page)).toEqual([]);
     await page.getByRole('button', { name: sorted[0].name, exact: true }).click();

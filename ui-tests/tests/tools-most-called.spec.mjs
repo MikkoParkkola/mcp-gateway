@@ -1,0 +1,184 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//
+// Tools › Status, most-called list: with no view, the screen lists
+// the tools called in the last hour, ten at most, highest first, and the change
+// against the hour before. An empty hour offers the whole catalogue. Search and
+// ?view=all open today's A-to-Z list. The shell document is served as the
+// gateway serves it; /ui/api answers are mocked for a signed-in admin.
+import { test, expect } from './base.mjs';
+
+const HOSTILE = '<img src=x onerror="window.__pwned=1">';
+
+async function toolsScreen(page, { tools, status = 200, hold } = {}) {
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
+  await page.route('**/ui/api/tools**', async (r) => {
+    if (hold) await hold;
+    return status === 200
+      ? r.fulfill({ json: { tools, total: tools.length } })
+      : r.fulfill({ status, json: { error: 'refused' } });
+  });
+}
+
+function tool(name, server, calls_1h, calls_prev_1h, description = '') {
+  return { name, server, description, calls_1h, calls_prev_1h };
+}
+
+const mostCalled = (page) => page.getByRole('region', { name: 'Most called, last hour', exact: true });
+const panelRow = (page, name) => mostCalled(page).locator('tbody tr').filter({ has: page.getByRole('link', { name, exact: true }) });
+const catalogueRows = (page) => page.locator('#content table.t tbody tr.tool');
+const search = (page) => page.getByRole('searchbox', { name: 'Search tools' });
+
+// The catalogue draws a hidden marker ahead of the name. The expected names stay literals.
+async function catalogueNames(page) {
+  const names = await catalogueRows(page).locator('td:nth-child(1)').allTextContents();
+  return names.map((n) => n.replace(/^[▸▾]\s*/, '').trim());
+}
+
+// 14 tools with distinct calls, listed lowest first, then 3 that were not called.
+// Rank is by calls_1h, so the panel order is the reverse of this list's called tools.
+const RANKED = [
+  tool('quiet_one', 'alpha', 0, 0),
+  tool('quiet_two', 'bravo', 0, 0),
+  tool('quiet_three', 'charlie', 0, 0),
+  tool('fir', 'alpha', 50, 10),
+  tool('holly', 'alpha', 60, 10),
+  tool('larch', 'alpha', 70, 10),
+  tool('ranked_eleventh', 'alpha', 80, 10),
+  tool('yarrow', 'alpha', 90, 10),
+  tool('aspen', 'alpha', 100, 10),
+  tool('birch', 'alpha', 200, 10),
+  tool('cedar', 'alpha', 300, 10),
+  tool('maple', 'alpha', 400, 10),
+  tool('pebble', 'alpha', 500, 10),
+  tool('anchor', 'alpha', 600, 10),
+  tool('willow', 'alpha', 700, 10),
+  tool('ember', 'alpha', 800, 10),
+  tool('quartz', 'alpha', 900, 10),
+];
+
+test('M1: landing lists the ten most-called tools, highest first', async ({ page }) => {
+  await toolsScreen(page, { tools: RANKED });
+  await page.goto('/ui/tools/status');
+  await expect(mostCalled(page).locator('tbody tr td:nth-child(1)')).toHaveText([
+    'quartz',
+    'ember',
+    'willow',
+    'anchor',
+    'pebble',
+    'maple',
+    'cedar',
+    'birch',
+    'aspen',
+    'yarrow',
+  ]);
+  await expect(mostCalled(page)).not.toContainText('ranked_eleventh');
+  await expect(mostCalled(page)).not.toContainText('quiet_one');
+  await expect(mostCalled(page)).not.toContainText('quiet_two');
+  await expect(mostCalled(page)).not.toContainText('quiet_three');
+});
+
+test('M2: equal counts sort by name, then by server', async ({ page }) => {
+  // Insertion order is neither name order nor server order.
+  await toolsScreen(page, { tools: [
+    tool('bravo', 'zulu', 10, 4),
+    tool('alpha', 'zulu', 10, 4),
+    tool('bravo', 'alpha', 10, 4),
+  ] });
+  await page.goto('/ui/tools/status');
+  await expect(mostCalled(page).locator('tbody tr td:nth-child(1)')).toHaveText(['alpha', 'bravo', 'bravo']);
+  await expect(mostCalled(page).locator('tbody tr td:nth-child(2)')).toHaveText(['zulu', 'alpha', 'zulu']);
+});
+
+test('M3: the change against the hour before is the exact text', async ({ page }) => {
+  await toolsScreen(page, { tools: [
+    tool('up_nine', 'alpha', 109, 100),
+    tool('down_two', 'alpha', 98, 100),
+    tool('flat', 'alpha', 50, 50),
+    tool('round_zero', 'alpha', 1003, 1000),
+    tool('fresh', 'alpha', 5, 0),
+    tool('doubled', 'alpha', 2, 1),
+  ] });
+  await page.goto('/ui/tools/status');
+  await expect(panelRow(page, 'up_nine').getByRole('cell', { name: '↗ 9% vs hour before', exact: true })).toBeVisible();
+  await expect(panelRow(page, 'down_two').getByRole('cell', { name: '↘ 2% vs hour before', exact: true })).toBeVisible();
+  await expect(panelRow(page, 'flat').getByRole('cell', { name: '→ no change', exact: true })).toBeVisible();
+  await expect(panelRow(page, 'round_zero').getByRole('cell', { name: '→ no change', exact: true })).toBeVisible();
+  await expect(panelRow(page, 'fresh').getByRole('cell', { name: 'new this hour', exact: true })).toBeVisible();
+  await expect(panelRow(page, 'doubled').getByRole('cell', { name: '↗ 100% vs hour before', exact: true })).toBeVisible();
+});
+
+test('M4: call counts render with thousands separators', async ({ page }) => {
+  await toolsScreen(page, { tools: [
+    tool('many_calls', 'alpha', 1234, 100),
+    tool('few_calls', 'alpha', 7, 1),
+  ] });
+  await page.goto('/ui/tools/status');
+  await expect(panelRow(page, 'many_calls').getByRole('cell', { name: '1,234', exact: true })).toBeVisible();
+  await expect(panelRow(page, 'few_calls').getByRole('cell', { name: '7', exact: true })).toBeVisible();
+});
+
+test('M5: an hour with no calls shows the empty line and the catalogue link', async ({ page }) => {
+  const forty = Array.from({ length: 40 }, (_, i) => tool(`quiet_${String(i).padStart(2, '0')}`, 'alpha', 0, 0, 'Unused'));
+  await toolsScreen(page, { tools: forty });
+  await page.goto('/ui/tools/status');
+  const panel = mostCalled(page);
+  await expect(panel).toContainText('No tool calls in the last hour.');
+  await expect(panel.getByRole('link')).toHaveCount(1);
+  await expect(panel.getByRole('link', { name: 'See all 40 tools', exact: true })).toHaveAttribute('href', /\?view=all$/);
+  await expect(panel.locator('tr')).toHaveCount(0);
+});
+
+test('M6: search on Status opens the A-to-Z list', async ({ page }) => {
+  // bravo_lookup matches by name. catalog_fetch matches by description.
+  // delta_ping's server is bravo; today's search does not read the server.
+  await toolsScreen(page, { tools: [
+    tool('echo_time', 'alpha', 6, 1, 'Tells the time'),
+    tool('delta_ping', 'bravo', 7, 1, 'Ping a host'),
+    tool('catalog_fetch', 'alpha', 8, 1, 'Reads the bravo index'),
+    tool('bravo_lookup', 'alpha', 9, 1, 'Looks up records'),
+  ] });
+  await page.goto('/ui/tools/status');
+  await search(page).fill('bravo');
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
+  await expect(search(page)).toHaveValue('bravo');
+  await expect.poll(() => catalogueNames(page)).toEqual(['bravo_lookup', 'catalog_fetch']);
+
+  await page.goto('/ui/tools/status');
+  await search(page).press('Enter');
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
+  await expect.poll(() => catalogueNames(page)).toEqual(['bravo_lookup', 'catalog_fetch', 'delta_ping', 'echo_time']);
+});
+
+test('M7: view=all opens the A-to-Z list', async ({ page }) => {
+  // Call order is zulu_tool, middle_tool, alpha_tool. Name order is the reverse at both ends.
+  await toolsScreen(page, { tools: [
+    tool('middle_tool', 'alpha', 50, 1, 'Middle'),
+    tool('zulu_tool', 'alpha', 90, 1, 'Last by name'),
+    tool('alpha_tool', 'alpha', 10, 1, 'First by name'),
+  ] });
+  await page.goto('/ui/tools/status?view=all');
+  await expect(catalogueRows(page)).toHaveCount(3);
+  const names = await catalogueNames(page);
+  expect(names[0]).toBe('alpha_tool');
+  expect(names[2]).toBe('zulu_tool');
+});
+
+test('M8: a most-called name links to the tool page', async ({ page }) => {
+  await toolsScreen(page, { tools: [
+    tool('alpha_link', 'srv_a', 2, 1),
+    tool('beta_link', 'srv_b', 9, 1),
+  ] });
+  await page.goto('/ui/tools/status');
+  await expect(mostCalled(page).getByRole('link', { name: 'beta_link', exact: true })).toHaveAttribute('href', '/ui/tools/srv_b%3Abeta_link/status');
+  await expect(mostCalled(page).getByRole('link', { name: 'alpha_link', exact: true })).toHaveAttribute('href', '/ui/tools/srv_a%3Aalpha_link/status');
+});
+
+test('M9: a hostile tool name is text', async ({ page }) => {
+  await toolsScreen(page, { tools: [tool(HOSTILE, 'alpha', 3, 1, 'Plain')] });
+  await page.goto('/ui/tools/status');
+  const panel = mostCalled(page);
+  await expect(panel.getByRole('link', { name: HOSTILE, exact: true })).toBeVisible();
+  await expect(panel.locator('img')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
+});
