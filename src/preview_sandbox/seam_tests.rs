@@ -53,7 +53,9 @@ fn production_files(dir: &Path, parent_text: &str, out: &mut Vec<PathBuf>) {
                 let leaf = production_text(&std::fs::read_to_string(&path).expect("source"));
                 // Only the quoted names: `declared` matches a `#[path]` by them.
                 for quoted in leaf.split('"').skip(1).step_by(2) {
-                    text.push_str(&format!(" \"{quoted}\""));
+                    text.push_str(" \"");
+                    text.push_str(quoted);
+                    text.push('"');
                 }
                 seen.push(path.clone());
                 out.push(path);
