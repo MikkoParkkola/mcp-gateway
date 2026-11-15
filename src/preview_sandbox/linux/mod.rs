@@ -446,9 +446,21 @@ fn build_plan(
 /// downloaded code, unlike a host-installed program, which gets its
 /// directory and sibling `lib`. A runtime tree (an NVM version) is bound
 /// whole, as for a program. Anything else is left unbound and refuses.
+/// npm's builtin `npmrc` is covered by an empty file either way.
 fn place_npm(plan: &mut Plan, npm: &Path, node: &Path) -> Result<PathBuf, Refusal> {
     let real = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
     let (npm_real, node_real) = (real(npm), real(node));
+    if node_real.is_dir() {
+        return Err(Refusal::Step(format!(
+            "placing node ({} is a directory)",
+            node.display()
+        )));
+    }
+    // The fetch never runs npx, so the program bind made for it (all of
+    // `/usr/local/bin` and `/usr/local/lib` for a regular npx file there)
+    // goes; only what follows is bound back under `/usr/local`.
+    plan.bound_back
+        .retain(|b| !Path::new(b).starts_with("/usr/local"));
     // npm's cli is `<package>/bin/npm-cli.js`.
     let package = npm_real
         .parent()
@@ -460,14 +472,13 @@ fn place_npm(plan: &mut Plan, npm: &Path, node: &Path) -> Result<PathBuf, Refusa
         (&npm_real, package.clone()),
     ] {
         // What must be shown: node's file, npm's whole package (its cli
-        // alone may be shown already, by npx's own bind-backs).
+        // can be shown while npm's own modules are not).
         if placed(bind.as_deref().unwrap_or(file), plan) {
             continue;
         }
         match program_bind(file, &plan.read_only) {
             ProgramBind::UsrLocal(_) => {
                 if let Some(bind) = bind {
-                    plan.bound_back.retain(|b| !Path::new(b).starts_with(&bind));
                     plan.bound_back.push(utf8(&bind)?);
                 }
             }
@@ -483,6 +494,12 @@ fn place_npm(plan: &mut Plan, npm: &Path, node: &Path) -> Result<PathBuf, Refusa
                 file.display()
             )));
         }
+    }
+    // npm's builtin config may hold a registry token someone stored there;
+    // the pinned environment outranks it, and the downloaded code never
+    // reads it: an empty file covers it.
+    if let Some(package) = &package {
+        plan.masked.push(utf8(&package.join("npmrc"))?);
     }
     // The alias npx sat beside (`/usr/local/bin/npm`) may be hidden now;
     // each literal step it takes must be shown, as for the program.
