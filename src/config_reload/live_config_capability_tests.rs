@@ -78,6 +78,7 @@ fn published_id(live: &LiveConfig) -> String {
         .published
         .expect("a revision is published")
         .revision
+        .clone()
 }
 
 /// Seq 2 then seq 1: seq 2's id stays.
