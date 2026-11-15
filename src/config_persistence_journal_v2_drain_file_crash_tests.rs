@@ -443,12 +443,12 @@ fn late_abandoned_retry() {
     assert_eq!(rig.drain(), Ok(()), "{ROW}: first drain removes it");
     let mut rig = restart(rig);
     std::fs::write(
-        super::super::handover::abandoned_path(&rig.live.path),
+        crate::config_persistence::journal::v2::abandoned_path(&rig.live.path),
         &late,
     )
     .expect(ROW);
     std::fs::set_permissions(
-        super::super::handover::abandoned_path(&rig.live.path),
+        crate::config_persistence::journal::v2::abandoned_path(&rig.live.path),
         std::os::unix::fs::PermissionsExt::from_mode(0o600),
     )
     .expect(ROW);

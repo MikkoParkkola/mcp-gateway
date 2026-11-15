@@ -9,7 +9,8 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 use super::super::errors::{
-    config_path_unavailable, config_refusal, flat_error, no_config_file, structured_error,
+    config_path_unavailable, config_refusal, flat_error, gate_refusal, no_config_file,
+    structured_error,
 };
 use super::super::secret_slots;
 use crate::config::Config;
@@ -197,6 +198,7 @@ fn refused_write(e: &ReplaceError) -> axum::response::Response {
     match e {
         // A busy gateway has written nothing, so this is a retry-me, not a
         // failure. 500 would tell the operator their edit broke something.
+        ReplaceError::Gated(refusal) => gate_refusal(*refusal),
         ReplaceError::Busy => flat_error(
             StatusCode::SERVICE_UNAVAILABLE,
             ConfigWriteError::Busy.to_string(),

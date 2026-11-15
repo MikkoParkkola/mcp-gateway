@@ -329,6 +329,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "own stricter check: O_NOFOLLOW, fstat, no group or world bits (R4)",
     ),
     (
+        "src/preview_sandbox/control.rs",
+        "the control peer's /proc/<pid>/stat and status (start time, parent pid, uids) through one directory fd; the kernel's process table, no secret",
+    ),
+    (
         "src/preview_sandbox/linux/mod.rs",
         "kernel settings under /proc/sys, read to name why a host refuses user namespaces; no secret",
     ),

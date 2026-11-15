@@ -6,8 +6,8 @@
 use super::super::super::fixtures::config;
 use super::super::DrainError;
 use super::super::fixtures::{reopen, runtime};
-use super::super::handover::abandoned_path;
 use super::drain_abandoned;
+use crate::config_persistence::journal::v2::abandoned_path;
 
 #[test]
 fn drain_refuses_off_unix() {

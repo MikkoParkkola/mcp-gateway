@@ -35,6 +35,9 @@ use crate::config_persistence::keyedit::Template;
 use super::ReloadContext;
 pub(crate) use super::replace_refusal::RefusalClass;
 pub(super) use super::replace_refusal::post_write_class;
+#[cfg(test)]
+use crate::gateway::restart_config_floor::seams::{AdmittedPoint, ReloadSource};
+use crate::gateway::restart_config_floor::{AdmissionGuard, AdmitKind, Refusal};
 
 // The revision type lives with the config commit primitive, which every
 // build compiles; the replace path names it from there.
@@ -149,6 +152,9 @@ pub(crate) struct ReplaceOutcome {
 pub(crate) enum ReplaceError {
     /// A lock stayed held past the wait; nothing was read.
     Busy,
+    /// The config gate refused the write before anything was read: a restart
+    /// is being prepared (`Busy`, retry later) or the gateway is going down.
+    Gated(Refusal),
     /// The file changed since the caller's view; its current revision.
     Stale { current: FileRevision },
     /// The compute refused, or produced bytes that are not UTF-8 text. Bytes
@@ -205,13 +211,24 @@ async fn spawn_locked(
     wait: Duration,
     receipt: Option<receipt::RevokeCheck>,
 ) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
-    tokio::spawn(async move { ctx.replace_locked(replace, audit, wait, receipt).await })
-        .await
-        .unwrap_or_else(|e| {
-            Err(ReplaceError::Failed(format!(
-                "the config write task failed: {e}"
-            )))
-        })
+    // The gate admits before the task exists; the guard lives in the task, so a
+    // dead task releases it, and the task moves it into `Entries` before any
+    // secret entry is staged.
+    let admitted = ctx
+        .registry
+        .config_gate()
+        .admit(AdmitKind::Write)
+        .map_err(ReplaceError::Gated)?;
+    tokio::spawn(async move {
+        ctx.replace_locked(replace, audit, wait, receipt, admitted)
+            .await
+    })
+    .await
+    .unwrap_or_else(|e| {
+        Err(ReplaceError::Failed(format!(
+            "the config write task failed: {e}"
+        )))
+    })
 }
 
 #[cfg(test)]
@@ -235,8 +252,11 @@ pub(crate) use audit::{IntentKind, replace_audited};
 #[cfg(feature = "webui")]
 pub(crate) use receipt::RevokeCheck;
 
+#[path = "replace_entries.rs"]
+mod entries;
 #[path = "replace_slots.rs"]
 mod slots;
+use entries::Entries;
 
 #[path = "replace_validate.rs"]
 mod validate;
@@ -290,6 +310,7 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
     match error {
         // Refused before anything was written.
         ReplaceError::Busy
+        | ReplaceError::Gated(_)
         | ReplaceError::Stale { .. }
         | ReplaceError::Refused(_)
         | ReplaceError::NoAuditLog
@@ -306,92 +327,6 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         ReplaceError::RollbackFailed { .. }
         | ReplaceError::Unconfirmed { .. }
         | ReplaceError::Failed(_) => Settle::Abandon,
-    }
-}
-
-/// This replacement's new entries until they are settled. Dropped unsettled
-/// (a panic, a write task that died) it discards them while the old file
-/// stands and abandons them once `write_atomic` may have replaced it.
-#[cfg_attr(
-    not(any(test, feature = "webui")),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and discovery adopt"
-    )
-)]
-struct Entries {
-    pending: Option<PendingSecrets>,
-    renamed: bool,
-}
-
-#[cfg_attr(
-    not(any(test, feature = "webui")),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and discovery adopt"
-    )
-)]
-impl Entries {
-    /// Keep and abandon touch no store, so they run here and now: a queued
-    /// closure that a shutting-down runtime never runs would drop the
-    /// entries undecided, which deletes them. Only a discard calls the
-    /// store, off the async worker (a keychain call blocks for up to 2 s);
-    /// if that closure never runs, the drop discards all the same.
-    async fn settle(mut self, how: Settle) {
-        let Some(pending) = self.pending.take() else {
-            return;
-        };
-        match how {
-            Settle::Keep | Settle::Abandon => settle_now(pending, how),
-            Settle::Discard => {
-                if let Err(e) = tokio::task::spawn_blocking(move || settle_now(pending, how)).await
-                {
-                    tracing::warn!(error = %e, "discarding a refused save's secret entries failed; they are listed as unused");
-                }
-            }
-        }
-    }
-}
-
-impl Drop for Entries {
-    fn drop(&mut self) {
-        let Some(pending) = self.pending.take() else {
-            return;
-        };
-        let how = if self.renamed {
-            Settle::Abandon
-        } else {
-            Settle::Discard
-        };
-        match (how, tokio::runtime::Handle::try_current()) {
-            (Settle::Discard, Ok(runtime)) => {
-                drop(runtime.spawn_blocking(move || settle_now(pending, how)));
-            }
-            _ => settle_now(pending, how),
-        }
-    }
-}
-
-#[cfg_attr(
-    not(any(test, feature = "webui")),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and discovery adopt"
-    )
-)]
-fn settle_now(pending: PendingSecrets, how: Settle) {
-    match how {
-        Settle::Keep => pending.keep(),
-        Settle::Abandon => pending.abandon(),
-        Settle::Discard => {
-            let left = pending.discard();
-            if !left.is_empty() {
-                tracing::warn!(
-                    entries = left.len(),
-                    "secret entries of a refused config save could not be removed; they are listed as unused"
-                );
-            }
-        }
     }
 }
 
@@ -464,6 +399,7 @@ impl ReloadContext {
         mut audit: Audit,
         wait: Duration,
         receipt: Option<receipt::RevokeCheck>,
+        admitted: AdmissionGuard,
     ) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
         let deadline = Instant::now() + wait;
         // The reload lock, then the config sidecar lock: the order every
@@ -496,34 +432,22 @@ impl ReloadContext {
         let target = locked.target.clone();
         let (locked, recovery_intent_id) = self.recover_before_write(&mut audit, locked).await?;
 
-        if target != self.trusted_config {
-            return Err(ReplaceError::Unsupported(format!(
-                "{} now resolves to {}, not to {}, the file this gateway started on; nothing was written",
-                self.config_path.display(),
-                target.display(),
-                self.trusted_config.display()
-            )));
-        }
-        // The read every loader uses, mode and owner judged on the handle read:
-        // a file another account can change is refused before any intent,
-        // entry or write, so its edit is never rewritten owner-only.
-        let current = match crate::config::read_config_text(&target) {
-            Ok(Some(text)) => text.into_bytes(),
-            Ok(None) => return Err(ReplaceError::NoConfigFile),
-            Err(UnreadConfig::Refused(why)) => return Err(ReplaceError::ConfigRefused(why)),
-            Err(UnreadConfig::Failed(why) | UnreadConfig::NotTheConfig(why)) => {
-                return Err(ReplaceError::Failed(why));
-            }
-        };
+        let current = self.read_trusted(&target)?;
         if let Expected::Revision(seen) = &replace.expected {
             let now = FileRevision::of(&current);
             if &now != seen {
                 return Err(ReplaceError::Stale { current: now });
             }
         }
+        // The write's one guard moves in before any entry is staged: a task
+        // that dies while staging drops `Entries`, whose detached discard then
+        // holds the count until its store calls are done.
         let mut entries = Entries {
             pending: None,
             renamed: false,
+            admitted: Some(admitted),
+            #[cfg(test)]
+            gate: self.registry.config_gate(),
         };
         // The new bytes are computed, and their slots checked against the
         // secrets, before any entry exists: a refusal creates nothing.
@@ -554,6 +478,10 @@ impl ReloadContext {
         };
         let result = match result {
             Ok(new) => {
+                #[cfg(test)]
+                entries
+                    .gate
+                    .call_admitted(AdmittedPoint::WriterAfterStaging);
                 self.write_computed(
                     &locked,
                     &target,
@@ -583,6 +511,8 @@ impl ReloadContext {
         if recording_receipt {
             order::record(&target, "reload_unlock");
         }
+        #[cfg(test)]
+        entries.gate.call_admitted(AdmittedPoint::WriterAfterLocks);
         entries.settle(how).await;
         result
     }
@@ -629,6 +559,8 @@ impl ReloadContext {
                     class: post_write_class(&refusal),
                     reason: refusal.text,
                 })?;
+            #[cfg(test)]
+            self.record_write_reload();
             return Ok(ReplaceOutcome {
                 revision: None,
                 kept_beside: None,
@@ -708,6 +640,8 @@ impl ReloadContext {
         }
         match reloaded {
             Ok(reload) => {
+                #[cfg(test)]
+                self.record_write_reload();
                 if let Err(e) = journal::mark_all_renamed(target) {
                     return Err(ReplaceError::Unconfirmed {
                         journal: journal::journal_path(target),
@@ -737,6 +671,39 @@ impl ReloadContext {
                 ))
             }
         }
+    }
+
+    /// The locked target's bytes, once it is still the file this gateway
+    /// started on. The read every loader uses, mode and owner judged on the
+    /// handle read: a file another account can change is refused before any
+    /// intent, entry or write, so its edit is never rewritten owner-only.
+    fn read_trusted(&self, target: &std::path::Path) -> Result<Vec<u8>, ReplaceError> {
+        if target != self.trusted_config.as_path() {
+            return Err(ReplaceError::Unsupported(format!(
+                "{} now resolves to {}, not to {}, the file this gateway started on; nothing was written",
+                self.config_path.display(),
+                target.display(),
+                self.trusted_config.display()
+            )));
+        }
+        match crate::config::read_config_text(target) {
+            Ok(Some(text)) => Ok(text.into_bytes()),
+            Ok(None) => Err(ReplaceError::NoConfigFile),
+            Err(UnreadConfig::Refused(why)) => Err(ReplaceError::ConfigRefused(why)),
+            Err(UnreadConfig::Failed(why) | UnreadConfig::NotTheConfig(why)) => {
+                Err(ReplaceError::Failed(why))
+            }
+        }
+    }
+
+    /// The reload log's Write entry: the running `environment` after this
+    /// write's own completed reload.
+    #[cfg(test)]
+    fn record_write_reload(&self) {
+        let environment = self.live_config.get().environment.clone();
+        self.registry
+            .config_gate()
+            .record_reload(ReloadSource::Write, &environment.unwrap_or_default());
     }
 
     /// Put the original back, or remove a staged copy no journal names yet

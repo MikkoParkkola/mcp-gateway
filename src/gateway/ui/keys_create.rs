@@ -20,7 +20,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::config_file::{Gateway, read_gateway};
-use super::errors::{flat_error, stale, structured_error};
+use super::errors::{flat_error, gate_refusal, stale, structured_error};
 use super::guard::Guard;
 use super::settings::caller_is_cli_key;
 use crate::config::{ApiKeyConfig, AuthConfig, Config, EnvOverlay};
@@ -434,6 +434,7 @@ fn not_written(state: &AppState) -> Response {
 fn variant_of(error: &ReplaceError) -> &'static str {
     match error {
         ReplaceError::Busy => "busy",
+        ReplaceError::Gated(_) => "gated",
         ReplaceError::Stale { .. } => "stale",
         ReplaceError::Refused(_) => "refused",
         ReplaceError::AuditRefused(_) => "audit_refused",
@@ -474,6 +475,7 @@ fn refused_write(
             StatusCode::SERVICE_UNAVAILABLE,
             "the config is being written; retry",
         ),
+        (None, Err(ReplaceError::Gated(refusal))) => gate_refusal(refusal),
         (None, Err(ReplaceError::ReloadRefused { .. })) => {
             fixed(StatusCode::CONFLICT, "reload_refused")
         }
