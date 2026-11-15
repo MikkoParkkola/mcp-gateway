@@ -568,7 +568,9 @@ done
 
     // The child blocks on a release file written once stop() has set its latch.
     // A gate that times out ends the child: it never reaches the handshake.
-    let deadline = std::time::Instant::now() + Duration::from_millis(2500);
+    // Spawning the child's shell can take seconds on a loaded host, so its pid
+    // is awaited for the shared hang bound, not a guess at a quick start.
+    let deadline = std::time::Instant::now() + crate::test_wait::HANG_BOUND;
     while !std::fs::read_to_string(&pidfile).is_ok_and(|pid| !pid.trim().is_empty())
         && std::time::Instant::now() < deadline
     {
@@ -576,7 +578,7 @@ done
     }
 
     let pid = std::fs::read_to_string(&pidfile)
-        .expect("child recorded its pid before shutdown")
+        .expect("child recorded its pid within the hang bound")
         .trim()
         .to_string();
     let alive = || {
