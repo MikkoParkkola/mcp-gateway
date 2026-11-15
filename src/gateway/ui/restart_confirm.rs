@@ -268,6 +268,14 @@ impl RestartConfirm {
     }
 
     /// The write sample the route shows and binds, read once per request.
+    /// Only a test's script can be empty; a release build always samples.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "a release build always samples; the Option is a test script's missing sample"
+        )
+    )]
     pub(crate) fn sample(&self, counter: &RecentWrites) -> Option<WriteSample> {
         match &self.samples {
             SampleSource::Counter => Some(counter.sample((self.clock)())),

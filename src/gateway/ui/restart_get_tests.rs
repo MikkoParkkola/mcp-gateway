@@ -37,15 +37,15 @@ const SCOPED: &str = "restart-scoped";
 #[derive(Clone, Copy)]
 enum Gateway {
     /// Auth on, an unscoped admin key, and a transparency log.
-    AuthWithLog,
+    KeysWithLog,
     /// Auth on, the admin keys, and no transparency log: a state config
     /// validation refuses (auth on requires the log), built only so the
     /// readiness check for a missing log stays covered.
-    AuthWithoutLog,
+    KeysWithoutLog,
     /// Auth off and no transparency log, the only config that allows it.
     /// Every caller is anonymous there, so the admin-only restart routes
     /// refuse each request.
-    AuthOffNoLog,
+    AuthOff,
 }
 
 struct Fixture {
@@ -120,7 +120,7 @@ fn confirm(
 
 async fn fixture(gateway: Gateway, registry: Option<RestartConfirm>) -> Fixture {
     let auth: AuthConfig = match gateway {
-        Gateway::AuthWithLog | Gateway::AuthWithoutLog => {
+        Gateway::KeysWithLog | Gateway::KeysWithoutLog => {
             serde_json::from_value(json!({"enabled": true, "api_keys": [{
                 "key_sha256": crate::config::api_key_digest_spec(ADMIN.as_bytes()),
                 "name": ADMIN, "admin": true, "backends": ["*"]
@@ -130,12 +130,12 @@ async fn fixture(gateway: Gateway, registry: Option<RestartConfirm>) -> Fixture 
             }]}))
             .unwrap()
         }
-        Gateway::AuthOffNoLog => AuthConfig::default(),
+        Gateway::AuthOff => AuthConfig::default(),
     };
     let audit = crate::test_dir_keep::kept_tempdir();
     let (mut state, store) = audience_state(&auth, (None, None), |meta| meta).await;
     let unique = Arc::get_mut(&mut state).expect("unique state");
-    if let Gateway::AuthWithLog = gateway {
+    if let Gateway::KeysWithLog = gateway {
         let config = TransparencyLogConfig {
             enabled: true,
             path: audit.path().join("audit.jsonl").display().to_string(),
@@ -154,7 +154,7 @@ async fn fixture(gateway: Gateway, registry: Option<RestartConfirm>) -> Fixture 
     Fixture {
         router: create_router(Arc::clone(&state)),
         state,
-        admin: !matches!(gateway, Gateway::AuthOffNoLog),
+        admin: !matches!(gateway, Gateway::AuthOff),
         _audit: audit,
         _store: store,
     }
@@ -210,7 +210,7 @@ fn token(body: &Value) -> Option<&str> {
 // registry, no override: a `?confirm=1` GET mints nothing.
 #[tokio::test]
 async fn the_production_gateway_mints_no_confirmation() {
-    let fx = fixture(Gateway::AuthWithLog, None).await;
+    let fx = fixture(Gateway::KeysWithLog, None).await;
     let (body, _) = get(&fx, "?confirm=1").await;
     assert_eq!(token(&body), None, "{body}");
     assert_eq!(body["available"], false, "{body}");
@@ -222,7 +222,7 @@ async fn restart_switched_off_mints_nothing_even_when_ready() {
     let inv = ready_invocation();
     let script = samples(&[Some(sample(0, 10))]);
     let fx = fixture(
-        Gateway::AuthWithLog,
+        Gateway::KeysWithLog,
         Some(confirm(&inv, &script).switched_off()),
     )
     .await;
@@ -239,7 +239,7 @@ async fn restart_switched_off_mints_nothing_even_when_ready() {
 async fn no_transparency_log_answers_audit_log_required() {
     let inv = ready_invocation();
     let script = samples(&[Some(sample(0, 10))]);
-    let fx = fixture(Gateway::AuthWithoutLog, Some(confirm(&inv, &script))).await;
+    let fx = fixture(Gateway::KeysWithoutLog, Some(confirm(&inv, &script))).await;
     let (body, _) = get(&fx, "?confirm=1").await;
     assert_eq!(body["available"], false, "{body}");
     assert_eq!(body["reason"], "audit_log_required", "{body}");
@@ -259,7 +259,7 @@ async fn only_confirm_1_mints_and_its_answer_is_not_stored() {
     let shown = sample(2, 10);
     // One sample per GET; this row makes twelve.
     let script = samples(&[Some(shown); 16]);
-    let fx = fixture(Gateway::AuthWithLog, Some(confirm(&inv, &script))).await;
+    let fx = fixture(Gateway::KeysWithLog, Some(confirm(&inv, &script))).await;
     let (plain, plain_headers) = get(&fx, "").await;
     assert_eq!(token(&plain), None, "a plain GET never mints: {plain}");
     assert_eq!(plain["available"], true, "{plain}");
@@ -318,7 +318,6 @@ async fn only_confirm_1_mints_and_its_answer_is_not_stored() {
 // the normal preview, with no `confirm` and no registry entry.
 #[tokio::test]
 async fn a_missing_precondition_answers_the_preview_without_a_token() {
-    let digest = Some(InvocationDigest::for_test([9; 32]));
     // name, invocation, the sample shown, platform, whether the random source works
     type Case = (
         &'static str,
@@ -327,6 +326,7 @@ async fn a_missing_precondition_answers_the_preview_without_a_token() {
         Platform,
         bool,
     );
+    let digest = Some(InvocationDigest::for_test([9; 32]));
     let cases: Vec<Case> = vec![
         (
             "invocation unavailable",
@@ -380,7 +380,7 @@ async fn a_missing_precondition_answers_the_preview_without_a_token() {
                 .with_invocation(InvocationSource::Scripted(Arc::clone(&inv)))
                 .with_platform(platform);
         }
-        let fx = fixture(Gateway::AuthWithLog, Some(rc)).await;
+        let fx = fixture(Gateway::KeysWithLog, Some(rc)).await;
         let (plain, _) = get(&fx, "").await;
         let (body, headers) = get(&fx, "?confirm=1").await;
         assert_eq!(body, plain, "{name}: the normal preview");
@@ -399,7 +399,7 @@ async fn the_platform_reason_comes_before_the_missing_log() {
     let inv = ready_invocation();
     let script = samples(&[Some(sample(0, 1))]);
     let rc = confirm(&inv, &script).with_platform(Platform::Windows);
-    let fx = fixture(Gateway::AuthWithoutLog, Some(rc)).await;
+    let fx = fixture(Gateway::KeysWithoutLog, Some(rc)).await;
     let (body, _) = get(&fx, "").await;
     assert_eq!(body["reason"], "windows_manual_restart", "{body}");
     // Restart off, or no restart target, also comes before the missing log.
@@ -416,7 +416,7 @@ async fn the_platform_reason_comes_before_the_missing_log() {
         if off {
             rc = rc.switched_off();
         }
-        let fx = fixture(Gateway::AuthWithoutLog, Some(rc)).await;
+        let fx = fixture(Gateway::KeysWithoutLog, Some(rc)).await;
         let (body, _) = get(&fx, "").await;
         assert_eq!(body["reason"], "restart_not_available", "{name}: {body}");
     }
@@ -455,7 +455,7 @@ async fn one_get_reads_each_source_once_and_binds_what_it_shows() {
     let inv = ready_invocation();
     let shown = sample(5, 70);
     let script = samples(&[Some(shown), Some(sample(9, 99))]);
-    let fx = fixture(Gateway::AuthWithLog, Some(confirm(&inv, &script))).await;
+    let fx = fixture(Gateway::KeysWithLog, Some(confirm(&inv, &script))).await;
     let (body, _) = get(&fx, "?confirm=1").await;
     let token = token(&body).expect("mint").to_owned();
     assert_eq!(body["recent_writes"]["count"], 5, "{body}");
@@ -518,7 +518,7 @@ fn a_minting_get_logs_no_token() {
         runtime.block_on(async {
             let inv = ready_invocation();
             let script = samples(&[Some(sample(1, 5))]);
-            let fx = fixture(Gateway::AuthWithLog, Some(confirm(&inv, &script))).await;
+            let fx = fixture(Gateway::KeysWithLog, Some(confirm(&inv, &script))).await;
             tracing::info!("restart-get-log-probe");
             get(&fx, "?confirm=1").await.0
         })
@@ -537,7 +537,7 @@ fn a_minting_get_logs_no_token() {
 async fn a_scoped_admins_confirm_request_is_refused_and_mints_nothing() {
     let inv = ready_invocation();
     let script = samples(&[Some(sample(0, 1)); 2]);
-    let fx = fixture(Gateway::AuthWithLog, Some(confirm(&inv, &script))).await;
+    let fx = fixture(Gateway::KeysWithLog, Some(confirm(&inv, &script))).await;
     let req = Request::builder()
         .method("GET")
         .uri(format!("{URI}?confirm=1"))
@@ -561,7 +561,7 @@ async fn a_scoped_admins_confirm_request_is_refused_and_mints_nothing() {
 async fn a_minting_get_carries_exactly_available_recent_writes_and_confirm() {
     let inv = ready_invocation();
     let script = samples(&[Some(sample(3, 30)); 2]);
-    let fx = fixture(Gateway::AuthWithLog, Some(confirm(&inv, &script))).await;
+    let fx = fixture(Gateway::KeysWithLog, Some(confirm(&inv, &script))).await;
     let (minted, _) = get(&fx, "?confirm=1").await;
     let mut keys: Vec<&str> = minted
         .as_object()
@@ -601,7 +601,7 @@ async fn a_minting_get_carries_exactly_available_recent_writes_and_confirm() {
 async fn an_auth_off_gateway_refuses_every_restart_get() {
     let inv = ready_invocation();
     let script = samples(&[Some(sample(0, 1)); 2]);
-    let fx = fixture(Gateway::AuthOffNoLog, Some(confirm(&inv, &script))).await;
+    let fx = fixture(Gateway::AuthOff, Some(confirm(&inv, &script))).await;
     let req = Request::builder()
         .method("GET")
         .uri(format!("{URI}?confirm=1"))
