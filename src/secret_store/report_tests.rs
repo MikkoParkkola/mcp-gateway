@@ -324,6 +324,9 @@ fn an_entry_named_only_by_a_capability_file_is_not_unused() {
     );
 }
 
+// Off Unix there is no link count to read: the listing skips the link check
+// there, and Settings refuses every files-store delete instead.
+#[cfg(unix)]
 #[test]
 fn an_entry_named_only_through_a_file_link_is_not_unused() {
     let (config, locks, path, name) = saved_unused();
