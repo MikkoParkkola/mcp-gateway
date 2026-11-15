@@ -7,6 +7,8 @@
 .activity-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .activity-label { font: var(--type-kicker); letter-spacing: var(--type-kicker-tracking); text-transform: uppercase; color: var(--color-text-secondary); }
 .activity-member { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
+/* display: flex above would otherwise beat the hidden attribute (the shell's own rule is per element). */
+.activity-member[hidden] { display: none; }
 .activity-search { width: min(100%, calc(var(--space-16) * 10)); }
 .activity-active { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
 .activity-value { font-family: var(--font-family-mono); overflow-wrap: anywhere; }

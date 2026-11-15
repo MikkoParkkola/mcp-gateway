@@ -35,6 +35,17 @@ pub(in crate::gateway::ui) enum Access {
 }
 
 impl Access {
+    /// The list answer's `access` word. Status reports `admin: false` for an
+    /// auditor and for a backend-scoped admin, and both are served more than
+    /// their own calls, so the screen reads the variant this page applied.
+    pub(super) fn word(&self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Own { .. } => "own",
+            Self::Scoped { .. } => "scoped",
+        }
+    }
+
     /// Whether this caller reads `line`, of `kind`.
     pub(super) fn admits(&self, line: &Line, kind: Kind) -> bool {
         match self {

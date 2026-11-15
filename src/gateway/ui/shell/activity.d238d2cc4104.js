@@ -73,10 +73,6 @@ async function statusTab(body, ctx) {
   }
 
   const filters = readFilters();
-  // The session's role, read from the route the shell reads it from, never from the
-  // shell's header text. Only an explicit member sees the own-key line; a failed read shows nothing.
-  const status = await ctx.api('/ui/api/status').catch(() => null);
-  const member = status?.auth?.admin === false;
 
   const outcomeTip = h('span', { class: 'activity-tip' });
   const blockedTip = h('span', { class: 'activity-tip' });
@@ -127,13 +123,14 @@ async function statusTab(body, ctx) {
   const moreLine = h('p', { class: 'activity-more-error', hidden: true });
 
   const root = h('div', { class: 'activity' });
-  // A member's line is above the list. Its trigger is a button, so it stays
-  // before the search: nothing focusable may sit between the search and a row.
-  let memberTip = null;
-  if (member) {
-    memberTip = h('span', { class: 'activity-tip' });
-    root.append(h('p', { class: 'activity-member' }, 'Calls made with your key', memberTip));
-  }
+  // "Calls made with your key", above the list, only when the list answer says it holds
+  // only the caller's own calls (access "own"). Status's admin flag cannot say that: an
+  // auditor and a backend-scoped admin read false there and are served others' calls.
+  // Its trigger is a button, so the line stays before the search: nothing focusable may
+  // sit between the search and a row. Hidden, it is out of the Tab order.
+  const memberTip = h('span', { class: 'activity-tip' });
+  const memberLine = h('p', { class: 'activity-member', hidden: true }, 'Calls made with your key', memberTip);
+  root.append(memberLine);
   root.append(outcomeRow, rangeGroup, search);
   if (filters.server || filters.key) root.append(active);
   root.append(empty, rowsEl, moreLine, sentinel);
@@ -146,7 +143,7 @@ async function statusTab(body, ctx) {
   import('/ui/assets/tooltip.fc459693146e.js').then(({ tip }) => {
     outcomeTip.append(tip('activity.status.outcome'));
     blockedTip.append(tip('activity.status.blocked'));
-    if (memberTip) memberTip.append(tip('activity.status.calls-made-with-your-key'));
+    memberTip.append(tip('activity.status.calls-made-with-your-key'));
   }).catch(() => {
     // The line stands without its (i).
   });
@@ -211,6 +208,8 @@ async function statusTab(body, ctx) {
     const next = data?.next_cursor;
     pageCursor = typeof next === 'string' && next ? next : null;
     // A reset cursor starts again from the newest row: what is on screen would show twice.
+    // Each first page answers for the current filters, and with them whose calls they are.
+    if (!append) memberLine.hidden = data?.access !== 'own';
     const replace = !append || data?.cursor_reset === true;
     if (replace) rowsEl.replaceChildren();
     let added = 0;

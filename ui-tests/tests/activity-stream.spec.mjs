@@ -315,9 +315,11 @@ test('A8 empty: the 24 h empty state, then Last 7 days removes the button', asyn
   await expect(week.getByRole('button')).toHaveCount(0);
 });
 
-test('A9 member: admin false shows the key line and its tooltip; admin true does not', async ({ page }) => {
-  let admin = false;
-  const urls = await install(page, { admin: () => admin, answer: () => list(ROWS) });
+test('A9 member: the line follows the list\'s own access, not the status admin flag', async ({ page }) => {
+  // admin is false throughout: an auditor reads false there too and is served everyone's
+  // calls, so only the list answer's access says whose calls these are.
+  let access = 'own';
+  const urls = await install(page, { admin: false, answer: () => ({ ...list(ROWS), access }) });
   await open(page, urls, '/ui/activity/status');
   const trigger = page.locator('#content .has-tip[data-tip="activity.status.calls-made-with-your-key"]');
   await expect(trigger.locator('button')).toBeVisible();
@@ -326,14 +328,17 @@ test('A9 member: admin false shows the key line and its tooltip; admin true does
   const lineBox = await trigger.boundingBox();
   const rowBox = await rowLinks(page).first().boundingBox();
   expect(lineBox.y).toBeLessThan(rowBox.y);
-  admin = true;
-  const at = urls.length;
-  await page.goto('/ui/activity/status');
-  await shellReady(page);
-  await expect.poll(() => urls.length).toBeGreaterThan(at);
-  await expect.poll(() => shownRows(page)).toHaveLength(5);
-  await expect(page.getByText('Calls made with your key', { exact: true })).toHaveCount(0);
-  await expect(page.locator('#content .has-tip[data-tip="activity.status.calls-made-with-your-key"]')).toHaveCount(0);
+  for (const other of ['all', 'scoped']) {
+    access = other;
+    const at = urls.length;
+    await page.goto('/ui/activity/status');
+    await shellReady(page);
+    await expect.poll(() => urls.length).toBeGreaterThan(at);
+    await expect.poll(() => shownRows(page)).toHaveLength(5);
+    // The trigger, not the text: an exact-text locator also matches nothing when the
+    // line is shown (it holds the trigger too), and hidden is true of nothing.
+    await expect(trigger.locator('button'), other).toBeHidden();
+  }
 });
 
 test('A10 hostile: a tool and a key render as text', async ({ page }) => {

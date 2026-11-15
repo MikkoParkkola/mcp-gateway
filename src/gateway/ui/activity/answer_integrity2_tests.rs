@@ -64,6 +64,33 @@ async fn r40_the_integrity_reason_survives_eviction() {
     assert_eq!(page["answer_integrity_failed"], 1);
 }
 
+/// The list names the Access it applied, as a literal word.
+#[tokio::test]
+async fn g2a_the_list_answer_names_the_access_applied() {
+    let fx = Fixture::new(None);
+    fx.call("gw-t");
+    let all = scoped(&fx, &Access::All).await;
+    assert_eq!(all["access"], "all");
+    let own = scoped(
+        &fx,
+        &Access::Own {
+            issuer: "https://issuer.example".into(),
+            subject: "subject".into(),
+        },
+    )
+    .await;
+    assert_eq!(own["access"], "own");
+    let limited = scoped(
+        &fx,
+        &Access::Scoped {
+            owner: None,
+            backends: vec!["b".into()],
+        },
+    )
+    .await;
+    assert_eq!(limited["access"], "scoped");
+}
+
 #[tokio::test]
 async fn r42_counts_are_taken_after_authorisation() {
     let fx = Fixture::new(Some(SECRET));
