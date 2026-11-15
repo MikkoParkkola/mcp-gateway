@@ -184,7 +184,7 @@ fn preview_config(ca: &rustix::fd::OwnedFd) -> Step {
     fs::create_dir(&certs).map_err(at("creating", &certs))?;
     let npmrc = dir.join("empty.npmrc");
     fs::write(&npmrc, b"").map_err(at("creating", &npmrc))?;
-    let source = PathBuf::from(format!("/proc/self/fd/{}", ca.as_raw_fd()));
+    let source = fs::read_link(format!("/proc/self/fd/{}", ca.as_raw_fd())).unwrap_or_default();
     mount_bind(&source, &ca_pem)
         .map_err(io::Error::from)
         .map_err(at("binding the CA snapshot on", &ca_pem))?;

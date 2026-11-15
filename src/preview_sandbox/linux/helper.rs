@@ -71,7 +71,7 @@ fn setup(plan: &Plan) -> Result<Option<UnixStream>, String> {
         .transpose()?;
     super::mounts::build_root(plan, ca.as_ref().map(|(fd, _)| fd))?;
     if let Some((fd, identity)) = ca {
-        std::mem::forget(fd);
+        drop(fd);
         super::mounts::check_preview_config(identity)?;
     }
     super::mounts::enter_root()?;
