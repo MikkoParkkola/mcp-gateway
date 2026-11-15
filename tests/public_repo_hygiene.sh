@@ -231,7 +231,7 @@ assert_base_fail_contains() {
     echo "expected hygiene check to fail against $base in $repo" >&2
     exit 1
   fi
-  if ! grep -F -q "$expected" "$output"; then
+  if ! grep -F -q -- "$expected" "$output"; then
     cat "$output" >&2
     echo "expected failure output to contain: $expected" >&2
     exit 1
@@ -329,6 +329,30 @@ commit_all "$repo" "seed"
 printf 'fn reload() {}\n' >>"$repo/src/lib.rs"
 commit_all "$repo" "change"
 assert_base_pass "$repo" HEAD~1
+
+# A bare --base resolves to a local branch first. A stale local copy of the line once made the check
+# scan months of old history and report thousands of findings this change never made. A local branch
+# that differs from its origin/ namesake is refused with the ref to pass; one equal to it still works.
+repo="$(make_repo base-stale-local-branch)"
+mkdir -p "$repo/src"
+printf 'fn start() {}\n' >"$repo/src/lib.rs"
+commit_all "$repo" "seed"
+git -C "$repo" branch line
+mkdir -p "$repo/tests"
+printf 'fn main() {}\n' >"$repo/tests/mik_9999_old.rs"
+commit_all "$repo" "the line moves on"
+git -C "$repo" update-ref refs/remotes/origin/line HEAD
+printf 'fn warm() {}\n' >>"$repo/src/lib.rs"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" line "--base line is the local branch"
+assert_base_fail_contains "$repo" line "pass --base origin/line"
+assert_base_pass "$repo" origin/line
+git -C "$repo" branch -f line origin/line
+assert_base_pass "$repo" line
+
+repo="$(make_repo base-not-a-commit)"
+commit_all "$repo" "seed"
+assert_base_fail_contains "$repo" no-such-ref "--base no-such-ref is not a commit"
 
 repo="$(make_repo ticket-id-in-new-file-name)"
 commit_all "$repo" "seed"
