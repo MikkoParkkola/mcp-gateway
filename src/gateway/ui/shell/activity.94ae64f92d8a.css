@@ -10,10 +10,20 @@
 .activity-search { width: min(100%, calc(var(--space-16) * 10)); }
 .activity-active { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
 .activity-value { font-family: var(--font-family-mono); overflow-wrap: anywhere; }
-.activity-rows { display: grid; }
-.activity-row { display: block; min-height: var(--size-row); padding: var(--space-2) var(--space-3);
+/* One grid for the whole list: each row takes its columns from it (subgrid), so
+   time, key, tool and outcome line up whatever each key's length. */
+.activity-rows { display: grid; column-gap: var(--space-4);
+  grid-template-columns: max-content minmax(0, max-content) minmax(0, max-content) 1fr max-content; }
+.activity-row { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center;
+  min-height: var(--size-row); padding: var(--space-2) var(--space-3);
   border-bottom: var(--size-rule) solid var(--color-border-subtle); color: var(--color-text-primary); text-decoration: none;
   font-family: var(--font-family-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .activity-row:hover { background: var(--color-bg-raised); }
+.activity-time { color: var(--color-text-secondary); }
+.activity-outcome[data-outcome="ok"] { color: var(--color-text-secondary); }
+.activity-outcome[data-outcome="blocked"] { color: var(--color-status-warning-fg); }
+.activity-outcome[data-outcome="failed"] { color: var(--color-status-danger-fg); }
+/* The frame's "opens" mark; empty alternative text, as the link already says it goes somewhere. */
+.activity-row::after { content: '\203A' / ''; justify-self: end; color: var(--color-text-secondary); }
 /* A box the observer can see, after the last row, with nothing to tab to. */
 .activity-more { block-size: 1px; }

@@ -351,3 +351,27 @@ test('A11 search left mid-wait: the next page keeps its own address, and no list
   expect(await page.evaluate(() => `${location.pathname}${location.search}`)).toBe('/ui/activity/c-1/status');
   expect(urls.length).toBe(before);
 });
+
+test('A12 columns: time, key, tool and outcome each start at the same place on every row', async ({ page }) => {
+  const urls = await install(page, { answer: () => list(ROWS) });
+  await open(page, urls, '/ui/activity/status');
+  await expect.poll(() => shownRows(page)).toHaveLength(5);
+  const cells = await rowLinks(page).evaluateAll((els) => els.map((el) => [...el.children]
+    .map((c) => {
+      const r = c.getBoundingClientRect();
+      return { text: (c.textContent ?? '').trim(), x: Math.round(r.left), mid: Math.round(r.top + r.height / 2) };
+    })));
+  // One element per column, in order, holding exactly the row's words.
+  expect(cells.map((row) => row.map((c) => c.text))).toEqual(SHOWN.map((s) => s.split(' ')));
+  // The keys differ in length (ana, support-agent, deploy-bot, ci): words run
+  // together would start each tool and outcome at a different place.
+  for (let k = 0; k < 4; k += 1) {
+    expect(new Set(cells.map((row) => row[k].x)).size, `column ${k}`).toBe(1);
+  }
+  // Side by side on one line, in column order: cells stacked in one column would
+  // also share a left edge.
+  for (const row of cells) {
+    expect(new Set(row.map((c) => c.mid)).size).toBe(1);
+    for (let k = 1; k < 4; k += 1) expect(row[k].x).toBeGreaterThan(row[k - 1].x);
+  }
+});

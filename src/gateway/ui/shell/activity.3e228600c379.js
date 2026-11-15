@@ -48,11 +48,18 @@ function readFilters() {
   };
 }
 
-/** One row, one link, nothing inside it a keyboard can reach. The key is who.account. */
+/**
+ * One row, one link, nothing inside it a keyboard can reach. The key is who.account.
+ * One cell per column, so the list's grid lines the rows up; the spaces between the
+ * cells keep the link's name one readable line.
+ */
 function rowLink(row) {
-  const a = h('a', { class: 'activity-row', href: `/ui/activity/${encodeURIComponent(row.id)}/status` });
-  a.textContent = `${clock(row.timestamp)} ${text(row.who?.account)} ${text(row.tool)} ${text(row.outcome)}`;
-  return a;
+  const outcome = text(row.outcome);
+  return h('a', { class: 'activity-row', href: `/ui/activity/${encodeURIComponent(row.id)}/status` },
+    h('span', { class: 'activity-time' }, clock(row.timestamp)), ' ',
+    h('span', {}, text(row.who?.account)), ' ',
+    h('span', {}, text(row.tool)), ' ',
+    h('span', { class: 'activity-outcome', 'data-outcome': outcome }, outcome));
 }
 
 async function statusTab(body, ctx) {
