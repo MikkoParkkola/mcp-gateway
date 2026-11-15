@@ -45,7 +45,7 @@
 //! ```compile_fail
 //! use mcp_gateway::mtls::CertIdentity;
 //! fn f(v: CertIdentity) -> CertIdentity {
-//!     CertIdentity { common_name: None, organizational_unit: None, san_uris: Vec::new(), san_dns_names: Vec::new(), display_name: String::new() }
+//!     CertIdentity { common_name: None, organizational_unit: None, san_uris: Vec::new(), san_dns_names: Vec::new(), display_name: String::new(), quota_principal: None }
 //! }
 //! ```
 //!
