@@ -57,19 +57,22 @@ impl Gateway {
         let log = home.join("gateway.log");
         let out = std::fs::File::create(&log).expect("log file");
         let err = out.try_clone().expect("log handle");
-        let child = Command::from(gateway_bin::command(home, gateway_bin::Inherit::Environment))
-            .current_dir(home)
-            .env("MCP_GATEWAY_CONFIG_DIR", home.join("state"))
-            .env("RUST_LOG", "info")
-            .kill_on_drop(true)
-            .arg("serve")
-            .arg("--config")
-            .arg(config)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(out))
-            .stderr(Stdio::from(err))
-            .spawn()
-            .expect("the built mcp-gateway binary spawns");
+        let child = Command::from(gateway_bin::command(
+            home,
+            gateway_bin::Inherit::Environment,
+        ))
+        .current_dir(home)
+        .env("MCP_GATEWAY_CONFIG_DIR", home.join("state"))
+        .env("RUST_LOG", "info")
+        .kill_on_drop(true)
+        .arg("serve")
+        .arg("--config")
+        .arg(config)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(out))
+        .stderr(Stdio::from(err))
+        .spawn()
+        .expect("the built mcp-gateway binary spawns");
         let mut gateway = Self {
             child,
             port: ANY_PORT,
@@ -90,11 +93,7 @@ impl Gateway {
             {
                 return gateway;
             }
-            assert!(
-                Instant::now() < deadline,
-                "no /livez:\n{}",
-                gateway.logs()
-            );
+            assert!(Instant::now() < deadline, "no /livez:\n{}", gateway.logs());
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
