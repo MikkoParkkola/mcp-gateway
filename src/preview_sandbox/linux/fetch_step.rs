@@ -46,6 +46,39 @@ pub(super) fn npm_env(credential: &str, port: u16, path: &str) -> Vec<(String, S
     .collect()
 }
 
+/// The fetch command's two output pipes, each drained on its own thread so a
+/// child writing a lot to one cannot block while the other is read. Joined
+/// only after the sweep, when every holder of either pipe is gone.
+pub(super) struct Drains {
+    out: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+}
+
+/// Start draining `stdout` and `stderr`, each to its last 64 KiB.
+pub(super) fn drain(
+    stdout: std::process::ChildStdout,
+    stderr: std::process::ChildStderr,
+) -> Drains {
+    let out = std::thread::spawn(move || {
+        let (mut stdout, mut stderr) = (stdout, stderr);
+        let _ = crate::preview_sandbox::fetch_output::read_tail(&mut stdout)?;
+        crate::preview_sandbox::fetch_output::read_tail(&mut stderr)
+    });
+    Drains { out }
+}
+
+impl Drains {
+    /// Both tails, stdout's then stderr's; a failed read leaves that tail empty.
+    pub(super) fn join(self) -> (Vec<u8>, Vec<u8>) {
+        let err = self
+            .out
+            .join()
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        (Vec::new(), err)
+    }
+}
+
 #[cfg(test)]
 #[path = "fetch_step_tests.rs"]
 mod tests;
