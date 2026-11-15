@@ -430,43 +430,56 @@ fn an_n_layout_binds_back_only_node_and_npms_package() {
     assert_eq!(exec, PathBuf::from(&cli));
 }
 
-/// R-bind in any layout (lead ruling 11-15), kills "npx's runtime tree is
-/// kept" and "a runtime tree is bound whole": an NVM install shows only
-/// node's real file and npm's package, read-only; the tree npx was bound by
-/// as the program goes first (the fetch never runs npx), so the tree's
-/// global packages and its `etc/npmrc` are not shown. A node outside every
-/// known layout gets the same two binds, and npx's lone-file bind goes.
+/// R-bind in any known layout (lead ruling 11-15), kills "npx's runtime
+/// tree is kept" and "a runtime tree is bound whole": an NVM install shows
+/// only node's real file and npm's package, read-only; the tree npx was
+/// bound by as the program goes first (the fetch never runs npx), so the
+/// tree's global packages and its `etc/npmrc` are not shown. Kills "a layout
+/// outside the known trees is bound" (security seat, r3): a node and an
+/// npm-shaped package anywhere else refuse by name, since a directory named
+/// `node_modules/npm` there proves nothing about what it holds.
 #[test]
 fn any_layout_binds_only_node_and_npms_package() {
     let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
-    for (prefix, npx_bind) in [
-        ("/home/preview-row/.nvm/versions/node/v20.0.0", None),
-        (
-            "/opt/hostedtoolcache/node/20.1.0/x64",
-            Some("lib/node_modules/npm/bin/npx-cli.js"),
-        ),
-    ] {
-        let package = format!("{prefix}/lib/node_modules/npm");
-        let npx = format!("{package}/bin/npx-cli.js");
-        let cli = format!("{package}/bin/npm-cli.js");
-        let node = format!("{prefix}/bin/node");
-        let mut plan = base.clone();
-        // What build_plan bound for npx as the program: its runtime tree,
-        // or its lone real file outside every known tree.
-        plan.read_only
-            .push(npx_bind.map_or_else(|| prefix.to_owned(), |f| format!("{prefix}/{f}")));
-        let exec = place_npm(
-            &mut plan,
-            Path::new(&npx),
-            Path::new(&cli),
-            Path::new(&node),
-        )
-        .expect("placed");
-        let want = [base.read_only.clone(), vec![node, package]].concat();
-        assert_eq!(plan.read_only, want, "{prefix}");
-        assert_eq!(plan.bound_back, base.bound_back, "{prefix}");
-        assert_eq!(exec, PathBuf::from(&cli), "{prefix}");
-    }
+    let tree = "/home/preview-row/.nvm/versions/node/v20.0.0";
+    let package = format!("{tree}/lib/node_modules/npm");
+    let npx = format!("{package}/bin/npx-cli.js");
+    let cli = format!("{package}/bin/npm-cli.js");
+    let node = format!("{tree}/bin/node");
+    let mut plan = base.clone();
+    // What build_plan bound for npx as the program: its runtime tree.
+    plan.read_only.push(tree.to_owned());
+    let exec = place_npm(
+        &mut plan,
+        Path::new(&npx),
+        Path::new(&cli),
+        Path::new(&node),
+    )
+    .expect("an NVM install is placed");
+    assert_eq!(
+        plan.read_only,
+        [base.read_only.clone(), vec![node, package]].concat()
+    );
+    assert_eq!(plan.bound_back, base.bound_back);
+    assert_eq!(exec, PathBuf::from(&cli));
+
+    let tool = "/opt/hostedtoolcache/node/20.1.0/x64";
+    let package = format!("{tool}/lib/node_modules/npm");
+    let npx = format!("{package}/bin/npx-cli.js");
+    let mut plan = base.clone();
+    // npx's lone real file, bound by build_plan outside every known tree.
+    plan.read_only.push(npx.clone());
+    let refused = place_npm(
+        &mut plan,
+        Path::new(&npx),
+        Path::new(&format!("{package}/bin/npm-cli.js")),
+        Path::new(&format!("{tool}/bin/node")),
+    )
+    .expect_err("a layout outside the known trees refuses");
+    assert!(
+        matches!(&refused, Refusal::Step(s) if s.starts_with("placing npm")),
+        "{refused}"
+    );
 }
 
 /// R-bind, kills "a covering bind-back keeps the trees whole": a regular npx
@@ -491,7 +504,7 @@ fn a_covering_usr_local_bind_back_is_replaced_by_the_narrow_binds() {
 
 /// Kills "a directory or a hidden path is taken for node": a node path that
 /// is a directory (shown or not) refuses by name, and so does one under the
-/// gateway's hidden paths.
+/// gateway's hidden paths, or an npm package under a masked secret path.
 #[test]
 fn a_directory_or_hidden_node_refuses() {
     let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
@@ -506,5 +519,32 @@ fn a_directory_or_hidden_node_refuses() {
             "{}: {refused}",
             node.display()
         );
-    }
+    } // An npm-shaped package under a masked secret path is never bound.
+    let secret = Path::new("/etc/ssl/private/node_modules/npm/bin/npm-cli.js");
+    let npx = Path::new("/usr/local/bin/preview-row-npx");
+    let node = Path::new("/usr/local/bin/preview-row-node");
+    let refused = place_npm(&mut base.clone(), npx, secret, node).expect_err("refused");
+    assert!(
+        matches!(&refused, Refusal::Step(s) if s.starts_with("placing npm")),
+        "{refused}"
+    );
+}
+
+/// Kills "a system npm keeps its builtin npmrc readable" (security seat, r3):
+/// npm's builtin `npmrc` is covered whatever its package directory is
+/// called, as for Debian's `/usr/share/nodejs/npm`, which a system root
+/// already shows, so nothing is bound for it.
+#[test]
+fn a_system_npms_builtin_npmrc_is_covered() {
+    let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let root = "/usr/share/preview-row/nodejs/npm";
+    let cli = format!("{root}/bin/npm-cli.js");
+    let npx = Path::new("/usr/bin/preview-row-npx");
+    let node = Path::new("/usr/bin/preview-row-node");
+    let mut plan = base.clone();
+    place_npm(&mut plan, npx, Path::new(&cli), node).expect("a system npm is placed");
+    let npmrc = format!("{root}/npmrc");
+    assert_eq!(plan.masked, [base.masked.clone(), vec![npmrc]].concat());
+    assert_eq!(plan.read_only, base.read_only);
+    assert_eq!(plan.bound_back, base.bound_back);
 }
