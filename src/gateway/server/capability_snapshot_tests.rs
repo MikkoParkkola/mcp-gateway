@@ -3,8 +3,7 @@
 //! S4 on the two startup paths. An unreadable directory, and separately one
 //! unreadable file in a readable directory, make the capability part Partial.
 //!
-//! The snapshot stub is the empty loaded part, so each row fails the Partial
-//! match. The HTTP scan runs in the background: this waits until it reports
+//! The HTTP scan runs in the background: this waits until it reports
 //! complete, yielding, and gives up at 30s. Nothing sleeps.
 
 use std::os::unix::fs::PermissionsExt as _;

@@ -4,8 +4,8 @@
 //! here, never a revision read back from the backend. A step that takes the
 //! catalogue lock is bounded by 30s. Nothing sleeps to open a window.
 //!
-//! The snapshot stub is the empty loaded part, and the capability publish
-//! stores nothing. Each row fails at the assertion named in its message.
+//! The capability publish stores nothing. Rows that read the snapshot name
+//! the assertion in the message.
 
 use std::path::Path;
 use std::sync::Arc;

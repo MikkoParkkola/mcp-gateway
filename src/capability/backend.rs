@@ -68,15 +68,42 @@ struct IndexedCapabilities {
     /// Read yet absent: gate refusals (rebuilt by each reload) and unloads (until admitted).
     refused: std::collections::HashSet<String>,
     unloaded: std::collections::HashSet<String>,
+    /// Directories and files the operation that installed this catalogue
+    /// could not read. Empty means that operation read every configured
+    /// directory and every file in them. The snapshot reads this, not the
+    /// set an operation is still filling.
+    unread: OperationUnread,
+}
+
+/// The unreadable paths of one catalogue operation.
+///
+/// Each operation gets its own. A reload keeps it aside until it installs
+/// the catalogue, then stores it there. A scan stores it on the catalogue
+/// at the start, because that catalogue is the one the scan is installing
+/// and a note arrives after the upsert it belongs to. A later operation
+/// that reads everything stores an empty one, and the part is loaded again.
+#[derive(Clone)]
+struct OperationUnread(Arc<parking_lot::Mutex<Vec<String>>>);
+
+impl Default for OperationUnread {
+    fn default() -> Self {
+        Self(Arc::new(parking_lot::Mutex::new(Vec::new())))
+    }
+}
+
+impl OperationUnread {
+    fn note(&self, path: &str) {
+        self.0.lock().push(path.to_owned());
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.lock().is_empty()
+    }
 }
 
 /// The file one served capability was loaded from, and the digest of the
 /// bytes the parse accepted. The bytes themselves are not kept. `digest` is
 /// absent when this backend was built without a revision key.
-///
-/// The snapshot stub does not read this yet. Install and remove still keep
-/// one slot per served entry, so the later read has the map.
-#[allow(dead_code, reason = "the snapshot stub does not read the source map yet")]
 struct ServedSource {
     /// Configured directory as written, joined with the walk's relative path.
     path: String,
@@ -184,8 +211,9 @@ pub struct DirectoryLoad {
     /// Files in this directory that could not be read or parsed, in walk order.
     ///
     /// The directory itself being unreadable is not here: that is the `Err`
-    /// the load returned. The catalogue does not treat these as a partial
-    /// catalogue; coverage does, once a later slice records them.
+    /// the load returned. The catalogue still serves the files it read. The
+    /// caller records both with [`CapabilityBackend::note_unreadable`], which
+    /// is what makes the served part partial.
     pub unreadable: Vec<String>,
 }
 
@@ -227,6 +255,9 @@ pub struct CapabilityBackend {
     /// that is not the HTTP or stdio startup catalogue: the load still runs,
     /// and the source map then has a path and no digest.
     revision_key: Option<[u8; 32]>,
+    /// The catalogue operation now recording unreadable paths. Not what a
+    /// snapshot reads: that reads the set stored on the catalogue.
+    recording: parking_lot::Mutex<OperationUnread>,
     /// Park, attach and publish share this mutex. The stub records nothing
     /// and delivers nothing. Nothing in production calls it yet.
     #[cfg_attr(
@@ -295,16 +326,22 @@ pub struct RugPullRecord {
 impl CapabilityBackend {
     /// Create a new capability backend
     pub fn new(name: &str, executor: Arc<CapabilityExecutor>) -> Self {
+        // One set, shared, until an operation replaces it. A note before any
+        // operation has started is on the catalogue a snapshot would read.
+        let unread = OperationUnread::default();
+        let mut catalogue = IndexedCapabilities::default();
+        catalogue.unread = unread.clone();
         Self {
             name: name.to_string(),
             executor,
-            capabilities: RwLock::new(IndexedCapabilities::default()),
+            capabilities: RwLock::new(catalogue),
             directories: RwLock::new(Vec::new()),
             rug_pull_state: RwLock::new(HashMap::new()),
             loaded_from: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
             initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
             revision_key: None,
+            recording: parking_lot::Mutex::new(unread),
             handoff: handoff::Handoff::new(),
             operation: tokio::sync::Mutex::new(()),
             #[cfg(test)]
@@ -337,28 +374,60 @@ impl CapabilityBackend {
         }
     }
 
-    /// The capability part for what is installed now.
+    /// The capability part for what is served now.
     ///
-    /// Stub: the empty loaded part. It does not take the catalogue lock and
-    /// does not read the source map. Coverage stays `Loaded` — an unreadable
-    /// directory or file is not `Partial` until a later slice records it.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "production call sites are a later slice; the tests are the caller until then"
-        )
-    )]
+    /// Under the catalogue read lock: one `(path, digest)` per served entry
+    /// that has a file, both files when two directories hold one name, and
+    /// nothing for an entry registered without a file. A source with no
+    /// digest was loaded on a backend with no revision key, so it has no
+    /// pair to contribute. Refused and rug-pulled capabilities are absent
+    /// because their slots are gone. `Partial` when the operation that
+    /// installed this catalogue left a path unread; the entries are the same
+    /// either way.
     pub(crate) fn capability_snapshot(&self) -> CapabilityPart<PartDigest> {
-        CapabilityPart::Loaded(Vec::new())
+        let caps = self.capabilities.read();
+        let mut entries = Vec::new();
+        for source in caps.sources.iter().flatten() {
+            let Some(digest) = source.digest else {
+                continue;
+            };
+            entries.push((source.path.clone(), digest));
+        }
+        // After the entries, so a note that lands during this read counts.
+        // The catalogue lock is still held: the entries and this set are one
+        // catalogue, not a later operation's.
+        let partial = !caps.unread.is_empty();
+        drop(caps);
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        if partial {
+            CapabilityPart::Partial(entries)
+        } else {
+            CapabilityPart::Loaded(entries)
+        }
     }
 
     /// A configured directory, or a file in a readable directory, could not
-    /// be read. The operation calls this so coverage can become `Partial`.
-    ///
-    /// Stub: the path is dropped. The snapshot stays `Loaded`.
+    /// be read. Recorded on the operation in progress, which is the set a
+    /// snapshot reads only once that operation has stored it on the catalogue.
     pub(crate) fn note_unreadable(&self, path: &str) {
-        let _ = path;
+        self.recording.lock().note(path);
+    }
+
+    /// The HTTP scan or the stdio startup is starting. Its catalogue is the
+    /// one it is about to install, so the unreadable set starts empty and
+    /// notes land on it. A reload does not use this: clearing here would
+    /// relabel the catalogue still being served.
+    pub(crate) fn begin_incremental_coverage(&self) {
+        let unread = OperationUnread::default();
+        let mut caps = self.capabilities.write();
+        caps.unread = unread.clone();
+        *self.recording.lock() = unread;
+    }
+
+    /// A reload is starting. Its notes stay off the catalogue until install
+    /// stores them with the entries it writes.
+    fn begin_reload_coverage(&self) {
+        *self.recording.lock() = OperationUnread::default();
     }
 
     /// The handoff to the live config. One per backend.
@@ -615,6 +684,10 @@ impl CapabilityBackend {
             return Ok(0);
         }
 
+        // Before any note, so this reload's set is not the one still stored
+        // on the catalogue. Install below is what stores it.
+        self.begin_reload_coverage();
+
         let mut loaded_files = Vec::new();
         let mut total = 0;
         // A directory that could not be read leaves the catalogue partial:
@@ -694,6 +767,9 @@ impl CapabilityBackend {
             super::op_gate::reach(super::op_gate::Step::Swap);
             caps.install(admitted);
             caps.settle_absent(refused);
+            // With the entries, under the same lock: the part names this
+            // catalogue and the coverage of the operation that wrote it.
+            caps.unread = self.recording.lock().clone();
             // With the swap, under the same lock: `catalogue_snapshot` never
             // sees one without the other.
             self.set_catalogue_partial(partial);

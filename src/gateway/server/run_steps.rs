@@ -108,6 +108,9 @@ impl Gateway {
                 // INITIAL scan. A missing or unreadable optional directory is
                 // NOT collected here — that stays benign, exactly as before.
                 let mut refused: Vec<String> = Vec::new();
+                // Before any directory is read: this scan's unreadable set
+                // starts empty and is the one its catalogue carries.
+                cap_backend_for_load.begin_incremental_coverage();
                 for dir in &capability_dirs {
                     match cap_backend_for_load
                         .load_from_directory_reporting(dir)

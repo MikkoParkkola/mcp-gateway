@@ -56,6 +56,9 @@ impl Gateway {
             // fails is still checked for pin mismatches below.
             cap_backend.register_directories(&self.config.capabilities.directories);
             let mut refused = Vec::new();
+            // Before any directory is read: this startup's unreadable set
+            // starts empty and is the one its catalogue carries.
+            cap_backend.begin_incremental_coverage();
             for dir in &self.config.capabilities.directories {
                 match cap_backend.load_from_directory_reporting(dir).await {
                     Ok(report) => {
