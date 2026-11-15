@@ -339,7 +339,7 @@ fn stop_all(children: Vec<Child>, end: ChildEnd) {
         match end {
             ChildEnd::Graceful => child
                 .backend
-                .hand_over_now(child.backend.budgets.close_stage),
+                .hand_over_now(tokio::time::Instant::now() + child.backend.budgets.close_stage),
             ChildEnd::Now => child.backend.retire_now(),
         }
         let Some(handle) = child.runtime.clone().or_else(|| current.clone()) else {

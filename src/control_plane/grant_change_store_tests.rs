@@ -8,7 +8,7 @@ use std::sync::Arc;
 use super::store::{AuditFilter, ControlPlaneStore, FileControlPlaneStore};
 use super::{
     ControlPlaneAction, ControlPlaneAuditEvent, ControlPlaneRollbackPlan, GrantChangeRecord,
-    GrantChangeVerb,
+    GrantChangeVerb, UiDecisionEntry, UiDecisionKind, UiDecisionRecord,
 };
 
 fn event(id: &str, change: Option<GrantChangeRecord>) -> ControlPlaneAuditEvent {
@@ -23,6 +23,7 @@ fn event(id: &str, change: Option<GrantChangeRecord>) -> ControlPlaneAuditEvent 
             step: "none".to_string(),
         },
         grant_change: change,
+        ui_decision: None,
     }
 }
 
@@ -66,4 +67,111 @@ fn t11_grant_change_round_trips_through_the_file_store() {
     let log = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
     let e2 = log.lines().find(|l| l.contains("\"e2\"")).unwrap();
     assert!(!e2.contains("grant_change"), "{e2}");
+}
+
+/// A UI decision survives a durable write and read back, and its record is
+/// a plain audit record plus one `ui_decision` key: an older gateway, which
+/// reads a record by its keys, reads the same event it always did.
+#[test]
+fn a_ui_decision_round_trips_and_only_adds_its_own_key() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let s = store(dir.path());
+    let decision = UiDecisionRecord {
+        authority: "https://idp.example".to_string(),
+        subject: "alice".to_string(),
+        agent: "mtls:runner".to_string(),
+        scope_digest: "a".repeat(64),
+        entries: vec![UiDecisionEntry {
+            capability: "stripe.charges".to_string(),
+            positions: vec![("h1".to_string(), 7)],
+        }],
+        decision: None,
+        rows: Vec::new(),
+        expires_at: None,
+    };
+    let mut decided = event("d1", None);
+    decided.ui_decision = Some(decision.clone());
+    s.append_audit(&decided).unwrap();
+    s.append_audit(&event("d2", None)).unwrap();
+
+    let page = s.read_audit(&AuditFilter::new(10)).unwrap();
+    let by_id = |id: &str| {
+        page.events
+            .iter()
+            .find(|e| e.event_id == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(by_id("d1").ui_decision, Some(decision));
+    assert_eq!(by_id("d2").ui_decision, None);
+
+    let log = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+    let record = |id: &str| -> serde_json::Map<String, serde_json::Value> {
+        let line = log
+            .lines()
+            .find(|l| l.contains(&format!("\"{id}\"")))
+            .unwrap();
+        serde_json::from_str(line).unwrap()
+    };
+    let (mut with, plain) = (record("d1"), record("d2"));
+    assert!(with.remove("ui_decision").is_some());
+    let keys =
+        |m: &serde_json::Map<String, serde_json::Value>| m.keys().cloned().collect::<Vec<_>>();
+    assert_eq!(
+        keys(&with),
+        keys(&plain),
+        "nothing but ui_decision is added"
+    );
+    for key in [
+        "kind",
+        "actor_id",
+        "action",
+        "target_id",
+        "reason",
+        "rollback_summary",
+        "rollback_step",
+    ] {
+        assert_eq!(with[key], plain[key], "{key}");
+    }
+}
+
+/// An accept's record: the decision, its rows and the expiry.
+fn accept() -> UiDecisionRecord {
+    UiDecisionRecord {
+        authority: "https://idp.example".to_string(),
+        subject: "alice".to_string(),
+        agent: "mtls:runner".to_string(),
+        scope_digest: "a".repeat(64),
+        entries: vec![UiDecisionEntry {
+            capability: "stripe.charges".to_string(),
+            positions: vec![("h1".to_string(), 7)],
+        }],
+        decision: Some(UiDecisionKind::Accept),
+        rows: vec![("row-1".to_string(), "sha256:ab".to_string())],
+        expires_at: Some(chrono::DateTime::from_timestamp(3_600, 0).expect("a time")),
+    }
+}
+
+/// R2, R4: an accept's record keeps its decision, rows and expiry through the
+/// file store, and the same accept appended twice (a retry) reads back as
+/// two records with one event id and one payload through the filtered,
+/// newest-first read.
+#[test]
+fn an_accept_record_round_trips_and_a_retry_reads_back_twice() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let s = store(dir.path());
+    let mut accepted = event("a1", None);
+    accepted.ui_decision = Some(accept());
+    s.append_audit(&accepted).unwrap();
+    s.append_audit(&event("other", None)).unwrap();
+    s.append_audit(&accepted).unwrap();
+
+    let mut filter = AuditFilter::new(10);
+    filter.action = Some(ControlPlaneAction::MutateGrant);
+    let page = s.read_audit(&filter).unwrap();
+    let mine: Vec<_> = page.events.iter().filter(|e| e.event_id == "a1").collect();
+    assert_eq!(mine.len(), 2, "{:?}", page.events);
+    for read in mine {
+        assert_eq!(read.ui_decision, Some(accept()));
+    }
 }

@@ -25,6 +25,18 @@ use runtime::RuntimeShutdown;
 /// installs tracing globally and creates its own Tokio runtime; never call it
 /// twice or from inside a Tokio runtime.
 pub fn run(args: Cli) -> ExitCode {
+    // First, before tracing or any runtime: the invocation a restart would
+    // re-exec. It never stops startup.
+    crate::restart::invocation::capture_and_install(
+        crate::restart::invocation::CaptureInputs {
+            args: std::env::args_os().collect(),
+            cwd: std::env::current_dir(),
+            path_env: std::env::var_os("PATH"),
+            #[cfg(unix)]
+            mask: crate::restart::invocation::current_thread_mask(),
+        },
+        &args,
+    );
     // Bound outside the runtime, so the log flush runs after the runtime's
     // own shutdown and keeps what that shutdown logs.
     let _flush_logs = match setup_tracing(&args.log_level, args.log_format.as_deref()) {
@@ -320,6 +332,18 @@ async fn dispatch(cli: Cli) -> ExitCode {
             data_dir.as_deref(),
             cli.config.as_deref(),
         ),
+        #[cfg(feature = "webui")]
+        Some(Command::Audit(mcp_gateway::cli::AuditCommand::LookupEmail(args))) => {
+            let load = || Config::load(config_path.as_deref()).map_err(|e| e.to_string());
+            commands::run_audit_lookup_command(args, load, port_override, host_override.as_deref())
+                .await
+        }
+        // The route it calls exists only with the web UI.
+        #[cfg(not(feature = "webui"))]
+        Some(Command::Audit(mcp_gateway::cli::AuditCommand::LookupEmail(_))) => {
+            eprintln!("audit lookup-email: this build has no web UI (cargo feature `webui`)");
+            ExitCode::FAILURE
+        }
         Some(Command::Audit(audit_cmd)) => {
             commands::run_audit_command(audit_cmd, cli.config.as_deref())
         }

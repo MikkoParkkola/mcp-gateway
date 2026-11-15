@@ -29,7 +29,7 @@ fn set(hook: &'static std::thread::LocalKey<HookSlot>, f: impl FnOnce() + 'stati
 /// A live writer holds the lease; the readers never need it.
 #[test]
 fn readers_work_beside_a_live_leased_writer() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     session_entry(&l, 0);
@@ -43,7 +43,7 @@ fn readers_work_beside_a_live_leased_writer() {
 /// rescan, then the whole result.
 #[test]
 fn show_rescans_once_when_a_listed_file_vanishes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     session_entry(&l, 0);
@@ -68,7 +68,7 @@ fn show_rescans_once_when_a_listed_file_vanishes() {
 /// A rotation under the reader on both passes: a busy log, not a result.
 #[test]
 fn show_reports_busy_when_the_log_changes_twice() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     session_entry(&l, 0);
@@ -88,7 +88,7 @@ fn show_reports_busy_when_the_log_changes_twice() {
 /// Growth alone (an append during the read): no rescan.
 #[test]
 fn show_does_not_rescan_for_growth() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     session_entry(&l, 0);

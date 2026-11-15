@@ -67,8 +67,12 @@ pub(crate) fn within_stop_deadline<F: std::future::Future>(
 pub(crate) struct StopDeadline {
     /// Keep a useful SIGTERM phase even after hurry setup consumes a few ms.
     hurried: std::sync::atomic::AtomicBool,
-    /// Nanoseconds after [`STOP_EPOCH`]; `u64::MAX` while unset.
-    at: std::sync::atomic::AtomicU64,
+    /// The deadline and when it was last moved earlier, as one pair:
+    /// nanoseconds after [`STOP_EPOCH`], `u64::MAX` while unset. A SIGTERM a
+    /// tree's plan had due before the set-time is still owed, so the two are
+    /// written and read together, never one without the other. A leaf lock:
+    /// held only to read or write the pair, never while taking another lock.
+    cut: parking_lot::Mutex<(u64, u64)>,
     /// Every graceful handover under this deadline, so the stop can wait for
     /// their kills before it returns; finished ones are pruned on each add.
     handed: parking_lot::Mutex<Vec<watch::Receiver<Reaped>>>,
@@ -81,7 +85,7 @@ impl Default for StopDeadline {
     fn default() -> Self {
         Self {
             hurried: std::sync::atomic::AtomicBool::new(false),
-            at: std::sync::atomic::AtomicU64::new(u64::MAX),
+            cut: parking_lot::Mutex::new((u64::MAX, u64::MAX)),
             handed: parking_lot::Mutex::default(),
         }
     }
@@ -117,8 +121,13 @@ impl StopDeadline {
     pub(crate) fn move_earlier(&self, deadline: Instant) {
         let nanos = deadline.saturating_duration_since(*STOP_EPOCH).as_nanos();
         let nanos = u64::try_from(nanos).unwrap_or(u64::MAX - 1);
-        self.at
-            .fetch_min(nanos, std::sync::atomic::Ordering::SeqCst);
+        let mut cut = self.cut.lock();
+        if nanos < cut.0 {
+            let set = Instant::now()
+                .saturating_duration_since(*STOP_EPOCH)
+                .as_nanos();
+            *cut = (nanos, u64::try_from(set).unwrap_or(u64::MAX - 1));
+        }
     }
 
     /// Track a graceful handover, so [`Self::wait_handed`] covers it.
@@ -144,9 +153,17 @@ impl StopDeadline {
 
     /// The deadline, once set.
     pub(crate) fn get(&self) -> Option<Instant> {
-        match self.at.load(std::sync::atomic::Ordering::SeqCst) {
-            u64::MAX => None,
-            nanos => Some(*STOP_EPOCH + Duration::from_nanos(nanos)),
+        self.get_with_set_at().map(|(at, _)| at)
+    }
+
+    /// The deadline, once set, and when it was last moved earlier.
+    pub(super) fn get_with_set_at(&self) -> Option<(Instant, Instant)> {
+        match *self.cut.lock() {
+            (u64::MAX, _) => None,
+            (at, set) => Some((
+                *STOP_EPOCH + Duration::from_nanos(at),
+                *STOP_EPOCH + Duration::from_nanos(set),
+            )),
         }
     }
 }
@@ -603,25 +620,36 @@ impl super::StdioTransport {
         super::tree::clear_writer(&self.writer).await;
     }
 
-    /// Test seam (MIK-7923 coverage): a retire that lands in `start` between
-    /// the spawn and the install, as one from another thread can. Fires only
-    /// for the transport armed by [`Self::retire_after_spawn_for_test`].
+    /// Test seam: a retire or a graceful
+    /// handover that lands in `start` between the spawn and the install, as
+    /// one from another thread can. Fires only for the transport armed by
+    /// [`Self::retire_after_spawn_for_test`] or
+    /// [`Self::hand_over_after_spawn_for_test`].
     #[cfg(all(test, unix))]
     pub(super) fn after_spawn_for_test(&self) {
-        let mut armed = RETIRE_AFTER_SPAWN.lock();
-        if armed
-            .as_ref()
-            .is_some_and(|it| std::ptr::eq(it.as_ptr(), self))
-        {
-            *armed = None;
-            drop(armed);
-            self.retire_tree_now();
+        let mut armed = AFTER_SPAWN.lock();
+        let Some(at) = armed
+            .iter()
+            .position(|(it, _)| std::ptr::eq(it.as_ptr(), self))
+        else {
+            return;
+        };
+        let (_, action) = armed.swap_remove(at);
+        drop(armed);
+        match action {
+            AfterSpawn::Retire => self.retire_tree_now(),
+            AfterSpawn::HandOver(budget) => self.hand_over_gracefully_now(budget),
         }
     }
 
     #[cfg(all(test, unix))]
     pub(super) fn retire_after_spawn_for_test(self: &std::sync::Arc<Self>) {
-        *RETIRE_AFTER_SPAWN.lock() = Some(std::sync::Arc::downgrade(self));
+        arm_after_spawn(self, AfterSpawn::Retire);
+    }
+
+    #[cfg(all(test, unix))]
+    pub(super) fn hand_over_after_spawn_for_test(self: &std::sync::Arc<Self>, budget: Duration) {
+        arm_after_spawn(self, AfterSpawn::HandOver(budget));
     }
 
     /// End this transport's tree now, synchronously and without a runtime
@@ -645,9 +673,32 @@ impl super::StdioTransport {
     }
 }
 
+/// What the after-spawn seam does to the transport it is armed for.
 #[cfg(all(test, unix))]
-static RETIRE_AFTER_SPAWN: parking_lot::Mutex<Option<std::sync::Weak<super::StdioTransport>>> =
-    parking_lot::Mutex::new(None);
+#[derive(Clone, Copy)]
+enum AfterSpawn {
+    /// Retire its tree at once.
+    Retire,
+    /// Hand its tree over gracefully, the plan fitted to the budget.
+    HandOver(Duration),
+}
+
+#[cfg(all(test, unix))]
+/// Every transport the after-spawn seam is armed for, one entry each, so seam
+/// rows running at the same time never overwrite each other's arming.
+static AFTER_SPAWN: parking_lot::Mutex<Vec<(std::sync::Weak<super::StdioTransport>, AfterSpawn)>> =
+    parking_lot::Mutex::new(Vec::new());
+
+/// Arm the after-spawn seam for `transport`, replacing its own earlier arming
+/// and dropping entries whose transport is gone.
+#[cfg(all(test, unix))]
+fn arm_after_spawn(transport: &std::sync::Arc<super::StdioTransport>, action: AfterSpawn) {
+    let mut armed = AFTER_SPAWN.lock();
+    armed.retain(|(it, _)| {
+        it.strong_count() > 0 && !std::ptr::eq(it.as_ptr(), std::sync::Arc::as_ptr(transport))
+    });
+    armed.push((std::sync::Arc::downgrade(transport), action));
+}
 
 #[cfg(test)]
 mod start_tests {

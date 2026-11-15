@@ -14,6 +14,10 @@ use crate::security::transparency_log::identity::LogId;
 /// The only frame version this build writes and reads.
 const VERSION: u32 = 1;
 
+/// The largest abandoned file a handover may write, a drain may read or rewrite: four journals.
+/// ponytail: a fixed multiple; a handover admits a donor only if its completed form fits.
+pub(crate) const MAX_ABANDONED_BYTES: usize = 4 * MAX_JOURNAL_BYTES;
+
 /// The JSON a frame carries. Fields are plain so serde does the validation the journal
 /// already does for a record (role, attribution through the persisted-principal decoder).
 #[derive(Serialize, Deserialize)]

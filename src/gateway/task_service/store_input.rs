@@ -355,8 +355,11 @@ impl TaskStore {
     /// # Errors
     /// `RevisionConflict` when the row moved; `InvalidTransition` when no
     /// round is open.
-    pub(crate) async fn close_round(
+    /// The caller names its class: the expiry sweep is Sweep, the input-round
+    /// paths Internal.
+    pub(crate) async fn close_round_as(
         &self,
+        kind: super::gate::Kind,
         owner: &str,
         id: &str,
         revision: u64,
@@ -365,11 +368,11 @@ impl TaskStore {
     ) -> Result<CommittedTask, StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(kind, move || {
             shared.close_round_blocking(&owner, &id, revision, reason, at)
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 
     /// Commit `input_required` together with the round's continuation.
@@ -399,11 +402,11 @@ impl TaskStore {
         );
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(super::gate::Kind::Internal, move || {
             shared.require_input_blocking(&owner, &id, revision, (requested, round, holds), at)
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 
     /// Accept answers for an open round, all or nothing.
@@ -421,11 +424,11 @@ impl TaskStore {
     ) -> Result<ProvideOutcome, StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || {
+        self.admitted(super::gate::Kind::External, move || {
             shared.provide_input_blocking(&owner, &id, answers, reserve, at)
         })
         .await
-        .map_err(|_| StoreError::Storage)?
+        .map_err(StoreError::from)?
     }
 
     /// Every open round closed at `now`, by its continuation deadline or its

@@ -282,6 +282,7 @@ pub(super) fn resolve_decision_core(
     // RBAC's 403 rather than the 409 below.
     let event = ControlPlaneAuditEvent {
         grant_change: None,
+        ui_decision: None,
         event_id: PREFLIGHT_EVENT_ID.to_string(),
         actor_id: actor.actor_id.clone(),
         action,
@@ -388,6 +389,7 @@ pub(super) fn apply_mutation(
 
     let event = ControlPlaneAuditEvent {
         grant_change: None,
+        ui_decision: None,
         event_id: PREFLIGHT_EVENT_ID.to_string(),
         actor_id: actor.actor_id.clone(),
         action,

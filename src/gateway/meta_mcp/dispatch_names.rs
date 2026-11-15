@@ -84,6 +84,43 @@ impl MetaArm {
     }
 }
 
+/// How a meta-tool counts toward the recent-write sample.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ArmWrites {
+    /// Counted per leaf dispatch it makes, never at the arm.
+    Leaves,
+    /// Reads only: never counted.
+    Read,
+    /// Counted once at the arm's entry, as undeclared.
+    Write,
+}
+
+impl MetaArm {
+    /// How this meta-tool counts. Exhaustive, so a new meta-tool does not
+    /// compile until it is classed.
+    pub(super) const fn writes(self) -> ArmWrites {
+        match self {
+            Self::Invoke | Self::Execute | Self::RunPlaybook => ArmWrites::Leaves,
+            Self::Search
+            | Self::ListServers
+            | Self::ListTools
+            | Self::SearchTools
+            | Self::GetStats
+            | Self::CostReport
+            | Self::WebhookStatus
+            | Self::ListDisabledCapabilities
+            | Self::GetProfile
+            | Self::ListProfiles => ArmWrites::Read,
+            Self::KillServer
+            | Self::ReviveServer
+            | Self::SetProfile
+            | Self::SetState
+            | Self::ReloadConfig
+            | Self::ReloadCapabilities => ArmWrites::Write,
+        }
+    }
+}
+
 /// Whether `tool_name` names a composite meta-tool (`gateway_execute`,
 /// `gateway_run_playbook`); `false` for any other name.
 pub(crate) fn is_composite_meta_tool(tool_name: &str) -> bool {

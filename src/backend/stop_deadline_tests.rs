@@ -110,11 +110,13 @@ async fn a_gateway_stop_waits_for_an_idle_released_child_to_be_killed() {
     let pid = leader_pid(dir.path());
 
     // Let go while idle, with a long plan of its own.
-    child.hand_over_now(Duration::from_secs(120));
+    child.hand_over_now(tokio::time::Instant::now() + Duration::from_secs(120));
     let stop_by = tokio::time::Instant::now()
         + crate::transport::KILL_RESERVE_FOR_TEST
         + Duration::from_secs(2);
-    registry.stop_all_by(stop_by).await;
+    registry
+        .stop_all_by(stop_by, crate::backend::Handover::WhenHurried)
+        .await;
 
     assert_ne!(
         kernel_view(pid),
@@ -140,11 +142,17 @@ async fn a_restart_of_a_backend_that_ignores_every_signal_completes_in_bound() {
         .await
         .expect("the restart completes within its bound");
     assert!(restarted.is_ok(), "the restart failed: {restarted:?}");
-    assert_ne!(
-        kernel_view(old),
-        Some(false),
-        "the old backend still runs after the restart"
-    );
+    // The old close is hard-limited: on a loaded host the limit can end it
+    // with the old tree handed to the reaper, killed a moment after the
+    // restart returns. What the row guards is an old backend left running.
+    let by = std::time::Instant::now() + Duration::from_secs(30);
+    while kernel_view(old) == Some(false) {
+        assert!(
+            std::time::Instant::now() < by,
+            "the old backend still runs 30 s after the restart"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     backend.stop().await.expect("stop");
 }
 
@@ -164,7 +172,12 @@ async fn a_stop_stuck_on_a_lifecycle_lock_ends_at_its_deadline() {
     // lifecycle budget (15 s) for it.
     let _held = backend.lifecycle.write().await;
     let started = tokio::time::Instant::now();
-    registry.stop_all_by(started + Duration::from_secs(1)).await;
+    registry
+        .stop_all_by(
+            started + Duration::from_secs(1),
+            crate::backend::Handover::WhenHurried,
+        )
+        .await;
     assert!(
         started.elapsed() < Duration::from_secs(10),
         "the stop outran its deadline: {:?}",
@@ -210,16 +223,19 @@ async fn a_hurried_stop_hands_a_lock_held_backends_live_tree_to_the_reaper_at_on
     // RetireOnDrop sweep after `cut` kills the tree. It must go within the watchdog
     // (how fast the reaper kills it is the transport's hurry rows' to pin).
     let ((), handed) = tokio::time::timeout(Duration::from_secs(30), async {
-        tokio::join!(registry.stop_all_by(cut), async {
-            // One yield lets the stop take its first step, where a hurried
-            // stop hands every live tree over before it waits on the lock.
-            tokio::task::yield_now().await;
-            let handed = registry.stop_deadline().handed_len();
-            while kernel_view(pid) == Some(false) {
-                tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::join!(
+            registry.stop_all_by(cut, crate::backend::Handover::WhenHurried),
+            async {
+                // One yield lets the stop take its first step, where a hurried
+                // stop hands every live tree over before it waits on the lock.
+                tokio::task::yield_now().await;
+                let handed = registry.stop_deadline().handed_len();
+                while kernel_view(pid) == Some(false) {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                handed
             }
-            handed
-        })
+        )
     })
     .await
     .expect("the hurried stop completes and its tree goes within the watchdog");
@@ -242,8 +258,10 @@ async fn a_handover_after_the_gateway_stop_returns_is_killed_at_once() {
     let pid = leader_pid(dir.path());
     // Nothing registered: the stop returns at once, its deadline far off.
     let far = tokio::time::Instant::now() + Duration::from_secs(60);
-    registry.stop_all_by(far).await;
-    child.hand_over_now(Duration::from_secs(120));
+    registry
+        .stop_all_by(far, crate::backend::Handover::WhenHurried)
+        .await;
+    child.hand_over_now(tokio::time::Instant::now() + Duration::from_secs(120));
     let by = std::time::Instant::now() + Duration::from_secs(10);
     while kernel_view(pid) == Some(false) {
         assert!(
@@ -281,7 +299,10 @@ async fn a_backend_registered_as_the_stop_starts_is_refused_or_retired() {
         *seen.lock().expect("lock") = Some(by_registry.register(late));
     });
     registry
-        .stop_all_by(tokio::time::Instant::now() + Duration::from_secs(1))
+        .stop_all_by(
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            crate::backend::Handover::WhenHurried,
+        )
         .await;
     let registered = registered
         .lock()
@@ -298,3 +319,6 @@ async fn a_backend_registered_as_the_stop_starts_is_refused_or_retired() {
         }
     }
 }
+
+#[path = "stop_deadline_early_tests.rs"]
+mod early;

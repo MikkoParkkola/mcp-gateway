@@ -189,3 +189,48 @@ fn a_hurried_close_keeps_term_after_setup_latency() {
     deadline.move_earlier(now + KILL_RESERVE);
     assert_eq!(deadline.hurry(now), now + KILL_RESERVE);
 }
+
+/// A cut records when it was made, as one pair with the deadline: a later
+/// deadline moves neither, an earlier one moves both.
+#[test]
+fn a_cut_records_when_it_was_made_and_a_later_one_moves_nothing() {
+    let deadline = super::StopDeadline::default();
+    assert_eq!(deadline.get_with_set_at(), None, "unset until a stop");
+    let now = std::time::Instant::now();
+    deadline.move_earlier(now + Duration::from_secs(60));
+    let (at, set) = deadline.get_with_set_at().expect("the cut is set");
+    assert_eq!(at, now + Duration::from_secs(60));
+    assert!(set >= now, "the set-time is when the move ran");
+    deadline.move_earlier(now + Duration::from_secs(90));
+    assert_eq!(
+        deadline.get_with_set_at(),
+        Some((at, set)),
+        "a later deadline moves neither the cut nor its set-time"
+    );
+    deadline.move_earlier(now + Duration::from_secs(30));
+    let (earlier, reset) = deadline.get_with_set_at().expect("the cut is set");
+    assert_eq!(earlier, now + Duration::from_secs(30));
+    assert!(reset >= set, "an earlier cut records its own set-time");
+}
+
+/// R4 (HANDOVER.4): a tree handed over at the HTTP backend stage's
+/// entry, with the stage's deadline set but not hurried, keeps every
+/// millisecond past the one kill reserve for its EOF and SIGTERM waits. Red
+/// if the reserve is taken twice (once by the caller, once here): the waits
+/// then vanish and the plan is an immediate kill.
+#[test]
+fn a_backend_stage_budget_keeps_its_eof_and_term_phases() {
+    let waits = Duration::from_millis(400);
+    let deadline = super::StopDeadline::default();
+    deadline.move_earlier(std::time::Instant::now() + KILL_RESERVE + waits);
+    let ending = graceful_ending(KILL_RESERVE + waits, true, Some(&deadline));
+    assert!(
+        matches!(ending, Ending::Graceful { .. }),
+        "a backend-stage budget lost its graceful plan: {ending:?}"
+    );
+    assert_eq!(
+        ending.waits(),
+        waits,
+        "the plan's EOF and SIGTERM waits are not the budget less one kill reserve"
+    );
+}

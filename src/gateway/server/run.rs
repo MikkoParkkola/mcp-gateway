@@ -53,6 +53,11 @@ impl Gateway {
         // Taken first, so the uptime the web UI reports counts from the start
         // of this call, not from the first request it serves.
         let started = ProcessStart::now();
+        // Any exit, an early error or a cancelled call included, hands the
+        // custody store to a release thread before `self` drops here.
+        let _custody_release = self
+            .account_custody()
+            .map(crate::personal_accounts::GatewayCustody::detach_on_drop);
         start_checks::http(&self.config)?;
         let addr = SocketAddr::new(
             self.config
@@ -108,13 +113,6 @@ impl Gateway {
         // served; it never stops the start.
         let (health, health_saver) =
             health_wiring::start(&data_dir, &counters, shutdown_tx.subscribe());
-        // The web UI's open decisions: built, replayed and kept current here.
-        #[cfg(feature = "webui")]
-        let _decisions = crate::gateway::ui::decisions::start(
-            &meta_mcp,
-            self.config_path.clone(),
-            shutdown_tx.subscribe(),
-        );
         // F24: this mode delivers tools/list_changed, so it may advertise it.
         meta_mcp.set_change_feed(crate::gateway::ChangeFeed::Http);
         let (tools_changed_tx, tools_changed_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -208,6 +206,15 @@ impl Gateway {
         let opened_store = build_control_plane_store_with_log(&self.config, &control_plane_base)?;
         let governance_log = opened_store.as_ref().map(|o| Arc::clone(&o.governance_log));
         let control_plane_store = opened_store.map(|o| o.store);
+        // The web UI's open decisions: built, replayed and kept current here,
+        // once the store whose governance audit holds the UI decisions is open.
+        #[cfg(feature = "webui")]
+        let _decisions = crate::gateway::ui::decisions::start(
+            &meta_mcp,
+            self.config_path.clone(),
+            shutdown_tx.subscribe(),
+            control_plane_store.clone(),
+        );
         let (identity_grant_sink, grants_read) = identity_grants::start_identity_grant_audit(
             &self.config,
             &meta_mcp,
@@ -745,7 +752,10 @@ impl Gateway {
         // Not covered by gateway_bootstrap_tests — no test drives `run`.
         budget
             .stage("account custody shutdown", total, async {
-                if let Err(e) = self.shutdown_account_custody().await {
+                if let Err(e) = self
+                    .shutdown_account_custody_by(budget.post_listener_end())
+                    .await
+                {
                     warn!(error = %e, "Personal account custody shutdown failed");
                 }
             })
@@ -766,7 +776,13 @@ impl Gateway {
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
-        self.backends.stop_all_by(stop_deadline).await;
+        self.backends
+            .stop_all_by(stop_deadline, crate::backend::Handover::AtEntry)
+            .await;
+
+        // Whatever the custody stage did not release (it was skipped or cut):
+        // never drop the store on this thread when `self` drops.
+        self.detach_custody_release();
 
         Ok(())
     }

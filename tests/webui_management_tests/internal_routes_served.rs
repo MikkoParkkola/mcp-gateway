@@ -20,8 +20,11 @@ const CAPABILITIES: &str = "tests/webui_management_tests/capabilities.rs";
 const UI_TOOL_CALL: &str = "src/gateway/router/ui_tool_call_tests.rs";
 const ADOPT_ROUTE: &str = "tests/discovery_adopt_route.rs";
 const SETTINGS_ROUTES: &str = "src/gateway/ui/settings_route_tests.rs";
+const UNUSED_ROUTES: &str = "src/gateway/ui/settings_unused_tests.rs";
 const KEY_CREATE: &str = "src/gateway/ui/keys_create_tests.rs";
 const DECISIONS_ROUTE: &str = "src/gateway/ui/decisions_tests.rs";
+/// The resolve route's rows, in their own file under the decisions tests.
+const DECISIONS_RESOLVE: &str = "src/gateway/ui/decisions_resolve_tests.rs";
 const SIGN_IN: &str = "src/gateway/ui/backends/signin_tests.rs";
 const DISCOVERY_WIRING: &str = "src/gateway/ui/discovery_wiring_tests.rs";
 const CP_WRITES: &[Citation] = &[(
@@ -108,7 +111,7 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         "/ui/api/decisions/{id}/resolve",
         Method::POST,
         &[(
-            DECISIONS_ROUTE,
+            DECISIONS_RESOLVE,
             "resolve_answers_one_status_per_state_and_writes_nothing",
         )],
     ),
@@ -173,6 +176,20 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         "/ui/api/settings/diff",
         Method::POST,
         &[(SETTINGS_ROUTES, "s1_budget_diff")],
+    ),
+    // The table's gateway has no reload context, so its admin answer is 503;
+    // this test lists from a gateway with one and pins the served listing.
+    (
+        "/ui/api/settings/secrets/unused",
+        Method::GET,
+        &[(UNUSED_ROUTES, "unused_listed_with_write_time")],
+    ),
+    // The table sends no `store` query, so its admin answer is 400; this test
+    // names an unused files entry and pins the served delete.
+    (
+        "/ui/api/settings/secrets/unused/{name}",
+        Method::DELETE,
+        &[(UNUSED_ROUTES, "delete_route_removes_entry")],
     ),
     // The table sends no body, so its admin answer is 400; this test sends a
     // call and pins the served 200 with the tool's result and its receipt.
