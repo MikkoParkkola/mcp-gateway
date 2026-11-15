@@ -86,7 +86,10 @@ let catalogueQueued = false;
 // Set when the catalogue is opened from the Status search: the catalogue then
 // takes the focus, so the keys typed after the first land in its search box.
 let focusCatalogueSearch = false;
-function queueCatalogue(from) {
+// The tools the panel just read, handed to the catalogue it opens: drawn at once, with
+// no second read for typed keys to fall into.
+let carried = null;
+function queueCatalogue(from, read) {
   if (catalogueQueued || showingAll()) return;
   catalogueQueued = true;
   setTimeout(() => {
@@ -95,6 +98,7 @@ function queueCatalogue(from) {
     // race must not be overridden by a jump to the catalogue.
     if (showingAll() || !from.isConnected || location.pathname !== '/ui/tools/status') return;
     focusCatalogueSearch = true;
+    carried = read;
     go(CATALOGUE_PATH);
   }, 0);
 }
@@ -123,26 +127,31 @@ function topCalled(list) {
 
 /** p == 0 is "new", before the ratio; a ratio that rounds to 0 is no change. */
 function changeWord(hour, prev) {
+  // null is the API's "not measured": no comparison, and never a number.
+  if (typeof prev !== 'number') return 'no count for the hour before';
   if (prev === 0) return 'new this hour';
   const d = Math.round(Math.abs(hour - prev) / prev * 100);
   if (d === 0) return '→ no change';
   return `${hour > prev ? '↗' : '↘'} ${d}% vs hour before`;
 }
 
-function mostCalled(body, list) {
+function mostCalled(body, read) {
+  const { list } = read;
   // Starts empty: a query left from an earlier catalogue visit would claim a
   // filter this panel does not apply.
   const search = searchBox(list);
   // Typing, or Enter in an empty box, leaves this panel for the catalogue.
-  search.addEventListener('input', () => {
+  search.addEventListener('input', (ev) => {
     filters.query = search.value;
-    queueCatalogue(search);
+    // An input method's text is not typed until it is committed.
+    if (ev.isComposing) return;
+    queueCatalogue(search, read);
   });
   search.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Enter' || search.value !== '') return;
     ev.preventDefault();
     filters.query = '';
-    queueCatalogue(search);
+    queueCatalogue(search, read);
   });
   const rows = topCalled(list);
   const titleId = 'tools-called-title';
@@ -238,14 +247,16 @@ function catalogue(body, list, servers) {
 }
 
 async function statusTab(body, ctx) {
-  const { list, servers } = await readTools(ctx.api);
+  const read = showingAll() && carried ? carried : await readTools(ctx.api);
+  carried = null;
+  const { list, servers } = read;
   ctx.header({ subtitle: `${plural(list.length, 'tool', 'tools')} from ${plural(servers.length, 'server', 'servers')}. Agents find them through search and invoke.` });
   if (list.length === 0) {
     body.append(ctx.state('empty', { title: 'No tools yet', body: 'No tools yet. Add a server and its tools appear here.' }));
     return;
   }
   if (showingAll()) catalogue(body, list, servers);
-  else mostCalled(body, list);
+  else mostCalled(body, read);
 }
 
 async function toolPage(body, ctx) {
@@ -281,5 +292,5 @@ register('tools', {
     actions: null,
     settings: null,
   },
-  entries: [{ label: 'All tools', path: '/ui/tools/status', kind: 'go' }],
+  entries: [{ label: 'All tools', path: CATALOGUE_PATH, kind: 'go' }],
 });

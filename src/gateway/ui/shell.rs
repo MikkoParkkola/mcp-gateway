@@ -49,12 +49,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tips.2b1d0c91519f.json"),
     ),
     (
-        "tools.332c6e6bafe1.js",
-        include_bytes!("shell/tools.332c6e6bafe1.js"),
-    ),
-    (
         "tools.5cacef0c94f9.css",
         include_bytes!("shell/tools.5cacef0c94f9.css"),
+    ),
+    (
+        "tools.a6bc4c317e9c.js",
+        include_bytes!("shell/tools.a6bc4c317e9c.js"),
     ),
     (
         "tooltip.5251c22696fd.css",
