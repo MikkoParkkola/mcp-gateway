@@ -77,6 +77,9 @@ pub struct ProcessFacts {
     /// The one budget every admin email lookup is charged to, in any session.
     #[cfg(feature = "webui")]
     lookup_budget: super::LookupBudget,
+    /// The restart confirmation registry, with its seams on the instance.
+    #[cfg(feature = "webui")]
+    restart_confirm: crate::gateway::ui::restart_confirm::RestartConfirm,
 }
 
 /// The most Activity reads (list, receipt, export, live-stream pages) running
@@ -99,6 +102,8 @@ impl ProcessFacts {
             activity_reads: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_READS)),
             #[cfg(feature = "webui")]
             lookup_budget: super::LookupBudget::new(),
+            #[cfg(feature = "webui")]
+            restart_confirm: crate::gateway::ui::restart_confirm::RestartConfirm::new(),
         }
     }
 
@@ -106,6 +111,16 @@ impl ProcessFacts {
     #[cfg(feature = "webui")]
     pub(crate) fn lookup_budget(&self) -> &super::LookupBudget {
         &self.lookup_budget
+    }
+
+    /// The restart confirmation registry (restart slice 7b).
+    #[cfg(feature = "webui")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the restart routes, slice 7c, read it")
+    )]
+    pub(crate) fn restart_confirm(&self) -> &crate::gateway::ui::restart_confirm::RestartConfirm {
+        &self.restart_confirm
     }
 
     /// The read slots Activity reads take, [`MAX_CONCURRENT_READS`] of them.
