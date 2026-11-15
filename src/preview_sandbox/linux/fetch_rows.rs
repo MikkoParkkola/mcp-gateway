@@ -491,7 +491,7 @@ async fn l_npmrc_a_token_in_npms_builtin_npmrc_stays_unreadable() {
     drop(planted);
 }
 
-/// L-nvm (lead ruling 11-15), kills "a runtime tree is bound whole" end to
+/// L-nvm, kills "a runtime tree is bound whole" end to
 /// end: a copy of the host's npm and node in an NVM-shaped tree fetches and
 /// runs the package from the two narrow binds alone (npm fetched it, node
 /// runs in the run phase), while a token in the tree's `etc/npmrc` and a

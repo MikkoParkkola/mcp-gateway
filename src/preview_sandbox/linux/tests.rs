@@ -430,12 +430,12 @@ fn an_n_layout_binds_back_only_node_and_npms_package() {
     assert_eq!(exec, PathBuf::from(&cli));
 }
 
-/// R-bind in any known layout (lead ruling 11-15), kills "npx's runtime
+/// R-bind in any known layout, kills "npx's runtime
 /// tree is kept" and "a runtime tree is bound whole": an NVM install shows
 /// only node's real file and npm's package, read-only; the tree npx was
 /// bound by as the program goes first (the fetch never runs npx), so the
 /// tree's global packages and its `etc/npmrc` are not shown. Kills "a layout
-/// outside the known trees is bound" (security seat, r3): a node and an
+/// outside the known trees is bound": a node and an
 /// npm-shaped package anywhere else refuse by name, since a directory named
 /// `node_modules/npm` there proves nothing about what it holds.
 #[test]
@@ -530,7 +530,7 @@ fn a_directory_or_hidden_node_refuses() {
     );
 }
 
-/// Kills "a system npm keeps its builtin npmrc readable" (security seat, r3):
+/// Kills "a system npm keeps its builtin npmrc readable":
 /// npm's builtin `npmrc` is covered whatever its package directory is
 /// called, as for Debian's `/usr/share/nodejs/npm`, which a system root
 /// already shows, so nothing is bound for it.
