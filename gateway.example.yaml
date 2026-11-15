@@ -75,7 +75,6 @@ backends:
     secrets: []
     passthrough: false
 capabilities:
-  enabled: true
   directories:
   - ./capabilities
   # Capability calls ignore HTTP(S)_PROXY. To send them through a proxy, name
@@ -94,7 +93,6 @@ security:
     allow: []
     deny: []
     use_default_deny: true
-    log_denied: true
   firewall:
     enabled: true
     scan_requests: true

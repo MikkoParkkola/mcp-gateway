@@ -250,7 +250,11 @@ fn doc_internal_paths(md: &str) -> BTreeSet<String> {
 
 /// `/ui/api/costs` is mounted only with `cost-governance`.
 fn mounted(path: &str) -> bool {
-    path != "/ui/api/costs" || cfg!(feature = "cost-governance")
+    // The `/accounts/v1` mount exists only with hosted accounts and their
+    // handles (src/gateway/router/accounts.rs:70-77); these gateways are built
+    // by `create_router`, which passes none.
+    (path != "/ui/api/costs" || cfg!(feature = "cost-governance"))
+        && !path.starts_with("/accounts/v1/")
 }
 
 /// Bodies from `src/gateway/ui/control_plane_mutation_tests.rs` (grant-1, pol-1).
@@ -608,6 +612,37 @@ const ROWS: &[Row] = &[
         Payload::None,
         [200, 200, 200, 200],
     ),
+    // src/gateway/ui/mod.rs:168 (index), in html_router, which
+    // src/gateway/router/mod.rs:875-880 merges outside authentication: the
+    // static page for every caller.
+    row(
+        "/ui/classic",
+        Method::GET,
+        "/ui/classic",
+        Payload::None,
+        [200, 200, 200, 200],
+    ),
+    // src/gateway/ui/mod.rs:171, the same unauthenticated html_router:
+    // shell::document (src/gateway/ui/shell.rs:105-120) refuses only an `api`
+    // or `assets` first segment, so a page path gets the document.
+    row(
+        "/ui/{*path}",
+        Method::GET,
+        "/ui/backends",
+        Payload::None,
+        [200, 200, 200, 200],
+    ),
+    // src/gateway/ui/session.rs:49, merged outside authentication
+    // (src/gateway/router/mod.rs:703-716, :851): logout (session.rs:81-120)
+    // answers 303 to /ui with or without a session, and the origin guard
+    // admits a request with no Origin (src/gateway/router/origin_guard.rs:10-12).
+    row(
+        "/dashboard/logout",
+        Method::POST,
+        "/dashboard/logout",
+        Payload::None,
+        [303, 303, 303, 303],
+    ),
 ];
 
 const GROUPS: [&[Row]; 5] = [
@@ -737,8 +772,16 @@ const PROBE_METHODS: [Method; 7] = [
     Method::OPTIONS,
 ];
 
-/// A method outside a route's rows answers 405. HEAD on a GET route is served
-/// by the GET handler (axum 0.8), so it answers like GET with an empty body.
+/// INTERNAL paths whose other methods answer 404 by design, not 405, and why.
+const OTHER_METHODS_NOT_FOUND: &[(&str, &str)] = &[(
+    "/ui/{*path}",
+    "the shell's method fallback answers 404, as before the shell existed \
+     (src/gateway/ui/shell.rs:152-155, routed at src/gateway/ui/mod.rs:171-173)",
+)];
+
+/// A method outside a route's rows answers 405, or 404 on a path listed in
+/// [`OTHER_METHODS_NOT_FOUND`]. HEAD on a GET route is served by the GET
+/// handler (axum 0.8), so it answers like GET with an empty body.
 #[tokio::test]
 async fn internal_routes_refuse_every_other_method() {
     let gw = gateway(Fixture::AuthOn).await;
@@ -776,8 +819,15 @@ async fn internal_routes_refuse_every_other_method() {
                 request(method, first.uri, Caller::Admin, Payload::None),
             )
             .await;
-            if status != StatusCode::METHOD_NOT_ALLOWED {
-                wrong.push(format!("{method} {path}: expected 405, got {status}"));
+            let expected = if OTHER_METHODS_NOT_FOUND.iter().any(|(p, _)| p == path) {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::METHOD_NOT_ALLOWED
+            };
+            if status != expected {
+                wrong.push(format!(
+                    "{method} {path}: expected {expected}, got {status}"
+                ));
             }
         }
     }
