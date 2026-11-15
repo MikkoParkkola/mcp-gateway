@@ -15,6 +15,7 @@ use super::guard::Guard;
 use super::{AppState, access_report, auth_facts, call_windows};
 use crate::gateway::auth::is_gateway_admin;
 use crate::gateway::authz::BackendGrant;
+use crate::gateway::restart_status::RestartStatus;
 use crate::oauth::client::sign_in::SignIn;
 
 /// `GET /ui/api/status` — JSON snapshot of gateway health.
@@ -30,12 +31,7 @@ pub(super) async fn status(
     // A caller with no credential (a public status path) has no scope to
     // narrow by. A scoped admin gets the counts, within its scope: the full
     // view lists every backend.
-    let scope = BackendGrant::for_ui(client.as_ref());
-    let view = if is_gateway_admin(client.as_ref()) && scope == BackendGrant::Unscoped {
-        StatusView::Full
-    } else {
-        StatusView::CountsOnly
-    };
+    let (view, scope) = StatusView::for_client(client.as_ref());
     let mut body = status_body(&state, view, scope);
     body["auth"] = auth_facts(&state, client.as_ref());
     // An auth-on caller with no credential gets no `access` member at all.
@@ -53,6 +49,23 @@ pub(super) enum StatusView {
     /// Counts only, of the backends the caller's scope reaches: every other
     /// caller.
     CountsOnly,
+}
+
+impl StatusView {
+    /// The view `client` gets and the backend scope its counts read within:
+    /// the full view only for an unscoped gateway admin. The one place that
+    /// decides it, for the status route and the restart GET alike.
+    pub(super) fn for_client(
+        client: Option<&crate::gateway::auth::AuthenticatedClient>,
+    ) -> (Self, BackendGrant<'_>) {
+        let scope = BackendGrant::for_ui(client);
+        let view = if is_gateway_admin(client) && scope == BackendGrant::Unscoped {
+            Self::Full
+        } else {
+            Self::CountsOnly
+        };
+        (view, scope)
+    }
 }
 
 /// The status body without the caller's `auth` member, which the caller adds.
@@ -73,13 +86,15 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
             .iter()
             .filter(|b| b.status().circuit_state != crate::failsafe::CircuitState::Open)
             .count();
-        return json!({
+        let mut body = json!({
             "server_count": total,
             "healthy_count": healthy,
             "degraded_count": total - healthy,
             "uptime_secs": state.process.uptime_secs(),
             "version": env!("CARGO_PKG_VERSION"),
         });
+        add_restart(&mut body, view, state.meta_mcp.restart_board().status());
+        return body;
     }
 
     // Full admin view
@@ -146,7 +161,7 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
         server.calls_prev_24h = w.prev_day;
     }
 
-    json!({
+    let mut body = json!({
         "server_count": total,
         "tool_count": tool_count,
         "uptime_secs": state.process.uptime_secs(),
@@ -158,7 +173,26 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
         },
         "servers": servers,
         "counts_since": counts_since,
-    })
+    });
+    add_restart(&mut body, view, state.meta_mcp.restart_board().status());
+    body
+}
+
+/// Add the restart member to a status body: the latest attempt's wire form,
+/// or null before any accept, in the full view only. The counts-only view
+/// (which scoped callers get too) never carries it, so a change of the record
+/// raises the stream's status generation and never its counts generation.
+pub(super) fn add_restart(body: &mut Value, view: StatusView, record: Option<RestartStatus>) {
+    if view == StatusView::Full
+        && let Some(members) = body.as_object_mut()
+    {
+        members.insert(
+            "restart".to_owned(),
+            record
+                .as_ref()
+                .map_or(Value::Null, RestartStatus::status_json),
+        );
+    }
 }
 
 #[expect(

@@ -212,3 +212,25 @@ fn a_cut_records_when_it_was_made_and_a_later_one_moves_nothing() {
     assert_eq!(earlier, now + Duration::from_secs(30));
     assert!(reset >= set, "an earlier cut records its own set-time");
 }
+
+/// R4 (HANDOVER.4): a tree handed over at the HTTP backend stage's
+/// entry, with the stage's deadline set but not hurried, keeps every
+/// millisecond past the one kill reserve for its EOF and SIGTERM waits. Red
+/// if the reserve is taken twice (once by the caller, once here): the waits
+/// then vanish and the plan is an immediate kill.
+#[test]
+fn a_backend_stage_budget_keeps_its_eof_and_term_phases() {
+    let waits = Duration::from_millis(400);
+    let deadline = super::StopDeadline::default();
+    deadline.move_earlier(std::time::Instant::now() + KILL_RESERVE + waits);
+    let ending = graceful_ending(KILL_RESERVE + waits, true, Some(&deadline));
+    assert!(
+        matches!(ending, Ending::Graceful { .. }),
+        "a backend-stage budget lost its graceful plan: {ending:?}"
+    );
+    assert_eq!(
+        ending.waits(),
+        waits,
+        "the plan's EOF and SIGTERM waits are not the budget less one kill reserve"
+    );
+}

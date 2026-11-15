@@ -57,6 +57,19 @@ pub(super) fn auth_required(status: StatusCode) -> (StatusCode, Json<Value>) {
     flat_error(status, "Authentication required")
 }
 
+const NO_RELOAD: &str = "Config reload is not enabled on this gateway";
+
+/// A read on a gateway with no reload context: it cannot answer right now (503).
+pub(super) fn no_reload_read() -> (StatusCode, Json<Value>) {
+    flat_error(StatusCode::SERVICE_UNAVAILABLE, NO_RELOAD)
+}
+
+/// A write on a gateway with no reload context attempted nothing, so it is refused
+/// (409): a 4xx means nothing was tried, a 5xx that the outcome is not confirmed.
+pub(super) fn no_reload_write() -> (StatusCode, Json<Value>) {
+    flat_error(StatusCode::CONFLICT, NO_RELOAD)
+}
+
 pub(super) fn config_path_unavailable() -> (StatusCode, Json<Value>) {
     flat_error(
         StatusCode::SERVICE_UNAVAILABLE,

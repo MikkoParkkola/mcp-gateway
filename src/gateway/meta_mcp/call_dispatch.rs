@@ -6,7 +6,7 @@ use crate::error::rpc_codes::{INVALID_REQUEST, METHOD_NOT_FOUND};
 use std::borrow::Cow;
 use std::ops::ControlFlow;
 
-use super::dispatch_names::MetaArm;
+use super::dispatch_names::{ArmWrites, MetaArm};
 
 use super::{
     Arc, CallerStanding, ChainSource, DispatchTarget, GateOutcome, JsonRpcResponse, MetaMcp,
@@ -466,6 +466,11 @@ impl MetaMcp {
         let (mut source, mut upstream) = (ChainSource::NotEligible, None);
         // Only `gateway_invoke` answers for one invocation.
         let mut trace = None;
+        // A local write arm is a recent write for the restart warning, counted
+        // at its entry, a refused one too; a leaf dispatch counts in `send`.
+        if MetaArm::parse(tool_name).map(MetaArm::writes) == Some(ArmWrites::Write) {
+            self.recent_writes.note(std::time::Instant::now());
+        }
         let result = match MetaArm::parse(tool_name) {
             Some(MetaArm::Search) => self.code_mode_search(&arguments, session_id, caller).await,
             // Composites are unvouched at their arm, before any step runs: a
