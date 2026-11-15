@@ -154,22 +154,26 @@ mod tests {
     }
 
     /// A held refusing socket keeps its port: while it is held, a bind of its
-    /// address fails and a connect to it is refused.
+    /// address fails as in use and a connect to it is refused.
     #[test]
     fn a_held_refusing_socket_keeps_its_port_and_refuses() {
         let held = refusing_socket();
         let addr = held.local_addr().expect("address");
-        assert!(
-            std::net::TcpListener::bind(addr).is_err(),
-            "a plain bind took the held port {addr}"
+        assert_eq!(
+            std::net::TcpListener::bind(addr)
+                .map(|_| ())
+                .map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::AddrInUse),
+            "a plain bind of the held port {addr} did not fail as in use"
         );
         #[cfg(unix)]
         {
             let reuse = tokio::net::TcpSocket::new_v4().expect("socket");
             reuse.set_reuseaddr(true).expect("address reuse");
-            assert!(
-                reuse.bind(addr).is_err(),
-                "a reuse-address bind took the held port {addr}"
+            assert_eq!(
+                reuse.bind(addr).map_err(|e| e.kind()),
+                Err(std::io::ErrorKind::AddrInUse),
+                "a reuse-address bind of the held port {addr} did not fail as in use"
             );
         }
         assert_eq!(
