@@ -477,9 +477,10 @@ fn second_attempt(stage: RestartPhase, committed: bool) -> RestartBoard {
     board
 }
 
-/// T8 (ATTEMPT.1): a call carrying the first attempt's id leaves the current
-/// second attempt's whole record unchanged, and the same call with its own id
-/// changes it, each staged where that call visibly applies.
+/// T8 (ATTEMPT.1): a call carrying the first attempt's id, or an id no attempt
+/// has yet, leaves the current second attempt's whole record unchanged, and the
+/// same call with its own id changes it, each staged where that call visibly
+/// applies.
 #[test]
 fn a_call_for_an_earlier_attempt_never_moves_the_current_one() {
     type Case = (&'static str, RestartPhase, bool, fn(&RestartBoard, u64));
@@ -509,12 +510,15 @@ fn a_call_for_an_earlier_attempt_never_moves_the_current_one() {
     for (name, stage, committed, call) in cases {
         let board = second_attempt(stage, committed);
         let before = board.status();
-        call(&board, 1);
-        assert_eq!(
-            board.status(),
-            before,
-            "{name}: the first attempt's id moved the second"
-        );
+        // 1 is the earlier attempt; 3 is no attempt yet (kills an ordering check).
+        for wrong in [1, 3] {
+            call(&board, wrong);
+            assert_eq!(
+                board.status(),
+                before,
+                "{name}: attempt {wrong}'s id moved the second"
+            );
+        }
         call(&board, 2);
         assert_ne!(
             board.status(),
@@ -526,12 +530,14 @@ fn a_call_for_an_earlier_attempt_never_moves_the_current_one() {
     // Commit: distinct deadlines, and its flag seen through a restarting call.
     let board = second_attempt(RestartPhase::Checkpoint, false);
     let before = board.status();
-    board.commit(1, STOP_DL);
-    assert_eq!(
-        board.status(),
-        before,
-        "commit: the first attempt's id moved the second"
-    );
+    for wrong in [1, 3] {
+        board.commit(wrong, STOP_DL);
+        assert_eq!(
+            board.status(),
+            before,
+            "commit: attempt {wrong}'s id moved the second"
+        );
+    }
     board.restarting(2);
     assert_eq!(
         board.status(),
