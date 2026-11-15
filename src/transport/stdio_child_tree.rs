@@ -254,21 +254,33 @@ impl ChildTree {
     /// (Unix): the close signal, then the pre-reap signal (A5) repeated while
     /// the group settles, never after the reap.
     fn send_group_signal(&mut self) {
-        // Test record only: whether the leader was seen exiting before this
-        // signal, so an ESRCH from an already-ended group is told apart from
-        // one a wrong group would give.
+        // Test record only: whether the leader was seen exiting, so an ESRCH
+        // from an already-ended group is told apart from one a wrong group
+        // would give. Before the send, or right after an ESRCH: once killpg
+        // finds no member, a leader that was in the group is already a zombie
+        // (the descendant sweep's SIGKILL can land in between); one still
+        // running was never in that group.
         #[cfg(all(test, unix))]
         let exited_before = matches!(self.leader_state(), Leader::Zombie | Leader::Gone);
+        // A row may inject the ESRCH macOS gives a group with no live member.
+        #[cfg(all(test, unix))]
+        let sent = match signal_log::injection(self.pid) {
+            Some(mode) => signal_log::answer(mode, self.pid),
+            None => self.wrapper.start_kill(),
+        };
+        #[cfg(not(all(test, unix)))]
         let sent = self.wrapper.start_kill();
         #[cfg(all(test, unix))]
-        let sent = signal_log::injected(self.pid, sent);
+        let exited = exited_before
+            || (signal_log::is_esrch(&sent)
+                && matches!(self.leader_state(), Leader::Zombie | Leader::Gone));
         self.signals_closed = true;
         #[cfg(test)]
         {
             self.group_signals_sent += 1;
             #[cfg(unix)]
             if let Some(pid) = self.pid {
-                signal_log::record(pid, signal_log::kill_outcome(&sent, exited_before));
+                signal_log::record(pid, signal_log::kill_outcome(&sent, exited));
             }
         }
         let _ = sent;

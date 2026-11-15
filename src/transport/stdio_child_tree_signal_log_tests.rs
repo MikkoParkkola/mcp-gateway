@@ -122,3 +122,48 @@ fn a_kill_records_its_outcome() {
         );
     }
 }
+
+/// A tree whose leader loops until killed, and the leader's pid.
+fn running_tree() -> (super::super::ChildTree, Pid) {
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.args(["-c", "while :; do sleep 0.05; done"]);
+    let tree =
+        super::super::ChildTree::new(super::super::super::spawn_in_own_tree(cmd).expect("spawn"));
+    let pid = tree.pid.expect("the leader's pid");
+    (tree, pid)
+}
+
+/// Kill what a row left of `tree`'s group and reap its leader: an injected kill
+/// sent nothing, and the closed gate sends nothing on drop.
+async fn end_tree(mut tree: super::super::ChildTree, pid: Pid) {
+    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, tree.wrapper.wait())
+        .await
+        .expect("the leader is reaped within the hang bound")
+        .expect("wait for the leader");
+}
+
+/// A group kill answering ESRCH while the leader still runs (it named a group the
+/// leader is not in) is a failed kill, never the kill of a group already gone.
+#[tokio::test]
+async fn esrch_with_the_leader_running_is_a_failed_kill() {
+    let (mut tree, pid) = running_tree();
+    arm(pid);
+    inject(pid, Esrch::Only);
+    tree.start_kill();
+    assert_eq!(take(pid), [Sent::KillFailed]);
+    end_tree(tree, pid).await;
+}
+
+/// A group kill answering ESRCH after the leader died between the check and the
+/// send, as the descendant sweep's SIGKILL can land, is the kill of a group
+/// already gone: the leader reads exited right after the ESRCH.
+#[tokio::test]
+async fn esrch_after_the_leader_died_mid_send_is_a_gone_kill() {
+    let (mut tree, pid) = running_tree();
+    arm(pid);
+    inject(pid, Esrch::AfterKillingLeader);
+    tree.start_kill();
+    assert_eq!(take(pid), [Sent::KillGone]);
+    end_tree(tree, pid).await;
+}

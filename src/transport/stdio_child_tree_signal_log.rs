@@ -14,9 +14,10 @@ use rustix::process::Pid;
 pub(crate) enum Sent {
     Term,
     Kill,
-    /// The kill was sent and found no process (ESRCH), and the leader had been
-    /// seen exiting before it was sent: the group had already ended. macOS
-    /// answers so for a group whose members have all exited; Linux answers Ok.
+    /// The kill was sent and found no process (ESRCH), and the leader was seen
+    /// exiting, before the send or right after the ESRCH: the group had already
+    /// ended. macOS answers so for a group whose members have all exited; Linux
+    /// answers Ok.
     KillGone,
     /// A kill's syscall failed, and not as `KillGone`: the group may not have
     /// been the child's.
@@ -47,14 +48,12 @@ fn log() -> std::sync::MutexGuard<'static, Log> {
 /// before the kernel reused the pid: it is replaced.
 pub(crate) fn arm(pid: Pid) {
     log().insert(pid.as_raw_nonzero().get(), Vec::new());
-    forget_gone(pid);
+    forget_injection(pid);
 }
 
 /// Drop an injection a stale row left for `pid`, or the one a finished row set.
-fn forget_gone(pid: Pid) {
-    GONE.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&pid.as_raw_nonzero().get());
+fn forget_injection(pid: Pid) {
+    injections().remove(&pid.as_raw_nonzero().get());
 }
 
 /// Append `sent` for `pid` when a row armed it; otherwise nothing.
@@ -64,52 +63,76 @@ pub(super) fn record(pid: Pid, sent: Sent) {
     }
 }
 
-static GONE: std::sync::Mutex<std::collections::BTreeSet<i32>> =
-    std::sync::Mutex::new(std::collections::BTreeSet::new());
+/// How an injected group kill answers ESRCH, as macOS answers a group with no
+/// live member.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Esrch {
+    /// Nothing is sent: the kill names a group the leader is not in.
+    Only,
+    /// The leader is SIGKILLed and seen a zombie first, as the descendant
+    /// sweep's kill can land between the check and the group kill; then the
+    /// group kill finds no member.
+    AfterKillingLeader,
+}
 
-/// Make every kill of `pid`'s group answer ESRCH, as macOS answers for a group
-/// whose members have all exited; the kill itself is still sent.
-pub(crate) fn inject_gone(pid: Pid) {
-    GONE.lock()
+static INJECTED: std::sync::Mutex<std::collections::BTreeMap<i32, Esrch>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+fn injections() -> std::sync::MutexGuard<'static, std::collections::BTreeMap<i32, Esrch>> {
+    INJECTED
+        .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(pid.as_raw_nonzero().get());
 }
 
-/// `sent`, or ESRCH when a row injected it for `pid`.
-pub(super) fn injected(pid: Option<Pid>, sent: std::io::Result<()>) -> std::io::Result<()> {
-    let gone = pid.is_some_and(|pid| {
-        GONE.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains(&pid.as_raw_nonzero().get())
-    });
-    if gone {
-        Err(std::io::Error::from_raw_os_error(
-            rustix::io::Errno::SRCH.raw_os_error(),
-        ))
-    } else {
-        sent
+/// Make every group kill of `pid` answer ESRCH, as `mode` says.
+pub(crate) fn inject(pid: Pid, mode: Esrch) {
+    injections().insert(pid.as_raw_nonzero().get(), mode);
+}
+
+/// The injection a row set for `pid`, if any.
+pub(super) fn injection(pid: Option<Pid>) -> Option<Esrch> {
+    pid.and_then(|pid| injections().get(&pid.as_raw_nonzero().get()).copied())
+}
+
+/// The injected answer: ESRCH, after the leader is killed and seen a zombie
+/// for `Esrch::AfterKillingLeader` (bounded at 30 s).
+pub(super) fn answer(mode: Esrch, pid: Option<Pid>) -> std::io::Result<()> {
+    if let (Esrch::AfterKillingLeader, Some(pid)) = (mode, pid) {
+        use rustix::process::{WaitId, WaitIdOptions, waitid};
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+        let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+        let by = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !matches!(waitid(WaitId::Pid(pid), options), Ok(Some(_)))
+            && std::time::Instant::now() < by
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
+    Err(std::io::Error::from_raw_os_error(
+        rustix::io::Errno::SRCH.raw_os_error(),
+    ))
 }
 
-/// What a kill's syscall result records: the kill; or, for ESRCH after the
-/// leader was seen exiting, the kill of a group already gone; otherwise a
-/// failed kill.
-pub(super) fn kill_outcome(sent: &std::io::Result<()>, exited_before: bool) -> Sent {
+/// Whether `sent` is ESRCH: no process left in the group.
+pub(super) fn is_esrch(sent: &std::io::Result<()>) -> bool {
+    sent.as_ref()
+        .is_err_and(|e| e.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()))
+}
+
+/// What a kill's syscall result records: the kill; or, for ESRCH with the
+/// leader seen exiting (before the send, or right after the ESRCH), the kill
+/// of a group already gone; otherwise a failed kill.
+pub(super) fn kill_outcome(sent: &std::io::Result<()>, exited: bool) -> Sent {
     match sent {
         Ok(()) => Sent::Kill,
-        Err(e)
-            if exited_before
-                && e.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) =>
-        {
-            Sent::KillGone
-        }
+        Err(_) if exited && is_esrch(sent) => Sent::KillGone,
         Err(_) => Sent::KillFailed,
     }
 }
 
 /// `pid`'s entries in order; it is disarmed.
-fn take(pid: Pid) -> Vec<Sent> {
-    forget_gone(pid);
+pub(crate) fn take(pid: Pid) -> Vec<Sent> {
+    forget_injection(pid);
     log()
         .remove(&pid.as_raw_nonzero().get())
         .unwrap_or_default()
@@ -299,20 +322,6 @@ pub(crate) async fn assert_gone_kill_counts(pid: Pid, what: &str) {
     );
     if let Err(why) = judge_term_then_kill(&sent) {
         panic!("{what}: {why}");
-    }
-}
-
-/// A kill that failed while the leader was not seen exiting is recorded as a
-/// failed kill, and the live rule refuses it by that name.
-pub(crate) async fn assert_failed_kill_refused(pid: Pid, what: &str) {
-    let sent = after_the_kill(pid).await;
-    assert!(
-        sent.contains(&Sent::KillFailed),
-        "{what}: no failed kill recorded: {sent:?}"
-    );
-    match judge_term_then_kill(&sent) {
-        Err(why) if why.contains("a kill failed") => {}
-        other => panic!("{what}: a failed kill was not refused by name: {other:?}"),
     }
 }
 

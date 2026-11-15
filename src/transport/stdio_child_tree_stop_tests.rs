@@ -96,23 +96,9 @@ async fn a_kill_that_finds_the_group_gone_after_sigterm_counts_as_the_kill() {
     .await;
     let pid = leader(&t).await;
     signal_log::arm(pid);
-    signal_log::inject_gone(pid);
+    signal_log::inject(pid, signal_log::Esrch::Only);
     t.close().await.expect("close");
     signal_log::assert_gone_kill_counts(pid, "a group gone at the kill").await;
-}
-
-/// ESRCH from a kill while the leader still runs, as a group that was never
-/// the child's would answer, is no kill: it is recorded as failed and refused.
-#[tokio::test]
-async fn a_kill_that_finds_no_group_while_the_leader_runs_is_refused() {
-    let (w, t) = started_unhurried(&resists_term(), None).await;
-    let child = descendant(w.path()).await;
-    let pid = leader(&t).await;
-    signal_log::arm(pid);
-    signal_log::inject_gone(pid);
-    t.close().await.expect("close");
-    signal_log::assert_failed_kill_refused(pid, "ESRCH while the leader ran").await;
-    gone(child).await;
 }
 
 /// A tree already in its exit waits when the gateway stop begins (an
