@@ -227,3 +227,64 @@ for (const width of WIDTHS) {
     await expect(page.getByRole('region', { name: 'Most called tools', exact: true })).toHaveAttribute('tabindex', '0');
   });
 }
+
+test('M13: keys typed while the catalogue reads its tools all land', async ({ page }) => {
+  let reads = 0;
+  let release;
+  const gate = new Promise((ok) => { release = ok; });
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
+  await page.route('**/ui/api/tools**', async (r) => {
+    reads += 1;
+    // A second read, if the catalogue makes one, is held while the user keeps typing.
+    if (reads === 2) await gate;
+    return r.fulfill({ json: { tools: RANKED, total: RANKED.length } });
+  });
+  await page.goto('/ui/tools/status');
+  await expect(mostCalled(page)).toBeVisible();
+  await search(page).click();
+  await page.keyboard.type('b');
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
+  await page.keyboard.type('irch');
+  release();
+  await expect(search(page)).toHaveValue('birch');
+});
+
+test('M14: a count the API did not measure is never shown as a number', async ({ page }) => {
+  // null is the API's "not measured", never zero.
+  await toolsScreen(page, { tools: [
+    { name: 'measured_now', server: 'alpha', description: '', calls_1h: 5, calls_prev_1h: null },
+    { name: 'unmeasured_now', server: 'alpha', description: '', calls_1h: null, calls_prev_1h: 3 },
+  ] });
+  await page.goto('/ui/tools/status');
+  await expect(panelRow(page, 'measured_now').getByRole('cell', { name: 'no count for the hour before', exact: true })).toBeVisible();
+  await expect(mostCalled(page)).not.toContainText('unmeasured_now');
+  await expect(mostCalled(page)).not.toContainText('Infinity');
+  await expect(mostCalled(page)).not.toContainText('NaN');
+});
+
+test('M15: the palette entry All tools opens the catalogue', async ({ page }) => {
+  await toolsScreen(page, { tools: RANKED });
+  await page.goto('/ui/tools/status');
+  await expect(mostCalled(page)).toBeVisible();
+  await page.keyboard.press('Control+KeyK');
+  await page.locator('dialog.palette [role="option"]', { hasText: 'All tools' }).click();
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
+});
+
+test('M16: text still being composed (an input method) does not leave the panel', async ({ page }) => {
+  await toolsScreen(page, { tools: RANKED });
+  await page.goto('/ui/tools/status');
+  await expect(mostCalled(page)).toBeVisible();
+  const compose = (data, isComposing) => page.locator('#tools-search').evaluate((el, [d, c]) => {
+    el.value = d;
+    el.dispatchEvent(new InputEvent('input', { data: d, isComposing: c, inputType: c ? 'insertCompositionText' : 'insertText', bubbles: true }));
+  }, [data, isComposing]);
+  await page.locator('#tools-search').dispatchEvent('compositionstart');
+  await compose('ｂ', true);
+  // Two timer turns: the jump is queued on one, so after two it would have run.
+  await page.evaluate(() => new Promise((r) => setTimeout(() => setTimeout(r, 0), 0)));
+  await expect(page).toHaveURL('/ui/tools/status');
+  await page.locator('#tools-search').dispatchEvent('compositionend');
+  await compose('b', false);
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
+});
