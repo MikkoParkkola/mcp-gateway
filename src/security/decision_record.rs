@@ -363,8 +363,16 @@ impl Noted {
                 ((DecisionKind::Unrecorded, None), None)
             }
         };
-        let applied = live.and_then(crate::config_reload::LiveConfig::applied_now);
-        let config_revision = applied.as_ref().map(|a| a.revision.clone());
+        let now = live.map(crate::config_reload::LiveConfig::applied_now);
+        let config_revision = now.as_ref().and_then(|snapshot| {
+            snapshot
+                .published
+                .as_ref()
+                .map(|applied| applied.revision.clone())
+        });
+        // The record still reads the startup field. The stub pair reports
+        // running equal to published, which would hide a reload that already
+        // split them.
         let running_revision = live
             .and_then(crate::config_reload::LiveConfig::running_revision)
             .filter(|running| config_revision.as_deref() != Some(*running))
@@ -375,8 +383,16 @@ impl Noted {
             // Stub: the field is omitted. The wording is `capabilities_line`.
             config_revision_capabilities: None,
             running_revision,
-            pending_restart: applied
-                .map(|a| a.pending_restart.iter().map(|f| (*f).to_owned()).collect())
+            pending_restart: now
+                .as_ref()
+                .and_then(|snapshot| snapshot.published.as_ref())
+                .map(|applied| {
+                    applied
+                        .pending_restart
+                        .iter()
+                        .map(|field| (*field).to_owned())
+                        .collect()
+                })
                 .unwrap_or_default(),
             kind,
             rule_id: rule_id.map(|id| id.as_str().to_owned()),
@@ -412,3 +428,7 @@ mod read_tests;
 #[cfg(test)]
 #[path = "decision_record_writer_tests.rs"]
 mod writer_tests;
+
+#[cfg(test)]
+#[path = "decision_record_capability_tests.rs"]
+mod capability_tests;

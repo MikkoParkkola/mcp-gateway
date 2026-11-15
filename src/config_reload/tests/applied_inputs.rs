@@ -8,7 +8,9 @@ use super::*;
 use crate::config_reload::revision::{AppliedInputs, ConsumedSource, RawInputs, config_revision};
 
 fn revision(live: &LiveConfig) -> Option<String> {
-    live.applied_now().map(|applied| applied.revision.clone())
+    live.applied_now()
+        .published
+        .map(|applied| applied.revision.clone())
 }
 
 fn revision_key() -> [u8; 32] {
@@ -234,7 +236,8 @@ fn an_outstanding_environment_change_is_pending_restart() {
         .with_applied(RawInputs::default());
     let pending = |live: &LiveConfig| {
         live.applied_now()
-            .map(|a| a.pending_restart.clone())
+            .published
+            .map(|applied| applied.pending_restart.clone())
             .unwrap_or_default()
     };
     live.set_inputs(RawInputs::default(), &["GW_SECRET_NAME".to_owned()]);

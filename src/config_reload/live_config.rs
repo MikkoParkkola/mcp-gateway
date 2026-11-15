@@ -10,7 +10,7 @@ use parking_lot::RwLock;
 
 use super::Generation;
 use super::diff::pending_restart_fields;
-use super::revision::{self, AppliedInputs, RawInputs};
+use super::revision::{self, AppliedInputs, CapabilityPart, PartDigest, RawInputs};
 use super::with_env_restart;
 use crate::config::Config;
 
@@ -27,6 +27,16 @@ pub(crate) struct Applied {
     inputs: AppliedInputs,
     pub(crate) revision: String,
     pub(crate) pending_restart: Vec<&'static str>,
+}
+
+/// The published revision and the running revision, taken in one read.
+///
+/// The design names no type for this pair. `published` keeps the applied
+/// snapshot a record already reads (revision and restart state). `running`
+/// is that snapshot's revision id.
+pub(crate) struct AppliedNow {
+    pub(crate) published: Option<Arc<Applied>>,
+    pub(crate) running: Option<String>,
 }
 
 /// Live, atomically-swappable config snapshot shared across the gateway.
@@ -220,11 +230,15 @@ impl LiveConfig {
         }))
     }
 
-    /// The published revision and its restart state, for a record: one read
-    /// lock and one `Arc` clone.
+    /// The published revision and the running revision, from one read of the
+    /// published snapshot.
+    ///
+    /// Stub: `running` is the published id, so the two do not diverge.
     #[must_use]
-    pub(crate) fn applied_now(&self) -> Option<Arc<Applied>> {
-        self.inner.read().applied.clone()
+    pub(crate) fn applied_now(&self) -> AppliedNow {
+        let published = self.inner.read().applied.clone();
+        let running = published.as_ref().map(|applied| applied.revision.clone());
+        AppliedNow { published, running }
     }
 
     /// `raw` digested, with the grants and capability digests their own sinks
@@ -276,6 +290,15 @@ impl LiveConfig {
         self.replace_part(|key, inputs| {
             inputs.grants = grants.map(|g| revision::part_digest(key, g));
         });
+    }
+
+    /// Publish `part` as the capability files of the revision, at load
+    /// sequence `seq`.
+    ///
+    /// Stub: stores nothing. The published revision stays the one the last
+    /// config publish left, whatever `seq` and `part` are.
+    pub(crate) fn set_capabilities(&self, seq: u64, part: CapabilityPart<PartDigest>) {
+        let _ = (seq, part, &self.inner);
     }
 
     fn replace_part(&self, change: impl FnOnce(&[u8; 32], &mut AppliedInputs)) {
@@ -406,3 +429,7 @@ impl LiveConfig {
         admit()
     }
 }
+
+#[cfg(test)]
+#[path = "live_config_capability_tests.rs"]
+mod capability_tests;
