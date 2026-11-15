@@ -155,11 +155,11 @@ fn rotated_env_files_under_an_unchanged_config_get_a_new_revision() {
         .with_revision_key(revision_key())
         .with_applied(env(b"K=1\n"));
     let before = revision(&live);
-    assert_eq!(before.as_deref(), live.running_revision());
+    assert_eq!(before.as_deref(), live.running_revision().as_deref());
     live.set_inputs(env(b"K=2\n"), &[]);
     assert_ne!(revision(&live), before);
     assert_eq!(
-        live.running_revision(),
+        live.running_revision().as_deref(),
         before.as_deref(),
         "startup's stays"
     );
@@ -181,7 +181,7 @@ fn startup_inputs_are_moved_into_the_first_publish_and_taken_once() {
     let live = LiveConfig::new(Config::default())
         .with_startup_revision(&record_key, live_env.take_startup_inputs());
     assert!(revision(&live).is_some(), "startup publishes a revision");
-    assert_eq!(live.running_revision(), revision(&live).as_deref());
+    assert_eq!(live.running_revision().as_deref(), revision(&live).as_deref());
     assert!(
         live_env.take_startup_inputs().is_none(),
         "the slot is empty after the startup publish, and a second take gets nothing"
@@ -211,7 +211,7 @@ fn startup_grants_are_in_the_running_revision() {
         live_env.set_startup_grants(grants.map(<[u8]>::to_vec));
         let live = LiveConfig::new(Config::default())
             .with_startup_revision(&record_key, live_env.take_startup_inputs());
-        let running = live.running_revision().map(str::to_owned);
+        let running = live.running_revision();
         (running, revision(&live))
     };
     let (with_grants, published) = startup(Some(b"grants: []\n"));

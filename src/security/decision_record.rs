@@ -142,6 +142,20 @@ pub(crate) struct Decision {
 /// the declared effect.
 pub(crate) const DECISION_VERSION: u8 = 2;
 
+/// Coverage of the capability part a revision names.
+fn coverage_of(
+    part: &crate::config_reload::revision::CapabilityPart<
+        crate::config_reload::revision::PartDigest,
+    >,
+) -> Coverage {
+    use crate::config_reload::revision::CapabilityPart;
+    match part {
+        CapabilityPart::Loaded(_) => Coverage::Covered,
+        CapabilityPart::NotLoaded => Coverage::NotLoaded,
+        CapabilityPart::Partial(_) => Coverage::Partial,
+    }
+}
+
 /// Whether the record being written is of a refused call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refused {
@@ -370,18 +384,25 @@ impl Noted {
                 .as_ref()
                 .map(|applied| applied.revision.clone())
         });
-        // The record still reads the startup field. The stub pair reports
-        // running equal to published, which would hide a reload that already
-        // split them.
-        let running_revision = live
-            .and_then(crate::config_reload::LiveConfig::running_revision)
-            .filter(|running| config_revision.as_deref() != Some(*running))
-            .map(str::to_owned);
+        // Both come from the one read. A second read could pair this
+        // revision with a running revision from after a reload.
+        let running_revision = now.as_ref().and_then(|snapshot| {
+            snapshot
+                .running
+                .clone()
+                .filter(|running| config_revision.as_deref() != Some(running.as_str()))
+        });
+        // Present whenever a revision is. The part is what that id covers.
+        let config_revision_capabilities = now.as_ref().and_then(|snapshot| {
+            snapshot
+                .published
+                .as_ref()
+                .map(|applied| coverage_of(applied.capability_part()))
+        });
         Decision {
             v: DECISION_VERSION,
             config_revision,
-            // Stub: the field is omitted. The wording is `capabilities_line`.
-            config_revision_capabilities: None,
+            config_revision_capabilities,
             running_revision,
             pending_restart: now
                 .as_ref()

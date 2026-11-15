@@ -112,9 +112,17 @@ pub(crate) fn effect_line(decision: &Decision) -> Option<&'static str> {
 
 /// Receipt and API wording for the capability coverage a record carries.
 ///
-/// Stub: a fixed empty string, so a row that expects either sentence fails.
-pub(crate) fn capabilities_line(_coverage: Option<Coverage>) -> &'static str {
-    ""
+/// No field and `not_loaded` share a sentence: that id does not cover the
+/// files. `partial` names the directories that could be read. `covered`
+/// adds nothing.
+pub(crate) fn capabilities_line(coverage: Option<Coverage>) -> &'static str {
+    match coverage {
+        None | Some(Coverage::NotLoaded) => "capabilities not included",
+        Some(Coverage::Partial) => {
+            "capabilities included from the directories that could be read"
+        }
+        Some(Coverage::Covered) => "",
+    }
 }
 
 /// How the call was decided, in the receipt's words.

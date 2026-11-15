@@ -14,11 +14,14 @@
 //! dropped. Only the digests outlive the publish, so a later grants change can
 //! recompute the id without the process holding any input's bytes.
 //!
-//! Capability files are a [`CapabilityPart`]. `Loaded` is written as today's
-//! count and entries. `NotLoaded` is still written as a zero count and
-//! `Partial` as that same loaded list, so an id does not yet name those two
-//! states. CLI flag overrides applied after the load are process arguments
-//! rather than inputs.
+//! Capability files are a [`CapabilityPart`]. `Loaded` is the count and the
+//! sorted entries, the bytes a gateway with capabilities disabled already
+//! publishes, including the empty list. `NotLoaded` is `u64::MAX` and nothing
+//! after it: the files have not been read. `Partial` is `u64::MAX - 1`, then
+//! that same count and entries: a directory or a file could not be read. A
+//! file count a process can hold sits below either marker, so the frame stays
+//! v1. The load sequence is not an input. CLI flag overrides applied after
+//! the load are process arguments rather than inputs.
 //!
 //! Encoding (shared with configuration history, which keys stored versions by
 //! this id):
@@ -29,7 +32,10 @@
 //!          TAG || part(D(gateway.yaml))
 //!              || (part(D(grants file)) | ABSENT)
 //!              || count || part(path) || (part(D(bytes)) | ABSENT) per env file, configured order
-//!              || count || part(path) || part(D(bytes)) per capability file, sorted
+//!              || capability part:
+//!                   Loaded:    count || part(path) || part(D(bytes)) per file, sorted
+//!                   NotLoaded: u64_be(u64::MAX)
+//!                   Partial:   u64_be(u64::MAX - 1) || count || entries, as Loaded
 //!              || count || part(source) || part(name) || part(D(value)) per consumed value,
 //!                          sorted, duplicates once))
 //! part(b) = 0x01 || u64_be(len b) || b;  ABSENT = 0x00;  count = u64_be(n)
@@ -135,6 +141,10 @@ pub(crate) struct AppliedInputs {
     pub grants: Option<PartDigest>,
     pub env_files: Vec<(String, Option<PartDigest>)>,
     pub capabilities: CapabilityPart<PartDigest>,
+    /// Load sequence of [`Self::capabilities`]. Not an input: [`config_revision`]
+    /// does not write it. A reload copies it with the part, so a gateway.yaml
+    /// reload does not look like sequence zero.
+    pub capability_seq: u64,
     pub consumed: Vec<ConsumedInput<PartDigest>>,
 }
 
@@ -176,6 +186,8 @@ impl AppliedInputs {
                 }
                 CapabilityPart::Loaded(entries) => CapabilityPart::Loaded(digest_entries(entries)),
             },
+            // The sequence is published state, not bytes the load read.
+            capability_seq: 0,
             consumed: raw
                 .consumed
                 .into_iter()
@@ -232,23 +244,32 @@ fn push_count(out: &mut Vec<u8>, n: u64) {
     out.extend_from_slice(&n.to_be_bytes());
 }
 
+/// The count and the sorted entries `Loaded` and `Partial` share.
+fn write_capability_entries(out: &mut Vec<u8>, entries: &[(String, PartDigest)]) {
+    let mut caps: Vec<_> = entries.iter().collect();
+    caps.sort();
+    push_count(out, caps.len() as u64);
+    for (path, digest) in caps {
+        push_part(out, path.as_bytes());
+        push_part(out, digest);
+    }
+}
+
 /// The capability section of the preimage.
 ///
-/// `NotLoaded` is written as a count of zero, and `Partial` as today's count
-/// and entries. Neither marker is written. The sequence number is not written
-/// either: it is not an input.
+/// A count of zero is the empty loaded list. `NotLoaded` is `u64::MAX`, which
+/// that count cannot be, or a gateway that has not read the files would
+/// publish the same id as one with an empty catalogue. `Partial` is
+/// `u64::MAX - 1` and then the same count and entries as `Loaded`. The load
+/// sequence is not written: it is not an input.
 fn write_capability_part(out: &mut Vec<u8>, part: &CapabilityPart<PartDigest>) {
     match part {
-        CapabilityPart::NotLoaded => push_count(out, 0),
-        CapabilityPart::Partial(entries) | CapabilityPart::Loaded(entries) => {
-            let mut caps: Vec<_> = entries.iter().collect();
-            caps.sort();
-            push_count(out, caps.len() as u64);
-            for (path, digest) in caps {
-                push_part(out, path.as_bytes());
-                push_part(out, digest);
-            }
+        CapabilityPart::NotLoaded => push_count(out, u64::MAX),
+        CapabilityPart::Partial(entries) => {
+            push_count(out, u64::MAX - 1);
+            write_capability_entries(out, entries);
         }
+        CapabilityPart::Loaded(entries) => write_capability_entries(out, entries),
     }
 }
 

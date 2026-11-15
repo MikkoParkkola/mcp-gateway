@@ -12,16 +12,12 @@ use crate::config_reload::revision::{CapabilityPart, RawBytes, RawInputs};
 impl Config {
     /// The capability part a startup revision carries.
     ///
-    /// Stub: today's empty loaded list, whichever way `capabilities.enabled`
-    /// reads. The two arms are where the real ones land: enabled has not read
-    /// the files, disabled is this empty catalogue.
-    #[allow(
-        clippy::if_same_then_else,
-        reason = "stub: both readings return today's empty loaded list"
-    )]
+    /// Enabled has not read the files (`NotLoaded`). Disabled is the empty
+    /// loaded list, so its id is the one from before capability files were
+    /// an input.
     pub(crate) fn capability_part(&self) -> CapabilityPart<RawBytes> {
         if self.capabilities.enabled {
-            CapabilityPart::Loaded(Vec::new())
+            CapabilityPart::NotLoaded
         } else {
             CapabilityPart::Loaded(Vec::new())
         }
