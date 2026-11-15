@@ -254,12 +254,19 @@ impl ChildTree {
     /// (Unix): the close signal, then the pre-reap signal (A5) repeated while
     /// the group settles, never after the reap.
     fn send_group_signal(&mut self) {
-        let _ = self.wrapper.start_kill();
+        let sent = self.wrapper.start_kill();
         self.signals_closed = true;
         #[cfg(test)]
         {
             self.group_signals_sent += 1;
+            #[cfg(unix)]
+            if sent.is_ok()
+                && let Some(pid) = self.pid
+            {
+                signal_log::record(pid, signal_log::Sent::Kill);
+            }
         }
+        let _ = sent;
     }
 
     /// Signal the group if it is provably ours (Unix), or end the Job
@@ -378,15 +385,31 @@ impl ChildTree {
         }
         match (self.leader_state(), self.pid) {
             (Leader::Running, Some(pid)) => {
-                let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::TERM);
+                let sent = rustix::process::kill_process_group(pid, rustix::process::Signal::TERM);
                 #[cfg(test)]
                 {
                     self.term_signals_sent += 1;
+                    if sent.is_ok() {
+                        signal_log::record(pid, signal_log::Sent::Term);
+                    }
+                }
+                let _ = sent;
+                true
+            }
+            (Leader::Zombie | Leader::Gone, _) => {
+                #[cfg(test)]
+                if let Some(pid) = self.pid {
+                    signal_log::record(pid, signal_log::Sent::LeaderGone);
                 }
                 true
             }
-            (Leader::Zombie | Leader::Gone, _) => true,
-            (Leader::Running | Leader::Unproven, _) => false,
+            (Leader::Running | Leader::Unproven, _) => {
+                #[cfg(test)]
+                if let Some(pid) = self.pid {
+                    signal_log::record(pid, signal_log::Sent::Unproven);
+                }
+                false
+            }
         }
     }
 
@@ -478,6 +501,16 @@ impl ChildTree {
         let planned = grace.term_at < grace.kill_at || grace.term_owed;
         let due = grace.term_owed || now >= grace.term_at;
         let fits = now < grace.kill_at || now + MIN_PHASE <= slack_end;
+        #[cfg(test)]
+        if planned
+            && due
+            && !fits
+            && grace.term_sent_at.is_none()
+            && let Some(pid) = self.pid
+        {
+            let late = now.saturating_duration_since(grace.kill_at);
+            signal_log::record(pid, signal_log::Sent::SkipLate { late });
+        }
         if planned && due && fits && grace.term_sent_at.is_none() && self.send_group_term() {
             grace.term_sent_at = Some(now);
             if now >= grace.kill_at {
@@ -673,6 +706,11 @@ pub(super) const NESTED_TERM_NEED: std::time::Duration = super::reaper::HURRY_WI
 /// Windows has no SIGTERM phase.
 #[cfg(not(unix))]
 pub(super) const NESTED_TERM_NEED: std::time::Duration = std::time::Duration::ZERO;
+
+/// Test-only record of the signals the reaper sends (see the module).
+#[cfg(all(test, unix))]
+#[path = "stdio_child_tree_signal_log.rs"]
+pub(crate) mod signal_log;
 
 #[cfg(all(test, unix))]
 #[path = "stdio_child_tree_tests.rs"]
