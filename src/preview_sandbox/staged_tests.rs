@@ -13,10 +13,15 @@ use std::path::Path;
 /// True when `text` carries a staged-dark attribute on a code line (a comment
 /// that merely mentions the attribute does not count).
 fn carries_staged_dark(text: &str) -> bool {
-    text.lines().any(|line| {
-        let line = line.trim_start();
-        !line.starts_with("//") && line.contains("expect(dead_code")
-    })
+    // Comment lines are mentions; the rest is read with whitespace removed,
+    // so an attribute rustfmt wrapped over several lines still counts.
+    let code: String = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .flat_map(str::chars)
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    code.contains("expect(dead_code")
 }
 
 /// Every `.rs` source under `dir` that carries a staged-dark attribute,
@@ -90,6 +95,10 @@ fn every_staged_line_names_the_part_that_removes_it() {
 fn the_scan_tells_an_attribute_from_a_mention() {
     assert!(carries_staged_dark(
         "#![cfg_attr(\n    not(test),\n    expect(dead_code, reason = \"later\")\n)]"
+    ));
+    // rustfmt wraps a long reason over several lines.
+    assert!(carries_staged_dark(
+        "#![cfg_attr(\n    not(test),\n    expect(\n        dead_code,\n        reason = \"later\"\n    )\n)]"
     ));
     assert!(!carries_staged_dark(
         "// a comment that names expect(dead_code) is only a mention"
