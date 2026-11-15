@@ -180,8 +180,15 @@ test('A3 search: web.fetch is one request after typing stops, and q is in the UR
   // The clock is paused, so a debounce timer cannot fire between keys.
   await box.pressSequentially('web.fetch');
   expect(urls.length).toBe(before);
-  // No debounce length is specified. One second after the last key is "typing stopped".
-  await page.clock.runFor(1000);
+  // The wait is 300 ms after the last key: nothing at 250 ms, one request by 350 ms.
+  // The search commits by writing q into the address, synchronously in its timer,
+  // so the address read inside the page tells whether the wait has ended.
+  const committedQ = () => page.evaluate(() => new URLSearchParams(location.search).get('q'));
+  await page.clock.runFor(250);
+  expect(await committedQ()).toBeNull();
+  expect(urls.length).toBe(before);
+  await page.clock.runFor(100);
+  expect(await committedQ()).toBe('web.fetch');
   await expect.poll(() => urls.length).toBe(before + 1);
   expect(filters(urls.at(-1)).q).toBe('web.fetch');
   expect(filters(urls.at(-1)).from).toBe(FROM_24H);
