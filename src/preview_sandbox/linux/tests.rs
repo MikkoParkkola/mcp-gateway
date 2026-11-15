@@ -408,3 +408,46 @@ fn a_file_under_a_mask_is_not_placed() {
     plan.bound_back.push(parent.display().to_string());
     assert!(!placed(&hidden.join("node"), &plan), "a hidden path");
 }
+
+/// R-bind, kills "the fetch binds the /usr/local trees whole" and "a covered
+/// bind-back stays": an `n` layout (npm's cli inside its package under
+/// `/usr/local/lib`, node in `/usr/local/bin`) binds back exactly node's file
+/// and npm's package, never the trees around them, since an npx preview's
+/// run phase executes downloaded code; an NVM node binds its version tree
+/// once; a node elsewhere leaves the plan unchanged and refuses by name.
+#[test]
+fn an_n_layout_binds_back_only_node_and_npms_package() {
+    let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let package = "/usr/local/lib/preview-row/node_modules/npm";
+    let cli = format!("{package}/bin/npm-cli.js");
+    let node = "/usr/local/bin/preview-row-node";
+    let mut plan = base.clone();
+    plan.bound_back = vec![format!("{package}/bin"), format!("{package}/lib")];
+    let exec =
+        place_npm(&mut plan, Path::new(&cli), Path::new(node)).expect("an n layout is placed");
+    assert_eq!(plan.bound_back, [node, package]);
+    assert_eq!(plan.read_only, base.read_only);
+    assert_eq!(exec, PathBuf::from(&cli));
+
+    let tree = "/home/preview-row/.nvm/versions/node/v20.0.0";
+    let mut plan = base.clone();
+    let cli = format!("{tree}/lib/node_modules/npm/bin/npm-cli.js");
+    let node = format!("{tree}/bin/node");
+    place_npm(&mut plan, Path::new(&cli), Path::new(&node)).expect("an NVM node is placed");
+    assert_eq!(
+        plan.read_only,
+        [base.read_only.clone(), vec![tree.to_owned()]].concat()
+    );
+    assert_eq!(plan.bound_back, base.bound_back);
+
+    let tool = "/opt/hostedtoolcache/node/20.1.0/x64";
+    let mut plan = base.clone();
+    let cli = format!("{tool}/lib/node_modules/npm/bin/npm-cli.js");
+    let node = format!("{tool}/bin/node");
+    let refused = place_npm(&mut plan, Path::new(&cli), Path::new(&node)).expect_err("refused");
+    assert!(
+        matches!(&refused, Refusal::Step(s) if s.starts_with("placing npm")),
+        "{refused}"
+    );
+    assert_eq!(plan, base);
+}

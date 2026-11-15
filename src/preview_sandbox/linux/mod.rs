@@ -220,7 +220,7 @@ async fn start_fetching_with(
                 bundle.source.display()
             ))
         })?;
-    let npm = npm_fetch(target, &plan, path.as_deref(), proxy.unix_path())?;
+    let npm = npm_fetch(target, &mut plan, path.as_deref(), proxy.unix_path())?;
     plan.fetch = Some(plan::FetchPaths {
         control: utf8(&control)?,
         ca: utf8(&ca)?,
@@ -283,7 +283,7 @@ async fn helper_ended(child: &mut tokio::process::Child) -> Refusal {
 /// fetch is built.
 fn npm_fetch(
     target: &Target,
-    plan: &Plan,
+    plan: &mut Plan,
     path: Option<&OsStr>,
     proxy: &Path,
 ) -> Result<Option<plan::NpmFetch>, Refusal> {
@@ -299,14 +299,7 @@ fn npm_fetch(
         .map_err(|e| Refusal::Step(format!("finding {requested} ({e})")))?;
     let (npm, node_dir) = probe::npm_beside(&npx)?;
     probe::check_npm(&npm, &node_dir)?;
-    for (what, file) in [("npm", &npm), ("node", &node_dir.join("node"))] {
-        if !placed(file, plan) {
-            return Err(Refusal::Step(format!(
-                "placing {what} ({} is not shown inside the root)",
-                file.display()
-            )));
-        }
-    }
+    let npm = place_npm(plan, &npm, &node_dir.join("node"))?;
     let ip = probe::find_ip(&probe::IP_CANDIDATES, &|p: &Path| placed(p, plan))?;
     let run_args = phases
         .run_args
@@ -442,6 +435,20 @@ fn build_plan(
         target: argv,
         fetch: None,
     })
+}
+
+/// Make npm and node shown inside the root and return the path npm is
+/// executed by there; refuses by name when either is not shown.
+fn place_npm(plan: &mut Plan, npm: &Path, node: &Path) -> Result<PathBuf, Refusal> {
+    for (what, file) in [("npm", npm), ("node", node)] {
+        if !placed(file, plan) {
+            return Err(Refusal::Step(format!(
+                "placing {what} ({} is not shown inside the root)",
+                file.display()
+            )));
+        }
+    }
+    Ok(npm.to_owned())
 }
 
 /// Whether `plan`'s root shows `file`, its links followed first.
