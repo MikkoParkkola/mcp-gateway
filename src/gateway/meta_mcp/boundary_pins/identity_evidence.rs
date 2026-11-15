@@ -462,28 +462,55 @@ async fn a_json_grants_file_naming_no_one_is_refused_by_parse_refusal() {
     );
 }
 
-/// `parse_journal` reads `JournalEntry`, which holds grant ids and digests and
-/// no identity type: the scanner flags it only because its statement slice runs
-/// past the fn into the next fn's `IdentityGrant` signature. A journal line is
-/// read in full and nothing in it names a caller.
+/// `parse_journal` reads `JournalEntry`: grant ids and digests, no identity.
+/// The scanner flags it only because its statement slice runs past the fn end
+/// into the next fn's `IdentityGrant` signature. The closure below destructures
+/// an entry exhaustively, with each field's type written out, and matches every
+/// verb, so it stops compiling if an entry or a verb gains a field or a variant:
+/// a journal that starts carrying an identity cannot build unnoticed.
 #[test]
 fn a_journal_entry_carries_no_identity() {
-    let text = source("src/identity_grants/journal.rs");
-    let start = text
-        .find("pub struct JournalEntry {")
-        .expect("JournalEntry is defined");
-    let body = &text[start..start + text[start..].find("\n}").expect("its body ends")];
-    for carrier in [
-        "GrantSubject",
-        "VerifiedIdentity",
-        "CertIdentity",
-        "IdentityGrant",
-    ] {
-        assert!(
-            !body.contains(carrier),
-            "JournalEntry now holds {carrier}: list its read-back"
+    use crate::identity_grants::journal::{JournalEntry, JournalVerb};
+    use chrono::{DateTime, Utc};
+    let fields_are_not_identities: fn(JournalEntry) = |entry| {
+        let JournalEntry {
+            v,
+            entry_id,
+            verb,
+            grant_id,
+            prev_digest,
+            digest,
+            expires_at,
+            at,
+            actor,
+            os_account,
+        } = entry;
+        let _: (
+            u32,
+            String,
+            String,
+            Option<String>,
+            String,
+            Option<DateTime<Utc>>,
+            DateTime<Utc>,
+            String,
+            Option<String>,
+        ) = (
+            v,
+            entry_id,
+            grant_id,
+            prev_digest,
+            digest,
+            expires_at,
+            at,
+            actor,
+            os_account,
         );
-    }
+        match verb {
+            JournalVerb::Add | JournalVerb::Replace | JournalVerb::Revoke => {}
+        }
+    };
+    let _ = fields_are_not_identities;
 }
 
 /// The three identity leaf modules declare no child module
