@@ -105,15 +105,15 @@
 //! evidence: H3
 //!
 //! ```compile_fail
-//! use mcp_gateway::key_server::oidc::VerifiedIdentity::{self as N};
-//! fn f(v: N) -> N {
-//!     N { subject: String::new(), email: String::new(), name: None, groups: Vec::new(), issuer: String::new() }
+//! use mcp_gateway::key_server::oidc::{self as N};
+//! fn f(v: N::VerifiedIdentity) -> N::VerifiedIdentity {
+//!     N::VerifiedIdentity { subject: String::new(), email: String::new(), name: None, groups: Vec::new(), issuer: String::new() }
 //! }
 //! ```
 //!
 //! ```
-//! use mcp_gateway::key_server::oidc::VerifiedIdentity::{self as N};
-//! fn f(v: N) -> N {
+//! use mcp_gateway::key_server::oidc::{self as N};
+//! fn f(v: N::VerifiedIdentity) -> N::VerifiedIdentity {
 //!     v
 //! }
 //! ```

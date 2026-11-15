@@ -454,7 +454,7 @@ mod tests {
             )
         };
         let refused_read = |result: &Result<(), Refused>| {
-            matches!(result, Err(Refused::Invalid { errors })
+            matches!(result, Err(Refused::Invalid { errors, .. })
                 if errors.iter().any(|e| e.message == "Capability YAML could not be parsed safely"))
         };
         let nameless = check(&owned(""));
