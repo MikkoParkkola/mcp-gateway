@@ -211,3 +211,143 @@ async fn a_redirect_is_not_followed() {
     assert!(refused.contains("307"), "{refused}");
     assert_eq!(hits.load(Ordering::SeqCst), 0, "the redirect was followed");
 }
+
+/// A gateway that answers every request with `status` and `body`.
+async fn answering(status: u16, body: String) -> String {
+    let status = axum::http::StatusCode::from_u16(status).expect("status");
+    let app = axum::Router::new().fallback(move || {
+        let body = body.clone();
+        async move { (status, [("content-type", "application/json")], body) }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    format!("http://{addr}")
+}
+
+/// What `dashboard-link` and `events dead-letters` print against `base`.
+async fn both(base: &str, token: &str) -> [(&'static str, super::Printed); 2] {
+    let list = mcp_gateway::cli::events::DeadLettersArgs {
+        action: mcp_gateway::cli::events::DeadLetterAction::List,
+        id: None,
+        all: false,
+        subscription: None,
+        reason: None,
+        url: None,
+        tls: no_flags(),
+    };
+    let tls = LinkTls::default();
+    [
+        (
+            "dashboard-link",
+            super::dashboard_link_output(base, &tls, token).await,
+        ),
+        (
+            "events",
+            super::dead_letters_output(base, &tls, &list, token).await,
+        ),
+    ]
+}
+
+fn printed_nowhere(command: &str, token: &str, out: &super::Printed) {
+    assert!(
+        !out.stdout.contains(token) && !out.stderr.contains(token),
+        "{command}, token {token:?}: {out:?}"
+    );
+}
+
+/// MIK-9679.CLIUX.14: a token equal to the status text is never printed.
+#[tokio::test]
+async fn a_token_equal_to_the_status_text_is_never_printed() {
+    for (token, status, body) in [
+        ("404", 404, r#"{"error":"no such route"}"#),
+        ("Not Found", 404, "{}"),
+        ("Found", 302, "{}"),
+        ("OK", 200, ""),
+    ] {
+        let base = answering(status, body.to_string()).await;
+        for (command, out) in both(&base, token).await {
+            printed_nowhere(command, token, &out);
+            assert!(!out.ok, "{command}, token {token:?}: a failure");
+            assert!(!out.stderr.is_empty(), "{command}: something is reported");
+        }
+    }
+}
+
+/// MIK-9679.CLIUX.26 (register row 1185): a token echoed in any of the
+/// gateway's reason shapes is never printed; the status still is.
+#[tokio::test]
+async fn a_token_echoed_in_the_error_reason_is_never_printed() {
+    let token = "tok-ECHOED-1185";
+    for body in [
+        serde_json::json!({ "message": format!("bad bearer {token}") }),
+        serde_json::json!({ "error": { "message": token } }),
+        serde_json::json!({ "error": token }),
+        serde_json::json!({ "reason": token }),
+    ] {
+        let base = answering(400, body.to_string()).await;
+        for (command, out) in both(&base, token).await {
+            printed_nowhere(command, token, &out);
+            assert!(!out.ok, "{command}: a failure");
+            assert!(out.stderr.contains("400"), "{command}: {}", out.stderr);
+        }
+    }
+}
+
+/// MIK-9679.CLIUX.15: a token in the success answer, in a value, a key or the
+/// link, is never printed; the rest of the answer is.
+#[tokio::test]
+async fn a_token_in_the_success_answer_is_never_printed() {
+    let token = "tok-IN-ANSWER-9679";
+    let mut body = serde_json::json!({
+        "link": format!("http://127.0.0.1:1/dashboard?bootstrap={token}"),
+        "items": [{ "id": "d1", "note": format!("held for {token}") }],
+    });
+    body[token] = serde_json::json!("a key");
+    let base = answering(200, body.to_string()).await;
+    let [(_, link), (_, events)] = both(&base, token).await;
+    for (command, out) in [("dashboard-link", &link), ("events", &events)] {
+        printed_nowhere(command, token, out);
+        assert!(out.ok, "{command}: {out:?}");
+        assert!(!out.stdout.is_empty(), "{command}: the answer is printed");
+    }
+    assert!(link.stdout.starts_with("http://127.0.0.1:1/dashboard?bootstrap="));
+    let printed: serde_json::Value = serde_json::from_str(&events.stdout).expect("JSON");
+    assert_eq!(printed["items"][0]["id"], "d1");
+}
+
+/// MIK-9679.CLIUX.15: an answer whose redaction would merge two entries is
+/// refused, not printed short.
+#[tokio::test]
+async fn an_answer_that_loses_an_entry_to_redaction_is_refused() {
+    // `[redacted]` is the shared redactor's first marker: renaming the key
+    // `#` to it collides with the existing key.
+    let body = r##"{"link":"http://127.0.0.1:1/l","#":"first","[redacted]":"second"}"##;
+    let base = answering(200, body.to_string()).await;
+    for (command, out) in both(&base, "#").await {
+        printed_nowhere(command, "#", &out);
+        assert!(!out.ok, "{command}: refused");
+        assert!(out.stdout.is_empty(), "{command}: nothing on stdout");
+        assert!(out.stderr.contains("printed safely"), "{command}: {}", out.stderr);
+    }
+}
+
+/// MIK-9679.CLIUX.15: the stdout backstop and the whole-stderr gate. A token
+/// equal to JSON syntax, which the JSON redactor cannot mask, is refused; a
+/// token equal to the note or the error prefix is masked there.
+#[tokio::test]
+async fn a_token_in_fixed_text_is_never_printed() {
+    let base = answering(200, r#"{"link":"http://127.0.0.1:1/l","ok":1}"#.into()).await;
+    let [(_, link), (_, events)] = both(&base, ":").await;
+    printed_nowhere("dashboard-link", ":", &link);
+    printed_nowhere("events", ":", &events);
+    assert!(!events.ok && events.stdout.is_empty(), "{events:?}");
+    let [(_, link), _] = both(&base, "once").await;
+    assert!(link.ok, "{link:?}");
+    printed_nowhere("dashboard-link", "once", &link);
+    let refused = answering(403, "{}".into()).await;
+    let [_, (_, events)] = both(&refused, "events").await;
+    printed_nowhere("events", "events", &events);
+}
