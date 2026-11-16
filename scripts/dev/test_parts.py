@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 TABLE = Path("scripts/dev/test-parts.tsv")
 SHARED = Path("scripts/dev/test-parts-shared.txt")
 BUILD_RS = Path("scripts/dev/test-parts-build.rs")  # the package build script (Cargo.toml `build`)
-CRATE_ALLOW = "#![cfg_attr(tp_partial, allow(dead_code, unused_imports, unused_variables))]"
+CRATE_ALLOW = "#![cfg_attr(tp_partial, allow(unused, unfulfilled_lint_expectations))]"
 CANDIDATE = re.compile(r"^(tests?|.*_tests?)$")
 # Canonical tags only: tp1, tp12; never tp0 or tp01, which the build script never emits.
 TAG = re.compile(r"^tp([1-9][0-9]*)$")

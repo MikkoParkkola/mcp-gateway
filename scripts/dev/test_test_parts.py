@@ -46,7 +46,7 @@ def read_tree(root: Path) -> dict[str, str]:
     }
 
 
-CRATE_ALLOW = "#![cfg_attr(tp_partial, allow(dead_code, unused_imports, unused_variables))]\n"
+CRATE_ALLOW = "#![cfg_attr(tp_partial, allow(unused, unfulfilled_lint_expectations))]\n"
 
 # Two parts: `src` (and src/a) in part 1, src/b in part 2. Tagged and green.
 BASE = {
