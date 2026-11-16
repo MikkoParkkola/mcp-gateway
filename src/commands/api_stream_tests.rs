@@ -599,7 +599,9 @@ async fn a_streamed_request_has_no_total_limit() {
             total: Some(ms(50)),
             ..AdminClientOptions::default()
         };
-        let url = api_url(&gateway.base, STREAM).expect("url");
+        let Ok(url) = api_url(&gateway.base, STREAM) else {
+            panic!("the stream URL parses");
+        };
         let buffered = super::super::super::dashboard_link::admin_call_url_with_options(
             reqwest::Method::GET,
             url,
