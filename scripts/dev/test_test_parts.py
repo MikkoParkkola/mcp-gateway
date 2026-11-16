@@ -149,6 +149,10 @@ class Invariant(Rows):
     def test_tp_partial_outside_the_crate_root_allow_is_refused(self):
         self.assert_refused(with_files(src__a_DOT_rs="#[cfg(tp_partial)]\npub fn f() {}\n" + BASE["src/a.rs"]), "stray-cfg")
 
+    def test_a_comment_naming_tp1_is_not_code(self):
+        # Review-round labels in comments ("gpt tp1 F3") are common in this tree.
+        self.assert_green(with_files(src__a_DOT_rs="/// Pinned after the gpt tp1 F3 finding.\n" + BASE["src/a.rs"]))
+
     def test_a_crate_root_without_the_partial_build_allow_is_refused(self):
         self.assert_refused(with_files(src__lib_DOT_rs="mod a;\nmod b;\n"), "crate-allow")
 
@@ -230,6 +234,21 @@ class ParseSafety(Rows):
 
     def test_a_file_that_does_not_parse_is_refused(self):
         self.assert_refused(with_files(src__a_DOT_rs=BASE["src/a.rs"] + "\nfn broken( {\n"), "parse")
+
+    def test_a_listed_grammar_gap_in_production_code_is_not_refused(self):
+        # src/gateway/authz.rs: the pinned grammar cannot parse `raw @ Value::String(_)` in a production fn.
+        body = "pub fn f(v: Option<u8>) -> u8 {\n    match v {\n        Some(raw @ 1) => raw,\n        _ => 0,\n    }\n}\n"
+        files = with_files(src__a_DOT_rs=body + BASE["src/a.rs"].replace("pub fn f() {}\n", ""))
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_tree(root, files)
+            walk = self.tool.walk_file("src/a.rs", files["src/a.rs"])
+            if not walk.errors:
+                self.skipTest("the pinned grammar parses this form; the gap row has nothing to pin")
+            known = self.tool.gate()._error_signature(self.tool.gate()._errors(
+                self.tool.gate()._rust_parser().parse(files["src/a.rs"].encode()).root_node, files["src/a.rs"].encode()))
+            with unittest.mock.patch.dict(self.tool.gate().KNOWN_GAPS, {"src/a.rs": known}):
+                self.assertNotIn("parse", sorted({f.code for f in self.tool.check(root)}))
 
     def test_a_walk_that_disagrees_with_the_token_scan_is_refused(self):
         real = self.tool.token_inventory
