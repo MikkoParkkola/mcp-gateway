@@ -475,7 +475,7 @@ fn production_files(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec
         }
         if path.is_dir() {
             production_files(root, &path, out);
-        } else if name.ends_with(".rs") {
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
             let rel = path.strip_prefix(root).expect("under the crate root");
             let rel: Vec<_> = rel
                 .components()
