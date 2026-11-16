@@ -1,0 +1,25 @@
+head_sha	74f5722a74e7c1af75e0d606eb94b93ae15bebdc
+#mutant m1
+mcp_gateway	commands::api::stream::tests::a_stalled_reader_ends_at_the_overall_deadline	src/commands/api_stream_tests.rs:800
+#mutant m2
+mcp_gateway	commands::api::stream::tests::tokens_the_redactor_cannot_mask_stop_the_run	src/commands/api_stream_tests.rs:835
+#mutant m4
+mcp_gateway	commands::api::stream::tests::tokens_the_redactor_cannot_mask_stop_the_run	src/commands/api_stream_tests.rs:835
+#mutant m5
+mcp_gateway	commands::api::stream::tests::an_over_long_line_in_one_chunk_is_refused	src/commands/api_stream_tests.rs:867
+#mutant m6
+mcp_gateway	commands::api::stream::tests::stream_flags_and_credentials_are_checked_before_sending	src/commands/api_stream_tests.rs:177
+#mutant m7
+mcp_gateway	commands::api::stream::tests::a_streamed_request_has_no_total_limit	src/commands/api_stream_tests.rs:689
+#mutant m9
+mcp_gateway	commands::api::stream::tests::an_over_long_line_is_refused_unprinted	src/commands/api_stream_tests.rs:389
+#mutant m10
+mcp_gateway	commands::api::stream::tests::stream_flags_and_credentials_are_checked_before_sending	src/commands/api_stream_tests.rs:157
+#mutant m11
+mcp_gateway	commands::api::stream::tests::a_download_masks_the_credential_at_every_cut	src/commands/api_stream_tests.rs:243
+#mutant m12
+mcp_gateway	commands::api::stream::tests::an_event_masks_the_credential_in_every_field	src/commands/api_stream_tests.rs:256
+#mutant m13
+mcp_gateway	commands::api::stream::tests::a_live_stream_stops_at_the_limit_and_hangs_up	src/commands/api_stream_tests.rs:598
+#mutant m14
+mcp_gateway	commands::api::stream::tests::no_response_headers_end_at_the_headers_wait	src/commands/api_stream_tests.rs:888
