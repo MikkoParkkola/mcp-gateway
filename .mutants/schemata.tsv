@@ -1,0 +1,7 @@
+head_sha	b4ce5417789ad1f5fb7e8198d1fd07273f391438
+#mutant m-never-exits
+cli_broken_pipe	a_reader_that_takes_one_line_and_leaves_is_a_clean_exit	tests/cli_broken_pipe.rs:47
+#mutant m-no-first-line
+cli_broken_pipe	a_reader_that_takes_one_line_and_leaves_is_a_clean_exit	tests/cli_broken_pipe.rs:47
+#mutant m-pipe-held
+cli_broken_pipe	a_reader_that_takes_one_line_and_leaves_is_a_clean_exit	tests/cli_broken_pipe.rs:90
