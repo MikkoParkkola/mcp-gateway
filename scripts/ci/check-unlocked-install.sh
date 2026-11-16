@@ -54,8 +54,9 @@ chmod 600 "$config"
 # The log exists before the start. The redirect below opens it in the background
 # child, and under load the first poll can run before that child does: reading a
 # missing file fails under set -e, and the script would exit having printed
-# nothing (seen in a merge train's cheap gate). Nothing outside this script can
-# delay the child's open, so no self-test row can reproduce this; the guarantee
+# nothing: a merge train's cheap gate saw exactly that on 2026-11-16 (exit 1,
+# empty output, load 10.1). Nothing outside this script can delay the child's
+# open, so no self-test row can reproduce this; the guarantee is structural and
 # rests on this line.
 : > "$log"
 
