@@ -242,6 +242,20 @@ fn block_from(code: &str, from: usize) -> &str {
     &code[start..]
 }
 
+/// The statement that starts at `from`, through its `;` outside any bracket.
+fn statement_from(code: &str, from: usize) -> &str {
+    let mut depth = 0_i64;
+    for (at, c) in code[from..].char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ';' if depth == 0 => return &code[from..=from + at],
+            _ => {}
+        }
+    }
+    &code[from..]
+}
+
 /// What the guard found in one product file: aliases of a clock type, and
 /// `disallowed_methods` allows whose scope holds a clock read.
 fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
@@ -271,6 +285,9 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
         }
         let scope = if attr.starts_with("#!") {
             code.as_str()
+        } else if code[close..].trim_start().starts_with("let ") {
+            // An allow on a `let` reaches that statement only, not the next block.
+            statement_from(&code, close)
         } else {
             block_from(&code, close)
         };
@@ -321,4 +338,33 @@ fn no_disallowed_methods_allow_or_clock_alias_hides_a_clock_read() {
         "the scan found no disallowed_methods allow at all (src/home_dir.rs holds four): it is reading nothing"
     );
     assert!(holes.is_empty(), "{holes:#?}");
+}
+
+/// Kills "a statement allow is scoped to the next block": an allow on a
+/// `let` hides a clock read in that statement, never one in the code after
+/// it, while an allow on a function still covers its whole body.
+#[test]
+fn an_allow_on_a_statement_reaches_that_statement_only() {
+    let read = concat!("U", "tc::now()");
+    let allow = "#[allow(clippy::disallowed_methods, reason = \"id: x\")]";
+    let inside =
+        format!("fn f() {{\n    {allow}\n    let at = ({read}, rand::random::<u8>());\n}}\n");
+    let after = format!(
+        "fn f() {{\n    {allow}\n    let id = rand::random::<u8>();\n    emit(Event {{ id, at: {read} }});\n}}\n"
+    );
+    let item = format!("{allow}\nfn f() {{\n    let at = {read};\n}}\n");
+    assert_eq!(
+        clock_lint_holes("inside.rs", &inside).len(),
+        1,
+        "in the statement"
+    );
+    assert!(
+        clock_lint_holes("after.rs", &after).is_empty(),
+        "after the statement"
+    );
+    assert_eq!(
+        clock_lint_holes("item.rs", &item).len(),
+        1,
+        "in the function"
+    );
 }
