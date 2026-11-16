@@ -735,7 +735,10 @@ async fn a_download_prints_before_the_body_ends() {
 /// that stalls the pipe parks a real write; once released, it keeps what it
 /// is given.
 #[derive(Clone, Default)]
-struct Parked(std::sync::Arc<(std::sync::Mutex<(bool, Vec<u8>)>, std::sync::Condvar)>);
+struct Parked(ParkState);
+
+/// Whether the parked writes are released, what they wrote, and the wake.
+type ParkState = std::sync::Arc<(std::sync::Mutex<(bool, Vec<u8>)>, std::sync::Condvar)>;
 
 impl Write for Parked {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {

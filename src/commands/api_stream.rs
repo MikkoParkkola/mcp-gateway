@@ -291,7 +291,7 @@ struct Events {
     started: bool,
     data: String,
     has_data: bool,
-    event: String,
+    name: String,
     last_id: String,
 }
 
@@ -326,7 +326,7 @@ impl Events {
             line = line.strip_prefix('\u{feff}').unwrap_or(line);
         }
         if line.is_empty() {
-            let event = std::mem::take(&mut self.event);
+            let event = std::mem::take(&mut self.name);
             let mut data = std::mem::take(&mut self.data);
             if !std::mem::replace(&mut self.has_data, false) {
                 return None;
@@ -348,13 +348,13 @@ impl Events {
         let (field, value) = line.split_once(':').unwrap_or((line, ""));
         let value = value.strip_prefix(' ').unwrap_or(value);
         match field {
-            "event" => self.event = value.to_owned(),
+            "event" => value.clone_into(&mut self.name),
             "data" => {
                 self.data.push_str(value);
                 self.data.push('\n');
                 self.has_data = true;
             }
-            "id" if !value.contains('\0') => self.last_id = value.to_owned(),
+            "id" if !value.contains('\0') => value.clone_into(&mut self.last_id),
             _ => {}
         }
         None
@@ -369,16 +369,19 @@ fn rendered(event: Event, token: &str, json_output: bool) -> Option<Vec<u8>> {
     if !json_output {
         let mut text = format!("event: {}\n", event.event);
         if let Some(id) = &event.id {
-            text.push_str(&format!("id: {id}\n"));
+            text.push_str("id: ");
+            text.push_str(id);
+            text.push('\n');
         }
         for line in event.data.split('\n') {
-            text.push_str(&format!("data: {line}\n"));
+            text.push_str("data: ");
+            text.push_str(line);
+            text.push('\n');
         }
         text.push('\n');
         return checked(&redact::text(&text, &secrets), &text, token);
     }
-    let data =
-        serde_json::from_str::<Value>(&event.data).unwrap_or_else(|_| Value::String(event.data));
+    let data = serde_json::from_str::<Value>(&event.data).unwrap_or(Value::String(event.data));
     let mut object = json!({"event": event.event, "id": event.id, "data": data});
     let entries = super::object_entry_count(&object);
     redact::json(&mut object, &secrets);
@@ -665,7 +668,7 @@ impl Printing<'_> {
         let (json, token) = (self.json, self.token);
         let mut body = answer.body;
         let (mut lines, mut events) = (Lines::default(), Events::default());
-        let mut printed = 0usize;
+        let mut shown = 0usize;
         let mut event_due = Instant::now() + deadlines.event;
         loop {
             let now = Instant::now();
@@ -694,7 +697,7 @@ impl Printing<'_> {
                 let Some(done) = events.push(&chunk) else {
                     return too_long(json, token);
                 };
-                for event in done.into_iter().take(self.limit - printed - pieces.len()) {
+                for event in done.into_iter().take(self.limit - shown - pieces.len()) {
                     let Some(bytes) = rendered(event, token, json) else {
                         return unsafe_body(json, token);
                     };
@@ -722,15 +725,15 @@ impl Printing<'_> {
                     Print::Failed => return write_failed(json, token),
                 }
                 if self.mode == Mode::Stream {
-                    printed += 1;
+                    shown += 1;
                 }
             }
-            if self.mode == Mode::Stream && printed >= self.limit {
+            if self.mode == Mode::Stream && shown >= self.limit {
                 return self.done();
             }
         }
         if self.mode == Mode::Stream {
-            let message = format!("The stream ended after {printed} of {} events.", self.limit);
+            let message = format!("The stream ended after {shown} of {} events.", self.limit);
             return network(&message, json, token);
         }
         if let Some(line) = lines.finish() {
