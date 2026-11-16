@@ -211,3 +211,314 @@ async fn a_redirect_is_not_followed() {
     assert!(refused.contains("307"), "{refused}");
     assert_eq!(hits.load(Ordering::SeqCst), 0, "the redirect was followed");
 }
+
+/// A gateway that answers every request with `status` and `body`.
+async fn answering(status: u16, body: String) -> String {
+    let status = axum::http::StatusCode::from_u16(status).expect("status");
+    let app = axum::Router::new().fallback(move || {
+        let body = body.clone();
+        async move { (status, [("content-type", "application/json")], body) }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    format!("http://{addr}")
+}
+
+/// What `dashboard-link` and `events dead-letters` print against `base`.
+async fn both(base: &str, token: &str) -> [(&'static str, super::Printed); 2] {
+    let list = mcp_gateway::cli::events::DeadLettersArgs {
+        action: mcp_gateway::cli::events::DeadLetterAction::List,
+        id: None,
+        all: false,
+        subscription: None,
+        reason: None,
+        url: None,
+        tls: no_flags(),
+    };
+    let tls = LinkTls::default();
+    [
+        (
+            "dashboard-link",
+            super::dashboard_link_output(base, &tls, token).await,
+        ),
+        (
+            "events",
+            super::dead_letters_output(base, &tls, &list, token).await,
+        ),
+    ]
+}
+
+fn printed_nowhere(command: &str, token: &str, out: &super::Printed) {
+    assert!(
+        !out.stdout.contains(token) && !out.stderr.contains(token),
+        "{command}, token {token:?}: {out:?}"
+    );
+}
+
+/// A token equal to the status text is never printed.
+#[tokio::test]
+async fn a_token_equal_to_the_status_text_is_never_printed() {
+    for (token, status, body) in [
+        ("404", 404, r#"{"error":"no such route"}"#),
+        ("Not Found", 404, "{}"),
+        ("Found", 302, "{}"),
+        ("OK", 200, ""),
+    ] {
+        let base = answering(status, body.to_string()).await;
+        for (command, out) in both(&base, token).await {
+            printed_nowhere(command, token, &out);
+            assert!(!out.ok, "{command}, token {token:?}: a failure");
+            // Not the fixed fallback sentence: the report itself, redacted.
+            assert!(
+                out.stderr.contains("the gateway answered"),
+                "{command}, token {token:?}: {}",
+                out.stderr
+            );
+        }
+    }
+}
+
+/// A token echoed in any of the
+/// gateway's reason shapes is never printed; the status still is.
+#[tokio::test]
+async fn a_token_echoed_in_the_error_reason_is_never_printed() {
+    let token = "tok-ECHOED-1185";
+    for body in [
+        serde_json::json!({ "message": format!("bad bearer {token}") }),
+        serde_json::json!({ "error": { "message": token } }),
+        serde_json::json!({ "error": token }),
+        serde_json::json!({ "reason": token }),
+    ] {
+        let base = answering(400, body.to_string()).await;
+        for (command, out) in both(&base, token).await {
+            printed_nowhere(command, token, &out);
+            assert!(!out.ok, "{command}: a failure");
+            assert!(out.stderr.contains("400"), "{command}: {}", out.stderr);
+        }
+    }
+}
+
+/// A token in the success answer, in a value, a key or the
+/// link, is never printed; the rest of the answer is.
+#[tokio::test]
+async fn a_token_in_the_success_answer_is_never_printed() {
+    let token = "tok-IN-ANSWER-9679";
+    let mut body = serde_json::json!({
+        "link": format!("http://127.0.0.1:1/dashboard?bootstrap={token}"),
+        "items": [{ "id": "d1", "note": format!("held for {token}") }],
+    });
+    body[token] = serde_json::json!("a key");
+    let base = answering(200, body.to_string()).await;
+    let [(_, link), (_, events)] = both(&base, token).await;
+    for (command, out) in [("dashboard-link", &link), ("events", &events)] {
+        printed_nowhere(command, token, out);
+        assert!(out.ok, "{command}: {out:?}");
+        assert!(!out.stdout.is_empty(), "{command}: the answer is printed");
+    }
+    assert!(
+        link.stdout
+            .starts_with("http://127.0.0.1:1/dashboard?bootstrap=")
+    );
+    let printed: serde_json::Value = serde_json::from_str(&events.stdout).expect("JSON");
+    assert_eq!(printed["items"][0]["id"], "d1");
+}
+
+/// An answer whose redaction would merge two entries is
+/// refused, not printed short.
+#[tokio::test]
+async fn an_answer_that_loses_an_entry_to_redaction_is_refused() {
+    // `[redacted]` is the shared redactor's first marker: renaming the key
+    // `#` to it collides with the existing key.
+    let body = r##"{"link":"http://127.0.0.1:1/l","#":"first","[redacted]":"second"}"##;
+    let base = answering(200, body.to_string()).await;
+    for (command, out) in both(&base, "#").await {
+        printed_nowhere(command, "#", &out);
+        assert!(!out.ok, "{command}: refused");
+        assert!(out.stdout.is_empty(), "{command}: nothing on stdout");
+        assert!(
+            out.stderr.contains("printed safely"),
+            "{command}: {}",
+            out.stderr
+        );
+    }
+}
+
+/// The stdout backstop and the whole-stderr gate. A token
+/// equal to JSON syntax, which the JSON redactor cannot mask, is refused; a
+/// token equal to the note or the error prefix is masked there.
+#[tokio::test]
+async fn a_token_in_fixed_text_is_never_printed() {
+    let base = answering(200, r#"{"link":"http://127.0.0.1:1/l","ok":1}"#.into()).await;
+    let [(_, link), (_, events)] = both(&base, ":").await;
+    printed_nowhere("dashboard-link", ":", &link);
+    printed_nowhere("events", ":", &events);
+    assert!(!events.ok && events.stdout.is_empty(), "{events:?}");
+    let [(_, link), _] = both(&base, "once").await;
+    assert!(link.ok, "{link:?}");
+    printed_nowhere("dashboard-link", "once", &link);
+    // The gate redacted the note; the fixed fallback sentence would not hold this.
+    assert!(link.stderr.contains("from this machine only"), "{link:?}");
+    let refused = answering(403, "{}".into()).await;
+    let [_, (_, events)] = both(&refused, "events").await;
+    printed_nowhere("events", "events", &events);
+    assert!(
+        events
+            .stderr
+            .contains("dead-letters: the gateway answered 403"),
+        "{events:?}"
+    );
+}
+
+fn dead_letters(
+    action: mcp_gateway::cli::events::DeadLetterAction,
+) -> mcp_gateway::cli::events::DeadLettersArgs {
+    mcp_gateway::cli::events::DeadLettersArgs {
+        action,
+        id: None,
+        all: false,
+        subscription: None,
+        reason: None,
+        url: None,
+        tls: no_flags(),
+    }
+}
+
+/// A config error that quotes the token is gated once a
+/// token is set; it still comes before the token error.
+#[tokio::test]
+async fn a_config_error_quoting_the_token_is_never_printed() {
+    let token = "tok-IN-CONFIG-9679";
+    let load = || Err(format!("bad bearer_token value {token}"));
+    let link = super::dashboard_link_args_output(
+        mcp_gateway::cli::dashboard_link::DashboardLinkArgs {
+            url: None,
+            tls: no_flags(),
+        },
+        load,
+        None,
+        None,
+        Ok(token.to_string()),
+    )
+    .await;
+    let list = dead_letters(mcp_gateway::cli::events::DeadLetterAction::List);
+    let events = super::events_args_output(&list, load, None, None, Ok(token.to_string())).await;
+    for (command, out) in [("dashboard-link", &link), ("events", &events)] {
+        printed_nowhere(command, token, out);
+        assert!(
+            !out.ok && out.stderr.contains("could not load the config"),
+            "{out:?}"
+        );
+    }
+    let unset = super::events_args_output(&list, load, None, None, Err(TokenError::Missing)).await;
+    assert!(
+        unset.stderr.contains("could not load the config"),
+        "{unset:?}"
+    );
+    let unset = super::dashboard_link_args_output(
+        mcp_gateway::cli::dashboard_link::DashboardLinkArgs {
+            url: None,
+            tls: no_flags(),
+        },
+        load,
+        None,
+        None,
+        Err(TokenError::Missing),
+    )
+    .await;
+    assert!(
+        unset.stderr.contains("could not load the config"),
+        "{unset:?}"
+    );
+}
+
+/// A usage error, single characters in the redaction markers, and a token
+/// that would re-form at a marker's edge are never printed.
+#[tokio::test]
+async fn usage_and_marker_edge_tokens_are_never_printed() {
+    let base = answering(400, r#"{"error":"denied: Xd]zz"}"#.into()).await;
+    let replay = dead_letters(mcp_gateway::cli::events::DeadLetterAction::Replay);
+    let tls = LinkTls::default();
+    let usage = super::dead_letters_output(&base, &tls, &replay, "replay").await;
+    printed_nowhere("events", "replay", &usage);
+    assert!(!usage.ok && !usage.stderr.is_empty(), "{usage:?}");
+    // "r" is in the first two markers, so the redactor rotates to the third;
+    // "d]z" would re-form at the first marker's edge, so it takes the second.
+    for token in ["r", "d]z"] {
+        for (command, out) in both(&base, token).await {
+            printed_nowhere(command, token, &out);
+            assert!(
+                !out.ok && !out.stderr.is_empty(),
+                "{command} {token:?}: {out:?}"
+            );
+        }
+    }
+    // "d" is in every marker, so the redactor fails closed: nothing holding
+    // it is printed, possibly nothing at all.
+    for (command, out) in both(&base, "d").await {
+        printed_nowhere(command, "d", &out);
+        assert!(!out.ok && out.stdout.is_empty(), "{command}: {out:?}");
+    }
+}
+
+/// `admin_call` itself returns its errors
+/// redacted, status text included, for any caller that prints them.
+#[tokio::test]
+async fn admin_call_errors_never_hold_the_token() {
+    for (token, status, body) in [
+        ("404", 404, "{}".to_string()),
+        ("OK", 200, String::new()),
+        (
+            "tok-ECHOED-1185",
+            400,
+            r#"{"reason":"tok-ECHOED-1185"}"#.to_string(),
+        ),
+    ] {
+        let base = answering(status, body).await;
+        let error = super::admin_call(
+            reqwest::Method::GET,
+            &base,
+            "/ui/api/events/dead-letters",
+            token,
+            &LinkTls::default(),
+        )
+        .await
+        .expect_err("an error");
+        assert!(!error.contains(token), "token {token:?}: {error}");
+        assert!(error.contains("the gateway answered"), "{error}");
+    }
+    // A token that would re-form at the first marker's edge takes the next.
+    let base = answering(400, r#"{"error":"denied: Xd]zz"}"#.into()).await;
+    let error = super::admin_call(
+        reqwest::Method::GET,
+        &base,
+        "/ui/api/events/dead-letters",
+        "d]z",
+        &LinkTls::default(),
+    )
+    .await
+    .expect_err("an error");
+    assert!(!error.contains("d]z"), "{error}");
+}
+
+/// Round 3: `fetch_link`'s own error is token-free for any caller, and the
+/// gate checks stderr as printed, so a token ending in a newline cannot form
+/// after the check.
+#[tokio::test]
+async fn fixed_text_and_the_final_newline_never_complete_the_token() {
+    let base = answering(200, r#"{"items":[]}"#.into()).await;
+    let error = fetch_link(&base, "link").await.expect_err("no link");
+    assert!(!error.contains("link"), "{error}");
+    let out = super::gate("dashboard-link", "given\n", Err("no reason given".into()));
+    assert!(!out.stderr.contains("given\n"), "{out:?}");
+    assert!(!out.ok && out.stdout.is_empty(), "{out:?}");
+}
+
+/// Run output goes through the CLI's `print!`, which exits cleanly when the
+/// reader closes the pipe; std's panics, and the release build aborts.
+#[test]
+fn run_output_uses_the_cli_print() {
+    assert!(include_str!("dashboard_link.rs").contains("\nuse crate::cli::stdout::print;\n"));
+}

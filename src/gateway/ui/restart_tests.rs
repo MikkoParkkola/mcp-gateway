@@ -292,6 +292,8 @@ async fn s4_admin_restart_get_carries_recent_writes() {
 #[test]
 fn b6_restart_body_carries_recent_writes_only_in_the_full_view() {
     use super::restart::availability_body;
+    use super::restart_confirm::{Readiness, Reason};
+    const OFF: Readiness = Readiness::Unavailable(Reason::PLATFORM);
     use super::status::StatusView;
     use crate::gateway::recent_writes::WriteSample;
     let sample = WriteSample {
@@ -306,10 +308,10 @@ fn b6_restart_body_carries_recent_writes_only_in_the_full_view() {
         (StatusView::CountsOnly, None),
         (StatusView::Full, None),
     ] {
-        let body = availability_body(view, sample);
+        let body = availability_body(view, sample, OFF);
         assert!(body.get("recent_writes").is_none(), "{body}");
     }
-    let full = availability_body(StatusView::Full, Some(sample));
+    let full = availability_body(StatusView::Full, Some(sample), OFF);
     assert_eq!(
         full["recent_writes"],
         json!({"count": 7, "complete_secs": 42}),
@@ -319,6 +321,6 @@ fn b6_restart_body_carries_recent_writes_only_in_the_full_view() {
     rest.as_object_mut()
         .expect("an object")
         .remove("recent_writes");
-    let base = availability_body(StatusView::CountsOnly, None);
+    let base = availability_body(StatusView::CountsOnly, None, OFF);
     assert_eq!(rest, base, "the sample adds one member and nothing else");
 }

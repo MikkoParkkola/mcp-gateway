@@ -13,6 +13,10 @@
 /// bits of entropy in 43 characters.
 pub(crate) fn random_secret(prefix: &'static str) -> String {
     use rand::RngExt as _;
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "credential: the one generator of a random credential"
+    )]
     let bytes: [u8; 32] = rand::rng().random();
     format!(
         "{prefix}{}",

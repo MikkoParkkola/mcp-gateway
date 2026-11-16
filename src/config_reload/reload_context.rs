@@ -185,6 +185,11 @@ impl ReloadContext {
             &running.security.hardened.private_backends,
         )?;
         let trusted_config = crate::identity_grants::journal::resolved(&config_path);
+        let reporting = super::refusals::ReloadReporting::default();
+        // This load is the configuration still running until a reload applies.
+        // Production replaces this reporting; that tally is stamped when the
+        // context takes it.
+        reporting.tally.note_loaded();
         let reload_owed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         registry.config_gate().register_owed(&reload_owed);
         Ok(Self {
@@ -211,7 +216,7 @@ impl ReloadContext {
             stop: tokio_util::sync::CancellationToken::new(),
             capabilities: None,
             on_registered: None,
-            reporting: super::refusals::ReloadReporting::default(),
+            reporting,
             markers: None,
             surfaced_hook: parking_lot::Mutex::new(None),
         })

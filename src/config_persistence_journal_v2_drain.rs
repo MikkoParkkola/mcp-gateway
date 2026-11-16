@@ -323,7 +323,7 @@ impl JournalDrain {
             journal.persist()?;
             return Ok(Some(token));
         }
-        let token = IntentId(uuid::Uuid::new_v4().simple().to_string());
+        let token = IntentId(crate::ids::new_v4().simple().to_string());
         let mut payload = Map::new();
         payload.insert("at_start".into(), at_start.into());
         payload.insert("kind".into(), "settle.recovery".into());

@@ -138,7 +138,7 @@ fn noncanonical_or_non_v4_snapshot_ids_are_refused() {
     )
     .unwrap();
     for id in [
-        format!("task-{}", uuid::Uuid::new_v4().simple()),
+        format!("task-{}", crate::ids::new_v4().simple()),
         "task-00000000-0000-3000-8000-000000000000".to_owned(),
     ] {
         let mut bad = valid.clone();

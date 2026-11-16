@@ -69,6 +69,7 @@ mod counters;
 mod coverage_canary;
 pub(crate) mod debug_trust_roots;
 mod health_history;
+pub(crate) mod ids;
 pub(crate) mod random_secret;
 #[cfg(test)]
 #[path = "random_secret_tests.rs"]
@@ -95,6 +96,10 @@ pub(crate) mod home_dir;
 pub mod honest_task_tokens;
 #[doc(hidden)]
 pub mod idempotency;
+// Compile-time evidence for the identity scanner's cases: doctests only. The
+// rows that read it are gateway::meta_mcp::boundary_pins::identity_evidence.
+#[cfg(doctest)]
+mod identity_evidence;
 #[doc(hidden)]
 pub mod identity_grants;
 #[doc(hidden)]
