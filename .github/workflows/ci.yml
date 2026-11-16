@@ -871,8 +871,9 @@ jobs:
     name: macOS lib test binary (cross-built)
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
     runs-on: macos-15-intel
-    # Step limits 3 + 4 + 4 + 48 + 3 = 62 (the probe's build took 41.7 min); the legs wait for it up to its start + 65.
-    timeout-minutes: 65
+    # Step limits 3 + 4 + 4 + 70 + 3 = 84. Measured on this runner: the cross-build took 55.6 min with a cold cache and
+    # 45.9 min warm, so 70 is 1.25x cold. The legs wait for it up to its start + 85.
+    timeout-minutes: 85
     continue-on-error: true
     permissions:
       contents: read
@@ -890,8 +891,12 @@ jobs:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         timeout-minutes: 4
+        with:
+          # A cross-build that hits its step limit still saves the dependencies it built, so the next run starts
+          # warm. The step limit sits below the job's, or the job is cancelled before this post step runs.
+          cache-on-failure: true
       - name: Cross-build the lib test binary for arm64
-        timeout-minutes: 48
+        timeout-minutes: 70
         env:
           CARGO_BUILD_TARGET: aarch64-apple-darwin
           CARGO_BUILD_JOBS: 4
