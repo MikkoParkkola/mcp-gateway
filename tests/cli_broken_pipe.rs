@@ -11,7 +11,121 @@
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
-use std::process::Stdio;
+use std::io::BufRead as _;
+use std::process::{Child, ExitStatus, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+/// Each wait on a child (its first line, its exit, the end of its output)
+/// gets this long. The commands print a fixed text and exit well inside a
+/// second, so only a hang reaches it, and it fails in seconds where an
+/// unbounded wait held a Windows runner until the job's own limit.
+const BOUND: Duration = Duration::from_secs(30);
+
+/// How a bounded child ended: its status and all it wrote.
+struct Ended {
+    status: ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+/// `from` read to its end on a thread; the text arrives on the receiver.
+fn read_on_thread(mut from: impl std::io::Read + Send + 'static) -> mpsc::Receiver<String> {
+    let (sent, text) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut all = String::new();
+        let _ = from.read_to_string(&mut all);
+        let _ = sent.send(all);
+    });
+    text
+}
+
+/// Kills `child` and reaps it within [`BOUND`]: true once it is gone. The
+/// cleanup is bounded too, so a child that survives its kill is reported,
+/// never waited on forever.
+fn kill_and_reap(child: &mut Child) -> bool {
+    let _ = child.kill();
+    let deadline = Instant::now() + BOUND;
+    while Instant::now() < deadline {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    false
+}
+
+/// Kills `child` and fails `case`, naming the wait that timed out.
+fn hung(child: &mut Child, case: &str, wait: &str) -> ! {
+    let after = if kill_and_reap(child) {
+        "killed"
+    } else {
+        "killed but still not reaped"
+    };
+    panic!("{case}: {wait} did not happen within {BOUND:?}; the child was {after}");
+}
+
+/// A spawned child whose every wait is bounded by [`BOUND`]. Dropped before
+/// it was reaped (a test that failed first), it is killed and waited for, so
+/// its temporary home is never removed under a live process.
+struct Bounded(Child);
+
+impl Bounded {
+    /// The child's first stdout line, read through a reader dropped as soon
+    /// as it has the line (as `| head -1` leaves).
+    fn first_line(&mut self, case: &str) -> String {
+        let stdout = self.0.stdout.take().expect("stdout");
+        let (sent, line) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut first = String::new();
+            let read = std::io::BufReader::new(stdout).read_line(&mut first);
+            let _ = sent.send(read.map(|_| first));
+        });
+        match line.recv_timeout(BOUND) {
+            Ok(read) => read.expect("read the first line"),
+            Err(_) => hung(&mut self.0, case, "the first stdout line"),
+        }
+    }
+
+    /// Reaps the child: waits for its exit, then for each piped output to
+    /// end; a wait that times out fails `case` naming that wait.
+    fn reap(mut self, case: &str) -> Ended {
+        let stdout = self.0.stdout.take().map(read_on_thread);
+        let stderr = self.0.stderr.take().map(read_on_thread);
+        let deadline = Instant::now() + BOUND;
+        let status = loop {
+            if let Some(status) = self.0.try_wait().expect("poll the child") {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                hung(&mut self.0, case, "the child's exit");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let collect = |text: Option<mpsc::Receiver<String>>, which: &str| {
+            text.map_or_else(String::new, |text| {
+                text.recv_timeout(BOUND).unwrap_or_else(|_| {
+                    panic!(
+                        "{case}: the child exited ({status}) but its {which} did not end within {BOUND:?}: another process holds the pipe"
+                    )
+                })
+            })
+        };
+        Ended {
+            stdout: collect(stdout, "stdout"),
+            stderr: collect(stderr, "stderr"),
+            status,
+        }
+    }
+}
+
+impl Drop for Bounded {
+    fn drop(&mut self) {
+        if matches!(self.0.try_wait(), Ok(None)) {
+            let _ = kill_and_reap(&mut self.0);
+        }
+    }
+}
 
 /// A stdout whose reader is closed before the child starts, so its first
 /// write fails however quickly the command runs.
@@ -33,11 +147,8 @@ fn run_with_reader_gone(args: &[&str]) -> (std::process::ExitStatus, String) {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn mcp-gateway");
-    let output = child.wait_with_output().expect("wait for mcp-gateway");
-    (
-        output.status,
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-    )
+    let ended = Bounded(child).reap(&format!("{args:?} with its reader gone"));
+    (ended.status, ended.stderr)
 }
 
 #[test]
@@ -59,9 +170,8 @@ fn a_closed_stdout_is_a_clean_exit() {
 /// and leaves while the command is still writing.
 #[test]
 fn a_reader_that_takes_one_line_and_leaves_is_a_clean_exit() {
-    use std::io::BufRead;
     let home = tempfile::tempdir().expect("home");
-    let mut child = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
+    let spawned = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
         .args(["list", "--available"])
         .current_dir(home.path())
         .stdin(Stdio::null())
@@ -69,19 +179,14 @@ fn a_reader_that_takes_one_line_and_leaves_is_a_clean_exit() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn mcp-gateway");
-    let mut first = String::new();
-    std::io::BufReader::new(child.stdout.take().expect("stdout"))
-        .read_line(&mut first)
-        .expect("read the first line");
+    let mut child = Bounded(spawned);
+    let case = "a reader that takes one line";
+    let first = child.first_line(case);
+    let ended = child.reap(case);
     assert!(!first.is_empty(), "the command printed nothing");
-    let output = child.wait_with_output().expect("wait for mcp-gateway");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = &ended.stderr;
     assert!(!stderr.contains("panicked"), "panicked:\n{stderr}");
-    assert!(
-        output.status.success(),
-        "exited {}:\n{stderr}",
-        output.status
-    );
+    assert!(ended.status.success(), "exited {}:\n{stderr}", ended.status);
 }
 
 /// Only `BrokenPipe` is a clean exit. A write that fails any other way (here
@@ -94,15 +199,16 @@ fn any_other_stdout_error_still_fails() {
         .write(true)
         .open("/dev/full")
         .expect("open /dev/full");
-    let output = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
+    let child = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
         .args(["list", "--available"])
         .current_dir(home.path())
         .stdin(Stdio::null())
         .stdout(full)
         .stderr(Stdio::piped())
-        .output()
-        .expect("run mcp-gateway");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+        .spawn()
+        .expect("spawn mcp-gateway");
+    let output = Bounded(child).reap("a full disk");
+    let stderr = &output.stderr;
     assert!(
         !output.status.success(),
         "a full disk was swallowed:\n{stderr}"
@@ -129,12 +235,15 @@ fn library_printed_output_exits_as_with_a_reader() {
         &["validate", capability][..],
     ] {
         let home = tempfile::tempdir().expect("home");
-        let read = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
+        let child = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
             .args(args)
             .current_dir(home.path())
             .stdin(Stdio::null())
-            .output()
-            .expect("run mcp-gateway");
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn mcp-gateway");
+        let read = Bounded(child).reap(&format!("{args:?} with a reader"));
         assert!(!read.stdout.is_empty(), "{args:?} printed nothing");
         // A clean exit with a reader, so an exit without one that fails
         // (a broken pipe reported as an error) cannot hide behind it.
