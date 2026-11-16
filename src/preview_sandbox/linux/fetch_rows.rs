@@ -199,7 +199,18 @@ pub(super) async fn preview(
         .await
         .expect("the run ended within the guard")
         .expect("stdout");
-    let _ = started.child.wait().await;
+    let mut err = String::new();
+    let mut stderr = started.child.stderr.take().expect("stderr");
+    tokio::time::timeout(GUARD, stderr.read_to_string(&mut err))
+        .await
+        .expect("the run's stderr ended within the guard")
+        .expect("stderr");
+    let status = started.child.wait().await.expect("the run's status");
+    // A fetch that fails inside the sandbox still ends its session cleanly, so
+    // the start succeeds; the helper then refuses and names its step.
+    if status.code() == Some(i32::from(super::REFUSED)) {
+        return Err(super::classify(&err));
+    }
     Ok(out)
 }
 
@@ -567,6 +578,20 @@ fn marked(marker: &str) -> Vec<u32> {
     found
 }
 
+/// Why a start ended before its fetch reached the registry: its refusal, or
+/// what the helper wrote to stderr once the started sandbox ended.
+async fn why_ended(ended: Result<crate::preview_sandbox::Started, Refusal>) -> String {
+    let mut started = match ended {
+        Err(refusal) => return format!("{refusal:?}"),
+        Ok(started) => started,
+    };
+    let mut err = String::new();
+    if let Some(mut stderr) = started.child.stderr.take() {
+        let _ = tokio::time::timeout(GUARD, stderr.read_to_string(&mut err)).await;
+    }
+    format!("started, then the helper wrote: {err}")
+}
+
 /// NPM.7 (the design's R6b, after the credential), kills "a start dropped
 /// mid-fetch leaves the fetch running": the start is dropped once the fake
 /// registry has read the fetch's first request (the credential was issued and
@@ -610,10 +635,16 @@ async fn l6b_a_start_dropped_mid_fetch_leaves_nothing_running() {
         Arc::new(TestResolve),
         Arc::new(TestDialer(registry.port)),
     ));
-    tokio::select! {
-        ended = &mut start => panic!("the start ended before the registry was asked: {:?}", ended.err()),
-        () = registry.first_request() => {}
+    let ended = tokio::select! {
+        ended = &mut start => Some(ended),
+        () = registry.first_request() => None,
         () = tokio::time::sleep(GUARD) => panic!("the registry was not asked within the guard"),
+    };
+    if let Some(ended) = ended {
+        panic!(
+            "the start ended before the registry was asked: {}",
+            why_ended(ended).await
+        );
     }
     drop(start);
     let empty = std::fs::read_dir(runtime.path())
