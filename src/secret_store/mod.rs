@@ -256,6 +256,10 @@ pub(crate) fn fresh_name(field: &str, unix_ms: u64, random: u64) -> String {
 pub(crate) fn random_suffix() -> Result<u64, StoreError> {
     use ring::rand::SecureRandom as _;
     let mut bytes = [0u8; 8];
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "temp name: a store file's random suffix"
+    )]
     ring::rand::SystemRandom::new()
         .fill(&mut bytes)
         .map_err(|_| StoreError::Failed("the OS random source failed".to_owned()))?;

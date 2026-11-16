@@ -1,1 +1,47 @@
-src/ids.rs	new_v4	statement	id	
+src/a2a/delegation.rs	fresh_token	statement	nonce	SystemRandom::newx1,fillx1
+src/config/record_key.rs	publish_new_file	statement	temp name	rand::rngx1,randomx1
+src/config/record_key.rs	publish_new_key	statement	record key	rand::rngx1,randomx1
+src/config_reload/live_config.rs	new	statement	record key	rand::rngx1,randomx1
+src/config_reload/replace_validate.rs	stand_in	statement	nonce	rand::randomx1
+src/config_reload/replace_validate.rs	stand_in	statement	nonce	rand::randomx1
+src/discovery/listing.rs	with_record_key	statement	HMAC key	rand::rngx1,randomx1
+src/events/client.rs	verify	statement	id	rand::randomx1
+src/events/client.rs	verify	statement	nonce	rand::randomx1
+src/events/operational_source.rs	emit	statement	id	rand::randomx1
+src/events/records.rs	write_record	statement	temp name	rand::randomx1
+src/events/store_key_binding.rs	write_key_id	statement	temp name	rand::randomx1
+src/events/upstream_session.rs	backoff	statement	jitter	rand::randomx1
+src/events/watch_source.rs	jitter	statement	jitter	rand::randomx1
+src/events/watch_source.rs	once	statement	id	rand::randomx1
+src/events/worker.rs	judge	statement	sample	rand::randomx1
+src/gateway/meta_mcp/chain_receipt.rs	mint_nonce	statement	nonce	SystemRandom::newx1,fillx1
+src/gateway/oauth/jwks.rs	generate_key_info	statement	key	KeyPair::generatex1
+src/gateway/record_principal.rs	one_run_key	statement	record key	rand::rngx1,randomx1
+src/gateway/server/stdio_nonce.rs	generate	statement	nonce	SystemRandom::newx1,fillx1
+src/gateway/ui/activity/cursor.rs	-	statement	HMAC key	rand::randomx1
+src/gateway/ui/backends/signin_flow.rs	new_attempt_id	statement	id	rand::rngx1,randomx1
+src/gateway/ui/decisions.rs	start_with	statement	HMAC key	rand::rngx1,randomx1
+src/gateway/ui/restart_confirm.rs	new	statement	nonce	SystemRandom::newx1,fillx1
+src/gateway/ui/stream/guard.rs	new	statement	id	rand::rngx1,randomx1
+src/ids.rs	new_v4	statement	id	Uuid::new_v4x1
+src/jitter.rs	full_jitter	statement	jitter	rand::random_rangex1
+src/key_server/email_hmac_store.rs	create	statement	HMAC key	rand::rngx1,randomx1
+src/mtls/cert_manager.rs	init_ca	statement	key	KeyPair::generatex1
+src/mtls/cert_manager.rs	issue_leaf	statement	key	KeyPair::generatex1
+src/oauth/client/mod.rs	generate_client_id	statement	id	rand::rngx1,randomx1
+src/oauth/client/mod.rs	generate_state	statement	nonce	rand::rngx1,randomx1
+src/personal_accounts/storage.rs	empty_authority	statement	id	SystemRandom::newx1,fillx1
+src/personal_accounts/storage.rs	random_hex	statement	id	SystemRandom::newx1,fillx1
+src/personal_accounts/storage.rs	seal_bytes	statement	nonce	SystemRandom::newx1,fillx1
+src/preview_sandbox/proxy.rs	os_random	statement	temp name	SystemRandom::newx1,fillx1
+src/protocol/continuation/keyring.rs	mint	statement	nonce	fillx1
+src/protocol/continuation/keyring.rs	new	statement	key	SystemRandom::newx1
+src/protocol/continuation/keyring.rs	rotate_if_due	statement	key	fillx1
+src/protocol/continuation/ledger.rs	new	statement	key	SystemRandom::newx1
+src/protocol/continuation/ledger.rs	new	statement	key	fillx1
+src/random_secret.rs	random_secret	statement	credential	rand::rngx1,randomx1
+src/secret_store/mod.rs	random_suffix	statement	temp name	SystemRandom::newx1,fillx1
+src/security/dispatched.rs	key	statement	HMAC key	SystemRandom::newx1,fillx1
+src/security/firewall/collusion.rs	replay_epoch	statement	id	rand::rngx1,randomx1
+src/tracing_context/mod.rs	generate	statement	id	rand::rngx1,randomx1
+src/tracing_context/mod.rs	generate	statement	id	rand::rngx1,randomx1

@@ -31,6 +31,21 @@ fn the_credential_is_not_guessable() {
 }
 
 /// The shared generator, like the clock, holds no mutable shared state.
+/// The personal-account journey takes its state, binding and verifier from
+/// here with an empty prefix: the 43-character base64url form its own
+/// generator produced before it moved onto this one.
+#[test]
+fn an_empty_prefix_is_43_base64url_characters() {
+    let secret = random_secret("");
+    assert_eq!(secret.len(), 43, "{secret}");
+    assert!(
+        secret
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+        "{secret}"
+    );
+}
+
 #[test]
 fn random_secret_rs_holds_no_shared_mutable_state() {
     let is_ident = |c: char| c.is_alphanumeric() || c == '_';
@@ -103,12 +118,11 @@ fn production_sources() -> Vec<(String, String)> {
 /// `gateway init`'s admin token, the auto bearer, the key server's
 /// bearer, the dashboard's session values, the OAuth client's PKCE verifier. The create route is listed; rotate joins in C2; any other caller fails here until it is reviewed and named.
 /// Every production file that names `random_secret` as a whole word, with
-/// how often: the shared generator's callers (2 each, since
-/// `crate::random_secret::random_secret(` names it twice), the library's
-/// `mod random_secret;`, and the personal-account journey's own
-/// `random_secret()` (its definition, its import and its three calls), which
-/// is not the shared generator. Any other naming, by path, `use`, alias,
-/// grouped or glob import, adds a word and fails until reviewed.
+/// how often: the shared generator's callers (2 per call, since
+/// `crate::random_secret::random_secret(` names it twice; the personal-account
+/// journey's three secrets make 6) and the library's `mod random_secret;`.
+/// Any other naming, by path, `use`, alias, grouped or glob import, adds a
+/// word and fails until reviewed.
 const CALLERS: &[(&str, usize)] = &[
     ("src/cli_support/init.rs", 2),
     ("src/config/features/auth.rs", 2),
@@ -117,8 +131,7 @@ const CALLERS: &[(&str, usize)] = &[
     ("src/key_server/store.rs", 2),
     ("src/lib.rs", 1),
     ("src/oauth/client/mod.rs", 2),
-    ("src/personal_accounts/journey/mod.rs", 1),
-    ("src/personal_accounts/journey/ops.rs", 4),
+    ("src/personal_accounts/journey/ops.rs", 6),
 ];
 
 /// `word` as a whole word: for `random_secret`, `random_secret_tests` and
@@ -304,10 +317,6 @@ const RANDOM_BASE64URL_REVIEWED: &[(&str, &str)] = &[
     (
         "src/oauth/client/mod.rs",
         "16-byte state and client ids; its PKCE verifier calls random_secret",
-    ),
-    (
-        "src/personal_accounts/journey/mod.rs",
-        "its own generator with a recoverable RNG error (a register row)",
     ),
     (
         "src/protocol/continuation/keyring.rs",

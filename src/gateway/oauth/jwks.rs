@@ -39,7 +39,6 @@
 use std::sync::{Arc, RwLock};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use rcgen::KeyPair as RcgenKeyPair;
 use serde::{Deserialize, Serialize};
 
 /// A single JWK entry (EC public key, signing use).
@@ -167,7 +166,8 @@ impl GatewayKeyPair {
 /// Generate a fresh ECDSA P-256 key pair and extract its public-key components.
 fn generate_key_info() -> Result<GatewayKeyInfo, String> {
     // `KeyPair::generate()` defaults to ECDSA P-256 in rcgen 0.14.
-    let key_pair = RcgenKeyPair::generate().map_err(|e| format!("Key generation failed: {e}"))?;
+    #[allow(clippy::disallowed_methods, reason = "key: the JWKS signing key pair")]
+    let key_pair = rcgen::KeyPair::generate().map_err(|e| format!("Key generation failed: {e}"))?;
 
     let kid = crate::ids::new_v4().to_string();
     let private_key_pem = key_pair.serialize_pem();

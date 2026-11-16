@@ -444,8 +444,16 @@ impl ContinuationState {
     /// sees it, rather than on the first elicitation a user reaches.
     #[must_use]
     pub fn new() -> Self {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "key: the generator for the continuation sealing key below"
+        )]
         let rng = SystemRandom::new();
         let mut key = [0u8; 32];
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "key: the process's continuation sealing key"
+        )]
         rng.fill(&mut key)
             .expect("platform RNG must produce a continuation key");
         // Named by the process, for the process: `origin_replica` is sealed
@@ -477,6 +485,10 @@ impl ContinuationState {
     #[cfg(test)]
     pub(crate) fn mint_refusing_for_test() -> Self {
         let mut key = [0u8; 32];
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "test code: a test store's continuation key"
+        )]
         SystemRandom::new()
             .fill(&mut key)
             .expect("platform RNG must produce a continuation key");

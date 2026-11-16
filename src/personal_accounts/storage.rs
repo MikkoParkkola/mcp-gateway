@@ -181,6 +181,10 @@ fn seal_bytes(
     let key = UnboundKey::new(&AES_256_GCM, key).map_err(|_| AccountError::InvalidConfiguration)?;
     let key = LessSafeKey::new(key);
     let mut nonce = [0_u8; 12];
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "nonce: the AEAD nonce of one sealed value"
+    )]
     SystemRandom::new()
         .fill(&mut nonce)
         .map_err(|_| AccountError::StorageUnavailable)?;
@@ -408,6 +412,7 @@ fn claim_store(
 /// one definition of the length rather than one per caller.
 pub(super) fn random_hex() -> Result<String, AccountError> {
     let mut bytes = [0_u8; 16];
+    #[allow(clippy::disallowed_methods, reason = "id: a grant record generation")]
     SystemRandom::new()
         .fill(&mut bytes)
         .map_err(|_| AccountError::StorageUnavailable)?;
@@ -416,6 +421,10 @@ pub(super) fn random_hex() -> Result<String, AccountError> {
 
 fn empty_authority(config: &StoreConfig) -> Result<Authority, AccountError> {
     let mut epoch = [0_u8; 16];
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "id: the account store's authority epoch"
+    )]
     SystemRandom::new()
         .fill(&mut epoch)
         .map_err(|_| AccountError::StorageUnavailable)?;

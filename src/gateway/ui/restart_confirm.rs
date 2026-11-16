@@ -121,7 +121,13 @@ impl RestartConfirm {
             clock: Arc::new(Instant::now),
             fill: Arc::new(|bytes: &mut [u8]| {
                 use ring::rand::SecureRandom as _;
-                ring::rand::SystemRandom::new().fill(bytes).map_err(|_| ())
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "nonce: a single-use 120 s restart confirmation, never a credential"
+                )]
+                let filled: Result<(), ()> =
+                    ring::rand::SystemRandom::new().fill(bytes).map_err(|_| ());
+                filled
             }),
             samples: SampleSource::Counter,
             entries: Mutex::new(HashMap::new()),
