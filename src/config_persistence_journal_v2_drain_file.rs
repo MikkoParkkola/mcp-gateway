@@ -178,8 +178,10 @@ fn completable(state: &JournalV2) -> bool {
 /// built again, so its intent is never parsed. `Some` says only that, not that the state is
 /// settled or complete (an undecided or delivery-stopped token can still return `Some`). The
 /// finishability check above and the handover's size bound both judge through this one
-/// function, so a handover never writes a file this drain refuses. `pub(super)` for the handover
-/// only: drain.rs, the shared parent, is at its file-size ceiling.
+/// function, so they never disagree on a missing counter or a terminal that does not build.
+/// The shape checks in `state_from_frames` (one binding, decided tokens, `terminals_agree`) are
+/// separate and not part of this judgement. `pub(super)` for the handover only: drain.rs, the
+/// shared parent, is at its file-size ceiling until it is split.
 pub(super) fn widest_finished(state: &JournalV2) -> Option<JournalV2> {
     let mut widest = state.clone();
     for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
