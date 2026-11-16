@@ -192,10 +192,23 @@ fn doc_only(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().all(|a| a.path().is_ident("doc"))
 }
 
-/// Whether `attrs` is exactly `#[cfg(test)]`.
+/// Whether `attrs` is exactly `#[cfg(test)]`, ignoring the lib test split's
+/// part tags (`#[cfg(tpK)]`, each a separate attribute that only narrows which
+/// part compiles the module): a tagged test module is still test-gated.
 fn cfg_test_only(attrs: &[syn::Attribute]) -> bool {
-    matches!(attrs, [only] if only.path().is_ident("cfg")
+    let rest: Vec<&syn::Attribute> = attrs.iter().filter(|a| !part_tag(a)).collect();
+    matches!(rest.as_slice(), [only] if only.path().is_ident("cfg")
         && only.parse_args::<syn::Path>().is_ok_and(|p| p.is_ident("test")))
+}
+
+/// Whether `attr` is a lib test split part tag, `#[cfg(tpK)]`.
+fn part_tag(attr: &syn::Attribute) -> bool {
+    attr.path().is_ident("cfg")
+        && attr.parse_args::<syn::Ident>().is_ok_and(|id| {
+            id.to_string()
+                .strip_prefix("tp")
+                .is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
+        })
 }
 
 /// The names a signature's parameters bind, unrawed.
@@ -357,6 +370,18 @@ fn entries(file: &syn::File, found: &mut Entries) {
             .unsupported
             .push("more than one test module".to_owned());
     }
+}
+
+/// The lib test split's part tag is a separate `#[cfg(tpK)]` above an
+/// unchanged `#[cfg(test)]`: the module is still test-gated, and a tag alone
+/// does not make one.
+#[test]
+fn a_part_tag_beside_the_test_cfg_still_reads_as_test_only() {
+    let module = |text: &str| syn::parse_str::<syn::ItemMod>(text).expect("a module item");
+    assert!(cfg_test_only(&module("#[cfg(tp2)]\n#[cfg(test)]\nmod t {}").attrs));
+    assert!(cfg_test_only(&module("#[cfg(test)]\nmod t {}").attrs));
+    assert!(!cfg_test_only(&module("#[cfg(tp2)]\nmod t {}").attrs));
+    assert!(!cfg_test_only(&module("#[cfg(tp2)]\n#[cfg(unix)]\nmod t {}").attrs));
 }
 
 /// Every exposed function of the judge, whatever its parameters, opens with

@@ -16,6 +16,18 @@ const CASES: &[(&str, &[&str], &[&str])] = &[
         &["fn product()"],
         &["fn t()"],
     ),
+    // The lib test split's part tag sits above the test cfg and goes with the
+    // test item, so a production scan never reads it.
+    (
+        "fn product() {}\n#[cfg(tp3)]\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\nfn after() {}\n",
+        &["fn product()", "fn after()"],
+        &["tp3", "fn t()"],
+    ),
+    (
+        "#[derive(Debug)]\nstruct Live;\n#[cfg(tp1)]\n#[cfg(tp2)]\n#[cfg(all(test, unix))]\nmod x_tests;\n",
+        &["#[derive(Debug)]", "struct Live;"],
+        &["tp1", "tp2", "mod x_tests"],
+    ),
     (
         "#[cfg(test)]\n#[path = \"x_tests.rs\"]\nmod x;\nfn product() {}\n",
         &["fn product()"],
