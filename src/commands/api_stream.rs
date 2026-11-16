@@ -468,6 +468,9 @@ async fn buffered(
     } = answer;
     let mut bytes = Vec::new();
     loop {
+        // Cooperative: a body that is always ready would otherwise hold its
+        // worker without a break, and its task could not be cancelled.
+        tokio::task::consume_budget().await;
         // Checked before each read, not only by the timeout: a body that is
         // always ready (endless empty chunks) never lets a zero wait fire.
         let now = Instant::now();
