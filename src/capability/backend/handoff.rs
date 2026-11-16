@@ -179,6 +179,8 @@ impl Handoff {
             reach(Step::Attach);
             if matches!(inner.state, State::Attached(_)) {
                 drop(inner);
+                // invariant: each backend is attached once, by the startup that built it (run.rs for
+                // HTTP, stdio_startup.rs for stdio); debug builds stop here, release builds deliver nothing new.
                 #[cfg(debug_assertions)]
                 panic!("attach is once per backend; a second call would replace the live config");
                 #[cfg(not(debug_assertions))]
