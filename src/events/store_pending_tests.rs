@@ -93,6 +93,7 @@ fn record(event: &str, sub: &str, now: DateTime<Utc>) -> OutboxRecord {
         dead_as: None,
         replayed: false,
         observed: None,
+        ended_incarnation: None,
     }
 }
 
@@ -564,6 +565,8 @@ mod burial;
 mod crash;
 #[path = "store_pending_dead_letter_tests.rs"]
 mod dead_letter;
+#[path = "store_ended_tests.rs"]
+mod ended;
 #[path = "store_expiry_tests.rs"]
 mod expiry;
 #[path = "store_revive_tests.rs"]
