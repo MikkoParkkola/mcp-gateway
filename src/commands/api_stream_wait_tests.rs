@@ -218,7 +218,7 @@ async fn a_streamed_request_has_no_total_limit() {
         let Ok(url) = api_url(&gateway.base, STREAM) else {
             panic!("the stream URL parses");
         };
-        let buffered = super::super::super::dashboard_link::admin_call_url_with_options(
+        let buffered = super::super::super::super::dashboard_link::admin_call_url_with_options(
             reqwest::Method::GET,
             url,
             TOKEN,
