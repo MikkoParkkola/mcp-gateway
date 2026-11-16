@@ -187,7 +187,7 @@ const STDIO: CallerStanding = CallerStanding::Admin;
 /// parked, and a scan still loading publishes into this handle. Called once
 /// per backend, before the HTTP listener binds.
 fn attach_capability_revision(
-    meta_mcp: &MetaMcp,
+    meta_mcp: &super::meta_mcp::MetaMcp,
     live_config: &Arc<crate::config_reload::LiveConfig>,
 ) {
     if let Some(capabilities) = meta_mcp.get_capabilities() {

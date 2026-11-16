@@ -478,7 +478,7 @@ fn h2_http_run_attaches_after_live_config_and_before_the_bind() {
         .find("meta_mcp.set_live_config(")
         .expect("run gives the meta-mcp its LiveConfig");
     let attach = code
-        .find(".attach_revision(Arc::clone(&live_config))")
+        .find("super::attach_capability_revision(&meta_mcp, &live_config)")
         .expect("run attaches the capability handoff to that LiveConfig");
     let bind = code
         .find("TcpListener::bind(")
@@ -488,9 +488,20 @@ fn h2_http_run_attaches_after_live_config_and_before_the_bind() {
         "the attach sits after the LiveConfig is set ({set}) and before the bind ({bind}), at {attach}"
     );
     assert_eq!(
-        code.matches(".attach_revision(").count(),
+        code.matches("attach_capability_revision(").count(),
         1,
         "run attaches once"
+    );
+    // The helper run calls is the one place the server attaches the handoff.
+    let server = crate::test_source_text::sanitize(&crate::test_source_text::production_text(
+        include_str!("mod.rs"),
+    ));
+    assert_eq!(
+        server
+            .matches(".attach_revision(Arc::clone(live_config))")
+            .count(),
+        1,
+        "the helper attaches the live config it is given, once"
     );
 }
 
