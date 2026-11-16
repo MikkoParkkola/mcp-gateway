@@ -34,13 +34,16 @@ fn rig(yaml: &str) -> Rig {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     write_owner_only(&path, yaml).expect("write config");
-    let running = Config::load(Some(&path)).expect("config loads");
-    let gateway_yaml = std::fs::read(&path).expect("read gateway");
-    let raw = RawInputs {
-        gateway_yaml,
-        ..RawInputs::default()
-    };
-    let (live, store) = hold_at(dir.path(), raw, path.display().to_string(), None, running);
+    // The startup inputs as a real start reads them, process overrides
+    // included, so an untouched reload digests the same inputs on any host.
+    let started = Config::load_evaluated(Some(&path)).expect("config loads");
+    let (live, store) = hold_at(
+        dir.path(),
+        started.inputs,
+        path.display().to_string(),
+        None,
+        started.config,
+    );
     let ctx = Arc::new(
         ReloadContext::new(
             path.clone(),
