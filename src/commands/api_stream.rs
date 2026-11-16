@@ -263,10 +263,10 @@ fn masked_line(line: &[u8], token: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// A masked piece as printed, or `None`. The redactor alone is not enough:
-/// a token can re-form at a marker's edge (`d]z` against `Xd]zz`), and a token
-/// found in every marker makes it fail closed to empty output, which would
-/// pass as an emptied line or event. Both refuse instead.
+/// A masked piece as printed, or `None`. The redactor tries each marker and,
+/// when every one would leave the token (a token found in all of them), fails
+/// closed to empty output, which would pass as an emptied line or event; that
+/// refuses instead. The token check backs the redactor's own guarantee.
 fn checked(masked: &str, input: &str, token: &str) -> Option<Vec<u8>> {
     let emptied = masked.is_empty() && !input.is_empty();
     (!emptied && !masked.contains(token)).then(|| masked.as_bytes().to_vec())

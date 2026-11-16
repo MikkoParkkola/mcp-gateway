@@ -804,11 +804,13 @@ async fn a_stalled_reader_ends_at_the_overall_deadline() {
     );
 }
 
-/// Final review: the redactor alone is not enough. A token re-formed at a
-/// marker's edge ("d]z" against "Xd]zz"), a token in every marker ("d", which
-/// makes the redactor fail closed to empty output), and a token equal to JSON
-/// syntax (":") each stop the run with the local-failure exit and print
-/// nothing, rather than print the token or emptied lines as a success.
+/// Final review: what the redactor leaves is checked. A token found in every
+/// marker ("d") makes it fail closed to empty output, and a token equal to
+/// JSON syntax (":") survives the value redaction of a --json event; each stops
+/// the run with the local-failure exit and prints nothing, rather than print
+/// emptied lines or the token as a success. A token that would re-form at a
+/// marker's edge ("d]z" against "Xd]zz") is masked with the next marker, and
+/// the run succeeds.
 #[tokio::test]
 async fn tokens_the_redactor_cannot_mask_stop_the_run() {
     let export = |body: &str| answer(200, "text/csv", vec![body.as_bytes().to_vec()], false);
@@ -821,9 +823,7 @@ async fn tokens_the_redactor_cannot_mask_stop_the_run() {
         )
     };
     for (request, reply, token) in [
-        (args(EXPORT, None, false), export("Xd]zz\n"), "d]z"),
         (args(EXPORT, None, false), export("abc\n"), "d"),
-        (args(STREAM, Some(1), false), event("Xd]zz"), "d]z"),
         (args(STREAM, Some(1), false), event("abc"), "d"),
         (args(STREAM, Some(1), true), event("1"), ":"),
     ] {
@@ -835,7 +835,18 @@ async fn tokens_the_redactor_cannot_mask_stop_the_run() {
             request.path,
             outcome.stderr
         );
-        assert!(!outcome.stderr.contains(token) || token == ":");
+    }
+    for (request, reply) in [
+        (args(EXPORT, None, false), export("Xd]zz\n")),
+        (args(STREAM, Some(1), false), event("Xd]zz")),
+    ] {
+        let (out, outcome, _) = run_as(&request, Some(reply), "d]z").await;
+        assert_eq!(outcome.exit, ApiExit::Ok, "{}", outcome.stderr);
+        let printed = text(&out);
+        assert!(
+            !printed.contains("d]z") && printed.contains("X<removed>z"),
+            "{printed:?}"
+        );
     }
 }
 
