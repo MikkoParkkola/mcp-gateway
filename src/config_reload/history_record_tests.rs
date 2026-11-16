@@ -29,7 +29,11 @@ pub(super) struct Rig {
 }
 
 pub(super) fn rig(yaml: &str) -> Rig {
-    let dir = tempfile::tempdir().expect("tempdir");
+    rig_in(tempfile::tempdir().expect("tempdir"), yaml)
+}
+
+/// [`rig`] in `dir`, so a test can install seams for it before the store opens.
+pub(super) fn rig_in(dir: tempfile::TempDir, yaml: &str) -> Rig {
     let path = dir.path().join("gateway.yaml");
     write_owner_only(&path, yaml).expect("write config");
     // The startup inputs as a real start reads them, process overrides

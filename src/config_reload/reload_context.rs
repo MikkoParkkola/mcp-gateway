@@ -253,6 +253,8 @@ impl ReloadContext {
     /// Publish `overlay` and, when it changes what the capability backend
     /// lists, send the same tools-changed notice a registry change sends.
     fn publish_overlay(&self, overlay: Arc<crate::config::EnvOverlay>) {
+        #[cfg(test)]
+        self.live_config.observe_overlay();
         match &self.capabilities {
             // Under the backend's listing lock, which an expired login's
             // announcement takes too, so one change is announced once.
@@ -511,6 +513,7 @@ impl ReloadContext {
         &self,
         path: &std::path::Path,
         source: Source,
+        slot: &mut crate::config_reload::history::RecordSlot,
     ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
@@ -558,8 +561,10 @@ impl ReloadContext {
             // would serve a value the operator has already replaced.
             self.publish_overlay(overlay);
             // The same rotation changes what the config was built from.
-            self.live_config
+            let pending = self
+                .live_config
                 .set_inputs_from(inputs, &env_restart_keys, source);
+            slot.spawn(&self.live_config, pending);
             // No difference from the published snapshot does not mean nothing is
             // outstanding: a restart-only edit was published on an earlier
             // reload and the running process still has not applied it.
@@ -612,9 +617,15 @@ impl ReloadContext {
 
         // Published together: a resolver that read the new config against the
         // old overlay would resolve an `env:` reference the reload just changed.
-        self.live_config
-            .set_applied(Arc::clone(&generation), inputs, &env_restart_keys, source);
+        let pending = self.live_config.set_applied(
+            Arc::clone(&generation),
+            inputs,
+            &env_restart_keys,
+            source,
+        );
         self.publish_overlay(overlay);
+        // No await between the swap and this spawn (design D-1).
+        slot.spawn(&self.live_config, pending);
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());
         // `surfaced_tools` applies here too, under the same lock.

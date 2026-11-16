@@ -62,11 +62,11 @@ pub struct LiveConfig {
     /// budgeting there, before any request can judge with them.
     published: crate::observer::Observer<Arc<Generation>>,
     /// The configuration history each applied publish is recorded into.
-    history: Option<crate::config_reload::history::HistoryHook>,
+    history: Option<Arc<crate::config_reload::history::HistoryHook>>,
     /// G5: how many generations this holder has published.
     #[cfg(test)]
     publishes: std::sync::atomic::AtomicU64,
-    /// Test seam: runs inside [`Self::record_publish`], after the published
+    /// Test seam: runs inside [`Self::run_record`], after the published
     /// bytes are captured and before they are handed to the history hook.
     #[cfg(test)]
     record_pause: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -122,11 +122,11 @@ impl LiveConfig {
         mut self,
         hook: impl Into<Option<crate::config_reload::history::HistoryHook>>,
     ) -> Self {
-        self.history = hook.into();
+        self.history = hook.into().map(Arc::new);
         self
     }
 
-    /// Install the pause [`Self::record_publish`] runs before the history hook.
+    /// Install the pause [`Self::run_record`] runs before the history hook.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn with_record_pause(mut self, pause: Arc<dyn Fn() + Send + Sync>) -> Self {
@@ -134,47 +134,86 @@ impl LiveConfig {
         self
     }
 
-    /// Record the publish just made from `raw`, after every lock is released.
-    /// `previous` and `published` were both read under the write lock that
-    /// swapped them, so a grants publish landing before this call cannot
-    /// relabel these bytes with its own revision.
-    fn record_publish(
+    /// The record of the publish just made from `raw`, for the record task to
+    /// run once every lock is released. `previous` and `published` were both
+    /// read under the write lock that swapped them, so a grants publish
+    /// landing before the record runs cannot relabel these bytes with its own
+    /// revision.
+    fn pending_publish(
         &self,
         raw: Option<RawInputs>,
         previous: Option<&str>,
         published: Option<Arc<Applied>>,
         source: Source,
-    ) {
-        let (Some(hook), Some(raw), Some(applied)) = (self.history.as_ref(), raw, published) else {
+    ) -> Option<crate::config_reload::history::PendingRecord> {
+        let (Some(_), Some(raw), Some(applied)) = (self.history.as_ref(), raw, published) else {
+            return None;
+        };
+        Some(crate::config_reload::history::PendingRecord::Publish {
+            raw,
+            revision: applied.revision.clone(),
+            pending_restart: applied.pending_restart.clone(),
+            previous: previous.map(str::to_string),
+            source,
+        })
+    }
+
+    /// Run `pending` on this thread: the test pause first, then the hook.
+    pub(crate) fn run_record(&self, pending: crate::config_reload::history::PendingRecord) {
+        let Some(hook) = &self.history else {
             return;
         };
         #[cfg(test)]
         if let Some(pause) = &self.record_pause {
             pause();
         }
-        hook.on_publish(
-            &raw,
-            &applied.revision,
-            applied.pending_restart.as_slice(),
-            previous,
-            source,
-            crate::clock::unix_secs().unwrap_or(0),
-        );
+        hook.run(pending, crate::clock::unix_secs().unwrap_or(0));
+    }
+
+    /// The history hook, for the record task.
+    pub(crate) fn history_hook(&self) -> Option<Arc<crate::config_reload::history::HistoryHook>> {
+        self.history.clone()
+    }
+
+    /// Test seam: log an overlay publication against the published revision.
+    #[cfg(test)]
+    pub(crate) fn observe_overlay(&self) {
+        let revision = self
+            .applied_now()
+            .map(|applied| applied.revision.clone())
+            .unwrap_or_default();
+        self.observe(crate::config_reload::history::seams::Observed::Overlay { revision });
+    }
+
+    /// Test seam: append to the ordered log of the seams installed for this
+    /// holder's history directory.
+    #[cfg(test)]
+    fn observe(&self, entry: crate::config_reload::history::seams::Observed) {
+        if let Some(seams) = self
+            .history
+            .as_ref()
+            .and_then(|hook| crate::config_reload::history::seams::for_file(&hook.store.file()))
+        {
+            seams.observe(entry);
+        }
     }
 
     /// Record a refused reload into the history hook, when one is set.
     /// `line` is the parser line of a file refusal.
-    pub(crate) fn record_refused(&self, source: Source, line: Option<u32>) {
-        let Some(hook) = &self.history else {
-            return;
-        };
+    pub(crate) fn refused_record(
+        &self,
+        source: Source,
+        line: Option<u32>,
+    ) -> Option<crate::config_reload::history::PendingRecord> {
+        self.history.as_ref()?;
+        #[cfg(test)]
+        self.observe(crate::config_reload::history::seams::Observed::Refusal);
         let served = self.applied_now().map(|applied| applied.revision.clone());
-        hook.on_refused(
+        Some(crate::config_reload::history::PendingRecord::Refused {
             source,
-            served.as_deref(),
+            served,
             line,
-            crate::clock::unix_secs().unwrap_or(0),
-        );
+        })
     }
 
     /// [`Self::from_prepared`] for `config` with `auth`, for unit-test
@@ -272,7 +311,12 @@ impl LiveConfig {
                 let recorded = live.history.as_ref().map(|_| raw.clone());
                 let live = live.with_applied(raw);
                 let published = live.applied_now();
-                live.record_publish(recorded, None, published, Source::Start);
+                // Startup records on this thread, before the holder is shared.
+                if let Some(pending) =
+                    live.pending_publish(recorded, None, published, Source::Start)
+                {
+                    live.run_record(pending);
+                }
                 live
             }
             None => live,
@@ -329,32 +373,50 @@ impl LiveConfig {
         raw: RawInputs,
         env_restart: &[String],
         source: Source,
-    ) {
+    ) -> Option<crate::config_reload::history::PendingRecord> {
         let recorded = self.history.as_ref().map(|_| raw.clone());
+        #[cfg(test)]
+        let mut observed = self.history.as_ref().map(|hook| hook.observed_files(&raw));
         // Both read inside the swap, under its write lock.
         let mut swapped = (None, None);
         self.publish_with(generation, |current, pending| {
             let applied = self
                 .digest_over(raw, current)
                 .and_then(|inputs| self.applied(inputs, with_env_restart(pending, env_restart)));
+            #[cfg(test)]
+            if let (Some(files), Some(applied)) = (observed.take(), applied.as_ref()) {
+                self.observe(crate::config_reload::history::seams::Observed::Swap {
+                    revision: applied.revision.clone(),
+                    files,
+                });
+            }
             swapped = (current.map(|a| a.revision.clone()), applied.clone());
             applied
         });
         let (previous, published) = swapped;
-        self.record_publish(recorded, previous.as_deref(), published, source);
+        self.pending_publish(recorded, previous.as_deref(), published, source)
     }
 
     /// The env files changed under an unchanged config file: same config,
     /// new inputs, new revision. Recorded as a file reload.
     #[cfg(test)]
     pub(crate) fn set_inputs(&self, raw: RawInputs, env_restart: &[String]) {
-        self.set_inputs_from(raw, env_restart, Source::File);
+        if let Some(pending) = self.set_inputs_from(raw, env_restart, Source::File) {
+            self.run_record(pending);
+        }
     }
 
     /// [`Self::set_inputs`] recording `source`. The replaced and the new
     /// revision are both read under this write lock.
-    pub(crate) fn set_inputs_from(&self, raw: RawInputs, env_restart: &[String], source: Source) {
+    pub(crate) fn set_inputs_from(
+        &self,
+        raw: RawInputs,
+        env_restart: &[String],
+        source: Source,
+    ) -> Option<crate::config_reload::history::PendingRecord> {
         let recorded = self.history.as_ref().map(|_| raw.clone());
+        #[cfg(test)]
+        let observed = self.history.as_ref().map(|hook| hook.observed_files(&raw));
         let (previous, published) = {
             let _gate = self.admission.write();
             let mut inner = self.inner.write();
@@ -366,9 +428,16 @@ impl LiveConfig {
             let inputs = self.digest_over(raw, current);
             let pending = with_env_restart(pending, env_restart);
             inner.applied = inputs.and_then(|inputs| self.applied(inputs, pending));
+            #[cfg(test)]
+            if let (Some(files), Some(applied)) = (observed, inner.applied.as_ref()) {
+                self.observe(crate::config_reload::history::seams::Observed::Swap {
+                    revision: applied.revision.clone(),
+                    files,
+                });
+            }
             (previous, inner.applied.clone())
         };
-        self.record_publish(recorded, previous.as_deref(), published, source);
+        self.pending_publish(recorded, previous.as_deref(), published, source)
     }
 
     /// New grants over the published config: only the grants part changes,

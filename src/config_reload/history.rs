@@ -10,6 +10,17 @@ use serde::{Deserialize, Serialize};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
 use crate::config_reload::revision::RawInputs;
 
+/// The whole-save deadline: a record's save, its sidecar wait and the
+/// startup worker's open all end within it (design D-1, D-2).
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "the stub: D-2 bounds the save with it; the rows read it now"
+    )
+)]
+pub(crate) const SAVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Where a reload event came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -135,6 +146,13 @@ enum StoreMode {
 pub(crate) struct ConfigHistory {
     bounds: Bounds,
     mode: parking_lot::Mutex<StoreMode>,
+    /// The directory the history file lives in, kept in either mode.
+    data_dir: PathBuf,
+    /// Serializes records in the order reloads take it: a reload takes it
+    /// under `lock_reload`, before anything changes, and its record task
+    /// holds it until the record is done (design D-1). Never taken with a
+    /// swap lock held, never by anything else.
+    record_guard: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl ConfigHistory {
@@ -147,6 +165,12 @@ impl ConfigHistory {
     /// keeps its history in memory only.
     pub(crate) fn open(data_dir: &Path, bounds: Bounds, now: u64) -> Self {
         let path = data_dir.join(Self::FILE);
+        #[cfg(test)]
+        if let Some(gate) =
+            seams::for_file(&path).and_then(|s| s.take_park(seams::ParkAt::OpenBeforeRead))
+        {
+            gate.park_blocking();
+        }
         // A parsed file is not kept: disk mode re-reads it on each call, and
         // the parse is wiped when it drops.
         let mode = match read_stored(&path) {
@@ -180,7 +204,19 @@ impl ConfigHistory {
         Self {
             bounds,
             mode: parking_lot::Mutex::new(mode),
+            data_dir: data_dir.to_path_buf(),
+            record_guard: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    /// The guard a reload takes before anything changes (design D-1).
+    pub(crate) fn record_guard(&self) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(&self.record_guard)
+    }
+
+    /// The history file's path, in either mode.
+    pub(crate) fn file(&self) -> PathBuf {
+        self.data_dir.join(Self::FILE)
     }
 
     /// Remember `event` and, when present, `snapshot`. Evict, then save.
@@ -270,7 +306,16 @@ impl ConfigHistory {
         match &*mode {
             StoreMode::MemoryOnly { state } => read(state),
             StoreMode::Disk { path } => {
-                let state = load_state(path).unwrap_or_default();
+                // A read fault is met by whichever read comes first (C4).
+                #[cfg(test)]
+                let faulted = seams::for_file(path).is_some_and(|s| s.take_read_fault().is_some());
+                #[cfg(not(test))]
+                let faulted = false;
+                let state = if faulted {
+                    State::default()
+                } else {
+                    load_state(path).unwrap_or_default()
+                };
                 read(&state)
             }
         }
@@ -283,6 +328,84 @@ pub(crate) struct HistoryHook {
     pub store: Arc<ConfigHistory>,
     pub config_path: String,
     pub grants_path: Option<String>,
+}
+
+/// One record, built under the swap locks from the publish's own inputs and
+/// run by the record task once the locks are released (design D-1).
+pub(crate) enum PendingRecord {
+    Publish {
+        raw: RawInputs,
+        revision: String,
+        pending_restart: Vec<&'static str>,
+        previous: Option<String>,
+        source: Source,
+    },
+    Refused {
+        source: Source,
+        served: Option<String>,
+        line: Option<u32>,
+    },
+}
+
+/// One reload's record: the guard it took before anything changed, and the
+/// record task it spawned (design D-1). Built at the entry of the reload
+/// transaction, under `lock_reload`.
+pub(crate) struct RecordSlot {
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl RecordSlot {
+    /// Take `live`'s record guard, waiting for the previous reload's record
+    /// to finish; a holder with no history takes nothing.
+    pub(crate) async fn take(live: &crate::config_reload::LiveConfig) -> Self {
+        let guard = match live.history_hook() {
+            Some(hook) => Some(hook.store.record_guard().lock_owned().await),
+            None => None,
+        };
+        Self { guard, task: None }
+    }
+
+    /// Spawn the record task for `pending`, moving the guard into it. There
+    /// is no await here, so a dropped reload cannot separate its swap from
+    /// its record: the task runs on, and the next reload waits for it.
+    pub(crate) fn spawn(
+        &mut self,
+        live: &Arc<crate::config_reload::LiveConfig>,
+        pending: Option<PendingRecord>,
+    ) {
+        let Some(pending) = pending else {
+            return;
+        };
+        let guard = self.guard.take();
+        let live = Arc::clone(live);
+        self.task = Some(tokio::spawn(async move {
+            let _guard = guard;
+            #[cfg(test)]
+            let reached = live
+                .history_hook()
+                .and_then(|hook| seams::for_file(&hook.store.file()))
+                .and_then(|seams| seams.take_record_park());
+            #[cfg(test)]
+            if let Some(gate) = &reached {
+                gate.park_async().await;
+            }
+            // ponytail: stub, today's synchronous record off the runtime's
+            // workers with no deadline; D-2 bounds it.
+            let _ = tokio::task::spawn_blocking(move || live.run_record(pending)).await;
+            #[cfg(test)]
+            if let Some(gate) = reached {
+                gate.finished();
+            }
+        }));
+    }
+
+    /// Wait for the record task, when one was spawned.
+    pub(crate) async fn finish(self) {
+        if let Some(task) = self.task {
+            let _ = task.await;
+        }
+    }
 }
 
 /// The hook a serving gateway attaches when it has a config file.
@@ -303,6 +426,40 @@ pub(crate) fn hook_for(
 }
 
 impl HistoryHook {
+    /// Run one pending record.
+    pub(crate) fn run(&self, pending: PendingRecord, now: u64) {
+        match pending {
+            PendingRecord::Publish {
+                raw,
+                revision,
+                pending_restart,
+                previous,
+                source,
+            } => self.on_publish(
+                &raw,
+                &revision,
+                &pending_restart,
+                previous.as_deref(),
+                source,
+                now,
+            ),
+            PendingRecord::Refused {
+                source,
+                served,
+                line,
+            } => self.on_refused(source, served.as_deref(), line, now),
+        }
+    }
+
+    /// The files a version of `raw` holds, as the swap observer logs them.
+    #[cfg(test)]
+    pub(crate) fn observed_files(&self, raw: &RawInputs) -> Vec<(String, Option<Vec<u8>>)> {
+        self.version_files(raw)
+            .into_iter()
+            .map(|file| (file.path.clone(), file.bytes.clone()))
+            .collect()
+    }
+
     /// Record one applied publish under `revision`. `previous == Some(revision)`
     /// is an unchanged reload: an event and no new version.
     pub(crate) fn on_publish(
@@ -506,20 +663,87 @@ fn record_in(
         }
         StoreMode::Disk { path } => path.clone(),
     };
+    #[cfg(test)]
+    let job = JobSeams::take(&path);
+    #[cfg(test)]
+    job.park(seams::ParkAt::BeforeRead);
+    #[cfg(test)]
+    let loaded = job.read(&path);
+    #[cfg(not(test))]
+    let loaded = load_state(&path);
     // The path clone ended the borrow of `mode`, so a failed read can switch it.
-    match load_state(&path) {
+    match loaded {
         Ok(mut state) => {
             remember(&mut state, event, snapshot, bounds, running, now);
+            #[cfg(test)]
+            job.park(seams::ParkAt::BeforeCheck);
+            #[cfg(test)]
+            job.park(seams::ParkAt::AfterCheck);
+            #[cfg(test)]
+            if job.fault == Some(seams::Fault::Write) {
+                job.done();
+                return Some(Noted::Write(std::io::Error::other("injected write fault")));
+            }
             // Written under the mode lock, so the file never ends on an older
             // state than a record that raced this one. The bytes are wiped
             // when `save_state` drops them.
-            save_state(&path, &state).err().map(Noted::Write)
+            let saved = save_state(&path, &state).err().map(Noted::Write);
+            #[cfg(test)]
+            job.done();
+            saved
         }
         Err(reason) => {
             let mut state = State::default();
             remember(&mut state, event, snapshot, bounds, running, now);
             *mode = StoreMode::MemoryOnly { state };
+            #[cfg(test)]
+            job.done();
             Some(Noted::Read(reason))
+        }
+    }
+}
+
+/// The seams one save job meets: its fault, taken once, and the gates it
+/// parks at; every gate it parked at is told when the job is done.
+#[cfg(test)]
+struct JobSeams {
+    seams: Option<Arc<seams::Seams>>,
+    fault: Option<seams::Fault>,
+    parked: std::cell::RefCell<Vec<Arc<seams::Gate>>>,
+}
+
+#[cfg(test)]
+impl JobSeams {
+    fn take(path: &Path) -> Self {
+        let seams = seams::for_file(path);
+        let fault = seams.as_ref().and_then(|s| s.take_fault());
+        Self {
+            seams,
+            fault,
+            parked: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    fn park(&self, at: seams::ParkAt) {
+        if let Some(gate) = self.seams.as_ref().and_then(|s| s.take_park(at)) {
+            gate.park_blocking();
+            self.parked.borrow_mut().push(gate);
+        }
+    }
+
+    fn read(&self, path: &Path) -> Result<State, String> {
+        match self.fault {
+            Some(seams::Fault::ReadIo) => Err("injected read fault".to_string()),
+            Some(seams::Fault::Unparseable) => {
+                serde_json::from_slice::<State>(b"{not json").map_err(|e| e.to_string())
+            }
+            _ => load_state(path),
+        }
+    }
+
+    fn done(&self) {
+        for gate in self.parked.borrow_mut().drain(..) {
+            gate.finished();
         }
     }
 }
@@ -630,6 +854,9 @@ mod reload_tests;
 #[cfg(test)]
 #[path = "history_route_tests.rs"]
 mod route_tests;
+#[cfg(test)]
+#[path = "history_seams.rs"]
+pub(crate) mod seams;
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod tests;

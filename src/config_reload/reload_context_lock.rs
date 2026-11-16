@@ -153,7 +153,12 @@ impl ReloadContext {
         // Audits the overrides the registry holds however this ends: applied,
         // refused, or dropped at an await after registering backends.
         let _audit = (self.reporting.override_audit.as_deref()).map(|a| a.guard(&self.registry));
-        let outcome = self.reload_transaction(path, source.clone()).await;
+        // Before anything changes: records stay in the order reloads take
+        // this, which is `lock_reload`'s (design D-1).
+        let mut slot = crate::config_reload::history::RecordSlot::take(&self.live_config).await;
+        let outcome = self
+            .reload_transaction(path, source.clone(), &mut slot)
+            .await;
         let refusals = &self.reporting.refusals;
         match &outcome {
             Ok(_) => {
@@ -178,9 +183,11 @@ impl ReloadContext {
                     line,
                 );
                 self.reporting.tally.refused();
-                self.live_config.record_refused(source, line);
+                let pending = self.live_config.refused_record(source, line);
+                slot.spawn(&self.live_config, pending);
             }
         }
+        slot.finish().await;
         outcome
     }
 
