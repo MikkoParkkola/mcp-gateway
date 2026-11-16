@@ -113,7 +113,10 @@ async fn a_resisting_trees_kill_that_finds_the_group_gone_passes_the_strict_rule
     let pid = leader(&t).await;
     signal_log::arm(pid);
     signal_log::inject(pid, signal_log::Esrch::AfterKillingLeader);
-    t.close().await.expect("close");
+    tokio::time::timeout(HANG_BOUND, t.close())
+        .await
+        .expect("close returns within the hang bound")
+        .expect("close");
     signal_log::assert_gone_kill_counts(
         pid,
         "a resisting tree gone at the kill",

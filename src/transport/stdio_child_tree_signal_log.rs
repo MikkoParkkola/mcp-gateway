@@ -109,10 +109,13 @@ pub(super) fn answer(mode: Esrch, pid: Option<Pid>) -> std::io::Result<()> {
         }
         let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
         let by = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while waitid(WaitId::Pid(pid), options)
-            .expect("the injected answer waits on the leader")
-            .is_none()
-        {
+        loop {
+            match waitid(WaitId::Pid(pid), options) {
+                Ok(Some(_)) => break,
+                // EINTR probes again, as the reaper's own leader probe does.
+                Ok(None) | Err(rustix::io::Errno::INTR) => {}
+                Err(e) => panic!("the injected answer waits on the leader: {e}"),
+            }
             assert!(
                 std::time::Instant::now() < by,
                 "the injected answer's leader was not a zombie within 30 s"

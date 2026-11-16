@@ -79,7 +79,9 @@ fn the_strict_rule_accepts_the_normal_path_only() {
             (&[Term, Kill, KillGone, KillGone], None),
             (&[KillGone], Some("not one SIGTERM")),
             (&[LATE, KillGone], Some("not one SIGTERM")),
+            (&[LeaderGone, KillGone], Some("not one SIGTERM")),
             (&[Term, KillFailed], Some("a kill failed")),
+            (&[Term, KillFailed, KillGone], Some("a kill failed")),
         ],
     );
 }
