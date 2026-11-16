@@ -189,12 +189,21 @@ pub(super) async fn start_fetching(
             isolation: super::Isolation::linux(&plan),
         }),
         Err(refusal) => {
-            // Ignored: unshare may already be gone; `kill` also reaps it.
-            let _ = child.kill().await;
+            // Ignored: unshare may already be gone. The reap is bounded by the
+            // lesser of a short bound and the deadline, so an unshare stuck in
+            // the kernel cannot hold the refusal; kill_on_drop and tokio's
+            // orphan reaping finish it.
+            let _ = child.start_kill();
+            let reap =
+                REAP_BOUND.min(deadline.saturating_duration_since(tokio::time::Instant::now()));
+            let _ = tokio::time::timeout(reap, child.wait()).await;
             Err(with_elapsed(refusal, begun))
         }
     }
 }
+
+/// How long a refused start waits for its killed `unshare` to be reaped.
+const REAP_BOUND: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Why the sandbox ended before its fetch step finished, from what the
 /// helper (or `unshare`) printed.

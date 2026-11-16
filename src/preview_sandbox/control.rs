@@ -301,15 +301,32 @@ pub(crate) async fn serve_session(
 ) -> Result<(), Refusal> {
     let (read, mut write) = stream.into_split();
     let mut read = tokio::io::BufReader::new(read);
+    // Every frame's rest and every write also end at the preview's deadline.
+    let within = || ControlBounds {
+        frame: bounds
+            .frame
+            .min(deadline.saturating_duration_since(tokio::time::Instant::now())),
+        ..bounds
+    };
+    let refuse_late = |what: &str| {
+        if tokio::time::Instant::now() >= deadline {
+            Err(Refusal::Step(format!(
+                "the preview's deadline passed before {what}"
+            )))
+        } else {
+            Ok(())
+        }
+    };
     // The helper asks for the fetch after building its root: its first byte
     // gets the setup bound, cut short by the preview's deadline.
     let setup = bounds
         .setup
         .min(deadline.saturating_duration_since(tokio::time::Instant::now()));
-    let start: FetchStart = parse(&read_line(&mut read, setup, bounds).await?, "fetch_start")?;
+    let start: FetchStart = parse(&read_line(&mut read, setup, within()).await?, "fetch_start")?;
     if !start.fetch_start {
         return Err(Refusal::Step("the sandbox sent fetch_start false".into()));
     }
+    refuse_late("the fetch's credential")?;
     let credential = proxy.begin_fetch(deadline)?;
     // Revokes on every way out of here, an error or a dropped future
     // included, so a helper that dies mid-fetch leaves no live credential.
@@ -324,15 +341,16 @@ pub(crate) async fn serve_session(
         credential: credential.secret().to_owned(),
         deadline_ms,
     })?;
-    write_line(&mut write, &issued, bounds).await?;
+    write_line(&mut write, &issued, within()).await?;
     let first = deadline.saturating_duration_since(tokio::time::Instant::now());
-    let done: FetchDone = parse(&read_line(&mut read, first, bounds).await?, "fetch_done")?;
+    let done: FetchDone = parse(&read_line(&mut read, first, within()).await?, "fetch_done")?;
     if !done.fetch_done {
         return Err(Refusal::Step("the sandbox sent fetch_done false".into()));
     }
     // The revoke returns only once every tunnel of the credential is shut.
     drop(fetch);
-    write_line(&mut write, &encode(&Expired { expired: true })?, bounds).await?;
+    refuse_late("expired")?;
+    write_line(&mut write, &encode(&Expired { expired: true })?, within()).await?;
     Ok(())
 }
 
