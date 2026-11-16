@@ -1391,8 +1391,10 @@ function draw(seq, held = null) {
     .then(() => {
       // The data is already in the body, under the loading state: let it go after its minimum.
       // Busy ends when the loading state does, never while it still covers the arrived content.
-      loading.release(() => { if (current()) content.removeAttribute('aria-busy'); });
+      // Saved first: release can hide the body until the state goes, and a copy taken then
+      // would show an error banner's data hidden.
       if (current()) saveSnapshot(key, body);
+      loading.release(() => { if (current()) content.removeAttribute('aria-busy'); });
     })
     .catch((err) => loading.after(() => {
       if (!current()) return;
@@ -1463,8 +1465,23 @@ function watchLoading(content, body, label, current) {
     release(done) {
       stop();
       const wait = left();
+      // Data drawn under a state that must stay a while longer stays hidden until the state
+      // goes, then shows in the same task: it never shows under the state and then jumps up
+      // into its place (a layout shift).
+      // Only this attempt's own body, still current: a stale release leaves it alone.
+      const hide = wait > 0 && current() && body.hasChildNodes() && !body.hidden;
+      // Hiding drops focus the screen gave inside the body; it comes back when the body shows.
+      const focused = hide && body.contains(document.activeElement) ? document.activeElement : null;
+      if (hide) body.hidden = true;
       const finish = () => {
         node?.remove();
+        // A superseded attempt's body stays hidden: its successor owns the page and the focus.
+        if (hide && current()) {
+          body.hidden = false;
+          if (focused?.isConnected && (document.activeElement === document.body || !document.activeElement)) {
+            focused.focus({ preventScroll: true });
+          }
+        }
         done?.();
       };
       if (wait > 0) setTimeout(finish, wait);
