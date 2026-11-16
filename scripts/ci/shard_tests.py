@@ -103,6 +103,9 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
 # Shards that are no matrix leg of their own: each runs from the lib test
 # binary another shard of its OS built and exported (`export-lib`).
 PREBUILT = {"macos": {"lib-a": "lib-b"}}
+# Option E probe 2 only (throwaway branch, never merged): lib-b also runs from a prebuilt binary, so the cross-built
+# binary is tested over both lib halves.
+PREBUILT["macos"]["lib-b"] = "lib-b"
 # Shards that are matrix legs of their own but compile nothing: they run from the lib test binary one job
 # of the run builds and shares (ci.yml's linux-lib-build, `export-lib`), under the same guards as `run`.
 SHARED_BUILD = {"linux": ("lib-a", "lib-b")}
