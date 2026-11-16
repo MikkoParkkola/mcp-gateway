@@ -35,6 +35,7 @@ python3 scripts/ci/coverage_shards.py --self-test	0	closed
 python3 scripts/ci/job_time_watch.py --self-test	0	closed
 python3 scripts/ci/mutants/run_mutants.py --self-test	2	closed
 python3 scripts/ci/shard_tests.py --self-test	0	closed
+python3 scripts/ci/obtain_lib.py --self-test	0	closed
 python3 scripts/ci/test_check_per_call_stages.py	0	closed
 python3 scripts/ci/test_docker_pr_scope.py	0	closed
 python3 scripts/ci/test_docs_only_gating.py	1	closed

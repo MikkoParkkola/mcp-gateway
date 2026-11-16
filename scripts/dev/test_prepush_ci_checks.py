@@ -41,18 +41,22 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/check_needs.py", ("${skippable[@]}", "$ROLLUP_EXPECTS")): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
     ("scripts/ci/job_time_watch.py", ("macos-shards",)): "ci-env: reads this run's jobs from the Actions API (GITHUB_RUN_ID, actions: read)",
     ("scripts/ci/shard_tests.py", ("run", "linux", "${{matrix.shard}}")): "cargo: runs cargo test shards",
-    ("scripts/ci/shard_tests.py", ("run", "macos", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/ci/shard_tests.py", ("export-lib", "<TMP>/lib-bin")): "cargo: builds the lib test binary (macOS, and Linux's shared build)",
     ("scripts/ci/shard_tests.py", ("run", "macos", "lib-a")): "cargo: builds and runs a macOS lib half",
-    ("scripts/ci/shard_tests.py", ("run", "macos", "int")): "cargo: runs the macOS integration shard (the os-int label's lane job)",
+    ("scripts/ci/shard_tests.py", ("run", "macos", "lib-b")): "cargo: builds and runs a macOS lib half",
+    ("scripts/ci/shard_tests.py", ("run", "macos", "int")): "cargo: runs the macOS integration shard (the train's int leg and the os-int label's lane job)",
     ("scripts/ci/os_sensitive_diff.py", ("--base", "HEAD^1", "--head", "HEAD", "--pr", "$PR_NUMBER", "--labels", "$LABELS",
                                          "--expect-second-parent", "$PR_HEAD_SHA")):
         "ci-env: reads the pull request number, labels and head sha from the event payload",
-    ("scripts/ci/shard_tests.py", ("run-prebuilt", "macos", "lib-a", "<TMP>/lib-bin/lib-tests")):
+    ("scripts/ci/shard_tests.py", ("run-prebuilt", "macos", "lib-a", "$LIB_BINARY")):
         "artifact: runs the lib test binary another job built",
+    ("scripts/ci/shard_tests.py", ("run-prebuilt", "macos", "lib-b", "$LIB_BINARY")):
+        "artifact: runs the lib test binary the Intel job cross-built",
     ("scripts/ci/shard_tests.py", ("run-prebuilt", "linux", "${{matrix.shard}}", "<TMP>/lib-bin/lib-tests")):
         "artifact: runs the shared lib test binary job linux-lib-build built",
-    ("scripts/ci/shard_tests.py", ("wait-lib", "macos-lib-tests", "macOS shard lib-b")):
+    ("scripts/ci/obtain_lib.py", ("lib-b", "<TMP>/lib-xbuild")):
+        "ci-env: polls this run's artifacts and jobs through the Actions API",
+    ("scripts/ci/obtain_lib.py", ("int", "<TMP>/lib-in")):
         "ci-env: polls this run's artifacts and jobs through the Actions API",
     ("scripts/dev/check-registry-packages.py", ()): "network: live npm/PyPI/HTTP lookups",
     ("scripts/dev/check-registry-packages.py", ("scripts/dev/testdata/registry-dead.rs", "--integrity", "scripts/dev/testdata/registry-dead.integrity.json")): "network: live lookups, CI expects exit 1 (registry-packages.yml, known-dead step)",

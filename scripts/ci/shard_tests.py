@@ -21,8 +21,7 @@ were deleted is lowered in the same diff, where review sees it.
 
   shard_tests.py run <os> <shard>    run it (exit 1 on failure or under floor)
   shard_tests.py export-lib <dir>    build the lib test binary and copy it to <dir>
-  shard_tests.py wait-lib <artifact> <producer job name>
-                                     wait for it in this run (found=true|false)
+  (obtain_lib.py fetches a binary another job of the run built; option E)
   shard_tests.py run-prebuilt <os> <shard> <binary>
                                      run a PREBUILT or SHARED_BUILD shard from that binary
   shard_tests.py --self-test         check the counter against fixed logs
@@ -106,6 +105,9 @@ PREBUILT = {"macos": {"lib-a": "lib-b"}}
 # Shards that are matrix legs of their own but compile nothing: they run from the lib test binary one job
 # of the run builds and shares (ci.yml's linux-lib-build, `export-lib`), under the same guards as `run`.
 SHARED_BUILD = {"linux": ("lib-a", "lib-b")}
+# Matrix legs that may run from a lib test binary another job of the run built (option E: obtain_lib.py fetches
+# it), and build their own when none comes. Unlike PREBUILT, each is still a matrix leg of its own.
+XBUILT = {"macos": ("lib-b",)}
 # The lib test binary's folder under BY_BINARY, as the cargo runner names it (`mcp_gateway-<hash>`, hash dropped).
 LIB_TARGET = "mcp_gateway"
 # Built, not run: the default `cargo test` target set compiles examples, and
@@ -629,74 +631,6 @@ def prebuilt_rows() -> None:
             f.write("#!/bin/sh\necho '   Compiling x'\n")
         os.chmod(cargo_none, 0o755)
         assert export_lib(os.path.join(root, "out2"), (cargo_none,)) == 1
-    # wait_for_lib: when int waits, and when it gives up and builds its half itself.
-    def waits(states, grace=600, warned=None):
-        t = [0.0]
-        seq = iter(states)
-
-        def fetch():  # an exception in the list stands for a failed `gh api` call
-            s = next(seq)
-            if isinstance(s, Exception):
-                raise s
-            return s
-        warn = (warned.append if warned is not None else lambda _: None)
-        return wait_for_lib(fetch, lambda s: t.__setitem__(0, t[0] + s), lambda: t[0], grace, 20, warn=warn)
-    assert waits([(False, "in_progress")] * 400 + [(True, "in_progress")]), "a slow producer was abandoned"
-    assert waits([(True, None)]), "a binary from an earlier attempt was not reused"
-    assert not waits([(False, "in_progress"), (False, "completed")]), "a producer that ended without it was awaited"
-    assert not waits([(False, None)] * 40), "an absent producer (int rerun alone) was awaited past grace"
-    assert not waits([(False, "queued")] * 40), "a producer queued past grace was awaited"
-    assert waits([(False, "queued")] * 5 + [(True, "in_progress")]), "a briefly queued producer was abandoned"
-    # A failed fetch (one `gh api` blip) never fails the job: it warns with gh's own text and polls on;
-    # five failures in a row give up on the shared binary and build the half here. The literals pin the
-    # five: rows built from FETCH_FAILURE_LIMIT would pass with any value of it.
-    assert FETCH_FAILURE_LIMIT == 5, FETCH_FAILURE_LIMIT
-    blip = RuntimeError("gh api exited 1: HTTP 502 Bad Gateway")
-    warned = []
-    assert waits([blip, (True, "in_progress")], warned=warned), "one failed fetch lost a binary that was there"
-    assert any("HTTP 502 Bad Gateway" in w and "::warning::" in w for w in warned), f"gh's error not shown: {warned}"
-    assert waits([blip] * 4 + [(False, "in_progress")] + [blip] * 4 + [(True, "in_progress")]), \
-        "four failures, a good fetch and four more fell back: failures that never ran five in a row added up"
-    assert not waits([blip] * 5), "five failed fetches in a row did not fall back to building here"
-    # The production seam, as in the incident: a non-zero `gh api` exit goes through gh_api and the real
-    # fetch, and is a warning and a poll, never a crash. The fake honours check=True as subprocess.run
-    # does, so restoring check=True (the incident's CalledProcessError) fails this row.
-    def fake_run(answers):
-        seq = iter(answers)
-
-        def run(cmd, check=False, **_):
-            rc, out, err = next(seq)
-            if check and rc:
-                raise subprocess.CalledProcessError(rc, cmd, out, err)
-            return subprocess.CompletedProcess(cmd, rc, out, err)
-        return run
-    try:
-        gh_api("repos/o/r/actions/runs/1/artifacts?name=hidden", ".total_count",
-               run=fake_run([(1, "", "HTTP 502: Bad Gateway\n")]))
-    except RuntimeError as e:
-        msg = str(e)
-    else:
-        raise AssertionError("a failed gh api call returned instead of raising")
-    assert "exited 1" in msg and "HTTP 502: Bad Gateway" in msg, f"gh's exit and text not carried: {msg}"
-    assert "?" not in msg and "hidden" not in msg, f"the query string reached the log: {msg}"
-    blip_run = fake_run([(1, "", "HTTP 502: Bad Gateway\n"), (0, "1\n", ""), (0, "in_progress\n", "")])
-    fetch = lib_fetch("o/r", "1", "1", "macos-lib-tests", "macOS shard lib-b",
-                      gh=lambda p, j: gh_api(p, j, run=blip_run))
-    seen, t = [], [0.0]
-    assert wait_for_lib(fetch, lambda s: t.__setitem__(0, t[0] + s), lambda: t[0], 600, 20, warn=seen.append), \
-        "a failed gh api call through the real fetch lost a binary that was there"
-    assert len(seen) == 1 and "HTTP 502: Bad Gateway" in seen[0], f"expected one warning with gh's text: {seen}"
-    # The rehearsal input skips the wait and asks for the fallback, touching no API.
-    with tempfile.TemporaryDirectory() as root:
-        out = os.path.join(root, "out")
-        saved = {k: os.environ.get(k) for k in ("MACOS_LIB_REHEARSE_FALLBACK", "GITHUB_OUTPUT")}
-        os.environ.update(MACOS_LIB_REHEARSE_FALLBACK="true", GITHUB_OUTPUT=out)
-        try:
-            assert wait_lib("macos-lib-tests", "macOS shard lib-b") == 0
-            assert open(out).read() == "found=false\n"
-        finally:
-            for k, v in saved.items():
-                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
 
 def per_binary_rows() -> None:
@@ -861,84 +795,6 @@ def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
     return 1 if failed else 0
 
 
-# Failed fetches in a row (one every `interval` s, so about 100 s of API trouble) before int gives up
-# on the shared binary and builds its half itself. A single failed `gh api` call never fails the job.
-FETCH_FAILURE_LIMIT = 5
-
-
-def wait_for_lib(fetch, sleep, clock, grace: float = 600, interval: float = 20, warn=print) -> bool:
-    """Whether the exported lib binary arrives. `fetch()` gives (artifact present, producer job
-    status in this attempt or None). Gives up, so the caller builds the half itself, when the
-    producer finished without it, or is absent from this attempt (a rerun of int alone) or still
-    queued `grace` seconds in (both macOS runners held by waiting jobs). An in-progress producer
-    is waited for: building again would cost more than waiting. A fetch that fails (a `gh api`
-    error) is shown as a warning with gh's own text and polled again; FETCH_FAILURE_LIMIT failures in
-    a row give up, as a missing binary does."""
-    start = clock()
-    failures = 0
-    while True:
-        try:
-            present, status = fetch()
-        except (RuntimeError, OSError, ValueError) as e:
-            failures += 1
-            warn(f"::warning::wait-lib: fetch failed ({failures} in a row): {e}")
-            if failures >= FETCH_FAILURE_LIMIT:
-                warn(f"::warning::wait-lib: {failures} failed fetches in a row; building this half here")
-                return False
-            sleep(interval)
-            continue
-        failures = 0
-        if present:
-            return True
-        if status == "completed":
-            return False
-        if status in (None, "queued", "waiting", "pending") and clock() - start >= grace:
-            return False
-        sleep(interval)
-
-
-def gh_api(path: str, jq: str, run=subprocess.run) -> str:
-    """One `gh api` call. A non-zero exit raises RuntimeError carrying gh's own text (rate limit, 5xx,
-    auth), which wait_for_lib shows as a warning before polling again. The logged path drops its query
-    string; the path holds no secret."""
-    p = run(["gh", "api", path, "--jq", jq], capture_output=True, text=True)
-    if p.returncode:
-        raise RuntimeError(f"gh api {path.split('?')[0]} exited {p.returncode}: {p.stderr.strip()[:300]}")
-    return p.stdout.strip()
-
-
-def lib_fetch(repo: str, run_id: str, attempt: str, artifact: str, producer: str, gh=gh_api):
-    """wait_for_lib's fetch: (artifact present in this run, producer job status in this attempt or None)."""
-    def fetch():
-        count = gh(f"repos/{repo}/actions/runs/{run_id}/artifacts?name={artifact}", ".total_count")
-        status = gh(f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100",
-                    f'[.jobs[] | select(.name == "{producer}") | .status][0] // ""')
-        return int(count or 0) > 0, status or None
-    return fetch
-
-
-def wait_lib(artifact: str, producer: str) -> int:
-    """Wait for `artifact` from job `producer` of this run; write found=true|false to GITHUB_OUTPUT."""
-    if os.environ.get("MACOS_LIB_REHEARSE_FALLBACK") == "true":
-        # A dispatch input: rehearse the path a missing binary takes, without breaking lib-b.
-        print(f"::notice::wait-lib: rehearsing the fallback; {artifact} not used")
-        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-            f.write("found=false\n")
-        return 0
-    repo, run_id = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"]
-    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
-
-    import time
-    start = time.monotonic()
-    found = wait_for_lib(lib_fetch(repo, run_id, attempt, artifact, producer), time.sleep, time.monotonic)
-    waited = int(time.monotonic() - start)
-    print(f"::notice::wait-lib: {artifact} {'found' if found else 'not coming; building this half here'}"
-          f" after {waited} s")
-    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-        f.write(f"found={'true' if found else 'false'}\n")
-    return 0
-
-
 def main(argv: list[str]) -> int:
     if argv[1:] == ["--self-test"]:
         return self_test()
@@ -946,10 +802,9 @@ def main(argv: list[str]) -> int:
         return run(argv[2], argv[3])  # a PREBUILT shard too: int's fallback build
     if len(argv) == 3 and argv[1] == "export-lib":
         return export_lib(argv[2])
-    if len(argv) == 4 and argv[1] == "wait-lib":
-        return wait_lib(argv[2], argv[3])
     if (len(argv) == 5 and argv[1] == "run-prebuilt"
-            and (argv[3] in PREBUILT.get(argv[2], {}) or argv[3] in SHARED_BUILD.get(argv[2], ()))):
+            and (argv[3] in PREBUILT.get(argv[2], {}) or argv[3] in SHARED_BUILD.get(argv[2], ())
+                 or argv[3] in XBUILT.get(argv[2], ()))):
         return run_prebuilt(argv[2], argv[3], argv[4])
     print(__doc__, file=sys.stderr)
     return 2

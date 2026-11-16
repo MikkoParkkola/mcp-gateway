@@ -73,7 +73,7 @@ RELEASE_PRS = {"feature-combos-pr"}
 # this repository), docs-only or not, into any base; every non-PR event runs it
 # as before, except the release-line push (POST_MERGE_SKIPPED). Checked by its
 # own cases below, so it is in neither SKIPPED nor KEPT.
-MACOS_TRAIN = {"macos-shards", "macos-check"}
+MACOS_TRAIN = {"macos-shards", "macos-check", "macos-xbuild"}
 # Lane pull requests into the release line only (never a train, a throwaway, a fork or another base), and no push:
 # the os-int label's check, and the macOS int shard that label turns on. Checked by lane_label_errors below, so they
 # are in neither SKIPPED nor KEPT. Both skip a release-line push (POST_MERGE_SKIPPED).
@@ -110,6 +110,8 @@ POST_MERGE_SKIPPED = {
     # The shards behind test, windows-check and macos-check (MIK-8482).
     "test-shards", "windows-shards", "windows-clippy", "macos-shards",
     "linux-lib-build", "test-shards-lib",
+    # The Intel cross-build of the macOS lib test binary, which only macos-shards uses (option E).
+    "macos-xbuild",
     # Build-heavy smokes; docker.yml builds and smokes the image per merge, the tag reruns them.
     "service-template-smoke", "usability-smoke", "upgrade-rehearsal", "helm-oci-roundtrip",
     "helm-supply-chain", "helm-airgap", "k8s-kind-rollback", "gws-dry-run", "task-sdk-recovery",
@@ -235,7 +237,9 @@ def macos_train_errors(jobs: dict) -> list[str]:
         after = dict(c, needs=dict(c["needs"], **{"macos-shards": {
             "result": "success" if shards_ran else "skipped", "outputs": {}}}))
         check_want = want and label not in judged_by_merge_train
-        for job, ran, w in (("macos-shards", shards_ran, want), ("macos-check", runs(check, after), check_want)):
+        # The Intel cross-build (option E) runs exactly where its shards do in every case here; none is labelled.
+        for job, ran, w in (("macos-shards", shards_ran, want), ("macos-check", runs(check, after), check_want),
+                            ("macos-xbuild", runs(jobs["macos-xbuild"], c), want)):
             if ran != w:
                 errors.append(f"{job}: {label} {'skips' if w else 'runs'}")
     # Where the aggregate runs (a train into main stands in for every non-release-line train), it runs
@@ -317,7 +321,7 @@ def lane_label_errors(jobs: dict) -> list[str]:
     lane_runs = [str(st.get("run", "")) for st in jobs["macos-int-lane"]["steps"] if "shard_tests.py" in str(st.get("run", ""))]
     train = [str(st.get("run", "")) for st in jobs["macos-shards"]["steps"] if "shard_tests.py run macos " in str(st.get("run", ""))
              and "run-prebuilt" not in str(st.get("run", ""))]
-    train_int = [r.replace("${{ matrix.shard }}", "int") for r in train if "matrix.shard" in r]
+    train_int = [r for r in (x.replace("${{ matrix.shard }}", "int") for x in train) if r.endswith("run macos int")]
     if lane_runs != train_int:
         errors.append(f"macos-int-lane runs {lane_runs}, the train's int shard runs {train_int}")
     return errors

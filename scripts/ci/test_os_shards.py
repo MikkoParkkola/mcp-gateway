@@ -18,7 +18,9 @@ Static checks on ci.yml and scripts/ci/shard_tests.py:
   check_needs.py;
 - no shard name equals a required name, every macOS shard name starts with
   `macOS ` (merge tooling treats that prefix as macOS), and none contains
-  the word `Tests`.
+  the word `Tests`;
+- option E: macos-shards' calls, gates and limits, each path's worst case within the job's limit, the
+  Intel job (`macos-xbuild`) against obtain_lib.py's tables, and its advisory marker on no other job of any workflow.
 """
 from __future__ import annotations
 
@@ -206,7 +208,8 @@ def workflow_problems(jobs: dict, st) -> list[str]:
                      f'{py} scripts/ci/shard_tests.py run-prebuilt {os_kind} {leg} "$RUNNER_TEMP/lib-bin/lib-tests"',
                      f"{py} scripts/ci/shard_tests.py run {os_kind} {leg}"]
         calls = [s.get("run", "").strip() for s in shard.get("steps", []) if "shard_tests.py" in s.get("run", "")]
-        if calls != want:
+        # An OS whose legs may take a binary another job built (option E): option_e_problems checks its calls.
+        if calls != want and not getattr(st, "XBUILT", {}).get(os_kind):
             out.append(f"{shard_key}: runner calls {calls}, want exactly {want!r}")
         # A duty pinned to one shard must name a shard that exists, or it
         # silently never runs (the UPGRADING, privileged and smoke steps).
@@ -268,6 +271,134 @@ def workflow_problems(jobs: dict, st) -> list[str]:
     return out
 
 
+# Option E: macos-shards' runner calls in order, each with its exact step gate and timeout (minutes).
+SH, OL = "python3 scripts/ci/shard_tests.py", "python3 scripts/ci/obtain_lib.py"
+B_TAKEN, INT_FOUND = "steps.obtain_b.outputs.found", "steps.obtain_int.outputs.found"
+MACOS_E = [
+    (f'{OL} lib-b "$RUNNER_TEMP/lib-xbuild"', "matrix.shard == 'lib-b' && env.MACOS_LIB_SOLO != 'true'", 80),
+    (f'{SH} export-lib "$RUNNER_TEMP/lib-bin"', f"matrix.shard == 'lib-b' && {B_TAKEN} != 'true'", 120),
+    (f"{SH} run macos lib-b", f"matrix.shard == 'lib-b' && {B_TAKEN} != 'true'", 45),
+    (f'{SH} run-prebuilt macos lib-b "$LIB_BINARY"', f"matrix.shard == 'lib-b' && {B_TAKEN} == 'true'", 45),
+    (f"{SH} run macos int", "matrix.shard == 'int'", 70),
+    (f'{OL} int "$RUNNER_TEMP/lib-in"', "matrix.shard == 'int'", 215),
+    (f'{SH} run-prebuilt macos lib-a "$LIB_BINARY"', f"(matrix.shard == 'int' && {INT_FOUND} == 'true') || "
+     "(matrix.shard == 'lib-b' && env.MACOS_LIB_SOLO == 'true')", 40),
+    (f"{SH} run macos lib-a", "matrix.shard == 'int' && steps.obtain_int.outputs.local_build == 'true'", 150),
+]
+XBUILD = ("macos-xbuild", "macOS lib test binary (cross-built)", "macos-lib-xbuild")  # job id, name, artifact
+MACOS_LIMIT, XBUILD_LIMIT = 255, 65
+UPLOAD = "actions/upload-artifact@"
+REPORT = "Runner, swap and memory pressure during the build"
+
+
+def obtain_module():
+    spec = importlib.util.spec_from_file_location("obtain_lib", ROOT / "scripts/ci/obtain_lib.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def option_e_problems(jobs: dict, workflows: dict, ol) -> list[str]:
+    """macOS legs, the Intel job and the advisory marker, against obtain_lib.py's tables (design r3 and its final
+    amendment). `workflows` maps every workflow file to its jobs, for the advisory rules."""
+    out = []
+    shard, xb = jobs.get("macos-shards") or {}, jobs.get(XBUILD[0])
+    if not xb:
+        return [f"{XBUILD[0]} missing"]
+    steps = shard.get("steps", [])
+    runs = [s for s in steps if "scripts/ci/" in s.get("run", "") and ("shard_tests.py" in s.get("run", "")
+                                                                         or "obtain_lib.py" in s.get("run", ""))]
+    got = [(s.get("run", "").strip(), str(s.get("if", "")), s.get("timeout-minutes")) for s in runs]
+    if got != MACOS_E:
+        out.append(f"macos-shards: calls, gates and timeouts {got}, want exactly {MACOS_E}")
+    if shard.get("timeout-minutes") != MACOS_LIMIT:
+        out.append(f"macos-shards: timeout-minutes {shard.get('timeout-minutes')}, want {MACOS_LIMIT}")
+    # The budget (amendment F5): each path's absolute cap plus every later step's limit fits the job's limit.
+    t = {call: minutes for call, _, minutes in MACOS_E}
+    uploads = [s for s in steps if UPLOAD in s.get("uses", "")]
+    report = [s.get("timeout-minutes") for s in steps if s.get("name") == REPORT]
+    up = uploads[0].get("timeout-minutes") if len(uploads) == 1 else None
+    rep = report[0] if len(report) == 1 else None
+    if not isinstance(up, int) or not isinstance(rep, int):
+        return out + [f"macos-shards: one upload and one report step, each with a limit (got {up}, {rep})"]
+    cap = {leg: ol.CAP[leg] // 60 for leg in ol.CAP}
+    paths = {
+        "lib-b fallback": cap["lib-b"] + t[MACOS_E[1][0]] + up + t[MACOS_E[2][0]] + rep,
+        "lib-b found": cap["lib-b"] + t[MACOS_E[3][0]] + rep,
+        "int found": cap["int"] + t[MACOS_E[6][0]] + rep,
+        "int local build": ol.LOCAL_BUILD_BY // 60 + t[MACOS_E[7][0]] + rep,
+    }
+    for path, total in paths.items():
+        if total > MACOS_LIMIT:
+            out.append(f"macos-shards: the {path} path takes up to {total} min, over the job's {MACOS_LIMIT}")
+    for (call, _, minutes), leg in ((MACOS_E[0], "lib-b"), (MACOS_E[5], "int")):
+        if minutes != cap[leg] + 5:
+            out.append(f"macos-shards: obtain {leg}'s step limit {minutes} is not its cap {cap[leg]} + 5")
+    # Producers: obtain_lib's job and artifact names are the ones ci.yml gives them.
+    lib_b_up = [s for s in uploads if (s.get("with") or {}).get("name") == ol.JOBS["lib-b"][1]]
+    if ol.JOBS["lib-b"][0] != "macOS shard lib-b" or not lib_b_up:
+        out.append(f"obtain_lib JOBS['lib-b'] {ol.JOBS['lib-b']} does not match macos-shards' name and upload")
+    if ol.JOBS["xbuild"] != XBUILD[1:] or xb.get("name") != XBUILD[1]:
+        out.append(f"{XBUILD[0]}: name {xb.get('name')!r} and obtain_lib JOBS['xbuild'] {ol.JOBS['xbuild']} "
+                   f"must both be {XBUILD[1:]}")
+    if ol.RUN_LIMIT["xbuild"] != XBUILD_LIMIT * 60 or xb.get("timeout-minutes") != XBUILD_LIMIT:
+        out.append(f"{XBUILD[0]}: timeout-minutes and obtain_lib's RUN_LIMIT must both be {XBUILD_LIMIT} min")
+    out += xbuild_job_problems(jobs, xb)
+    out += advisory_problems(workflows)
+    return out
+
+
+def xbuild_job_problems(jobs: dict, xb: dict) -> list[str]:
+    """The Intel job: runner, guard, advisory settings, step limits, the cross-build and its upload."""
+    out = []
+    alt = (" || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
+           " && " + LABELLED + ")")
+    shards_if = str(jobs["macos-shards"].get("if", ""))
+    if alt not in shards_if or str(xb.get("if", "")) != shards_if.replace(alt, ""):
+        out.append(f"{XBUILD[0]}: if must be macos-shards' guard without the os-sensitive lane, exactly")
+    if xb.get("runs-on") != "macos-15-intel":
+        out.append(f"{XBUILD[0]}: runs-on {xb.get('runs-on')!r}, want 'macos-15-intel'")
+    if xb.get("continue-on-error") is not True:
+        out.append(f"{XBUILD[0]}: continue-on-error must be true, so a red Intel job never turns a run red")
+    if (xb.get("env") or {}).get("MERGE_TRAIN_ADVISORY") != "true":
+        out.append(f"{XBUILD[0]}: env MERGE_TRAIN_ADVISORY must be \"true\"")
+    if xb.get("permissions") != {"contents": "read"}:
+        out.append(f"{XBUILD[0]}: permissions must be contents: read only")
+    limits = [s.get("timeout-minutes") for s in xb.get("steps", [])]
+    if not all(isinstance(m, int) for m in limits) or sum(limits) > XBUILD_LIMIT:
+        out.append(f"{XBUILD[0]}: step limits {limits} must all be set and sum to at most {XBUILD_LIMIT}")
+    if any("continue-on-error" in s for s in xb.get("steps", [])):
+        out.append(f"{XBUILD[0]}: no step-level continue-on-error (a failed step must stop the job)")
+    export = [s for s in xb.get("steps", []) if "shard_tests.py" in s.get("run", "")]
+    if ([s.get("run", "").strip() for s in export] != [f'{SH} export-lib "$RUNNER_TEMP/lib-bin"']
+            or (export[0].get("env") or {}).get("CARGO_BUILD_TARGET") != "aarch64-apple-darwin"):
+        out.append(f"{XBUILD[0]}: one export-lib call with CARGO_BUILD_TARGET aarch64-apple-darwin")
+    up = [s.get("with") or {} for s in xb.get("steps", []) if UPLOAD in s.get("uses", "")]
+    want = {"name": XBUILD[2], "path": "${{ runner.temp }}/lib-bin/lib-tests", "retention-days": 1,
+            "overwrite": True, "if-no-files-found": "error"}
+    if up != [want]:
+        out.append(f"{XBUILD[0]}: upload {up}, want exactly [{want}]")
+    return out
+
+
+def advisory_problems(workflows: dict) -> list[str]:
+    """MERGE_TRAIN_ADVISORY only on macos-xbuild, no other job under its name, no job needing it, in any file."""
+    out = []
+    for path, wf_jobs in workflows.items():
+        for jid, job in (wf_jobs or {}).items():
+            job = job or {}
+            if jid == XBUILD[0] and path.endswith("/ci.yml"):
+                continue
+            if "MERGE_TRAIN_ADVISORY" in (job.get("env") or {}):
+                out.append(f"{path} {jid}: MERGE_TRAIN_ADVISORY belongs to {XBUILD[0]} alone")
+            if str(job.get("name", "")).strip() == XBUILD[1]:
+                out.append(f"{path} {jid}: uses the advisory job's name {XBUILD[1]!r}")
+            needs = job.get("needs") or []
+            if XBUILD[0] in ([needs] if isinstance(needs, str) else needs):
+                out.append(f"{path} {jid}: needs the advisory job {XBUILD[0]}")
+    return out
+
+
 def self_test(jobs: dict, st) -> None:
     """Each wiring rule fails on the mutation that breaks it."""
     import copy
@@ -296,8 +427,8 @@ def self_test(jobs: dict, st) -> None:
         "fail-fast": lambda j: j["windows-shards"]["strategy"].__setitem__("fail-fast", True),
         "clippy guard drift": lambda j: j["windows-clippy"].__setitem__("if", "${{ true }}"),
         "runner gets an extra argument": lambda j: next(
-            s for s in j["macos-shards"]["steps"] if "shard_tests.py" in s.get("run", "")
-        ).__setitem__("run", "python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }} --skip x"),
+            s for s in j["windows-shards"]["steps"] if "shard_tests.py" in s.get("run", "")
+        ).__setitem__("run", "python scripts/ci/shard_tests.py run windows ${{ matrix.shard }} --skip x"),
         "duty pinned to a missing shard": lambda j: next(
             s for s in j["test-shards"]["steps"] if "UPGRADING" in s.get("name", "")
         ).__setitem__("if", "matrix.shard == 'int-z'"),
@@ -388,6 +519,59 @@ def self_test(jobs: dict, st) -> None:
         st.SHARDS["linux"] = linux
 
 
+def option_e_rows(jobs: dict, workflows: dict, ol) -> None:
+    """Each option E rule fails on the mutation that breaks it, and the real files pass."""
+    import copy
+    import types
+
+    def step(j, needle):
+        return next(s for s in j["macos-shards"]["steps"] if needle in s.get("run", ""))
+
+    def xstep(j, needle):
+        return next(s for s in j[XBUILD[0]]["steps"] if needle in s.get("run", "") + s.get("uses", ""))
+
+    def tables():
+        return types.SimpleNamespace(CAP=dict(ol.CAP), LOCAL_BUILD_BY=ol.LOCAL_BUILD_BY, JOBS=dict(ol.JOBS),
+                                     RUN_LIMIT=dict(ol.RUN_LIMIT))
+    mutations = {
+        "lib-b obtains in the solo lane": lambda j, w, o: step(j, "obtain_lib.py lib-b").__setitem__(
+            "if", "matrix.shard == 'lib-b'"),
+        "lib-b builds after taking a binary": lambda j, w, o: step(j, "export-lib").__setitem__(
+            "if", "matrix.shard == 'lib-b'"),
+        "obtain step limit not its cap + 5": lambda j, w, o: step(j, "obtain_lib.py lib-b").__setitem__(
+            "timeout-minutes", 75),
+        "job limit 240": lambda j, w, o: j["macos-shards"].__setitem__("timeout-minutes", 240),
+        # Only the budget sum decides this one: the steps and their limits are untouched.
+        "local build allowed past minute 100": lambda j, w, o: setattr(o, "LOCAL_BUILD_BY", 101 * 60),
+        "lib-b's producer name drifts": lambda j, w, o: o.JOBS.__setitem__("lib-b", ("macOS lib-b", "macos-lib-tests")),
+        "Intel job in the os-sensitive lane": lambda j, w, o: j[XBUILD[0]].__setitem__("if", j["macos-shards"]["if"]),
+        "Intel job on an arm64 runner": lambda j, w, o: j[XBUILD[0]].__setitem__("runs-on", "macos-latest"),
+        "Intel job turns a run red": lambda j, w, o: j[XBUILD[0]].pop("continue-on-error"),
+        "advisory marker dropped": lambda j, w, o: j[XBUILD[0]]["env"].pop("MERGE_TRAIN_ADVISORY"),
+        "Intel limit drifts from RUN_LIMIT": lambda j, w, o: j[XBUILD[0]].__setitem__("timeout-minutes", 70),
+        "Intel step limits over the job's": lambda j, w, o: xstep(j, "export-lib").__setitem__("timeout-minutes", 60),
+        "Intel step runs on after failing": lambda j, w, o: xstep(j, "export-lib").__setitem__("continue-on-error", True),
+        "Intel build for its own arch": lambda j, w, o: xstep(j, "export-lib")["env"].pop("CARGO_BUILD_TARGET"),
+        "Intel upload kept a week": lambda j, w, o: xstep(j, UPLOAD)["with"].__setitem__("retention-days", 7),
+        "Intel job may write": lambda j, w, o: j[XBUILD[0]]["permissions"].__setitem__("actions", "write"),
+        "Intel job renamed": lambda j, w, o: j[XBUILD[0]].__setitem__("name", "macOS lib (cross)"),
+        "marker on another job": lambda j, w, o: j["macos-shards"]["env"].__setitem__("MERGE_TRAIN_ADVISORY", "true"),
+        "another workflow uses the advisory name": lambda j, w, o: w.__setitem__(
+            ".github/workflows/zz.yml", {"x": {"name": XBUILD[1]}}),
+        "a job needs the advisory job": lambda j, w, o: j["macos-check"].__setitem__(
+            "needs", ["macos-shards", XBUILD[0]]),
+    }
+    assert not option_e_problems(jobs, workflows, tables()), "the real files fail option E's rules"
+    survived = []
+    for name, mutate in mutations.items():
+        j, w, o = copy.deepcopy(jobs), copy.deepcopy(workflows), tables()
+        w[".github/workflows/ci.yml"] = j  # the advisory scan reads ci.yml's jobs through `workflows`
+        mutate(j, w, o)
+        if not option_e_problems(j, w, o):
+            survived.append(name)
+    assert not survived, f"option E mutations not caught: {survived}"
+
+
 def cascade_rows() -> None:
     """The lib cascade rule accepts exact splits and refuses gaps and overlaps."""
     split = "gateway::"
@@ -415,12 +599,16 @@ def cascade_rows() -> None:
 def main() -> int:
     st = runner()
     jobs = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"]
-    problems = table_problems(st) + workflow_problems(jobs, st)
+    workflows = {str(p.relative_to(ROOT)): (yaml.safe_load(p.read_text()) or {}).get("jobs") or {}
+                 for p in sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))}
+    ol = obtain_module()
+    problems = table_problems(st) + workflow_problems(jobs, st) + option_e_problems(jobs, workflows, ol)
     for p in problems:
         print(f"os-shards: {p}")
     if problems:
         return 1
     self_test(jobs, st)
+    option_e_rows(jobs, workflows, ol)
     cascade_rows()
     print(f"os-shards: {sum(len(s) for s in st.SHARDS.values())} shards on 3 OSes are complete; wiring holds")
     return 0
