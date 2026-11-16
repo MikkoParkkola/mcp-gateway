@@ -88,7 +88,7 @@ browser makes. Those are reviewed by hand against this page.
 | `src/commands/skills.rs` | you run `skills` with an `http(s)` source | that URL |
 | `src/commands/doctor/npm_pin.rs` | you run `doctor`; on by default, off with `--no-registry-check`, `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK` or `security.posture: hardened` (`src/commands/doctor/npm_pin.rs`) | `registry.npmjs.org`, one request per npx package an enabled stdio backend pins. The request path is the package name; the pinned version is compared locally, not sent. The User-Agent is `mcp-gateway-doctor`. An `HTTPS_PROXY` you set is used |
 | `src/commands/doctor.rs`, `src/commands/doctor/ws_reach.rs` | you run `doctor` | your configured HTTP and WebSocket backends |
-| `src/commands/doctor/health.rs`, `src/commands/stats.rs`, `src/commands/dashboard_link.rs`, `src/commands/api.rs`, `src/commands/config_export/mod.rs` | you run `doctor`, `stats`, `dashboard-link`, `api`, `events dead-letters` or `config export` | the gateway your config names, normally this machine's; `stats`, `api` and `events dead-letters` take `--url` to point at another |
+| `src/commands/doctor/health.rs`, `src/commands/stats.rs`, `src/commands/dashboard_link_admin.rs`, `src/commands/api.rs`, `src/commands/config_export/mod.rs` | you run `doctor`, `stats`, `dashboard-link`, `api`, `events dead-letters` or `config export` | the gateway your config names, normally this machine's; `stats`, `api` and `events dead-letters` take `--url` to point at another |
 
 `cap install --from-github` fetches from `raw.githubusercontent.com/<repo>`
 only when you run it (`src/registry/mod.rs`, `src/commands/cap.rs`).

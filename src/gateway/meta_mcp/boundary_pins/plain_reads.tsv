@@ -14,7 +14,7 @@ src/commands/api.rs	read_data	File::open	1	not-config	operator-named request bod
 src/commands/config_export/mod.rs	merge_into_config	fs::read_to_string	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
 src/commands/config_export/mod.rs	rollback_client_config	fs::read	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
 src/commands/config_export/mod.rs	verify_gateway_entry	fs::read_to_string	1	not-config	a third-party MCP client config JSON or its backup, never gateway.yaml
-src/commands/dashboard_link.rs	read_file	fs::read	1	not-config	operator-named client cert, key and CA for one request
+src/commands/dashboard_link_admin.rs	read_file	fs::read	1	not-config	operator-named client cert, key and CA for one request
 src/commands/doctor/lease_custody.rs	dm_crypt	fs::read_to_string	1	not-config	kernel tables under /proc and /sys
 src/commands/doctor/lease_custody.rs	swap	fs::read_to_string	1	not-config	kernel tables under /proc and /sys
 src/commands/kubernetes.rs	read_cluster_apply_plan	fs::read_to_string	1	not-config	Kubernetes plan or report input
