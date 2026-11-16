@@ -219,8 +219,8 @@ async fn f2_t2_the_run_child_holds_no_control_connection() {
 
 /// 2b-1, kills "the CA files are missing or writable in the root": from the
 /// run child, `ca.pem` is there and cannot be written, removed or renamed,
-/// `empty.npmrc` and `empty-certs` are there and empty, and nothing can be
-/// added beside them.
+/// `empty-user.npmrc`, `empty-global.npmrc` and `empty-certs` are there and
+/// empty, and nothing can be added beside them.
 #[tokio::test]
 async fn ca_files_are_read_only_from_the_run_child() {
     let script = "d=/etc/mcp-gateway-preview
@@ -228,8 +228,8 @@ async fn ca_files_are_read_only_from_the_run_child() {
         (echo x > $d/ca.pem) 2>/dev/null && echo ca-writable
         (rm -f $d/ca.pem) 2>/dev/null; test -f $d/ca.pem && echo ca-kept
         (mv $d/ca.pem $d/moved) 2>/dev/null && echo ca-moved
-        test -f $d/empty.npmrc && echo npmrc-present
-        test -s $d/empty.npmrc || echo npmrc-empty
+        test -f $d/empty-user.npmrc && test -f $d/empty-global.npmrc && echo npmrc-present
+        test -s $d/empty-user.npmrc || test -s $d/empty-global.npmrc || echo npmrc-empty
         test -d $d/empty-certs && [ -z \"$(ls -A $d/empty-certs)\" ] && echo certs-empty
         (touch $d/new) 2>/dev/null && echo dir-writable
         true";
