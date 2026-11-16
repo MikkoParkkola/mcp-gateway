@@ -267,3 +267,98 @@ fn t8_an_event_written_without_a_diff_field_loads() {
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(!text.contains("attempted_diff"));
 }
+
+/// A valid stored history holding one version, "r0".
+#[cfg(unix)]
+const ONE_VERSION: &[u8] =
+    br#"{"snapshots":[{"revision":"r0","at":1,"files":[],"pending_restart":[]}],"events":[]}"#;
+
+/// The history file holds env-file bytes, so it is read as a secret file: a
+/// loose or linked one is not loaded, and is never saved over. (A file owned
+/// by another account takes the same refusal; a row cannot create one
+/// without root, and the owner rule is the guarded reader's own.)
+#[cfg(unix)]
+#[test]
+fn t9_a_loose_or_linked_history_file_is_refused_and_left_alone() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // The premise: the same bytes, owner-only, load.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(ConfigHistory::FILE);
+    std::fs::write(&path, ONE_VERSION).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let history = ConfigHistory::open(dir.path(), Bounds::default(), 5);
+    assert_eq!(
+        revision_names(&history),
+        expect(&["r0"]),
+        "owner-only loads"
+    );
+
+    // Loose: readable by others.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(ConfigHistory::FILE);
+    std::fs::write(&path, ONE_VERSION).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let history = ConfigHistory::open(dir.path(), Bounds::default(), 5);
+    assert!(history.snapshots().is_empty(), "a loose file is not loaded");
+    record_version(&history, "r1", 6, b"a: 1\n", "r1");
+    assert_eq!(
+        revision_names(&history),
+        expect(&["r1"]),
+        "history runs in memory"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        ONE_VERSION,
+        "left byte-identical"
+    );
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o644, "its mode is left alone");
+
+    // Linked: a symbolic link to an owner-only file holding a valid store.
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("elsewhere.json");
+    std::fs::write(&target, ONE_VERSION).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let path = dir.path().join(ConfigHistory::FILE);
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    let history = ConfigHistory::open(dir.path(), Bounds::default(), 5);
+    assert!(
+        history.snapshots().is_empty(),
+        "a linked file is not loaded"
+    );
+    record_version(&history, "r1", 6, b"a: 1\n", "r1");
+    let link = std::fs::symlink_metadata(&path).unwrap();
+    assert!(link.file_type().is_symlink(), "the link is left in place");
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        ONE_VERSION,
+        "its target is left byte-identical"
+    );
+}
+
+/// A refused history file is said once, naming the file and why: history
+/// that silently stops being kept is a loss nobody would notice.
+#[cfg(unix)]
+#[test]
+fn t10_a_refused_history_file_is_one_warning_naming_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(ConfigHistory::FILE);
+    std::fs::write(&path, ONE_VERSION).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let ((), warnings) = crate::test_log_capture::capture_warnings(|| {
+        let history = ConfigHistory::open(dir.path(), Bounds::default(), 5);
+        record_version(&history, "r1", 6, b"a: 1\n", "r1");
+        record_version(&history, "r2", 7, b"a: 2\n", "r2");
+    });
+    assert_eq!(warnings.lines().count(), 1, "one warning: {warnings}");
+    let named = format!("Refusing to load config history file {}", path.display());
+    assert!(warnings.contains(&named), "it names the file: {warnings}");
+    assert!(
+        warnings.contains("mode 0644 lets other users read it"),
+        "it says why: {warnings}"
+    );
+}
