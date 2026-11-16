@@ -1,0 +1,7 @@
+head_sha	5829c97901128fa568a10e943ece297441e5058a
+#mutant m-mirror-kind
+mcp_gateway	config::features::auth::api_key_serialize_tests::keys_are_written_exactly_as_before	src/config/features/api_key_serialize_tests.rs:242
+#mutant m-resolved-debug
+mcp_gateway	config::features::auth::api_key_serialize_tests::a_resolved_key_debug_prints_no_credential_value	src/config/features/api_key_serialize_tests.rs:161
+#mutant m-stmt-scope
+mcp_gateway	clock::tests::an_allow_on_a_statement_reaches_that_statement_only	src/clock_tests.rs:356
