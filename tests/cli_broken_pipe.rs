@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+#[cfg(mutants)] macro_rules! mutant { ($id:literal, $m:expr, $o:expr $(,)?) => { if std::env::var("MCP_GATEWAY_MUTANT").as_deref() == Ok($id) { $m } else { $o } }; } #[cfg(not(mutants))] macro_rules! mutant { ($id:literal, $m:expr, $o:expr $(,)?) => { $o }; } // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `mcp-gateway list --available | head` exits cleanly, through the shipped
 //! binary.
@@ -63,7 +63,7 @@ impl Bounded {
             let read = std::io::BufReader::new(stdout).read_line(&mut first);
             let _ = sent.send(read.map(|_| first));
         });
-        match line.recv_timeout(BOUND) {
+        match mutant!("m-no-first-line", Err(mpsc::RecvTimeoutError::Timeout), line.recv_timeout(BOUND)) {
             Ok(read) => read.expect("read the first line"),
             Err(_) => hung(&mut self.0, case, "the first stdout line"),
         }
@@ -76,7 +76,7 @@ impl Bounded {
         let stderr = self.0.stderr.take().map(read_on_thread);
         let deadline = Instant::now() + BOUND;
         let status = loop {
-            if let Some(status) = self.0.try_wait().expect("poll the child") {
+            if let Some(status) = mutant!("m-never-exits", None, self.0.try_wait().expect("poll the child")) {
                 break status;
             }
             if Instant::now() >= deadline {
@@ -86,7 +86,7 @@ impl Bounded {
         };
         let collect = |text: Option<mpsc::Receiver<String>>, which: &str| {
             text.map_or_else(String::new, |text| {
-                text.recv_timeout(BOUND).unwrap_or_else(|_| {
+                mutant!("m-pipe-held", Err(mpsc::RecvTimeoutError::Timeout), text.recv_timeout(BOUND)).unwrap_or_else(|_| {
                     panic!(
                         "{case}: the child exited ({status}) but its {which} did not end within {BOUND:?}: another process holds the pipe"
                     )
