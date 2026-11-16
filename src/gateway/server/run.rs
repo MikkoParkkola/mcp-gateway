@@ -33,6 +33,7 @@ use crate::gateway::stop_budget::{DRAIN_CAP, StopBudget};
 use crate::gateway::streaming::NotificationMultiplexer;
 use crate::gateway::webhooks::WebhookRegistry;
 use crate::playbook::PlaybookEngine;
+use crate::retire::{Exit, RetirePlan};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
 use crate::{Error, Result};
@@ -572,6 +573,17 @@ impl Gateway {
         #[cfg(test)]
         self.test_seams.report_bound_port(&listener);
 
+        // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
+        // A test may start the same shutdown without a signal.
+        // Its handlers install here, before the banner reports the port.
+        #[cfg(test)]
+        let shutdown = test_seams::shutdown_signal_or_trigger(
+            shutdown_tx.clone(),
+            self.test_seams.take_shutdown_trigger(),
+        );
+        #[cfg(not(test))]
+        let shutdown = support::shutdown_signal(shutdown_tx.clone());
+
         log_startup_banner(
             &self.config,
             &self.backends,
@@ -665,15 +677,6 @@ impl Gateway {
             .await
         };
 
-        // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
-        // A test may start the same shutdown without a signal (MIK-8156).
-        #[cfg(test)]
-        let shutdown = test_seams::shutdown_signal_or_trigger(
-            shutdown_tx,
-            self.test_seams.take_shutdown_trigger(),
-        );
-        #[cfg(not(test))]
-        let shutdown = support::shutdown_signal(shutdown_tx);
         // The stop's total starts at the trigger, however the listener returns.
         let total = self.config.server.shutdown_timeout;
         let fired = Arc::new(std::sync::OnceLock::<tokio::time::Instant>::new());
@@ -696,6 +699,13 @@ impl Gateway {
                 .unwrap_or_else(tokio::time::Instant::now),
             total,
         );
+        // The one store of the retirement plan: the exit ends in this total, under the watchdog.
+        if let Some(cell) = &self.retire {
+            let plan = RetirePlan::new(budget.end(), budget.runtime_end(), Exit::Plain);
+            if cell.set(plan).is_ok() {
+                crate::retire::arm(&plan);
+            }
+        }
 
         // Saved under one deadline, off the runtime's threads (MIK-8157).
         #[cfg(feature = "cost-governance")]
