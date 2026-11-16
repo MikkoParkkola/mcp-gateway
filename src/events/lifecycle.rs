@@ -29,7 +29,7 @@ impl EventsHub {
     /// The source that offers event type `name`. None offers the gateway's
     /// own ended notice.
     pub(super) fn source_offering(&self, name: &str) -> Option<Arc<dyn EventSource>> {
-        if name == super::outbox::ENDED_NAME {
+        if mutant!("m15", false, name == super::outbox::ENDED_NAME) {
             return None;
         }
         // ponytail: scans every source's descriptors per call, delivery

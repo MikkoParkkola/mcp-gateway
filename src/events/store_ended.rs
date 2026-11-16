@@ -101,7 +101,11 @@ impl Store {
             }
             return Err(error);
         }
-        let live_left = remove_record(&self.subs_dir, &format!("{id}.json"));
+        let live_left = mutant!(
+            "m20",
+            Ok(()),
+            remove_record(&self.subs_dir, &format!("{id}.json"))
+        );
         state.drop_row(id);
         state.ended.insert((id.to_owned(), sub.incarnation), ended);
         let stamped = self.stamp_removed(&mut state, &sub, Some(at), tail);
@@ -157,7 +161,11 @@ impl Store {
             ));
         }
         let file = EndedRow::file(&ended.row.id, ended.row.incarnation);
-        write_record(&self.ended_dir, &file, ended)?.durable()
+        mutant!(
+            "m19",
+            Ok(()),
+            write_record(&self.ended_dir, &file, ended)?.durable()
+        )
     }
 
     /// Delete ended row `key` and its file. Memory follows the disk.

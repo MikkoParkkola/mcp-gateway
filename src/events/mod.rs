@@ -380,7 +380,7 @@ impl EventsHub {
         if source
             .descriptors()
             .iter()
-            .any(|d| d.name == outbox::ENDED_NAME)
+            .any(|d| mutant!("m13", false, d.name == outbox::ENDED_NAME))
         {
             tracing::warn!(
                 name = outbox::ENDED_NAME,
@@ -436,7 +436,7 @@ impl EventsHub {
             .iter()
             .flat_map(|source| source.descriptors())
             // A source's offer can change after it registered.
-            .filter(|d| d.name != outbox::ENDED_NAME)
+            .filter(|d| mutant!("m14", true, d.name != outbox::ENDED_NAME))
             .collect();
         all.sort_by(|a, b| a.name.cmp(&b.name));
         all
