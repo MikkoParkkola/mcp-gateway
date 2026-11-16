@@ -7,10 +7,12 @@
     reason = "callers arrive in a later slice; the store is not wired yet"
 )]
 
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+
+use crate::config_reload::revision::RawInputs;
 
 /// Where a reload event came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,7 +111,7 @@ struct State {
 pub(crate) struct ConfigHistory {
     data_dir: PathBuf,
     bounds: Bounds,
-    inner: RefCell<State>,
+    inner: parking_lot::Mutex<State>,
 }
 
 impl ConfigHistory {
@@ -121,14 +123,14 @@ impl ConfigHistory {
         Self {
             data_dir: data_dir.to_path_buf(),
             bounds,
-            inner: RefCell::new(State::default()),
+            inner: parking_lot::Mutex::new(State::default()),
         }
     }
 
     /// Remember `event` and, when present, `snapshot`. Old snapshots fall away by age alone.
     pub(crate) fn record(&self, event: Event, snapshot: Option<Snapshot>, running: &str, now: u64) {
         let _ = (running, &self.data_dir);
-        let mut state = self.inner.borrow_mut();
+        let mut state = self.inner.lock();
         if let Some(snapshot) = snapshot {
             state.snapshots.push(snapshot);
         }
@@ -140,17 +142,17 @@ impl ConfigHistory {
     }
 
     pub(crate) fn events(&self) -> Vec<Event> {
-        self.inner.borrow().events.clone()
+        self.inner.lock().events.clone()
     }
 
     /// Kept versions, oldest first.
     pub(crate) fn snapshots(&self) -> Vec<Snapshot> {
-        self.inner.borrow().snapshots.clone()
+        self.inner.lock().snapshots.clone()
     }
 
     /// `Kept` when `revision` is still in memory. Anything else is `Unknown`.
     pub(crate) fn lookup(&self, revision: &str) -> Lookup {
-        let state = self.inner.borrow();
+        let state = self.inner.lock();
         if let Some(snapshot) = state
             .snapshots
             .iter()
@@ -159,6 +161,41 @@ impl ConfigHistory {
             return Lookup::Kept(snapshot.clone());
         }
         Lookup::Unknown
+    }
+}
+
+/// The store a `LiveConfig` records its publishes into, with the paths of the
+/// files a version holds (the publish carries their bytes, not their names).
+pub(crate) struct HistoryHook {
+    pub store: Arc<ConfigHistory>,
+    pub config_path: String,
+    pub grants_path: Option<String>,
+}
+
+impl HistoryHook {
+    /// Record one applied publish under `revision`. The stub records every
+    /// publish as a file reload, keeps gateway.yaml alone and no restart fields.
+    pub(crate) fn on_publish(&self, raw: &RawInputs, revision: &str, now: u64) {
+        let snapshot = Snapshot {
+            revision: revision.to_string(),
+            at: now,
+            files: vec![StoredFile {
+                path: self.config_path.clone(),
+                bytes: Some(raw.gateway_yaml.clone()),
+            }],
+            pending_restart: Vec::new(),
+        };
+        let event = Event {
+            at: now,
+            source: Source::File,
+            outcome: Outcome::Applied,
+            revision: Some(revision.to_string()),
+            unchanged: false,
+            still_running: None,
+            location: None,
+            attempted_diff: None,
+        };
+        self.store.record(event, Some(snapshot), revision, now);
     }
 }
 

@@ -230,6 +230,7 @@ pub(crate) fn flags_off(mut config: Config) -> Config {
     config.security.ssrf_protection = false;
     config
 }
+pub(crate) mod history;
 pub(crate) mod override_audit;
 #[cfg_attr(
     not(feature = "webui"),
@@ -243,7 +244,6 @@ mod reload_context;
 pub(crate) mod reload_tally;
 mod reload_warm_hook;
 pub(crate) mod revision;
-pub(crate) mod history;
 // Linux and macOS, as the other real-watcher rows (MIK-8181).
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod reload_warm_hook_tests;

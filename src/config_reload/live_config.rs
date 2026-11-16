@@ -60,6 +60,8 @@ pub struct LiveConfig {
     /// held: cost governance takes the starting figures of names it starts
     /// budgeting there, before any request can judge with them.
     published: crate::observer::Observer<Arc<Generation>>,
+    /// The configuration history each applied publish is recorded into.
+    history: Option<crate::config_reload::history::HistoryHook>,
     /// G5: how many generations this holder has published.
     #[cfg(test)]
     publishes: std::sync::atomic::AtomicU64,
@@ -100,9 +102,33 @@ impl LiveConfig {
             policy_epoch: None,
             admission: RwLock::new(()),
             published: crate::observer::Observer::default(),
+            history: None,
             #[cfg(test)]
             publishes: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Record every applied publish from here on into `hook`'s store.
+    #[must_use]
+    pub(crate) fn with_history(mut self, hook: crate::config_reload::history::HistoryHook) -> Self {
+        self.history = Some(hook);
+        self
+    }
+
+    /// The configuration history this holder records into, if any.
+    pub(crate) fn history(&self) -> Option<&Arc<crate::config_reload::history::ConfigHistory>> {
+        self.history.as_ref().map(|hook| &hook.store)
+    }
+
+    /// Record the publish just made from `raw`, after every lock is released.
+    fn record_publish(&self, raw: Option<RawInputs>) {
+        let (Some(hook), Some(raw), Some(applied)) =
+            (self.history.as_ref(), raw, self.applied_now())
+        else {
+            return;
+        };
+        let now = crate::clock::unix_secs().unwrap_or(0);
+        hook.on_publish(&raw, &applied.revision, now);
     }
 
     /// [`Self::from_prepared`] for `config` with `auth`, for unit-test
@@ -250,24 +276,30 @@ impl LiveConfig {
         raw: RawInputs,
         env_restart: &[String],
     ) {
+        let recorded = self.history.as_ref().map(|_| raw.clone());
         self.publish_with(generation, |current, pending| {
             self.digest_over(raw, current)
                 .and_then(|inputs| self.applied(inputs, with_env_restart(pending, env_restart)))
         });
+        self.record_publish(recorded);
     }
 
     /// The env files changed under an unchanged config file: same config,
     /// new inputs, new revision.
     pub(crate) fn set_inputs(&self, raw: RawInputs, env_restart: &[String]) {
-        let _gate = self.admission.write();
-        let mut inner = self.inner.write();
-        let current = inner.applied.as_deref();
-        let pending = current
-            .map(|a| a.pending_restart.clone())
-            .unwrap_or_default();
-        let inputs = self.digest_over(raw, current);
-        let pending = with_env_restart(pending, env_restart);
-        inner.applied = inputs.and_then(|i| self.applied(i, pending));
+        let recorded = self.history.as_ref().map(|_| raw.clone());
+        {
+            let _gate = self.admission.write();
+            let mut inner = self.inner.write();
+            let current = inner.applied.as_deref();
+            let pending = current
+                .map(|a| a.pending_restart.clone())
+                .unwrap_or_default();
+            let inputs = self.digest_over(raw, current);
+            let pending = with_env_restart(pending, env_restart);
+            inner.applied = inputs.and_then(|i| self.applied(i, pending));
+        }
+        self.record_publish(recorded);
     }
 
     /// New grants over the published config: only the grants part changes,
