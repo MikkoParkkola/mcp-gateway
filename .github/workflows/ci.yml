@@ -2174,6 +2174,13 @@ jobs:
         run: uv sync --locked --project scripts/gate-env
       - name: Check the cfg item finder marks what it claims to
         run: scripts/gate-env/.venv/bin/python scripts/dev/test_cfg_items.py
+      # The lib test split: every test function compiles in exactly one part
+      # (one #[cfg(tpK)] on itself or a module above it, K from
+      # scripts/dev/test-parts.tsv). A refusal prints the fix.
+      - name: Check the lib test part checker refuses what it claims to
+        run: scripts/gate-env/.venv/bin/python scripts/dev/test_test_parts.py
+      - name: Every lib test function is in exactly one part
+        run: scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py check
       # docs/PRIVACY.md lists every place product code can open an outbound
       # connection; a new one, or one kind replacing another, fails here until
       # scripts/dev/outbound-sites.tsv and docs/PRIVACY.md list it.
