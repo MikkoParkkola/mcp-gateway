@@ -723,6 +723,29 @@ exit 0
 exit 137
 """, {"filter": "crash_case", "runs": 1, "parallel": 1, "exact": False}, 1, (0, 1, 0), 0)
 
+        # Run level: a void iteration then a failing one exits 1 (failure outranks void), not 3.
+        seq_spec = {"filter": "seq_case", "runs": 2, "parallel": 1, "exact": False}
+        seq_repo = repo_for("seq", seq_spec)
+        seq_dir = tmp / "seq-count"
+        write_exe(tmp / "seq-bin", """#!/bin/sh
+dir="$SEQ_DIR"
+mkdir -p "$dir"
+n=0
+if [ -f "$dir/n" ]; then n=$(cat "$dir/n"); fi
+n=$((n + 1))
+printf '%s\\n' "$n" > "$dir/n"
+if [ "$n" -eq 1 ]; then
+  printf '%s\\n' "running 0 tests"
+  printf '%s\\n' "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out"
+  exit 0
+fi
+exit 137
+""")
+        seq = run_py(["run", "--binary", str(tmp / "seq-bin"), "--out", str(tmp / "seq-out")],
+                     seq_repo, penv(SEQ_DIR=str(seq_dir)), 30)
+        if seq.returncode != 1:
+            problems.append(f"seq: void then fail exited {seq.returncode}, want 1")
+
         # One copy executes nothing; the other crashes. The iteration fails.
         mix_spec = {"filter": "mix_case", "runs": 1, "parallel": 2, "exact": False}
         mix_repo = repo_for("mix", mix_spec)

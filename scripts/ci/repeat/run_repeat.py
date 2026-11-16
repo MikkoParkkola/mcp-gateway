@@ -666,10 +666,11 @@ def cmd_run(binary: Path, out: Path) -> int:
         print(tail)
     if incomplete:
         return 1
+    # A failure outranks void at run level too, as it does inside an iteration.
+    if done - passed - void:
+        return 1
     if void:
         return 3
-    if passed != done:
-        return 1
     return 0
 
 
