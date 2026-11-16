@@ -17,7 +17,7 @@ use crate::security::transparency_log::TransparencyLogger;
 use crate::security::transparency_log::identity::LogId;
 use crate::security::transparency_log::settle::{Appended, Attribution, Role, Unsettled};
 // `terminal_record` is used by the file drain and the handover, through this import.
-use decide::{decide_missing, decision, frozen, refuse_attempt, terminal_record};
+use decide::{decide_missing, frozen, refuse_attempt, terminal_record};
 use deliver::deliver_all;
 
 pub(crate) struct DrainSession {

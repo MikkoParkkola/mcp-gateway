@@ -75,7 +75,7 @@ pub(super) async fn send_record(
         attribution: record.attribution.clone(),
     };
     #[cfg(test)]
-    super::observe::note(&journal.target, super::observe::Event::BStarted);
+    super::super::observe::note(&journal.target, super::super::observe::Event::BStarted);
     let appended = sink.settle(&delivery).await;
     let receipt = match appended {
         Ok(receipt) if receipt.id == *binding => receipt,
@@ -84,7 +84,7 @@ pub(super) async fn send_record(
         Err(Unsettled::Unconfirmed(_)) => return Err(DrainError::Unconfirmed),
         Err(Unsettled::Invalid(_)) => {
             #[cfg(test)]
-            super::observe::note(&journal.target, super::observe::Event::BInvalid);
+            super::super::observe::note(&journal.target, super::super::observe::Event::BInvalid);
             return park_record(journal, token, index, ParkReason::InvalidPayload);
         }
     };
@@ -99,7 +99,7 @@ pub(super) async fn send_record(
     }
     journal.persist().map_err(|_| DrainError::Journal)?;
     #[cfg(test)]
-    super::observe::note(&journal.target, super::observe::Event::FlagSynced);
+    super::super::observe::note(&journal.target, super::super::observe::Event::FlagSynced);
     #[cfg(test)]
     if delivery.role == Role::Deferred {
         fault::hit(&journal.target, fault::At::DeferredFlagged).map_err(|_| DrainError::Journal)?;
@@ -134,7 +134,7 @@ pub(super) fn appended_boundary(target: &Path, role: Role) -> Result<(), DrainEr
     let before = fault::fired(target);
     fault::hit(target, at).map_err(|_| DrainError::Journal)?;
     if fault::fired(target) == before {
-        super::observe::note(target, fault::event(at));
+        super::super::observe::note(target, fault::event(at));
     }
     Ok(())
 }

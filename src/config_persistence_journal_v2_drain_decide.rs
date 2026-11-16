@@ -26,7 +26,7 @@ pub(super) fn refuse_attempt(
         .map(|owner| owner.intent_id.clone());
     if let Some(token) = token {
         #[cfg(test)]
-        super::observe::decision_computing(&journal.target);
+        super::super::observe::decision_computing(&journal.target);
         let reason = match refusal {
             Refusal::Moved => Reason::Moved,
             Refusal::Other(_) => Reason::Refused,
@@ -61,7 +61,7 @@ pub(super) fn compute_decision(
     token: &IntentId,
 ) -> Result<JournalDecision, DrainError> {
     #[cfg(test)]
-    super::observe::decision_computing(&journal.target);
+    super::super::observe::decision_computing(&journal.target);
     let writer = journal
         .state
         .writer
