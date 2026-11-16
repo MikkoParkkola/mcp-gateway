@@ -872,13 +872,15 @@ async fn an_over_long_line_in_one_chunk_is_refused() {
 #[tokio::test]
 async fn no_response_headers_end_at_the_headers_wait() {
     let out = Shared::default();
+    // Bound first: the run is awaited later, past this statement.
+    let (request, tls, deadlines) = (args(EXPORT, None, false), LinkTls::default(), short());
     let run = run_streamed_with(
-        &args(EXPORT, None, false),
+        &request,
         BASE,
-        &LinkTls::default(),
+        &tls,
         credential,
         out.clone(),
-        &short(),
+        &deadlines,
         |_| futures::future::pending::<Result<AdminStream, AdminCallError>>(),
     );
     // A hang guard, far past the 400 ms headers deadline under test: without
