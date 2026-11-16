@@ -256,6 +256,28 @@ fn statement_from(code: &str, from: usize) -> &str {
     &code[from..]
 }
 
+/// Whether the code after an attribute, past any further attributes, is an
+/// item with a brace body (a function, impl, module, trait or type), whose
+/// lint scope is that body. A `let` never is, whatever its type names.
+fn item_with_body(rest: &str) -> bool {
+    let mut rest = rest.trim_start();
+    while rest.starts_with("#[") {
+        rest = rest[rest.find(']').map_or(rest.len(), |end| end + 1)..].trim_start();
+    }
+    let head = &rest[..rest.find(['{', ';', '=']).unwrap_or(rest.len())];
+    let mut words = head
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|word| !word.is_empty());
+    let first = words.next();
+    first != Some("let")
+        && first.into_iter().chain(words).any(|word| {
+            matches!(
+                word,
+                "fn" | "impl" | "mod" | "trait" | "struct" | "enum" | "union"
+            )
+        })
+}
+
 /// What the guard found in one product file: aliases of a clock type, and
 /// `disallowed_methods` allows whose scope holds a clock read.
 fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
@@ -270,7 +292,9 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
         r"\b(?:SystemTime|Utc|{epoch}|{jwt})\b|\bLocal\s*::\s*now\b"
     ))
     .expect("read pattern");
-    let code = product_code(src);
+    // Comments and string and char literals blanked: a `;` or bracket inside
+    // one neither ends nor opens a scope, and a clock name in one is no read.
+    let code = crate::test_source_text::sanitize(&product_code(src));
     let mut holes: Vec<String> = alias
         .find_iter(&code)
         .map(|m| format!("{rel}: a clock type aliased: {}", m.as_str()))
@@ -285,11 +309,12 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
         }
         let scope = if attr.starts_with("#!") {
             code.as_str()
-        } else if code[close..].trim_start().starts_with("let ") {
-            // An allow on a `let` reaches that statement only, not the next block.
-            statement_from(&code, close)
-        } else {
+        } else if item_with_body(&code[close..]) {
             block_from(&code, close)
+        } else {
+            // A statement (a `let`, an expression) or a bodiless item (a
+            // `const`, a `static`): the allow reaches it only, to its `;`.
+            statement_from(&code, close)
         };
         if read.is_match(scope) {
             holes.push(format!(
@@ -340,31 +365,87 @@ fn no_disallowed_methods_allow_or_clock_alias_hides_a_clock_read() {
     assert!(holes.is_empty(), "{holes:#?}");
 }
 
-/// Kills "a statement allow is scoped to the next block": an allow on a
-/// `let` hides a clock read in that statement, never one in the code after
-/// it, while an allow on a function still covers its whole body.
+/// Kills "a statement allow is scoped to the next block" and "a literal or a
+/// comment moves the scope": each case is a body under one allow and the
+/// number of holes the guard must report. A statement's allow reaches that
+/// statement only, a function's its body; a `;` or a bracket inside a literal
+/// or a comment changes neither, and a clock name inside a literal is no read.
 #[test]
-fn an_allow_on_a_statement_reaches_that_statement_only() {
+fn an_allow_reaches_exactly_its_statement_or_item() {
     let read = concat!("U", "tc::now()");
     let allow = "#[allow(clippy::disallowed_methods, reason = \"id: x\")]";
-    let inside =
-        format!("fn f() {{\n    {allow}\n    let at = ({read}, rand::random::<u8>());\n}}\n");
-    let after = format!(
-        "fn f() {{\n    {allow}\n    let id = rand::random::<u8>();\n    emit(Event {{ id, at: {read} }});\n}}\n"
-    );
-    let item = format!("{allow}\nfn f() {{\n    let at = {read};\n}}\n");
-    assert_eq!(
-        clock_lint_holes("inside.rs", &inside).len(),
-        1,
-        "in the statement"
-    );
-    assert!(
-        clock_lint_holes("after.rs", &after).is_empty(),
-        "after the statement"
-    );
-    assert_eq!(
-        clock_lint_holes("item.rs", &item).len(),
-        1,
-        "in the function"
-    );
+    let body = |lines: &str| format!("fn f() {{\n    {allow}\n{lines}}}\n");
+    let cases: [(&str, String, usize); 12] = [
+        (
+            "in the statement",
+            body(&format!("    let at = ({read}, rand::random::<u8>());\n")),
+            1,
+        ),
+        (
+            "after the statement",
+            body(&format!(
+                "    let id = rand::random::<u8>();\n    emit(Event {{ id, at: {read} }});\n"
+            )),
+            0,
+        ),
+        (
+            "in the function",
+            format!("{allow}\nfn f() {{\n    let at = {read};\n}}\n"),
+            1,
+        ),
+        (
+            "past a char ';'",
+            body(&format!("    let at = c == ';' || late({read});\n")),
+            1,
+        ),
+        (
+            "past a string ';' and brace",
+            body(&format!("    let at = (\";}}\", {read});\n")),
+            1,
+        ),
+        (
+            "past a comment ';'",
+            body(&format!("    let at = /* ; */ {read};\n")),
+            1,
+        ),
+        (
+            "a clock name in a string",
+            body(&format!("    let s = \"{read}\";\n")),
+            0,
+        ),
+        (
+            "under a second attribute",
+            body(&format!("    #[rustfmt::skip]\n    let at = {read};\n")),
+            1,
+        ),
+        (
+            "a let on its own line",
+            body(&format!("    let\n        at = {read};\n")),
+            1,
+        ),
+        (
+            "in an expression statement",
+            body(&format!("    emit({read});\n    let id = 1;\n")),
+            1,
+        ),
+        (
+            "a let whose type names fn",
+            body(&format!("    let f: fn() -> T = || {read};\n")),
+            1,
+        ),
+        (
+            "after an expression statement",
+            body(&format!(
+                "    emit(rand::random::<u8>());\n    emit(Event {{ at: {read} }});\n"
+            )),
+            0,
+        ),
+    ];
+    for (name, code, holes) in &cases {
+        assert_eq!(
+            clock_lint_holes("case.rs", code).len(),
+            *holes,
+            "{name}:\n{code}"
+        );
+    }
 }
