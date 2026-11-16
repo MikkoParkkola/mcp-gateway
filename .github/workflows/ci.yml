@@ -292,7 +292,7 @@ jobs:
       - name: The installed compiler is the pinned one
         run: python3 scripts/ci/check_toolchain_pin.py --runtime
       # Here because this job already has the pinned compiler and is cheap:
-      # build.rs alone, run with every value of MCP_GATEWAY_TEST_PART.
+      # the part build script alone, run with every value of its variable.
       - name: build.rs emits exactly the lib test part cfgs for each value
         run: python3 scripts/dev/test_build_rs_parts.py
       - name: Validate service-template smoke script
