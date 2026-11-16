@@ -106,11 +106,9 @@ impl Default for Bounds {
     }
 }
 
-/// What `lookup` found for a revision.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "read by the history page, a later slice")
-)]
+/// What `lookup` found for a revision. Test-only until the history page
+/// reads it.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Lookup {
     Kept(Snapshot),
@@ -230,29 +228,21 @@ impl ConfigHistory {
         })
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "read by the history page, a later slice")
-    )]
+    /// Held events, oldest first. Test-only until the history page reads it.
+    #[cfg(test)]
     pub(crate) fn events(&self) -> Vec<Event> {
         self.with_state(|state| state.events.clone())
     }
 
     /// Kept versions, oldest first.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "read by the history page, a later slice")
-    )]
     pub(crate) fn snapshots(&self) -> Vec<Snapshot> {
         self.with_state(|state| state.snapshots.clone())
     }
 
     /// `Kept` when `revision` is still stored. `NoLongerKept` when a held
-    /// event names it. Otherwise `Unknown`.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "read by the history page, a later slice")
-    )]
+    /// event names it. Otherwise `Unknown`. Test-only until the history page
+    /// reads it.
+    #[cfg(test)]
     pub(crate) fn lookup(&self, revision: &str) -> Lookup {
         self.with_state(|state| {
             if let Some(snapshot) = state
