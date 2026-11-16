@@ -173,6 +173,21 @@ pub(crate) async fn accept_helper(
         .map_err(|_| Refusal::Step("the sandbox never opened its control connection".into()))?;
     let (stream, _) = accepted
         .map_err(|e| Refusal::Step(format!("accepting the sandbox's control connection ({e})")))?;
+    mutant!(
+        "m-listener-forgotten",
+        std::mem::forget(listener),
+        mutant!(
+            "m-accept-loop",
+            {
+                tokio::spawn(async move {
+                    loop {
+                        drop(listener.accept().await);
+                    }
+                });
+            },
+            drop(listener)
+        )
+    );
     // The boot clock as the connection is taken: a process that started
     // later is not the one that connected, whatever pid it holds.
     #[cfg(target_os = "linux")]
