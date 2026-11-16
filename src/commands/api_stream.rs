@@ -91,7 +91,7 @@ pub(super) fn streamed(base: &str, path: &str) -> bool {
 pub(super) fn check_args(args: &ApiArgs, url: &reqwest::Url) -> Result<(), ApiError> {
     let stream = mode_of(url) == Mode::Stream;
     let usage = |message: &str, remedy: &str| Err(ApiError::new(ApiExit::Usage, message, remedy));
-    if stream && args.limit.is_none() {
+    if mutant!("m10", false, stream && args.limit.is_none()) {
         return usage(
             "The event stream needs --limit.",
             "Add --limit N to print N events, then retry.",
@@ -113,7 +113,7 @@ pub(super) fn check_args(args: &ApiArgs, url: &reqwest::Url) -> Result<(), ApiEr
         } else {
             None
         };
-        if let Some(flag) = flag {
+        if let Some(flag) = mutant!("m6", None, flag) {
             return Err(ApiError::new(
                 ApiExit::Usage,
                 format!("{flag} does not apply to {}.", url.path()),
@@ -179,7 +179,7 @@ async fn send_with(
     base: AdminClientOptions,
 ) -> Result<AdminStream, AdminCallError> {
     let options = AdminClientOptions {
-        total: None,
+        total: mutant!("m7", base.total, None),
         ..base
     };
     admin_stream_url(
@@ -235,7 +235,7 @@ impl Lines {
         let mut start = 0;
         while let Some(at) = self.pending[scan..].iter().position(|&b| b == b'\n') {
             let end = scan + at;
-            if end - start > PENDING_LIMIT {
+            if mutant!("m5", false, end - start > PENDING_LIMIT) {
                 return None;
             }
             done.push(self.pending[start..=end].to_vec());
@@ -257,7 +257,11 @@ impl Lines {
 /// and holds the credential.
 fn masked_line(line: &[u8], token: &str) -> Option<Vec<u8>> {
     match std::str::from_utf8(line) {
-        Ok(text) => checked(&redact::text(text, &[token.to_owned()]), text, token),
+        Ok(text) => mutant!(
+            "m11",
+            Some(text.as_bytes().to_vec()),
+            checked(&redact::text(text, &[token.to_owned()]), text, token)
+        ),
         Err(_) if !line.windows(token.len()).any(|w| w == token.as_bytes()) => Some(line.to_vec()),
         Err(_) => None,
     }
@@ -268,7 +272,7 @@ fn masked_line(line: &[u8], token: &str) -> Option<Vec<u8>> {
 /// closed to empty output, which would pass as an emptied line or event; that
 /// refuses instead. The token check backs the redactor's own guarantee.
 fn checked(masked: &str, input: &str, token: &str) -> Option<Vec<u8>> {
-    let emptied = masked.is_empty() && !input.is_empty();
+    let emptied = mutant!("m2", false, masked.is_empty() && !input.is_empty());
     (!emptied && !masked.contains(token)).then(|| masked.as_bytes().to_vec())
 }
 
@@ -312,7 +316,11 @@ impl Events {
                 }
                 _ => self.line.push(byte),
             }
-            if self.line.len() > PENDING_LIMIT || self.data.len() > PENDING_LIMIT {
+            if mutant!(
+                "m9",
+                false,
+                self.line.len() > PENDING_LIMIT || self.data.len() > PENDING_LIMIT
+            ) {
                 return None;
             }
         }
@@ -379,7 +387,11 @@ fn rendered(event: Event, token: &str, json_output: bool) -> Option<Vec<u8>> {
             text.push('\n');
         }
         text.push('\n');
-        return checked(&redact::text(&text, &secrets), &text, token);
+        return mutant!(
+            "m12",
+            Some(text.clone().into_bytes()),
+            checked(&redact::text(&text, &secrets), &text, token)
+        );
     }
     let data = serde_json::from_str::<Value>(&event.data).unwrap_or(Value::String(event.data));
     let mut object = json!({"event": event.name, "id": event.id, "data": data});
@@ -391,7 +403,11 @@ fn rendered(event: Event, token: &str, json_output: bool) -> Option<Vec<u8>> {
     let mut line = serde_json::to_vec(&object).ok()?;
     line.push(b'\n');
     // A token equal to JSON syntax survives the value redaction.
-    (!line.windows(token.len()).any(|w| w == token.as_bytes())).then_some(line)
+    mutant!(
+        "m4",
+        Some(line),
+        (!line.windows(token.len()).any(|w| w == token.as_bytes())).then_some(line)
+    )
 }
 
 /// The lower-cased MIME essence of the answer's Content-Type.
@@ -553,7 +569,11 @@ impl Printer {
             return Print::Failed;
         }
         let left = until.saturating_duration_since(Instant::now());
-        match tokio::time::timeout(left, self.acks.recv()).await {
+        match mutant!(
+            "m1",
+            Ok(self.acks.recv().await),
+            tokio::time::timeout(left, self.acks.recv()).await
+        ) {
             Err(_) => Print::Late,
             Ok(Some(Ok(true))) => Print::Done,
             Ok(Some(Ok(false))) => Print::ReaderGone,
@@ -728,7 +748,11 @@ impl Printing<'_> {
                     shown += 1;
                 }
             }
-            if self.mode == Mode::Stream && shown >= self.limit {
+            if mutant!(
+                "m13",
+                false,
+                self.mode == Mode::Stream && shown >= self.limit
+            ) {
                 return self.done();
             }
         }
