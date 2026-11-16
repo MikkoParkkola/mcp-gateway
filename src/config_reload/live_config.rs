@@ -481,14 +481,19 @@ impl LiveConfig {
         Some((replaced, published))
     }
 
-    /// Prepare `config` against the published generation, with no env
-    /// overlay, and publish it. For tests: a reload prepares a
-    /// [`Generation`] itself and calls [`Self::publish`] (a source pin holds
-    /// this).
+    /// Test fixtures only: replaces the config and erases the revision.
+    ///
+    /// Prepares `config` against the published generation, with no env
+    /// overlay, and publishes it with no revision. A reload prepares a
+    /// [`Generation`] itself and calls [`Self::set_applied`]. Hidden from
+    /// the documented API: integration-test
+    /// fixtures call it, and nothing in the gateway does (design delta,
+    /// 2026-11-16).
     ///
     /// # Panics
     ///
     /// When the preparation refuses `config`.
+    #[doc(hidden)]
     pub fn set(&self, config: Config) {
         let published = self.generation();
         // An edit that leaves `auth` as published keeps the published key
@@ -504,7 +509,7 @@ impl LiveConfig {
             self.prepare(config, &crate::config::EnvOverlay::none())
                 .expect("the config prepares")
         };
-        self.publish(Arc::new(prepared));
+        self.publish_with(Arc::new(prepared), |_, _| None);
     }
 
     /// Build the generation for `config` against what this process runs:
@@ -525,7 +530,9 @@ impl LiveConfig {
 
     /// Publish a prepared generation in one swap, with no revision; a reload
     /// that knows its inputs calls [`LiveConfig::set_applied`] instead.
-    pub fn publish(&self, generation: Arc<Generation>) {
+    /// Test-only: it erases the revision config history records under.
+    #[cfg(test)]
+    pub(crate) fn publish(&self, generation: Arc<Generation>) {
         self.publish_with(generation, |_, _| None);
     }
 
