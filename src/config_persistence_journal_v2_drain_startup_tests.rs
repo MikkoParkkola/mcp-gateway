@@ -367,46 +367,35 @@ fn prepare_refuses_unrepairable() {
         Err(StartError::RepairPending),
         "{ROW}: RepairPending"
     );
-    let after = journal_at(&live, ROW);
-    let (Some(before_writer), Some(after_writer)) = (before.writer.as_ref(), after.writer.as_ref())
-    else {
-        panic!("{ROW}: writer token still present");
+    // Every field but the one appended attempt equals the journal before: the writer (its flags,
+    // counter and records), the fact, the phase, the binding and every earlier attempt.
+    let mut after = journal_at(&live, ROW);
+    let Some(added) = after.attempts.pop() else {
+        panic!("{ROW}: repair appended its recovery attempt");
     };
     assert_eq!(
-        after_writer.intent_id, before_writer.intent_id,
-        "{ROW}: writer token"
+        after, before,
+        "{ROW}: the journal is unchanged but for one appended attempt"
     );
-    assert_eq!(
-        after_writer.intent.payload_json, before_writer.intent.payload_json,
-        "{ROW}: writer intent bytes"
-    );
-    assert_eq!(
-        after_writer.decision, before_writer.decision,
-        "{ROW}: writer decision"
-    );
-    assert_eq!(after.phase, before.phase, "{ROW}: phase");
-    assert_eq!(
-        after.original_revision, before.original_revision,
-        "{ROW}: original_revision"
-    );
-    assert_eq!(after.binding, before.binding, "{ROW}: binding");
-    assert_eq!(
-        after.attempts.len(),
-        before.attempts.len() + 1,
-        "{ROW}: one new attempt"
-    );
-    assert_eq!(
-        &after.attempts[..before.attempts.len()],
-        before.attempts.as_slice(),
-        "{ROW}: earlier attempts unchanged"
-    );
-    let added = &after.attempts[before.attempts.len()];
+    // The appended attempt, against the design's recovery attempt: an undecided, unsent recovery
+    // intent at start that settles the writer.
     assert_eq!(
         added.intent.role,
         Role::RecoveryIntent,
-        "{ROW}: new attempt is a recovery intent"
+        "{ROW}: a recovery intent"
     );
-    assert_eq!(added.decision, None, "{ROW}: new attempt is undecided");
+    assert_eq!(added.decision, None, "{ROW}: undecided");
+    assert_eq!(added.intent_counter, None, "{ROW}: never sent");
+    assert!(!added.intent.delivered, "{ROW}: not flagged delivered");
+    assert!(added.records.is_empty(), "{ROW}: no records");
+    assert!(!added.handed_over, "{ROW}: not handed over");
+    let payload: Value = serde_json::from_slice(&added.intent.payload_json).expect(ROW);
+    assert_eq!(
+        payload["kind"], "settle.recovery",
+        "{ROW}: recovery payload kind"
+    );
+    assert_eq!(payload["at_start"], true, "{ROW}: at start");
+    assert_eq!(payload["settles"], "writer-1", "{ROW}: settles the writer");
     assert_eq!(
         std::fs::read(&live.path).expect(ROW),
         config,

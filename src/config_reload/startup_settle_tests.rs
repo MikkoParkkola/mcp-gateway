@@ -386,8 +386,11 @@ async fn finish_accepts_a_clean_start() {
         );
     }
     // Released: a fresh start takes the lock at once.
-    let again = prepare_start_within(&config, Duration::ZERO).await;
-    assert!(again.is_ok(), "{row}: the lock is free after finishing");
+    let again = match prepare_start_within(&config, Duration::ZERO).await {
+        Ok(again) => again,
+        Err(error) => panic!("{row}: the lock is free after finishing, got {error:?}"),
+    };
+    assert_locked(row, &again);
 }
 
 /// GATE.2: a held lock past a zero bound is Busy and leaves the files unchanged.
