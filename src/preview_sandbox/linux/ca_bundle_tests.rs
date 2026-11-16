@@ -8,11 +8,10 @@ use std::path::{Path, PathBuf};
 
 use super::{DISTRO_BUNDLES, HostBundle, MAX_BUNDLE};
 
-/// One freshly made certificate, PEM-encoded.
+/// One freshly made certificate, PEM-encoded (the shared test CA helper).
 fn pem() -> String {
-    rcgen::generate_simple_self_signed(vec!["ca.test".into()])
-        .expect("certificate")
-        .cert
+    crate::test_fixture_host::test_pki("ca.test", "ca bundle rows CA")
+        .ca
         .pem()
 }
 
