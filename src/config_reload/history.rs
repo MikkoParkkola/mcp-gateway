@@ -846,6 +846,12 @@ fn evict_events(events: &mut Vec<Event>, bounds: Bounds) {
 }
 
 #[cfg(test)]
+#[path = "history_deadline_tests.rs"]
+mod deadline_tests;
+#[cfg(test)]
+#[path = "history_order_tests.rs"]
+mod order_tests;
+#[cfg(test)]
 #[path = "history_record_tests.rs"]
 mod record_tests;
 #[cfg(test)]
@@ -855,8 +861,14 @@ mod reload_tests;
 #[path = "history_route_tests.rs"]
 mod route_tests;
 #[cfg(test)]
+#[path = "history_save_tests.rs"]
+mod save_tests;
+#[cfg(test)]
 #[path = "history_seams.rs"]
 pub(crate) mod seams;
+#[cfg(test)]
+#[path = "history_startup_tests.rs"]
+mod startup_tests;
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod tests;
