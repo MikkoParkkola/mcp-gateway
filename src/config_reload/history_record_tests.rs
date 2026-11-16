@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{Bounds, ConfigHistory, Event, HistoryHook, Snapshot, StoredFile};
+use super::{Bounds, ConfigHistory, Event, HistoryHook, Outcome, Snapshot, Source, StoredFile};
 use crate::backend::BackendRegistry;
 use crate::config::{Config, FailsafeConfig};
 use crate::config_reload::reload_context::replace::{Expected, Replace, Replaced};
@@ -289,5 +289,160 @@ async fn h9_pending_restart_is_recorded() {
             .last()
             .map(|snapshot| snapshot.pending_restart.clone()),
         Some(vec!["server".to_string()])
+    );
+}
+
+/// H8: `gateway_reload_config` through the tool dispatch records source `ui`
+/// with the caller's account. `AuditWho::from_caller` copies `api_key_name`,
+/// so a caller named `ops-admin` has account `ops-admin`. Red against the
+/// stub, which records `who: ""`.
+#[tokio::test]
+async fn h8_a_meta_tool_reload_records_its_caller() {
+    use std::borrow::Cow;
+
+    use crate::gateway::authz::{AdminStanding, AllowAll};
+    use crate::gateway::test_helpers::{Authentication, MetaMcp, MetaMcpCallerContext};
+    use crate::protocol::{JsonRpcResponse, RequestId};
+
+    let rig = rig(ONE_BACKEND);
+    let meta = MetaMcp::new(Arc::clone(&rig.ctx.registry));
+    meta.set_reload_context(Arc::clone(&rig.ctx));
+    write_owner_only(&rig.path, TWO_BACKENDS).expect("add a backend");
+
+    let caller = MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
+        authentication: Authentication::Authenticated,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+        is_modern: false,
+        protocol_revision: None,
+        authorizer: &AllowAll,
+        api_key_name: Some("ops-admin"),
+        agent_id: None,
+        agent_declared: None,
+        grant_subject: None,
+        stdio_nonce: None,
+        caller_key: None,
+        verified_identity: None,
+        admin: AdminStanding::Gateway,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
+        input_capabilities: crate::protocol::meta::Declared::NONE,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        task: None,
+        era: crate::protocol::meta::Era::Legacy,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
+    };
+    let response: JsonRpcResponse = meta
+        .dispatch_below_gate(
+            RequestId::Number(1),
+            "gateway_reload_config",
+            Cow::Owned(serde_json::json!({})),
+            None,
+            &caller,
+            false,
+        )
+        .await;
+    assert!(
+        response.error.is_none(),
+        "dispatch ran the reload: {:?}",
+        response.error
+    );
+    let newest = rig.store.events().last().cloned().expect("a reload event");
+    assert_eq!(newest.outcome, Outcome::Applied);
+    assert_eq!(
+        newest.source,
+        Source::Ui {
+            who: "ops-admin".to_string()
+        }
+    );
+}
+
+/// H8b: `POST /ui/api/reload` as the configured admin key `ui-admin` records
+/// that key's account. The handler `reload` takes a `Guard` and does not pass
+/// `caller_who`; the stub records `who: ""`. The history hook is the one
+/// `Gateway::history_hook` attaches when a config path is set and grants are
+/// off, on the reload context's `LiveConfig` (the store the reload publishes).
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn h8b_a_ui_reload_records_its_caller() {
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use tower::ServiceExt;
+
+    use crate::config::{ApiKeyConfig, AuthConfig, FailsafeConfig};
+    use crate::gateway::test_helpers::create_router;
+
+    const KEY: &str = "ui-admin";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, ONE_BACKEND).expect("write config");
+    let started = Config::load_evaluated(Some(&path)).expect("config loads");
+    let (live, store) = hold_at(
+        dir.path(),
+        started.inputs,
+        path.display().to_string(),
+        None,
+        started.config,
+        None,
+    );
+    let auth = AuthConfig {
+        enabled: true,
+        api_keys: vec![ApiKeyConfig {
+            key: None,
+            key_sha256: Some(crate::config::api_key_digest_spec(KEY.as_bytes())),
+            expires_at: None,
+            name: KEY.to_string(),
+            rate_limit: 0,
+            backends: vec!["*".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: true,
+            kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let key_server: Option<Arc<crate::key_server::KeyServer>> = None;
+    let agents: Option<Arc<crate::gateway::AgentRegistry>> = None;
+    let (state, _fixture) =
+        crate::gateway::audience_state(&auth, (key_server, agents), |meta| meta).await;
+    let ctx = ReloadContext::new(
+        path.clone(),
+        Arc::new(live),
+        Arc::clone(&state.backends),
+        FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("the registry pairs with the config");
+    state.meta_mcp.set_reload_context(Arc::new(ctx));
+    write_owner_only(&path, TWO_BACKENDS).expect("add a backend");
+
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/ui/api/reload")
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from("{}"))
+        .expect("request");
+    let response = create_router(state)
+        .oneshot(request)
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    let newest = store.events().last().cloned().expect("a reload event");
+    assert_eq!(newest.outcome, Outcome::Applied);
+    assert_eq!(
+        newest.source,
+        Source::Ui {
+            who: "ui-admin".to_string()
+        }
     );
 }

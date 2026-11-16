@@ -273,9 +273,12 @@ pub(crate) async fn manual_reload(
     // Bounded: a reload the gate fails to refuse would wait on a reload lock a
     // certified adapter holds, and the row must fail, never hang. Not for rows
     // on a paused clock (the timeout would fire as soon as the runtime idles).
-    tokio::time::timeout(BOUND, ctx.manual_reload_outcome())
-        .await
-        .unwrap_or_else(|_| panic!("never answered: the manual reload"))
+    tokio::time::timeout(
+        BOUND,
+        ctx.manual_reload_outcome(crate::config_reload::history::Source::Ui { who: String::new() }),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("never answered: the manual reload"))
 }
 
 /// A CLI-style writer running on its own thread: the real

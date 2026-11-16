@@ -645,7 +645,10 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
         .into_response();
     };
 
-    match reload_context.manual_reload_outcome().await {
+    match reload_context
+        .manual_reload_outcome(crate::config_reload::history::Source::Ui { who: String::new() })
+        .await
+    {
         Ok(outcome) => (
             StatusCode::OK,
             Json(json!({

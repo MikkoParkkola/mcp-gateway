@@ -366,7 +366,10 @@ impl ReloadContext {
     /// # Errors
     ///
     /// The gate's refusal text, or `reload_outcome`'s error.
-    pub async fn manual_reload_outcome(&self) -> std::result::Result<ReloadOutcome, String> {
+    pub async fn manual_reload_outcome(
+        &self,
+        source: Source,
+    ) -> std::result::Result<ReloadOutcome, String> {
         use crate::gateway::restart_config_floor::{AdmitKind, Refusal};
         let gate = self.registry.config_gate();
         let _admitted = gate.admit(AdmitKind::ManualReload).map_err(|refusal| {
@@ -381,7 +384,7 @@ impl ReloadContext {
         gate.call_admitted(
             crate::gateway::restart_config_floor::seams::AdmittedPoint::ManualAfterAdmission,
         );
-        let outcome = self.reload_outcome().await?;
+        let outcome = self.reload_outcome_from(source).await?;
         #[cfg(test)]
         gate.record_reload(
             crate::gateway::restart_config_floor::seams::ReloadSource::Manual,
@@ -396,6 +399,14 @@ impl ReloadContext {
     ///
     /// Returns an error string if the config file cannot be read or parsed.
     pub async fn reload_outcome(&self) -> std::result::Result<ReloadOutcome, String> {
+        self.reload_outcome_from(Source::File).await
+    }
+
+    /// [`Self::reload_outcome`] recording `source` on the history event.
+    pub(crate) async fn reload_outcome_from(
+        &self,
+        source: crate::config_reload::history::Source,
+    ) -> std::result::Result<ReloadOutcome, String> {
         // Grants FIRST, and on their own lock. Two reasons, both settled in
         // review: a config refusal must not hold a revocation hostage, and a
         // revocation must not queue behind `backend.stop()` for an unrelated
@@ -465,7 +476,7 @@ impl ReloadContext {
                 return Err(skipped);
             }
         };
-        let mut outcome = match self.reload_outcome_locked_at(&target, Source::File).await {
+        let mut outcome = match self.reload_outcome_locked_at(&target, source).await {
             Ok(outcome) => {
                 // An applied reload marks the charts; a refused one
                 // returns below and marks nothing.

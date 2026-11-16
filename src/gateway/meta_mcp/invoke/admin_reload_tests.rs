@@ -58,7 +58,8 @@ async fn reload_effect(
     let meta = MetaMcp::new(registry);
     meta.set_reload_context(Arc::new(ctx));
     Box::pin(crate::gateway::delivery_facts::scope(async move {
-        let answer = Box::pin(meta.reload_config()).await;
+        let answer =
+            Box::pin(meta.reload_config(&crate::security::audit::AuditWho::gateway())).await;
         let mut fields = serde_json::Map::new();
         crate::gateway::delivery_facts::record_fields(
             crate::gateway::delivery_facts::snapshot().as_ref(),

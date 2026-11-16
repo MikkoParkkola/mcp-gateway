@@ -436,9 +436,8 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
         // A manual reload goes through the config gate's wrapper, which must itself
         // run the same transaction (asserted below).
         assert!(
-            text.contains(".reload_outcome().await")
-                || text.contains(".manual_reload_outcome().await"),
-            "{entry} no longer reloads through ReloadContext::reload_outcome"
+            text.contains(".reload_outcome().await") || text.contains(".manual_reload_outcome("),
+            "{entry} no longer reloads through reload_outcome or manual_reload_outcome"
         );
     }
     let wrapper = source_span(
@@ -447,8 +446,8 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
         "\n    }\n",
     );
     assert!(
-        wrapper.contains("self.reload_outcome().await"),
-        "manual_reload_outcome no longer runs ReloadContext::reload_outcome"
+        wrapper.contains("self.reload_outcome_from("),
+        "manual_reload_outcome no longer runs the full reload path"
     );
 }
 
