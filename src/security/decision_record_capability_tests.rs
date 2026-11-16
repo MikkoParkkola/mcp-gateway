@@ -40,7 +40,7 @@ fn within_30s(step: impl FnOnce() + Send + 'static) {
     }
 }
 
-/// Before the first publish the record says not_loaded and names an id other
+/// Before the first publish the record says `not_loaded` and names an id other
 /// than the first covered one. The first record after the publish says covered.
 #[test]
 fn r1x_record_around_the_first_capability_publish() {

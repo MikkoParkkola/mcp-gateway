@@ -189,7 +189,7 @@ async fn s4_http_scan_unreadable_directory_is_partial() {
     write_good(&good, "alpha");
     let _mode = ModeGuard::deny(&bad);
     let configured = display(&good);
-    let scan = http_scan(&[good, bad]).await;
+    let scan = Box::pin(http_scan(&[good, bad])).await;
     let part = snapshot(&scan.backend);
     assert_eq!(
         id_of(&scan.key, &part),
@@ -204,7 +204,7 @@ async fn s4_http_scan_unreadable_file_is_partial() {
     write_good(dir.path(), "alpha");
     write_good(dir.path(), "secret");
     let _mode = ModeGuard::deny(&dir.path().join("secret.yaml"));
-    let scan = http_scan(&[dir.path().to_path_buf()]).await;
+    let scan = Box::pin(http_scan(&[dir.path().to_path_buf()])).await;
     let part = snapshot(&scan.backend);
     assert_eq!(
         id_of(&scan.key, &part),
@@ -222,7 +222,7 @@ async fn s4_stdio_startup_unreadable_directory_is_partial() {
     std::fs::create_dir(&bad).expect("the unreadable directory");
     write_good(&good, "alpha");
     let _mode = ModeGuard::deny(&bad);
-    let (backend, key) = stdio_catalogue(&[display(&good), display(&bad)]).await;
+    let (backend, key) = Box::pin(stdio_catalogue(&[display(&good), display(&bad)])).await;
     let part = snapshot(&backend);
     assert_eq!(
         id_of(&key, &part),
@@ -237,7 +237,7 @@ async fn s4_stdio_startup_unreadable_file_is_partial() {
     write_good(dir.path(), "alpha");
     write_good(dir.path(), "secret");
     let _mode = ModeGuard::deny(&dir.path().join("secret.yaml"));
-    let (backend, key) = stdio_catalogue(&[display(dir.path())]).await;
+    let (backend, key) = Box::pin(stdio_catalogue(&[display(dir.path())])).await;
     let part = snapshot(&backend);
     assert_eq!(
         id_of(&key, &part),
