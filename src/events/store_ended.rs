@@ -95,18 +95,21 @@ impl Store {
                 remove_record(&self.outbox_dir, &OutboxRecord::file(event_id)).and_then(|()| {
                     remove_record(&self.ended_dir, &EndedRow::file(id, sub.incarnation))
                 });
+            drop(state);
             if let Err(undo) = undone {
                 tracing::warn!(%undo, "events store: an unfinished ending was not undone");
             }
             return Err(error);
         }
-        if let Err(error) = remove_record(&self.subs_dir, &format!("{id}.json")) {
-            tracing::warn!(%error, "events store: an ended row's live file was not removed");
-        }
+        let live_left = remove_record(&self.subs_dir, &format!("{id}.json"));
         state.drop_row(id);
         state.ended.insert((id.to_owned(), sub.incarnation), ended);
-        self.stamp_removed(&mut state, &sub, Some(at), tail)?;
-        Ok(true)
+        let stamped = self.stamp_removed(&mut state, &sub, Some(at), tail);
+        drop(state);
+        if let Err(error) = live_left {
+            tracing::warn!(%error, "events store: an ended row's live file was not removed");
+        }
+        stamped.map(|()| true)
     }
 
     /// After `sub` left the live rows: a live row that was its pair's last
