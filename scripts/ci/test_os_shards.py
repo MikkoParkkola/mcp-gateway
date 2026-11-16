@@ -333,10 +333,20 @@ def option_e_problems(jobs: dict, workflows: dict, ol) -> list[str]:
     for (call, _, minutes), leg in ((MACOS_E[0], "lib-b"), (MACOS_E[5], "int")):
         if minutes != cap[leg] + 5:
             out.append(f"macos-shards: obtain {leg}'s step limit {minutes} is not its cap {cap[leg]} + 5")
-    # Producers: obtain_lib's job and artifact names are the ones ci.yml gives them.
-    lib_b_up = [s for s in uploads if (s.get("with") or {}).get("name") == ol.JOBS["lib-b"][1]]
-    if ol.JOBS["lib-b"][0] != "macOS shard lib-b" or not lib_b_up:
-        out.append(f"obtain_lib JOBS['lib-b'] {ol.JOBS['lib-b']} does not match macos-shards' name and upload")
+    # Producers: obtain_lib's job and artifact names are the ones ci.yml gives them, rendered from the name template.
+    lib_b_name = str(shard.get("name", "")).replace("${{ matrix.shard }}", "lib-b")
+    if ol.JOBS["lib-b"][0] != lib_b_name:
+        out.append(f"obtain_lib JOBS['lib-b'] {ol.JOBS['lib-b'][0]!r} is not macos-shards' lib-b name {lib_b_name!r}")
+    # lib-b hands its native binary to int only when it built one, and never in the solo lane.
+    handoff = {"if": f"matrix.shard == 'lib-b' && env.MACOS_LIB_SOLO != 'true' && {B_TAKEN} != 'true'",
+               "with": {"name": ol.JOBS["lib-b"][1], "path": "${{ runner.temp }}/lib-bin/lib-tests",
+                        "retention-days": 1, "overwrite": True, "if-no-files-found": "error"}}
+    if [{"if": str(s.get("if", "")), "with": s.get("with")} for s in uploads] != [handoff]:
+        out.append(f"macos-shards: one upload, exactly {handoff}")
+    # Every deadline in obtain_lib.py counts from JOB_START, so it is noted first.
+    first = steps[0] if steps else {}
+    if str(first.get("run", "")).strip() != 'echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"' or "if" in first:
+        out.append("macos-shards: the first step must note JOB_START, unconditionally")
     if ol.JOBS["xbuild"] != XBUILD[1:] or xb.get("name") != XBUILD[1]:
         out.append(f"{XBUILD[0]}: name {xb.get('name')!r} and obtain_lib JOBS['xbuild'] {ol.JOBS['xbuild']} "
                    f"must both be {XBUILD[1:]}")
@@ -548,6 +558,15 @@ def option_e_rows(jobs: dict, workflows: dict, ol) -> None:
         # Only the budget sum decides this one: the steps and their limits are untouched.
         "local build allowed past minute 100": lambda j, w, o: setattr(o, "LOCAL_BUILD_BY", 101 * 60),
         "lib-b's producer name drifts": lambda j, w, o: o.JOBS.__setitem__("lib-b", ("macOS lib-b", "macos-lib-tests")),
+        "lib-b's job renamed in ci.yml": lambda j, w, o: j["macos-shards"].__setitem__(
+            "name", "macOS leg ${{ matrix.shard }}"),
+        "lib-b hands over the cross-built binary too": lambda j, w, o: next(
+            s for s in j["macos-shards"]["steps"] if UPLOAD in s.get("uses", "")).__setitem__(
+            "if", "matrix.shard == 'lib-b' && env.MACOS_LIB_SOLO != 'true'"),
+        "hand-off kept a week": lambda j, w, o: next(
+            s for s in j["macos-shards"]["steps"] if UPLOAD in s.get("uses", ""))["with"].__setitem__(
+            "retention-days", 7),
+        "JOB_START not noted": lambda j, w, o: j["macos-shards"].__setitem__("steps", j["macos-shards"]["steps"][1:]),
         "Intel job in the os-sensitive lane": lambda j, w, o: j[XBUILD[0]].__setitem__("if", j["macos-shards"]["if"]),
         "Intel job on an arm64 runner": lambda j, w, o: j[XBUILD[0]].__setitem__("runs-on", "macos-latest"),
         "Intel job turns a run red": lambda j, w, o: j[XBUILD[0]].pop("continue-on-error"),

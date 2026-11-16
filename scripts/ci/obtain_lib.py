@@ -5,11 +5,13 @@
 
   obtain_lib.py <leg> <dest>    leg: lib-b | int; dest: the folder the binary is downloaded into
 
-Polls this run's artifacts and jobs every 20 s. The first producer of the leg (PRODUCERS, in order) whose artifact is
+Polls this run's artifacts and jobs every 30 s. The first producer of the leg (PRODUCERS, in order) whose artifact is
 present is downloaded into <dest> (emptied first), made executable, checked to be an arm64 Mach-O, and listed under a
-120 s timeout; a failed download, wrong architecture, failed or empty list drops that producer. Writes found,
-producer, reason (found | none-left | deadline | misconfigured), local_build (int: true only on none-left before
-LOCAL_BUILD_BY), tests, list and binary (the downloaded file) to GITHUB_OUTPUT, and one summary line. Every deadline
+120 s timeout; a failed download, wrong architecture, failed or empty list counts against that producer, which is
+dropped after three. Writes found,
+producer, reason (found | none-left | deadline | misconfigured | unavailable), local_build (int: true only when no
+binary can come and it is before LOCAL_BUILD_BY), tests, list and binary (the downloaded file) to GITHUB_OUTPUT, and
+one summary line. Every deadline
 is epoch seconds from JOB_START, the job's first step's `date +%s`. The producers' conclusions are never read: a
 completed producer without its artifact after one re-read is absent, whatever its conclusion.
 """
@@ -38,6 +40,9 @@ REREAD = 60                                            # a completed producer is
 # wait of 45 min near 180 calls.
 POLL = 30
 FETCH_TRIES = 3                                        # a producer whose artifact is there is dropped after 3 failures
+LOOK_TRIES = 10                                        # failed looks in a row (5 min) end the wait as unavailable
+API_TIMEOUT, DOWNLOAD_TIMEOUT = 60, 600                # seconds per `gh api` call and per `gh run download`
+MAX_JOB_PAGES = 5                                      # jobs pages of 100 read per look
 ARM64_MACHO = bytes.fromhex("cffaedfe0c000001")        # MH_MAGIC_64, CPU_TYPE_ARM64, little-endian
 
 
@@ -48,7 +53,10 @@ class Misconfigured(Exception):
 def gh_json(path: str, run=subprocess.run):
     """One `gh api` call, parsed. 401, 404 and a 403 that is not a rate limit raise Misconfigured; anything else,
     rate limits included (GitHub answers them 403 or 429), raises RuntimeError, which the poll retries."""
-    p = run(["gh", "api", path], capture_output=True, text=True)
+    try:
+        p = run(["gh", "api", path], capture_output=True, text=True, timeout=API_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"gh api {path.split('?')[0]} ran past {API_TIMEOUT} s")
     if p.returncode:
         err = p.stderr.strip()[:300]
         denied = "HTTP 403" in err and "rate limit" not in err.lower()
@@ -63,8 +71,11 @@ def fetch(producer: str, dest: str, repo: str, run_id: str, run=subprocess.run):
     artifact = JOBS[producer][1]
     shutil.rmtree(dest, ignore_errors=True)
     os.makedirs(dest)
-    p = run(["gh", "run", "download", run_id, "--repo", repo, "-n", artifact, "-D", dest],
-            capture_output=True, text=True)
+    try:
+        p = run(["gh", "run", "download", run_id, "--repo", repo, "-n", artifact, "-D", dest],
+                capture_output=True, text=True, timeout=DOWNLOAD_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"download of {artifact} ran past {DOWNLOAD_TIMEOUT} s")
     if p.returncode:
         raise RuntimeError(f"download of {artifact} failed: {p.stderr.strip()[:200]}")
     files = [os.path.join(dest, f) for f in os.listdir(dest) if os.path.isfile(os.path.join(dest, f))]
@@ -79,7 +90,7 @@ def fetch(producer: str, dest: str, repo: str, run_id: str, run=subprocess.run):
         p = run([binary, "--list", "--format", "terse"], capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"{artifact}: --list ran past 120 s")
-    tests = [line for line in p.stdout.splitlines() if line.endswith(": test")]
+    tests = sorted(line for line in p.stdout.splitlines() if line.endswith(": test"))
     if p.returncode or not tests:
         raise RuntimeError(f"{artifact}: --list exited {p.returncode} with {len(tests)} tests")
     return binary, len(tests), hashlib.sha256("\n".join(tests).encode()).hexdigest()
@@ -95,16 +106,22 @@ def epoch(stamp):
 
 def snapshot(repo: str, run_id: str, attempt: str, artifacts: list, gh=gh_json):
     """(those of `artifacts` present in this run, {job name: (status, started_at epoch)} for this attempt). Each
-    artifact is asked for by name; a jobs page shorter than the attempt's job count raises RuntimeError (retried), so
-    a producer past the first page never reads as absent (a train's attempt held 68 jobs on 2026-11-16)."""
+    artifact is asked for by name; jobs are read page by page until the attempt's job count is reached (a train's
+    attempt held 68 jobs on 2026-11-16), and a list still short after MAX_JOB_PAGES raises RuntimeError (retried),
+    so a producer never reads as absent because it sat on a later page."""
     names = set()
     for artifact in artifacts:
         arts = gh(f"repos/{repo}/actions/runs/{run_id}/artifacts?name={artifact}")
         names |= {a["name"] for a in arts.get("artifacts", []) if a.get("name") == artifact and not a.get("expired")}
-    jobs = gh(f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")
-    listed = jobs.get("jobs", [])
-    if jobs.get("total_count", 0) > len(listed):
-        raise RuntimeError(f"jobs page holds {len(listed)} of {jobs.get('total_count')} jobs")
+    listed, total = [], None
+    for page in range(1, MAX_JOB_PAGES + 1):
+        jobs = gh(f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}")
+        total = jobs.get("total_count", 0)
+        listed += jobs.get("jobs", [])
+        if len(listed) >= total or not jobs.get("jobs"):
+            break
+    if len(listed) < (total or 0):
+        raise RuntimeError(f"jobs list holds {len(listed)} of {total} jobs")
     return names, {j["name"]: (j.get("status"), epoch(j.get("started_at"))) for j in listed}
 
 
@@ -116,7 +133,8 @@ def skipped(mode: str, leg: str) -> set:
 
 def result(leg: str, producer, reason: str, waited: float, tests: int = 0, sha: str = "", why: str = "",
            binary: str = "") -> dict:
-    local = leg == "int" and reason == "none-left" and waited < LOCAL_BUILD_BY
+    # int builds the half itself whenever no binary can come and there is still time; only a deadline forbids it.
+    local = leg == "int" and reason in ("none-left", "misconfigured", "unavailable") and waited < LOCAL_BUILD_BY
     return {"found": "true" if producer else "false", "producer": producer or "none", "reason": reason,
             "local_build": "true" if local else "false", "tests": str(tests), "list": sha, "binary": binary,
             "waited": str(int(waited)), "why": why}
@@ -125,8 +143,11 @@ def result(leg: str, producer, reason: str, waited: float, tests: int = 0, sha: 
 def obtain(leg: str, producers: list, job_start: float, look, get, clock, sleep, warn=print) -> dict:
     """The poll loop. look() gives snapshot(); get(producer) gives fetch()'s triple or raises RuntimeError."""
     alive, done_at, failed = list(producers), {}, {}
+    look_failures = 0
     while True:
         now = clock()
+        if not alive:  # rehearsal `all`, or lib-b under `compare`: nothing to wait for, so no look either
+            return result(leg, None, "none-left", now - job_start)
         if now - job_start >= CAP[leg]:
             return result(leg, None, "deadline", now - job_start)
         try:
@@ -134,9 +155,14 @@ def obtain(leg: str, producers: list, job_start: float, look, get, clock, sleep,
         except Misconfigured as e:
             return result(leg, None, "misconfigured", now - job_start, why=str(e))
         except (RuntimeError, OSError, ValueError, KeyError) as e:
-            warn(f"::warning::obtain-lib: {e}; polling again")
+            look_failures += 1
+            warn(f"::warning::obtain-lib: {e}; failed look {look_failures} of {LOOK_TRIES}")
+            if look_failures >= LOOK_TRIES:
+                # The API is down for this run: stop waiting while int can still build its half.
+                return result(leg, None, "unavailable", now - job_start, why=str(e))
             sleep(POLL)
             continue
+        look_failures = 0
         for p in list(alive):
             job, artifact = JOBS[p]
             if artifact in names:
@@ -247,7 +273,14 @@ def self_test() -> int:
 
     def denied(s):
         raise Misconfigured("HTTP 401")
-    check("401 fails fast", case("int", denied), reason="misconfigured", waited="0")
+    check("401 fails fast, int still builds", case("int", denied), reason="misconfigured", waited="0",
+          local_build="true")
+
+    def api_down(s):
+        raise RuntimeError("HTTP 502")
+    # Ten failed looks in a row (0, 30, ..., 270 s) end the wait while int can still build its half.
+    check("API down: unavailable after 10 looks", case("int", api_down), reason="unavailable", waited="270",
+          local_build="true")
     calls = [0]
 
     def blip(s):
@@ -295,28 +328,44 @@ def self_test() -> int:
             rows += 1
         else:
             raise AssertionError(f"{err} returned")
-    # snapshot: each artifact asked for by name; a short jobs page raises (retried), never reads as absent.
+    # snapshot: each artifact asked for by name; jobs read page by page, so a producer on page 2 is seen; a list still
+    # short after MAX_JOB_PAGES raises (retried), never reads as absent.
     asked = []
+    filler = [{"name": f"job {i}", "status": "completed"} for i in range(100)]
 
-    def fake_gh(path, total=2):
+    def fake_gh(path, total=102):
         asked.append(path)
         if "/artifacts?" in path:
             return {"artifacts": [{"name": path.split("name=")[1]}, {"name": "other"}]}
-        return {"total_count": total, "jobs": [{"name": xb[0], "status": "queued"}, {"name": lb[0]}]}
+        page = int(path.rsplit("page=", 1)[1])
+        jobs = {1: filler, 2: [{"name": xb[0], "status": "queued"}, {"name": lb[0]}]}.get(page, [])
+        return {"total_count": total, "jobs": jobs}
     names, jobs = snapshot("o/r", "9", "1", ["macos-lib-xbuild"], gh=fake_gh)
-    assert names == {"macos-lib-xbuild"} and set(jobs) == {xb[0], lb[0]}, (names, jobs)
+    assert names == {"macos-lib-xbuild"} and {xb[0], lb[0]} <= set(jobs) and len(jobs) == 102, (names, len(jobs))
     assert asked[0] == "repos/o/r/actions/runs/9/artifacts?name=macos-lib-xbuild", asked
+    assert asked[1:] == [f"repos/o/r/actions/runs/9/attempts/1/jobs?per_page=100&page={n}" for n in (1, 2)], asked
     try:
-        snapshot("o/r", "9", "1", [], gh=lambda p: fake_gh(p, total=101))
+        snapshot("o/r", "9", "1", [], gh=lambda p: fake_gh(p, total=600))
     except RuntimeError:
-        rows += 2
+        rows += 3
     else:
-        raise AssertionError("a truncated jobs page was accepted")
+        raise AssertionError("a jobs list short of its count was accepted")
+    # Timeouts: a hung `gh api` or `gh run download` is a retryable error, never a hang past the caps.
+    def hang(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+    for call in (lambda: gh_json("repos/o/r/x", run=hang),
+                 lambda: fetch("xbuild", os.path.join(tempfile.mkdtemp(), "d"), "o/r", "1", run=hang)):
+        try:
+            call()
+        except RuntimeError:
+            rows += 1
+        else:
+            raise AssertionError("a hung gh call returned")
     check("queued past grace", case("lib-b", lambda s: snap(x=("queued", 0))), reason="none-left", waited="600")
     check("int waits for a running lib-b past 100 min, no local build",
           case("int", lambda s: snap(b=("in_progress", 0) if s < 9000 else ("completed", 0))),
           reason="none-left", waited="9060", local_build="false")
-    check("rehearsal all: nothing to wait for", case("int", lambda s: snap(), producers=[]),
+    check("rehearsal all: nothing to wait for, no look", case("int", api_down, producers=[]),
           reason="none-left", waited="0", local_build="true")
     # int waits for a running lib-b until lib-b's start + 203 min (12180 s): lib-b's 75-min wait, 120-min build,
     # 5-min upload and int's 3-min download. Literal seconds: a row built from RUN_LIMIT passes with any value.
@@ -355,6 +404,11 @@ def self_test() -> int:
         _, n, _ = fetch("xbuild", dest, "o/r", "77", run=fake(log=log))
         assert n == 2 and os.listdir(dest) == ["lib-bin"], (n, os.listdir(dest))
         assert log[0] == ["gh", "run", "download", "77", "--repo", "o/r", "-n", "macos-lib-xbuild", "-D", dest], log
+        rows += 1
+        # The list hash ignores order, so compare mode judges the set of tests, not how --list ordered them.
+        _, _, in_order = fetch("xbuild", dest, "o/r", "77", run=fake(listing="a: test\nb: test\n"))
+        _, _, reordered = fetch("xbuild", dest, "o/r", "77", run=fake(listing="b: test\na: test\n"))
+        assert in_order == reordered, (in_order, reordered)
         rows += 1
         for name, kw in [("download failure", {"dl_rc": 1}), ("wrong architecture", {"content": b"\x7fELF" * 2}),
                          ("failed list", {"list_rc": 1}), ("empty list", {"listing": ""})]:

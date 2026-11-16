@@ -705,9 +705,9 @@ HANDOFF_RETENTION_DAYS = 90
 # A re-run of the grade job alone after they expire fails (the merge refuses a
 # missing bundle); re-running all jobs rebuilds them.
 COVERAGE_BUNDLE = ("7", "rerunning all jobs rebuilds them; multi-GB bundles per PR run")
-# The macOS lib test binary lib-b hands to int in the same run: a
-# rerun of int alone within the day reuses it, after that int builds its half
-# itself; nothing published depends on it.
+# The macOS lib test binary the Intel job (macos-lib-xbuild) or lib-b (macos-lib-tests) hands to the macOS legs in
+# the same run: a rerun of a leg within the day reuses it, after that the leg builds its own; nothing published
+# depends on it.
 MACOS_LIB_BINARY = ("1", "int rebuilds its half when it is gone; a large test binary per run")
 # ci.yml's shared Linux lib test binary: its consumers rerun within the day reuse it; after that a consumer rerun
 # fails red at the download (it never builds its own) until linux-lib-build reruns too. Nothing published depends on it.
@@ -716,8 +716,20 @@ SHORT_HANDOFFS = {  # (workflow, artifact name) -> (retention-days, reason)
     ("coverage-probe.yml", "cov-shard-sdk"): COVERAGE_BUNDLE,
     ("coverage-probe.yml", "cov-shard-${{ matrix.part }}"): COVERAGE_BUNDLE,
     ("ci.yml", "macos-lib-tests"): MACOS_LIB_BINARY,
+    ("ci.yml", "macos-lib-xbuild"): MACOS_LIB_BINARY,
     ("ci.yml", "linux-lib-tests"): LINUX_LIB_BINARY,
 }
+
+
+def obtained_artifacts() -> list[str]:
+    """The artifacts scripts/ci/obtain_lib.py downloads (`gh run download`, not the download action), from its own
+    table, so a step running it counts as a download of each."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "obtain_lib", pathlib.Path(__file__).parents[2] / "scripts/ci/obtain_lib.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return sorted(artifact for _job, artifact in module.JOBS.values())
 
 
 def wrong_handoffs(handoffs) -> list[str]:
@@ -2846,14 +2858,17 @@ class WorkflowWiring(unittest.TestCase):
                 b for b in blocks
                 if any(re.match(r"^\s*(- )?uses:\s*actions/download-artifact@", l) for l in b)
             ]
-            if not downloads:
+            # A step running obtain_lib.py downloads each artifact in its table (`gh run download`).
+            fetched = [a for b in blocks if any("scripts/ci/obtain_lib.py" in l for l in b)
+                       for a in obtained_artifacts()]
+            if not downloads and not fetched:
                 continue
             # One selector per download, as the action reads it: `name:` wins,
             # then `pattern:`; with neither it takes every artifact of the run.
             wanted = [
                 (artifact_keys(block, ("name",)) or artifact_keys(block, ("pattern",)) or ["*"])[0]
                 for block in downloads
-            ]
+            ] + fetched
             for block in blocks:
                 if not any(re.match(r"^\s*(- )?uses:\s*actions/upload-artifact@", l) for l in block):
                     continue
