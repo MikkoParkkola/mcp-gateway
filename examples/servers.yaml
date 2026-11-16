@@ -53,7 +53,6 @@ backends:
     enabled: false
 
 capabilities:
-  enabled: true
   directories:
     - "./capabilities"
   # Built-in examples include REST connectors such as weather, GitHub, Notion,

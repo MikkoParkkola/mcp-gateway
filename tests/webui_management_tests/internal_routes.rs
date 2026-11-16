@@ -250,7 +250,11 @@ fn doc_internal_paths(md: &str) -> BTreeSet<String> {
 
 /// `/ui/api/costs` is mounted only with `cost-governance`.
 fn mounted(path: &str) -> bool {
-    path != "/ui/api/costs" || cfg!(feature = "cost-governance")
+    // The `/accounts/v1` mount exists only with hosted accounts and their
+    // handles (src/gateway/router/accounts.rs:70-77); these gateways are built
+    // by `create_router`, which passes none.
+    (path != "/ui/api/costs" || cfg!(feature = "cost-governance"))
+        && !path.starts_with("/accounts/v1/")
 }
 
 /// Bodies from `src/gateway/ui/control_plane_mutation_tests.rs` (grant-1, pol-1).
@@ -608,6 +612,37 @@ const ROWS: &[Row] = &[
         Payload::None,
         [200, 200, 200, 200],
     ),
+    // src/gateway/ui/mod.rs:168 (index), in html_router, which
+    // src/gateway/router/mod.rs:875-880 merges outside authentication: the
+    // static page for every caller.
+    row(
+        "/ui/classic",
+        Method::GET,
+        "/ui/classic",
+        Payload::None,
+        [200, 200, 200, 200],
+    ),
+    // src/gateway/ui/mod.rs:171, the same unauthenticated html_router:
+    // shell::document (src/gateway/ui/shell.rs:105-120) refuses only an `api`
+    // or `assets` first segment, so a page path gets the document.
+    row(
+        "/ui/{*path}",
+        Method::GET,
+        "/ui/backends",
+        Payload::None,
+        [200, 200, 200, 200],
+    ),
+    // src/gateway/ui/session.rs:49, merged outside authentication
+    // (src/gateway/router/mod.rs:703-716, :851): logout (session.rs:81-120)
+    // answers 303 to /ui with or without a session, and the origin guard
+    // admits a request with no Origin (src/gateway/router/origin_guard.rs:10-12).
+    row(
+        "/dashboard/logout",
+        Method::POST,
+        "/dashboard/logout",
+        Payload::None,
+        [303, 303, 303, 303],
+    ),
 ];
 
 const GROUPS: [&[Row]; 5] = [
@@ -727,73 +762,14 @@ fn every_doc_internal_route_has_rows_and_no_other() {
     );
 }
 
-const PROBE_METHODS: [Method; 7] = [
-    Method::GET,
-    Method::HEAD,
-    Method::POST,
-    Method::PUT,
-    Method::PATCH,
-    Method::DELETE,
-    Method::OPTIONS,
-];
-
-/// A method outside a route's rows answers 405. HEAD on a GET route is served
-/// by the GET handler (axum 0.8), so it answers like GET with an empty body.
-#[tokio::test]
-async fn internal_routes_refuse_every_other_method() {
-    let gw = gateway(Fixture::AuthOn).await;
-    let mut wrong = Vec::new();
-    for path in doc_internal_paths(SURFACE_DOC)
-        .iter()
-        .filter(|p| mounted(p))
-    {
-        let rows: Vec<&Row> = all_rows().filter(|r| r.path == path).collect();
-        let Some(first) = rows.first() else { continue };
-        let has = |m: &Method| rows.iter().any(|r| r.method == *m);
-        for method in PROBE_METHODS.iter().filter(|m| !has(m)) {
-            if *method == Method::HEAD && has(&Method::GET) {
-                // Back to back, so no row's write sits between the two.
-                let (get, _, _) = send(
-                    &gw,
-                    request(&Method::GET, first.uri, Caller::Admin, Payload::None),
-                )
-                .await;
-                let (head, _, body) = send(
-                    &gw,
-                    request(method, first.uri, Caller::Admin, Payload::None),
-                )
-                .await;
-                if head != get || !body.is_empty() {
-                    wrong.push(format!(
-                        "HEAD {path}: {head} with {} body bytes, GET answered {get}",
-                        body.len()
-                    ));
-                }
-                continue;
-            }
-            let (status, _, _) = send(
-                &gw,
-                request(method, first.uri, Caller::Admin, Payload::None),
-            )
-            .await;
-            if status != StatusCode::METHOD_NOT_ALLOWED {
-                wrong.push(format!("{method} {path}: expected 405, got {status}"));
-            }
-        }
-    }
-    assert!(
-        wrong.is_empty(),
-        "INTERNAL routes answer methods they have no row for:\n{}",
-        wrong.join("\n")
-    );
-}
-
 #[path = "internal_routes_capabilities.rs"]
 mod capabilities;
 #[path = "internal_routes_control_plane_tests.rs"]
 mod control_plane;
 #[path = "internal_routes_gateway.rs"]
 mod gateway_rows;
+#[path = "internal_routes_methods.rs"]
+mod methods;
 #[path = "internal_routes_decisions.rs"]
 mod pending;
 #[path = "internal_routes_registry.rs"]
