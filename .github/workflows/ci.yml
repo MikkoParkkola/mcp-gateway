@@ -1011,7 +1011,7 @@ jobs:
           overwrite: true
           if-no-files-found: error
       - name: Lib-b half, built here
-        # Reuses the build above.
+        # Reuses the build above. The half's tests took 20.0-24.3 min on 12 trains (#4932-#4972), here and below.
         if: matrix.shard == 'lib-b' && steps.obtain_b.outputs.found != 'true'
         timeout-minutes: 45
         run: python3 scripts/ci/shard_tests.py run macos lib-b
@@ -1036,6 +1036,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci/obtain_lib.py int "$RUNNER_TEMP/lib-in"
       - name: Lib-a half from the prebuilt binary
+        # 13.4-18.4 min on the same trains.
         if: (matrix.shard == 'int' && steps.obtain_int.outputs.found == 'true') || (matrix.shard == 'lib-b' && env.MACOS_LIB_SOLO == 'true')
         timeout-minutes: 40
         env:

@@ -197,18 +197,10 @@ def workflow_problems(jobs: dict, st) -> list[str]:
         # Linux shards build the library test binary through the memory log (check_swap_jobs.py enforces it there).
         memlog = "scripts/ci/with-memory-log.sh " if os_kind == "linux" else ""
         call = f"{memlog}{py} scripts/ci/shard_tests.py run {os_kind} ${{{{ matrix.shard }}}}"
-        # An OS with PREBUILT shards also exports the lib binary first and runs each prebuilt
-        # shard from it after the suite.
-        prebuilt = sorted(getattr(st, "PREBUILT", {}).get(os_kind, {}))
-        # Each prebuilt shard: wait for the binary, run from it, or build it here when it is not coming.
-        want = ([f'{py} scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"'] if prebuilt else []) + [call]
-        for leg in prebuilt:
-            producer = st.PREBUILT[os_kind][leg]
-            want += [f'{py} scripts/ci/shard_tests.py wait-lib macos-lib-tests "{prefix}{producer}"',
-                     f'{py} scripts/ci/shard_tests.py run-prebuilt {os_kind} {leg} "$RUNNER_TEMP/lib-bin/lib-tests"',
-                     f"{py} scripts/ci/shard_tests.py run {os_kind} {leg}"]
+        want = [call]
         calls = [s.get("run", "").strip() for s in shard.get("steps", []) if "shard_tests.py" in s.get("run", "")]
-        # An OS whose legs may take a binary another job built (option E): option_e_problems checks its calls.
+        # The OS whose legs take a binary another job built (option E, macOS, the one with PREBUILT shards):
+        # option_e_problems checks its calls.
         if calls != want and not getattr(st, "XBUILT", {}).get(os_kind):
             out.append(f"{shard_key}: runner calls {calls}, want exactly {want!r}")
         # A duty pinned to one shard must name a shard that exists, or it
@@ -289,6 +281,9 @@ XBUILD = ("macos-xbuild", "macOS lib test binary (cross-built)", "macos-lib-xbui
 MACOS_LIMIT, XBUILD_LIMIT = 255, 65
 UPLOAD = "actions/upload-artifact@"
 REPORT = "Runner, swap and memory pressure during the build"
+# int with no binary and no time left to build: red, so the lib-a half is never silently skipped.
+NO_BINARY = ("No lib test binary in time", f"matrix.shard == 'int' && {INT_FOUND} != 'true' && "
+             "steps.obtain_int.outputs.local_build != 'true'")
 
 
 def obtain_module():
@@ -313,6 +308,10 @@ def option_e_problems(jobs: dict, workflows: dict, ol) -> list[str]:
         out.append(f"macos-shards: calls, gates and timeouts {got}, want exactly {MACOS_E}")
     if shard.get("timeout-minutes") != MACOS_LIMIT:
         out.append(f"macos-shards: timeout-minutes {shard.get('timeout-minutes')}, want {MACOS_LIMIT}")
+    fail = [s for s in steps if s.get("name") == NO_BINARY[0]]
+    if (len(fail) != 1 or str(fail[0].get("if", "")) != NO_BINARY[1]
+            or not str(fail[0].get("run", "")).rstrip().endswith("exit 1")):
+        out.append(f"macos-shards: one step {NO_BINARY[0]!r} gated `{NO_BINARY[1]}` that ends in `exit 1`")
     # The budget (amendment F5): each path's absolute cap plus every later step's limit fits the job's limit.
     t = {call: minutes for call, _, minutes in MACOS_E}
     uploads = [s for s in steps if UPLOAD in s.get("uses", "")]
@@ -541,6 +540,11 @@ def option_e_rows(jobs: dict, workflows: dict, ol) -> None:
         "obtain step limit not its cap + 5": lambda j, w, o: step(j, "obtain_lib.py lib-b").__setitem__(
             "timeout-minutes", 75),
         "job limit 240": lambda j, w, o: j["macos-shards"].__setitem__("timeout-minutes", 240),
+        "int's no-binary failure removed": lambda j, w, o: j["macos-shards"].__setitem__(
+            "steps", [s for s in j["macos-shards"]["steps"] if s.get("name") != NO_BINARY[0]]),
+        "int's no-binary failure never fires": lambda j, w, o: next(
+            s for s in j["macos-shards"]["steps"] if s.get("name") == NO_BINARY[0]).__setitem__(
+            "if", "matrix.shard == 'int' && steps.obtain_int.outputs.found == 'false'"),
         # Only the budget sum decides this one: the steps and their limits are untouched.
         "local build allowed past minute 100": lambda j, w, o: setattr(o, "LOCAL_BUILD_BY", 101 * 60),
         "lib-b's producer name drifts": lambda j, w, o: o.JOBS.__setitem__("lib-b", ("macOS lib-b", "macos-lib-tests")),
