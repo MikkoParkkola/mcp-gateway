@@ -137,10 +137,11 @@ fn running_tree() -> (super::super::ChildTree, Pid) {
     (tree, pid)
 }
 
-/// Kill what a row left of `tree`'s group and reap its leader: an injected kill
-/// sent nothing, and the closed gate sends nothing on drop.
-async fn end_tree(mut tree: super::super::ChildTree, pid: Pid) {
-    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+/// Kill what a row left of `tree`'s group through its owner, the wrapper, and
+/// reap its leader: an injected kill sent nothing, and the closed gate sends
+/// nothing on drop.
+async fn end_tree(mut tree: super::super::ChildTree) {
+    let _ = tree.wrapper.start_kill();
     tokio::time::timeout(crate::test_wait::HANG_BOUND, tree.wrapper.wait())
         .await
         .expect("the leader is reaped within the hang bound")
@@ -156,7 +157,7 @@ async fn esrch_with_the_leader_running_is_a_failed_kill() {
     inject(pid, Esrch::Only);
     tree.start_kill();
     assert_eq!(take(pid), [Sent::KillFailed]);
-    end_tree(tree, pid).await;
+    end_tree(tree).await;
 }
 
 /// A group kill answering ESRCH after the leader died between the check and the
@@ -169,5 +170,5 @@ async fn esrch_after_the_leader_died_mid_send_is_a_gone_kill() {
     inject(pid, Esrch::AfterKillingLeader);
     tree.start_kill();
     assert_eq!(take(pid), [Sent::KillGone]);
-    end_tree(tree, pid).await;
+    end_tree(tree).await;
 }
