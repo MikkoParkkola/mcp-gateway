@@ -67,6 +67,7 @@ ALLOWED_CONDITIONS = {
 # with the measurement that puts them out of scope.
 EXEMPT = {
     ("coverage-probe.yml", "linux-sdk"): "builds one integration test; measured peak 6.5 GB",
+    ("feature-combos.yml", "release-test-compile"): "cargo check only, no test binary; measured peak 12.96 GB",
 }
 
 # The jobs in scope, by workflow file and job id. A change to this set is a
@@ -77,7 +78,6 @@ EXPECTED = {
     ("ci.yml", "test-shards"),
     ("ci.yml", "test-throwaway-hosted"),
     ("coverage-probe.yml", "linux-part"),
-    ("feature-combos.yml", "release-test-compile"),
     ("mutants.yml", "linux-hosted"),
     ("packaged-suite.yml", "packaged-suite"),
     ("release.yml", "verify"),
