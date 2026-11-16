@@ -134,10 +134,11 @@ fn a_kill_records_its_outcome() {
         // A group that is not the leader's own is never gone, on any host.
         (Some(SRCH), false, false, false, MacOs, failed(SRCH)),
         (Some(SRCH), true, false, false, Linux, failed(SRCH)),
-        // EPERM (members found, none signalled): gone only with no live
+        // macOS EPERM (members found, none signalled): gone only with no live
         // member left, which BSD killpg answers for a group of zombies.
         (Some(PERM), false, true, false, MacOs, Sent::KillGone),
-        (Some(PERM), true, true, false, Linux, Sent::KillGone),
+        // Linux signals zombies, so its EPERM is always a member beyond reach.
+        (Some(PERM), true, true, false, Linux, failed(PERM)),
         (Some(PERM), true, true, true, MacOs, failed(PERM)),
         (Some(PERM), false, true, true, Linux, failed(PERM)),
         (Some(PERM), false, false, false, MacOs, failed(PERM)),

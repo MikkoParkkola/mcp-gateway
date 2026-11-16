@@ -314,7 +314,9 @@ impl MacTable {
             match Libproc.info(pid) {
                 Lookup::Found(info) if matches!(info.state, ProcState::Zombie) => {}
                 Lookup::Missing(Miss::Gone) => {}
-                _ => return Some(true),
+                Lookup::Found(_) | Lookup::Missing(Miss::Foreign | Miss::Failed) => {
+                    return Some(true);
+                }
             }
         }
         Some(false)

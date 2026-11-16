@@ -192,9 +192,10 @@ const HOST: EsrchOn = if cfg!(target_os = "macos") {
 /// What a kill's syscall result records: the kill; the kill of a group already
 /// gone, for an error from the leader's own group that says no member is left
 /// to signal (ESRCH with the leader seen exiting, before the send or right
-/// after, or on macOS at once; EPERM with no live member left, which BSD
-/// killpg answers for a group of zombies); otherwise a failed kill with its
-/// errno. EPERM with a live member stays a failure: a member beyond our reach.
+/// after, or on macOS at once; on macOS, EPERM with no live member left, which
+/// BSD killpg answers for a group of zombies); otherwise a failed kill with its
+/// errno. EPERM with a live member, or on Linux, which signals zombies, stays a
+/// failure: a member beyond our reach.
 pub(super) fn classify(
     sent: &std::io::Result<()>,
     exited: bool,
@@ -208,7 +209,8 @@ pub(super) fn classify(
     let errno = error.raw_os_error().unwrap_or(0);
     let esrch_gone =
         errno == rustix::io::Errno::SRCH.raw_os_error() && (exited || host == EsrchOn::MacOs);
-    let eperm_gone = errno == rustix::io::Errno::PERM.raw_os_error() && !live_member;
+    let eperm_gone =
+        errno == rustix::io::Errno::PERM.raw_os_error() && !live_member && host == EsrchOn::MacOs;
     if own_group && (esrch_gone || eperm_gone) {
         Sent::KillGone
     } else {
