@@ -86,6 +86,26 @@ class Discovery(unittest.TestCase):
     def test_the_anchors_alone_are_clean(self):
         self.assertEqual(stages.check(self.root, self.table, self.harness), [])
 
+    def test_a_stage_no_entry_names_is_reported(self):
+        # A timed row that no function points at measures a path the
+        # inventory says nothing is on: the surfaced row went unnamed this way.
+        self.harness.write_text(
+            'const STAGES: &[(&str, bool, usize, usize)] = '
+            '&[("row_a", true, 16, 1), ("row_b", true, 16, 1)];\n'
+        )
+        self.assertEqual(
+            stages.check(self.root, self.table, self.harness),
+            ["STAGES row 'row_b': no inventory entry names it, so nothing it times is accounted for"],
+        )
+        rel, fn = "src/gateway/server/mod.rs", "anchor_server"
+        self.table.write_text(
+            "".join(
+                f"{r}\t{f}\t{'row_b' if (r, f) == (rel, fn) else 'row_a'}\ton the path\n"
+                for r, f in self.anchors.items()
+            )
+        )
+        self.assertEqual(stages.check(self.root, self.table, self.harness), [])
+
     def test_a_table_split_across_two_parts_is_clean(self):
         items = list(self.anchors.items())
         part1 = self.root / "stages_part1.tsv"
