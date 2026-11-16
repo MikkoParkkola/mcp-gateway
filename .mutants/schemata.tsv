@@ -1,0 +1,29 @@
+head_sha	3b8e93d1b97915230168418975ca086ba4b577f0
+#mutant m1
+mcp_gateway	events::store::pending::tests::ended::a_pending_notice_is_due_alone_and_beside_a_successor	src/events/store_ended_tests.rs:171
+#mutant m2
+mcp_gateway	events::store::pending::tests::ended::a_pending_notice_is_due_alone_and_beside_a_successor	src/events/store_ended_tests.rs:182
+#mutant m3
+mcp_gateway	events::store::pending::tests::ended::a_notice_claims_and_signs_with_its_ended_row	src/events/store_ended_tests.rs:211
+#mutant m4
+mcp_gateway	events::store::pending::tests::ended::a_notice_claims_and_signs_with_its_ended_row	src/events/store_ended_tests.rs:212
+#mutant m5
+mcp_gateway	events::store::pending::tests::ended::a_delivered_notice_takes_its_ended_row_and_leaves_the_successor_alone	src/events/store_ended_tests.rs:255
+#mutant m6
+mcp_gateway	events::store::pending::tests::ended::a_retried_notice_keeps_its_ended_row	src/events/store_ended_tests.rs:278
+#mutant m7
+mcp_gateway	events::store::pending::tests::ended::a_delivered_notice_takes_its_ended_row_and_leaves_the_successor_alone	src/events/store_ended_tests.rs:259
+#mutant m8
+mcp_gateway	events::store::pending::tests::ended::a_dead_notice_is_buried_takes_its_ended_row_and_is_not_replayed	src/events/store_ended_tests.rs:307
+#mutant m9
+mcp_gateway	events::store::pending::tests::ended::an_owner_unsubscribe_cancels_the_notice_and_its_ended_row	src/events/store_ended_tests.rs:326
+#mutant m10
+mcp_gateway	events::store::pending::tests::ended::a_second_ending_keeps_the_first_endings_notice	src/events/store_ended_tests.rs:346
+#mutant m11
+mcp_gateway	events::store::pending::tests::ended::an_expired_successor_leaves_the_notice_due	src/events/store_ended_tests.rs:375
+#mutant m12
+mcp_gateway	events::store::pending::tests::ended::a_pending_notice_is_due_alone_and_beside_a_successor	src/events/store_ended_tests.rs:177
+#mutant m17
+mcp_gateway	events::lifecycle_tests::revoke_notice::a_notice_goes_out_though_the_source_refuses_the_ended_row	src/events/lifecycle_revoke_notice_tests.rs:256
+#mutant m18
+mcp_gateway	events::lifecycle_tests::revoke_notice::an_unsubscribe_answers_after_a_notice_in_flight	src/events/lifecycle_revoke_notice_tests.rs:454
