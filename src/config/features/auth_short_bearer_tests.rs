@@ -31,7 +31,7 @@ fn owner_only(dir: &Path, name: &str, contents: &str) -> PathBuf {
 /// T5: what is measured, and how. Characters, not bytes: ten two-byte
 /// characters are 20 bytes and still short.
 #[test]
-fn short_bearer_by_kind_and_length() {
+fn measures_only_literal_and_env_tokens() {
     let none = EnvOverlay::none();
     assert_eq!(SHORT.chars().count(), 19, "premise");
     assert_eq!(FLOOR.chars().count(), 20, "premise");
@@ -116,7 +116,7 @@ fn load(dir: &Path, posture: &str, spec: &str, env: &str) -> crate::Result<Confi
 /// Each token here appears in no other test, so no other load can have used
 /// up its warning.
 #[test]
-fn a_short_bearer_warns_once_at_load() {
+fn a_short_token_warns_once_at_load() {
     let dir = tempfile::tempdir().expect("tempdir");
     let env = "MIK9721_T6_TOKEN=t6-short-env-bearer\n";
     for (spec, token) in [
