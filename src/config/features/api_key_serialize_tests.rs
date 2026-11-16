@@ -120,6 +120,51 @@ fn a_key_debug_prints_no_credential_value() {
     }
 }
 
+/// Kills "a resolved key's Debug prints a credential": the resolved auth
+/// config the gateway runs on prints each resolved key, and none shows a
+/// digest (as hex or as the bytes it is stored as), principal or approval.
+#[test]
+fn a_resolved_key_debug_prints_no_credential_value() {
+    let hex = |c: char| std::iter::repeat_n(c, 64).collect::<String>();
+    let key = ApiKeyConfig {
+        key_sha256: Some(format!("sha256:{}", hex('a'))),
+        previous_key_sha256: Some(format!("sha256:{}", hex('d'))),
+        previous_expires_at: Some(at("2999-01-01T00:00:00Z")),
+        name: "resolved".into(),
+        kind: ApiKeyKind::Personal,
+        principal: Some("0123456789ab".into()),
+        approved_by: Some(ApiKeyBinding {
+            quota_principal: hex('b'),
+            digest_tag: hex('c'),
+        }),
+        ..ApiKeyConfig::default()
+    };
+    let auth = AuthConfig {
+        enabled: true,
+        api_keys: vec![key],
+        ..AuthConfig::default()
+    };
+    let resolved = crate::gateway::auth::ResolvedAuthConfig::from_config(
+        &auth,
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    );
+    let printed = format!("{resolved:?}");
+    for secret in [
+        hex('a'),
+        hex('b'),
+        hex('c'),
+        hex('d'),
+        "0123456789ab".to_owned(),
+        "170, 170, 170".to_owned(),
+        "221, 221, 221".to_owned(),
+    ] {
+        assert!(
+            !printed.contains(secret.as_str()),
+            "resolved Debug prints {secret}: {printed}"
+        );
+    }
+}
+
 /// The config's YAML and JSON before the key type stopped being Serialize.
 /// A change to another auth field's output changes them too: take the new
 /// bytes from the failure message and check that only that field moved.

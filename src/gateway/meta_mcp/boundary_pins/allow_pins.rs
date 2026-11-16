@@ -175,6 +175,18 @@ fn the_root_ban_span_is_the_root_config_list() {
         .collect();
     let pinned: Vec<&str> = include_str!("root_ban_span.toml").lines().collect();
     assert_eq!(paths, pinned, "root span differs");
+    // The type ban too: rand's thread generator, the only type listed.
+    let start = config
+        .find("disallowed-types = [\n")
+        .expect("the root type list");
+    let end = start + config[start..].find("\n]").expect("its end");
+    let types: Vec<&str> = config[start..end]
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter_map(|line| line.split_once("path = \"")?.1.split_once('"'))
+        .map(|(path, _)| path)
+        .collect();
+    assert_eq!(types, ["rand::rngs::ThreadRng"], "root type list differs");
 }
 
 /// The keys `root_keys` must read, a row against a misparse of the span.

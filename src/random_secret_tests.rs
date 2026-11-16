@@ -459,253 +459,98 @@ fn the_entropy_crates_are_pinned() {
     }
 }
 
-/// Threat model: a credential digest or approval field must not reach a
-/// serializer, anything that leaves the process as JSON or text; nor may a
-/// whole auth section or config, which holds every key's. Naming a field
-/// anywhere else (the loader, validation, authorization) is not the threat.
-///
-/// Lexical, no syntax tree: a serializer call is one of these names followed
-/// by its balanced argument list. A container under another name (auth.rs's
-/// restart-only `view`, which drops the keys; a `value`) or a digest copied
-/// into a local first is not seen; those spellings stay on register row 805.
-const SERIALIZERS: [&str; 12] = [
-    "json!(",
-    "json![",
-    "json!{",
-    "to_value(",
-    "to_string(",
-    "to_string_pretty(",
-    "to_vec(",
-    "to_vec_pretty(",
-    "to_writer(",
-    "to_writer_pretty(",
-    "canonical_json(",
-    "canonical_json_sha256(",
-];
+/// The credential output pin: digest and approval fields kept out of
+/// serializers and text output.
+#[path = "credential_output_tests.rs"]
+mod credential_output;
 
-/// Text that leaves the process too: log lines, formatted strings and panic
-/// messages. A field read in one is barred like a serializer's; a whole
-/// container is not, because a key's `Debug` already redacts its digests.
-const TEXT_OUTPUTS: [&str; 22] = [
-    "info!(",
-    "warn!(",
-    "error!(",
-    "debug!(",
-    "trace!(",
-    "event!(",
-    "format!(",
-    "format_args!(",
-    "write!(",
-    "writeln!(",
-    "println!(",
-    "eprintln!(",
-    "print!(",
-    "eprint!(",
-    "panic!(",
-    "assert!(",
-    "assert_eq!(",
-    "assert_ne!(",
-    "dbg!(",
-    "todo!(",
-    "unimplemented!(",
-    "unreachable!(",
-];
+/// The root clippy list's free functions, owned by a module path rather than
+/// a type or trait, as (module, name).
+fn banned_free_functions() -> Vec<(&'static str, &'static str)> {
+    include_str!("gateway/meta_mcp/boundary_pins/root_ban_span.toml")
+        .lines()
+        .filter_map(|path| {
+            let (module, name) = path.rsplit_once("::")?;
+            let owner = module.rsplit("::").next()?;
+            (!owner.starts_with(char::is_uppercase)).then_some((module, name))
+        })
+        .collect()
+}
 
-/// The credential digest and approval reads no serializer argument may hold.
-const DIGEST_READS: [&str; 7] = [
-    ".key_sha256",
-    ".previous_key_sha256",
-    ".digest_tag",
-    ".approved_by",
-    "resolve_digest(",
-    "resolve_previous_digest(",
-    "digest_specs_mut(",
-];
-
-/// The only sites that serialise an auth section or a whole config, with how
-/// many each file holds, so a second site in one of these files fails too.
-/// Every one is the config writer or an equality check inside the process.
-const CONTAINER_SERIALIZERS: &[(&str, usize, &str)] = &[
-    (
-        "src/config_persistence.rs",
-        1,
-        "in-memory equality: the comment-loss check compares the configs before and after as JSON values",
-    ),
-    (
-        "src/config_persistence_splice.rs",
-        4,
-        "in-memory equality: the spliced text must reload as the config, compared as JSON values",
-    ),
-    (
-        "src/config_persistence_url.rs",
-        1,
-        "config writer: the whole config rendered to gateway.yaml, keys through AuthConfig's mirror",
-    ),
-    (
-        "src/config_reload/diff.rs",
-        1,
-        "reload diff: compares the auth section as canonical JSON inside the process, never output",
-    ),
-    (
-        "src/config_reload/live_config.rs",
-        2,
-        "same-auth check: two auth sections compared as JSON values inside the process, never output",
-    ),
-];
-
-/// Each balanced argument list in `code` of a call to one of `names`, with
-/// where the call starts.
-fn call_arguments<'c>(code: &'c str, names: &[&str]) -> Vec<(usize, &'c str)> {
+/// The banned free functions a `use` in `code` imports: directly, aliased,
+/// in a group, or by a glob of their module. Imported, one runs as a
+/// single-segment call (`random()`) that the allow inventory does not count.
+fn imported_free_functions(code: &str) -> Vec<String> {
+    let free = banned_free_functions();
     let mut found = Vec::new();
-    for name in names {
-        for (at, _) in code.match_indices(name) {
-            let open = at + name.len() - 1;
-            let mut depth = 0_usize;
-            for (offset, c) in code[open..].char_indices() {
-                match c {
-                    '(' | '[' | '{' => depth += 1,
-                    ')' | ']' | '}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            found.push((at, &code[open + 1..open + offset]));
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
+    for (at, _) in code.match_indices("use ") {
+        let line_start = code[..at].rfind('\n').map_or(0, |n| n + 1);
+        let before = code[line_start..at].trim();
+        if !(before.is_empty() || before == "pub" || before.starts_with("pub(")) {
+            continue;
+        }
+        let Some(end) = code[at..].find(';') else {
+            continue;
+        };
+        let compact: String = code[at + 4..at + end]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        let compact = compact.trim_start_matches("::");
+        for (module, name) in &free {
+            let direct = compact == format!("{module}::{name}")
+                || compact.starts_with(&format!("{module}::{name}as"));
+            let glob = compact == format!("{module}::*");
+            let grouped = compact
+                .strip_prefix(&format!("{module}::{{"))
+                .is_some_and(|items| {
+                    items.trim_end_matches('}').split(',').any(|item| {
+                        item == *name || item == "*" || item.starts_with(&format!("{name}as"))
+                    })
+                });
+            if direct || glob || grouped {
+                found.push(format!("{module}::{name}"));
             }
         }
     }
     found
 }
 
-/// The depth-zero arguments of an argument list.
-fn top_level(arguments: &str) -> Vec<&str> {
-    let (mut depth, mut from, mut args) = (0_usize, 0, Vec::new());
-    for (at, c) in arguments.char_indices() {
-        match c {
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                args.push(&arguments[from..at]);
-                from = at + 1;
-            }
-            _ => {}
-        }
-    }
-    args.push(&arguments[from..]);
-    args
-}
-
-/// An auth section or a whole config among a call's arguments: `config` /
-/// `auth` alone; a value built by `Config::` or `AuthConfig::`; a closure
-/// parameter typed `&Config` or `&AuthConfig` on the call's line or the one
-/// above; or a `.auth` (`.auth()`) that is the value itself, cloned or
-/// borrowed at most, not a member read such as `.auth().enabled`.
-fn is_container(code: &str, at: usize, arguments: &str) -> bool {
-    let ident = |c: char| c.is_alphanumeric() || c == '_';
-    let line_start = code[..at].rfind('\n').map_or(0, |n| n + 1);
-    let above = code[..line_start.saturating_sub(1)]
-        .rfind('\n')
-        .map_or(0, |n| n + 1);
-    let near = &code[above..at];
-    top_level(arguments).into_iter().any(|argument| {
-        let bare = argument.trim().trim_start_matches('&').trim();
-        let typed_closure = !bare.is_empty()
-            && bare.chars().all(ident)
-            && ["Config", "AuthConfig"]
-                .iter()
-                .any(|ty| near.contains(&format!("|{bare}: &{ty}|")));
-        bare == "config"
-            || bare == "auth"
-            || typed_closure
-            || argument.contains("Config::")
-            || argument.match_indices(".auth").any(|(at, word)| {
-                let mut rest = &argument[at + word.len()..];
-                for suffix in ["()", ".clone()", ".to_owned()", ".as_ref()"] {
-                    rest = rest.strip_prefix(suffix).unwrap_or(rest);
-                }
-                let rest = rest.trim_start();
-                !rest.starts_with(ident) && !rest.starts_with('.')
-            })
-    })
-}
-
-/// Each spelling the review rounds named, through the scan's own helpers on
-/// synthetic code: the macro's three delimiters (the `json!({..})` form was
-/// always scanned), a text output, a container as a later argument, a cloned
-/// auth section, a closure typed on the line above, and a member read that
-/// is not a container.
+/// The import ban sees each spelling, and leaves trait imports alone.
 #[test]
-fn the_output_scan_sees_each_reviewed_spelling() {
-    let outputs = [&SERIALIZERS[..], &TEXT_OUTPUTS[..]].concat();
-    let reads = |code: &str| {
-        call_arguments(code, &outputs)
-            .iter()
-            .any(|(_, a)| DIGEST_READS.iter().any(|read| a.contains(read)))
-    };
-    assert!(
-        reads("let v = json!({ d: key.key_sha256 });"),
-        "json! object in parentheses"
-    );
-    assert!(reads("let v = json![key.key_sha256];"), "json! in brackets");
-    assert!(reads("let v = json!{ key.key_sha256 };"), "json! in braces");
-    assert!(reads("print!(\"{:?}\", key.digest_tag);"), "print!");
-    let container = |code: &str| {
-        call_arguments(code, &SERIALIZERS)
-            .iter()
-            .any(|(at, a)| is_container(code, *at, a))
-    };
-    assert!(
-        container("serde_json::to_writer(&mut out, &config)"),
-        "a later argument"
-    );
-    assert!(
-        container("serde_json::to_value(&state.auth.clone())"),
-        ".auth.clone()"
-    );
-    assert!(
-        container("let f = |c: &Config|\n    serde_json::to_value(c);"),
-        "a closure typed on the line above"
-    );
-    assert!(
-        !container("json!({ on: live.auth().enabled })"),
-        "a member read is not a container"
-    );
+fn the_import_ban_sees_each_spelling() {
+    for code in [
+        "use rand::random;",
+        "use rand::random as draw;",
+        "use rand::{random, RngExt};",
+        "use rand::*;",
+        "pub(crate) use ring::rand::generate;",
+    ] {
+        assert!(!imported_free_functions(code).is_empty(), "missed: {code}");
+    }
+    for code in [
+        "use rand::RngExt as _;",
+        "use ring::rand::SecureRandom as _;",
+        "use rand::seq::SliceRandom;",
+    ] {
+        assert!(imported_free_functions(code).is_empty(), "flagged: {code}");
+    }
 }
 
+/// No production file imports a banned free function: each is called by its
+/// full path, which the allow inventory counts.
 #[test]
-fn no_credential_field_reaches_a_serializer() {
-    let mut reads = Vec::new();
-    let mut containers: Vec<(String, usize)> = Vec::new();
-    for (file, code) in production_sources() {
-        let arguments = call_arguments(&code, &SERIALIZERS);
-        let outputs = call_arguments(&code, &[&SERIALIZERS[..], &TEXT_OUTPUTS[..]].concat());
-        for read in DIGEST_READS {
-            if outputs.iter().any(|(_, a)| a.contains(read)) {
-                reads.push(format!("{file}: {read}"));
-            }
-        }
-        let count = arguments
-            .iter()
-            .filter(|(at, a)| is_container(&code, *at, a))
-            .count();
-        if count > 0 {
-            containers.push((file, count));
-        }
-    }
-    assert!(
-        reads.is_empty(),
-        "a credential field reaches a serializer or text output: {reads:?}"
-    );
-    containers.sort();
-    let mut want: Vec<(String, usize)> = CONTAINER_SERIALIZERS
-        .iter()
-        .map(|(file, count, _)| ((*file).to_owned(), *count))
+fn no_banned_free_function_is_imported() {
+    let imports: Vec<String> = production_sources()
+        .into_iter()
+        .flat_map(|(file, code)| {
+            imported_free_functions(&code)
+                .into_iter()
+                .map(move |name| format!("{file}: {name}"))
+        })
         .collect();
-    want.sort();
-    assert_eq!(
-        containers, want,
-        "an auth section or config reaches a serializer outside the listed sites"
+    assert!(
+        imports.is_empty(),
+        "call it by its full path, never imported: {imports:?}"
     );
 }
