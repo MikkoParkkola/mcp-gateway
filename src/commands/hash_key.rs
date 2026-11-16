@@ -51,6 +51,7 @@ pub fn run_hash_key_command(verify: Option<&str>) -> ExitCode {
     }
     // New keys only: `--verify` still checks a key chosen before the floor.
     if verify.is_none() && key.len() < MIN_SECRET_LEN {
+        // ci-allow-secret-log: MIN_SECRET_LEN is the constant 20, a length floor; the key itself is never printed, only its length
         eprintln!(
             "hash-key: the key is {} bytes; a new key needs at least {MIN_SECRET_LEN} bytes\n{USAGE}",
             key.len()
