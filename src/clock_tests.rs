@@ -256,26 +256,97 @@ fn statement_from(code: &str, from: usize) -> &str {
     &code[from..]
 }
 
-/// Whether the code after an attribute, past any further attributes, is an
-/// item with a brace body (a function, impl, module, trait or type), whose
-/// lint scope is that body. A `let` never is, whatever its type names.
-fn item_with_body(rest: &str) -> bool {
+/// The code an allow reaches, judged from what follows its attribute.
+enum AllowScope {
+    /// An item with a brace body (a function, impl, module, trait, type or
+    /// extern block): that body.
+    Body,
+    /// A statement (a `let`, an expression) or a bodiless item (a `const`, a
+    /// `static`, a signature): through its `;`.
+    Statement,
+    /// `mod name;`: its code is another file, which this scan does not read.
+    OutOfLineModule,
+}
+
+/// The byte just past the bracket group `text` opens (after any leading
+/// `#`), nested groups included.
+fn balanced_end(text: &str) -> usize {
+    let mut depth = 0_i64;
+    for (at, c) in text.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return at + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    text.len()
+}
+
+/// The identifier `text` starts with, or "" if it starts with anything else.
+fn leading_word(text: &str) -> &str {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .next()
+        .unwrap_or("")
+}
+
+/// Past further attributes, visibility and qualifiers, the item introducer
+/// decides: an item keyword whose brace body comes before any `;` is a body,
+/// `mod name;` is out of line, and anything else is a statement, whatever
+/// words its type or arguments hold.
+fn allow_scope(rest: &str) -> AllowScope {
     let mut rest = rest.trim_start();
     while rest.starts_with("#[") {
-        rest = rest[rest.find(']').map_or(rest.len(), |end| end + 1)..].trim_start();
+        rest = rest[balanced_end(rest)..].trim_start();
     }
-    let head = &rest[..rest.find(['{', ';', '=']).unwrap_or(rest.len())];
-    let mut words = head
-        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .filter(|word| !word.is_empty());
-    let first = words.next();
-    first != Some("let")
-        && first.into_iter().chain(words).any(|word| {
-            matches!(
-                word,
-                "fn" | "impl" | "mod" | "trait" | "struct" | "enum" | "union"
-            )
-        })
+    loop {
+        let word = leading_word(rest);
+        match word {
+            "pub" => {
+                rest = rest[word.len()..].trim_start();
+                if rest.starts_with('(') {
+                    rest = rest[balanced_end(rest)..].trim_start();
+                }
+            }
+            "const" | "async" | "unsafe" | "default" | "extern" => {
+                rest = rest[word.len()..].trim_start();
+                // An ABI string (`extern "C"`), its contents already blanked.
+                if let Some(abi) = rest.strip_prefix('"') {
+                    rest = abi.find('"').map_or("", |end| &abi[end + 1..]).trim_start();
+                }
+                if word == "extern" && rest.starts_with('{') {
+                    return AllowScope::Body;
+                }
+            }
+            _ => break,
+        }
+    }
+    let introducer = leading_word(rest);
+    if !matches!(
+        introducer,
+        "fn" | "impl" | "mod" | "trait" | "struct" | "enum" | "union"
+    ) {
+        return AllowScope::Statement;
+    }
+    let mut depth = 0_i64;
+    for c in rest.chars() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            '{' if depth == 0 => return AllowScope::Body,
+            ';' if depth == 0 => break,
+            _ => {}
+        }
+    }
+    if introducer == "mod" {
+        AllowScope::OutOfLineModule
+    } else {
+        AllowScope::Statement
+    }
 }
 
 /// What the guard found in one product file: aliases of a clock type, and
@@ -309,12 +380,18 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
         }
         let scope = if attr.starts_with("#!") {
             code.as_str()
-        } else if item_with_body(&code[close..]) {
-            block_from(&code, close)
         } else {
-            // A statement (a `let`, an expression) or a bodiless item (a
-            // `const`, a `static`): the allow reaches it only, to its `;`.
-            statement_from(&code, close)
+            match allow_scope(&code[close..]) {
+                AllowScope::Body => block_from(&code, close),
+                AllowScope::Statement => statement_from(&code, close),
+                AllowScope::OutOfLineModule => {
+                    // Fails closed: the module's own file is not read here.
+                    holes.push(format!(
+                        "{rel}: a disallowed_methods allow on an out-of-line module, whose file this scan does not read"
+                    ));
+                    continue;
+                }
+            }
         };
         if read.is_match(scope) {
             holes.push(format!(
@@ -375,7 +452,7 @@ fn an_allow_reaches_exactly_its_statement_or_item() {
     let read = concat!("U", "tc::now()");
     let allow = "#[allow(clippy::disallowed_methods, reason = \"id: x\")]";
     let body = |lines: &str| format!("fn f() {{\n    {allow}\n{lines}}}\n");
-    let cases: [(&str, String, usize); 12] = [
+    let cases: [(&str, String, usize); 19] = [
         (
             "in the statement",
             body(&format!("    let at = ({read}, rand::random::<u8>());\n")),
@@ -439,6 +516,43 @@ fn an_allow_reaches_exactly_its_statement_or_item() {
                 "    emit(rand::random::<u8>());\n    emit(Event {{ at: {read} }});\n"
             )),
             0,
+        ),
+        (
+            "a const whose type names fn",
+            body(&format!("    const AT: fn() -> u64 = make({read});\n")),
+            1,
+        ),
+        (
+            "an expression whose turbofish names fn",
+            body(&format!("    consume::<fn()>({read});\n")),
+            1,
+        ),
+        (
+            "a static with a block initialiser",
+            body(&format!("    static AT: u64 = {{ {read} }};\n")),
+            1,
+        ),
+        (
+            "a let with a closure body",
+            body(&format!("    let f = || {{ {read} }};\n")),
+            1,
+        ),
+        (
+            "an out-of-line module (fails closed)",
+            format!("{allow}\nmod clocks;\n"),
+            1,
+        ),
+        (
+            "an extern block, a read after it",
+            format!(
+                "{allow}\nextern \"C\" {{\n    fn now() -> u64;\n}}\nfn g() {{\n    let at = {read};\n}}\n"
+            ),
+            0,
+        ),
+        (
+            "under a nested-bracket attribute",
+            body(&format!("    #[shape([1, 2])]\n    let at = {read};\n")),
+            1,
         ),
     ];
     for (name, code, holes) in &cases {
