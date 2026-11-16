@@ -872,7 +872,7 @@ async fn an_over_long_line_in_one_chunk_is_refused() {
 #[tokio::test]
 async fn no_response_headers_end_at_the_headers_wait() {
     let out = Shared::default();
-    let outcome = run_streamed_with(
+    let run = run_streamed_with(
         &args(EXPORT, None, false),
         BASE,
         &LinkTls::default(),
@@ -880,8 +880,12 @@ async fn no_response_headers_end_at_the_headers_wait() {
         out.clone(),
         &short(),
         |_| futures::future::pending::<Result<AdminStream, AdminCallError>>(),
-    )
-    .await;
+    );
+    // A hang guard, far past the 400 ms headers deadline under test: without
+    // that deadline the run would wait on the sender forever.
+    let outcome = tokio::time::timeout(Duration::from_secs(30), run)
+        .await
+        .expect("the headers deadline ends a run whose gateway never answers");
     assert_eq!(
         (outcome.exit, out.bytes().len()),
         (ApiExit::Network, 0),
