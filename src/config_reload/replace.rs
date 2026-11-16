@@ -209,6 +209,7 @@ async fn spawn_locked(
     ctx: Arc<ReloadContext>,
     replace: Replace,
     audit: Audit,
+    source: Source,
     wait: Duration,
     receipt: Option<receipt::RevokeCheck>,
 ) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
@@ -221,7 +222,7 @@ async fn spawn_locked(
         .admit(AdmitKind::Write)
         .map_err(ReplaceError::Gated)?;
     tokio::spawn(async move {
-        ctx.replace_locked(replace, audit, wait, receipt, admitted)
+        ctx.replace_locked(replace, audit, source, wait, receipt, admitted)
             .await
     })
     .await
@@ -398,6 +399,7 @@ impl ReloadContext {
         &self,
         replace: Replace,
         mut audit: Audit,
+        source: Source,
         wait: Duration,
         receipt: Option<receipt::RevokeCheck>,
         admitted: AdmissionGuard,
@@ -489,6 +491,7 @@ impl ReloadContext {
                     &current,
                     (new, replace.replaced),
                     &mut entries,
+                    source,
                 )
                 .await
             }
@@ -527,6 +530,7 @@ impl ReloadContext {
         current: &[u8],
         (new, replaced): (Vec<u8>, Replaced),
         entries: &mut Entries,
+        source: Source,
     ) -> Result<ReplaceOutcome, ReplaceError> {
         if std::str::from_utf8(&new).is_err() {
             return Err(ReplaceError::Refused(
@@ -555,7 +559,7 @@ impl ReloadContext {
             // a refusal needs no rollback.
             // The principal arrives with its own row (H8).
             let reload = self
-                .reload_outcome_locked_at(target, Source::Ui { who: String::new() })
+                .reload_outcome_locked_at(target, source)
                 .await
                 .map_err(|refusal| ReplaceError::ReloadRefused {
                     class: post_write_class(&refusal),
@@ -570,7 +574,8 @@ impl ReloadContext {
                 secrets: Vec::new(),
             });
         }
-        self.commit(target, current, &new, replaced, entries).await
+        self.commit(target, current, &new, replaced, entries, source)
+            .await
     }
     /// Stage, journal, write, reload; then keep the new bytes or put the
     /// original back.
@@ -581,6 +586,7 @@ impl ReloadContext {
         new: &[u8],
         replaced: Replaced,
         entries: &mut Entries,
+        source: Source,
     ) -> Result<ReplaceOutcome, ReplaceError> {
         // Every step uses `target`, resolved once and checked against the
         // trusted path, so a link re-pointed mid-write cannot split them.
@@ -625,9 +631,7 @@ impl ReloadContext {
         #[cfg(test)]
         order::record(target, "commit");
         // The principal arrives with its own row (H8).
-        let reloaded = self
-            .reload_outcome_locked_at(target, Source::Ui { who: String::new() })
-            .await;
+        let reloaded = self.reload_outcome_locked_at(target, source).await;
         // The reload reads gateway.yaml through its configured path. If a
         // symlink there moved meanwhile, it loaded some other file: put ours
         // back, and owe a reload so the runtime leaves that other file too.

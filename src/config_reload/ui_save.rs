@@ -127,10 +127,7 @@ pub(crate) async fn ui_save(
         replace,
         audit,
         crate::config_reload::history::Source::Ui {
-            who: {
-                let _ = who;
-                String::new()
-            },
+            who: who.account.clone(),
         },
         wait,
     )

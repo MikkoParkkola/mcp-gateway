@@ -87,6 +87,7 @@ pub(super) async fn revoke_key(
     };
     let who =
         super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
+    let account = who.account.clone();
     let audit = match AuditPosture::of(
         Some(log),
         GatewayAuth::of(state.live_config.running().auth.enabled),
@@ -134,7 +135,7 @@ pub(super) async fn revoke_key(
         context,
         replace,
         audit,
-        crate::config_reload::history::Source::Ui { who: String::new() },
+        crate::config_reload::history::Source::Ui { who: account },
         RELOAD_LOCK_WAIT,
         check,
     )

@@ -163,7 +163,7 @@ impl LiveConfig {
     }
 
     /// Record a refused reload into the history hook, when one is set.
-    /// `line` is the parser line of a file refusal; the hook does not store it yet.
+    /// `line` is the parser line of a file refusal.
     pub(crate) fn record_refused(&self, source: Source, line: Option<u32>) {
         let Some(hook) = &self.history else {
             return;
@@ -373,22 +373,43 @@ impl LiveConfig {
 
     /// New grants over the published config: only the grants part changes,
     /// and the revision is recomputed under the same gate as a reload.
+    /// The replaced and the new revision are both read under that write
+    /// lock; the history hook runs after the locks drop.
     pub(crate) fn set_grants(&self, grants: Option<&[u8]>) {
-        self.replace_part(|key, inputs| {
+        let Some((replaced, published)) = self.replace_part(|key, inputs| {
             inputs.grants = grants.map(|g| revision::part_digest(key, g));
-        });
-    }
-
-    fn replace_part(&self, change: impl FnOnce(&[u8; 32], &mut AppliedInputs)) {
-        let _gate = self.admission.write();
-        let mut inner = self.inner.write();
-        let (Some(key), Some(current)) = (self.revision_key, inner.applied.as_deref()) else {
+        }) else {
             return;
         };
-        let mut inputs = current.inputs.clone();
-        let pending = current.pending_restart.clone();
+        let Some(hook) = &self.history else {
+            return;
+        };
+        hook.on_grants(
+            grants,
+            &published.revision,
+            published.pending_restart.as_slice(),
+            Some(replaced.revision.as_str()),
+            crate::clock::unix_secs().unwrap_or(0),
+        );
+    }
+
+    /// Apply `change` to the published inputs and return the replaced and
+    /// the new [`Applied`], both captured under the write lock. `None` when
+    /// this holder publishes no revision.
+    fn replace_part(
+        &self,
+        change: impl FnOnce(&[u8; 32], &mut AppliedInputs),
+    ) -> Option<(Arc<Applied>, Arc<Applied>)> {
+        let _gate = self.admission.write();
+        let mut inner = self.inner.write();
+        let key = self.revision_key?;
+        let replaced = Arc::clone(inner.applied.as_ref()?);
+        let mut inputs = replaced.inputs.clone();
+        let pending = replaced.pending_restart.clone();
         change(&key, &mut inputs);
-        inner.applied = self.applied(inputs, pending);
+        let published = self.applied(inputs, pending)?;
+        inner.applied = Some(Arc::clone(&published));
+        Some((replaced, published))
     }
 
     /// Prepare `config` against the published generation, with no env

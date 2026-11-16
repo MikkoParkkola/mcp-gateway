@@ -20,6 +20,7 @@ fn snap(revision: &str, at: u64, bytes: &[u8]) -> Snapshot {
     Snapshot {
         revision: revision.to_string(),
         at,
+        source: Source::File,
         files: vec![StoredFile {
             path: "gateway.yaml".to_string(),
             bytes: Some(bytes.to_vec()),

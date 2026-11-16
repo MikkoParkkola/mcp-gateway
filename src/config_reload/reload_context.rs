@@ -366,7 +366,7 @@ impl ReloadContext {
     /// # Errors
     ///
     /// The gate's refusal text, or `reload_outcome`'s error.
-    pub async fn manual_reload_outcome(
+    pub(crate) async fn manual_reload_outcome(
         &self,
         source: Source,
     ) -> std::result::Result<ReloadOutcome, String> {

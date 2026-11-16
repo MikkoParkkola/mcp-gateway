@@ -442,7 +442,7 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
     }
     let wrapper = source_span(
         "config_reload/reload_context.rs",
-        "pub async fn manual_reload_outcome",
+        "pub(crate) async fn manual_reload_outcome",
         "\n    }\n",
     );
     assert!(

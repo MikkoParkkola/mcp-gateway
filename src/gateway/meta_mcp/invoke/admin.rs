@@ -291,8 +291,6 @@ impl MetaMcp {
         &self,
         who: &crate::security::audit::AuditWho,
     ) -> Result<Value> {
-        // Stub: the caller's account is not yet the history `who`.
-        let _ = who;
         let ctx = self.get_reload_context().ok_or_else(|| {
             Error::json_rpc(
                 INTERNAL_ERROR,
@@ -301,7 +299,9 @@ impl MetaMcp {
         })?;
 
         match ctx
-            .manual_reload_outcome(crate::config_reload::history::Source::Ui { who: String::new() })
+            .manual_reload_outcome(crate::config_reload::history::Source::Ui {
+                who: who.account.clone(),
+            })
             .await
         {
             Ok(outcome) => Ok(json!({

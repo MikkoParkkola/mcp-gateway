@@ -115,10 +115,7 @@ async fn write_audited(
         replace,
         audit,
         crate::config_reload::history::Source::Ui {
-            who: {
-                let _ = who;
-                String::new()
-            },
+            who: who.account.clone(),
         },
         RELOAD_LOCK_WAIT,
     )
@@ -651,8 +648,11 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
         .into_response();
     };
 
+    let who = admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
     match reload_context
-        .manual_reload_outcome(crate::config_reload::history::Source::Ui { who: String::new() })
+        .manual_reload_outcome(crate::config_reload::history::Source::Ui {
+            who: who.account.clone(),
+        })
         .await
     {
         Ok(outcome) => (

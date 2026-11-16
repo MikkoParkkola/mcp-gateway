@@ -34,11 +34,27 @@ pub(crate) struct StoredFile {
     pub bytes: Option<Vec<u8>>,
 }
 
+impl Drop for StoredFile {
+    fn drop(&mut self) {
+        // Every parsed copy of a version's bytes. Wiped here, the same
+        // zeroize `WipedBytes` uses, so dropping the parse does not leave
+        // the secret in the allocator's free list. A field of this value
+        // cannot be moved out; clone the bytes instead.
+        if let Some(bytes) = self.bytes.as_mut() {
+            zeroize::Zeroize::zeroize(bytes);
+        }
+    }
+}
+
 /// One kept version of the config files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Snapshot {
     pub revision: String,
     pub at: u64,
+    /// Where the publish that stored this version came from. Absent in a
+    /// file written before the field existed: those load as a file reload.
+    #[serde(default = "file_source")]
+    pub source: Source,
     pub files: Vec<StoredFile>,
     pub pending_restart: Vec<String>,
 }
@@ -56,7 +72,9 @@ pub(crate) struct Event {
     pub at: u64,
     pub source: Source,
     pub outcome: Outcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
     pub unchanged: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub still_running: Option<StillRunning>,
@@ -106,14 +124,19 @@ struct State {
     events: Vec<Event>,
 }
 
-/// In-memory history of config versions, persisted as `data_dir/config-history.json`.
+/// Where this store's history lives. Disk mode holds no version bodies: each
+/// record reads the file, evicts, writes it back and drops the bytes (wiped).
+/// Memory-only is the refused-file mode of the 2026-11-16 ruling.
+enum StoreMode {
+    Disk { path: PathBuf },
+    MemoryOnly { state: State },
+}
+
+/// Config versions and reload events, persisted as `data_dir/config-history.json`
+/// unless that file is refused, when this store keeps them in memory only.
 pub(crate) struct ConfigHistory {
-    data_dir: PathBuf,
     bounds: Bounds,
-    /// False when a file on disk could not be read or moved aside: a save
-    /// would replace history this process never loaded.
-    saves: bool,
-    inner: parking_lot::Mutex<State>,
+    mode: parking_lot::Mutex<StoreMode>,
 }
 
 impl ConfigHistory {
@@ -126,86 +149,85 @@ impl ConfigHistory {
     /// keeps its history in memory only.
     pub(crate) fn open(data_dir: &Path, bounds: Bounds, now: u64) -> Self {
         let path = data_dir.join(Self::FILE);
-        let (state, saves) = match read_stored(&path) {
-            Ok(None) => (State::default(), true),
+        // A parsed file is not kept: disk mode re-reads it on each call, and
+        // the parse is wiped when it drops.
+        let mode = match read_stored(&path) {
+            Ok(None) => StoreMode::Disk { path },
             Err(reason) => {
                 tracing::warn!(%reason, "config history kept in memory only; its file is left as it is");
-                (State::default(), false)
+                StoreMode::MemoryOnly {
+                    state: State::default(),
+                }
             }
-            Ok(Some(text)) => match serde_json::from_str::<State>(&text) {
-                Ok(state) => (state, true),
+            Ok(Some(text)) => match serde_json::from_slice::<State>(text.as_bytes()) {
+                Ok(parsed) => {
+                    drop(parsed);
+                    StoreMode::Disk { path }
+                }
                 Err(error) => match crate::counters::persist::quarantine(&path, now) {
-                    Ok(_) => (State::default(), true),
+                    Ok(_) => StoreMode::Disk { path },
                     Err(quarantine_error) => {
                         tracing::warn!(
                             parse = %error,
                             error = %quarantine_error,
                             "config history could not be moved aside; not saving over it"
                         );
-                        (State::default(), false)
+                        StoreMode::MemoryOnly {
+                            state: State::default(),
+                        }
                     }
                 },
             },
         };
         Self {
-            data_dir: data_dir.to_path_buf(),
             bounds,
-            saves,
-            inner: parking_lot::Mutex::new(state),
+            mode: parking_lot::Mutex::new(mode),
         }
     }
 
     /// Remember `event` and, when present, `snapshot`. Evict, then save.
-    /// `running` is the revision a snapshot eviction must not drop.
+    /// `running` is the revision a snapshot eviction must not drop. A disk
+    /// read that is refused or fails switches this store to memory-only,
+    /// starting from the event being recorded, and does not write.
     pub(crate) fn record(&self, event: Event, snapshot: Option<Snapshot>, running: &str, now: u64) {
-        let path = self.data_dir.join(Self::FILE);
-        let failed = {
-            let mut state = self.inner.lock();
-            if let Some(snapshot) = snapshot {
-                state.snapshots.push(snapshot);
-            }
-            state.events.push(event);
-            evict_snapshots(&mut state.snapshots, self.bounds, running, now);
-            evict_events(&mut state.events, self.bounds);
-            // Written under the lock, so the file never ends on an older state
-            // than a record that raced this one.
-            if self.saves {
-                serde_json::to_vec(&*state)
-                    .map_err(std::io::Error::from)
-                    .and_then(|bytes| {
-                        write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)
-                    })
-                    .err()
-            } else {
-                None
-            }
+        let noted = {
+            let mut mode = self.mode.lock();
+            record_in(&mut mode, self.bounds, event, snapshot, running, now)
         };
-        if let Some(error) = failed {
-            tracing::warn!(%error, "config history could not be saved");
+        match noted {
+            None => {}
+            Some(Noted::Write(error)) => {
+                tracing::warn!(%error, "config history could not be saved");
+            }
+            Some(Noted::Read(reason)) => {
+                tracing::warn!(%reason, "config history kept in memory only; its file is left as it is");
+            }
         }
     }
 
     /// The bytes `path` had in the newest kept version, when it has that file.
     fn newest_file_bytes(&self, path: &str) -> Option<Vec<u8>> {
-        let state = self.inner.lock();
-        let file = state
-            .snapshots
-            .last()?
-            .files
-            .iter()
-            .find(|file| file.path == path)?;
-        file.bytes.clone()
+        self.with_state(|state| {
+            let file = state
+                .snapshots
+                .last()?
+                .files
+                .iter()
+                .find(|file| file.path == path)?;
+            file.bytes.clone()
+        })
     }
 
     /// When the newest kept version named `revision` was stored.
     fn stored_at(&self, revision: &str) -> Option<u64> {
-        let state = self.inner.lock();
-        state
-            .snapshots
-            .iter()
-            .rev()
-            .find(|snapshot| snapshot.revision == revision)
-            .map(|snapshot| snapshot.at)
+        self.with_state(|state| {
+            state
+                .snapshots
+                .iter()
+                .rev()
+                .find(|snapshot| snapshot.revision == revision)
+                .map(|snapshot| snapshot.at)
+        })
     }
 
     #[cfg_attr(
@@ -213,7 +235,7 @@ impl ConfigHistory {
         allow(dead_code, reason = "read by the history page, a later slice")
     )]
     pub(crate) fn events(&self) -> Vec<Event> {
-        self.inner.lock().events.clone()
+        self.with_state(|state| state.events.clone())
     }
 
     /// Kept versions, oldest first.
@@ -222,7 +244,7 @@ impl ConfigHistory {
         allow(dead_code, reason = "read by the history page, a later slice")
     )]
     pub(crate) fn snapshots(&self) -> Vec<Snapshot> {
-        self.inner.lock().snapshots.clone()
+        self.with_state(|state| state.snapshots.clone())
     }
 
     /// `Kept` when `revision` is still stored. `NoLongerKept` when a held
@@ -232,22 +254,36 @@ impl ConfigHistory {
         allow(dead_code, reason = "read by the history page, a later slice")
     )]
     pub(crate) fn lookup(&self, revision: &str) -> Lookup {
-        let state = self.inner.lock();
-        if let Some(snapshot) = state
-            .snapshots
-            .iter()
-            .find(|snapshot| snapshot.revision == revision)
-        {
-            return Lookup::Kept(snapshot.clone());
+        self.with_state(|state| {
+            if let Some(snapshot) = state
+                .snapshots
+                .iter()
+                .find(|snapshot| snapshot.revision == revision)
+            {
+                return Lookup::Kept(snapshot.clone());
+            }
+            if state
+                .events
+                .iter()
+                .any(|event| event.revision.as_deref() == Some(revision))
+            {
+                return Lookup::NoLongerKept;
+            }
+            Lookup::Unknown
+        })
+    }
+
+    /// Disk reads and parses the file. Memory-only reads the held state.
+    /// A disk read that fails answers as an empty store and does not change mode.
+    fn with_state<T>(&self, read: impl FnOnce(&State) -> T) -> T {
+        let mode = self.mode.lock();
+        match &*mode {
+            StoreMode::MemoryOnly { state } => read(state),
+            StoreMode::Disk { path } => {
+                let state = load_state(path).unwrap_or_default();
+                read(&state)
+            }
         }
-        if state
-            .events
-            .iter()
-            .any(|event| event.revision.as_deref() == Some(revision))
-        {
-            return Lookup::NoLongerKept;
-        }
-        Lookup::Unknown
     }
 }
 
@@ -300,6 +336,7 @@ impl HistoryHook {
         let snapshot = Snapshot {
             revision: revision.to_string(),
             at: now,
+            source: source.clone(),
             pending_restart: pending_restart
                 .iter()
                 .copied()
@@ -321,7 +358,7 @@ impl HistoryHook {
         &self,
         source: Source,
         served: Option<&str>,
-        _line: Option<u32>,
+        line: Option<u32>,
         now: u64,
     ) {
         let still_running = served.map(|revision| StillRunning {
@@ -336,11 +373,75 @@ impl HistoryHook {
                 revision: None,
                 unchanged: false,
                 still_running,
-                location: None,
+                location: line.map(u64::from),
                 attempted_diff: None,
             },
             None,
             served.unwrap_or(""),
+            now,
+        );
+    }
+
+    /// A grants publish is its own version. The grants come from their file,
+    /// so the source is `File`. Nothing is recorded when this hook has no
+    /// grants path. `previous == Some(revision)` is an unchanged event.
+    /// Otherwise the version is the newest held version's files with the
+    /// grants entry set to `grants` (`None` when there are none), appended
+    /// when that version has no grants entry; with no held version, only
+    /// the grants entry.
+    pub(crate) fn on_grants(
+        &self,
+        grants: Option<&[u8]>,
+        revision: &str,
+        pending_restart: &[&str],
+        previous: Option<&str>,
+        now: u64,
+    ) {
+        let Some(grants_path) = self.grants_path.clone() else {
+            return;
+        };
+        if previous == Some(revision) {
+            self.store.record(
+                applied_event(now, Source::File, revision, true),
+                None,
+                revision,
+                now,
+            );
+            return;
+        }
+        let bytes = grants.map(<[u8]>::to_vec);
+        let mut files = self
+            .store
+            .snapshots()
+            .pop()
+            .map(|newest| newest.files.clone())
+            .unwrap_or_default();
+        if let Some(file) = files.iter_mut().find(|file| file.path == grants_path) {
+            if let Some(old) = file.bytes.as_mut() {
+                zeroize::Zeroize::zeroize(old);
+            }
+            file.bytes = bytes;
+        } else {
+            files.push(StoredFile {
+                path: grants_path,
+                bytes,
+            });
+        }
+        let snapshot = Snapshot {
+            revision: revision.to_string(),
+            at: now,
+            source: Source::File,
+            pending_restart: pending_restart
+                .iter()
+                .copied()
+                .map(str::to_string)
+                .collect(),
+            files,
+        };
+        self.store.record(
+            applied_event(now, Source::File, revision, false),
+            Some(snapshot),
+            revision,
             now,
         );
     }
@@ -372,7 +473,7 @@ impl HistoryHook {
 
 /// The stored history, read as the secret file it is (it holds env-file
 /// bytes): `None` when there is none, the refusal or read error otherwise.
-fn read_stored(path: &Path) -> Result<Option<String>, String> {
+fn read_stored(path: &Path) -> Result<Option<crate::wiped_bytes::WipedBytes>, String> {
     // The guarded read follows links, so a link is refused first. The check
     // and the open are two calls: swapping the file between them takes write
     // access to the data directory, which only the gateway's own user has.
@@ -388,10 +489,90 @@ fn read_stored(path: &Path) -> Result<Option<String>, String> {
         _ => {}
     }
     match crate::config::read_checked_file(path, crate::config::CheckedFile::ConfigHistory) {
-        Ok(text) => Ok(Some(text)),
+        Ok(text) => Ok(Some(crate::wiped_bytes::WipedBytes::new(text.into_bytes()))),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.to_string()),
     }
+}
+
+/// A disk read refused or failed while recording, or a save that did not land.
+enum Noted {
+    Write(std::io::Error),
+    Read(String),
+}
+
+fn record_in(
+    mode: &mut StoreMode,
+    bounds: Bounds,
+    event: Event,
+    snapshot: Option<Snapshot>,
+    running: &str,
+    now: u64,
+) -> Option<Noted> {
+    let path = match mode {
+        StoreMode::MemoryOnly { state } => {
+            remember(state, event, snapshot, bounds, running, now);
+            return None;
+        }
+        StoreMode::Disk { path } => path.clone(),
+    };
+    // The path clone ended the borrow of `mode`, so a failed read can switch it.
+    match load_state(&path) {
+        Ok(mut state) => {
+            remember(&mut state, event, snapshot, bounds, running, now);
+            // Written under the mode lock, so the file never ends on an older
+            // state than a record that raced this one. The bytes are wiped
+            // when `save_state` drops them.
+            save_state(&path, &state).err().map(Noted::Write)
+        }
+        Err(reason) => {
+            let mut state = State::default();
+            remember(&mut state, event, snapshot, bounds, running, now);
+            *mode = StoreMode::MemoryOnly { state };
+            Some(Noted::Read(reason))
+        }
+    }
+}
+
+fn remember(
+    state: &mut State,
+    event: Event,
+    snapshot: Option<Snapshot>,
+    bounds: Bounds,
+    running: &str,
+    now: u64,
+) {
+    if let Some(snapshot) = snapshot {
+        state.snapshots.push(snapshot);
+    }
+    state.events.push(event);
+    evict_snapshots(&mut state.snapshots, bounds, running, now);
+    evict_events(&mut state.events, bounds);
+}
+
+/// The file, parsed. Absent is an empty store. The read text is wiped when
+/// `read_stored`'s buffer drops, and the parsed copy when `State` drops.
+fn load_state(path: &Path) -> Result<State, String> {
+    let Some(text) = read_stored(path)? else {
+        return Ok(State::default());
+    };
+    serde_json::from_slice(text.as_bytes()).map_err(|error| error.to_string())
+}
+
+fn save_state(path: &Path, state: &State) -> Result<(), std::io::Error> {
+    let bytes = serde_json::to_vec(state).map_err(std::io::Error::from)?;
+    let bytes = crate::wiped_bytes::WipedBytes::new(bytes);
+    write_atomic(path, bytes.as_bytes(), FileMode::Private, Symlink::Replace)
+}
+
+/// `true` when `value` is false, so a refused event omits `unchanged`.
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// A stored version written before `source` existed is a file reload.
+fn file_source() -> Source {
+    Source::File
 }
 
 fn applied_event(at: u64, source: Source, revision: &str, unchanged: bool) -> Event {
