@@ -12,7 +12,8 @@ fn the_npm_environment_is_exactly_the_designed_list() {
     got.sort();
     let proxy = "http://x:c0ffee@127.0.0.1:41234";
     let ca = "/etc/mcp-gateway-preview/ca.pem";
-    let empty = "/etc/mcp-gateway-preview/empty.npmrc";
+    let user = "/etc/mcp-gateway-preview/empty-user.npmrc";
+    let global = "/etc/mcp-gateway-preview/empty-global.npmrc";
     let mut want: Vec<(String, String)> = [
         ("PATH", "/usr/lib/node/bin:/usr/lib/npm/bin"),
         ("HOME", "/preview-home"),
@@ -30,8 +31,8 @@ fn the_npm_environment_is_exactly_the_designed_list() {
         ("npm_config_update_notifier", "false"),
         ("npm_config_cafile", ca),
         ("npm_config_strict_ssl", "true"),
-        ("npm_config_userconfig", empty),
-        ("npm_config_globalconfig", empty),
+        ("npm_config_userconfig", user),
+        ("npm_config_globalconfig", global),
     ]
     .iter()
     .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))

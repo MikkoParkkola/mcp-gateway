@@ -398,8 +398,8 @@ async fn ca_files_are_read_only_from_the_fetch_child() {
     (echo x > $d/ca.pem) 2>/dev/null && echo ca-writable
     (rm -f $d/ca.pem) 2>/dev/null; test -f $d/ca.pem && echo ca-kept
     (mv $d/ca.pem $d/moved) 2>/dev/null && echo ca-moved
-    test -f $d/empty.npmrc && echo npmrc-present
-    test -s $d/empty.npmrc || echo npmrc-empty
+    test -f $d/empty-user.npmrc && test -f $d/empty-global.npmrc && echo npmrc-present
+    test -s $d/empty-user.npmrc || test -s $d/empty-global.npmrc || echo npmrc-empty
     test -d $d/empty-certs && [ -z "$(ls -A $d/empty-certs)" ] && echo certs-empty
     (touch $d/new) 2>/dev/null && echo dir-writable
   } >> "$obs/report"

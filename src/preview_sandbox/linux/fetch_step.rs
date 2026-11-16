@@ -22,13 +22,15 @@ use crate::preview_sandbox::install::check_lock;
 /// The npm fetch command's whole environment: the D5 list (proxy through the
 /// relay with the fetch credential, no scripts, no git, the public registry)
 /// plus the CA amendment's trust variables (the snapshot as `cafile`, strict
-/// TLS, and an empty npmrc as both the user and the global config). `path` is
+/// TLS, and empty user and global npmrc files, two of them since npm refuses
+/// one file as both). `path` is
 /// node's directory, then npm's.
 pub(super) fn npm_env(credential: &str, port: u16, path: &str) -> Vec<(String, String)> {
     let proxy = format!("http://x:{credential}@127.0.0.1:{port}");
     let home = super::plan::HOME;
     let ca = format!("{PREVIEW_CONFIG}/ca.pem");
-    let empty = format!("{PREVIEW_CONFIG}/empty.npmrc");
+    let user = format!("{PREVIEW_CONFIG}/empty-user.npmrc");
+    let global = format!("{PREVIEW_CONFIG}/empty-global.npmrc");
     [
         ("PATH", path),
         ("HOME", home),
@@ -47,8 +49,8 @@ pub(super) fn npm_env(credential: &str, port: u16, path: &str) -> Vec<(String, S
         // npm's cafile replaces node's built-in roots (npm >= 9, the probe's floor).
         ("npm_config_cafile", ca.as_str()),
         ("npm_config_strict_ssl", "true"),
-        ("npm_config_userconfig", empty.as_str()),
-        ("npm_config_globalconfig", empty.as_str()),
+        ("npm_config_userconfig", user.as_str()),
+        ("npm_config_globalconfig", global.as_str()),
     ]
     .iter()
     .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
