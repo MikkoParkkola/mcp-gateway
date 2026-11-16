@@ -239,6 +239,13 @@ class SharedAndContainers(Rows):
         helper = CONTAINER["src/a/x_support.rs"] + "crate::a::gen_tests!(made);\n"
         self.assert_refused(container(src__a_DOT_rs=GEN_MACRO + CONTAINER["src/a.rs"], src__a__x_support_DOT_rs=helper), "test-macro")
 
+    def test_a_wrapper_around_a_test_generating_macro_is_refused_in_a_container(self):
+        # A macro that only calls a generator generates tests too (code review r1).
+        wrapper = "macro_rules! wrap {\n    () => {\n        gen_tests!(wrapped);\n    };\n}\n"
+        helper = CONTAINER["src/a/x_support.rs"] + "wrap!();\n"
+        files = container(src__a_DOT_rs=GEN_MACRO + wrapper + CONTAINER["src/a.rs"], src__a__x_support_DOT_rs=helper)
+        self.assert_refused(files, "test-macro")
+
 
 class TableAndBuildRs(Rows):
     """The table against build.rs's `const N`: both ways, no empty part, no stale row."""
@@ -261,6 +268,20 @@ class ParseSafety(Rows):
 
     def test_a_file_that_does_not_parse_is_refused(self):
         self.assert_refused(with_files(src__a_DOT_rs=BASE["src/a.rs"] + "\nfn broken( {\n"), "parse")
+
+    def test_a_file_mounted_twice_is_refused(self):
+        # One file under two module paths can carry only one set of tags (code review r1).
+        lib = BASE["src/lib.rs"] + '#[path = "a.rs"]\nmod a_again;\n'
+        self.assert_refused(with_files(src__lib_DOT_rs=lib), "double-mount")
+
+    def test_same_named_modules_under_exclusive_cfgs_are_both_walked(self):
+        # src/gateway/task_service/store.rs: `mod platform;` twice, unix and windows; keyed by name, the first
+        # file was never walked (code review r1).
+        lib = BASE["src/lib.rs"] + '#[cfg(unix)]\n#[path = "plat_unix.rs"]\nmod platform;\n#[cfg(windows)]\n#[path = "plat_win.rs"]\nmod platform;\n'
+        files = with_files(src__lib_DOT_rs=lib)
+        files["src/plat_unix.rs"] = A_UNTAGGED
+        files["src/plat_win.rs"] = "pub fn g() {}\n"
+        self.assert_refused(files, "untagged")
 
     def test_a_listed_grammar_gap_in_production_code_is_not_refused(self):
         # src/gateway/authz.rs: the pinned grammar cannot parse `raw @ Value::String(_)` in a production fn.

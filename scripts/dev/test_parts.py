@@ -157,6 +157,7 @@ class Item(NamedTuple):
 class FileWalk(NamedTuple):
     items: list[Item]
     generators: set[str]  # macro_rules names whose body holds a test attribute
+    macro_calls: dict[str, set[str]]  # macro_rules name -> macros its body calls (last path segment)
     invocations: list[tuple[str, int, int | None]]  # (macro name, line, enclosing module item) at item level
     errors: list[tuple[int, int]]  # error byte ranges
     parse_ok: bool
@@ -210,6 +211,7 @@ def walk_file(rel: str, text: str) -> FileWalk:
     parse_ok = not errors or g._error_signature(g._errors(root, src)) == g.KNOWN_GAPS.get(rel)
     items: list[Item] = []
     generators: set[str] = set()
+    macro_calls: dict[str, set[str]] = {}
     invocations: list[tuple[str, int, int | None]] = []
 
     def visit(container, path: tuple[str, ...], parent: int | None) -> None:
@@ -219,8 +221,11 @@ def walk_file(rel: str, text: str) -> FileWalk:
             if node.type == "macro_definition":
                 body = _text(src, node)
                 name = node.child_by_field_name("name")
-                if name is not None and re.search(r"#\s*\[\s*(?:tokio\s*::\s*)?test\b", body):
-                    generators.add(_text(src, name).removeprefix("r#"))
+                if name is not None:
+                    own = _text(src, name).removeprefix("r#")
+                    macro_calls[own] = {c.removeprefix("r#") for c in re.findall(r"(?:r#)?(\w+)\s*!", body)} - {"macro_rules"}
+                    if re.search(r"#\s*\[\s*(?:tokio\s*::\s*)?test\b", body):
+                        generators.add(own)
                 continue
             if node.type == "macro_invocation":
                 macro = node.child_by_field_name("macro")
@@ -270,7 +275,7 @@ def walk_file(rel: str, text: str) -> FileWalk:
                 visit(body, (*path, name), len(items) - 1)
 
     visit(root, (), None)
-    return FileWalk(items, generators, invocations, errors, parse_ok, _attr_problems(rel, src, root))
+    return FileWalk(items, generators, macro_calls, invocations, errors, parse_ok, _attr_problems(rel, src, root))
 
 
 TEST_ATTR_TEXT = re.compile(r"(?:tokio\s*::\s*)?test\s*[\](]")
@@ -337,6 +342,7 @@ class Crate(NamedTuple):
     nodes: list[Node]
     files: dict[str, FileWalk]
     texts: dict[str, str]
+    remounts: list[tuple[str, tuple[str, ...]]]  # (file, crate path) of a second mount of a walked file
 
 
 def walk_crate(root: Path) -> Crate:
@@ -346,26 +352,35 @@ def walk_crate(root: Path) -> Crate:
     nodes: list[Node] = []
     files: dict[str, FileWalk] = {}
     texts: dict[str, str] = {}
+    remounts: list[tuple[str, tuple[str, ...]]] = []
     # (file, owns its directory, parent node of the file's top level, crate path of the file's module)
     queue = [(base / "src" / "lib.rs", True, None, ())]
     while queue:
         path, owns_dir, parent, prefix = queue.pop(0)
         rel = path.relative_to(base).as_posix()
-        if rel in files or not path.is_file():
+        if not path.is_file():
+            continue
+        if rel in files:
+            remounts.append((rel, prefix))
             continue
         texts[rel] = path.read_text(encoding="utf-8")
         walk = walk_file(rel, texts[rel])
         files[rel] = walk
-        targets = {names: (p, via) for p, via, names in g.bindings(path, owns_dir) if p.is_file()}
+        # Each `mod name;` resolves in source order: two declarations may share a name under exclusive cfgs
+        # (`#[cfg(unix)] #[path = "store_unix.rs"] mod platform;` beside a windows one), so a name maps to a queue.
+        targets: dict[tuple[str, ...], list] = {}
+        for p, via, names in g.bindings(path, owns_dir):
+            if p.is_file():
+                targets.setdefault(names, []).append((p, via))
         local: dict[int, int] = {}  # item index in this file -> node index
         for ix, it in enumerate(walk.items):
             up = parent if it.parent is None else local[it.parent]
             local[ix] = len(nodes)
             nodes.append(Node(rel, it, up, (*prefix, *it.path)))
-            if it.out_of_line and it.path in targets:
-                child, via = targets[it.path]
+            if it.out_of_line and targets.get(it.path):
+                child, via = targets[it.path].pop(0)
                 queue.append((child, via, local[ix], (*prefix, *it.path)))
-    return Crate(nodes, files, texts)
+    return Crate(nodes, files, texts, remounts)
 
 
 def _ancestors(crate: Crate, ix: int):
@@ -441,6 +456,8 @@ def analyse(root: Path) -> Analysis:
             add("cross-check", rel, 1, "the tree walk and the token scan disagree on modules or test functions")
         for no, code, message in walk.attr_problems:
             add(code, rel, no, message)
+    for rel, path in crate.remounts:
+        add("double-mount", rel, 1, f"also mounted as {'::'.join(path)}; one file can carry one set of tags")
     if CRATE_ALLOW not in [line.strip() for line in crate.texts.get("src/lib.rs", "").splitlines()]:
         add("crate-allow", "src/lib.rs", 1, f"add the line: {CRATE_ALLOW}")
 
@@ -467,6 +484,13 @@ def analyse(root: Path) -> Analysis:
         if it.is_test_fn and sum(len(tags.get(a, ())) for a in (ix, *_ancestors(crate, ix))) > 1:
             add("two-tags", n.rel, it.line, f"{it.name} sits under more than one part tag")
     generators = set().union(*(w.generators for w in crate.files.values())) if crate.files else set()
+    calls: dict[str, set[str]] = {}
+    for w in crate.files.values():
+        for m, called in w.macro_calls.items():
+            calls.setdefault(m, set()).update(called)
+    # A macro that calls a generator generates tests too, however deep the chain (code review r1).
+    while grown := {m for m, called in calls.items() if m not in generators and called & generators}:
+        generators |= grown
     for rel, walk in crate.files.items():
         for name, line, parent in walk.invocations:
             if name not in generators:
