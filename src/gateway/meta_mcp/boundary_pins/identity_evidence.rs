@@ -1,0 +1,648 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Evidence that the compiler, and the identity types' checked
+//! deserialization, cover every case `scripts/release/check_identity_sources.py`
+//! catches. [`CASES`] names the proofs for each case. The rows below keep the
+//! table in step with the script, check that each named proof exists and has
+//! the required shape, and hold the proofs that are unit rows.
+
+use super::packaged::{PinnedFile, crate_root, read_or_skip, repo_file};
+
+/// The three identity leaf modules.
+const LEAVES: [&str; 3] = [
+    "src/identity_grants/subject.rs",
+    "src/key_server/oidc/verified.rs",
+    "src/mtls/identity/cert.rs",
+];
+/// The compile-time pairs: each a `compile_fail` block and its one-line twin.
+const EVIDENCE: &str = "src/identity_evidence.rs";
+
+/// `GrantSubject::new` is checked: a value only after its `Result` is handled,
+/// and a pair naming no one is refused.
+const NEW_IS_CHECKED: &[&str] = &[
+    "doc:NEW-GS",
+    "row:src/identity_grants_subject_tests.rs#new_refuses_a_subject_naming_no_one_and_names_the_empty_part",
+    SOURCES_PIN,
+];
+/// The source pin: every constructor call and every struct literal of the three
+/// types is a reviewed row with its count, and each defining file is pinned by
+/// the hash of its bytes, so a new site, inside a leaf too, fails it.
+const SOURCES_PIN: &str = "row:src/gateway/meta_mcp/boundary_pins/identity_sources_tests.rs#every_identity_source_is_a_reviewed_row";
+/// Every field of the three types is private (the source pin's own row).
+const PRIVATE_FIELDS: &str = "row:src/gateway/meta_mcp/boundary_pins/identity_sources_tests.rs#every_field_of_each_sealed_type_is_private";
+/// No production child module in a leaf (EV.3).
+const NO_CHILDREN: &str = "row:src/gateway/meta_mcp/boundary_pins/identity_evidence.rs#identity_leaf_modules_declare_no_production_children";
+/// Neither `VerifiedIdentity` nor `CertIdentity` can be deserialized.
+const NOT_DESERIALIZABLE: &str = "row:src/gateway/meta_mcp/boundary_pins/identity_refusals.rs#verified_and_cert_identities_cannot_be_deserialized";
+/// Every literal in the evidence names exactly its struct's fields.
+const LITERALS_COMPLETE: &str = "row:src/gateway/meta_mcp/boundary_pins/identity_evidence.rs#each_evidence_literal_names_every_field_of_its_struct";
+
+/// One row per case the scanner catches: the case as the script keys it, then
+/// its proofs. A proof is `doc:<ID>` (a pair in [`EVIDENCE`]) or
+/// `row:<file>#<fn>` (a unit row).
+const CASES: &[(&str, &[&str])] = &[
+    (
+        "ALLOWED src/key_server/oidc/verified.rs checked VerifiedIdentity {",
+        &[
+            "doc:LIT-VI",
+            PRIVATE_FIELDS,
+            NO_CHILDREN,
+            SOURCES_PIN,
+            LITERALS_COMPLETE,
+        ],
+    ),
+    (
+        "ALLOWED src/identity_grants/subject.rs new GrantSubject {",
+        &[
+            "doc:LIT-GS",
+            PRIVATE_FIELDS,
+            NO_CHILDREN,
+            SOURCES_PIN,
+            LITERALS_COMPLETE,
+        ],
+    ),
+    (
+        "ALLOWED src/mtls/identity/cert.rs parse CertIdentity {",
+        &[
+            "doc:LIT-CI",
+            PRIVATE_FIELDS,
+            NO_CHILDREN,
+            SOURCES_PIN,
+            LITERALS_COMPLETE,
+        ],
+    ),
+    (
+        "ALLOWED src/decisions/mod.rs access_key GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    (
+        "ALLOWED src/decisions/mod.rs covered GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    (
+        "ALLOWED src/decisions/mod.rs denial_from_record GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    (
+        "ALLOWED src/gateway/meta_mcp/invoke/budget.rs grant_subject_from_api_key GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    (
+        "ALLOWED src/gateway/router/identity.rs grant_subject_from_cert_identity GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    (
+        "ALLOWED src/gateway/router/identity.rs grant_subject_from_oauth_agent GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    (
+        "ALLOWED src/gateway/router/identity.rs grant_subject_from_verified_identity GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    (
+        "ALLOWED src/gateway/router/identity.rs trusted_proxy_identity GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    (
+        "ALLOWED src/gateway/ui/admin_audit.rs caller_who GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    (
+        "ALLOWED src/gateway/ui/admin_audit.rs recorded GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    (
+        "ALLOWED src/gateway/ui/events.rs admitted GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    (
+        "ALLOWED src/gateway/ui/tool_call.rs via_label GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    (
+        "ALLOWED src/identity_grants/subject.rs try_from GrantSubject::new(",
+        NEW_IS_CHECKED,
+    ),
+    ("RULE_SITES src/commands/identity.rs", NEW_IS_CHECKED),
+    (
+        "READ_BACKS src/capability/parser.rs parse_capability",
+        &["row:src/identity_grants_subject_tests.rs#a_capability_owner_naming_no_one_is_refused"],
+    ),
+    (
+        "READ_BACKS src/capability/file_writer_headers.rs check",
+        &[
+            "row:src/capability/file_writer_headers.rs#an_owner_naming_no_one_is_refused_by_the_header_check",
+        ],
+    ),
+    (
+        "READ_BACKS src/identity_grants.rs read_identity_grants_file_with_bytes",
+        &[
+            "row:src/identity_grants_subject_tests.rs#a_grants_yaml_naming_no_one_is_refused_with_its_path_and_rule_id",
+        ],
+    ),
+    (
+        "READ_BACKS src/identity_grants/journal.rs parse_journal",
+        &[
+            "row:src/gateway/meta_mcp/boundary_pins/identity_refusals.rs#a_journal_entry_carries_no_identity",
+        ],
+    ),
+    (
+        "READ_BACKS src/identity_grants_matching.rs parse_refusal",
+        &[
+            "row:src/gateway/meta_mcp/boundary_pins/identity_refusals.rs#a_json_grants_file_naming_no_one_is_refused_by_parse_refusal",
+        ],
+    ),
+    (
+        "READ_BACKS src/identity_grants_matching.rs remainder_error",
+        &[
+            "row:src/identity_grants_subject_tests.rs#a_nameless_row_behind_a_bare_one_is_the_remainder_error",
+        ],
+    ),
+    (
+        "H1",
+        &[
+            "doc:H1",
+            NOT_DESERIALIZABLE,
+            "row:src/gateway/meta_mcp/boundary_pins/identity_refusals.rs#h1_an_aliased_derive_refuses_a_grant_subject_naming_no_one",
+        ],
+    ),
+    (
+        "H2",
+        &[
+            "doc:H2",
+            NOT_DESERIALIZABLE,
+            "row:src/gateway/meta_mcp/boundary_pins/identity_refusals.rs#h2_an_array_of_grant_subjects_refuses_one_naming_no_one",
+        ],
+    ),
+    (
+        "H3",
+        &[
+            "doc:H3",
+            PRIVATE_FIELDS,
+            NO_CHILDREN,
+            SOURCES_PIN,
+            LITERALS_COMPLETE,
+        ],
+    ),
+    (
+        "H4",
+        &[
+            "doc:H4",
+            "doc:H4-SPACED",
+            NOT_DESERIALIZABLE,
+            "row:src/gateway/meta_mcp/boundary_pins/identity_refusals.rs#h4_an_aliased_deserializer_refuses_a_grant_subject_naming_no_one",
+        ],
+    ),
+    (
+        "H5",
+        &[
+            "doc:H5",
+            NOT_DESERIALIZABLE,
+            "row:src/gateway/meta_mcp/boundary_pins/identity_refusals.rs#h5_a_self_read_back_refuses_a_grant_subject_naming_no_one",
+        ],
+    ),
+    (
+        "H6",
+        &[
+            "doc:H6",
+            NOT_DESERIALIZABLE,
+            "row:src/gateway/meta_mcp/boundary_pins/identity_refusals.rs#h6_a_block_initializer_refuses_a_grant_subject_naming_no_one",
+        ],
+    ),
+    (
+        "H7",
+        &[
+            "doc:H7",
+            PRIVATE_FIELDS,
+            NO_CHILDREN,
+            SOURCES_PIN,
+            LITERALS_COMPLETE,
+        ],
+    ),
+    (
+        "H8",
+        &[
+            "doc:H8",
+            PRIVATE_FIELDS,
+            NO_CHILDREN,
+            SOURCES_PIN,
+            LITERALS_COMPLETE,
+        ],
+    ),
+];
+
+/// A source file of this crate (always packaged, so never a skip).
+fn source(rel: &str) -> String {
+    read_or_skip(crate_root(), rel, false).expect("a source file is read or the read panics")
+}
+
+/// The quoted strings of one Python literal line, in order: `("a", "b"): ...`
+/// gives `["a", "b"]`.
+fn quoted(line: &str) -> Vec<&str> {
+    line.split('"').skip(1).step_by(2).collect()
+}
+
+/// The key lines of the script's `NAME = {` dict, up to its closing `}`.
+fn dict_keys<'a>(script: &'a str, name: &str) -> Vec<Vec<&'a str>> {
+    let open = format!("{name} = {{");
+    let start = script
+        .find(&open)
+        .unwrap_or_else(|| panic!("the script defines {name}"));
+    script[start + open.len()..]
+        .lines()
+        .take_while(|line| line.trim() != "}")
+        .map(str::trim)
+        .filter(|line| line.starts_with("(\""))
+        .map(|line| quoted(line.split("):").next().unwrap_or(line)))
+        .collect()
+}
+
+/// The case ids the scanner catches today, built from its own lists.
+fn script_cases(script: &str) -> Vec<String> {
+    let mut cases: Vec<String> = dict_keys(script, "ALLOWED")
+        .into_iter()
+        .map(|key| format!("ALLOWED {}", key.join(" ")))
+        .chain(
+            dict_keys(script, "READ_BACKS")
+                .into_iter()
+                .map(|key| format!("READ_BACKS {}", key.join(" "))),
+        )
+        .collect();
+    // The whole set, up to its closing brace, so a set split over lines reads too.
+    let open = "RULE_SITES = {";
+    let start = script.find(open).expect("the script defines RULE_SITES") + open.len();
+    let rule_sites = &script[start..start + script[start..].find('}').expect("RULE_SITES closes")];
+    cases.extend(
+        quoted(rule_sites)
+            .into_iter()
+            .map(|site| format!("RULE_SITES {site}")),
+    );
+    cases.extend((1..=8).map(|n| format!("H{n}")));
+    cases.sort();
+    cases
+}
+
+/// The table's case ids equal the cases the script catches: `ALLOWED`, `READ_BACKS`
+/// and `RULE_SITES` read from the script, plus H1-H8. A row added to or dropped
+/// from the script fails here until the table follows.
+#[test]
+fn the_table_names_every_case_the_scanner_catches() {
+    let Some(script) = repo_file(PinnedFile::IdentityScanner) else {
+        return;
+    };
+    let mut table: Vec<String> = CASES.iter().map(|(case, _)| (*case).to_owned()).collect();
+    table.sort();
+    let script = script_cases(&script);
+    assert_eq!(
+        script.len(),
+        31,
+        "premise: 16 ALLOWED, 6 READ_BACKS, 1 RULE_SITES, H1-H8: {script:?}"
+    );
+    assert_eq!(table, script);
+}
+
+/// One evidence pair: its id, then each block's fence info and body lines.
+struct Pair {
+    id: String,
+    fail_info: String,
+    fail: Vec<String>,
+    twin_info: String,
+    twin: Vec<String>,
+}
+
+/// The `compile_fail` block and twin after each `evidence:` line, in order.
+fn pairs(evidence: &str) -> Vec<Pair> {
+    let lines: Vec<&str> = evidence.lines().collect();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < lines.len() {
+        let Some(id) = lines[at].strip_prefix("//! evidence: ") else {
+            at += 1;
+            continue;
+        };
+        let mut blocks = Vec::new();
+        let mut i = at + 1;
+        while blocks.len() < 2 && i < lines.len() {
+            if let Some(info) = lines[i].strip_prefix("//! ```") {
+                let body: Vec<String> = lines[i + 1..]
+                    .iter()
+                    .take_while(|line| **line != "//! ```")
+                    .map(|line| (*line).to_owned())
+                    .collect();
+                i += body.len() + 2;
+                blocks.push((info.to_owned(), body));
+            } else {
+                i += 1;
+            }
+        }
+        assert_eq!(
+            blocks.len(),
+            2,
+            "evidence {id} has a compile_fail block and a twin"
+        );
+        let (twin_info, twin) = blocks.pop().expect("two blocks");
+        let (fail_info, fail) = blocks.pop().expect("two blocks");
+        out.push(Pair {
+            id: id.to_owned(),
+            fail_info,
+            fail,
+            twin_info,
+            twin,
+        });
+        at = i;
+    }
+    out
+}
+
+/// Every pair is a `compile_fail` block then a plain (compiled and run) twin,
+/// and the two differ in exactly one line, so the twin passing puts the
+/// failure on that line. Stable rustdoc ignores a `compile_fail` error code,
+/// so the twin is what names the cause.
+#[test]
+fn each_compile_fail_has_a_one_line_twin() {
+    let found = pairs(&source(EVIDENCE));
+    assert_eq!(found.len(), 13, "premise: the 13 pairs are read");
+    for pair in found {
+        let id = &pair.id;
+        assert_eq!(
+            pair.fail_info, "compile_fail",
+            "{id}: the first block must fail to compile"
+        );
+        assert_eq!(
+            pair.twin_info, "",
+            "{id}: the twin must be compiled and run, not ignored"
+        );
+        assert_eq!(
+            pair.fail.len(),
+            pair.twin.len(),
+            "{id}: same number of lines"
+        );
+        let differing = pair
+            .fail
+            .iter()
+            .zip(&pair.twin)
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(differing, 1, "{id}: exactly one line differs");
+    }
+}
+
+/// The names of the test fns in `text` (`#[test]` or an attribute ending in
+/// `::test`, such as `#[tokio::test]`), at any depth; an `#[ignore]`d one does
+/// not count, since it proves nothing in a normal run.
+fn test_fns(text: &str) -> Vec<String> {
+    struct Tests(Vec<String>);
+    impl<'ast> syn::visit::Visit<'ast> for Tests {
+        fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+            let is_test = item.attrs.iter().any(|attr| {
+                attr.path()
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "test")
+            });
+            let ignored = item.attrs.iter().any(|attr| attr.path().is_ident("ignore"));
+            if is_test && !ignored {
+                self.0.push(item.sig.ident.to_string());
+            }
+            syn::visit::visit_item_fn(self, item);
+        }
+    }
+    let file = syn::parse_file(text).expect("the file parses");
+    let mut tests = Tests(Vec::new());
+    syn::visit::Visit::visit_file(&mut tests, &file);
+    tests.0
+}
+
+/// Every proof the table names exists: each `doc:` id is a pair in the
+/// evidence module, each `row:` names a fn in its file, and every pair in the
+/// module is named by some case.
+#[test]
+fn every_proof_the_table_names_exists() {
+    let ids: Vec<String> = pairs(&source(EVIDENCE))
+        .into_iter()
+        .map(|pair| pair.id)
+        .collect();
+    let mut named = Vec::new();
+    for (case, proofs) in CASES {
+        assert!(!proofs.is_empty(), "{case}: at least one proof");
+        for proof in *proofs {
+            if let Some(id) = proof.strip_prefix("doc:") {
+                assert!(ids.iter().any(|known| known == id), "{case}: no pair {id}");
+                named.push(id);
+            } else if let Some(row) = proof.strip_prefix("row:") {
+                let (file, name) = row.split_once('#').expect("row:<file>#<fn>");
+                assert!(
+                    test_fns(&source(file)).iter().any(|test| test == name),
+                    "{case}: {file} has no test fn {name}"
+                );
+            } else {
+                panic!("{case}: unknown proof {proof}");
+            }
+        }
+    }
+    for id in &ids {
+        assert!(
+            named.contains(&id.as_str()),
+            "pair {id} is named by no case"
+        );
+    }
+}
+
+/// Which `mod` items [`child_modules`] reports.
+#[derive(Clone, Copy)]
+enum Scope {
+    /// Every one, test-only or not.
+    All,
+    /// Only those compiled outside tests: a test-only item, and everything
+    /// inside it, is skipped (the shared reader, `test_source_text::test_only`).
+    Production,
+}
+
+/// Every `mod` item in `text` within `scope`, at any depth (inside an inline
+/// module or a fn body too), whatever its visibility: each would see its
+/// ancestors' private fields.
+fn child_modules(text: &str, scope: Scope) -> Vec<String> {
+    struct Mods(Vec<String>, Scope);
+    impl Mods {
+        fn skips(&self, attrs: &[syn::Attribute]) -> bool {
+            matches!(self.1, Scope::Production) && crate::test_source_text::test_only(attrs)
+        }
+    }
+    impl<'ast> syn::visit::Visit<'ast> for Mods {
+        fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+            if self.skips(&item.attrs) {
+                return;
+            }
+            self.0.push(item.ident.to_string());
+            syn::visit::visit_item_mod(self, item);
+        }
+        fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+            if !self.skips(&item.attrs) {
+                syn::visit::visit_item_fn(self, item);
+            }
+        }
+        fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+            if !self.skips(&item.attrs) {
+                syn::visit::visit_impl_item_fn(self, item);
+            }
+        }
+        fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+            if !self.skips(&item.attrs) {
+                syn::visit::visit_item_impl(self, item);
+            }
+        }
+    }
+    let file = syn::parse_file(text).expect("the text parses");
+    let mut mods = Mods(Vec::new(), scope);
+    syn::visit::Visit::visit_file(&mut mods, &file);
+    mods.0
+}
+
+/// The child scan sees every declaration form a production child could take,
+/// and skips only what is compiled under test alone.
+#[test]
+fn the_child_scan_sees_every_module_form() {
+    let forms = "mod a; pub mod b; pub(crate) mod c; pub(self) mod d; pub(super) mod e; \
+                 pub(in crate::x) mod f; mod g {} fn h() { mod i {} }";
+    let every = ["a", "b", "c", "d", "e", "f", "g", "i"];
+    assert_eq!(child_modules(forms, Scope::All), every);
+    assert_eq!(child_modules(forms, Scope::Production), every);
+    let gated = "#[cfg(test)] mod t {} #[cfg(test)] fn f() { mod u {} } \
+                 mod p { #[cfg(test)] mod q {} } #[cfg(any(test, unix))] mod r {}";
+    assert_eq!(child_modules(gated, Scope::All), ["t", "u", "p", "q", "r"]);
+    assert_eq!(child_modules(gated, Scope::Production), ["p", "r"]);
+}
+
+/// EV.3: the three identity leaf modules declare no child module
+/// outside test code. A child would see the private fields, so a literal or a
+/// field write there would compile.
+#[test]
+fn identity_leaf_modules_declare_no_production_children() {
+    assert_eq!(
+        child_modules(&source("src/key_server/oidc/verified.rs"), Scope::All),
+        ["tests"],
+        "premise: verified.rs declares its test child, so skipping test-only items is what passes"
+    );
+    for leaf in LEAVES {
+        let children = child_modules(&source(leaf), Scope::Production);
+        assert!(
+            children.is_empty(),
+            "{leaf} declares a production child: {children:?}"
+        );
+    }
+}
+
+/// The doctest module stays registered: `src/lib.rs` declares
+/// `identity_evidence` under `#[cfg(doctest)]`, so rustdoc collects its pairs.
+#[test]
+fn the_evidence_module_is_collected_by_rustdoc() {
+    let lib = syn::parse_file(&source("src/lib.rs")).expect("lib.rs parses");
+    let declared: Vec<&syn::ItemMod> = lib
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Mod(item) if item.ident == "identity_evidence" => Some(item),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        declared.len(),
+        1,
+        "src/lib.rs declares identity_evidence once"
+    );
+    let item = declared[0];
+    assert!(
+        item.content.is_none(),
+        "an external file, not an inline module"
+    );
+    let attrs: Vec<String> = item
+        .attrs
+        .iter()
+        .filter(|attr| !attr.path().is_ident("doc"))
+        .map(|attr| {
+            attr.path()
+                .get_ident()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(
+        attrs,
+        ["cfg"],
+        "only a cfg, no #[path] or other gate: {attrs:?}"
+    );
+    let doctest = item.attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<syn::Path>()
+                .is_ok_and(|p| p.is_ident("doctest"))
+    });
+    assert!(
+        doctest,
+        "src/lib.rs must declare `#[cfg(doctest)] mod identity_evidence;`"
+    );
+}
+
+/// The field names of the one struct named `ty` in `leaf`.
+fn struct_fields(leaf: &str, ty: &str) -> Vec<String> {
+    let file = syn::parse_file(&source(leaf)).expect("the leaf parses");
+    let found: Vec<&syn::Fields> = file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Struct(item) if item.ident == ty => Some(&item.fields),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(found.len(), 1, "{leaf} defines {ty} exactly once");
+    let mut names: Vec<String> = found[0]
+        .iter()
+        .filter_map(|field| field.ident.as_ref().map(ToString::to_string))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Every struct literal in the evidence names exactly its struct's fields, so a
+/// literal block fails on privacy alone, never on a missing, renamed or extra
+/// field (the twin cannot see the literal line it replaces).
+#[test]
+fn each_evidence_literal_names_every_field_of_its_struct() {
+    let types = [
+        ("VerifiedIdentity", LEAVES[1]),
+        ("GrantSubject", LEAVES[0]),
+        ("CertIdentity", LEAVES[2]),
+    ];
+    let mut checked = 0;
+    for pair in pairs(&source(EVIDENCE)) {
+        for line in &pair.fail {
+            for (ty, leaf) in types {
+                let Some(at) = line.find(&format!("{ty} {{ ")) else {
+                    continue;
+                };
+                let body = &line[at + ty.len() + 3..];
+                let body = &body[..body.rfind('}').expect("the literal closes")];
+                let mut named: Vec<String> = body
+                    .split(',')
+                    .filter_map(|field| {
+                        field
+                            .split_once(':')
+                            .map(|(name, _)| name.trim().to_owned())
+                    })
+                    .collect();
+                named.sort();
+                assert_eq!(
+                    named,
+                    struct_fields(leaf, ty),
+                    "{}: the {ty} literal's fields",
+                    pair.id
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert_eq!(
+        checked, 6,
+        "premise: LIT-VI, LIT-GS, LIT-CI, H3, H7 and H8 each hold one literal"
+    );
+}
