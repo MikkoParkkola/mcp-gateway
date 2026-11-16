@@ -255,3 +255,46 @@ pub(crate) fn for_file(history_file: &Path) -> Option<Arc<Seams>> {
     let dir = history_file.parent()?;
     INSTALLED.lock().expect("installed").get(dir).cloned()
 }
+
+/// The seams one save job meets: its fault, taken once, and the gates it
+/// parks at; every gate it parked at is told when the job is done.
+pub(super) struct JobSeams {
+    seams: Option<Arc<Seams>>,
+    fault: Option<Fault>,
+    parked: std::cell::RefCell<Vec<Arc<Gate>>>,
+}
+
+impl JobSeams {
+    pub(super) fn take(path: &Path) -> Self {
+        let seams = for_file(path);
+        let fault = seams.as_ref().and_then(|s| s.take_fault());
+        Self {
+            seams,
+            fault,
+            parked: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    pub(super) fn park(&self, at: ParkAt) {
+        if let Some(gate) = self.seams.as_ref().and_then(|s| s.take_park(at)) {
+            gate.park_blocking();
+            self.parked.borrow_mut().push(gate);
+        }
+    }
+
+    pub(super) fn read(&self, path: &Path) -> Result<super::State, String> {
+        match self.fault {
+            Some(Fault::ReadIo) => Err("injected read fault".to_string()),
+            Some(Fault::Unparseable) => {
+                serde_json::from_slice::<super::State>(b"{not json").map_err(|e| e.to_string())
+            }
+            _ => super::load_state(path),
+        }
+    }
+
+    pub(super) fn done(&self) {
+        for gate in self.parked.borrow_mut().drain(..) {
+            gate.finished();
+        }
+    }
+}
