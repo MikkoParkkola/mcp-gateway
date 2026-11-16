@@ -1,0 +1,5 @@
+head_sha	7be6df6b1dfaac2a83e463b9f3dc997e7a60728f
+#mutant m-listener-forgotten
+mcp_gateway	preview_sandbox::control::tests::t8_no_second_connection_is_served	src/preview_sandbox/control_tests.rs:222
+#mutant m-accept-loop
+mcp_gateway	preview_sandbox::control::tests::t8_no_second_connection_is_served	src/preview_sandbox/control_tests.rs:222
