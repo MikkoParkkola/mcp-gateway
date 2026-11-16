@@ -378,10 +378,14 @@ fn entries(file: &syn::File, found: &mut Entries) {
 #[test]
 fn a_part_tag_beside_the_test_cfg_still_reads_as_test_only() {
     let module = |text: &str| syn::parse_str::<syn::ItemMod>(text).expect("a module item");
-    assert!(cfg_test_only(&module("#[cfg(tp2)]\n#[cfg(test)]\nmod t {}").attrs));
+    assert!(cfg_test_only(
+        &module("#[cfg(tp2)]\n#[cfg(test)]\nmod t {}").attrs
+    ));
     assert!(cfg_test_only(&module("#[cfg(test)]\nmod t {}").attrs));
     assert!(!cfg_test_only(&module("#[cfg(tp2)]\nmod t {}").attrs));
-    assert!(!cfg_test_only(&module("#[cfg(tp2)]\n#[cfg(unix)]\nmod t {}").attrs));
+    assert!(!cfg_test_only(
+        &module("#[cfg(tp2)]\n#[cfg(unix)]\nmod t {}").attrs
+    ));
 }
 
 /// Every exposed function of the judge, whatever its parameters, opens with

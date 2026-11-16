@@ -336,6 +336,13 @@ class Codemod(Rows):
         out = self.compound("#[cfg(not(test))]")
         self.assertIn("#[cfg(not(test))]\nmod tests {\n    #[cfg(tp1)]\n    #[test]", out)
 
+    def test_the_crate_allow_joins_the_inner_attributes_past_comments_and_blank_lines(self):
+        # rustfmt refuses a blank line inside the run of inner attributes (the first real-tree run put one there).
+        start = untagged(BASE)
+        start["src/lib.rs"] = "// SPDX line\n//! Crate docs.\n\n#![deny(unsafe_code)]\nmod a;\nmod b;\n"
+        first, _ = self.applied(start)
+        self.assertEqual(first["src/lib.rs"], "// SPDX line\n//! Crate docs.\n\n" + CRATE_ALLOW + "#![deny(unsafe_code)]\nmod a;\nmod b;\n")
+
     def assert_apply_refuses_and_leaves_the_tree(self, files: dict[str, str]) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

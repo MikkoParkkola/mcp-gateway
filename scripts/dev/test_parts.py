@@ -513,7 +513,9 @@ def apply(root: Path) -> list[str]:
     lib = a.crate.texts.get("src/lib.rs")
     if lib is not None and CRATE_ALLOW not in [line.strip() for line in lib.splitlines()]:
         lines = lib.split("\n")
-        at = next((i for i, line in enumerate(lines, 1) if not line.startswith("//")), len(lines))
+        # Directly above the crate's first code line (past its comments and blank lines), so it joins the run of
+        # inner attributes with no blank line inside it, as rustfmt wants.
+        at = next((i for i, line in enumerate(lines, 1) if line.strip() and not line.lstrip().startswith("//")), len(lines))
         edits.setdefault("src/lib.rs", []).append((at, 1, CRATE_ALLOW))
     for rel, ops in edits.items():
         lines = a.crate.texts[rel].split("\n")

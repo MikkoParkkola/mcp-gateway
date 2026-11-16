@@ -18,11 +18,10 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(tp_partial)");
     match std::env::var("MCP_GATEWAY_TEST_PART") {
         Ok(value) => {
-            let k: u32 = value
-                .parse()
-                .ok()
-                .filter(|k| *k <= N)
-                .unwrap_or_else(|| panic!("MCP_GATEWAY_TEST_PART must be 0..={N}, got {value:?}"));
+            let k: u32 =
+                value.parse().ok().filter(|k| *k <= N).unwrap_or_else(|| {
+                    panic!("MCP_GATEWAY_TEST_PART must be 0..={N}, got {value:?}")
+                });
             if k > 0 {
                 println!("cargo::rustc-cfg=tp{k}");
             }

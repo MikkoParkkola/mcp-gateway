@@ -8,8 +8,8 @@
 //! is `#[doc(hidden)]` and may change or vanish in any release, including a
 //! patch release. Use the `mcp-gateway` binary, its configuration and its
 //! HTTP and MCP interfaces instead (see the README).
-#![cfg_attr(tp_partial, allow(dead_code, unused_imports, unused_variables))]
 
+#![cfg_attr(tp_partial, allow(dead_code, unused_imports, unused_variables))]
 #![deny(unsafe_code)]
 // In stdio mode stdout is the JSON-RPC stream to the client, so library code
 // never prints to it: a stray line breaks the client's framing. Diagnostics go
