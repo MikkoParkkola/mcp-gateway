@@ -1,0 +1,6 @@
+head_sha	208ef19072950e0bdd68271c208e76d3e80914a9
+#mutant mlock
+mcp_gateway	gateway::meta_mcp::invoke::admin::publish_tests::l2_watcher_and_admin_reloads_are_ordered	src/gateway/meta_mcp/invoke/admin_publish_tests.rs:272
+#mutant mswap
+mcp_gateway	gateway::meta_mcp::invoke::admin::publish_tests::p4_admin_and_watcher_reload_deliver_after_the_swap	src/gateway/meta_mcp/invoke/admin_publish_tests.rs:113
+mcp_gateway	gateway::meta_mcp::invoke::admin::publish_tests::l2_watcher_and_admin_reloads_are_ordered	src/gateway/meta_mcp/invoke/admin_publish_tests.rs:281
