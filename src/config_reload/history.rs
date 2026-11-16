@@ -439,9 +439,14 @@ impl HistoryHook {
     /// gateway.yaml, then each env file, then the grants file when this hook has one.
     fn version_files(&self, raw: &RawInputs) -> Vec<StoredFile> {
         let mut files = Vec::with_capacity(raw.env_files.len() + 2);
+        // m10: the version rereads gateway.yaml from disk, not the published bytes.
         files.push(StoredFile {
             path: self.config_path.clone(),
-            bytes: Some(raw.gateway_yaml.clone()),
+            bytes: Some(mutant!(
+                "m10",
+                std::fs::read(&self.config_path).unwrap_or_default(),
+                raw.gateway_yaml.clone()
+            )),
         });
         files.extend(raw.env_files.iter().map(|(path, bytes)| StoredFile {
             path: path.clone(),
@@ -457,7 +462,20 @@ impl HistoryHook {
                 bytes,
             });
         }
-        files
+        // m6: the consumed values (env, overrides, secret files) are stored too.
+        files.extend(mutant!(
+            "m6",
+            raw.consumed
+                .iter()
+                .map(|input| StoredFile {
+                    path: input.name.clone(),
+                    bytes: Some(input.value.clone()),
+                })
+                .collect::<Vec<_>>(),
+            Vec::<StoredFile>::new()
+        ));
+        // m5: a version keeps gateway.yaml only.
+        mutant!("m5", files.into_iter().take(1).collect(), files)
     }
 }
 
@@ -533,6 +551,20 @@ fn remember(
     now: u64,
 ) {
     if let Some(snapshot) = snapshot {
+        // m7: a held version with the same files is re-keyed to the new id.
+        mutant!(
+            "m7",
+            {
+                for held in state
+                    .snapshots
+                    .iter_mut()
+                    .filter(|held| held.files == snapshot.files)
+                {
+                    held.revision.clone_from(&snapshot.revision);
+                }
+            },
+            ()
+        );
         state.snapshots.push(snapshot);
     }
     state.events.push(event);

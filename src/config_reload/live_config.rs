@@ -368,6 +368,8 @@ impl LiveConfig {
             inner.applied = inputs.and_then(|inputs| self.applied(inputs, pending));
             (previous, inner.applied.clone())
         };
+        // m1a: an env-file publish under an unchanged config records nothing.
+        let recorded = mutant!("m1a", None, recorded);
         self.record_publish(recorded, previous.as_deref(), published, source);
     }
 
