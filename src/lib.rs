@@ -381,8 +381,3 @@ pub(crate) mod test_symlink;
 // Every caller is a firewall-gated test (allowed-root rows).
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) mod test_tempdir;
-
-// Canary: an error that exists only in test code compiled with debug assertions off. The debug-off check job must
-// fail on it; every debug-on job must not. Reverted before review.
-#[cfg(all(test, not(debug_assertions)))]
-compile_error!("planted canary: debug-off test code only");
