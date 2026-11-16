@@ -40,11 +40,29 @@ fn read_on_thread(mut from: impl std::io::Read + Send + 'static) -> mpsc::Receiv
     text
 }
 
+/// Kills `child` and reaps it within [`BOUND`]: true once it is gone. The
+/// cleanup is bounded too, so a child that survives its kill is reported,
+/// never waited on forever.
+fn kill_and_reap(child: &mut Child) -> bool {
+    let _ = child.kill();
+    let deadline = Instant::now() + BOUND;
+    while Instant::now() < deadline {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    false
+}
+
 /// Kills `child` and fails `case`, naming the wait that timed out.
 fn hung(child: &mut Child, case: &str, wait: &str) -> ! {
-    let _ = child.kill();
-    let _ = child.wait();
-    panic!("{case}: {wait} did not happen within {BOUND:?}; the child was killed");
+    let after = if kill_and_reap(child) {
+        "killed"
+    } else {
+        "killed but still not reaped"
+    };
+    panic!("{case}: {wait} did not happen within {BOUND:?}; the child was {after}");
 }
 
 /// A spawned child whose every wait is bounded by [`BOUND`]. Dropped before
@@ -104,8 +122,7 @@ impl Bounded {
 impl Drop for Bounded {
     fn drop(&mut self) {
         if matches!(self.0.try_wait(), Ok(None)) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+            let _ = kill_and_reap(&mut self.0);
         }
     }
 }
