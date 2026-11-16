@@ -34,13 +34,16 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
-      # The runner script comes from the release line, never from the tree
-      # under test: a source head that edited it could fake its own checks.
+      # The runner script and the shard module it reads its skip list from come
+      # from the release line, never from the tree under test: a source head
+      # that edited either could fake its own checks. Nothing from the checkout
+      # runs after this step except the test binary itself.
       - name: Fetch the reviewed runner script
         shell: bash
         run: |
           git fetch --quiet --depth=1 origin docs/ranking-1-release-line
           git show FETCH_HEAD:scripts/ci/repeat/run_repeat.py > "$RUNNER_TEMP/run_repeat.py"
+          git show FETCH_HEAD:scripts/ci/shard_tests.py > "$RUNNER_TEMP/shard_tests.py"
       - name: Plan
         run: python3 "$RUNNER_TEMP/run_repeat.py" plan
       - name: Fetch the CI lib test binary
@@ -53,8 +56,8 @@ jobs:
       - name: Allow unprivileged user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Repeat the filtered tests
-        # Memory every 30 s (scripts/ci/with-memory-log.sh); log-only, the binary is already built.
-        run: scripts/ci/with-memory-log.sh python3 "$RUNNER_TEMP/run_repeat.py" run --binary "$RUNNER_TEMP/lib-bin/lib-tests" --out repeat-out
+        # No memory-log wrapper: it would be a script from the tree under test.
+        run: python3 "$RUNNER_TEMP/run_repeat.py" run --binary "$RUNNER_TEMP/lib-bin/lib-tests" --out repeat-out
       - name: Upload the repeat results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
