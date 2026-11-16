@@ -640,7 +640,7 @@ async fn prepare_records_a_v1_recovery() {
 #[tokio::test]
 async fn prepare_refuses_unrecordable_v1() {
     let row = "prepare_refuses_unrecordable_v1";
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = dir.path().join("gateway.yaml");
     let log = dir.path().join("audit.ndjson");
     std::fs::create_dir(&log).expect("the log path is a directory");
