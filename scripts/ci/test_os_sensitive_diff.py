@@ -10,6 +10,7 @@ Docs, a file's name alone, and platform cfg lines do not count.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -154,11 +155,67 @@ def main() -> int:
     # The receiver form of a file unlock counts too.
     row("a receiver-form unlock triggers", len(osd.scan(diff("src/a.rs", "+    guard.unlock()?;"))), 1)
 
+    # OS-process code demands os-sensitive, the macOS lib shard (train 47v: #4951's signal and process-group lines broke
+    # three macOS lib tests; the pattern above had no such word). The lookups below fail as assertions, not import
+    # errors, on a script that lacks the new words.
+    scan_proc = getattr(osd, "scan_proc", lambda d: [])
+    alts = [re.compile(w) for w in getattr(osd, "OS_PROC_WORDS", ())]
+
+    def vproc(hits, labels, pr=7):
+        return osd.verdict(hits, labels=labels, pr=pr, kind="proc") if hasattr(osd, "scan_proc") else None
+
+    word_rows = ["Signal::TERM", "libc::SIGTERM", "nix::sys::signal::kill", "libc::kill(pid, 15)", "killpg(pgid, 9)",
+                 "sigaction(sig, &sa)", "SIG_IGN", "child.start_kill()", "kill_process(pid, sig)",
+                 "kill_process_group(pgid, sig)", "test_kill_process(pid)", "child.kill()",
+                 'Command::new("kill").arg("-TERM")', "cmd.process_group(0)", "cmd.pre_exec(f)", "setsid()",
+                 "getsid(pid)", "setpgid(0, 0)", "getpgid(pid)", "tcsetpgrp(fd, pgid)", "waitpid(pid)",
+                 "waitid(P_PID)", "WaitId::Pid(pid)", "c.try_wait()", "out.wait_with_output()",
+                 "rustix::process::wait(opts)", "let f = NOHANG;", "child.wait()", "Errno::CHILD", "ESRCH"]
+    row("one OS_PROC word per row: each row line matches exactly one alternative",
+        [sum(1 for a in alts if a.search(w)) for w in word_rows], [1] * len(word_rows))
+    row("each OS_PROC word, alone on an added Rust line, demands os-sensitive",
+        [bool(scan_proc(diff("src/a.rs", f"+    {w}"))) for w in word_rows], [True] * len(word_rows))
+    row("a removed OS_PROC line counts too", len(scan_proc(diff("src/a.rs", "-    child.start_kill();"))), 1)
+    near_misses = ['let name = "kill_process";', "idp.kill()", "live.kill()", "barrier.wait()", "EINTR",
+                   "KillSwitch::kill(x)", "fn kill(id: u32, server: &S) {}", "err.raw_os_error()", "// sigterm",
+                   "x.Try_Wait()", "Errno::PERM", "SIGNAL_COUNT"]
+    row("near misses demand nothing", [w for w in near_misses if scan_proc(diff("src/a.rs", f"+    {w}"))], [])
+    row("an OS word in TOML or markdown demands nothing",
+        (scan_proc(diff("Cargo.toml", '+signal-hook = "0.3"')), scan_proc(diff("README.md", "+Send SIGTERM first."))),
+        ([], []))
+    row("an os-int line alone demands os-int, not os-sensitive",
+        (bool(osd.scan(diff("src/a.rs", "+    secret_store::open();"))), scan_proc(diff("src/a.rs", "+    secret_store::open();"))),
+        (True, []))
+    both = diff("src/a.rs", "+    keychain::store(pid); libc::kill(pid, libc::SIGTERM);")
+    row("one line with both kinds demands both labels", (bool(osd.scan(both)), bool(scan_proc(both))), (True, True))
+    pmsg = vproc(scan_proc(both), labels=["os-int"], pr=4951) or ""
+    row("with only os-int, the os-sensitive message names its command and the label timing",
+        ("gh pr edit 4951 --add-label os-sensitive" in pmsg, "next run" in pmsg, "src/a.rs:10" in pmsg), (True, True, True))
+    row("os-sensitive satisfies the proc check; os-int does not",
+        (vproc(scan_proc(both), labels=["os-sensitive"]), vproc(scan_proc(both), labels=["os-int"]) is not None), (None, True))
+    culprit = ("diff --git a/src/transport/stdio_child_tree.rs b/src/transport/stdio_child_tree.rs\n"
+               "--- a/src/transport/stdio_child_tree.rs\n+++ b/src/transport/stdio_child_tree.rs\n@@ -310,1 +310,1 @@\n"
+               "-                let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::TERM);\n"
+               "+        let sent = self.wrapper.start_kill();\n"
+               "diff --git a/src/backend/stop_deadline_early_tests.rs b/src/backend/stop_deadline_early_tests.rs\n"
+               "--- a/src/backend/stop_deadline_early_tests.rs\n+++ b/src/backend/stop_deadline_early_tests.rs\n"
+               "@@ -88,1 +88,0 @@\n-        \"the tree ended without the SIGTERM its graceful plan sends first\"\n")
+    row("#4951's culprit lines, unlabelled, fail and name os-sensitive",
+        ("--add-label os-sensitive" in (vproc(scan_proc(culprit), labels=["no-changelog"], pr=4951) or ""),
+         sorted({p for p, _, _ in scan_proc(culprit)})),
+        (True, ["src/backend/stop_deadline_early_tests.rs", "src/transport/stdio_child_tree.rs"]))
+    repo, pr_head = make_pr({"f.rs": b"fn f(c: &mut Child) { c.start_kill().ok(); }\n"})
+    cli = run_cli(repo, pr_head)
+    row("the command exits 1 naming os-sensitive on an unlabelled OS-process hit, 0 when labelled",
+        (cli.returncode, "--add-label os-sensitive" in cli.stdout, run_cli(repo, pr_head, '["os-sensitive"]').returncode),
+        (1, True, 0))
+
     for e in errors:
         print(f"os-sensitive-diff: {e}")
     if not errors:
-        print("os-sensitive-diff: content triggers (secret store, keychain, file locks) in Rust and TOML only; "
-              "docs, names and cfg lines do not; the failure names the lines and the label command")
+        print("os-sensitive-diff: content triggers (secret store, keychain, file locks: os-int; signals, process groups, "
+              "reaping, process errno in Rust: os-sensitive); docs, names and cfg lines do not; the failure names the "
+              "lines and each missing label's command")
     return 1 if errors else 0
 
 
