@@ -167,6 +167,24 @@ class Invariant(Rows):
         # Nothing places or deletes a tag on a struct, so it may only sit on a module or a function (code review r1).
         self.assert_refused(with_files(src__a_DOT_rs="#[cfg(tp1)]\nstruct Probe;\n" + BASE["src/a.rs"]), "stray-cfg")
 
+    def test_a_tag_on_an_impl_method_is_refused(self):
+        # The walk records no item inside an impl or a fn body, so a tag there is never placed or checked (r2).
+        body = BASE["src/a.rs"] + "\nstruct S;\nimpl S {\n    #[cfg(tp1)]\n    fn m() {}\n}\n"
+        self.assert_refused(with_files(src__a_DOT_rs=body), "stray-cfg")
+
+    def test_a_part_cfg_inside_a_macro_body_is_refused(self):
+        # Attributes inside macro token trees are not parsed as attributes (code review r2).
+        mac = "macro_rules! m {\n    () => {\n        #[cfg(tp2)]\n        fn g() {}\n    };\n}\n"
+        self.assert_refused(with_files(src__a_DOT_rs=mac + BASE["src/a.rs"]), "stray-cfg")
+
+    def test_a_test_attribute_through_nested_cfg_attr_is_refused(self):
+        body = BASE["src/a.rs"] + "\n#[cfg_attr(test, cfg_attr(test, test))]\nfn sneaky() {}\n"
+        self.assert_refused(with_files(src__a_DOT_rs=body), "test-attr")
+
+    def test_a_path_rooted_test_attribute_through_cfg_attr_is_refused(self):
+        body = BASE["src/a.rs"] + "\n#[cfg_attr(test, ::tokio::test)]\nasync fn sneaky() {}\n"
+        self.assert_refused(with_files(src__a_DOT_rs=body), "test-attr")
+
     def test_a_test_attribute_applied_through_cfg_attr_is_refused(self):
         # Neither read counts a test function made by cfg_attr, so it would run in every part (code review r1).
         body = BASE["src/a.rs"] + "\n#[cfg_attr(test, test)]\nfn sneaky() {}\n"
@@ -252,6 +270,13 @@ class SharedAndContainers(Rows):
         helper = CONTAINER["src/a/x_support.rs"] + "crate::a::gen_tests!(made);\n"
         self.assert_refused(container(src__a_DOT_rs=GEN_MACRO + CONTAINER["src/a.rs"], src__a__x_support_DOT_rs=helper), "test-macro")
 
+    def test_a_wrapper_hidden_by_a_comment_or_a_namesake_is_still_a_generator(self):
+        # A comment between the name and `!`, and a same-named second definition in the file, hid the call (r2).
+        wrapper = "macro_rules! wrap {\n    () => {\n        gen_tests /* why */ !(wrapped);\n    };\n}\nmod other {\n    macro_rules! wrap {\n        () => {};\n    }\n}\n"
+        helper = CONTAINER["src/a/x_support.rs"] + "wrap!();\n"
+        files = container(src__a_DOT_rs=GEN_MACRO + wrapper + CONTAINER["src/a.rs"], src__a__x_support_DOT_rs=helper)
+        self.assert_refused(files, "test-macro")
+
     def test_a_wrapper_around_a_test_generating_macro_is_refused_in_a_container(self):
         # A macro that only calls a generator generates tests too (code review r1).
         wrapper = "macro_rules! wrap {\n    () => {\n        gen_tests!(wrapped);\n    };\n}\n"
@@ -286,6 +311,13 @@ class PackageAndLists(Rows):
     def test_a_cargo_toml_that_does_not_package_the_build_script_is_refused(self):
         # Without it the packaged crate has no build script and every tagged test is compiled out of package-tests.
         toml = BASE["Cargo.toml"].replace('    "scripts/dev/test-parts-build.rs",\n', "")
+        self.assert_refused(with_files(**{"Cargo.toml": toml}), "package")
+
+    def test_a_build_key_outside_the_package_table_is_refused(self):
+        # A line regex took a build key in any table and the path in an exclude list (code review r2).
+        toml = BASE["Cargo.toml"].replace('build = "scripts/dev/test-parts-build.rs"\n', "")
+        toml = toml.replace('include = [\n    "src/**",\n    "scripts/dev/test-parts-build.rs",\n]\n', 'include = ["src/**"]\nexclude = [\n    "scripts/dev/test-parts-build.rs",\n]\n')
+        toml += '\n[lib]\nbuild = "scripts/dev/test-parts-build.rs"\n'
         self.assert_refused(with_files(**{"Cargo.toml": toml}), "package")
 
     def test_a_duplicate_table_row_is_refused(self):
@@ -467,6 +499,11 @@ class Codemod(Rows):
             with self.assertRaises(self.tool.Refusal):
                 self.tool.apply(root)
             self.assertEqual(read_tree(root), files)
+
+    def test_apply_refuses_a_test_cfg_that_follows_other_code_on_its_line(self):
+        # `#[cfg(test)] mod support { #[cfg(test)] mod tests {` : the inner module's tag would land above support (r2).
+        body = BASE["src/a.rs"] + "\n#[cfg(test)] mod support { #[cfg(test)] mod inner_tests { #[test] fn t3() {} } }\n"
+        self.assert_apply_refuses_and_leaves_the_tree(untagged(with_files(src__a_DOT_rs=body)))
 
     def test_a_refusal_in_one_file_leaves_every_file_untouched(self):
         broken = untagged(BASE)

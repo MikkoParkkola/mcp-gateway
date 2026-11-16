@@ -15,6 +15,7 @@ import functools
 import importlib.util
 import re
 import sys
+import tomllib
 from pathlib import Path
 from typing import NamedTuple
 
@@ -55,6 +56,17 @@ def _attr_problems(rel: str, src: bytes, root) -> list[tuple[int, str, str]]:
     stack = [root]
     while stack:
         node = stack.pop()
+        if node.type in ("macro_definition", "macro_invocation"):
+            # Attributes inside macro token trees are not parsed as attributes: read them as text (code review r2).
+            code = g.blank(_text(src, node))[0]
+            line = _line(src, node.start_byte)
+            for attr in _attrs_in_text(code):
+                flat = " ".join(attr.split())
+                if re.match(r"#\s*!?\s*\[\s*cfg(?:_attr)?\s*\(", flat) and PART_NAME.search(flat):
+                    out.append((line, "stray-cfg", "a part cfg inside a macro body is not supported"))
+                if re.match(r"#\s*\[\s*cfg_attr\s*\(", flat) and _applies_test(flat):
+                    out.append((line, "test-attr", "a test attribute applied through cfg_attr is not supported"))
+            continue
         if node.type not in ("attribute_item", "inner_attribute_item"):
             stack.extend(node.children)
             continue
@@ -63,17 +75,48 @@ def _attr_problems(rel: str, src: bytes, root) -> list[tuple[int, str, str]]:
             continue
         code = " ".join(g.blank(_text(src, node))[0].split())
         line = _line(src, node.start_byte)
-        if path == "cfg_attr" and any(re.match(r"(?:tokio\s*::\s*)?test\b", a) for a in _cfg_attr_applied(code)):
+        if path == "cfg_attr" and _applies_test(code):
             out.append((line, "test-attr", "a test attribute applied through cfg_attr is not supported; write #[test]"))
         if not PART_NAME.search(code):
             continue
         if rel == "src/lib.rs" and node.type == "inner_attribute_item" and code == CRATE_ALLOW:
             continue
         owner = g._owner(node) if node.type == "attribute_item" else None
-        if TAG_LINE.match(code) and owner is not None and owner.type in ("mod_item", "function_item"):
+        if TAG_LINE.match(code) and _walked_item(owner):
             continue
         out.append((line, "stray-cfg", "a part cfg may only be an exact #[cfg(tpK)] line on a module or function"))
     return out
+
+
+def _walked_item(owner) -> bool:
+    """Whether `owner` is a module or function the walk records: at a file's top level or directly in a module's
+    body, never in an impl, a trait or a function body (a tag there would never be placed or checked)."""
+    if owner is None or owner.type not in ("mod_item", "function_item"):
+        return False
+    up = owner.parent
+    return up is not None and (up.type == "source_file" or (up.type == "declaration_list" and up.parent is not None and up.parent.type == "mod_item"))
+
+
+def _applies_test(code: str) -> bool:
+    """Whether a `#[cfg_attr(..)]` applies a test attribute, a leading `::` or a nested cfg_attr included."""
+    for applied in _cfg_attr_applied(code):
+        a = applied.lstrip(":").strip()
+        if re.match(r"(?:tokio\s*::\s*)?test\b", a):
+            return True
+        if re.match(r"cfg_attr\s*\(", a) and _applies_test(f"#[{a}]"):
+            return True
+    return False
+
+
+def _attrs_in_text(code: str):
+    """Each `#[..]` / `#![..]` in `code` (comments and literals already blanked), by bracket matching."""
+    for m in re.finditer(r"#\s*!?\s*\[", code):
+        depth = 0
+        for i in range(m.end() - 1, len(code)):
+            depth += {"[": 1, "]": -1}.get(code[i], 0)
+            if depth == 0:
+                yield code[m.start() : i + 1]
+                break
 FIX = "scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py apply"
 
 
@@ -146,6 +189,7 @@ class Item(NamedTuple):
     first_attr_line: int  # the first attribute's line, or `line`
     tags: tuple[tuple[int, int, bool], ...]  # (part, line, shares its line with other code)
     test_cfg_line: int | None  # the line of a test-only `#[cfg(..)]`
+    test_cfg_alone: bool  # nothing but whitespace precedes that attribute on its line
     is_test_fn: bool
     odd_test_attrs: tuple[str, ...]  # test-like attributes the walk does not support
     out_of_line: bool  # `mod name;`
@@ -219,11 +263,14 @@ def walk_file(rel: str, text: str) -> FileWalk:
             if node.type == "expression_statement" and node.named_child_count == 1:
                 node = node.named_children[0]  # an item-level `gen!(..);` parses as a statement around the call
             if node.type == "macro_definition":
-                body = _text(src, node)
+                # Blanked, so a comment between a name and `!` hides nothing; unioned, so a same-named definition
+                # elsewhere in the file adds to the edges instead of replacing them (code review r2).
+                body = g.blank(_text(src, node))[0]
                 name = node.child_by_field_name("name")
                 if name is not None:
                     own = _text(src, name).removeprefix("r#")
-                    macro_calls[own] = {c.removeprefix("r#") for c in re.findall(r"(?:r#)?(\w+)\s*!", body)} - {"macro_rules"}
+                    called = {c.removeprefix("r#") for c in re.findall(r"(?:r#)?(\w+)\s*!", body)} - {"macro_rules"}
+                    macro_calls.setdefault(own, set()).update(called)
                     if re.search(r"#\s*\[\s*(?:tokio\s*::\s*)?test\b", body):
                         generators.add(own)
                 continue
@@ -236,7 +283,7 @@ def walk_file(rel: str, text: str) -> FileWalk:
             if node.type not in ("mod_item", "function_item"):
                 continue
             attrs = _attributes(node)
-            tags, test_cfg, odd, is_test = [], None, [], False
+            tags, test_cfg, odd, is_test, cfg_alone = [], None, [], False, False
             for a in attrs:
                 apath, args = _attr_path_and_args(src, a)
                 inner = args.strip()[1:-1].strip() if args.strip().startswith("(") else ""
@@ -244,6 +291,7 @@ def walk_file(rel: str, text: str) -> FileWalk:
                     tags.append((int(TAG.match(inner).group(1)), _line(src, a.start_byte), _shares_line(src, a)))
                 elif apath == "cfg" and g.cfg_is_test(inner):
                     test_cfg = _line(src, a.start_byte)
+                    cfg_alone = not src[src.rfind(b"\n", 0, a.start_byte) + 1 : a.start_byte].strip()
                 elif apath in TEST_ATTRS:
                     is_test = True
                 elif "test" in apath.rsplit("::", 1)[-1]:
@@ -263,6 +311,7 @@ def walk_file(rel: str, text: str) -> FileWalk:
                     first_attr_line=_line(src, first.start_byte),
                     tags=tuple(tags),
                     test_cfg_line=test_cfg,
+                    test_cfg_alone=cfg_alone,
                     is_test_fn=kind == "fn" and is_test,
                     odd_test_attrs=tuple(odd) if kind == "fn" else (),
                     out_of_line=kind == "mod" and body is None,
@@ -526,15 +575,19 @@ def analyse(root: Path) -> Analysis:
 
 
 def _check_package(root: Path, add) -> None:
-    """Cargo builds and packages this build script: Cargo.toml's `build` names it and its `include` list holds it
-    (without the include, the packaged crate has no build script and every tagged test is compiled out of
-    package-tests)."""
-    toml = (root / "Cargo.toml").read_text(encoding="utf-8")
+    """Cargo builds and packages this build script: Cargo.toml's `[package] build` names it and `[package] include`
+    holds it (without the include, the packaged crate has no build script and every tagged test is compiled out of
+    package-tests). Parsed as TOML, so a key in another table or the path in `exclude` does not count."""
     want = BUILD_RS.as_posix()
-    if not re.search(rf'^build\s*=\s*"{re.escape(want)}"\s*$', toml, re.M):
+    try:
+        package = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8")).get("package", {})
+    except tomllib.TOMLDecodeError as err:
+        add("package", "Cargo.toml", 1, f"Cargo.toml does not parse: {err}")
+        return
+    if package.get("build") != want:
         add("package", "Cargo.toml", 1, f'[package] needs build = "{want}"')
-    if not re.search(rf'^\s*"{re.escape(want)}",?\s*$', toml, re.M):
-        add("package", "Cargo.toml", 1, f'the include list needs "{want}"')
+    if want not in package.get("include", []):
+        add("package", "Cargo.toml", 1, f'[package] include needs "{want}"')
 
 
 def _check_table(root: Path, rows, crate: Crate, desired: dict[int, int], add) -> None:
@@ -604,7 +657,7 @@ def apply(root: Path) -> list[str]:
         if want is not None and not have:
             if n.item.kind == "mod" and n.item.test_cfg_line:
                 at = n.item.test_cfg_line
-                alone = lines[at - 1].lstrip().startswith("#[")
+                alone = n.item.test_cfg_alone
             else:
                 at = n.item.first_attr_line
                 alone = not n.item.indent.strip()
