@@ -56,7 +56,7 @@ pub(super) fn decide_missing(journal: &mut JournalSession) -> Result<(), DrainEr
     Ok(())
 }
 
-pub(super) fn compute_decision(
+fn compute_decision(
     journal: &JournalSession,
     token: &IntentId,
 ) -> Result<JournalDecision, DrainError> {
@@ -101,11 +101,7 @@ pub(super) fn compute_decision(
     }
 }
 
-pub(super) fn decision(
-    result: ResultClass,
-    reason: Reason,
-    settled_by: Option<IntentId>,
-) -> JournalDecision {
+fn decision(result: ResultClass, reason: Reason, settled_by: Option<IntentId>) -> JournalDecision {
     JournalDecision {
         result,
         reason,

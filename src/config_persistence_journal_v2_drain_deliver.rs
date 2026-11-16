@@ -3,11 +3,14 @@
 //! Delivery to the log: every intent first, then the owed terminals frozen, then every record,
 //! each persisted before the next is sent; a record the log refuses is parked.
 
+#[cfg(test)]
 use std::path::Path;
 
 use super::super::{IntentId, JournalSession, ParkReason};
 use super::decide::{freeze_records, owner_mut};
-use super::{Delivery, DrainError, SettleSink, fault};
+#[cfg(test)]
+use super::fault;
+use super::{Delivery, DrainError, SettleSink};
 use crate::security::transparency_log::identity::LogId;
 use crate::security::transparency_log::settle::{Role, Unsettled};
 
@@ -46,7 +49,7 @@ pub(super) async fn deliver_all(
     Ok(())
 }
 
-pub(super) async fn send_record(
+async fn send_record(
     journal: &mut JournalSession,
     sink: &dyn SettleSink,
     binding: &LogId,
@@ -107,7 +110,7 @@ pub(super) async fn send_record(
     Ok(())
 }
 
-pub(super) fn park_record(
+fn park_record(
     journal: &mut JournalSession,
     token: &IntentId,
     index: Option<usize>,
@@ -124,7 +127,7 @@ pub(super) fn park_record(
 }
 
 #[cfg(test)]
-pub(super) fn appended_boundary(target: &Path, role: Role) -> Result<(), DrainError> {
+fn appended_boundary(target: &Path, role: Role) -> Result<(), DrainError> {
     let at = match role {
         Role::Intent(_) | Role::RecoveryIntent => fault::At::IntentAppended,
         Role::Outcome | Role::Abandoned => fault::At::OutcomeAppended,
