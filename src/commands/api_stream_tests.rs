@@ -582,13 +582,15 @@ async fn a_streamed_request_has_no_total_limit() {
     .await;
     let request = args(STREAM, Some(2), false);
     let mut out = Vec::new();
+    // Bound first: the streamed future is joined later, past this statement.
+    let (tls, deadlines) = (LinkTls::default(), Deadlines::default());
     let streamed = run_streamed_with(
         &request,
         &gateway.base,
-        &LinkTls::default(),
+        &tls,
         credential,
         &mut out,
-        &Deadlines::default(),
+        &deadlines,
         send,
     );
     let release_after_a_timed_out_buffered_call = async {
@@ -648,13 +650,15 @@ async fn a_download_prints_before_the_body_ends() {
     reply.body = body.boxed();
     let request = args(EXPORT, None, false);
     let mut sink = Shared(Arc::clone(&printed));
+    // Bound first: the streamed future is joined later, past this statement.
+    let (tls, deadlines) = (LinkTls::default(), short());
     let streamed = run_streamed_with(
         &request,
         BASE,
-        &LinkTls::default(),
+        &tls,
         credential,
         &mut sink,
-        &short(),
+        &deadlines,
         |_| async { Ok(reply) },
     );
     let feed = async {
