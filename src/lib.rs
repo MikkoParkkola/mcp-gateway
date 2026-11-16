@@ -95,6 +95,10 @@ pub(crate) mod home_dir;
 pub mod honest_task_tokens;
 #[doc(hidden)]
 pub mod idempotency;
+// Compile-time evidence for the identity scanner's cases: doctests only. The
+// rows that read it are gateway::meta_mcp::boundary_pins::identity_evidence.
+#[cfg(doctest)]
+mod identity_evidence;
 #[doc(hidden)]
 pub mod identity_grants;
 #[doc(hidden)]
