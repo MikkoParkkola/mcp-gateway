@@ -13,6 +13,8 @@ mod audit_secret;
 mod cli_parse;
 #[path = "main_dangling_tests.rs"]
 mod dangling;
+#[path = "main_hidden_flags_tests.rs"]
+mod hidden_flags;
 
 fn make_discovered_server(name: &str) -> DiscoveredServer {
     DiscoveredServer::new(
