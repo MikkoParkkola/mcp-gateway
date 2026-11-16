@@ -184,9 +184,7 @@ fn random_secret_is_never_imported_under_another_name() {
 const ID_CALLERS: &[(&str, usize)] = &[
     ("src/a2a/client.rs", 1),
     ("src/a2a/types.rs", 1),
-    ("src/attestation/launcher.rs", 1),
-    ("src/attestation/signer.rs", 2),
-    ("src/attestation/wiring.rs", 1),
+    ("src/attestation/signer.rs", 1),
     ("src/backend/ops.rs", 2),
     ("src/capability/executor/cli_run.rs", 1),
     ("src/capability/executor/jsonrpc.rs", 1),
