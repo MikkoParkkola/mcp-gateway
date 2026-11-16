@@ -275,7 +275,7 @@ fn checked(masked: &str, input: &str, token: &str) -> Option<Vec<u8>> {
 /// One dispatched event-stream event.
 #[derive(Debug, PartialEq, Eq)]
 struct Event {
-    event: String,
+    name: String,
     id: Option<String>,
     data: String,
 }
@@ -333,7 +333,7 @@ impl Events {
             }
             data.pop();
             return Some(Event {
-                event: if event.is_empty() {
+                name: if event.is_empty() {
                     "message".to_owned()
                 } else {
                     event
@@ -367,7 +367,7 @@ impl Events {
 fn rendered(event: Event, token: &str, json_output: bool) -> Option<Vec<u8>> {
     let secrets = [token.to_owned()];
     if !json_output {
-        let mut text = format!("event: {}\n", event.event);
+        let mut text = format!("event: {}\n", event.name);
         if let Some(id) = &event.id {
             text.push_str("id: ");
             text.push_str(id);
@@ -382,7 +382,7 @@ fn rendered(event: Event, token: &str, json_output: bool) -> Option<Vec<u8>> {
         return checked(&redact::text(&text, &secrets), &text, token);
     }
     let data = serde_json::from_str::<Value>(&event.data).unwrap_or(Value::String(event.data));
-    let mut object = json!({"event": event.event, "id": event.id, "data": data});
+    let mut object = json!({"event": event.name, "id": event.id, "data": data});
     let entries = super::object_entry_count(&object);
     redact::json(&mut object, &secrets);
     if super::object_entry_count(&object) < entries {

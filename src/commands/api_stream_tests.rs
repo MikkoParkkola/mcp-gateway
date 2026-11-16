@@ -205,8 +205,8 @@ fn events_follow_the_event_stream_rules() {
     ] {
         all.extend(parser.push(chunk.as_bytes()).expect("under the limit"));
     }
-    let event = |event: &str, id: Option<&str>, data: &str| Event {
-        event: event.to_owned(),
+    let event = |name: &str, id: Option<&str>, data: &str| Event {
+        name: name.to_owned(),
         id: id.map(str::to_owned),
         data: data.to_owned(),
     };
