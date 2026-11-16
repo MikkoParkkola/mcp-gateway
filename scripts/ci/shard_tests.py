@@ -443,6 +443,10 @@ def self_test() -> int:
     assert all(n <= LEFTOVER_CEILING.get((p, h), 0) for p, h, n, _ in KNOWN_LEFTOVERS), \
         "KNOWN_LEFTOVERS may only shrink"
     hwm = ["audit.jsonl.hwm"]
+    # KNOWN_LEFTOVERS is empty, so the matcher's rules are held with a synthetic source: without
+    # it every folder fails and the stray and contents cases below would pass whatever the rules.
+    synthetic = [(r"\.tmp[A-Za-z0-9]{6}", r"audit\.jsonl\.hwm", 3, "a synthetic source")]
+    assert unexpected({".tmpAb12Cd": hwm}, synthetic) == [], "the synthetic source allows its own folder"
     home = [".mcp-gateway/protocol-revision-telemetry/window.json", "tasks/stdio/store.lease"]
     control = [".gateway.yaml.lock", ".mcp-gateway/transparency/transparency.jsonl",
                "gateway-control-plane/audit.jsonl"]
@@ -475,13 +479,13 @@ def self_test() -> int:
     # No source is known any more, so not even one audit high-water-mark folder
     # passes (the per-source count itself is held by "the count bounds a source").
     assert unexpected({".tmpAb12C0": hwm}) == [".tmpAb12C0"]
-    # A plain temp folder is tolerated only for what a known source writes: a
-    # stray file, a known file beside a stray one, an empty folder and a plain
-    # file all fail, though each has a tolerated name.
+    # A plain temp folder is tolerated only for what its source writes: a stray
+    # file, a source's file beside a stray one and an empty folder all fail under
+    # the synthetic source, though each folder has a name it matches.
     for files in (["other.db"], [*hwm, "other.db"], [*home, "keys/secret.pem"],
                   [*control, "gateway-control-plane/other.jsonl"],
                   [*full, "serve.log.1"], [*full, ".mcp-gateway/tasks/task-x.json"], []):
-        assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
+        assert unexpected({".tmpAb12Cd": files}, synthetic) == [".tmpAb12Cd"], files
     # The same check end to end: a run that leaves a generically named temp
     # folder holding a stray file turns red on it.
     fake_dir = (*fake[:2], fake[2].replace(
@@ -542,6 +546,8 @@ def self_test() -> int:
         assert found[".tmpKnown1"] == hwm, found
         assert found[".tmpLink01"] == ["audit.jsonl.hwm", "elsewhere"], found
         assert unexpected(found) == [".tmpKnown1", ".tmpLink01", ".tmpStray1"], found
+        # Under the synthetic source the link and the stray still fail on their contents alone.
+        assert unexpected(found, synthetic) == [".tmpLink01", ".tmpStray1"], found
     per_binary_rows()
     prebuilt_rows()
     print("shard_tests self-test: ok")
