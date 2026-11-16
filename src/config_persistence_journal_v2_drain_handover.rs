@@ -16,7 +16,6 @@ use super::fault::{self, At};
 use crate::config_persistence::journal::v2::abandoned_path;
 use crate::config_persistence::sync_dir_of;
 use crate::security::transparency_log::rotation::file_id;
-use crate::security::transparency_log::settle::Role;
 
 /// Why a handover did not complete. The donor is byte-identical after `Foreign`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,27 +109,10 @@ fn private_to_us(_meta: &std::fs::Metadata) -> bool {
 /// its widest, every owed terminal frozen by the drain's own builder, every record undelivered
 /// and parked with the longest reason. `usize::MAX` when that state cannot be built or encoded.
 pub(super) fn maximal_size(donor: &JournalV2) -> usize {
-    let mut widest = donor.clone();
-    for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
-        token.intent_counter = Some(u64::MAX);
-    }
-    // Built against the widened state, so a `settled_by` counter is the widest too.
-    let snapshot = widest.clone();
-    for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
-        // A terminal already frozen is never built again, so its intent is never parsed here.
-        if token
-            .records
-            .iter()
-            .any(|record| matches!(record.role, Role::Outcome | Role::Abandoned))
-        {
-            continue;
-        }
-        match super::terminal_record(&snapshot, token) {
-            Ok(Some(record)) => token.records.push(record),
-            Ok(None) => {}
-            Err(_) => return usize::MAX,
-        }
-    }
+    // The file drain's own judgement: a donor it could not finish has no bound.
+    let Some(mut widest) = super::file::widest_finished(donor) else {
+        return usize::MAX;
+    };
     let longest = [
         ParkReason::InvalidPayload,
         ParkReason::ContentConflict,
