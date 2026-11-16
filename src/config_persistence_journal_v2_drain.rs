@@ -64,6 +64,13 @@ pub(crate) struct DrainFailure {
     error: DrainError,
 }
 
+impl DrainFailure {
+    /// Why the drain stopped.
+    pub(crate) fn error(&self) -> DrainError {
+        self.error
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DrainError {
     Journal,

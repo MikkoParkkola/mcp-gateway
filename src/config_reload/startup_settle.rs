@@ -3,19 +3,24 @@
 //! The config-write startup gate: before the gateway serves, settle a dead writer's pending
 //! config-write artifacts (the v2 journal, the abandoned file, the retired manifest) under the
 //! config lock, or prove without the lock that none can exist.
-//!
-//! STUB (red phase): today's shape, so the rows fail for the reasons they name. The lock wait
-//! blocks the caller's thread, `Busy` is not typed, the probe looks at the journal only, and
-//! `finish_start` settles nothing.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::config_persistence::CLI_LOCK_WAIT;
-use crate::config_persistence::journal::v2::drain::DrainSession;
-use crate::config_persistence::lock::{self, NotLocked};
+use crate::config_persistence::journal::journal_path;
+use crate::config_persistence::journal::v2::drain::file::{Handover, drain_abandoned, handover_of};
+use crate::config_persistence::journal::v2::drain::{DrainError, DrainSession, JournalDrain};
+use crate::config_persistence::journal::v2::{
+    JournalV2, OpenJournal, abandoned_path, retired_path,
+};
+use crate::config_persistence::lock::{
+    Locked, NoResult, NotLocked, absent, dispatch_journal, lock_config_deferred, lock_path,
+    no_writer_possible, off_runtime,
+};
+use crate::config_persistence::{CLI_LOCK_WAIT, recover_recorded};
+use crate::identity_grants::journal::resolved;
 use crate::security::transparency_log::TransparencyLogger;
 
 /// A startup that may go on to load the config: the lock held, or proven unneeded. Not `Clone`.
@@ -78,6 +83,13 @@ impl StartupSession {
     }
 }
 
+// The worker drops its session before returning this, so the lock is released there.
+struct Refusal {
+    class: StartError,
+    path: PathBuf,
+    cause: String,
+}
+
 /// Take the config lock (waiting up to [`CLI_LOCK_WAIT`]) and repair what a crashed write left,
 /// or prove that no writer and no artifact can exist here.
 pub(crate) async fn prepare_start(config: &Path) -> Result<StartupSession, StartError> {
@@ -90,22 +102,12 @@ pub(crate) async fn prepare_start_within(
     wait: Duration,
 ) -> Result<StartupSession, StartError> {
     let configured = config.to_path_buf();
-    match lock::lock_config_blocking_deferred(config, Instant::now() + wait, |_| {}) {
-        Ok(locked) => Ok(StartupSession {
-            state: StartupState::Locked(DrainSession::new(locked, configured, None)),
-        }),
-        Err(NotLocked::Busy) => Err(StartError::ArtifactCheckFailed),
+    match lock_config_deferred(config, Instant::now() + wait).await {
+        Err(NotLocked::Busy) => Err(StartError::Busy),
         Err(NotLocked::Failed(_) | NotLocked::Refused(_)) => {
-            match lock::no_writer_possible(config) {
-                Some(_) if !lock::journal_pending(config) => Ok(StartupSession {
-                    state: StartupState::ArtifactFreeUnlocked {
-                        target: crate::identity_grants::journal::resolved(config),
-                        configured,
-                    },
-                }),
-                _ => Err(StartError::ArtifactCheckFailed),
-            }
+            from_worker(move || unlocked(configured)).await
         }
+        Ok(locked) => from_worker(move || open_locked(locked, configured)).await,
     }
 }
 
@@ -115,24 +117,192 @@ pub(crate) async fn finish_start(
     session: StartupSession,
     log: Option<Arc<TransparencyLogger>>,
 ) -> Result<(), StartError> {
-    drop((session, log));
-    Ok(())
+    match session.state {
+        StartupState::ArtifactFreeUnlocked { configured, target } => {
+            from_worker(move || recheck(&configured, &target)).await
+        }
+        StartupState::Locked(session) => {
+            // Captured on the caller: the worker is not inside a runtime until `block_on`.
+            let handle = tokio::runtime::Handle::current();
+            from_worker(move || handle.block_on(drain_locked(session, log))).await
+        }
+    }
 }
 
 /// The journal drain's error, as a start refusal.
-pub(crate) fn journal_stage(
-    error: crate::config_persistence::journal::v2::drain::DrainError,
-) -> Result<(), StartError> {
-    drop(error);
-    Ok(())
+pub(crate) fn journal_stage(error: DrainError) -> Result<(), StartError> {
+    Err(match error {
+        DrainError::NoLogger
+        | DrainError::OtherLog
+        | DrainError::Journal
+        | DrainError::Refused
+        | DrainError::Unconfirmed
+        | DrainError::Finish
+        | DrainError::FileRefused => StartError::JournalPending,
+        DrainError::RepairPending => StartError::RepairPending,
+        DrainError::Parked => StartError::InvalidAuditPayload,
+    })
 }
 
 /// The abandoned-file drain's error, as a start refusal (`NoLogger`: logging off, P6, accepts).
-pub(crate) fn file_stage(
-    error: crate::config_persistence::journal::v2::drain::DrainError,
-) -> Result<(), StartError> {
-    drop(error);
-    Ok(())
+pub(crate) fn file_stage(error: DrainError) -> Result<(), StartError> {
+    match error {
+        DrainError::NoLogger => Ok(()),
+        DrainError::Parked => Err(StartError::InvalidAuditPayload),
+        DrainError::OtherLog
+        | DrainError::FileRefused
+        | DrainError::Journal
+        | DrainError::Refused
+        | DrainError::Unconfirmed
+        | DrainError::Finish
+        | DrainError::RepairPending => Err(StartError::AbandonedPending),
+    }
+}
+
+// Stalled retries. Lost proves nothing about the artifacts. The log is written on the caller.
+async fn from_worker<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, Refusal> + Send + 'static,
+) -> Result<T, StartError> {
+    match off_runtime(work).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(Refusal { class, path, cause })) => {
+            tracing::error!(
+                path = %path.display(),
+                cause = %cause,
+                "config-write startup refused: {class}"
+            );
+            Err(class)
+        }
+        Err(NoResult::Stalled) => Err(StartError::Busy),
+        Err(NoResult::Lost) => Err(StartError::ArtifactCheckFailed),
+    }
+}
+
+fn refuse(class: StartError, path: PathBuf, cause: impl Into<String>) -> Refusal {
+    Refusal {
+        class,
+        path,
+        cause: cause.into(),
+    }
+}
+
+// Creating the lock sidecar is this probe's only write, and that creation is the refusal.
+fn probe(configured: &Path) -> Result<PathBuf, Refusal> {
+    let target = resolved(configured);
+    if no_writer_possible(&target).is_none() {
+        let path = lock_path(&target);
+        return Err(refuse(
+            StartError::ArtifactCheckFailed,
+            path,
+            "no_writer_possible",
+        ));
+    }
+    for (path, cause) in [
+        (journal_path(&target), "journal"),
+        (abandoned_path(&target), "abandoned"),
+        (retired_path(&target), "retired"),
+    ] {
+        if !absent(&path) {
+            return Err(refuse(StartError::ArtifactCheckFailed, path, cause));
+        }
+    }
+    Ok(target)
+}
+
+fn unlocked(configured: PathBuf) -> Result<StartupSession, Refusal> {
+    let target = probe(&configured)?;
+    Ok(StartupSession {
+        state: StartupState::ArtifactFreeUnlocked { configured, target },
+    })
+}
+
+fn recheck(configured: &Path, target: &Path) -> Result<(), Refusal> {
+    let found = probe(configured)?;
+    if found.as_path() == target {
+        Ok(())
+    } else {
+        Err(refuse(StartError::ArtifactCheckFailed, found, "resolved"))
+    }
+}
+
+fn held(locked: Locked, configured: PathBuf, state: Option<JournalV2>) -> StartupSession {
+    StartupSession {
+        state: StartupState::Locked(DrainSession::new(locked, configured, state)),
+    }
+}
+
+fn open_locked(locked: Locked, configured: PathBuf) -> Result<StartupSession, Refusal> {
+    let path = journal_path(&locked.target);
+    match dispatch_journal(&locked) {
+        Ok(None) => Ok(held(locked, configured, None)),
+        Ok(Some(OpenJournal::Legacy(legacy))) => {
+            drop(legacy);
+            recover_recorded(&locked, &super::startup_recovery_intent)
+                .map(|()| held(locked, configured, None))
+                .map_err(|why| refuse(StartError::JournalPending, path, why))
+        }
+        Ok(Some(OpenJournal::Current(state))) => match handover_of(&state) {
+            // Repair refuses a donor. The file drain's resume finishes a full handover.
+            Handover::All => Ok(held(locked, configured, Some(*state))),
+            Handover::Partial => Err(refuse(StartError::JournalPending, path, "Partial")),
+            Handover::NotHandedOver => {
+                let mut session = DrainSession::new(locked, configured, Some(*state));
+                match JournalDrain::repair(&mut session, true) {
+                    Ok(_) => Ok(StartupSession {
+                        state: StartupState::Locked(session),
+                    }),
+                    Err(other) => {
+                        let class = if other == DrainError::RepairPending {
+                            StartError::RepairPending
+                        } else {
+                            StartError::JournalPending
+                        };
+                        drop(session);
+                        Err(refuse(class, path, format!("{other:?}")))
+                    }
+                }
+            }
+        },
+        Err(error) => Err(refuse(
+            StartError::JournalPending,
+            path,
+            format!("{error:?}"),
+        )),
+    }
+}
+
+// The session drops here, on the worker, including when the caller was cancelled.
+async fn drain_locked(
+    mut session: DrainSession,
+    log: Option<Arc<TransparencyLogger>>,
+) -> Result<(), Refusal> {
+    let journal = journal_path(session.target());
+    let abandoned = abandoned_path(session.target());
+    if session
+        .journal()
+        .is_some_and(|state| handover_of(state) != Handover::All)
+    {
+        session = match JournalDrain::run(session, log.clone()).await {
+            Ok(session) => session,
+            Err(failure) => {
+                let error = failure.error();
+                let cause = format!("{error:?}");
+                drop(failure);
+                // `journal_stage` refuses every variant. Ok would skip the file, so it refuses too.
+                let class = match journal_stage(error) {
+                    Err(class) => class,
+                    Ok(()) => StartError::JournalPending,
+                };
+                return Err(refuse(class, journal, cause));
+            }
+        };
+    }
+    let outcome = drain_abandoned(&mut session, log).await.or_else(|error| {
+        let cause = format!("{error:?}");
+        file_stage(error).map_err(|class| refuse(class, abandoned, cause))
+    });
+    drop(session);
+    outcome
 }
 
 #[cfg(test)]

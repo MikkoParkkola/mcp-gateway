@@ -13,7 +13,9 @@ use super::super::fixtures::{self as journal_fixtures, NEW, OLD};
 use super::super::{Fact, IntentId, JournalV2, ParkReason, Phase};
 use super::DrainSession;
 use super::fault::{self, At, Fault, Pause};
-use super::fixtures::{Live, accepted, attempt, decided, replace_bytes, staged, state};
+use super::fixtures::{
+    Live, SAVE, accepted, attempt, decided, payload, replace_bytes, staged, state,
+};
 use super::handover::{self, hand_over};
 use crate::config_persistence::commit::FileRevision;
 use crate::config_persistence::lock::{self, NotLocked};
@@ -210,6 +212,27 @@ fn owe(rec: &[Value], token: &str, event: &str, pair: Option<(&str, &str)>, n: u
     );
 }
 
+/// The writer's intent arrived at least once, and every copy carries its frozen bytes. A fixture
+/// whose intent has a counter seeds it as appended before a crash with its flag unsynced, and the
+/// drain resends such an intent (at least once): the drain's own `late_journal_retry` row allows
+/// these equal repeats and counts terminals, not intent copies.
+fn intent_arrived(rec: &[Value], token: &str, row: &str) {
+    let copies: Vec<&Value> = rec
+        .iter()
+        .filter(|record| record["token"] == token && record["event"] == "config_save_intent")
+        .collect();
+    assert!(
+        !copies.is_empty(),
+        "{row}: {token} intent arrived; arrived {}",
+        arrived(rec)
+    );
+    for copy in copies {
+        for (key, value) in payload(SAVE) {
+            assert_eq!(copy[&key], value, "{row}: {token} intent copy keeps {key}");
+        }
+    }
+}
+
 /// Writer save, writer rolled-back outcome, one recovery intent, and that attempt's outcome.
 fn expect_staged_owed(records: &[Value], row: &str) {
     owe(records, "writer-1", "config_save_intent", None, 1, row);
@@ -386,7 +409,7 @@ fn prepare_leaves_handover_to_the_file_drain() {
     held(&live.path, ROW);
     finished(session, Some(Arc::clone(&live.log)), ROW);
     let records = live.records();
-    owe(&records, "writer-1", "config_save_intent", None, 1, ROW);
+    intent_arrived(&records, "writer-1", ROW);
     owe(
         &records,
         "writer-1",
@@ -549,16 +572,20 @@ async fn finish_cancelled_releases_the_lock() {
         "{ROW}: still parked after the finish task was aborted"
     );
     pause.release();
-    let until = Instant::now() + Duration::from_secs(30);
-    match lock::lock_config_blocking_deferred(&live.path, until, |_| {}) {
-        Ok(guard) => drop(guard),
-        Err(error) => panic!("{ROW}: 30s acquire after cancel got {error:?}"),
+    // Off this thread: the aborted worker may still need this runtime to drive its drains.
+    let path = live.path.clone();
+    let acquired = tokio::task::spawn_blocking(move || {
+        lock::lock_config_blocking_deferred(&path, Instant::now() + Duration::from_secs(30), |_| {})
+            .map(drop)
+    })
+    .await
+    .expect(ROW);
+    if let Err(error) = acquired {
+        panic!("{ROW}: 30s acquire after cancel got {error:?}");
     }
-    finished(
-        must_prepare(&live.path, ROW).await,
-        Some(Arc::clone(&live.log)),
-        ROW,
-    );
+    let again = must_prepare(&live.path, ROW).await;
+    let finished = finish_start(again, Some(Arc::clone(&live.log))).await;
+    assert_eq!(finished, Ok(()), "{ROW}: a fresh start finishes");
     expect_staged_owed(&live.records(), ROW);
     free(&live.path, ROW);
 }

@@ -38,7 +38,7 @@ fn policy_p1() -> Result<(), String> {
     finished(session, Some(Arc::clone(&live.log)), ROW);
     gone(&live.resolved, JOURNAL, ROW);
     let records = live.records();
-    owe(&records, "writer-1", "config_save_intent", None, 1, ROW);
+    intent_arrived(&records, "writer-1", ROW);
     owe(
         &records,
         "writer-1",
@@ -88,7 +88,7 @@ fn policy_p4() -> Result<(), String> {
     finished(session, Some(Arc::clone(&live.log)), ROW);
     gone(&live.resolved, ABANDONED, ROW);
     let records = live.records();
-    owe(&records, "writer-1", "config_save_intent", None, 1, ROW);
+    intent_arrived(&records, "writer-1", ROW);
     owe(
         &records,
         "writer-1",
