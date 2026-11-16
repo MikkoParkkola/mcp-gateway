@@ -131,7 +131,7 @@ pub(crate) use server::listener_mint_for_test;
 pub(crate) use meta_mcp::stored_binding::Refusal as StoredBindingRefusal;
 /// The router fixture, for history rows outside `gateway` (`router` is private).
 /// Exists for the configuration-history rows (`src/config_reload/history_*_tests.rs`).
-#[cfg(test)]
+#[cfg(all(test, feature = "webui"))]
 pub(crate) use router::tests::audience_state;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};
 /// The test-only allocation meter, for allocation rows outside `gateway`
