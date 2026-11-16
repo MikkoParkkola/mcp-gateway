@@ -75,6 +75,21 @@ pub(crate) fn test_only(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+/// Whether `attr` is a lib test split part tag, `#[cfg(tpK)]`. It only picks
+/// the part that compiles the item; the unsplit build compiles every part.
+#[allow(
+    dead_code,
+    reason = "the binary's and integration tests' copies use only production_text"
+)]
+pub(crate) fn part_tag(attr: &syn::Attribute) -> bool {
+    attr.path().is_ident("cfg")
+        && attr.parse_args::<syn::Ident>().is_ok_and(|id| {
+            id.to_string()
+                .strip_prefix("tp")
+                .is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
+        })
+}
+
 /// `text` with every item compiled only under test blanked: spaces in place
 /// of its bytes, newlines kept, so positions and line numbers still match
 /// `text` and literals outside test items survive. An item is test-only when

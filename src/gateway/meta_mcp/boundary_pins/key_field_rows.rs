@@ -189,8 +189,10 @@ fn named(attr: &syn::Attribute, name: &str) -> bool {
 }
 
 /// An attribute that can switch a test off: `ignore`, `cfg` or `cfg_attr`.
+/// A part tag only picks the part that compiles the test, so it does not.
 fn disables(attr: &syn::Attribute) -> bool {
     ["ignore", "cfg", "cfg_attr"].iter().any(|n| named(attr, n))
+        && !crate::test_source_text::part_tag(attr)
 }
 
 /// The top-level test functions of one file that run (no `#[ignore]`,
@@ -231,12 +233,14 @@ fn tests_in(source: &str) -> BTreeMap<String, String> {
 }
 
 /// The gates a row module may carry: built for tests, with or without the
-/// UI. Any other attribute (another `cfg`, a `#[path]` redirect) could build
+/// UI, plus a part tag (it picks the part; the unsplit build compiles every
+/// part). Any other attribute (another `cfg`, a `#[path]` redirect) could build
 /// a different file or none.
 const ROW_MODULE_CFGS: [&str; 2] = ["test", "all(test,feature=\"webui\")"];
 
 fn allowed_on_row_module(attr: &syn::Attribute) -> bool {
     named(attr, "doc")
+        || crate::test_source_text::part_tag(attr)
         || (named(attr, "cfg")
             && attr.meta.require_list().is_ok_and(|list| {
                 let gate: String = list.tokens.to_string().split_whitespace().collect();
@@ -359,6 +363,11 @@ fn a_deleted_row_is_caught() {
         0,
         "webui gate"
     );
+    let tagged = "#[cfg(tp2)]\n#[cfg(test)]\nmod live_key_authz_tests;\n";
+    let admin = row("#[tokio::test]", "K5 `admin`");
+    assert_eq!(caught(&admin, tagged), 0, "part-tagged module");
+    let tagged_row = row("#[cfg(tp2)]\n#[tokio::test]", "K5 `admin`");
+    assert_eq!(caught(&tagged_row, module), 0, "part-tagged test");
     for other in ["#[cfg(any())]", "#[cfg(test)]\n#[path = \"x.rs\"]"] {
         let module = format!("{other}\nmod live_key_authz_tests;\n");
         assert_eq!(

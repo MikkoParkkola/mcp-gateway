@@ -196,19 +196,12 @@ fn doc_only(attrs: &[syn::Attribute]) -> bool {
 /// part tags (`#[cfg(tpK)]`, each a separate attribute that only narrows which
 /// part compiles the module): a tagged test module is still test-gated.
 fn cfg_test_only(attrs: &[syn::Attribute]) -> bool {
-    let rest: Vec<&syn::Attribute> = attrs.iter().filter(|a| !part_tag(a)).collect();
+    let rest: Vec<&syn::Attribute> = attrs
+        .iter()
+        .filter(|a| !crate::test_source_text::part_tag(a))
+        .collect();
     matches!(rest.as_slice(), [only] if only.path().is_ident("cfg")
         && only.parse_args::<syn::Path>().is_ok_and(|p| p.is_ident("test")))
-}
-
-/// Whether `attr` is a lib test split part tag, `#[cfg(tpK)]`.
-fn part_tag(attr: &syn::Attribute) -> bool {
-    attr.path().is_ident("cfg")
-        && attr.parse_args::<syn::Ident>().is_ok_and(|id| {
-            id.to_string()
-                .strip_prefix("tp")
-                .is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
-        })
 }
 
 /// The names a signature's parameters bind, unrawed.

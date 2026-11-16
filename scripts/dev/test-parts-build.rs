@@ -3,11 +3,11 @@
 //! Which parts of the lib test code this build compiles.
 //!
 //! The lib test binary is too large for one compile on a 16 GB runner, so its test modules are split into `N`
-//! parts by a `#[cfg(tpK)]` line (scripts/dev/test_parts.py keeps them, scripts/dev/test-parts.tsv says which part a
-//! directory is in). `MCP_GATEWAY_TEST_PART=K` builds part K only and sets `tp_partial`, under which the crate root
-//! allows the dead code a partial build leaves. `0` builds no part: the code every part shares, which is how that
-//! floor is measured. Unset, every part compiles, so local `cargo test`, `cargo build` and the release build are
-//! unchanged. Nothing else happens here.
+//! parts by a `#[cfg(tpK)]` line (`scripts/dev/test_parts.py` keeps them, `scripts/dev/test-parts.tsv` says which
+//! part a directory is in). `MCP_GATEWAY_TEST_PART=K` builds part K only and sets `tp_partial`, under which the
+//! crate root allows the dead code a partial build leaves. `0` builds no part: the code every part shares, which is
+//! how that floor is measured. Unset, every part compiles, so local `cargo test`, `cargo build` and the release build
+//! are unchanged. Nothing else happens here.
 
 fn main() {
     const N: u32 = 5;
