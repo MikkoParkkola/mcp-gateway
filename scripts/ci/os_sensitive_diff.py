@@ -8,6 +8,13 @@ keychain or a file lock is OS-sensitive: macOS behaves differently there, and on
 cost a whole train (train 46u: the keychain change to `init` passed its own CI and broke the macOS int shard). The
 label makes the pull request run the macOS int shard; the lane adds it at READY, not on every push.
 
+A changed Rust line that sends a signal, manages a process group or session, reaps a child or reads a process errno
+demands `os-sensitive` instead, which runs the macOS lib shard (train 47v: #4951's SIGTERM and process-group lines
+broke three macOS lib tests and no word here named them). The words are process-specific spellings counted on the
+release line (OS_PROC_WORDS). Declared residual: an edit with no such word beside unchanged process calls (a timing
+change in a reaper, `guard.child().wait()`, `child_mut().wait()`) is not seen; trains remain the backstop, and the
+first train attempt lost to such an edit switches this check to every changed line of a file holding such a word.
+
 Docs, a file's name alone and platform cfg lines do not count (docs/ and markdown are not Rust or TOML; a measured
 7-day window had 16 of 167 lane pull requests hit, against 23 for a cfg trigger of which 21 were noise).
 
@@ -35,6 +42,20 @@ PATTERN = re.compile(
     re.IGNORECASE,
 )
 SUFFIXES = (".rs", ".toml")
+LABEL_PROC = "os-sensitive"
+# One alternative per word, case-sensitive (SIGTERM is a constant; prose "kill" is not code). kill_process only as a
+# call, not the tool-name string; .kill() on any receiver but the idp/live test fixtures, which abort tokio tasks.
+OS_PROC_WORDS = (
+    r"\bSignal::[A-Z]+", r"\bSIG(?:TERM|KILL|INT|HUP|QUIT|CHLD|STOP|CONT|USR1|USR2|PIPE|ALRM)\b", r"nix::sys::signal",
+    r"libc::kill\b", r"\bkillpg\b", r"\bsigaction\b", r"\bSIG_(?:IGN|DFL)\b", r"\bstart_kill\b",
+    r"(?<![\"\w])kill_process\(", r"(?<![\"\w])kill_process_group\(", r"\btest_kill_process\(",
+    r"(?<![A-Za-z0-9_])(?!(?:idp|live)\.kill\(\))[A-Za-z_][A-Za-z0-9_]*\.kill\(\)", r"Command::new\(\"kill\"\)",
+    r"\bprocess_group\b", r"\bpre_exec\b", r"\bsetsid\b", r"\bgetsid\b", r"\bsetpgid\b", r"\bgetpgid\b",
+    r"\btcsetpgrp\b", r"\bwaitpid\b", r"\bwaitid\b", r"\bWaitId(?:Options)?\b", r"\btry_wait\b",
+    r"\bwait_with_output\b", r"rustix::process::wait\b", r"\bNOHANG\b", r"\bchild\.wait\(",
+    r"\bErrno::(?:CHILD|SRCH|INTR)\b", r"\bE(?:SRCH|CHILD)\b",
+)
+OS_PROC = re.compile("|".join(f"(?:{w})" for w in OS_PROC_WORDS))
 SHOWN = 10
 HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
@@ -59,7 +80,7 @@ def header_path(line: str, prefix: str) -> str | None:
     return raw[2:] if raw[:2] in ("a/", "b/") else raw
 
 
-def scan(diff_text: str) -> list[tuple[str, int, str]]:
+def scan(diff_text: str, pattern: re.Pattern = PATTERN, suffixes: tuple = SUFFIXES) -> list[tuple[str, int, str]]:
     """(path, line number, the changed line) for each added or removed line in a .rs or .toml file that matches.
     An added line is numbered in the new file, a removed one where it stood in the old file. File headers are read
     only outside a hunk: a hunk's own line counts say where its body ends, so a body line that starts with `++ ` or
@@ -74,14 +95,14 @@ def scan(diff_text: str) -> list[tuple[str, int, str]]:
                 continue
             if line.startswith("+") and left_new > 0:
                 path = new_path or old_path
-                if path and path.endswith(SUFFIXES) and PATTERN.search(line[1:]):
+                if path and path.endswith(suffixes) and pattern.search(line[1:]):
                     out.append((path, new, line[1:].strip()))
                 new += 1
                 left_new -= 1
                 continue
             if line.startswith("-") and left_old > 0:
                 path = old_path or new_path  # a removed line belongs to the old file, which a rename changes
-                if path and path.endswith(SUFFIXES) and PATTERN.search(line[1:]):
+                if path and path.endswith(suffixes) and pattern.search(line[1:]):
                     out.append((path, old, line[1:].strip()))
                 old += 1
                 left_old -= 1
@@ -102,21 +123,32 @@ def scan(diff_text: str) -> list[tuple[str, int, str]]:
     return out
 
 
-def verdict(hits: list[tuple[str, int, str]], labels: list[str], pr: int) -> str | None:
-    """None when the pull request is fine, else the failure message."""
-    if not hits or LABEL in labels:
+def scan_proc(diff_text: str) -> list[tuple[str, int, str]]:
+    """The OS-process lines (OS_PROC) in changed Rust files: they demand os-sensitive."""
+    return scan(diff_text, OS_PROC, (".rs",))
+
+
+# kind -> (label, what the matched lines touch, the shard the label runs)
+_KINDS = {"int": (LABEL, "the secret store, the keychain or a file lock", "int"),
+          "proc": (LABEL_PROC, "signals, process groups, child reaping or process errno", "lib")}
+
+
+def verdict(hits: list[tuple[str, int, str]], labels: list[str], pr: int, kind: str = "int") -> str | None:
+    """None when the pull request is fine, else the failure message for that label."""
+    label, what, shard = _KINDS[kind]
+    if not hits or label in labels:
         return None
     lines = [f"  {p}:{n}: {t[:100]}" for p, n, t in hits[:SHOWN]]
     if len(hits) > SHOWN:
         lines.append(f"  ... and {len(hits) - SHOWN} more")
     return (
-        "This diff touches OS-sensitive code (the secret store, the keychain or a file lock), and only a merge train\n"
+        f"This diff touches OS-sensitive code ({what}), and only a merge train\n"
         "runs macOS, so a macOS break would cost a train. Matched lines:\n" + "\n".join(lines) + "\n"
-        f"Run the macOS int shard on this pull request at READY (not on every push):\n"
-        f"  gh pr edit {pr} --add-label {LABEL}\n"
+        f"Run the macOS {shard} shard on this pull request at READY (not on every push):\n"
+        f"  gh pr edit {pr} --add-label {label}\n"
         "then push or reopen once, since a label counts from the next run (CONTRIBUTING.md).\n"
         f"If that command says the label does not exist (it was renamed or deleted), create it first:\n"
-        f"  gh label create {LABEL} --description 'run the macOS int shard on this pull request'"
+        f"  gh label create {label} --description 'run the macOS {shard} shard on this pull request'"
     )
 
 
@@ -160,12 +192,14 @@ def main() -> int:
     raw = subprocess.run(["git", "-C", args.repo, "diff", "--unified=0", "--no-color", "--text", "--no-ext-diff",
                           "--no-textconv", args.base, args.head, "--", "*.rs", "*.toml"],
                          check=True, capture_output=True).stdout
-    hits = scan(raw.decode("utf-8", "replace"))
-    message = verdict(hits, json.loads(args.labels), args.pr)
-    if message:
-        print(message)
+    text = raw.decode("utf-8", "replace")
+    hits, proc = scan(text), scan_proc(text)
+    labels = json.loads(args.labels)
+    messages = [m for m in (verdict(hits, labels, args.pr), verdict(proc, labels, args.pr, kind="proc")) if m]
+    if messages:
+        print("\n\n".join(messages))
         return 1
-    print(f"{len(hits)} OS-sensitive line(s); the {LABEL} label is {'on' if hits else 'not needed'}.")
+    print(f"{len(hits)} {LABEL} line(s), {len(proc)} {LABEL_PROC} line(s); each needed label is on.")
     return 0
 
 
