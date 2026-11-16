@@ -108,7 +108,17 @@ impl CapabilityBackend {
         // Held through the publish; this reload's log lines are written after
         // it is released, so a blocked log write never holds up the next
         // catalogue operation.
-        let operation = self.lock_operation().await;
+        // The mutant skips the lock but still reaches the Acquire step, so the
+        // row's own ordering assertion, not a missing step, has to catch it.
+        let operation = mutant!(
+            "mlock",
+            {
+                #[cfg(test)]
+                super::super::op_gate::reach(super::super::op_gate::Step::Acquire);
+                None
+            },
+            Some(self.lock_operation().await)
+        );
         let dirs: Vec<String> = self.directories.read().clone();
         let mut failed_dirs: Vec<(String, String)> = Vec::new();
         let mut refused_logs: Vec<(String, String)> = Vec::new();
@@ -192,6 +202,7 @@ impl CapabilityBackend {
             // while this write lock is still held.
             #[cfg(test)]
             super::super::op_gate::reach(super::super::op_gate::Step::Swap);
+            let early = mutant!("mswap", Some(part_from(&caps)), None);
             caps.install(admitted);
             caps.settle_absent(refused);
             // With the entries, under the same lock: the part names this
@@ -208,7 +219,7 @@ impl CapabilityBackend {
             // After install, still under this lock: the seq and the part name
             // the catalogue this swap wrote, not the one it replaced.
             let seq = self.alloc_seq();
-            let part = part_from(&caps);
+            let part = early.unwrap_or_else(|| part_from(&caps));
             (seq, part)
         };
         // The catalogue lock is released. A row holds this gap. The publish
