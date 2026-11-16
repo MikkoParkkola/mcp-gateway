@@ -53,8 +53,8 @@ async fn a_backend_that_ignores_eof_gets_sigterm_before_sigkill() {
     );
 }
 
-/// A backend that ignores EOF and SIGTERM is still killed, and close still
-/// returns, within the bound: no backend can hold a stop open.
+/// A backend that ignores EOF and SIGTERM is killed and reaped (no zombie), and close
+/// returns, within the bound, even when its kills find the group gone (macOS).
 #[tokio::test]
 async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
     // The fixed plan outside a shutdown (EOF wait, SIGTERM wait, the reap

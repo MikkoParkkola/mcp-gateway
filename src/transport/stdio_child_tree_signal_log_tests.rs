@@ -109,20 +109,29 @@ fn the_skip_rule_accepts_the_kill_alone() {
 
 #[test]
 fn a_kill_records_its_outcome() {
+    use EsrchOn::{Linux, MacOs};
     use rustix::io::Errno;
     let err = |e: Errno| Err(std::io::Error::from_raw_os_error(e.raw_os_error()));
-    let cases: [(std::io::Result<()>, bool, Sent); 5] = [
-        (Ok(()), false, Sent::Kill),
-        (Ok(()), true, Sent::Kill),
-        (err(Errno::SRCH), true, Sent::KillGone),
-        (err(Errno::SRCH), false, Sent::KillFailed),
-        (err(Errno::PERM), true, Sent::KillFailed),
+    // (result, leader seen exited, leader's own group, host, recorded)
+    let cases: [(std::io::Result<()>, bool, bool, EsrchOn, Sent); 10] = [
+        (Ok(()), false, true, Linux, Sent::Kill),
+        (Ok(()), true, true, MacOs, Sent::Kill),
+        (err(Errno::SRCH), true, true, Linux, Sent::KillGone),
+        (err(Errno::SRCH), true, true, MacOs, Sent::KillGone),
+        (err(Errno::SRCH), false, true, Linux, Sent::KillFailed),
+        // macOS: the group is ending before the leader reads exited.
+        (err(Errno::SRCH), false, true, MacOs, Sent::KillGone),
+        // A group that is not the leader's own is never gone, on any host.
+        (err(Errno::SRCH), false, false, MacOs, Sent::KillFailed),
+        (err(Errno::SRCH), true, false, Linux, Sent::KillFailed),
+        (err(Errno::PERM), true, true, Linux, Sent::KillFailed),
+        (err(Errno::PERM), false, true, MacOs, Sent::KillFailed),
     ];
-    for (sent, exited, want) in cases {
+    for (sent, exited, own, host, want) in cases {
         assert_eq!(
-            kill_outcome(&sent, exited),
+            classify(&sent, exited, own, host),
             want,
-            "{sent:?}, exited: {exited}"
+            "{sent:?}, exited: {exited}, own group: {own}, {host:?}"
         );
     }
 }
@@ -150,6 +159,10 @@ async fn end_tree(mut tree: super::super::ChildTree) {
 
 /// A group kill answering ESRCH while the leader still runs (it named a group the
 /// leader is not in) is a failed kill, never the kill of a group already gone.
+/// Linux only: macOS answers ESRCH for its own ending group too (see `EsrchOn`).
+/// The group the kill names comes from shared spawn and kill code, so this row
+/// catches a wrong-group bug for every platform.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn esrch_with_the_leader_running_is_a_failed_kill() {
     let (mut tree, pid) = running_tree();

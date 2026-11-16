@@ -280,7 +280,7 @@ impl ChildTree {
             self.group_signals_sent += 1;
             #[cfg(unix)]
             if let Some(pid) = self.pid {
-                signal_log::record(pid, signal_log::kill_outcome(&sent, exited));
+                signal_log::record(pid, signal_log::kill_outcome(pid, &sent, exited));
             }
         }
         let _ = sent;

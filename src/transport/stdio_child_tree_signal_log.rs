@@ -47,8 +47,30 @@ fn log() -> std::sync::MutexGuard<'static, Log> {
 /// is unique, so an entry already there is a stale one a failed row left
 /// before the kernel reused the pid: it is replaced.
 pub(crate) fn arm(pid: Pid) {
-    log().insert(pid.as_raw_nonzero().get(), Vec::new());
+    let raw = pid.as_raw_nonzero().get();
+    log().insert(raw, Vec::new());
     forget_injection(pid);
+    // Read while the leader runs: macOS refuses getpgid once it is exiting.
+    if rustix::process::getpgid(Some(pid)) == Ok(pid) {
+        own_groups().insert(raw);
+    } else {
+        own_groups().remove(&raw);
+    }
+}
+
+/// Pids that led their own group (pgid == pid, as spawned) when armed.
+static OWN_GROUP: std::sync::Mutex<std::collections::BTreeSet<i32>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+fn own_groups() -> std::sync::MutexGuard<'static, std::collections::BTreeSet<i32>> {
+    OWN_GROUP
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Whether `pid` led its own group when it was armed.
+fn own_group(pid: Pid) -> bool {
+    own_groups().contains(&pid.as_raw_nonzero().get())
 }
 
 /// Drop an injection a stale row left for `pid`, or the one a finished row set.
@@ -73,6 +95,11 @@ pub(crate) enum Esrch {
     /// sweep's kill can land between the check and the group kill; then the
     /// group kill finds no member.
     AfterKillingLeader,
+    /// macOS's gap on any host: the leader gets SIGKILL and the group kill
+    /// answers ESRCH at once, while the record reads the leader running for
+    /// the next `steps` kills (one per reaper step); kills are judged on macOS
+    /// rules throughout.
+    MacGap { steps: u8 },
 }
 
 static INJECTED: std::sync::Mutex<std::collections::BTreeMap<i32, Esrch>> =
@@ -98,6 +125,13 @@ pub(super) fn injection(pid: Option<Pid>) -> Option<Esrch> {
 /// for `Esrch::AfterKillingLeader` (bounded at 30 s; a setup failure panics by
 /// name rather than reading as a classified kill).
 pub(super) fn answer(mode: Esrch, pid: Option<Pid>) -> std::io::Result<()> {
+    if let (Esrch::MacGap { .. }, Some(pid)) = (mode, pid) {
+        // No wait for the zombie: the gap is the point.
+        match rustix::process::kill_process(pid, rustix::process::Signal::KILL) {
+            Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+            Err(e) => panic!("the injected gap kills the leader: {e}"),
+        }
+    }
     if let (Esrch::AfterKillingLeader, Some(pid)) = (mode, pid) {
         use rustix::process::{WaitId, WaitIdOptions, waitid};
         // A setup failure is the injection's own, never a classified kill.
@@ -134,20 +168,71 @@ pub(super) fn is_esrch(sent: &std::io::Result<()>) -> bool {
         .is_err_and(|e| e.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()))
 }
 
-/// What a kill's syscall result records: the kill; or, for ESRCH with the
-/// leader seen exiting (before the send, or right after the ESRCH), the kill
-/// of a group already gone; otherwise a failed kill.
-pub(super) fn kill_outcome(sent: &std::io::Result<()>, exited: bool) -> Sent {
+/// What a group kill's ESRCH means for a leader not yet seen exited. A kill is
+/// only sent while the leader is unreaped, so its group id cannot be reused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EsrchOn {
+    /// Linux: an unreaped leader, a zombie included, still takes the signal,
+    /// so ESRCH means a group the leader is not in.
+    Linux,
+    /// macOS: a process given SIGKILL leaves signal delivery before waitid can
+    /// report its exit, so ESRCH from the leader's own group means it is ending.
+    MacOs,
+}
+
+/// This host's [`EsrchOn`]; other Unix hosts keep the strict Linux reading.
+const HOST: EsrchOn = if cfg!(target_os = "macos") {
+    EsrchOn::MacOs
+} else {
+    EsrchOn::Linux
+};
+
+/// What a kill's syscall result records: the kill; or, for ESRCH from the
+/// leader's own group, the kill of a group already gone, when the leader was
+/// seen exiting (before the send, or right after the ESRCH) or `host` is
+/// macOS; otherwise a failed kill.
+pub(super) fn classify(
+    sent: &std::io::Result<()>,
+    exited: bool,
+    own_group: bool,
+    host: EsrchOn,
+) -> Sent {
     match sent {
         Ok(()) => Sent::Kill,
-        Err(_) if exited && is_esrch(sent) => Sent::KillGone,
+        Err(_) if is_esrch(sent) && own_group && (exited || host == EsrchOn::MacOs) => {
+            Sent::KillGone
+        }
         Err(_) => Sent::KillFailed,
+    }
+}
+
+/// [`classify`] for an armed `pid` on this host, or on macOS rules with the
+/// gap's masked steps under `Esrch::MacGap`.
+pub(super) fn kill_outcome(pid: Pid, sent: &std::io::Result<()>, exited: bool) -> Sent {
+    let (exited, host) = match gap_step(pid) {
+        Some(in_gap) => (exited && !in_gap, EsrchOn::MacOs),
+        None => (exited, HOST),
+    };
+    classify(sent, exited, own_group(pid), host)
+}
+
+/// Under `Esrch::MacGap`, whether this kill falls in the gap (the record reads
+/// the leader running), counting the gap down; `None` without that injection.
+fn gap_step(pid: Pid) -> Option<bool> {
+    match injections().get_mut(&pid.as_raw_nonzero().get()) {
+        Some(Esrch::MacGap { steps }) => {
+            let in_gap = *steps > 0;
+            *steps = steps.saturating_sub(1);
+            Some(in_gap)
+        }
+        _ => None,
     }
 }
 
 /// `pid`'s entries in order; it is disarmed.
 pub(crate) fn take(pid: Pid) -> Vec<Sent> {
     forget_injection(pid);
+    own_groups().remove(&pid.as_raw_nonzero().get());
     log()
         .remove(&pid.as_raw_nonzero().get())
         .unwrap_or_default()

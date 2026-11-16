@@ -52,3 +52,46 @@ async fn a_resisting_trees_kill_that_finds_the_group_gone_passes_the_strict_rule
     .await;
     gone(child).await;
 }
+
+/// macOS's gap, on any host: a resisting tree's group kills answer ESRCH while
+/// the record still reads the leader running for `steps` kills. Each is the
+/// kill of a group already gone on macOS rules, and gone is not forgotten:
+/// close returns in the bound, the leader is reaped (no zombie left) and no
+/// member of the tree survives.
+async fn a_gap_of(steps: u8) {
+    use rustix::process::{WaitId, WaitIdOptions, waitid};
+    let what = format!("a {steps}-step gap");
+    let (w, t) = started_unhurried(&resists_term(), None).await;
+    let child = descendant(w.path()).await;
+    let pid = leader(&t).await;
+    signal_log::arm(pid);
+    signal_log::inject(pid, signal_log::Esrch::MacGap { steps });
+    tokio::time::timeout(HANG_BOUND, t.close())
+        .await
+        .expect("close returns within the hang bound")
+        .expect("close");
+    signal_log::assert_gone_kill_counts(pid, &what, signal_log::Rule::Strict).await;
+    assert_killed(pid).await;
+    let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+    assert_eq!(
+        waitid(WaitId::Pid(pid), options).err(),
+        Some(rustix::io::Errno::CHILD),
+        "{what}: the leader is reaped, no zombie left"
+    );
+    gone(child).await;
+}
+
+#[tokio::test]
+async fn a_one_step_gap_still_counts_as_the_kill() {
+    a_gap_of(1).await;
+}
+
+#[tokio::test]
+async fn a_three_step_gap_still_counts_as_the_kill() {
+    a_gap_of(3).await;
+}
+
+#[tokio::test]
+async fn a_five_step_gap_still_counts_as_the_kill() {
+    a_gap_of(5).await;
+}
