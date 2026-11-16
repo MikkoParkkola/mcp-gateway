@@ -348,3 +348,36 @@ async fn r7e_the_accept_ends_at_the_preview_deadline() {
         .expect("the accept did not end within the guard");
     assert!(accepted.is_err());
 }
+
+/// R7j, kills "a step is still polled after the preview's deadline": once the
+/// deadline has passed, a step that would finish at once (a ready write) is
+/// refused without being polled.
+#[tokio::test(start_paused = true)]
+async fn r7j_a_step_after_the_deadline_is_never_polled() {
+    let polled = std::cell::Cell::new(false);
+    let passed = tokio::time::Instant::now();
+    let step = async {
+        polled.set(true);
+        Ok(())
+    };
+    assert!(super::by_deadline(passed, "a write", step).await.is_err());
+    assert!(!polled.get(), "the step ran after the deadline");
+}
+
+/// R7k, kills "a write outlives the preview's deadline": a helper that stops
+/// reading is cut off at the deadline, not at the frame bound (past the guard
+/// here).
+#[tokio::test(start_paused = true)]
+async fn r7k_a_stuck_write_ends_at_the_deadline() {
+    let bounds = ControlBounds {
+        frame: Duration::from_secs(3600),
+        ..B
+    };
+    let soon = tokio::time::Instant::now() + Duration::from_secs(1);
+    let mut stuck = Stuck;
+    let write = super::write_line(&mut stuck, "x", bounds);
+    let written = tokio::time::timeout(GUARD, super::by_deadline(soon, "a write", write))
+        .await
+        .expect("the write did not end within the guard");
+    assert!(written.is_err());
+}
