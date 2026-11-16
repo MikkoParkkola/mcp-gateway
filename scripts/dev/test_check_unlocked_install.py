@@ -21,7 +21,7 @@ CHECKER = ROOT / "scripts" / "ci" / "check-unlocked-install.sh"
 # A stand-in gateway: serves 200 on /livez from an OS-chosen port, and logs
 # what STUB_MODE says. `--config` must name a file the checker wrote.
 STUB = r'''#!/usr/bin/env python3
-import http.server, os, sys, threading
+import http.server, os, sys, threading, time
 mode = os.environ["STUB_MODE"]
 config = sys.argv[sys.argv.index("--config") + 1]
 assert os.path.isfile(config), config
@@ -45,9 +45,13 @@ if mode == "wrong-port":
     other = http.server.HTTPServer(("127.0.0.1", 0), Livez)
     port = other.server_address[1]
     other.server_close()
-if mode in ("both", "partial", "no-livez", "wrong-port"):
+if mode in ("both", "partial", "late-partial", "no-livez", "wrong-port"):
     print("INFO mcp_gateway::gateway::server::run_steps: Key server enabled", flush=True)
-if mode == "partial":
+if mode == "late-partial":
+    # The unterminated banner arrives after the checker's newline test
+    # (test_a_banner_written_between_two_reads_is_not_read).
+    time.sleep(0.5)
+if mode in ("partial", "late-partial"):
     # The banner never ends its line: the checker must not read it.
     sys.stdout.write(f"INFO mcp_gateway::gateway::server::support: Listening host=127.0.0.1 port={port}")
     sys.stdout.flush()
@@ -57,13 +61,15 @@ server.serve_forever()
 '''
 
 
-def run_checker(mode, keep_log=None):
+def run_checker(mode, keep_log=None, path_first=None):
     with tempfile.TemporaryDirectory() as tmp:
         stub = pathlib.Path(tmp) / "mcp-gateway"
         stub.write_text(STUB)
         stub.chmod(0o755)
         env = dict(os.environ, STUB_MODE=mode, UNLOCKED_INSTALL_WAIT="6")
         env.pop("UNLOCKED_INSTALL_LOG", None)
+        if path_first:
+            env["PATH"] = f"{path_first}{os.pathsep}{env['PATH']}"
         if keep_log:
             env["UNLOCKED_INSTALL_LOG"] = str(keep_log)
         return subprocess.run(
@@ -107,6 +113,21 @@ class CheckUnlockedInstall(unittest.TestCase):
 
     def test_a_banner_line_still_being_written_is_not_read(self):
         result = run_checker("partial")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("did not both answer /livez", result.stdout)
+
+    def test_a_banner_written_between_two_reads_is_not_read(self):
+        # Seen under load in a merge train's cheap gate. The checker must judge one
+        # snapshot of the log per poll. A shim makes every `tail` return 1.5 s late,
+        # so a checker that tests the last byte with tail and then reads the file
+        # again sees a log that ended in a newline, then reads the banner the stub
+        # wrote 0.5 s later without its newline, and passes on a port the binary
+        # never finished printing.
+        with tempfile.TemporaryDirectory() as shims:
+            tail = pathlib.Path(shims) / "tail"
+            tail.write_text('#!/bin/bash\n/usr/bin/tail "$@"; rc=$?\nsleep 1.5\nexit $rc\n')
+            tail.chmod(0o755)
+            result = run_checker("late-partial", path_first=shims)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("did not both answer /livez", result.stdout)
 
