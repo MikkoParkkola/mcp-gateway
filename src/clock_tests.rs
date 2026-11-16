@@ -269,7 +269,7 @@ fn item_with_body(rest: &str) -> bool {
         .split(|c: char| !(c.is_alphanumeric() || c == '_'))
         .filter(|word| !word.is_empty());
     let first = words.next();
-    first != Some("let")
+    mutant!("m-let-word", true, first != Some("let"))
         && first.into_iter().chain(words).any(|word| {
             matches!(
                 word,
@@ -294,7 +294,7 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
     .expect("read pattern");
     // Comments and string and char literals blanked: a `;` or bracket inside
     // one neither ends nor opens a scope, and a clock name in one is no read.
-    let code = crate::test_source_text::sanitize(&product_code(src));
+    let code = mutant!("m-literal-blind", product_code(src), crate::test_source_text::sanitize(&product_code(src)));
     let mut holes: Vec<String> = alias
         .find_iter(&code)
         .map(|m| format!("{rel}: a clock type aliased: {}", m.as_str()))
@@ -309,7 +309,7 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
         }
         let scope = if attr.starts_with("#!") {
             code.as_str()
-        } else if item_with_body(&code[close..]) {
+        } else if mutant!("m-stmt-scope", true, item_with_body(&code[close..])) {
             block_from(&code, close)
         } else {
             // A statement (a `let`, an expression) or a bodiless item (a
