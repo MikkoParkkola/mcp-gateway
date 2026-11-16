@@ -127,11 +127,17 @@ impl ConfigHistory {
         }
     }
 
-    /// Remember `event` and, when present, `snapshot`. Old snapshots fall away by age alone.
+    /// Remember `event` and, when present, `snapshot`, unless a kept version
+    /// already holds the same files. Old snapshots fall away by age alone.
     pub(crate) fn record(&self, event: Event, snapshot: Option<Snapshot>, running: &str, now: u64) {
         let _ = (running, &self.data_dir);
         let mut state = self.inner.lock();
-        if let Some(snapshot) = snapshot {
+        if let Some(snapshot) = snapshot
+            && !state
+                .snapshots
+                .iter()
+                .any(|kept| kept.files == snapshot.files)
+        {
             state.snapshots.push(snapshot);
         }
         state.events.push(event);
