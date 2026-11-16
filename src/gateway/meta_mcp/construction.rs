@@ -123,7 +123,7 @@ impl MetaMcp {
             recent_writes: Arc::new(crate::gateway::recent_writes::RecentWrites::new(
                 std::time::Instant::now(),
             )),
-            restart_board: Arc::default(),
+            restart_slot: crate::gateway::restart_slot::RestartSlot::new(Arc::default()),
         }
     }
 
