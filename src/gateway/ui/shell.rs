@@ -21,12 +21,12 @@ const DOCUMENT: &str = include_str!("shell/index.html");
 /// asset gets a new name and a cached copy can never go stale.
 pub(super) const ASSETS: &[(&str, &[u8])] = &[
     (
-        "activity.237d685089d2.css",
-        include_bytes!("shell/activity.237d685089d2.css"),
+        "activity.112f99b1ee7c.js",
+        include_bytes!("shell/activity.112f99b1ee7c.js"),
     ),
     (
-        "activity.382f2c4d27c5.js",
-        include_bytes!("shell/activity.382f2c4d27c5.js"),
+        "activity.237d685089d2.css",
+        include_bytes!("shell/activity.237d685089d2.css"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -49,36 +49,36 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.59ea70dca81f.js",
-        include_bytes!("shell/gateway.59ea70dca81f.js"),
-    ),
-    (
-        "shell.2de18ea72fd5.js",
-        include_bytes!("shell/shell.2de18ea72fd5.js"),
+        "gateway.72b16b622995.js",
+        include_bytes!("shell/gateway.72b16b622995.js"),
     ),
     (
         "shell.8a1ede0f5317.css",
         include_bytes!("shell/shell.8a1ede0f5317.css"),
     ),
     (
-        "tips.c71d93a1d77a.json",
-        include_bytes!("shell/tips.c71d93a1d77a.json"),
+        "shell.f6002da4e5df.js",
+        include_bytes!("shell/shell.f6002da4e5df.js"),
+    ),
+    (
+        "tips.f472c300c624.json",
+        include_bytes!("shell/tips.f472c300c624.json"),
     ),
     (
         "tools.24f226efcd24.css",
         include_bytes!("shell/tools.24f226efcd24.css"),
     ),
     (
-        "tools.92e061e5570d.js",
-        include_bytes!("shell/tools.92e061e5570d.js"),
+        "tools.73637c570595.js",
+        include_bytes!("shell/tools.73637c570595.js"),
     ),
     (
         "tooltip.5251c22696fd.css",
         include_bytes!("shell/tooltip.5251c22696fd.css"),
     ),
     (
-        "tooltip.82730770f2c1.js",
-        include_bytes!("shell/tooltip.82730770f2c1.js"),
+        "tooltip.e19ddd0cd201.js",
+        include_bytes!("shell/tooltip.e19ddd0cd201.js"),
     ),
 ];
 
