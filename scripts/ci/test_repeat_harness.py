@@ -216,6 +216,10 @@ for a in "$@"; do
   esac
 done
 if [ -n "$found" ]; then
+  if [ -n "$GH_FAKE_LIST_FAIL" ]; then
+    echo "run list failed" >&2
+    exit 1
+  fi
   cat "$GH_FAKE_RUNS"
   exit 0
 fi
@@ -223,19 +227,27 @@ if [ "$1" = "run" ] && [ "$2" = "download" ]; then
   shift 2
   run_id=
   dest=
+  name=
   while [ $# -gt 0 ]; do
     case "$1" in
       -D|--dir) dest=$2; shift 2 ;;
-      -n|--name) shift 2 ;;
+      -n|--name) name=$2; shift 2 ;;
       *) run_id=$1; shift ;;
     esac
   done
+  if [ "$name" != "linux-lib-tests" ]; then
+    echo "download must request --name linux-lib-tests" >&2
+    exit 1
+  fi
   printf '%s\\n' "$run_id" >> "$GH_FAKE_IDS"
   if [ -n "$GH_FAKE_DOWNLOAD_FAIL" ]; then
     echo "artifact expired" >&2
     exit 1
   fi
   mkdir -p "$dest"
+  if [ -n "$GH_FAKE_DOWNLOAD_EMPTY" ]; then
+    exit 0
+  fi
   printf '%s\\n' 'REPEAT-ARTIFACT' > "$dest/lib-tests"
   chmod 644 "$dest/lib-tests"
   exit 0
@@ -265,8 +277,10 @@ def test_fetch() -> None:
         commit_overlay(repo, env, hooks, json.dumps(spec) + "\n")
         log, ids, runs_path = tmp / "gh.log", tmp / "ids", tmp / "runs.json"
 
-        def fetch(name: str, payload: dict, out: Path, *, download_fail: bool = False) -> subprocess.CompletedProcess[str]:
-            runs_path.write_text(json.dumps(payload))
+        def fetch(name: str, payload: dict, out: Path, *, download_fail: bool = False,
+                  list_fail: bool = False, download_empty: bool = False,
+                  raw_runs: str | None = None) -> subprocess.CompletedProcess[str]:
+            runs_path.write_text(raw_runs if raw_runs is not None else json.dumps(payload))
             log.write_text("")
             ids.write_text("")
             marker.unlink(missing_ok=True)
@@ -275,6 +289,10 @@ def test_fetch() -> None:
                               PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
             if download_fail:
                 penv["GH_FAKE_DOWNLOAD_FAIL"] = "1"
+            if list_fail:
+                penv["GH_FAKE_LIST_FAIL"] = "1"
+            if download_empty:
+                penv["GH_FAKE_DOWNLOAD_EMPTY"] = "1"
             return run_py(["fetch", "--out", str(out)], repo, penv, 30)
 
         def compiled(name: str) -> None:
@@ -301,22 +319,66 @@ def test_fetch() -> None:
             problems.append("found: lib-tests is not executable")
         elif ids.read_text().split() != ["20"]:
             problems.append(f"found: downloaded run ids {ids.read_text()!r}, want 20")
+        elif (out / "source-run-id.txt").read_text().strip() != "20":
+            problems.append(f"found: source-run-id.txt {(out / 'source-run-id.txt').read_text()!r}")
         elif "workflows/ci.yml/runs" not in logged or f"head_sha={sha}" not in logged or "per_page=20" not in logged:
             problems.append(f"found: gh was not asked for the ci.yml runs of the sha: {logged!r}")
+        elif "--name" not in logged or "linux-lib-tests" not in logged:
+            problems.append(f"found: download was not asked for --name linux-lib-tests: {logged!r}")
 
-        def refused(name: str, payload: dict, phrase: str, download_fail: bool = False) -> None:
-            ran = fetch(name, payload, tmp / f"out-{name}", download_fail=download_fail)
+        def refused(name: str, payload: dict, phrase: str, *, download_fail: bool = False,
+                    list_fail: bool = False, download_empty: bool = False,
+                    raw_runs: str | None = None) -> None:
+            ran = fetch(name, payload, tmp / f"out-{name}", download_fail=download_fail,
+                        list_fail=list_fail, download_empty=download_empty, raw_runs=raw_runs)
             compiled(name)
             lines = nonempty_lines(ran)
             if ran.returncode != 4 or len(lines) != 1 or phrase not in lines[0]:
                 problems.append(f"{name}: rc={ran.returncode} lines={lines!r}")
 
         refused("no-run", {"total_count": 0, "workflow_runs": []}, "no CI run")
+        refused("list-fail", {}, "run list failed", list_fail=True)
+        refused("not-json", {}, "not JSON", raw_runs="not-json")
         refused("in-progress", {"total_count": 1, "workflow_runs": [
             {"id": 5, "head_sha": sha, "status": "in_progress", "created_at": "2026-11-16T00:00:00Z"}]}, "wait")
+        refused("newest-in-progress", {"total_count": 2, "workflow_runs": [
+            {"id": 1, "head_sha": sha, "status": "completed", "conclusion": "success",
+             "created_at": "2026-11-01T00:00:00Z"},
+            {"id": 2, "head_sha": sha, "status": "in_progress",
+             "created_at": "2026-11-16T00:00:00Z"},
+        ]}, "wait")
+        if ids.read_text().strip():
+            problems.append(f"newest-in-progress: downloaded {ids.read_text()!r} instead of waiting")
         refused("expired", {"total_count": 1, "workflow_runs": [
             {"id": 30, "head_sha": sha, "status": "completed", "conclusion": "success",
              "created_at": "2026-11-16T00:00:00Z"}]}, "1 day", download_fail=True)
+        refused("empty-download", {"total_count": 1, "workflow_runs": [
+            {"id": 31, "head_sha": sha, "status": "completed", "conclusion": "success",
+             "created_at": "2026-11-16T00:00:00Z"}]}, "1 day", download_empty=True)
+
+        failed_run = {"total_count": 1, "workflow_runs": [
+            {"id": 40, "head_sha": sha, "status": "completed", "conclusion": "failure",
+             "created_at": "2026-11-16T00:00:00Z"},
+        ]}
+        failed_out = tmp / "out-failed-run"
+        proc = fetch("failed-run", failed_run, failed_out)
+        compiled("failed-run")
+        if proc.returncode != 0 or not (failed_out / "lib-tests").is_file():
+            problems.append(f"failed-run: rc={proc.returncode} {combined(proc)[:300]!r}")
+        elif ids.read_text().split() != ["40"] or (failed_out / "source-run-id.txt").read_text().strip() != "40":
+            problems.append(f"failed-run: ids {ids.read_text()!r}")
+
+        other = "b" * 40
+        other_out = tmp / "out-other-sha"
+        proc = fetch("other-sha", {"total_count": 2, "workflow_runs": [
+            {"id": 7, "head_sha": other, "status": "in_progress",
+             "created_at": "2026-11-01T00:00:00Z"},
+            {"id": 8, "head_sha": sha, "status": "completed", "conclusion": "success",
+             "created_at": "2026-11-16T00:00:00Z"},
+        ]}, other_out)
+        compiled("other-sha")
+        if proc.returncode != 0 or ids.read_text().split() != ["8"] or not (other_out / "lib-tests").is_file():
+            problems.append(f"other-sha: rc={proc.returncode} ids={ids.read_text()!r} {combined(proc)[:300]!r}")
     if problems:
         raise AssertionError("\n".join(problems))
 
@@ -372,6 +434,7 @@ exit 0
         summary = tmp / "summary.md"
         summary.write_text("")
         out = tmp / "pass-out"
+        (tmp / "source-run-id.txt").write_text("4242\n")
         proc = run_py(["run", "--binary", str(tmp / "pass-bin"), "--out", str(out)], pass_repo,
                       penv(RECORD_DIR=str(record), GITHUB_STEP_SUMMARY=str(summary)), 30)
         if marker.exists():
@@ -386,6 +449,10 @@ exit 0
         if isinstance(data, dict):
             if data.get("passed") != 3 or data.get("total") != 3 or data.get("void") != 0:
                 problems.append(f"pass: totals {data.get('passed')}/{data.get('total')} void={data.get('void')}")
+            if data.get("incomplete") is not False:
+                problems.append(f"pass: incomplete {data.get('incomplete')!r}")
+            if data.get("source_run_id") != "4242":
+                problems.append(f"pass: source_run_id {data.get('source_run_id')!r}")
             if data.get("spec") != pass_spec:
                 problems.append(f"pass: spec {data.get('spec')!r}")
             iters = data.get("iterations")
@@ -409,10 +476,11 @@ exit 0
                 problems.append(f"pass: CARGO_MANIFEST_DIR {path.read_text().strip()!r}")
         for path in record.glob("*.tmp"):
             tmpdir = Path(path.read_text().strip())
-            if tmpdir.name != lib_target or tmpdir.parent.name != by_binary or not tmpdir.is_dir():
-                problems.append(f"pass: TMPDIR {tmpdir}")
+            if tmpdir.name != lib_target or tmpdir.parent.name != by_binary or tmpdir.exists():
+                problems.append(f"pass: TMPDIR {tmpdir} exists={tmpdir.exists()}")
         if "|" not in summary.read_text():
             problems.append("pass: GITHUB_STEP_SUMMARY has no markdown table")
+        (tmp / "source-run-id.txt").unlink()
 
         # The binary fails only on its second invocation. One copy per iteration, so iteration 2 fails.
         fail_spec = {"filter": "fail_case", "runs": 3, "parallel": 1, "exact": False}
@@ -499,18 +567,36 @@ exit 0
 
         sleep_spec = {"filter": "sleep_case", "runs": 1, "parallel": 2, "exact": False}
         sleep_repo = repo_for("sleep", sleep_spec)
-        write_exe(tmp / "sleep-bin", """#!/bin/sh
-sleep 1
-printf '%s\\n' "running 1 test"
-printf '%s\\n' "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
-exit 0
+        stamp = tmp / "overlap.log"
+        write_exe(tmp / "sleep-bin", """#!/usr/bin/env python3
+import os
+import time
+path = os.environ["STAMP_FILE"]
+def stamp(word):
+    fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+    try:
+        os.write(fd, f"{word} {time.time()}\\n".encode())
+    finally:
+        os.close(fd)
+stamp("start")
+time.sleep(1)
+stamp("end")
+print("running 1 test")
+print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out")
 """)
-        started = time.monotonic()
         proc = run_py(["run", "--binary", str(tmp / "sleep-bin"), "--out", str(tmp / "sleep-out")],
-                      sleep_repo, penv(), 20)
-        elapsed = time.monotonic() - started
-        if proc.returncode != 0 or elapsed >= 1.8:
-            problems.append(f"sleep: rc={proc.returncode} elapsed={elapsed:.2f}s stderr={proc.stderr!r}")
+                      sleep_repo, penv(STAMP_FILE=str(stamp)), 20)
+        events = []
+        for line in stamp.read_text().splitlines() if stamp.is_file() else []:
+            kind, _, raw = line.partition(" ")
+            if kind in ("start", "end") and raw:
+                events.append((kind, float(raw)))
+        starts = [when for kind, when in events if kind == "start"]
+        ends = [when for kind, when in events if kind == "end"]
+        overlapped = len(starts) == 2 and len(ends) == 2 and min(ends) > max(starts)
+        if proc.returncode != 0 or not overlapped:
+            problems.append(
+                f"sleep: rc={proc.returncode} events={events!r} stderr={proc.stderr!r}")
         else:
             try:
                 got = json.loads((tmp / "sleep-out" / "results.json").read_text())
@@ -520,6 +606,54 @@ exit 0
                 copies = (got.get("iterations") or [{}])[0].get("copies") or []
                 if got.get("passed") != 1 or len(copies) != 2:
                     problems.append(f"sleep: passed={got.get('passed')} copies={len(copies)}")
+
+        timeout_spec = {"filter": "timeout_case", "runs": 1, "parallel": 1, "exact": False}
+        timeout_repo = repo_for("timeout", timeout_spec)
+        write_exe(tmp / "timeout-bin", """#!/bin/sh
+sleep 30
+printf '%s\\n' "running 1 test"
+printf '%s\\n' "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+exit 0
+""")
+        timeout_out = tmp / "timeout-out" / "results.json"
+        started = time.monotonic()
+        proc = run_py(["run", "--binary", str(tmp / "timeout-bin"), "--out", str(tmp / "timeout-out")],
+                      timeout_repo, penv(REPEAT_COPY_TIMEOUT_S="1"), 20)
+        elapsed = time.monotonic() - started
+        if proc.returncode != 1 or elapsed >= 5 or not timeout_out.is_file():
+            problems.append(
+                f"timeout: rc={proc.returncode} elapsed={elapsed:.2f}s file={timeout_out.is_file()} "
+                f"stderr={proc.stderr!r}")
+        else:
+            got = json.loads(timeout_out.read_text())
+            tail = got.get("first_failure_tail") or ""
+            iteration = (got.get("iterations") or [{}])[0]
+            if "TIMEOUT" not in tail or iteration.get("result") != "fail":
+                problems.append(f"timeout: result={iteration.get('result')!r} tail={tail!r}")
+
+        budget_spec = {"filter": "budget_case", "runs": 5, "parallel": 1, "exact": False}
+        budget_repo = repo_for("budget", budget_spec)
+        write_exe(tmp / "budget-bin", """#!/bin/sh
+sleep 1.2
+printf '%s\\n' "running 1 test"
+printf '%s\\n' "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+exit 0
+""")
+        budget_out = tmp / "budget-out" / "results.json"
+        proc = run_py(["run", "--binary", str(tmp / "budget-bin"), "--out", str(tmp / "budget-out")],
+                      budget_repo, penv(REPEAT_RUN_BUDGET_S="1", REPEAT_SOURCE_RUN_ID="77"), 30)
+        if not budget_out.is_file():
+            problems.append(f"budget: no results.json rc={proc.returncode} stderr={proc.stderr!r}")
+        else:
+            got = json.loads(budget_out.read_text())
+            iters = got.get("iterations") or []
+            if (proc.returncode != 1 or got.get("incomplete") is not True or len(iters) != 1
+                    or got.get("total") != 1 or got.get("verdict") != "1/1"
+                    or "repeat: 1/1" not in proc.stdout or got.get("source_run_id") != "77"):
+                problems.append(
+                    f"budget: rc={proc.returncode} incomplete={got.get('incomplete')!r} "
+                    f"total={got.get('total')} verdict={got.get('verdict')!r} "
+                    f"source={got.get('source_run_id')!r} stdout={proc.stdout!r}")
     if problems:
         raise AssertionError("\n".join(problems))
 
@@ -578,15 +712,30 @@ def test_workflow() -> None:
     for word in ("cargo", "rustc", "rust-toolchain", "rust-cache", "add-swap", "swapon", "mkswap"):
         if word in folded:
             problems.append(f"step text contains {word}")
-    if "git show FETCH_HEAD:scripts/ci/repeat/run_repeat.py" not in blob:
-        problems.append("script is not fetched with git show FETCH_HEAD:scripts/ci/repeat/run_repeat.py")
+    for path in ("scripts/ci/repeat/run_repeat.py", "scripts/ci/shard_tests.py"):
+        shown = f"git show FETCH_HEAD:{path}"
+        if shown not in blob or not re.search(re.escape(shown) + r"\s*>\s*[\"']?\$RUNNER_TEMP/", blob):
+            problems.append(f"{path} is not fetched with git show FETCH_HEAD into RUNNER_TEMP")
     if "docs/ranking-1-release-line" not in blob:
         problems.append("release line is not fetched")
     if not has_fetch_depth(job.get("steps") or []):
         problems.append("checkout fetch-depth is not 2")
-    runs = [step.get("run", "") for step in job.get("steps") or [] if isinstance(step, dict)]
-    if not any("scripts/ci/with-memory-log.sh" in run and "run_repeat.py" in run for run in runs):
-        problems.append("run_repeat.py is not run through scripts/ci/with-memory-log.sh")
+    run_steps = []
+    for step in job.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        text = step.get("run")
+        if isinstance(text, str) and re.search(r"run_repeat\.py['\"]?\s+run\b", text):
+            run_steps.append(text)
+    if len(run_steps) != 1:
+        problems.append(f"expected one run_repeat.py run step, found {len(run_steps)}")
+    else:
+        text = run_steps[0]
+        checkout_script = "with-memory-log.sh" in text or re.search(r"(^|[\s\"'])scripts/", text)
+        if checkout_script or "RUNNER_TEMP" not in text:
+            problems.append(
+                "run step must use only the fetched files from RUNNER_TEMP, "
+                "not a script from the checkout under test")
     token_ok = False
 
     def walk(node: object) -> None:

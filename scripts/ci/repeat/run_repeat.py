@@ -13,12 +13,14 @@ The branch is the commit under test plus ONE commit that adds only
   exact     pass --exact to libtest when true
 
 Modes: `plan` (refuse a bad branch, print the spec, write valid=true),
-`fetch --out DIR` (download that sha's linux-lib-tests artifact; it lives
-1 day), `run --binary BIN --out DIR` (repeat the filter; compiles nothing),
+`fetch --out DIR` (download that sha's linux-lib-tests artifact from the
+newest finished CI run for the sha; the binary is kept 1 day), `run
+--binary BIN --out DIR` (repeat the filter; compiles nothing),
 `--self-test`. Standard library only.
 
 Exit: plan 0 or 2; fetch 0 or 4; run 0 when every repeat passed, 1 when one
-failed, 3 when a repeat ran no tests (void, nothing to judge).
+failed or the run stopped early (incomplete), 3 when a finished run had a
+repeat that executed no tests (void, nothing to judge).
 """
 from __future__ import annotations
 
@@ -27,9 +29,12 @@ import importlib.util
 import json
 import os
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -40,6 +45,9 @@ FILTER_RE = re.compile(r"^[A-Za-z0-9_:]{1,200}$")
 KEYS = ("sha", "filter", "runs", "parallel", "exact")
 RESULT_RE = re.compile(r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored\b", re.M)
 TAIL_LINES = 40
+COPY_OUTPUT_LINES = 400
+COPY_TIMEOUT = 1200
+RUN_BUDGET = 300 * 60
 ARTIFACT = "linux-lib-tests"
 RUNS_MAX = 50
 PARALLEL_MAX = 4
@@ -59,12 +67,16 @@ def git(*args: str) -> str:
 def prebuilt_shape() -> tuple[list[str], str, str]:
     """Linux lib tail of shard_tests.run_prebuilt: skips, BY_BINARY, LIB_TARGET.
 
-    The reviewed script is copied to RUNNER_TEMP, so the module is the sibling
-    in this checkout or the one next to this file.
+    The checkout under test is never searched. When this file lives at
+    scripts/ci/repeat/run_repeat.py the module is the sibling of its parent,
+    scripts/ci/shard_tests.py (repo layout, used by tests). The workflow copies
+    both reviewed files into one directory, so shard_tests.py may instead sit
+    beside this file.
     """
+    here = Path(__file__).resolve()
     candidates = [
-        Path(__file__).resolve().parent.parent / "shard_tests.py",
-        Path.cwd() / "scripts" / "ci" / "shard_tests.py",
+        here.parent.parent / "shard_tests.py",
+        here.parent / "shard_tests.py",
     ]
     path = next((c for c in candidates if c.is_file()), None)
     if path is None:
@@ -182,6 +194,14 @@ def _fetch_die(message: str) -> int:
     return 4
 
 
+def _env_int(name: str, default: int) -> int:
+    """Test override. Unset keeps the module constant."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return int(raw)
+
+
 def cmd_fetch(out: Path) -> int:
     try:
         spec = load_spec()
@@ -197,46 +217,132 @@ def cmd_fetch(out: Path) -> int:
     except json.JSONDecodeError:
         return _fetch_die("no CI run: the run list was not JSON")
     runs = payload.get("workflow_runs") or []
-    if not runs:
+    # The list is queried by sha, and still filtered: a run for another sha must not block this one.
+    matched = [run for run in runs if isinstance(run, dict) and run.get("head_sha") == spec["sha"]]
+    if not matched:
         return _fetch_die("no CI run for this sha")
-    # A run that has not finished has no binary yet. Say so, rather than taking an older one.
-    if any(run.get("status") != "completed" for run in runs):
+    newest = max(matched, key=lambda run: (str(run.get("created_at") or ""), int(run.get("id") or 0)))
+    # Only the newest run matters. An older finished run is not a substitute for one still going.
+    if newest.get("status") != "completed":
         return _fetch_die("CI for this sha is not finished; wait for it to complete")
-    ready = [run for run in runs if run.get("conclusion") == "success" and run.get("head_sha") == spec["sha"]]
-    if not ready:
-        return _fetch_die("no CI run for this sha succeeded")
-    newest = max(ready, key=lambda run: (str(run.get("created_at") or ""), int(run.get("id") or 0)))
     out.mkdir(parents=True, exist_ok=True)
-    downloaded = subprocess.run(
+    # Conclusion is not required to be success: a red run can still have uploaded the binary.
+    # Success is the file landing, not gh's exit status.
+    subprocess.run(
         ["gh", "run", "download", str(newest["id"]), "--dir", str(out), "--name", ARTIFACT],
         capture_output=True, text=True)
     binary = out / "lib-tests"
-    if downloaded.returncode != 0 or not binary.is_file():
-        # The upload keeps the binary for 1 day. A miss after a green run is that window closing.
+    if not binary.is_file():
+        # The upload keeps the binary for 1 day. A miss after a finished run is that window closing.
         return _fetch_die("the lib test binary is kept 1 day and the download failed")
     binary.chmod(0o755)  # an artifact round trip drops the exec bit, as run_prebuilt restores
+    (out / "source-run-id.txt").write_text(f"{newest['id']}\n", encoding="utf-8")
     return 0
+
+
+def _source_run_id(binary: Path) -> str | None:
+    """CI run the binary came from. A test may set the env; fetch writes the file beside the binary."""
+    chosen = os.environ.get("REPEAT_SOURCE_RUN_ID")
+    if chosen is not None and chosen.strip():
+        return chosen.strip()
+    path = binary.parent / "source-run-id.txt"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8").strip()
+    return text or None
+
+
+def _payload(spec: dict, iterations: list[dict], tail: str | None, incomplete: bool, source_id: str | None) -> dict:
+    passed = sum(1 for it in iterations if it["result"] == "pass")
+    void = sum(1 for it in iterations if it["result"] == "void")
+    total = len(iterations)
+    payload = {
+        "passed": passed,
+        "total": total,
+        "void": void,
+        "verdict": f"{passed}/{total}",
+        "incomplete": incomplete,
+        "spec": spec,
+        "iterations": iterations,
+    }
+    if source_id is not None:
+        payload["source_run_id"] = source_id
+    if tail is not None:
+        payload["first_failure_tail"] = tail
+    return payload
+
+
+def _write_results(out: Path, payload: dict) -> None:
+    """Atomically publish results.json. A killed runner keeps the previous iteration."""
+    out.mkdir(parents=True, exist_ok=True)
+    dest = out / "results.json"
+    tmp = out / ".results.json.tmp"
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, dest)
+
+
+def _write_summary(prior: str, iterations: list[dict], passed: int, total: int) -> None:
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary:
+        return
+    rows = ["| iteration | copies | result |", "| --- | --- | --- |"]
+    rows += [f"| {it['n']} | {len(it['copies'])} | {it['result']} |" for it in iterations]
+    rows += ["", f"Verdict: {passed}/{total}"]
+    path = Path(summary)
+    body = prior + "\n".join(rows) + "\n"
+    tmp = path.with_name(path.name + ".repeat-tmp")
+    tmp.write_text(body, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _one_copy(binary: str, args: list[str], repo: Path, by_binary: str, lib_target: str) -> dict:
     """One libtest invocation, with the temp dir run_prebuilt gives a Linux lib binary.
 
     cwd is inherited: the process is already in the repo, and passing cwd= leaves
-    Python's posix_spawn path. `sleep` is a symlink at the front of PATH so a long
-    PATH walk cannot push two overlapped one-second copies past the harness ceiling.
+    Python's posix_spawn path. The copy runs in its own session so a timeout can
+    kill the whole group. judge sees the full output; only the tail is stored.
+    The temp root is removed when the copy ends.
     """
     root = tempfile.mkdtemp(prefix="shard-tmp-")
-    tmpdir = os.path.join(root, by_binary, lib_target)
-    os.makedirs(tmpdir)
-    os.symlink("/bin/sleep", os.path.join(root, "sleep"))
-    env = os.environ.copy()
-    env["CARGO_MANIFEST_DIR"] = str(repo)
-    env["TMPDIR"] = tmpdir
-    env["PATH"] = root + os.pathsep + env.get("PATH", "")
-    proc = subprocess.run([binary, *args], env=env, capture_output=True, text=True)
-    text = proc.stdout + proc.stderr
-    tests_run, kind = judge(proc.returncode, text)
-    return {"exit": proc.returncode, "tests_run": tests_run, "kind": kind, "output": text}
+    try:
+        tmpdir = os.path.join(root, by_binary, lib_target)
+        os.makedirs(tmpdir)
+        env = os.environ.copy()
+        env["CARGO_MANIFEST_DIR"] = str(repo)
+        env["TMPDIR"] = tmpdir
+        limit = _env_int("REPEAT_COPY_TIMEOUT_S", COPY_TIMEOUT)
+        proc = subprocess.Popen(
+            [binary, *args],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        timed_out = False
+        try:
+            stdout, stderr = proc.communicate(timeout=limit)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            stdout, stderr = proc.communicate()
+        text = f"{stdout or ''}{stderr or ''}"
+        if timed_out:
+            if text and not text.endswith("\n"):
+                text += "\n"
+            text += f"TIMEOUT after {limit} s"
+        exit_code = proc.returncode if proc.returncode is not None else -signal.SIGKILL
+        # Classify from the full text. The stored tail can drop the summary line.
+        tests_run, kind = judge(exit_code, text)
+        if timed_out:
+            kind = "fail"
+        kept = "\n".join(text.splitlines()[-COPY_OUTPUT_LINES:])
+        return {"exit": exit_code, "tests_run": tests_run, "kind": kind, "output": kept}
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def cmd_run(binary: Path, out: Path) -> int:
@@ -249,10 +355,32 @@ def cmd_run(binary: Path, out: Path) -> int:
     os.chmod(binary, 0o755)
     repo = Path.cwd()
     args = lib_argv(spec, skips)
-    iterations = []
+    iterations: list[dict] = []
     tail = None
+    budget = _env_int("REPEAT_RUN_BUDGET_S", RUN_BUDGET)
+    started = time.monotonic()
+    incomplete = False
+    source_id = _source_run_id(binary)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    prior = ""
+    if summary:
+        summary_path = Path(summary)
+        if summary_path.is_file():
+            prior = summary_path.read_text(encoding="utf-8")
+            if prior and not prior.endswith("\n"):
+                prior += "\n"
+
+    def publish(is_incomplete: bool) -> None:
+        payload = _payload(spec, iterations, tail, is_incomplete, source_id)
+        _write_results(out, payload)
+        _write_summary(prior, iterations, payload["passed"], payload["total"])
+
     # Repeats are sequential so repeat N is N copies later. Copies inside one repeat overlap.
     for number in range(1, spec["runs"] + 1):
+        # Stop starting iterations once the budget is exceeded. One already running finishes.
+        if time.monotonic() - started > budget:
+            incomplete = True
+            break
         with ThreadPoolExecutor(max_workers=spec["parallel"]) as pool:
             copies = list(pool.map(
                 lambda _i: _one_copy(str(binary), args, repo, by_binary, lib_target),
@@ -273,31 +401,17 @@ def cmd_run(binary: Path, out: Path) -> int:
             "result": result,
             "copies": [{"exit": copy["exit"], "tests_run": copy["tests_run"]} for copy in copies],
         })
+        publish(False)
+    if incomplete:
+        publish(True)
     passed = sum(1 for it in iterations if it["result"] == "pass")
     void = sum(1 for it in iterations if it["result"] == "void")
     total = len(iterations)
-    payload = {
-        "passed": passed,
-        "total": total,
-        "void": void,
-        "verdict": f"{passed}/{total}",
-        "spec": spec,
-        "iterations": iterations,
-    }
-    if tail is not None:
-        payload["first_failure_tail"] = tail
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "results.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        rows = ["| iteration | copies | result |", "| --- | --- | --- |"]
-        rows += [f"| {it['n']} | {len(it['copies'])} | {it['result']} |" for it in iterations]
-        rows += ["", f"Verdict: {passed}/{total}"]
-        with open(summary, "a", encoding="utf-8") as fh:
-            fh.write("\n".join(rows) + "\n")
     print(f"repeat: {passed}/{total}")
     if tail:
         print(tail)
+    if incomplete:
+        return 1
     if void:
         return 3
     if passed != total:
