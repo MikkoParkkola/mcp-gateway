@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! W-T10c to W-T10h: a 3.x token file swapped for a link is refused, and the
 //! printed remediation repairs what it can and only instructs on unsafe paths.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use super::*;
 

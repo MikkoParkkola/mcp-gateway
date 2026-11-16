@@ -21,7 +21,7 @@ pub struct AuthConfig {
     #[serde(default)]
     pub bearer_token: Option<String>,
     /// API keys for multi-client access with optional restrictions.
-    #[serde(default)]
+    #[serde(default, serialize_with = "super::api_key::serialize_keys")]
     pub api_keys: Vec<ApiKeyConfig>,
     /// Paths that bypass authentication (default: `["/health"]`).
     /// `/livez` and `/readyz` follow `/health` without being listed.
@@ -467,6 +467,10 @@ mod api_key_digest_tests;
 #[cfg(test)]
 #[path = "api_key_binding_tests.rs"]
 mod api_key_binding_tests;
+
+#[cfg(test)]
+#[path = "api_key_serialize_tests.rs"]
+mod api_key_serialize_tests;
 
 #[cfg(test)]
 #[path = "auth_dashboard_session_tests.rs"]

@@ -3,6 +3,10 @@
 //! Unit rows for [`caller_key`]: the exact encoding, that no subject key can
 //! equal a credential key, and which variant each identity mix resolves to.
 //! The route-level rows live in `tests/meta_firewall_verdict/caller_key.rs`.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use super::*;
 use crate::gateway::auth::{AuthenticatedClient, anonymous_client, principal_of};

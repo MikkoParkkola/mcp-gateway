@@ -555,7 +555,7 @@ impl EventsHub {
                 backend: backend.clone(),
                 scope: Visibility::Backend(backend),
                 owner: None,
-                upstream_id: uuid::Uuid::new_v4().to_string(),
+                upstream_id: crate::ids::new_v4().to_string(),
                 occurred_at,
                 data: json!({}),
                 lifecycle_key: key,

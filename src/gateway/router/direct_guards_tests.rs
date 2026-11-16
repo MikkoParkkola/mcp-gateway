@@ -444,7 +444,7 @@ async fn t5_guards_signing_off_dispatches_and_gateway_invoke_is_signed() {
         assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{backend}");
         let fx = fixture(Answer::Ok, |meta| arm_signing(meta, true)).await;
         // A fresh nonce per call, as a client would send.
-        let nonce = uuid::Uuid::new_v4().to_string();
+        let nonce = crate::ids::new_v4().to_string();
         let (_, body) = post_meta_invoke_nonce(&fx, "k-std", backend, "read", &nonce).await;
         assert!(
             body["result"].get("_signature").is_some(),
