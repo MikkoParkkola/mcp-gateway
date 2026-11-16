@@ -182,6 +182,19 @@ pub(crate) type StdioTelemetry =
 /// spawned this process, so it holds whatever the operator holds.
 const STDIO: CallerStanding = CallerStanding::Admin;
 
+/// Hand the published config to the capability catalogue. The catalogue scan
+/// starts before this handle exists: attaching delivers a part that scan
+/// parked, and a scan still loading publishes into this handle. Called once
+/// per backend, before the HTTP listener binds.
+fn attach_capability_revision(
+    meta_mcp: &MetaMcp,
+    live_config: &Arc<crate::config_reload::LiveConfig>,
+) {
+    if let Some(capabilities) = meta_mcp.get_capabilities() {
+        capabilities.attach_revision(Arc::clone(live_config));
+    }
+}
+
 fn expand_home_path(path: &str) -> PathBuf {
     crate::home_dir::expand_or_cwd(path)
 }
