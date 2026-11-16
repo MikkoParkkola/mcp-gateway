@@ -207,8 +207,7 @@ async fn l_env_each_npm_step_sees_exactly_the_fetch_environment() {
             shim.bin.display(),
             tree.join("lib/node_modules/npm/bin").display()
         );
-        let mut want =
-            super::fetch_step::npm_env(credential, port.parse().expect("port"), &path);
+        let mut want = super::fetch_step::npm_env(credential, port.parse().expect("port"), &path);
         want.sort();
         assert_eq!(seen, want, "{step}: {out}");
     }
@@ -240,7 +239,11 @@ fi"#;
         .skip_while(|l| !l.starts_with("bin-ran"))
         .collect();
     // PID 1 may be hidden from the run; nothing else may be there.
-    assert_eq!(tail.get(..2), Some(&["bin-ran", "escapee-gone"][..]), "{out}");
+    assert_eq!(
+        tail.get(..2),
+        Some(&["bin-ran", "escapee-gone"][..]),
+        "{out}"
+    );
     assert!(tail[2..].iter().all(|l| *l == "other 1"), "{out}");
 }
 
@@ -261,7 +264,10 @@ async fn l_deadline2_the_two_npm_steps_share_one_deadline() {
     // The gateway's own deadline ends the session first: its wait for
     // fetch_done times out at the deadline, either way a refusal.
     let text = refusal.to_string();
-    assert!(text.contains("deadline") || text.contains("never came"), "{text}");
+    assert!(
+        text.contains("deadline") || text.contains("never came"),
+        "{text}"
+    );
 }
 
 /// The shim itself, outside the sandbox (runs where user namespaces are
