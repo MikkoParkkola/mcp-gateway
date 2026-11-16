@@ -285,7 +285,7 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
         }
         let scope = if attr.starts_with("#!") {
             code.as_str()
-        } else if code[close..].trim_start().starts_with("let ") {
+        } else if mutant!("m-stmt-scope", false, code[close..].trim_start().starts_with("let ")) {
             // An allow on a `let` reaches that statement only, not the next block.
             statement_from(&code, close)
         } else {

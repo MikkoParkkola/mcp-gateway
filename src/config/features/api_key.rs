@@ -194,7 +194,7 @@ impl<'a> From<&'a ApiKeyConfig> for KeyOut<'a> {
             allowed_tools: allowed_tools.as_deref(),
             denied_tools: denied_tools.as_deref(),
             admin: *admin,
-            kind: *kind,
+            kind: mutant!("m-mirror-kind", ApiKeyKind::default(), *kind),
             principal: principal.as_deref(),
             previous_key_sha256: previous_key_sha256.as_deref(),
             previous_expires_at: previous_expires_at.as_ref(),
