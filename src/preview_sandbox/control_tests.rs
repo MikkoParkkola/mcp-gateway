@@ -193,9 +193,9 @@ fn t8_a_duplicated_status_field_is_refused() {
 /// T8, kills "the listener outlives the accept" and "a second connection is
 /// taken": once the helper's one connection is taken, whatever the peer check
 /// said, no second connection is served. A connect that goes through must be
-/// reset when read: it was queued on a copy of the listener's fd that a child
-/// another test forks holds until its exec, and closing the last copy resets
-/// it. An accepted connection reads an end or a byte instead, or hangs. The
+/// reset (when read, or already while connecting): it was queued on a copy of
+/// the listener's fd that a child another test forks holds until its exec, and
+/// closing the last copy resets it. An accepted connection reads an end or a byte instead, or hangs. The
 /// row then waits for a refused connect: a live listener never refuses (once
 /// its backlog is full it answers "try again"), so the guard fails the row.
 /// Linux only: the sandbox runs nowhere else, and on macOS a full backlog
@@ -228,6 +228,11 @@ async fn t8_no_second_connection_is_served() {
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     last = "a full backlog's try again".into();
+                }
+                // Queued, then reset before the connect finished: the same
+                // closed copy as a taken connect reset on its read.
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {
+                    last = "a queued connect, reset while connecting".into();
                 }
                 Err(e) => panic!("a connect after the accept failed otherwise: {e}"),
             }
