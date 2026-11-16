@@ -325,9 +325,7 @@ impl Drop for AllowlistProxy {
             // Ended under the lock; its Drop shuts the tunnels.
             drop(live.take());
         }
-        if let Some(dir) = self.unix_path.parent() {
-            let _ = std::fs::remove_dir_all(dir);
-        }
+        // PROBE MUTANT, never merges: the private directory is left behind.
     }
 }
 
