@@ -81,7 +81,10 @@ fn backend_in(root: &str) -> (Arc<CapabilityBackend>, Arc<MetaMcp>) {
 async fn p4_admin_and_watcher_reload_deliver_after_the_swap() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let root = root_of(&dir);
-    let path = format!("{root}/alpha.yaml");
+    let path = std::path::Path::new(&root)
+        .join("alpha.yaml")
+        .display()
+        .to_string();
     let original = yaml_bytes("alpha", "one");
     let admin_bytes = yaml_bytes("alpha", "admin");
     let watcher_bytes = yaml_bytes("alpha", "watcher");
@@ -185,7 +188,10 @@ fn l2_watcher_and_admin_reloads_are_ordered() {
     op_gate::clear_arrivals();
     let dir = tempfile::tempdir().expect("a temp dir");
     let root = root_of(&dir);
-    let path = format!("{root}/alpha.yaml");
+    let path = std::path::Path::new(&root)
+        .join("alpha.yaml")
+        .display()
+        .to_string();
     let watcher_bytes = yaml_bytes("alpha", "watcher");
     let admin_bytes = yaml_bytes("alpha", "admin");
     let (backend, meta) = backend_in(&root);

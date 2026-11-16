@@ -58,12 +58,11 @@ pub(crate) fn source_path(root: &str, file: &Path) -> String {
     if relative.as_os_str().is_empty() {
         return root.to_string();
     }
-    let relative = relative.to_string_lossy();
-    if root.ends_with('/') || root.ends_with('\\') {
-        format!("{root}{relative}")
-    } else {
-        format!("{root}/{relative}")
-    }
+    // The configured directory as written, joined with the platform's
+    // separator: on Windows the walk's relative path carries backslashes, and
+    // a rug-pull record and a loaded-from key must equal the path a caller
+    // builds with `Path::join`. On Unix this is the same string as `{root}/{relative}`.
+    Path::new(root).join(relative).display().to_string()
 }
 
 impl CapabilityLoader {

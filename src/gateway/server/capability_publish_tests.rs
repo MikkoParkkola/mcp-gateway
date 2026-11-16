@@ -309,7 +309,10 @@ async fn h2_account_bound_http_startup_reaches_a_covered_part() {
         &started.backend,
         &started.live,
         &started.key,
-        &format!("{root}/alpha.yaml"),
+        &std::path::Path::new(&root)
+            .join("alpha.yaml")
+            .display()
+            .to_string(),
         &bytes,
         "account-bound HTTP",
     );
@@ -326,7 +329,10 @@ async fn h2_background_http_startup_reaches_a_covered_part() {
         &started.backend,
         &started.live,
         &started.key,
-        &format!("{root}/alpha.yaml"),
+        &std::path::Path::new(&root)
+            .join("alpha.yaml")
+            .display()
+            .to_string(),
         &bytes,
         "background HTTP",
     );
@@ -349,11 +355,17 @@ async fn s1_a_two_directory_startup_delivers_one_part_naming_both() {
     // The part is sorted by path, and the temp dirs' names order the two.
     let mut files = vec![
         (
-            format!("{}/alpha.yaml", root_of(first.path())),
+            std::path::Path::new(&root_of(first.path()))
+                .join("alpha.yaml")
+                .display()
+                .to_string(),
             part_digest(&started.key, &alpha),
         ),
         (
-            format!("{}/beta.yaml", root_of(second.path())),
+            std::path::Path::new(&root_of(second.path()))
+                .join("beta.yaml")
+                .display()
+                .to_string(),
             part_digest(&started.key, &beta),
         ),
     ];
@@ -382,7 +394,10 @@ async fn h2_stdio_startup_reaches_a_covered_part() {
         &backend,
         &live,
         &key,
-        &format!("{root}/alpha.yaml"),
+        &std::path::Path::new(&root)
+            .join("alpha.yaml")
+            .display()
+            .to_string(),
         &bytes,
         "stdio",
     );

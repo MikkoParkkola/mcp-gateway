@@ -387,13 +387,13 @@ impl CapabilityBackend {
     ///
     /// Returns an error if reloading fails for all directories.
     pub async fn reload(&self) -> Result<usize> {
-        // Held until this function returns, which is after the publish.
+        // Held through the publish; this reload's log lines are written after
+        // it is released, so a blocked log write never holds up the next
+        // catalogue operation.
         let _operation = self.lock_operation().await;
         let dirs: Vec<String> = self.directories.read().clone();
-
-        if dirs.is_empty() {
-            debug!(backend = %self.name, "No directories to reload");
-        }
+        let mut failed_dirs: Vec<(String, String)> = Vec::new();
+        let mut refused_logs: Vec<(String, String)> = Vec::new();
 
         // Before any note, so this reload's set is not the one still stored
         // on the catalogue. Install below is what stores it. An empty
@@ -421,7 +421,7 @@ impl CapabilityBackend {
                 Err(e) => {
                     partial = true;
                     self.note_unreadable(dir);
-                    warn!(backend = %self.name, directory = %dir, error = %e, "Failed to reload directory");
+                    failed_dirs.push((dir.clone(), e.to_string()));
                 }
             }
         }
@@ -442,12 +442,7 @@ impl CapabilityBackend {
                 Err(error) => {
                     total -= 1;
                     refused.insert(file.definition.name.clone());
-                    warn!(
-                        backend = %self.name,
-                        capability = %file.definition.name,
-                        error = %error,
-                        "Capability refused on reload: its account binding does not resolve"
-                    );
+                    refused_logs.push((file.definition.name.clone(), error.to_string()));
                 }
             }
         }
@@ -505,7 +500,22 @@ impl CapabilityBackend {
         self.publish_revision(seq, part);
         self.catalogue_changed();
         self.note_admitted(trusted, !partial);
+        drop(_operation);
 
+        if dirs.is_empty() {
+            debug!(backend = %self.name, "No directories to reload");
+        }
+        for (dir, error) in &failed_dirs {
+            warn!(backend = %self.name, directory = %dir, error = %error, "Failed to reload directory");
+        }
+        for (capability, error) in &refused_logs {
+            warn!(
+                backend = %self.name,
+                capability = %capability,
+                error = %error,
+                "Capability refused on reload: its account binding does not resolve"
+            );
+        }
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
         Ok(total)
     }

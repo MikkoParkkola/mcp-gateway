@@ -105,7 +105,7 @@ impl Gateway {
                     CapabilityBackend::settle_before_initial_scan().await;
                 }
                 // Load, the post-rug-pull snapshot and the publish are one
-                // operation. The guard drops at the end of this scan.
+                // operation. The guard drops after the publish, before the logs.
                 let _operation = cap_backend_for_load.lock_operation().await;
 
                 let mut total_caps = 0;
@@ -113,6 +113,9 @@ impl Gateway {
                 // INITIAL scan. A missing or unreadable optional directory is
                 // NOT collected here — that stays benign, exactly as before.
                 let mut refused: Vec<String> = Vec::new();
+                // Each directory's outcome, logged once the operation lock is
+                // released: a blocked log write must not hold up a reload.
+                let mut dir_logs: Vec<(String, Result<usize, String>)> = Vec::new();
                 // Before any directory is read: this scan's unreadable set
                 // starts empty and is the one its catalogue carries.
                 cap_backend_for_load.begin_incremental_coverage();
@@ -126,13 +129,13 @@ impl Gateway {
                             for path in &report.unreadable {
                                 cap_backend_for_load.note_unreadable(path);
                             }
-                            debug!(directory = %dir, count = report.admitted, "Loaded capabilities");
+                            dir_logs.push((dir.clone(), Ok(report.admitted)));
                             refused.extend(report.rejected);
                         }
                         Err(e) => {
                             cap_backend_for_load.mark_initial_scan_failed(); // not fatal
                             cap_backend_for_load.note_unreadable(dir);
-                            debug!(directory = %dir, error = %e, "Failed to load capabilities");
+                            dir_logs.push((dir.clone(), Err(e.to_string())));
                         }
                     }
                     #[cfg(test)]
@@ -176,6 +179,15 @@ impl Gateway {
                 // until attach delivers its part, and attach announces it.
                 if transitioned {
                     cap_backend_for_load.announce_scanned(&registry_for_load);
+                }
+                drop(_operation);
+                for (dir, outcome) in &dir_logs {
+                    match outcome {
+                        Ok(count) => debug!(directory = %dir, count, "Loaded capabilities"),
+                        Err(error) => {
+                            debug!(directory = %dir, error = %error, "Failed to load capabilities")
+                        }
+                    }
                 }
                 if total_caps > 0 {
                     info!(capabilities = total_caps, name = %capability_name, "Capability backend ready");

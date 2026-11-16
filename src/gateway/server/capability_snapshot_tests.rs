@@ -67,7 +67,10 @@ fn id_of(key: &[u8; 32], part: &CapabilityPart<PartDigest>) -> String {
 /// Partial over the one file installed: `alpha` in `dir`, as configured.
 fn alpha_only(key: &[u8; 32], dir: &str) -> CapabilityPart<PartDigest> {
     CapabilityPart::Partial(vec![(
-        format!("{dir}/alpha.yaml"),
+        std::path::Path::new(&dir)
+            .join("alpha.yaml")
+            .display()
+            .to_string(),
         part_digest(key, yaml_bytes("alpha").as_bytes()),
     )])
 }

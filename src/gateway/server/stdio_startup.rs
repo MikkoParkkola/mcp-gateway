@@ -59,11 +59,27 @@ impl Gateway {
             // fails is still checked for pin mismatches below.
             cap_backend.register_directories(&self.config.capabilities.directories);
             let mut refused = Vec::new();
+            // Defined before the lock is taken, and called only after it is released.
+            let log_dirs = |logs: &[(String, Result<usize, String>)]| {
+                for (dir, outcome) in logs {
+                    match outcome {
+                        Ok(count) => {
+                            debug!(target: PARENT_TARGET, directory = %dir, count, "Loaded capabilities (stdio)")
+                        }
+                        Err(error) => {
+                            debug!(target: PARENT_TARGET, directory = %dir, %error, "Failed to load optional capabilities (stdio)")
+                        }
+                    }
+                }
+            };
             // The load, the snapshot and the publish are one operation.
             let operation = cap_backend.lock_operation().await;
             // Before any directory is read: this startup's unreadable set
             // starts empty and is the one its catalogue carries.
             cap_backend.begin_incremental_coverage();
+            // Each directory's outcome, logged once the operation lock is
+            // released: a blocked log write must not hold up a reload.
+            let mut dir_logs: Vec<(String, Result<usize, String>)> = Vec::new();
             for dir in &self.config.capabilities.directories {
                 match cap_backend.load_from_directory_reporting(dir).await {
                     Ok(report) => {
@@ -71,16 +87,18 @@ impl Gateway {
                         for path in &report.unreadable {
                             cap_backend.note_unreadable(path);
                         }
-                        debug!(target: PARENT_TARGET, directory = %dir, count = admitted, "Loaded capabilities (stdio)");
+                        dir_logs.push((dir.clone(), Ok(admitted)));
                         refused.extend(report.rejected);
                     }
                     Err(error) => {
                         cap_backend.note_unreadable(dir);
-                        debug!(target: PARENT_TARGET, directory = %dir, %error, "Failed to load optional capabilities (stdio)");
+                        dir_logs.push((dir.clone(), Err(error.to_string())));
                     }
                 }
             }
             if !refused.is_empty() {
+                drop(operation);
+                log_dirs(&dir_logs);
                 return Err(crate::Error::Config(format!(
                     "capabilities rejected by the account admission gate: {}",
                     refused.join("; ")
@@ -101,6 +119,7 @@ impl Gateway {
                 cap_backend.mark_initial_scan_complete();
             }
             drop(operation);
+            log_dirs(&dir_logs);
             meta_mcp.set_capabilities(cap_backend);
         }
 

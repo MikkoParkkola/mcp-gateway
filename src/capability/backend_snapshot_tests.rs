@@ -155,8 +155,20 @@ async fn p1_changed_bytes_reload_to_the_new_id() {
     wait(backend.reload()).await.expect("the reload");
 
     let after = snapshot(&backend);
-    let expected = loaded(format!("{root}/alpha.yaml"), &changed);
-    let prior = loaded(format!("{root}/alpha.yaml"), &previous);
+    let expected = loaded(
+        std::path::Path::new(&root)
+            .join("alpha.yaml")
+            .display()
+            .to_string(),
+        &changed,
+    );
+    let prior = loaded(
+        std::path::Path::new(&root)
+            .join("alpha.yaml")
+            .display()
+            .to_string(),
+        &previous,
+    );
     assert_eq!(
         id_of(&after),
         id_of(&expected),
@@ -181,7 +193,13 @@ async fn p2_identical_bytes_keep_the_id_and_membership_rounds_trip() {
     wait(backend.reload()).await.expect("the identical reload");
 
     let reloaded = snapshot(&backend);
-    let one = loaded(format!("{root}/alpha.yaml"), &alpha);
+    let one = loaded(
+        std::path::Path::new(&root)
+            .join("alpha.yaml")
+            .display()
+            .to_string(),
+        &alpha,
+    );
     assert_eq!(
         id_of(&reloaded),
         id_of(&one),
@@ -194,8 +212,20 @@ async fn p2_identical_bytes_keep_the_id_and_membership_rounds_trip() {
         .expect("the reload that adds a file");
     let added = snapshot(&backend);
     let two = CapabilityPart::Loaded(vec![
-        (format!("{root}/alpha.yaml"), part_digest(&key(), &alpha)),
-        (format!("{root}/beta.yaml"), part_digest(&key(), &beta)),
+        (
+            std::path::Path::new(&root)
+                .join("alpha.yaml")
+                .display()
+                .to_string(),
+            part_digest(&key(), &alpha),
+        ),
+        (
+            std::path::Path::new(&root)
+                .join("beta.yaml")
+                .display()
+                .to_string(),
+            part_digest(&key(), &beta),
+        ),
     ]);
     assert_eq!(id_of(&added), id_of(&two), "a file added names a new id");
 
@@ -273,7 +303,13 @@ async fn p3_yaml_reload_keeps_the_part_and_seq_until_a_capability_reload() {
     write_at(&dir.path().join("alpha.yaml"), &after);
     wait(backend.reload()).await.expect("the capability reload");
     let changed = snapshot(&backend);
-    let expected = loaded(format!("{root}/alpha.yaml"), &after);
+    let expected = loaded(
+        std::path::Path::new(&root)
+            .join("alpha.yaml")
+            .display()
+            .to_string(),
+        &after,
+    );
     assert_ne!(
         id_of(&changed),
         prior,
@@ -308,8 +344,20 @@ async fn s1_a_scan_of_two_directories_is_one_part() {
 
     let part = snapshot(&backend);
     let expected = CapabilityPart::Loaded(vec![
-        (format!("{root_a}/alpha.yaml"), part_digest(&key(), &alpha)),
-        (format!("{root_b}/beta.yaml"), part_digest(&key(), &beta)),
+        (
+            std::path::Path::new(&root_a)
+                .join("alpha.yaml")
+                .display()
+                .to_string(),
+            part_digest(&key(), &alpha),
+        ),
+        (
+            std::path::Path::new(&root_b)
+                .join("beta.yaml")
+                .display()
+                .to_string(),
+            part_digest(&key(), &beta),
+        ),
     ]);
     assert_eq!(
         id_of(&part),
@@ -365,7 +413,13 @@ async fn s2_refused_and_rug_pulled_capabilities_are_absent() {
     assert!(backend.has_capability("kept"), "the other file stays");
 
     let part = snapshot(&backend);
-    let expected = loaded(format!("{root}/kept.yaml"), &kept);
+    let expected = loaded(
+        std::path::Path::new(&root)
+            .join("kept.yaml")
+            .display()
+            .to_string(),
+        &kept,
+    );
     assert_eq!(
         id_of(&part),
         id_of(&expected),
@@ -392,8 +446,20 @@ async fn s3_the_same_name_in_two_directories_keeps_both_files() {
 
     let part = snapshot(&backend);
     let expected = CapabilityPart::Loaded(vec![
-        (format!("{root_a}/shared.yaml"), part_digest(&key(), &left)),
-        (format!("{root_b}/shared.yaml"), part_digest(&key(), &right)),
+        (
+            std::path::Path::new(&root_a)
+                .join("shared.yaml")
+                .display()
+                .to_string(),
+            part_digest(&key(), &left),
+        ),
+        (
+            std::path::Path::new(&root_b)
+                .join("shared.yaml")
+                .display()
+                .to_string(),
+            part_digest(&key(), &right),
+        ),
     ]);
     assert_eq!(id_of(&part), id_of(&expected), "both files are in the part");
 }
@@ -448,7 +514,10 @@ async fn s4_reload_unreadable_directory_is_partial() {
     let part = snapshot(&backend);
     // Partial over the files installed: the readable directory's one file.
     let expected = CapabilityPart::Partial(vec![(
-        format!("{good}/alpha.yaml"),
+        std::path::Path::new(&good)
+            .join("alpha.yaml")
+            .display()
+            .to_string(),
         part_digest(&key(), &alpha),
     )]);
     assert_eq!(
@@ -475,7 +544,10 @@ async fn s4_reload_unreadable_file_is_partial() {
     wait(backend.reload()).await.expect("the reload");
     let part = snapshot(&backend);
     let expected = CapabilityPart::Partial(vec![(
-        format!("{root}/alpha.yaml"),
+        std::path::Path::new(&root)
+            .join("alpha.yaml")
+            .display()
+            .to_string(),
         part_digest(&key(), &alpha),
     )]);
     assert_eq!(
