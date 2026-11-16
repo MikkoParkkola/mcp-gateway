@@ -54,6 +54,10 @@ impl EventsHub {
         } = *claimed;
         #[cfg(test)]
         self.after_claim.pause().await;
+        if !record.is_event() {
+            self.attempt_ended(services, &record, &sub).await;
+            return;
+        }
         let url = url::Url::parse(&sub.url).ok();
         let ctx = Ctx {
             sub: &sub,
@@ -762,6 +766,8 @@ const fn dead(reason: DeadReason, status: &'static str) -> Settle {
 
 #[path = "worker_dispatch.rs"]
 mod dispatch;
+#[path = "worker_ended.rs"]
+mod ended;
 #[path = "worker_fence.rs"]
 mod fence;
 #[path = "worker_settle.rs"]
