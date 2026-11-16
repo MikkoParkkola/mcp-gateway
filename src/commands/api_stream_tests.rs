@@ -518,5 +518,30 @@ async fn an_over_long_line_in_one_chunk_is_refused() {
     assert_eq!((outcome.exit, out.len()), (ApiExit::LocalFailure, 0));
 }
 
+/// The shared refusal on the stream's JSON events (its third caller, beside
+/// admin_call and the buffered path): an event whose redaction would merge two
+/// keys is refused, not printed short.
+#[tokio::test]
+async fn a_json_event_that_loses_an_entry_to_redaction_is_refused() {
+    // `[redacted]` is the shared redactor's first marker: renaming the key
+    // `#` to it collides with the existing key.
+    let reply = answer(
+        200,
+        "text/event-stream",
+        vec![
+            br##"data: {"#":"first","[redacted]":"second"}"##.to_vec(),
+            b"\n\n".to_vec(),
+        ],
+        true,
+    );
+    let (out, outcome, _) = run_as(&args(STREAM, Some(1), true), Some(reply), "#").await;
+    assert_eq!(
+        (outcome.exit, out.len()),
+        (ApiExit::LocalFailure, 0),
+        "{}",
+        outcome.stderr
+    );
+}
+
 #[path = "api_stream_wait_tests.rs"]
 mod waits;
