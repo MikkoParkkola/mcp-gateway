@@ -813,7 +813,7 @@ Included in a default build. `/metrics` answers only the scrape token in
 
 ```yaml
 server:
-  metrics_token: env:METRICS_SCRAPE_TOKEN
+  metrics_token: env:MCP_GATEWAY_METRICS_TOKEN
 ```
 
 Anything else gets 401 with `WWW-Authenticate: Bearer`, **the admin bearer

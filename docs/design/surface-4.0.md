@@ -1420,7 +1420,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_KIND_NAMESPACE` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh:20 |
 | `MCP_GATEWAY_LOG_FORMAT` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:148 |
 | `MCP_GATEWAY_LOG_LEVEL` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:142 |
-| `MCP_GATEWAY_METRICS_TOKEN` | INTERNAL | example name only; config reads it via env:/${} | hidden variable: still read and applied; left out of the docs; UPGRADING names it | deploy/helm/mcp-gateway/templates/configmap.yaml:130 |
+| `MCP_GATEWAY_METRICS_TOKEN` | KEEP | the env name the Helm chart renders for `server.metrics_token` when `metrics.existingSecret` is set; not read by the binary | - | docs/DEPLOYMENT.md:816 |
 | `MCP_GATEWAY_MUTANT` | INTERNAL | names the one mutant a mutation-proof test process switches on; read only in a build with `--cfg mutants`, never in a normal or release build | test-only | src/mutant.rs:23 |
 | `MCP_GATEWAY_MUTANT_CHILD` | INTERNAL | marks the child process of the `mutant!` switch's own tests; compiled into test builds only (`cfg(test)`) | test-only | src/mutant.rs:36 |
 | `MCP_GATEWAY_PORT` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:131 |
