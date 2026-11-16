@@ -533,12 +533,27 @@ pub async fn run_dashboard_link_args(
     port_override: Option<u16>,
     host_override: Option<&str>,
 ) -> ExitCode {
-    match dashboard_link_base(args.url, args.tls, load, port_override, host_override) {
-        Ok((base, tls)) => run_dashboard_link_command(&base, &tls).await,
-        Err(message) => {
-            eprintln!("dashboard-link: {message}");
-            ExitCode::FAILURE
-        }
+    let token = read_token(|name| std::env::var(name).ok());
+    print(dashboard_link_args_output(args, load, port_override, host_override, token).await)
+}
+
+/// What `dashboard-link` prints for `token`. A resolution error comes before a
+/// token error, as before; with a token set it passes the output gate too,
+/// because a config error can quote the config, which can hold the token.
+async fn dashboard_link_args_output(
+    args: mcp_gateway::cli::dashboard_link::DashboardLinkArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    token: Result<String, TokenError>,
+) -> Printed {
+    const PREFIX: &str = "dashboard-link";
+    let base = dashboard_link_base(args.url, args.tls, load, port_override, host_override);
+    match (base, token) {
+        (Ok((base, tls)), Ok(token)) => dashboard_link_output(&base, &tls, &token).await,
+        (Err(message), Ok(token)) => gate(PREFIX, &token, Err(message)),
+        (Err(message), Err(_)) => unmasked(PREFIX, &message),
+        (Ok(_), Err(error)) => unmasked(PREFIX, &error.to_string()),
     }
 }
 
@@ -551,33 +566,41 @@ pub async fn run_events_command(
     host_override: Option<&str>,
 ) -> ExitCode {
     let mcp_gateway::cli::events::EventsCommand::DeadLetters(args) = args.command;
-    match dashboard_link_base(
+    let token = read_token(|name| std::env::var(name).ok());
+    print(events_args_output(&args, load, port_override, host_override, token).await)
+}
+
+/// What `events dead-letters` prints for `token`, resolving like
+/// [`dashboard_link_args_output`].
+async fn events_args_output(
+    args: &mcp_gateway::cli::events::DeadLettersArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    token: Result<String, TokenError>,
+) -> Printed {
+    const PREFIX: &str = "events dead-letters";
+    let base = dashboard_link_base(
         args.url.clone(),
         args.tls.clone(),
         load,
         port_override,
         host_override,
-    ) {
-        Ok((base, tls)) => run_dead_letters_command(&base, &tls, &args).await,
-        Err(message) => {
-            eprintln!("events dead-letters: {message}");
-            ExitCode::FAILURE
-        }
+    );
+    match (base, token) {
+        (Ok((base, tls)), Ok(token)) => dead_letters_output(&base, &tls, args, &token).await,
+        (Err(message), Ok(token)) => gate(PREFIX, &token, Err(message)),
+        (Err(message), Err(_)) => unmasked(PREFIX, &message),
+        (Ok(_), Err(error)) => unmasked(PREFIX, &error.to_string()),
     }
 }
 
-/// Run `events dead-letters` against the gateway at `base`.
-async fn run_dead_letters_command(
-    base: &str,
-    tls: &LinkTls,
-    args: &mcp_gateway::cli::events::DeadLettersArgs,
-) -> ExitCode {
-    match read_token(|name| std::env::var(name).ok()) {
-        Ok(token) => print(dead_letters_output(base, tls, args, &token).await),
-        Err(error) => {
-            eprintln!("events dead-letters: {error}");
-            ExitCode::FAILURE
-        }
+/// A failure printed when no token is set, so there is nothing to mask.
+fn unmasked(prefix: &str, message: &str) -> Printed {
+    Printed {
+        stdout: String::new(),
+        stderr: format!("{prefix}: {message}\n"),
+        ok: false,
     }
 }
 
@@ -624,12 +647,23 @@ fn gate(prefix: &str, token: &str, result: Result<(String, &str), String>) -> Pr
         Ok((stdout, note)) => (stdout, note.to_string(), true),
         Err(message) => (String::new(), format!("{prefix}: {message}\n"), false),
     };
-    Printed {
-        stdout,
-        stderr: mcp_gateway::cli::redact::text(&stderr, &[token.to_string()]),
-        ok,
-    }
+    // A token re-formed across a redaction marker's edge would survive the
+    // redactor; then print one fixed sentence, or nothing if even that holds
+    // the token (as the api command does).
+    let stderr = mcp_gateway::cli::redact::text(&stderr, &[token.to_string()]);
+    let stderr = if !stderr.contains(token) {
+        stderr
+    } else if UNPRINTABLE_MESSAGE.contains(token) {
+        String::new()
+    } else {
+        UNPRINTABLE_MESSAGE.to_string()
+    };
+    Printed { stdout, stderr, ok }
 }
+
+/// Printed instead of a message the redactor could not make token-free.
+const UNPRINTABLE_MESSAGE: &str =
+    "A message could not be printed without exposing the credential.\n";
 
 fn print(out: Printed) -> ExitCode {
     print!("{}", out.stdout);
@@ -714,17 +748,6 @@ fn transport_error(base: &str, error: reqwest::Error, tls: &LinkTls) -> String {
         }
     }
     message
-}
-
-/// Run the command against the gateway at `base`.
-pub async fn run_dashboard_link_command(base: &str, tls: &LinkTls) -> ExitCode {
-    match read_token(|name| std::env::var(name).ok()) {
-        Ok(token) => print(dashboard_link_output(base, tls, &token).await),
-        Err(error) => {
-            eprintln!("dashboard-link: {error}");
-            ExitCode::FAILURE
-        }
-    }
 }
 
 /// What `dashboard-link` prints, through the output gate.

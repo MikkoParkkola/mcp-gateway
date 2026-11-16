@@ -358,3 +358,71 @@ async fn a_token_in_fixed_text_is_never_printed() {
     let [_, (_, events)] = both(&refused, "events").await;
     printed_nowhere("events", "events", &events);
 }
+
+fn dead_letters(
+    action: mcp_gateway::cli::events::DeadLetterAction,
+) -> mcp_gateway::cli::events::DeadLettersArgs {
+    mcp_gateway::cli::events::DeadLettersArgs {
+        action,
+        id: None,
+        all: false,
+        subscription: None,
+        reason: None,
+        url: None,
+        tls: no_flags(),
+    }
+}
+
+/// MIK-9679.CLIUX.14: a config error that quotes the token is gated once a
+/// token is set; it still comes before the token error.
+#[tokio::test]
+async fn a_config_error_quoting_the_token_is_never_printed() {
+    let token = "tok-IN-CONFIG-9679";
+    let load = || Err(format!("bad bearer_token value {token}"));
+    let link = super::dashboard_link_args_output(
+        mcp_gateway::cli::dashboard_link::DashboardLinkArgs {
+            url: None,
+            tls: no_flags(),
+        },
+        load,
+        None,
+        None,
+        Ok(token.to_string()),
+    )
+    .await;
+    let list = dead_letters(mcp_gateway::cli::events::DeadLetterAction::List);
+    let events = super::events_args_output(&list, load, None, None, Ok(token.to_string())).await;
+    for (command, out) in [("dashboard-link", &link), ("events", &events)] {
+        printed_nowhere(command, token, out);
+        assert!(
+            !out.ok && out.stderr.contains("could not load the config"),
+            "{out:?}"
+        );
+    }
+    let unset = super::events_args_output(&list, load, None, None, Err(TokenError::Missing)).await;
+    assert!(
+        unset.stderr.contains("could not load the config"),
+        "{unset:?}"
+    );
+}
+
+/// MIK-9679.CLIUX.14: a usage error, a single character in the redaction
+/// marker, and a token re-formed at a marker's edge are never printed.
+#[tokio::test]
+async fn usage_and_marker_edge_tokens_are_never_printed() {
+    let base = answering(400, r#"{"error":"denied: Xd]zz"}"#.into()).await;
+    let replay = dead_letters(mcp_gateway::cli::events::DeadLetterAction::Replay);
+    let tls = LinkTls::default();
+    let usage = super::dead_letters_output(&base, &tls, &replay, "replay").await;
+    printed_nowhere("events", "replay", &usage);
+    assert!(!usage.ok && !usage.stderr.is_empty(), "{usage:?}");
+    for token in ["d", "d]z"] {
+        for (command, out) in both(&base, token).await {
+            printed_nowhere(command, token, &out);
+            assert!(
+                !out.ok && !out.stderr.is_empty(),
+                "{command} {token:?}: {out:?}"
+            );
+        }
+    }
+}
