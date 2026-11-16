@@ -394,6 +394,6 @@ pub(super) fn csv(collected: &Collected) -> String {
     w.finish(collected.truncated)
 }
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "export_tests.rs"]
 mod tests;
