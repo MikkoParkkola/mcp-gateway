@@ -6,6 +6,9 @@ use std::time::Duration;
 
 use super::*;
 
+/// A failed kill; the judges read no errno.
+const FAILED: Sent = Sent::KillFailed { errno: 1 };
+
 const LATE: Sent = Sent::SkipLate {
     late: Duration::from_secs(1),
 };
@@ -30,7 +33,7 @@ fn check(judge: fn(&[Sent]) -> Result<(), String>, cases: &[(&[Sent], Option<&st
 
 #[test]
 fn the_live_rule_accepts_sigterm_then_kill_or_a_justified_late_skip_only() {
-    use Sent::{Kill, KillFailed, KillGone, LeaderGone, Term, Unproven};
+    use Sent::{Kill, KillGone, LeaderGone, Term, Unproven};
     check(
         judge_term_then_kill,
         &[
@@ -43,8 +46,8 @@ fn the_live_rule_accepts_sigterm_then_kill_or_a_justified_late_skip_only() {
             (&[Term, KillGone, KillGone], None),
             (&[Term, Kill, KillGone], None),
             (&[LATE, KillGone], None),
-            (&[Term, KillFailed], Some("a kill failed")),
-            (&[Term, KillFailed, KillGone], Some("a kill failed")),
+            (&[Term, FAILED], Some("a kill failed")),
+            (&[Term, FAILED, KillGone], Some("a kill failed")),
             (&[KillGone, Term, KillGone], Some("not one SIGTERM")),
             (&[Kill], Some("no recorded reason")),
             (&[Unproven, Kill], Some("ownership was not shown")),
@@ -63,7 +66,7 @@ fn the_live_rule_accepts_sigterm_then_kill_or_a_justified_late_skip_only() {
 
 #[test]
 fn the_strict_rule_accepts_the_normal_path_only() {
-    use Sent::{Kill, KillFailed, KillGone, LeaderGone, Term, Unproven};
+    use Sent::{Kill, KillGone, LeaderGone, Term, Unproven};
     check(
         judge_strict,
         &[
@@ -80,15 +83,15 @@ fn the_strict_rule_accepts_the_normal_path_only() {
             (&[KillGone], Some("not one SIGTERM")),
             (&[LATE, KillGone], Some("not one SIGTERM")),
             (&[LeaderGone, KillGone], Some("not one SIGTERM")),
-            (&[Term, KillFailed], Some("a kill failed")),
-            (&[Term, KillFailed, KillGone], Some("a kill failed")),
+            (&[Term, FAILED], Some("a kill failed")),
+            (&[Term, FAILED, KillGone], Some("a kill failed")),
         ],
     );
 }
 
 #[test]
 fn the_skip_rule_accepts_the_kill_alone() {
-    use Sent::{Kill, KillFailed, KillGone, LeaderGone, Term, Unproven};
+    use Sent::{Kill, KillGone, LeaderGone, Term, Unproven};
     check(
         judge_kill_without_term,
         &[
@@ -97,7 +100,7 @@ fn the_skip_rule_accepts_the_kill_alone() {
             (&[EARLY, Kill], None),
             (&[KillGone], None),
             (&[Kill, KillGone], None),
-            (&[KillFailed], Some("a kill failed")),
+            (&[FAILED], Some("a kill failed")),
             (&[Term, KillGone], Some("not the kill alone")),
             (&[Term, Kill], Some("not the kill alone")),
             (&[], Some("not the kill alone")),
@@ -111,27 +114,46 @@ fn the_skip_rule_accepts_the_kill_alone() {
 fn a_kill_records_its_outcome() {
     use EsrchOn::{Linux, MacOs};
     use rustix::io::Errno;
-    let err = |e: Errno| Err(std::io::Error::from_raw_os_error(e.raw_os_error()));
-    // (result, leader seen exited, leader's own group, host, recorded)
-    let cases: [(std::io::Result<()>, bool, bool, EsrchOn, Sent); 10] = [
-        (Ok(()), false, true, Linux, Sent::Kill),
-        (Ok(()), true, true, MacOs, Sent::Kill),
-        (err(Errno::SRCH), true, true, Linux, Sent::KillGone),
-        (err(Errno::SRCH), true, true, MacOs, Sent::KillGone),
-        (err(Errno::SRCH), false, true, Linux, Sent::KillFailed),
+    const SRCH: Errno = Errno::SRCH;
+    const PERM: Errno = Errno::PERM;
+    const INVAL: Errno = Errno::INVAL;
+    const ACCES: Errno = Errno::ACCESS;
+    let failed = |e: Errno| Sent::KillFailed {
+        errno: e.raw_os_error(),
+    };
+    // (errno, or None for Ok; leader seen exited; leader's own group; a live
+    // member; host; recorded)
+    let cases: [(Option<Errno>, bool, bool, bool, EsrchOn, Sent); 16] = [
+        (None, false, true, true, Linux, Sent::Kill),
+        (None, true, true, false, MacOs, Sent::Kill),
+        (Some(SRCH), true, true, true, Linux, Sent::KillGone),
+        (Some(SRCH), true, true, true, MacOs, Sent::KillGone),
+        (Some(SRCH), false, true, true, Linux, failed(SRCH)),
         // macOS: the group is ending before the leader reads exited.
-        (err(Errno::SRCH), false, true, MacOs, Sent::KillGone),
+        (Some(SRCH), false, true, true, MacOs, Sent::KillGone),
         // A group that is not the leader's own is never gone, on any host.
-        (err(Errno::SRCH), false, false, MacOs, Sent::KillFailed),
-        (err(Errno::SRCH), true, false, Linux, Sent::KillFailed),
-        (err(Errno::PERM), true, true, Linux, Sent::KillFailed),
-        (err(Errno::PERM), false, true, MacOs, Sent::KillFailed),
+        (Some(SRCH), false, false, false, MacOs, failed(SRCH)),
+        (Some(SRCH), true, false, false, Linux, failed(SRCH)),
+        // EPERM (members found, none signalled): gone only with no live
+        // member left, which BSD killpg answers for a group of zombies.
+        (Some(PERM), false, true, false, MacOs, Sent::KillGone),
+        (Some(PERM), true, true, false, Linux, Sent::KillGone),
+        (Some(PERM), true, true, true, MacOs, failed(PERM)),
+        (Some(PERM), false, true, true, Linux, failed(PERM)),
+        (Some(PERM), false, false, false, MacOs, failed(PERM)),
+        // Any other errno is a failed kill that names itself.
+        (Some(INVAL), true, true, false, MacOs, failed(INVAL)),
+        (Some(INVAL), true, true, false, Linux, failed(INVAL)),
+        (Some(ACCES), false, true, false, MacOs, failed(ACCES)),
     ];
-    for (sent, exited, own, host, want) in cases {
+    for (errno, exited, own, live, host, want) in cases {
+        let sent = errno.map_or(Ok(()), |e| {
+            Err(std::io::Error::from_raw_os_error(e.raw_os_error()))
+        });
         assert_eq!(
-            classify(&sent, exited, own, host),
+            classify(&sent, exited, own, live, host),
             want,
-            "{sent:?}, exited: {exited}, own group: {own}, {host:?}"
+            "{sent:?}, exited: {exited}, own group: {own}, live member: {live}, {host:?}"
         );
     }
 }
@@ -169,7 +191,12 @@ async fn esrch_with_the_leader_running_is_a_failed_kill() {
     arm(pid);
     inject(pid, Esrch::Only);
     tree.start_kill();
-    assert_eq!(take(pid), [Sent::KillFailed]);
+    assert_eq!(
+        take(pid),
+        [Sent::KillFailed {
+            errno: rustix::io::Errno::SRCH.raw_os_error()
+        }]
+    );
     end_tree(tree).await;
 }
 

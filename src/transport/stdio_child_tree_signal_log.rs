@@ -19,9 +19,11 @@ pub(crate) enum Sent {
     /// ended. macOS answers so for a group whose members have all exited; Linux
     /// answers Ok.
     KillGone,
-    /// A kill's syscall failed, and not as `KillGone`: the group may not have
-    /// been the child's.
-    KillFailed,
+    /// A kill's syscall failed, and not as `KillGone`, with its raw errno: the
+    /// group may not have been the child's, or a member was beyond its reach.
+    KillFailed {
+        errno: i32,
+    },
     /// A due SIGTERM skipped: the step landed `late` past the kill instant,
     /// with no room left for SIGTERM's minimum phase inside the stop's slack.
     SkipLate {
@@ -187,22 +189,30 @@ const HOST: EsrchOn = if cfg!(target_os = "macos") {
     EsrchOn::Linux
 };
 
-/// What a kill's syscall result records: the kill; or, for ESRCH from the
-/// leader's own group, the kill of a group already gone, when the leader was
-/// seen exiting (before the send, or right after the ESRCH) or `host` is
-/// macOS; otherwise a failed kill.
+/// What a kill's syscall result records: the kill; the kill of a group already
+/// gone, for an error from the leader's own group that says no member is left
+/// to signal (ESRCH with the leader seen exiting, before the send or right
+/// after, or on macOS at once; EPERM with no live member left, which BSD
+/// killpg answers for a group of zombies); otherwise a failed kill with its
+/// errno. EPERM with a live member stays a failure: a member beyond our reach.
 pub(super) fn classify(
     sent: &std::io::Result<()>,
     exited: bool,
     own_group: bool,
+    live_member: bool,
     host: EsrchOn,
 ) -> Sent {
-    match sent {
-        Ok(()) => Sent::Kill,
-        Err(_) if is_esrch(sent) && own_group && (exited || host == EsrchOn::MacOs) => {
-            Sent::KillGone
-        }
-        Err(_) => Sent::KillFailed,
+    let Err(error) = sent else {
+        return Sent::Kill;
+    };
+    let errno = error.raw_os_error().unwrap_or(0);
+    let esrch_gone =
+        errno == rustix::io::Errno::SRCH.raw_os_error() && (exited || host == EsrchOn::MacOs);
+    let eperm_gone = errno == rustix::io::Errno::PERM.raw_os_error() && !live_member;
+    if own_group && (esrch_gone || eperm_gone) {
+        Sent::KillGone
+    } else {
+        Sent::KillFailed { errno }
     }
 }
 
@@ -213,7 +223,33 @@ pub(super) fn kill_outcome(pid: Pid, sent: &std::io::Result<()>, exited: bool) -
         Some(in_gap) => (exited && !in_gap, EsrchOn::MacOs),
         None => (exited, HOST),
     };
-    classify(sent, exited, own_group(pid), host)
+    let live = !is_eperm(sent) || group_has_live_member(pid);
+    classify(sent, exited, own_group(pid), live, host)
+}
+
+/// Whether `sent` is EPERM: members found, none signalled.
+fn is_eperm(sent: &std::io::Result<()>) -> bool {
+    sent.as_ref()
+        .is_err_and(|e| e.raw_os_error() == Some(rustix::io::Errno::PERM.raw_os_error()))
+}
+
+/// Whether the group `pid` leads still holds a member that is not a zombie,
+/// read right after an EPERM. A table that cannot be read counts as live, and
+/// so does every host but macOS, whose killpg is the one that answers EPERM for
+/// a group of zombies: there EPERM stays a failure.
+fn group_has_live_member(pid: Pid) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        u32::try_from(pid.as_raw_nonzero().get())
+            .ok()
+            .and_then(super::super::sweep::PlatformTable::group_has_live_member)
+            .unwrap_or(true)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pid;
+        true
+    }
 }
 
 /// Under `Esrch::MacGap`, whether this kill falls in the gap (the record reads
@@ -247,7 +283,7 @@ async fn after_the_kill(pid: Pid) -> Vec<Sent> {
     let by = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !log().get(&pid.as_raw_nonzero().get()).is_some_and(|sent| {
         sent.iter()
-            .any(|s| matches!(s, Sent::Kill | Sent::KillGone | Sent::KillFailed))
+            .any(|s| matches!(s, Sent::Kill | Sent::KillGone | Sent::KillFailed { .. }))
     }) {
         if std::time::Instant::now() >= by {
             return take(pid);
@@ -289,7 +325,7 @@ fn term_then_kill(sent: &[Sent]) -> bool {
 
 /// A failed kill anywhere is refused first, by name.
 fn no_failed_kill(sent: &[Sent]) -> Result<(), String> {
-    if sent.contains(&Sent::KillFailed) {
+    if sent.iter().any(|s| matches!(s, Sent::KillFailed { .. })) {
         Err(format!("a kill failed: {sent:?}"))
     } else {
         Ok(())

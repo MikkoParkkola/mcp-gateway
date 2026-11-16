@@ -290,6 +290,35 @@ impl MacTable {
             Lookup::Missing(_) => None,
         }
     }
+
+    /// Whether process group `pgid` still holds a member that is not a zombie,
+    /// for the stop rows' record only; `None` when the pid listing fails. A
+    /// group lives in one session, so another session's process (getpgid
+    /// refused) is never a member; a member we may not read (another user's)
+    /// counts as live.
+    #[cfg(test)]
+    pub(in crate::transport::stdio) fn group_has_live_member(pgid: u32) -> Option<bool> {
+        let group = i32::try_from(pgid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)?;
+        for pid in Libproc.list()? {
+            let Some(member) = i32::try_from(pid)
+                .ok()
+                .and_then(rustix::process::Pid::from_raw)
+            else {
+                continue;
+            };
+            if rustix::process::getpgid(Some(member)) != Ok(group) {
+                continue;
+            }
+            match Libproc.info(pid) {
+                Lookup::Found(info) if matches!(info.state, ProcState::Zombie) => {}
+                Lookup::Missing(Miss::Gone) => {}
+                _ => return Some(true),
+            }
+        }
+        Some(false)
+    }
 }
 
 #[cfg(target_os = "macos")]
