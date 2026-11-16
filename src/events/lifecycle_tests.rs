@@ -435,6 +435,13 @@ struct Receiver {
 }
 
 async fn receiver() -> Receiver {
+    receiver_answering(Arc::new(|_| axum::http::StatusCode::OK)).await
+}
+
+/// [`receiver`], answering the `n`th post (from 0) with `answer(n)`.
+async fn receiver_answering(
+    answer: Arc<dyn Fn(usize) -> axum::http::StatusCode + Send + Sync>,
+) -> Receiver {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let ca = crate::mtls::CertGenerator::init_ca(&crate::mtls::CaParams {
         cn: "events lifecycle test CA",
@@ -466,9 +473,14 @@ async fn receiver() -> Receiver {
         axum::routing::post(
             move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
                 let sink = Arc::clone(&sink);
+                let answer = Arc::clone(&answer);
                 async move {
-                    sink.lock().push((headers, body.to_vec()));
-                    axum::http::StatusCode::OK
+                    let n = {
+                        let mut got = sink.lock();
+                        got.push((headers, body.to_vec()));
+                        got.len() - 1
+                    };
+                    answer(n)
                 }
             },
         ),
@@ -650,3 +662,6 @@ mod subscribe_order;
 
 #[path = "reconcile_table_lifecycle_tests.rs"]
 mod reconcile_table;
+
+#[path = "lifecycle_revoke_notice_tests.rs"]
+mod revoke_notice;
