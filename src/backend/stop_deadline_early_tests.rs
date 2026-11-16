@@ -353,7 +353,7 @@ async fn a_deadline_spent_mid_handover_gives_the_rest_a_zero_budget() {
 
 /// R5 (HANDOVER.1 wiring): the HTTP stop's backend stage is the one
 /// `stop_all_by` call in `Gateway::run` and the blocks it moved into
-/// run_wiring.rs (`stop_custody_and_backends`), and it hands over at entry.
+/// `run_wiring.rs` (`stop_custody_and_backends`), and it hands over at entry.
 /// `run` is driven by no row, so its source text is the evidence.
 #[test]
 fn the_http_backend_stage_hands_over_at_entry() {
