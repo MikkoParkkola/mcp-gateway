@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{Bounds, ConfigHistory, Event, HistoryHook, Outcome, Snapshot, Source};
+use super::{Bounds, ConfigHistory, Event, HistoryHook, Outcome, Snapshot, Source, StoredFile};
 use crate::backend::BackendRegistry;
 use crate::config::{Config, FailsafeConfig};
 use crate::config_reload::reload_context::replace::{
@@ -110,12 +110,8 @@ fn file_paths(snapshot: &Snapshot) -> Vec<String> {
         .collect()
 }
 
-fn file_bytes(snapshot: &Snapshot, path: &str) -> Option<Option<Vec<u8>>> {
-    snapshot
-        .files
-        .iter()
-        .find(|file| file.path == path)
-        .map(|file| file.bytes.clone())
+fn stored<'s>(snapshot: &'s Snapshot, path: &str) -> Option<&'s StoredFile> {
+    snapshot.files.iter().find(|file| file.path == path)
 }
 
 fn event_keys(event: &Event) -> Vec<String> {
@@ -319,19 +315,22 @@ fn h5_a_snapshot_holds_every_operator_file_with_presence() {
     assert_eq!(
         older
             .as_ref()
-            .and_then(|snapshot| file_bytes(snapshot, &env_path)),
+            .and_then(|snapshot| stored(snapshot, &env_path))
+            .map(|file| file.bytes.clone()),
         Some(Some(env_bytes))
     );
     assert_eq!(
         newer
             .as_ref()
-            .and_then(|snapshot| file_bytes(snapshot, &env_path)),
+            .and_then(|snapshot| stored(snapshot, &env_path))
+            .map(|file| file.bytes.clone()),
         Some(None)
     );
     assert_eq!(
         newer
             .as_ref()
-            .and_then(|snapshot| file_bytes(snapshot, &grants_path)),
+            .and_then(|snapshot| stored(snapshot, &grants_path))
+            .map(|file| file.bytes.clone()),
         Some(Some(grants_bytes))
     );
 }

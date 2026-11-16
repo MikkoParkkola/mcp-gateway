@@ -123,7 +123,7 @@ impl LiveConfig {
     fn record_publish(
         &self,
         raw: Option<RawInputs>,
-        previous: Option<String>,
+        previous: Option<&str>,
         published: Option<Arc<Applied>>,
         source: Source,
     ) {
@@ -134,7 +134,7 @@ impl LiveConfig {
             &raw,
             &applied.revision,
             applied.pending_restart.as_slice(),
-            previous.as_deref(),
+            previous,
             source,
             crate::clock::unix_secs().unwrap_or(0),
         );
@@ -317,11 +317,12 @@ impl LiveConfig {
             applied
         });
         let (previous, published) = swapped;
-        self.record_publish(recorded, previous, published, source);
+        self.record_publish(recorded, previous.as_deref(), published, source);
     }
 
     /// The env files changed under an unchanged config file: same config,
     /// new inputs, new revision. Recorded as a file reload.
+    #[cfg(test)]
     pub(crate) fn set_inputs(&self, raw: RawInputs, env_restart: &[String]) {
         self.set_inputs_from(raw, env_restart, Source::File);
     }
@@ -343,7 +344,7 @@ impl LiveConfig {
             inner.applied = inputs.and_then(|inputs| self.applied(inputs, pending));
             (previous, inner.applied.clone())
         };
-        self.record_publish(recorded, previous, published, source);
+        self.record_publish(recorded, previous.as_deref(), published, source);
     }
 
     /// New grants over the published config: only the grants part changes,

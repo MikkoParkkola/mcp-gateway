@@ -431,9 +431,7 @@ fn evict_snapshots(snapshots: &mut Vec<Snapshot>, bounds: Bounds, running: &str,
 }
 
 fn event_json_len(event: &Event) -> usize {
-    serde_json::to_vec(event)
-        .map(|bytes| bytes.len())
-        .unwrap_or(usize::MAX)
+    serde_json::to_vec(event).map_or(usize::MAX, |bytes| bytes.len())
 }
 
 /// Drop the oldest event until the count and the serialized-byte total both fit.

@@ -52,7 +52,7 @@ fn expect(revisions: &[&str]) -> Vec<String> {
         .collect()
 }
 
-fn gateway<'a>(snapshot: &'a Snapshot) -> &'a [u8] {
+fn gateway(snapshot: &Snapshot) -> &[u8] {
     snapshot
         .files
         .iter()
@@ -135,7 +135,7 @@ fn t3_byte_bounds_evict_until_under() {
     let history = ConfigHistory::open(dir.path(), bounds, 0);
     for i in 1..=4 {
         let revision = format!("r{i}");
-        let bytes = vec![b'0' + i as u8; 40];
+        let bytes = vec![b'0' + u8::try_from(i).unwrap(); 40];
         record_version(&history, &revision, i, &bytes, &revision);
     }
     assert_eq!(revision_names(&history), expect(&["r3", "r4"]));
