@@ -418,3 +418,30 @@ fn h2_http_run_attaches_after_live_config_and_before_the_bind() {
         "run attaches once"
     );
 }
+
+/// Kills the mutant "the startup scan registers webhook routes after its
+/// publish". The publish can make the scan ready, so a client that sees
+/// readiness must find every capability's webhook route, as before revisions
+/// were published. Pinned in the source for the reason the attach is: the
+/// order inside one spawned step has no seam a row can hold.
+#[test]
+fn startup_registers_webhook_routes_before_the_publish_that_can_mark_ready() {
+    let code = crate::test_source_text::sanitize(&crate::test_source_text::production_text(
+        include_str!("run_steps.rs"),
+    ));
+    let routes = code
+        .find(".register_capability(&cap)")
+        .expect("the startup scan registers webhook routes");
+    let publish = code
+        .find(".publish_initial_scan(")
+        .expect("the startup scan publishes its part");
+    assert!(
+        routes < publish,
+        "webhook routes ({routes}) are registered before the publish ({publish})"
+    );
+    assert_eq!(
+        code.matches(".register_capability(&cap)").count(),
+        1,
+        "one registration site"
+    );
+}

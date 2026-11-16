@@ -324,15 +324,9 @@ impl super::CapabilityBackend {
     /// that completes a parked scan announces its catalogue, as the scan's
     /// own end would have.
     pub(crate) fn attach_revision(&self, live: Arc<LiveConfig>) {
-        // An attach can be what makes a parked scan ready: the same snapshot
-        // the scan's own publish takes, before the scan can become ready.
-        #[cfg(test)]
-        let (was_ready, records) = (self.initial_scan_complete(), self.rug_pull_records().len());
+        // The readiness-order snapshot needs nothing here: a parked scan set
+        // it in its publish, before this attach can make it ready.
         let announce = self.handoff.attach_revision(live);
-        #[cfg(test)]
-        if !was_ready && self.initial_scan_complete() {
-            let _ = self.records_at_scan_complete.set(records);
-        }
         if let Some(registry) = announce {
             self.announce_scanned(&registry);
         }

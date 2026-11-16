@@ -150,14 +150,9 @@ impl Gateway {
                 // Before readiness and before webhook routes are registered, so
                 // nothing it unloads keeps a route.
                 cap_backend_for_load.detect_rug_pulls().await;
-                // Under the catalogue write lock, after rug-pull removal: the
-                // seq and the part name the catalogue the scan is serving.
-                // The publish runs after that lock drops. The registry is left
-                // first, so an attach that completes a parked scan announces it.
-                let (seq, part) = cap_backend_for_load.take_served_revision();
-                cap_backend_for_load.announce_scan_through(Arc::clone(&registry_for_load));
-                let transitioned = cap_backend_for_load.publish_initial_scan(seq, part);
 
+                // Before the publish, which can make the scan ready: a client
+                // that sees readiness finds every capability's webhook route.
                 if webhooks_enabled {
                     for cap in cap_backend_for_load.list_capabilities() {
                         if !cap.webhooks.is_empty() {
@@ -165,6 +160,14 @@ impl Gateway {
                         }
                     }
                 }
+
+                // Under the catalogue write lock, after rug-pull removal: the
+                // seq and the part name the catalogue the scan is serving.
+                // The publish runs after that lock drops. The registry is left
+                // first, so an attach that completes a parked scan announces it.
+                let (seq, part) = cap_backend_for_load.take_served_revision();
+                cap_backend_for_load.announce_scan_through(Arc::clone(&registry_for_load));
+                let transitioned = cap_backend_for_load.publish_initial_scan(seq, part);
 
                 // Readiness waits on this (MIK-7268), and clients served during the
                 // scan hear of its catalogue; refusals are reported below.

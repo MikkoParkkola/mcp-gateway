@@ -113,16 +113,15 @@ impl CapabilityBackend {
     /// `true` when this call marked the scan complete. Unattached, the scan
     /// stays parked and this is `false`.
     pub(crate) fn publish_initial_scan(&self, seq: u64, part: CapabilityPart<PartDigest>) -> bool {
-        // Taken before the publish can make the scan ready, as
-        // mark_initial_scan_complete takes it: the readiness-order row reads
-        // what a probe that sees the scan complete could see.
+        // Set before the publish, which can make the scan ready, as
+        // mark_initial_scan_complete sets it before its flag: the readiness-order
+        // row reads what a probe that sees the scan complete could see. A scan
+        // that parks here is completed later by attach, after this was set.
         #[cfg(test)]
-        let records = self.rug_pull_records().len();
+        let _ = self
+            .records_at_scan_complete
+            .set(self.rug_pull_records().len());
         let transitioned = self.handoff.publish_and_end(seq, part);
-        #[cfg(test)]
-        if transitioned {
-            let _ = self.records_at_scan_complete.set(records);
-        }
         #[cfg(test)]
         self.notify_delivery();
         transitioned
