@@ -125,11 +125,13 @@ fn x5_no_presented_credential_in_any_log_line_or_audit_record() {
                 .block_on(run_all())
         });
     let codes: Vec<u16> = statuses.iter().map(|(_, s)| s.as_u16()).collect();
-    // The reads ran: admin key, bearer and session are served; the standard
-    // key is refused by role, the wrong key by authentication.
+    // The reads ran: admin key, bearer and session are served; the signed
+    // NDJSON export answers 409 here (no signing key is configured), after
+    // authentication and the guard have run; the standard key is refused by
+    // role, the wrong key by authentication.
     assert_eq!(
         codes,
-        [200, 200, 200, 200, 200, 200, 403, 401],
+        [200, 409, 200, 200, 200, 200, 403, 401],
         "{statuses:?}"
     );
     // The three seeded calls, then whatever the requests themselves recorded.
