@@ -1,0 +1,13 @@
+head_sha	18a94e6b9a508e1662cb619ff2a15b36c9536b97
+#mutant m13
+mcp_gateway	events::lifecycle_tests::revoke_notice::a_source_offering_the_reserved_name_is_not_catalogued	src/events/lifecycle_revoke_notice_tests.rs:205
+#mutant m14
+mcp_gateway	events::lifecycle_tests::revoke_notice::a_source_that_turns_to_the_reserved_name_is_not_offered	src/events/lifecycle_revoke_notice_tests.rs:236
+#mutant m15
+mcp_gateway	events::lifecycle_tests::revoke_notice::a_source_that_turns_to_the_reserved_name_is_not_offered	src/events/lifecycle_revoke_notice_tests.rs:241
+#mutant m16
+mcp_gateway	events::lifecycle_tests::revoke_notice::a_source_event_with_the_reserved_name_is_dropped_at_fan_out	src/events/lifecycle_revoke_notice_tests.rs:495
+#mutant m19
+mcp_gateway	events::store::pending::tests::ended::an_ended_row_leaves_every_live_reader_and_lives_only_under_ended	src/events/store_ended_tests.rs:96
+#mutant m20
+mcp_gateway	events::store::pending::tests::ended::an_ended_row_leaves_every_live_reader_and_lives_only_under_ended	src/events/store_ended_tests.rs:95
