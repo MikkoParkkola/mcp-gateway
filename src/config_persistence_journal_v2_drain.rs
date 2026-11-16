@@ -402,10 +402,8 @@ fn restore(
 #[cfg(tp3)]
 #[path = "config_persistence_journal_v2_crash_tests.rs"]
 mod crash_tests;
-#[cfg(tp3)]
 #[path = "config_persistence_journal_v2_drain_decide.rs"]
 mod decide;
-#[cfg(tp3)]
 #[path = "config_persistence_journal_v2_drain_deliver.rs"]
 mod deliver;
 #[path = "config_persistence_journal_v2_drain_fault_tests.rs"]

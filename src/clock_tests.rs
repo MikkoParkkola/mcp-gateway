@@ -234,6 +234,7 @@ pub(crate) fn product_code(src: &str) -> String {
 
 /// The lib test split puts a `#[cfg(tpK)]` line above a test module's
 /// unchanged `#[cfg(test)]`: the module is still dropped from product code.
+#[cfg(tp3)]
 #[test]
 fn product_code_drops_a_part_tagged_test_module() {
     let code = product_code(
