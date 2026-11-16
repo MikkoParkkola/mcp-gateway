@@ -166,8 +166,10 @@ fn the_root_ban_span_is_the_root_config_list() {
         .find("disallowed-methods = [\n")
         .expect("the root list");
     let end = start + config[start..].find("\n]\n").expect("its end");
+    // A commented-out entry is a removed one: comment lines never count.
     let paths: Vec<&str> = config[start..end]
         .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
         .filter_map(|line| line.split_once("path = \"")?.1.split_once('"'))
         .map(|(path, _)| path)
         .collect();

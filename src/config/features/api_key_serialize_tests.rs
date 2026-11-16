@@ -92,7 +92,10 @@ fn shapes() -> AuthConfig {
 /// plaintext key, a digest, a principal or an approval value.
 #[test]
 fn a_key_debug_prints_no_credential_value() {
-    let auth = shapes();
+    let auth = AuthConfig {
+        bearer_token: Some("bearer-never-printed".into()),
+        ..shapes()
+    };
     let hex = |c: char| std::iter::repeat_n(c, 64).collect::<String>();
     let secrets = [
         "plaintext-never-written".to_owned(),
@@ -102,6 +105,7 @@ fn a_key_debug_prints_no_credential_value() {
         "env:PREVIOUS_KEY".to_owned(),
         "env:KEY_DIGEST".to_owned(),
         "0123456789ab".to_owned(),
+        "bearer-never-printed".to_owned(),
     ];
     let printed: Vec<String> = std::iter::once(format!("{auth:?}"))
         .chain(auth.api_keys.iter().map(|key| format!("{key:?}")))

@@ -468,8 +468,10 @@ fn the_entropy_crates_are_pinned() {
 /// by its balanced argument list. A container under another name (auth.rs's
 /// restart-only `view`, which drops the keys; a `value`) or a digest copied
 /// into a local first is not seen; those spellings stay on register row 805.
-const SERIALIZERS: [&str; 10] = [
+const SERIALIZERS: [&str; 12] = [
     "json!(",
+    "json![",
+    "json!{",
     "to_value(",
     "to_string(",
     "to_string_pretty(",
@@ -531,7 +533,7 @@ const CONTAINER_SERIALIZERS: &[(&str, usize, &str)] = &[
     ),
     (
         "src/config_persistence_splice.rs",
-        3,
+        4,
         "in-memory equality: the spliced text must reload as the config, compared as JSON values",
     ),
     (
@@ -577,29 +579,99 @@ fn call_arguments<'c>(code: &'c str, names: &[&str]) -> Vec<(usize, &'c str)> {
     found
 }
 
-/// An auth section or a whole config: `config` / `auth` alone; a value built
-/// by `Config::` or `AuthConfig::`; a closure parameter typed `&Config` or
-/// `&AuthConfig` on the call's line; or a `.auth` (`.auth()`) that is the
-/// value itself, not a member read such as `.auth().enabled`.
+/// The depth-zero arguments of an argument list.
+fn top_level(arguments: &str) -> Vec<&str> {
+    let (mut depth, mut from, mut args) = (0_usize, 0, Vec::new());
+    for (at, c) in arguments.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                args.push(&arguments[from..at]);
+                from = at + 1;
+            }
+            _ => {}
+        }
+    }
+    args.push(&arguments[from..]);
+    args
+}
+
+/// An auth section or a whole config among a call's arguments: `config` /
+/// `auth` alone; a value built by `Config::` or `AuthConfig::`; a closure
+/// parameter typed `&Config` or `&AuthConfig` on the call's line or the one
+/// above; or a `.auth` (`.auth()`) that is the value itself, cloned or
+/// borrowed at most, not a member read such as `.auth().enabled`.
 fn is_container(code: &str, at: usize, arguments: &str) -> bool {
-    let bare = arguments.trim().trim_start_matches('&').trim();
     let ident = |c: char| c.is_alphanumeric() || c == '_';
     let line_start = code[..at].rfind('\n').map_or(0, |n| n + 1);
-    let line = &code[line_start..at];
-    let typed_closure = !bare.is_empty()
-        && bare.chars().all(ident)
-        && ["Config", "AuthConfig"]
+    let above = code[..line_start.saturating_sub(1)]
+        .rfind('\n')
+        .map_or(0, |n| n + 1);
+    let near = &code[above..at];
+    top_level(arguments).into_iter().any(|argument| {
+        let bare = argument.trim().trim_start_matches('&').trim();
+        let typed_closure = !bare.is_empty()
+            && bare.chars().all(ident)
+            && ["Config", "AuthConfig"]
+                .iter()
+                .any(|ty| near.contains(&format!("|{bare}: &{ty}|")));
+        bare == "config"
+            || bare == "auth"
+            || typed_closure
+            || argument.contains("Config::")
+            || argument.match_indices(".auth").any(|(at, word)| {
+                let mut rest = &argument[at + word.len()..];
+                for suffix in ["()", ".clone()", ".to_owned()", ".as_ref()"] {
+                    rest = rest.strip_prefix(suffix).unwrap_or(rest);
+                }
+                let rest = rest.trim_start();
+                !rest.starts_with(ident) && !rest.starts_with('.')
+            })
+    })
+}
+
+/// Each spelling the review rounds named, through the scan's own helpers on
+/// synthetic code: the macro's three delimiters (the `json!({..})` form was
+/// always scanned), a text output, a container as a later argument, a cloned
+/// auth section, a closure typed on the line above, and a member read that
+/// is not a container.
+#[test]
+fn the_output_scan_sees_each_reviewed_spelling() {
+    let outputs = [&SERIALIZERS[..], &TEXT_OUTPUTS[..]].concat();
+    let reads = |code: &str| {
+        call_arguments(code, &outputs)
             .iter()
-            .any(|ty| line.contains(&format!("|{bare}: &{ty}|")));
-    bare == "config"
-        || bare == "auth"
-        || typed_closure
-        || arguments.contains("Config::")
-        || arguments.match_indices(".auth").any(|(at, word)| {
-            let rest = &arguments[at + word.len()..];
-            let rest = rest.strip_prefix("()").unwrap_or(rest).trim_start();
-            !rest.starts_with(ident) && !rest.starts_with('.')
-        })
+            .any(|(_, a)| DIGEST_READS.iter().any(|read| a.contains(read)))
+    };
+    assert!(
+        reads("let v = json!({ d: key.key_sha256 });"),
+        "json! object in parentheses"
+    );
+    assert!(reads("let v = json![key.key_sha256];"), "json! in brackets");
+    assert!(reads("let v = json!{ key.key_sha256 };"), "json! in braces");
+    assert!(reads("print!(\"{:?}\", key.digest_tag);"), "print!");
+    let container = |code: &str| {
+        call_arguments(code, &SERIALIZERS)
+            .iter()
+            .any(|(at, a)| is_container(code, *at, a))
+    };
+    assert!(
+        container("serde_json::to_writer(&mut out, &config)"),
+        "a later argument"
+    );
+    assert!(
+        container("serde_json::to_value(&state.auth.clone())"),
+        ".auth.clone()"
+    );
+    assert!(
+        container("let f = |c: &Config|\n    serde_json::to_value(c);"),
+        "a closure typed on the line above"
+    );
+    assert!(
+        !container("json!({ on: live.auth().enabled })"),
+        "a member read is not a container"
+    );
 }
 
 #[test]
