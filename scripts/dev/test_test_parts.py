@@ -21,6 +21,7 @@ SCRIPT = Path(__file__).resolve().parent / "test_parts.py"
 TAG_LINE_PREFIX = "#[cfg(tp"
 SHARED = "scripts/dev/test-parts-shared.txt"
 TABLE = "scripts/dev/test-parts.tsv"
+BUILD = "scripts/dev/test-parts-build.rs"
 
 
 def load_tool():
@@ -49,7 +50,7 @@ CRATE_ALLOW = "#![cfg_attr(tp_partial, allow(dead_code, unused_imports, unused_v
 
 # Two parts: `src` (and src/a) in part 1, src/b in part 2. Tagged and green.
 BASE = {
-    "build.rs": "fn main() {\n    const N: u32 = 2;\n    let _ = N;\n}\n",
+    BUILD: "fn main() {\n    const N: u32 = 2;\n    let _ = N;\n}\n",
     "scripts/dev/test-parts.tsv": "src\t1\nsrc/b\t2\n",
     "scripts/dev/test-parts-shared.txt": "",
     "src/lib.rs": CRATE_ALLOW + "mod a;\nmod b;\n",
@@ -217,7 +218,7 @@ class TableAndBuildRs(Rows):
     """The table against build.rs's `const N`: both ways, no empty part, no stale row."""
 
     def test_n_above_the_table_leaves_an_empty_part_and_is_refused(self):
-        self.assert_refused(with_files(build_DOT_rs=BASE["build.rs"].replace("N: u32 = 2", "N: u32 = 3")), "empty-part")
+        self.assert_refused(with_files(**{BUILD: BASE[BUILD].replace("N: u32 = 2", "N: u32 = 3")}), "empty-part")
 
     def test_a_row_above_n_is_refused(self):
         self.assert_refused(with_files(**{TABLE: BASE[TABLE] + "src/b/deep\t3\n"}), "table-range")

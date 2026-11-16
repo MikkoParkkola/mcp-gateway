@@ -1,5 +1,5 @@
 # The lib test split's directory table: <directory>TAB<part>. A test module's part is the row of the directory
-# of the file its tag sits in, else the nearest ancestor's row. N is build.rs's `const N`; the checker is
+# of the file its tag sits in, else the nearest ancestor's row. N is `const N` in scripts/dev/test-parts-build.rs; the checker is
 # scripts/dev/test_parts.py. Rebalance by editing a row and running `scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py apply`.
 # Measured peaks of the lib test build per part (rustc RSS, MiB; Linux on Spark, incremental off,
 # base cae9948eb1, these rows):

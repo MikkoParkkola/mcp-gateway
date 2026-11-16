@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""R-BUILDRS: build.rs emits exactly the lib test split's cfgs for every value of MCP_GATEWAY_TEST_PART.
+"""R-BUILDRS: the build script (scripts/dev/test-parts-build.rs) emits exactly the lib test split's cfgs
+for every value of MCP_GATEWAY_TEST_PART.
 
-Compiles build.rs alone with rustc (it uses std only) and runs it with the variable unset, 0, each of 1..=N, N+1,
+Compiles the build script alone with rustc (it uses std only) and runs it with the variable unset, 0, each of 1..=N, N+1,
 empty and `abc`. Valid values print exactly the expected `cargo::` lines; the others fail naming the variable. Then
 the same check runs on two seeded broken copies (an empty value read as unset; a value above N accepted) and must
-refuse both, so the check cannot pass vacuously. N is read from build.rs's `const N`.
+refuse both, so the check cannot pass vacuously. N is read from its `const N`.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ def problems(source: str, workdir: Path) -> list[str]:
     n = int(re.search(r"\bconst\s+N\s*:\s*u32\s*=\s*([0-9]+)\s*;", source).group(1))
     src, exe = workdir / "build.rs", workdir / "build-script"
     src.write_text(source, encoding="utf-8")
-    built = subprocess.run(["rustc", "--edition", "2021", "-O", str(src), "-o", str(exe)], capture_output=True, text=True)
+    built = subprocess.run(["rustc", "--edition", "2024", "-O", str(src), "-o", str(exe)], capture_output=True, text=True)
     if built.returncode != 0:
         return [f"build.rs does not compile: {built.stderr.strip()[:400]}"]
     out = []
@@ -55,7 +56,7 @@ def problems(source: str, workdir: Path) -> list[str]:
 
 
 def main() -> int:
-    source = (ROOT / "build.rs").read_text(encoding="utf-8")
+    source = (ROOT / "scripts/dev/test-parts-build.rs").read_text(encoding="utf-8")
     seeded = {
         "an empty value read as unset": source.replace(
             'match std::env::var("MCP_GATEWAY_TEST_PART") {',

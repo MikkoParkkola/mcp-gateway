@@ -4,7 +4,7 @@
 """The lib test split's codemod (`apply`) and checker (`check`).
 
 The invariant: every test function compiles in exactly one part, through one `#[cfg(tpK)]` line on itself or on an
-enclosing module, K being the table part of the directory of the file the tag sits in. build.rs turns the variable
+enclosing module, K being the table part of the directory of the file the tag sits in. The build script (scripts/dev/test-parts-build.rs) turns the variable
 MCP_GATEWAY_TEST_PART into those cfgs; unset builds every part. Rows: scripts/dev/test_test_parts.py.
 Run with the gates' environment (tree-sitter): scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py check
 """
@@ -21,6 +21,7 @@ from typing import NamedTuple
 HERE = Path(__file__).resolve().parent
 TABLE = Path("scripts/dev/test-parts.tsv")
 SHARED = Path("scripts/dev/test-parts-shared.txt")
+BUILD_RS = Path("scripts/dev/test-parts-build.rs")  # the package build script (Cargo.toml `build`)
 CRATE_ALLOW = "#![cfg_attr(tp_partial, allow(dead_code, unused_imports, unused_variables))]"
 CANDIDATE = re.compile(r"^(tests?|.*_tests?)$")
 TAG = re.compile(r"^tp([0-9]+)$")
@@ -54,7 +55,7 @@ def gate():
 
 
 def read_n(root: Path) -> int | None:
-    m = CONST_N.search((root / "build.rs").read_text(encoding="utf-8"))
+    m = CONST_N.search((root / BUILD_RS).read_text(encoding="utf-8"))
     return int(m.group(1)) if m else None
 
 
@@ -449,7 +450,7 @@ def analyse(root: Path) -> Analysis:
 def _check_table(root: Path, rows, crate: Crate, desired: dict[int, int], add) -> None:
     n = read_n(root)
     if n is None:
-        add("table-range", "build.rs", 1, "build.rs declares no `const N: u32`")
+        add("table-range", BUILD_RS.as_posix(), 1, "the build script declares no `const N: u32`")
         return
     for directory, part, no in rows:
         if not 1 <= part <= n:
