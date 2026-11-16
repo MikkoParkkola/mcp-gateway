@@ -127,6 +127,45 @@ def test_self_test() -> None:
         raise AssertionError(f"--self-test exited {proc.returncode}: {combined(proc)[-500:]}")
 
 
+def test_sibling_shard() -> None:
+    """With a sibling shard_tests.py and the repo-layout copy both present, the sibling wins."""
+    if not SCRIPT.is_file():
+        raise AssertionError(ABSENT)
+    with tempfile.TemporaryDirectory(prefix="repeat-sibling-") as raw:
+        tmp = Path(raw)
+        repeat = tmp / "scripts" / "ci" / "repeat"
+        repeat.mkdir(parents=True)
+        (tmp / "scripts" / "ci" / "shard_tests.py").write_text(
+            'MARKER = "REPO_LAYOUT"\n'
+            'SKIPS = {"linux": ["--REPO_LAYOUT"]}\n'
+            'BY_BINARY = MARKER\n'
+            'LIB_TARGET = "lib-REPO_LAYOUT"\n'
+        )
+        sibling = repeat / "shard_tests.py"
+        sibling.write_text(
+            'MARKER = "SIBLING_WINS"\n'
+            'SKIPS = {"linux": ["--SIBLING_WINS"]}\n'
+            'BY_BINARY = MARKER\n'
+            'LIB_TARGET = "lib-SIBLING_WINS"\n'
+        )
+        (repeat / "run_repeat.py").write_bytes(SCRIPT.read_bytes())
+        spec = importlib.util.spec_from_file_location("run_repeat_sibling_case", repeat / "run_repeat.py")
+        if spec is None or spec.loader is None:
+            raise AssertionError("cannot load the copied run_repeat.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sib_spec = importlib.util.spec_from_file_location("shard_sibling_marker", sibling)
+        if sib_spec is None or sib_spec.loader is None:
+            raise AssertionError("cannot load the sibling shard_tests.py")
+        sib = importlib.util.module_from_spec(sib_spec)
+        sib_spec.loader.exec_module(sib)
+        skips, by_binary, lib_target = mod.prebuilt_shape()
+        if by_binary != sib.MARKER or lib_target != sib.LIB_TARGET or skips != list(sib.SKIPS["linux"]):
+            raise AssertionError(
+                f"sibling marker {sib.MARKER!r} lost: skips={skips!r} by_binary={by_binary!r} "
+                f"lib_target={lib_target!r}")
+
+
 def test_plan() -> None:
     if not SCRIPT.is_file():
         raise AssertionError(ABSENT)
@@ -356,6 +395,19 @@ def test_fetch() -> None:
             {"id": 31, "head_sha": sha, "status": "completed", "conclusion": "success",
              "created_at": "2026-11-16T00:00:00Z"}]}, "1 day", download_empty=True)
 
+        stale_out = tmp / "out-stale"
+        stale_out.mkdir()
+        (stale_out / "lib-tests").write_text("STALE-BINARY\n")
+        ran = fetch("stale-left", {"total_count": 1, "workflow_runs": [
+            {"id": 32, "head_sha": sha, "status": "completed", "conclusion": "success",
+             "created_at": "2026-11-16T00:00:00Z"}]}, stale_out, download_fail=True)
+        compiled("stale-left")
+        stale_lines = nonempty_lines(ran)
+        if ran.returncode != 4 or len(stale_lines) != 1 or "1 day" not in stale_lines[0]:
+            problems.append(f"stale-left: rc={ran.returncode} lines={stale_lines!r}")
+        elif (stale_out / "lib-tests").exists():
+            problems.append("stale-left: pre-existing lib-tests was left in place")
+
         failed_run = {"total_count": 1, "workflow_runs": [
             {"id": 40, "head_sha": sha, "status": "completed", "conclusion": "failure",
              "created_at": "2026-11-16T00:00:00Z"},
@@ -436,7 +488,8 @@ exit 0
         out = tmp / "pass-out"
         (tmp / "source-run-id.txt").write_text("4242\n")
         proc = run_py(["run", "--binary", str(tmp / "pass-bin"), "--out", str(out)], pass_repo,
-                      penv(RECORD_DIR=str(record), GITHUB_STEP_SUMMARY=str(summary)), 30)
+                      penv(RECORD_DIR=str(record), GITHUB_STEP_SUMMARY=str(summary),
+                           RUNNER_NAME="repeat-runner"), 30)
         if marker.exists():
             problems.append("pass: cargo or rustc was invoked")
         try:
@@ -449,8 +502,13 @@ exit 0
         if isinstance(data, dict):
             if data.get("passed") != 3 or data.get("total") != 3 or data.get("void") != 0:
                 problems.append(f"pass: totals {data.get('passed')}/{data.get('total')} void={data.get('void')}")
-            if data.get("incomplete") is not False:
-                problems.append(f"pass: incomplete {data.get('incomplete')!r}")
+            if data.get("incomplete") is not False or data.get("completed") != 3:
+                problems.append(
+                    f"pass: incomplete {data.get('incomplete')!r} completed {data.get('completed')!r}")
+            if data.get("verdict") != "3/3":
+                problems.append(f"pass: verdict {data.get('verdict')!r}")
+            if data.get("artifact") != "linux-lib-tests" or data.get("runner") != "repeat-runner":
+                problems.append(f"pass: artifact {data.get('artifact')!r} runner {data.get('runner')!r}")
             if data.get("source_run_id") != "4242":
                 problems.append(f"pass: source_run_id {data.get('source_run_id')!r}")
             if data.get("spec") != pass_spec:
@@ -461,8 +519,7 @@ exit 0
                     any(copy.get("exit") != 0 or copy.get("tests_run") != 1
                         for it in iters for copy in it.get("copies") or [])):
                 problems.append(f"pass: iterations {iters!r}")
-            if not isinstance(data.get("verdict"), str) or not data.get("verdict"):
-                problems.append(f"pass: verdict {data.get('verdict')!r}")
+
         args = sorted(record.glob("*.args"))
         want = ["pass_case", "--exact", *skips]
         if len(args) != 6 or any(path.read_text().splitlines() != want for path in args):
@@ -478,8 +535,11 @@ exit 0
             tmpdir = Path(path.read_text().strip())
             if tmpdir.name != lib_target or tmpdir.parent.name != by_binary or tmpdir.exists():
                 problems.append(f"pass: TMPDIR {tmpdir} exists={tmpdir.exists()}")
-        if "|" not in summary.read_text():
-            problems.append("pass: GITHUB_STEP_SUMMARY has no markdown table")
+        summary_text = summary.read_text()
+        if "|" not in summary_text or "Verdict: 3/3" not in summary_text:
+            problems.append(f"pass: GITHUB_STEP_SUMMARY {summary_text!r}")
+        elif "INCOMPLETE:" in summary_text:
+            problems.append(f"pass: summary marks a finished run incomplete: {summary_text!r}")
         (tmp / "source-run-id.txt").unlink()
 
         # The binary fails only on its second invocation. One copy per iteration, so iteration 2 fails.
@@ -510,8 +570,11 @@ printf '%s\\n' "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 fi
 exit 0
 """)
         fail_out = tmp / "fail-out"
+        fail_env = penv(COUNT_DIR=str(count))
+        for key in ("RUNNER_NAME", "RUNNER_OS", "RUNNER_ARCH"):
+            fail_env.pop(key, None)
         proc = run_py(["run", "--binary", str(tmp / "fail-bin"), "--out", str(fail_out)], fail_repo,
-                      penv(COUNT_DIR=str(count)), 30)
+                      fail_env, 30)
         if marker.exists():
             problems.append("fail: cargo or rustc was invoked")
         try:
@@ -524,6 +587,13 @@ exit 0
         if isinstance(data, dict):
             if data.get("passed") != 2 or data.get("total") != 3 or data.get("void") != 0:
                 problems.append(f"fail: totals {data.get('passed')}/{data.get('total')} void={data.get('void')}")
+            if (data.get("incomplete") is not False or data.get("completed") != 3
+                    or data.get("verdict") != "2/3"):
+                problems.append(
+                    f"fail: incomplete {data.get('incomplete')!r} completed {data.get('completed')!r} "
+                    f"verdict {data.get('verdict')!r}")
+            if data.get("runner") != "" or data.get("artifact") != "linux-lib-tests":
+                problems.append(f"fail: runner {data.get('runner')!r} artifact {data.get('artifact')!r}")
             tail = data.get("first_failure_tail")
             lines = tail.splitlines() if isinstance(tail, str) else [str(item) for item in tail] if isinstance(tail, list) else []
             if len(lines) != 40 or "FAIL 50" not in lines or "FAIL 01" in lines or not any(
@@ -550,6 +620,9 @@ exit 0
                 problems.append(f"{name}: rc={ran.returncode} stdout={ran.stdout!r} stderr={ran.stderr!r}")
             if got.get("passed") != passed or got.get("total") != total or got.get("void") != void:
                 problems.append(f"{name}: totals {got.get('passed')}/{got.get('total')} void={got.get('void')}")
+            if got.get("incomplete") is not False or got.get("verdict") != f"{passed}/{total}":
+                problems.append(
+                    f"{name}: incomplete {got.get('incomplete')!r} verdict {got.get('verdict')!r}")
             copies = (got.get("iterations") or [{}])[0].get("copies") or [{}]
             if not copies or copies[0].get("tests_run") != tests_run:
                 problems.append(f"{name}: tests_run {copies!r}")
@@ -640,20 +713,146 @@ printf '%s\\n' "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 fi
 exit 0
 """)
         budget_out = tmp / "budget-out" / "results.json"
-        proc = run_py(["run", "--binary", str(tmp / "budget-bin"), "--out", str(tmp / "budget-out")],
-                      budget_repo, penv(REPEAT_RUN_BUDGET_S="1", REPEAT_SOURCE_RUN_ID="77"), 30)
+        budget_summary = tmp / "budget-summary.md"
+        budget_env = penv(REPEAT_RUN_BUDGET_S="1", REPEAT_SOURCE_RUN_ID="77",
+                           RUNNER_OS="Linux", RUNNER_ARCH="X64",
+                           GITHUB_STEP_SUMMARY=str(budget_summary))
+        budget_env.pop("RUNNER_NAME", None)
+        budget_proc = subprocess.Popen(
+            [sys.executable, str(SCRIPT), "run", "--binary", str(tmp / "budget-bin"),
+             "--out", str(tmp / "budget-out")],
+            cwd=budget_repo, env=budget_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        mid = None
+        poll_deadline = time.monotonic() + 15
+        while time.monotonic() < poll_deadline and mid is None:
+            if budget_out.is_file():
+                try:
+                    mid = json.loads(budget_out.read_text())
+                except json.JSONDecodeError:
+                    mid = None
+            if budget_proc.poll() is not None:
+                break
+            time.sleep(0.02)
+        try:
+            budget_stdout, budget_stderr = budget_proc.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            budget_proc.kill()
+            budget_stdout, budget_stderr = budget_proc.communicate()
+            problems.append(f"budget: harness still running stderr={budget_stderr!r}")
+            budget_stdout = budget_stdout or ""
+        if mid is None and budget_out.is_file():
+            try:
+                mid = json.loads(budget_out.read_text())
+            except json.JSONDecodeError:
+                mid = None
+        if not isinstance(mid, dict):
+            problems.append(
+                f"budget: no mid-run results.json rc={budget_proc.returncode} stderr={budget_stderr!r}")
+        elif mid.get("incomplete") is not True or mid.get("verdict") != "1/5" or mid.get("completed") != 1:
+            problems.append(
+                f"budget mid-run: incomplete={mid.get('incomplete')!r} "
+                f"verdict={mid.get('verdict')!r} completed={mid.get('completed')!r}")
         if not budget_out.is_file():
-            problems.append(f"budget: no results.json rc={proc.returncode} stderr={proc.stderr!r}")
+            problems.append(f"budget: no results.json rc={budget_proc.returncode} stderr={budget_stderr!r}")
         else:
             got = json.loads(budget_out.read_text())
             iters = got.get("iterations") or []
-            if (proc.returncode != 1 or got.get("incomplete") is not True or len(iters) != 1
-                    or got.get("total") != 1 or got.get("verdict") != "1/1"
-                    or "repeat: 1/1" not in proc.stdout or got.get("source_run_id") != "77"):
+            summary_body = budget_summary.read_text() if budget_summary.is_file() else ""
+            if (budget_proc.returncode != 1 or got.get("incomplete") is not True or len(iters) != 1
+                    or got.get("total") != 1 or got.get("completed") != 1 or got.get("verdict") != "1/5"
+                    or "repeat: 1/1" not in budget_stdout or got.get("source_run_id") != "77"
+                    or got.get("artifact") != "linux-lib-tests" or got.get("runner") != "Linux-X64"
+                    or "INCOMPLETE: 1 of 5 runs executed" not in summary_body
+                    or "Verdict: 1/5" not in summary_body):
                 problems.append(
-                    f"budget: rc={proc.returncode} incomplete={got.get('incomplete')!r} "
-                    f"total={got.get('total')} verdict={got.get('verdict')!r} "
-                    f"source={got.get('source_run_id')!r} stdout={proc.stdout!r}")
+                    f"budget: rc={budget_proc.returncode} incomplete={got.get('incomplete')!r} "
+                    f"total={got.get('total')} completed={got.get('completed')} "
+                    f"verdict={got.get('verdict')!r} runner={got.get('runner')!r} "
+                    f"source={got.get('source_run_id')!r} stdout={budget_stdout!r} "
+                    f"summary={summary_body!r}")
+
+        hold_spec = {"filter": "hold_case", "runs": 1, "parallel": 1, "exact": False}
+        hold_repo = repo_for("hold", hold_spec)
+        hold_pid = tmp / "hold.pid"
+        write_exe(tmp / "hold-bin", """#!/usr/bin/env python3
+import os
+import time
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    grand = os.fork()
+    if grand > 0:
+        path = os.environ.get("HOLD_PID")
+        if path:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(str(grand))
+        os._exit(0)
+    time.sleep(60)
+    os._exit(0)
+os.waitpid(pid, 0)
+os._exit(0)
+""")
+        hold_out = tmp / "hold-out" / "results.json"
+        started = time.monotonic()
+        try:
+            proc = run_py(["run", "--binary", str(tmp / "hold-bin"), "--out", str(tmp / "hold-out")],
+                          hold_repo, penv(REPEAT_COPY_TIMEOUT_S="1", HOLD_PID=str(hold_pid)), 25)
+            elapsed = time.monotonic() - started
+            timed_out_exc = False
+        except subprocess.TimeoutExpired:
+            elapsed = time.monotonic() - started
+            proc = None
+            timed_out_exc = True
+        finally:
+            if hold_pid.is_file():
+                try:
+                    os.kill(int(hold_pid.read_text().strip()), 9)
+                except (OSError, ValueError):
+                    pass
+        if timed_out_exc or proc is None or proc.returncode != 1 or elapsed >= 20 or not hold_out.is_file():
+            detail = "harness timed out" if timed_out_exc or proc is None else (
+                f"rc={proc.returncode} stderr={proc.stderr!r}")
+            problems.append(f"hold: {detail} elapsed={elapsed:.2f}s file={hold_out.is_file()}")
+        else:
+            got = json.loads(hold_out.read_text())
+            tail = got.get("first_failure_tail") or ""
+            iteration = (got.get("iterations") or [{}])[0]
+            if "TIMEOUT" not in tail or iteration.get("result") != "fail":
+                problems.append(f"hold: result={iteration.get('result')!r} tail={tail!r}")
+
+        spew_spec = {"filter": "spew_case", "runs": 1, "parallel": 1, "exact": False}
+        spew_repo = repo_for("spew", spew_spec)
+        write_exe(tmp / "spew-bin", """#!/usr/bin/env python3
+import sys
+out = sys.stdout.buffer
+block = b"x\\n" * 1000
+for _ in range(5000):
+    out.write(block)
+out.write(b"test result: ok. 1 passed; 0 failed; 0 ignored\\n")
+""")
+        spew_out = tmp / "spew-out" / "results.json"
+        started = time.monotonic()
+        try:
+            proc = run_py(["run", "--binary", str(tmp / "spew-bin"), "--out", str(tmp / "spew-out")],
+                          spew_repo, penv(), 40)
+            elapsed = time.monotonic() - started
+        except subprocess.TimeoutExpired:
+            elapsed = time.monotonic() - started
+            problems.append(f"spew: still running after {elapsed:.2f}s")
+        else:
+            if proc.returncode != 0 or elapsed >= 30 or not spew_out.is_file():
+                problems.append(
+                    f"spew: rc={proc.returncode} elapsed={elapsed:.2f}s file={spew_out.is_file()} "
+                    f"stderr={proc.stderr!r}")
+            else:
+                got = json.loads(spew_out.read_text())
+                iteration = (got.get("iterations") or [{}])[0]
+                copies = iteration.get("copies") or [{}]
+                if (iteration.get("result") != "pass" or not copies or copies[0].get("tests_run") != 1
+                        or got.get("incomplete") is not False):
+                    problems.append(
+                        f"spew: result={iteration.get('result')!r} copies={copies!r} "
+                        f"incomplete={got.get('incomplete')!r}")
     if problems:
         raise AssertionError("\n".join(problems))
 
@@ -772,7 +971,8 @@ def test_contributing() -> None:
         raise AssertionError("CONTRIBUTING.md lacks " + ", ".join(missing))
 
 
-CHECKS = [test_self_test, test_plan, test_fetch, test_run, test_workflow, test_swap_jobs, test_contributing]
+CHECKS = [test_self_test, test_sibling_shard, test_plan, test_fetch, test_run,
+          test_workflow, test_swap_jobs, test_contributing]
 
 
 def main() -> int:

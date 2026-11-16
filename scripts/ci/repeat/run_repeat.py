@@ -29,12 +29,15 @@ import importlib.util
 import json
 import os
 import re
+import select
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -44,9 +47,12 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 FILTER_RE = re.compile(r"^[A-Za-z0-9_:]{1,200}$")
 KEYS = ("sha", "filter", "runs", "parallel", "exact")
 RESULT_RE = re.compile(r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored\b", re.M)
+RUNNING_RE = re.compile(r"^running \d+ tests?\b")
 TAIL_LINES = 40
 COPY_OUTPUT_LINES = 400
 COPY_TIMEOUT = 1200
+# After a timeout kill, the second read. A setsid grandchild can hold the pipes.
+POST_KILL_READ = 10
 RUN_BUDGET = 300 * 60
 ARTIFACT = "linux-lib-tests"
 RUNS_MAX = 50
@@ -67,16 +73,15 @@ def git(*args: str) -> str:
 def prebuilt_shape() -> tuple[list[str], str, str]:
     """Linux lib tail of shard_tests.run_prebuilt: skips, BY_BINARY, LIB_TARGET.
 
-    The checkout under test is never searched. When this file lives at
-    scripts/ci/repeat/run_repeat.py the module is the sibling of its parent,
-    scripts/ci/shard_tests.py (repo layout, used by tests). The workflow copies
-    both reviewed files into one directory, so shard_tests.py may instead sit
-    beside this file.
+    The checkout under test is never searched. shard_tests.py beside this file
+    is tried first: the workflow copies both reviewed files into one directory.
+    The repo-layout path, scripts/ci/shard_tests.py two directories up, is used
+    only when that sibling is absent (local tests).
     """
     here = Path(__file__).resolve()
     candidates = [
-        here.parent.parent / "shard_tests.py",
         here.parent / "shard_tests.py",
+        here.parent.parent / "shard_tests.py",
     ]
     path = next((c for c in candidates if c.is_file()), None)
     if path is None:
@@ -227,13 +232,16 @@ def cmd_fetch(out: Path) -> int:
         return _fetch_die("CI for this sha is not finished; wait for it to complete")
     out.mkdir(parents=True, exist_ok=True)
     # Conclusion is not required to be success: a red run can still have uploaded the binary.
-    # Success is the file landing, not gh's exit status.
-    subprocess.run(
+    # A file already in OUT is from an earlier attempt. Drop it before gh runs so a
+    # failed download cannot leave that stale binary looking new.
+    binary = out / "lib-tests"
+    binary.unlink(missing_ok=True)
+    downloaded = subprocess.run(
         ["gh", "run", "download", str(newest["id"]), "--dir", str(out), "--name", ARTIFACT],
         capture_output=True, text=True)
-    binary = out / "lib-tests"
-    if not binary.is_file():
-        # The upload keeps the binary for 1 day. A miss after a finished run is that window closing.
+    # Both: gh must exit 0, and lib-tests must be on disk. Either miss is the 1-day window.
+    if downloaded.returncode != 0 or not binary.is_file():
+        binary.unlink(missing_ok=True)
         return _fetch_die("the lib test binary is kept 1 day and the download failed")
     binary.chmod(0o755)  # an artifact round trip drops the exec bit, as run_prebuilt restores
     (out / "source-run-id.txt").write_text(f"{newest['id']}\n", encoding="utf-8")
@@ -252,16 +260,32 @@ def _source_run_id(binary: Path) -> str | None:
     return text or None
 
 
+def _runner() -> str:
+    """Hosted runner identity. RUNNER_NAME, else RUNNER_OS-RUNNER_ARCH, else empty."""
+    name = os.environ.get("RUNNER_NAME", "").strip()
+    if name:
+        return name
+    system = os.environ.get("RUNNER_OS", "").strip()
+    arch = os.environ.get("RUNNER_ARCH", "").strip()
+    if system and arch:
+        return f"{system}-{arch}"
+    return ""
+
+
 def _payload(spec: dict, iterations: list[dict], tail: str | None, incomplete: bool, source_id: str | None) -> dict:
     passed = sum(1 for it in iterations if it["result"] == "pass")
     void = sum(1 for it in iterations if it["result"] == "void")
-    total = len(iterations)
+    completed = len(iterations)
+    # Denominator is the spec's runs. A partial file must not read as N of N.
     payload = {
         "passed": passed,
-        "total": total,
+        "total": completed,
         "void": void,
-        "verdict": f"{passed}/{total}",
+        "verdict": f"{passed}/{spec['runs']}",
+        "completed": completed,
         "incomplete": incomplete,
+        "artifact": ARTIFACT,
+        "runner": _runner(),
         "spec": spec,
         "iterations": iterations,
     }
@@ -281,13 +305,17 @@ def _write_results(out: Path, payload: dict) -> None:
     os.replace(tmp, dest)
 
 
-def _write_summary(prior: str, iterations: list[dict], passed: int, total: int) -> None:
+def _write_summary(prior: str, iterations: list[dict], passed: int, spec_runs: int, incomplete: bool) -> None:
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary:
         return
+    done = len(iterations)
     rows = ["| iteration | copies | result |", "| --- | --- | --- |"]
     rows += [f"| {it['n']} | {len(it['copies'])} | {it['result']} |" for it in iterations]
-    rows += ["", f"Verdict: {passed}/{total}"]
+    rows.append("")
+    if incomplete:
+        rows.append(f"INCOMPLETE: {done} of {spec_runs} runs executed")
+    rows.append(f"Verdict: {passed}/{spec_runs}")
     path = Path(summary)
     body = prior + "\n".join(rows) + "\n"
     tmp = path.with_name(path.name + ".repeat-tmp")
@@ -295,13 +323,126 @@ def _write_summary(prior: str, iterations: list[dict], passed: int, total: int) 
     os.replace(tmp, path)
 
 
+class _Capture:
+    """Last 400 lines plus the harness summary lines. The rest is discarded."""
+
+    def __init__(self) -> None:
+        self.tail: deque[str] = deque(maxlen=COPY_OUTPUT_LINES)
+        self.result: str | None = None
+        self.running: str | None = None
+        self.lock = threading.Lock()
+
+    def add_many(self, lines: list[str]) -> None:
+        if not lines:
+            return
+        with self.lock:
+            for line in lines:
+                if line.startswith("test result:") and RESULT_RE.match(line):
+                    self.result = line
+                elif line.startswith("running ") and RUNNING_RE.match(line):
+                    self.running = line
+            self.tail.extend(lines)
+
+    def snapshot(self) -> tuple[list[str], str | None, str | None]:
+        with self.lock:
+            return list(self.tail), self.result, self.running
+
+
+def _close_pipes(proc: subprocess.Popen) -> None:
+    for stream in (proc.stdout, proc.stderr):
+        if stream is None or stream.closed:
+            continue
+        try:
+            stream.close()
+        except (OSError, ValueError):
+            pass
+
+
+def _read_pipe(stream, state: _Capture, stop: threading.Event) -> None:
+    """One stream. Line at a time; a stop or a closed pipe ends the read."""
+    fd = stream.fileno()
+    os.set_blocking(fd, False)
+    pending = b""
+    eof = False
+    while not stop.is_set() and not eof:
+        try:
+            ready, _, _ = select.select([fd], [], [], 0.2)
+        except (OSError, ValueError):
+            break
+        if not ready:
+            continue
+        while not stop.is_set():
+            try:
+                chunk = os.read(fd, 65536)
+            except BlockingIOError:
+                break
+            except OSError:
+                eof = True
+                break
+            if not chunk:
+                eof = True
+                break
+            pending += chunk
+            *lines, pending = pending.split(b"\n")
+            if lines:
+                state.add_many([raw.decode("utf-8", "replace").rstrip("\r") for raw in lines])
+    if pending:
+        state.add_many([pending.decode("utf-8", "replace").rstrip("\r")])
+
+
+def _join_readers(threads: list[threading.Thread], timeout: float) -> bool:
+    deadline = time.monotonic() + max(0.0, timeout)
+    for thread in threads:
+        thread.join(timeout=max(0.0, deadline - time.monotonic()))
+    return all(not thread.is_alive() for thread in threads)
+
+
+def _as_text(data: str | bytes | None) -> str:
+    if not data:
+        return ""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", "replace")
+    return data
+
+
+def _fold(state: _Capture, data: str | bytes | None) -> None:
+    text = _as_text(data)
+    if text:
+        state.add_many(text.splitlines())
+
+
+def _judge_text(lines: list[str], result: str | None, running: str | None) -> str:
+    """Tail plus any summary line that scrolled out of it. judge uses the last match."""
+    body = list(lines)
+    if running and running not in body:
+        body.insert(0, running)
+    if result:
+        matches = [line for line in body if RESULT_RE.match(line)]
+        if not matches or matches[-1] != result:
+            body.append(result)
+    return "\n".join(body)
+
+
+def _blocking(proc: subprocess.Popen) -> None:
+    for stream in (proc.stdout, proc.stderr):
+        if stream is None or stream.closed:
+            continue
+        try:
+            os.set_blocking(stream.fileno(), True)
+        except (OSError, ValueError):
+            pass
+
+
 def _one_copy(binary: str, args: list[str], repo: Path, by_binary: str, lib_target: str) -> dict:
     """One libtest invocation, with the temp dir run_prebuilt gives a Linux lib binary.
 
     cwd is inherited: the process is already in the repo, and passing cwd= leaves
     Python's posix_spawn path. The copy runs in its own session so a timeout can
-    kill the whole group. judge sees the full output; only the tail is stored.
-    The temp root is removed when the copy ends.
+    kill the whole group. A reader thread per stream keeps the last 400 lines and
+    the `test result:` / `running N tests` lines; judge sees that, not the whole
+    run. After a timeout kill the second communicate waits at most 10s, then the
+    pipes are closed and whatever was already read is kept. The temp root is
+    removed when the copy ends.
     """
     root = tempfile.mkdtemp(prefix="shard-tmp-")
     try:
@@ -319,28 +460,56 @@ def _one_copy(binary: str, args: list[str], repo: Path, by_binary: str, lib_targ
             text=True,
             start_new_session=True,
         )
-        timed_out = False
+        state = _Capture()
+        stop = threading.Event()
+        threads = []
+        for stream in (proc.stdout, proc.stderr):
+            if stream is None:
+                continue
+            thread = threading.Thread(target=_read_pipe, args=(stream, state, stop), daemon=True)
+            thread.start()
+            threads.append(thread)
+        deadline = time.monotonic() + limit
         try:
-            stdout, stderr = proc.communicate(timeout=limit)
+            proc.wait(timeout=limit)
+            exited = True
         except subprocess.TimeoutExpired:
-            timed_out = True
+            exited = False
+        readers_done = _join_readers(threads, max(0.0, deadline - time.monotonic())) if exited else False
+        timed_out = not exited or not readers_done
+        if timed_out:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            stdout, stderr = proc.communicate()
-        text = f"{stdout or ''}{stderr or ''}"
+            # Readers own the pipes until they stop. Then one bounded communicate.
+            stop.set()
+            _join_readers(threads, 1)
+            _blocking(proc)
+            try:
+                extra_out, extra_err = proc.communicate(timeout=POST_KILL_READ)
+            except subprocess.TimeoutExpired as exc:
+                extra_out, extra_err = exc.stdout, exc.stderr
+                _close_pipes(proc)
+            _fold(state, extra_out)
+            _fold(state, extra_err)
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
+        else:
+            stop.set()
+            _close_pipes(proc)
+        lines, result, running = state.snapshot()
         if timed_out:
-            if text and not text.endswith("\n"):
-                text += "\n"
-            text += f"TIMEOUT after {limit} s"
+            lines.append(f"TIMEOUT after {limit} s")
+            lines = lines[-COPY_OUTPUT_LINES:]
         exit_code = proc.returncode if proc.returncode is not None else -signal.SIGKILL
-        # Classify from the full text. The stored tail can drop the summary line.
-        tests_run, kind = judge(exit_code, text)
+        tests_run, kind = judge(exit_code, _judge_text(lines, result, running))
         if timed_out:
             kind = "fail"
-        kept = "\n".join(text.splitlines()[-COPY_OUTPUT_LINES:])
-        return {"exit": exit_code, "tests_run": tests_run, "kind": kind, "output": kept}
+        return {"exit": exit_code, "tests_run": tests_run, "kind": kind, "output": "\n".join(lines)}
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -373,7 +542,7 @@ def cmd_run(binary: Path, out: Path) -> int:
     def publish(is_incomplete: bool) -> None:
         payload = _payload(spec, iterations, tail, is_incomplete, source_id)
         _write_results(out, payload)
-        _write_summary(prior, iterations, payload["passed"], payload["total"])
+        _write_summary(prior, iterations, payload["passed"], spec["runs"], is_incomplete)
 
     # Repeats are sequential so repeat N is N copies later. Copies inside one repeat overlap.
     for number in range(1, spec["runs"] + 1):
@@ -401,7 +570,8 @@ def cmd_run(binary: Path, out: Path) -> int:
             "result": result,
             "copies": [{"exit": copy["exit"], "tests_run": copy["tests_run"]} for copy in copies],
         })
-        publish(False)
+        # A file written before the last spec run is a partial result.
+        publish(number != spec["runs"])
     if incomplete:
         publish(True)
     passed = sum(1 for it in iterations if it["result"] == "pass")
