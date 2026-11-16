@@ -172,6 +172,11 @@ class Invariant(Rows):
         body = BASE["src/a.rs"] + "\nstruct S;\nimpl S {\n    #[cfg(tp1)]\n    fn m() {}\n}\n"
         self.assert_refused(with_files(src__a_DOT_rs=body), "stray-cfg")
 
+    def test_a_tag_in_a_module_nested_in_a_function_body_is_refused(self):
+        # The walk never enters a fn body, so a module there is unseen however deep (code review r3).
+        body = BASE["src/a.rs"] + "\nfn outer() {\n    mod inner {\n        #[cfg(tp1)]\n        fn g() {}\n    }\n}\n"
+        self.assert_refused(with_files(src__a_DOT_rs=body), "stray-cfg")
+
     def test_a_part_cfg_inside_a_macro_body_is_refused(self):
         # Attributes inside macro token trees are not parsed as attributes (code review r2).
         mac = "macro_rules! m {\n    () => {\n        #[cfg(tp2)]\n        fn g() {}\n    };\n}\n"

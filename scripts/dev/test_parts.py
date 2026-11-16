@@ -93,8 +93,13 @@ def _walked_item(owner) -> bool:
     body, never in an impl, a trait or a function body (a tag there would never be placed or checked)."""
     if owner is None or owner.type not in ("mod_item", "function_item"):
         return False
+    # Every enclosing scope up to the file must be a module body: one fn body, impl or block anywhere above hides it.
     up = owner.parent
-    return up is not None and (up.type == "source_file" or (up.type == "declaration_list" and up.parent is not None and up.parent.type == "mod_item"))
+    while up is not None and up.type != "source_file":
+        if up.type != "declaration_list" or up.parent is None or up.parent.type != "mod_item":
+            return False
+        up = up.parent.parent
+    return up is not None
 
 
 def _applies_test(code: str) -> bool:
