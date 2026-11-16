@@ -233,17 +233,14 @@ impl Gateway {
         // Its generations carry the key table: the startup one is the auth
         // resolved above, so the startup keys authenticate from the first
         // request, and every reload rebuilds the key list over it.
-        let mut live_config =
+        let live_config = Arc::new(
             LiveConfig::from_prepared(crate::config_reload::Generation::prepare_startup(
                 self.config.clone(),
                 Arc::clone(&auth_config),
             ))
-            .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch));
-        if let Some(hook) = self.history_hook(&data_dir) {
-            live_config = live_config.with_history(hook);
-        }
-        let live_config = Arc::new(
-            live_config.with_startup_revision(&record_key, self.env.take_startup_inputs()),
+            .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+            .with_history(self.history_hook(&data_dir))
+            .with_startup_revision(&record_key, self.env.take_startup_inputs()),
         );
         meta_mcp.set_live_config(Arc::clone(&live_config));
 

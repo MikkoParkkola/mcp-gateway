@@ -109,10 +109,14 @@ impl LiveConfig {
         }
     }
 
-    /// Record every applied publish from here on into `hook`'s store.
+    /// Record every applied publish from here on into `hook`'s store; `None`
+    /// (a gateway with no config file) records nothing.
     #[must_use]
-    pub(crate) fn with_history(mut self, hook: crate::config_reload::history::HistoryHook) -> Self {
-        self.history = Some(hook);
+    pub(crate) fn with_history(
+        mut self,
+        hook: impl Into<Option<crate::config_reload::history::HistoryHook>>,
+    ) -> Self {
+        self.history = hook.into();
         self
     }
 
