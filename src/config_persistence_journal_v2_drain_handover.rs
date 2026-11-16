@@ -5,7 +5,7 @@
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::super::JournalSession;
 use super::super::abandoned::{MAX_ABANDONED_BYTES, TornProof, encode_frame};
@@ -13,9 +13,9 @@ use super::super::abandoned::{Placement, against_donor, frames_of, marked};
 use super::super::{JournalV2, ParkReason};
 use super::DrainSession;
 use super::fault::{self, At};
+use crate::config_persistence::journal::v2::abandoned_path;
 use crate::config_persistence::sync_dir_of;
 use crate::security::transparency_log::rotation::file_id;
-use crate::security::transparency_log::settle::Role;
 
 /// Why a handover did not complete. The donor is byte-identical after `Foreign`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,13 +25,6 @@ pub(crate) enum HandoverError {
     Sync,
     Finish,
     Foreign,
-}
-
-/// `<config>.abandoned`, beside the resolved config, in the journal's own directory.
-pub(crate) fn abandoned_path(target: &Path) -> PathBuf {
-    let mut name = std::ffi::OsString::from(target.file_name().unwrap_or_default());
-    name.push(".abandoned");
-    target.with_file_name(name)
 }
 
 /// Open an existing abandoned file for the whole call: no symlink follow, no waiting on a
@@ -116,27 +109,10 @@ fn private_to_us(_meta: &std::fs::Metadata) -> bool {
 /// its widest, every owed terminal frozen by the drain's own builder, every record undelivered
 /// and parked with the longest reason. `usize::MAX` when that state cannot be built or encoded.
 pub(super) fn maximal_size(donor: &JournalV2) -> usize {
-    let mut widest = donor.clone();
-    for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
-        token.intent_counter = Some(u64::MAX);
-    }
-    // Built against the widened state, so a `settled_by` counter is the widest too.
-    let snapshot = widest.clone();
-    for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
-        // A terminal already frozen is never built again, so its intent is never parsed here.
-        if token
-            .records
-            .iter()
-            .any(|record| matches!(record.role, Role::Outcome | Role::Abandoned))
-        {
-            continue;
-        }
-        match super::terminal_record(&snapshot, token) {
-            Ok(Some(record)) => token.records.push(record),
-            Ok(None) => {}
-            Err(_) => return usize::MAX,
-        }
-    }
+    // The file drain's own judgement: a donor it could not finish has no bound.
+    let Some(mut widest) = super::file::widest_finished(donor) else {
+        return usize::MAX;
+    };
     let longest = [
         ParkReason::InvalidPayload,
         ParkReason::ContentConflict,

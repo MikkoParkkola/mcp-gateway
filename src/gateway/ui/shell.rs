@@ -25,8 +25,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/activity.237d685089d2.css"),
     ),
     (
-        "activity.8b890a724a42.js",
-        include_bytes!("shell/activity.8b890a724a42.js"),
+        "activity.382f2c4d27c5.js",
+        include_bytes!("shell/activity.382f2c4d27c5.js"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -45,32 +45,40 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/fonts/OverpassMono-400.9b51e031ff0d.woff2"),
     ),
     (
-        "shell.36c263e358bc.js",
-        include_bytes!("shell/shell.36c263e358bc.js"),
+        "gateway.03e9ffebd104.css",
+        include_bytes!("shell/gateway.03e9ffebd104.css"),
+    ),
+    (
+        "gateway.59ea70dca81f.js",
+        include_bytes!("shell/gateway.59ea70dca81f.js"),
+    ),
+    (
+        "shell.2de18ea72fd5.js",
+        include_bytes!("shell/shell.2de18ea72fd5.js"),
     ),
     (
         "shell.8a1ede0f5317.css",
         include_bytes!("shell/shell.8a1ede0f5317.css"),
     ),
     (
-        "tips.981d49b6a829.json",
-        include_bytes!("shell/tips.981d49b6a829.json"),
+        "tips.c71d93a1d77a.json",
+        include_bytes!("shell/tips.c71d93a1d77a.json"),
     ),
     (
         "tools.24f226efcd24.css",
         include_bytes!("shell/tools.24f226efcd24.css"),
     ),
     (
-        "tools.cf1d3211a06b.js",
-        include_bytes!("shell/tools.cf1d3211a06b.js"),
-    ),
-    (
-        "tooltip.2b7c2fda2fb9.js",
-        include_bytes!("shell/tooltip.2b7c2fda2fb9.js"),
+        "tools.92e061e5570d.js",
+        include_bytes!("shell/tools.92e061e5570d.js"),
     ),
     (
         "tooltip.5251c22696fd.css",
         include_bytes!("shell/tooltip.5251c22696fd.css"),
+    ),
+    (
+        "tooltip.82730770f2c1.js",
+        include_bytes!("shell/tooltip.82730770f2c1.js"),
     ),
 ];
 
@@ -165,3 +173,7 @@ pub(super) async fn not_found() -> StatusCode {
 #[cfg(test)]
 #[path = "shell_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "shell_budget_tests.rs"]
+mod budget_tests;

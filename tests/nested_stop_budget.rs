@@ -301,11 +301,13 @@ async fn stop_and_wait_chain_gone(root: &Path, pid: u32, leaves: &[u32]) -> (Ins
     (sent, Instant::now())
 }
 
-/// A plain stop of the chain: when the SIGTERM went, when the last pid was gone, and both
-/// gateways' logs as they stood then (the temp root goes with `run`).
+/// A plain stop of the chain: when the SIGTERM went, when the last pid was gone, when the
+/// outer gateway's process exited, and both gateways' logs as they stood then (the temp
+/// root goes with `run`).
 struct Stopped {
     sent: Instant,
     gone_at: Instant,
+    exited_at: Instant,
     logs: String,
 }
 
@@ -390,15 +392,17 @@ async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) -> Stopped 
     );
     let deadline = Instant::now() + STOP_BOUND;
     let (sent, gone_at) = stop_and_wait_chain_gone(root, pid, &leaves).await;
-    let stopped = Stopped {
-        sent,
-        gone_at,
-        logs: logs(root),
-    };
+    let logs_then = logs(root);
     tokio::time::timeout_at(deadline, reaped.child_mut().wait())
         .await
         .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
         .expect("gateway exit");
+    let stopped = Stopped {
+        sent,
+        gone_at,
+        exited_at: Instant::now(),
+        logs: logs_then,
+    };
     // Safety net only: the gateway has already exited, so this sends no signal.
     reaped.reap().await;
     std::mem::forget(cleanup);
@@ -420,6 +424,15 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
         gone <= HTTP_MINIMUM + BUDGET_SLACK,
         "the chain outlived the stop budget: {gone:?} against {:?}\n{}",
         HTTP_MINIMUM + BUDGET_SLACK,
+        stop.logs
+    );
+    // P4 (RETIRE.4): a full-budget stop, measured to the outer process's exit, ends inside
+    // its total: every stage ended in its share, so the exit lands by D + 200 ms.
+    let exited = stop.exited_at.duration_since(stop.sent);
+    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the process exits inside the stop total, short of the watchdog's slack)
+    assert!(
+        exited <= HTTP_MINIMUM + Duration::from_millis(200),
+        "the gateway exited {exited:?} after its SIGTERM, past its {HTTP_MINIMUM:?} total\n{}",
         stop.logs
     );
 }

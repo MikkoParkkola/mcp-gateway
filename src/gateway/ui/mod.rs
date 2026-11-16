@@ -57,6 +57,11 @@ mod preview_identity;
 mod principal;
 mod refusals;
 mod restart;
+pub(crate) mod restart_confirm;
+#[cfg(test)]
+mod restart_confirm_tests;
+#[cfg(test)]
+mod restart_get_tests;
 #[cfg(test)]
 mod restart_tests;
 mod secret_slots;
@@ -633,7 +638,7 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
         .into_response();
     };
 
-    match reload_context.reload_outcome().await {
+    match reload_context.manual_reload_outcome().await {
         Ok(outcome) => (
             StatusCode::OK,
             Json(json!({
@@ -648,7 +653,10 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
             // Whose fault, not just that it failed (MIK-8058): a file the
             // network posture refuses is the operator's config, a shutdown is
             // the gateway unavailable.
-            use crate::config_reload::{ReloadFailure, reload_failure};
+            use crate::config_reload::{ReloadFailure, is_gate_refusal, reload_failure};
+            if is_gate_refusal(&error) {
+                return flat_error(StatusCode::CONFLICT, error).into_response();
+            }
             let status = match reload_failure(&error) {
                 ReloadFailure::PostureRefused => StatusCode::CONFLICT,
                 ReloadFailure::ShuttingDown => StatusCode::SERVICE_UNAVAILABLE,

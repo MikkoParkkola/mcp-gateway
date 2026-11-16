@@ -190,8 +190,9 @@ async fn l1j_b_the_last_line_survives_a_full_stderr_at_exit() {
 }
 
 /// L1j-c (structural): the exit flush guard is bound before the runtime runs
-/// and held through it. A guard dropped early flushes at startup and not at
-/// exit, which a process test cannot tell apart while stderr keeps up.
+/// and held through it, then handed to the tail that ends the log writer. A
+/// guard dropped early flushes at startup and not at exit, which a process
+/// test cannot tell apart while stderr keeps up.
 #[test]
 fn l1j_c_the_flush_guard_outlives_the_runtime() {
     let entry = include_str!("../src/cli/entry.rs");
@@ -203,14 +204,22 @@ fn l1j_c_the_flush_guard_outlives_the_runtime() {
         .expect("cli::run ends")
         .0;
     let bound = run
-        .find("let _flush_logs = match setup_tracing(")
+        .find("let flush_logs = match setup_tracing_flush(")
         .expect("cli::run binds the flush guard");
     let runs = run[bound..]
         .find("runtime::block_on(")
         .map(|at| bound + at)
         .expect("the runtime runs after the guard is bound");
     assert!(
-        !run[bound..runs].contains("drop(_flush_logs"),
+        !run[bound..runs].contains("drop(flush_logs"),
         "the flush guard is dropped before the runtime runs"
+    );
+    let tail = run[runs..]
+        .find("crate::retire::tail(")
+        .map(|at| runs + at)
+        .expect("the tail runs after the runtime");
+    assert!(
+        run[tail..].contains("flush_logs)"),
+        "the tail does not take the flush guard"
     );
 }

@@ -93,7 +93,8 @@ pub struct ReloadContext {
     /// running config is then on bytes that are gone, so the next holder of
     /// the reload lock reloads before its own work. Cleared only by an
     /// accepted reload, so a reload that fails is retried, never forgotten.
-    pub(super) reload_owed: std::sync::atomic::AtomicBool,
+    /// Shared with the restart gate, which reads it as part of the checkpoint.
+    pub(super) reload_owed: Arc<std::sync::atomic::AtomicBool>,
     /// Where an audited gateway's recovery intents go, set once at start
     /// from the audit posture: every in-gateway holder of the config lock
     /// appends one before it recovers a crashed write or pays an owed
@@ -124,6 +125,19 @@ pub(crate) type SurfacedHook = Arc<dyn Fn(&Config) + Send + Sync>;
 
 /// The refusal a reload returns when the gateway's shutdown ended its wait.
 pub(super) const STOPPED: &str = "config reload stopped: the gateway is shutting down";
+
+/// What a manual reload answers when the restart gate refuses it; the UI route
+/// maps exactly these texts to its 409 body.
+pub(crate) const RELOAD_REPLAY_OWED: &str =
+    "a restart is being prepared; the reload runs when it is decided";
+pub(crate) const RELOAD_RESTARTING: &str = "the gateway is restarting";
+pub(crate) const RELOAD_STOPPING: &str = "the gateway is stopping";
+
+/// Whether `error` is one of the restart gate's refusal texts.
+#[cfg(feature = "webui")]
+pub(crate) fn is_gate_refusal(error: &str) -> bool {
+    [RELOAD_REPLAY_OWED, RELOAD_RESTARTING, RELOAD_STOPPING].contains(&error)
+}
 
 /// The reload's file load; a field so a test can stall or fail it.
 pub(super) type LoadPatch = fn(
@@ -171,10 +185,17 @@ impl ReloadContext {
             &running.security.hardened.private_backends,
         )?;
         let trusted_config = crate::identity_grants::journal::resolved(&config_path);
+        let reporting = super::refusals::ReloadReporting::default();
+        // This load is the configuration still running until a reload applies.
+        // Production replaces this reporting; that tally is stamped when the
+        // context takes it.
+        reporting.tally.note_loaded();
+        let reload_owed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        registry.config_gate().register_owed(&reload_owed);
         Ok(Self {
             config_path,
             trusted_config,
-            reload_owed: std::sync::atomic::AtomicBool::new(false),
+            reload_owed,
             recovery_audit: parking_lot::Mutex::new(None),
             #[cfg(test)]
             recovery_pause: std::sync::Arc::default(),
@@ -195,7 +216,7 @@ impl ReloadContext {
             stop: tokio_util::sync::CancellationToken::new(),
             capabilities: None,
             on_registered: None,
-            reporting: super::refusals::ReloadReporting::default(),
+            reporting,
             markers: None,
             surfaced_hook: parking_lot::Mutex::new(None),
         })
@@ -254,6 +275,15 @@ impl ReloadContext {
     pub(super) fn with_load(mut self, load: LoadPatch) -> Self {
         self.load = load;
         self
+    }
+
+    /// Mark a reload as owed, as a journal recovery that rolled the file back
+    /// does, so a restart checkpoint row can stage that one condition without
+    /// arranging a recovery on disk.
+    #[cfg(test)]
+    pub(crate) fn owe_reload_for_test(&self) {
+        self.reload_owed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Test-only: a context whose every reload after a write refuses the new
@@ -326,6 +356,37 @@ impl ReloadContext {
     /// Returns an error string if the config file cannot be read or parsed.
     pub async fn reload(&self) -> std::result::Result<String, String> {
         self.reload_outcome().await.map(|outcome| outcome.changes)
+    }
+
+    /// A manual reload (the UI route or the meta-tool): admitted by the restart
+    /// gate first, then the shared transaction. A refused admission answers with
+    /// the text the caller maps to its 409 body.
+    ///
+    /// # Errors
+    ///
+    /// The gate's refusal text, or `reload_outcome`'s error.
+    pub async fn manual_reload_outcome(&self) -> std::result::Result<ReloadOutcome, String> {
+        use crate::gateway::restart_config_floor::{AdmitKind, Refusal};
+        let gate = self.registry.config_gate();
+        let _admitted = gate.admit(AdmitKind::ManualReload).map_err(|refusal| {
+            match refusal {
+                Refusal::Restarting => RELOAD_RESTARTING,
+                Refusal::Stopping => RELOAD_STOPPING,
+                Refusal::Busy | Refusal::ReplayOwed => RELOAD_REPLAY_OWED,
+            }
+            .to_owned()
+        })?;
+        #[cfg(test)]
+        gate.call_admitted(
+            crate::gateway::restart_config_floor::seams::AdmittedPoint::ManualAfterAdmission,
+        );
+        let outcome = self.reload_outcome().await?;
+        #[cfg(test)]
+        gate.record_reload(
+            crate::gateway::restart_config_floor::seams::ReloadSource::Manual,
+            self.live_config.get().environment.as_deref().unwrap_or(""),
+        );
+        Ok(outcome)
     }
 
     /// Reload the config file and return a structured outcome for callers/UI.

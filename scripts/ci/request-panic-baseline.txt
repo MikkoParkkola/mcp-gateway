@@ -14,7 +14,6 @@ src/capability/executor/jsonrpc.rs	.expect("static content-type is valid"),	1
 src/capability/executor/mcp.rs	let child = map.get_mut(&key).expect("present: inserted above");	1
 src/config/secret_ref.rs	Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}").expect("constant template pattern")	1
 src/config/secret_ref.rs	let whole = caps.get(0).expect("group 0 always matches");	1
-src/config_reload/watcher.rs	let trigger = pending_trigger.take().unwrap();	1
 src/context_integrity/kernel.rs	.expect("destructive action patterns must compile")	1
 src/context_integrity/kernel.rs	.expect("exfiltration patterns must compile")	1
 src/context_integrity/kernel.rs	.expect("financial data patterns must compile")	1
@@ -49,8 +48,6 @@ src/gateway/server/run_steps.rs	GatewayKeyPair::generate().expect("RSA key pair 
 src/gateway/server/stdio_loop.rs	.expect("the admission semaphore is never closed");	2
 src/gateway/server/stdio_loop.rs	let slot = slot.expect("a spawned request holds the slot it was admitted on");	1
 src/gateway/server/stdio_nonce.rs	.expect("the OS RNG must yield 32 bytes");	1
-src/gateway/server/support.rs	.expect("Failed to install Ctrl+C handler");	1
-src/gateway/server/support.rs	.expect("Failed to install SIGTERM handler")	1
 src/gateway/task_service/execution.rs	_ => unreachable!("matched above"),	1
 src/gateway/task_service/execution/operations.rs	.expect("worker semaphore is never closed");	1
 src/gateway/task_service/execution/worker.rs	let job = job.expect("a handle is captured only for an armed job");	1

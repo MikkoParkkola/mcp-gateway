@@ -38,10 +38,6 @@
   ],
   "gateway": [
    "gateway.actions.configuration-versions",
-   "gateway.settings.2-which-key-does-it",
-   "gateway.settings.and-memory-just-brought-in",
-   "gateway.settings.environment-name",
-   "gateway.settings.sentry-the-server-you-just",
    "gateway.status.11-47-edit-not-applied",
    "gateway.status.2-restarts-6-s-down",
    "gateway.status.4-0-0",
@@ -130,6 +126,12 @@
   "tools": [
    "tools.actions.run-as"
   ]
+ },
+ "_pending_later": {
+  "gateway.settings.2-which-key-does-it": "Gateway › Settings: Connect a client",
+  "gateway.settings.and-memory-just-brought-in": "Gateway › Settings: Connect a client",
+  "gateway.settings.environment-name": "Gateway › Settings: the editable environment name",
+  "gateway.settings.sentry-the-server-you-just": "Gateway › Settings: Connect a client"
  },
  "access.actions.keys": {
   "title": "Keys",

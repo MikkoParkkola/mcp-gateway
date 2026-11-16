@@ -234,7 +234,7 @@ impl JournalSession {
         if bytes.len() > abandoned::MAX_ABANDONED_BYTES {
             return Err(JournalError::Persist);
         }
-        let path = drain::handover::abandoned_path(&self.target);
+        let path = abandoned_path(&self.target);
         write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)
             .map_err(|_| JournalError::Persist)?;
         drain::fault::file_rewritten(&self.target)?;
@@ -605,6 +605,22 @@ mod observe;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_state_tests.rs"]
 mod state_tests;
+
+/// `<config>.abandoned`: the sidecar an abandoned journal's handover writes, beside the
+/// resolved config in the journal's own directory. The drain's handover and the restart
+/// checkpoint both name it through this one function.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the restart coordinator wiring, a later slice, reaches it through the config floor"
+    )
+)]
+pub(crate) fn abandoned_path(target: &std::path::Path) -> std::path::PathBuf {
+    let mut name = std::ffi::OsString::from(target.file_name().unwrap_or_default());
+    name.push(".abandoned");
+    target.with_file_name(name)
+}
 
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned.rs"]
