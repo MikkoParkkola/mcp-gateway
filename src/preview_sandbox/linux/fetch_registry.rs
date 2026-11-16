@@ -94,11 +94,23 @@ fn ustar_header(path: &str, size: usize, mode: u32) -> [u8; 512] {
     h
 }
 
-/// A running fake registry: its loopback port and the CA its leaf chains to.
+/// A running fake registry: its loopback port, the CA its leaf chains to, how
+/// many connections are open, and a signal on the first request.
 pub(super) struct Registry {
     pub(super) port: u16,
     pub(super) ca_pem: String,
+    open: Arc<std::sync::atomic::AtomicUsize>,
+    first: Arc<tokio::sync::Notify>,
     _serve: tokio::task::JoinHandle<()>,
+}
+
+/// One accepted connection, counted open until its handler ends.
+struct Open(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for Open {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl Registry {
@@ -145,10 +157,17 @@ impl Registry {
                 })
                 .collect(),
         );
+        let open = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let first = Arc::new(tokio::sync::Notify::new());
+        let (count, signal) = (Arc::clone(&open), Arc::clone(&first));
         let serve = tokio::spawn(async move {
             while let Ok((tcp, _)) = listener.accept().await {
                 let (acceptor, routes) = (acceptor.clone(), Arc::clone(&routes));
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let open = Open(Arc::clone(&count));
+                let signal = Arc::clone(&signal);
                 tokio::spawn(async move {
+                    let _open = open;
                     let Ok(mut tls) = acceptor.accept(tcp).await else {
                         return;
                     };
@@ -160,6 +179,8 @@ impl Registry {
                             _ => return,
                         }
                     }
+                    // A stored permit: a row that waits after the request still sees it.
+                    signal.notify_one();
                     let line = String::from_utf8_lossy(&head);
                     let path = line
                         .split_whitespace()
@@ -186,7 +207,19 @@ impl Registry {
         Self {
             port,
             ca_pem: pki.ca.pem(),
+            open,
+            first,
             _serve: serve,
         }
+    }
+
+    /// Connections accepted and not yet ended.
+    pub(super) fn open_connections(&self) -> usize {
+        self.open.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Returns once the registry has read its first request's head.
+    pub(super) async fn first_request(&self) {
+        self.first.notified().await;
     }
 }

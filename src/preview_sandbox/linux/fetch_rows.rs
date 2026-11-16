@@ -545,3 +545,87 @@ async fn l_nvm_npm_and_node_run_from_the_two_narrow_binds() {
     let out = ran.expect("the copied npm fetched and node ran");
     assert_eq!(lines(&out), ["node-ran", "bin-ran"], "{out}");
 }
+
+/// Every live process whose command line carries `marker` (the `unshare`, the
+/// helper and a target all carry the target's arguments).
+fn marked(marker: &str) -> Vec<u32> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir("/proc").expect("/proc").flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let state = stat
+            .rsplit_once(") ")
+            .and_then(|(_, rest)| rest.split_whitespace().next());
+        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        let live = !matches!(state, None | Some("Z" | "X"));
+        if live && String::from_utf8_lossy(&cmdline).contains(marker) {
+            found.push(pid);
+        }
+    }
+    found
+}
+
+/// NPM.7 (the design's R6b, after the credential), kills "a start dropped
+/// mid-fetch leaves the fetch running": the start is dropped once the fake
+/// registry has read the fetch's first request (the credential was issued and
+/// used). Every process carrying the target's marker ends within the guard,
+/// the proxy that held the credential is gone with its directory, and no
+/// connection to the registry stays open, so nothing of the fetch can reach it.
+#[tokio::test]
+async fn l6b_a_start_dropped_mid_fetch_leaves_nothing_running() {
+    const MARKER: &str = "l6b-marker-5c1e";
+    let Some(gateway) = gateway_bin() else {
+        return;
+    };
+    if host_npx().is_none() || !sandbox_runs(&gateway).await {
+        return;
+    }
+    let fake = package(
+        "mcp-dropped",
+        &[("mcp-dropped", "bin/cli.sh")],
+        serde_json::json!({}),
+    );
+    let registry = Registry::start(vec![fake], "dropped start CA").await;
+    let dir = tempfile::tempdir().expect("dir");
+    let bundle = dir.path().join("bundle.pem");
+    std::fs::write(&bundle, &registry.ca_pem).expect("bundle");
+    let runtime = tempfile::tempdir().expect("runtime dir");
+    let ambient = Ambient {
+        ca_bundle: Some(bundle.into_os_string()),
+        runtime_dir: Some(runtime.path().as_os_str().to_owned()),
+        path: std::env::var_os("PATH"),
+    };
+    let target = Target {
+        program: PathBuf::from("npx"),
+        args: vec!["mcp-dropped".into(), MARKER.into()],
+    };
+    let mut start = Box::pin(start_fetching_with(
+        &gateway,
+        &target,
+        &[],
+        tokio::time::Instant::now() + GUARD,
+        ambient,
+        Arc::new(TestResolve),
+        Arc::new(TestDialer(registry.port)),
+    ));
+    tokio::select! {
+        ended = &mut start => panic!("the start ended before the registry was asked: {:?}", ended.err()),
+        () = registry.first_request() => {}
+        () = tokio::time::sleep(GUARD) => panic!("the registry was not asked within the guard"),
+    }
+    drop(start);
+    let empty = std::fs::read_dir(runtime.path())
+        .expect("runtime dir")
+        .count();
+    assert_eq!(empty, 0, "the proxy's directory outlived the dropped start");
+    let ended = async {
+        while !marked(MARKER).is_empty() || registry.open_connections() != 0 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    tokio::time::timeout(GUARD, ended)
+        .await
+        .expect("the sandbox and every registry connection ended within the guard");
+}
