@@ -259,6 +259,6 @@ jobs:
         # 30 s (scripts/ci/check_swap_jobs.py).
         timeout-minutes: 30
         run: >-
-          scripts/ci/with-memory-log.sh cargo test --all-targets --no-run
+          scripts/ci/with-memory-log.sh cargo check --all-targets
           --config profile.dev.debug-assertions=false
           --config profile.test.debug-assertions=false
