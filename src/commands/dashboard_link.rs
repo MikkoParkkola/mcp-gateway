@@ -199,7 +199,6 @@ pub(crate) async fn admin_call(
         tls,
         None,
         None,
-        None,
         &AdminClientOptions::default(),
     )
     .await
@@ -337,7 +336,6 @@ pub(crate) async fn admin_call_url_with_options(
         tls,
         body,
         if_match,
-        None,
         options,
     )
     .await?;
@@ -402,22 +400,11 @@ pub(crate) async fn admin_stream_url(
     endpoint: reqwest::Url,
     token: &str,
     tls: &LinkTls,
-    if_match: Option<&reqwest::header::HeaderValue>,
-    last_event_id: Option<&reqwest::header::HeaderValue>,
     options: &AdminClientOptions,
 ) -> Result<AdminStream, AdminCallError> {
     use futures::StreamExt;
-    let response = send_admin_request(
-        method,
-        endpoint.as_str(),
-        token,
-        tls,
-        None,
-        if_match,
-        last_event_id,
-        options,
-    )
-    .await?;
+    let response =
+        send_admin_request(method, endpoint.as_str(), token, tls, None, None, options).await?;
     let status = response.status();
     let headers = response.headers().clone();
     let request_id = headers
@@ -451,7 +438,6 @@ async fn send_admin_request(
     tls: &LinkTls,
     body: Option<&serde_json::Value>,
     if_match: Option<&reqwest::header::HeaderValue>,
-    last_event_id: Option<&reqwest::header::HeaderValue>,
     options: &AdminClientOptions,
 ) -> Result<reqwest::Response, AdminCallError> {
     check_target(endpoint)
@@ -489,9 +475,6 @@ async fn send_admin_request(
     }
     if let Some(value) = if_match {
         request = request.header(reqwest::header::IF_MATCH, value);
-    }
-    if let Some(value) = last_event_id {
-        request = request.header("last-event-id", value);
     }
     request.send().await.map_err(|error| {
         AdminCallError::new(

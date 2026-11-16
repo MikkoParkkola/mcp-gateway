@@ -29,7 +29,6 @@ fn args(path: &str, limit: Option<u32>, json: bool) -> ApiArgs {
         data: None,
         if_match: None,
         limit,
-        last_event_id: None,
         json,
         url: None,
         tls: DashboardLinkTls::default(),
@@ -115,13 +114,11 @@ fn split(body: &str, at: usize) -> Vec<Vec<u8>> {
     vec![a.to_vec(), b.to_vec()]
 }
 
-/// R4: the stream needs --limit, the stream flags belong to the stream, and a
+/// R4: the stream needs --limit, --limit belongs to the stream, and a
 /// credential with a control character is refused; nothing is sent.
 #[tokio::test]
 async fn stream_flags_and_credentials_are_checked_before_sending() {
     let elsewhere = args("/ui/api/status", Some(1), false);
-    let mut cursor_elsewhere = args("/ui/api/status", None, false);
-    cursor_elsewhere.last_event_id = Some("7".to_owned());
     for request in [
         args(STREAM, None, true),
         args("/ui/api/stream?x=1", None, false),
@@ -135,14 +132,6 @@ async fn stream_flags_and_credentials_are_checked_before_sending() {
             request.path
         );
     }
-    let checked = check_args(
-        &cursor_elsewhere,
-        &api_url(BASE, "/ui/api/status").expect("url"),
-    );
-    assert!(
-        checked.is_err(),
-        "--last-event-id off the stream is refused"
-    );
     for bad in ["two\nlines", "tab\there"] {
         let refused = super::super::resolve_token(Ok(bad.to_owned()), BASE);
         assert!(
@@ -460,10 +449,11 @@ impl Drop for HangUp {
 
 /// A stand-in gateway on loopback: it answers with `events` at once, then
 /// `then` after `release` fires, then keeps the stream open; it records the
-/// Last-Event-ID it was sent, counts requests, and notices a hang-up.
+/// query it was sent (where a resume cursor travels), counts requests, and
+/// notices a hang-up.
 struct Live {
     base: String,
-    last_event_id: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    query: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     requests: std::sync::Arc<AtomicUsize>,
     hung_up: std::sync::Arc<tokio::sync::Notify>,
     release: std::sync::Arc<tokio::sync::Notify>,
@@ -477,24 +467,20 @@ async fn live(
     use std::sync::Arc;
     let gateway = Live {
         base: String::new(),
-        last_event_id: Arc::default(),
+        query: Arc::default(),
         requests: Arc::default(),
         hung_up: Arc::default(),
         release: Arc::default(),
     };
     let (seen, count, hung_up, release) = (
-        Arc::clone(&gateway.last_event_id),
+        Arc::clone(&gateway.query),
         Arc::clone(&gateway.requests),
         Arc::clone(&gateway.hung_up),
         Arc::clone(&gateway.release),
     );
-    let app = axum::Router::new().fallback(move |headers: axum::http::HeaderMap| {
+    let app = axum::Router::new().fallback(move |uri: axum::http::Uri| {
         count.fetch_add(1, Ordering::SeqCst);
-        let id = headers
-            .get("last-event-id")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
-        *seen.lock().expect("seen") = id;
+        *seen.lock().expect("seen") = uri.query().map(str::to_owned);
         let state = (
             0usize,
             HangUp(Arc::clone(&hung_up)),
@@ -536,7 +522,8 @@ async fn live(
 
 /// R1, R2 (test plan row T6): against a live stream that stays open,
 /// `--json --limit 1` prints exactly the first event as one JSON line and
-/// exits 0; the gateway sees the hang-up, receives the Last-Event-ID sent,
+/// exits 0; the gateway sees the hang-up, receives the resume cursor in the
+/// query unchanged (`?last_event_id=`, which the route resumes from),
 /// and gets one request.
 #[tokio::test]
 async fn a_live_stream_stops_at_the_limit_and_hangs_up() {
@@ -546,8 +533,7 @@ async fn a_live_stream_stops_at_the_limit_and_hangs_up() {
         None,
     )
     .await;
-    let mut request = args(STREAM, Some(1), true);
-    request.last_event_id = Some("0".to_owned());
+    let request = args("/ui/api/stream?last_event_id=0", Some(1), true);
     let mut out = Vec::new();
     let outcome = run_streamed_with(
         &request,
@@ -572,8 +558,8 @@ async fn a_live_stream_stops_at_the_limit_and_hangs_up() {
         .await
         .expect("the gateway sees the client hang up");
     assert_eq!(
-        gateway.last_event_id.lock().expect("seen").as_deref(),
-        Some("0")
+        gateway.query.lock().expect("seen").as_deref(),
+        Some("last_event_id=0")
     );
     assert_eq!(
         gateway.requests.load(Ordering::SeqCst),

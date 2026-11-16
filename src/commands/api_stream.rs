@@ -87,7 +87,7 @@ pub(super) fn streamed(base: &str, path: &str) -> bool {
     api_url(base, path).is_ok_and(|url| mode_of(&url) != Mode::Buffered)
 }
 
-/// The stream flags belong to the stream route, which needs `--limit`.
+/// `--limit` belongs to the stream route, which needs it.
 pub(super) fn check_args(args: &ApiArgs, url: &reqwest::Url) -> Result<(), ApiError> {
     let stream = mode_of(url) == Mode::Stream;
     let usage = |message: &str, remedy: &str| Err(ApiError::new(ApiExit::Usage, message, remedy));
@@ -102,20 +102,6 @@ pub(super) fn check_args(args: &ApiArgs, url: &reqwest::Url) -> Result<(), ApiEr
             "--limit applies only to /ui/api/stream.",
             "Remove --limit, or ask for /ui/api/stream.",
         );
-    }
-    if let Some(id) = &args.last_event_id {
-        if !stream {
-            return usage(
-                "--last-event-id applies only to /ui/api/stream.",
-                "Remove --last-event-id, or ask for /ui/api/stream.",
-            );
-        }
-        if id.chars().any(char::is_control) {
-            return usage(
-                "--last-event-id holds a control character.",
-                "Pass the event id exactly as the stream printed it.",
-            );
-        }
     }
     Ok(())
 }
@@ -153,7 +139,6 @@ pub(super) struct StreamRequest {
     pub(super) url: reqwest::Url,
     pub(super) token: String,
     pub(super) tls: LinkTls,
-    pub(super) last_event_id: Option<reqwest::header::HeaderValue>,
 }
 
 /// The production sender: the shared client and policy, with no total limit
@@ -168,8 +153,6 @@ pub(super) async fn send(request: StreamRequest) -> Result<AdminStream, AdminCal
         request.url,
         &request.token,
         &request.tls,
-        None,
-        request.last_event_id.as_ref(),
         &options,
     )
     .await
@@ -516,31 +499,12 @@ where
         Ok(token) => token,
         Err(error) => return error.outcome(args.json, ""),
     };
-    let last_event_id = match args
-        .last_event_id
-        .as_deref()
-        .map(reqwest::header::HeaderValue::from_str)
-    {
-        Some(Err(_)) => {
-            let remedy = "Pass the event id exactly as the stream printed it.";
-            return failure(
-                ApiExit::Usage,
-                "--last-event-id is not a valid header value.",
-                remedy,
-                args.json,
-                &token,
-            );
-        }
-        Some(Ok(value)) => Some(value),
-        None => None,
-    };
     let started = Instant::now();
     let request = StreamRequest {
         method,
         url,
         token: token.clone(),
         tls: tls.clone(),
-        last_event_id,
     };
     let answer = match tokio::time::timeout(deadlines.headers, send(request)).await {
         Ok(Ok(answer)) => answer,
