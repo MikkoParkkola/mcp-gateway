@@ -72,12 +72,27 @@ fn refuse_bound(row: &str, foreign: bool) -> Result<(), String> {
     drop(live.seed(state(&live.resolved), row));
     let session = prepared(&live.path, row);
     let baseline = artifact(&live.resolved, JOURNAL, row);
+    let live_log = std::fs::read(&live.log_path).unwrap_or_default();
+    // P3 passes no log. Only a foreign finish (P2) has a second log to keep identical.
+    let other_log = foreign.then(|| std::fs::read(&other.log_path).unwrap_or_default());
     let log = foreign.then(|| Arc::clone(&other.log));
     let error = super::super::fixtures::runtime(finish_start(session, log));
     if error != Err(StartError::JournalPending) {
         return Err(format!("{row}: want JournalPending, got {error:?}"));
     }
     same(&live.resolved, JOURNAL, &baseline, row);
+    assert_eq!(
+        std::fs::read(&live.log_path).unwrap_or_default(),
+        live_log,
+        "{row}: live log byte-identical"
+    );
+    if let Some(before_log) = other_log {
+        assert_eq!(
+            std::fs::read(&other.log_path).unwrap_or_default(),
+            before_log,
+            "{row}: other log byte-identical"
+        );
+    }
     free(&live.path, row);
     Ok(())
 }
@@ -112,12 +127,24 @@ fn policy_p5() -> Result<(), String> {
     let other = Live::new();
     let session = abandon(&live, ROW, |_| {});
     let baseline = artifact(&live.resolved, ABANDONED, ROW);
+    let live_log = std::fs::read(&live.log_path).unwrap_or_default();
+    let other_log = std::fs::read(&other.log_path).unwrap_or_default();
     let error = super::super::fixtures::runtime(finish_start(session, Some(other.log)));
     if error != Err(StartError::AbandonedPending) {
         return Err(format!("{ROW}: want AbandonedPending, got {error:?}"));
     }
-    // Section 5 names the error. Byte-identity is the OtherLog keep (the file is not deleted).
+    // Section 5 names the error. The abandoned file and both logs stay byte-identical.
     same(&live.resolved, ABANDONED, &baseline, ROW);
+    assert_eq!(
+        std::fs::read(&live.log_path).unwrap_or_default(),
+        live_log,
+        "{ROW}: live log byte-identical"
+    );
+    assert_eq!(
+        std::fs::read(&other.log_path).unwrap_or_default(),
+        other_log,
+        "{ROW}: other log byte-identical"
+    );
     free(&live.path, ROW);
     Ok(())
 }
@@ -157,9 +184,11 @@ fn finish_drains_journal_then_file() {
     handed(&mut session, ROW);
     drop(session);
     plant_staged(&live, ROW);
-    finished(prepared(&live.path, ROW), Some(Arc::clone(&live.log)), ROW);
+    let session = prepared(&live.path, ROW);
+    let token = recovery_attempt_token(&live, ROW);
+    finished(session, Some(Arc::clone(&live.log)), ROW);
     let records = live.records();
-    expect_staged_owed(&records, ROW);
+    expect_staged_owed(&records, &token, ROW);
     owe(&records, "file-1", "config_save_intent", None, 1, ROW);
     owe(
         &records,
@@ -224,6 +253,7 @@ fn finish_parks_invalid_payload() {
         ["writer-1"],
         "{ROW}: park persisted on writer-1; parked {parked:?}"
     );
+    free(&live.path, ROW);
 }
 
 /// GATE.4: a journal record the log rejects is parked in the journal, which stays.
@@ -250,6 +280,7 @@ fn finish_parks_invalid_journal_payload() {
         Some(ParkReason::InvalidPayload),
         "{ROW}: park persisted"
     );
+    free(&live.path, ROW);
 }
 
 /// GATE.4: a torn abandoned file with logging off is `AbandonedPending`, not P6's accept.
@@ -277,7 +308,8 @@ fn finish_refuses_unreadable_file_without_log() {
     free(&live.path, ROW);
 }
 
-/// GATE.4: a fault after the intent append is `JournalPending` and leaves the intent unflagged.
+/// GATE.4: a fault after the intent append is `JournalPending`, leaves the intent unflagged,
+/// and the log holds that intent with no outcome.
 #[test]
 fn crash_s4() {
     const ROW: &str = "crash_s4";
@@ -299,5 +331,16 @@ fn crash_s4() {
         !writer.intent.delivered,
         "{ROW}: writer-1 intent not flagged delivered"
     );
+    let records = live.records();
+    let intents = records
+        .iter()
+        .filter(|record| record["token"] == "writer-1" && record["event"] == "config_save_intent")
+        .count();
+    assert!(
+        intents >= 1,
+        "{ROW}: log holds writer-1's intent; arrived {}",
+        arrived(&records)
+    );
+    owe(&records, "writer-1", "config_write_outcome", None, 0, ROW);
     free(&live.path, ROW);
 }

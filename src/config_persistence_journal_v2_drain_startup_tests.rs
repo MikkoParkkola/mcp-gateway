@@ -20,7 +20,7 @@ use super::handover::{self, hand_over};
 use crate::config_persistence::commit::FileRevision;
 use crate::config_persistence::lock::{self, NotLocked};
 use crate::config_reload::startup_settle::{
-    StartError, StartupSession, finish_start, prepare_start,
+    StartError, StartupSession, finish_start, prepare_start, prepare_start_within,
 };
 use crate::security::transparency_log::TransparencyLogger;
 use crate::security::transparency_log::settle::{IntentKind, Role};
@@ -212,10 +212,11 @@ fn owe(rec: &[Value], token: &str, event: &str, pair: Option<(&str, &str)>, n: u
     );
 }
 
-/// The writer's intent arrived at least once, and every copy carries its frozen bytes. A fixture
-/// whose intent has a counter seeds it as appended before a crash with its flag unsynced, and the
-/// drain resends such an intent (at least once): the drain's own `late_journal_retry` row allows
-/// these equal repeats and counts terminals, not intent copies.
+/// The writer's intent arrived at least once and at most twice (the seeded surviving copy plus
+/// one resend), and every copy carries its frozen bytes. A fixture whose intent has a counter
+/// seeds it as appended before a crash with its flag unsynced, and the drain resends such an
+/// intent: the drain's own `late_journal_retry` row allows these equal repeats and counts
+/// terminals, not intent copies.
 fn intent_arrived(rec: &[Value], token: &str, row: &str) {
     let copies: Vec<&Value> = rec
         .iter()
@@ -226,6 +227,11 @@ fn intent_arrived(rec: &[Value], token: &str, row: &str) {
         "{row}: {token} intent arrived; arrived {}",
         arrived(rec)
     );
+    assert!(
+        copies.len() <= 2,
+        "{row}: {token} intent at most twice (the seeded surviving copy plus one resend); arrived {}",
+        arrived(rec)
+    );
     for copy in copies {
         for (key, value) in payload(SAVE) {
             assert_eq!(copy[&key], value, "{row}: {token} intent copy keeps {key}");
@@ -233,8 +239,33 @@ fn intent_arrived(rec: &[Value], token: &str, row: &str) {
     }
 }
 
-/// Writer save, writer rolled-back outcome, one recovery intent, and that attempt's outcome.
-fn expect_staged_owed(records: &[Value], row: &str) {
+/// The recovery attempt's token, read from the journal after `prepare_start`.
+fn recovery_attempt_token(live: &Live, row: &str) -> String {
+    let journal = journal_at(live, row);
+    let tokens: Vec<String> = journal
+        .attempts
+        .iter()
+        .filter(|attempt| attempt.intent.role == Role::RecoveryIntent)
+        .map(|attempt| attempt.intent_id.0.clone())
+        .collect();
+    assert_eq!(
+        tokens.len(),
+        1,
+        "{row}: one recovery attempt after prepare, got {tokens:?}"
+    );
+    tokens.into_iter().next().expect(row)
+}
+
+/// How many captured lines each carry both `path` and `cause`.
+fn lines_naming(text: &str, path: &str, cause: &str) -> usize {
+    text.lines()
+        .filter(|line| line.contains(path) && line.contains(cause))
+        .count()
+}
+
+/// Writer save, writer rolled-back outcome, one recovery intent for `token`, and that
+/// attempt's outcome.
+fn expect_staged_owed(records: &[Value], token: &str, row: &str) {
     owe(records, "writer-1", "config_save_intent", None, 1, row);
     owe(
         records,
@@ -254,12 +285,13 @@ fn expect_staged_owed(records: &[Value], row: &str) {
         "{row}: one config_recovery_intent; arrived {}",
         arrived(records)
     );
-    let token = recoveries[0]["token"].as_str().unwrap_or("");
-    assert_ne!(
-        token, "writer-1",
-        "{row}: recovery token is {token}, not writer-1"
+    assert_eq!(
+        recoveries[0]["token"].as_str().unwrap_or(""),
+        token,
+        "{row}: recovery intent carries the attempt token {token}"
     );
-    assert_ne!(token, "", "{row}: recovery token arrived empty");
+    assert_ne!(token, "writer-1", "{row}: recovery token is not writer-1");
+    assert_ne!(token, "", "{row}: recovery token is not empty");
     owe(
         records,
         token,
@@ -317,7 +349,8 @@ fn prepare_repairs_before_load() {
     held(&live.path, ROW);
 }
 
-/// GATE.4: a staged restore whose original is gone is `RepairPending` and leaves the journal.
+/// GATE.4: a staged restore whose original is gone is `RepairPending`. One undecided recovery
+/// attempt is appended; the writer, phase, original revision, binding and config stay.
 #[test]
 fn prepare_refuses_unrepairable() {
     const ROW: &str = "prepare_refuses_unrepairable";
@@ -325,15 +358,55 @@ fn prepare_refuses_unrepairable() {
     plant_staged(&live, ROW);
     std::fs::remove_file(live.resolved.join(ORIGINAL)).expect(ROW);
     let config = std::fs::read(&live.path).expect(ROW);
+    // Repair persists the attempt before it finds the original gone, so the journal is not
+    // byte-identical. The writer and the config are never touched.
+    let before = journal_at(&live, ROW);
     let error = super::fixtures::runtime(prepare_start(&live.path)).map(drop);
     assert_eq!(
         error,
         Err(StartError::RepairPending),
         "{ROW}: RepairPending"
     );
-    // Repair persists its attempt before it finds the original gone, so the journal stays, but
-    // not byte-identical; the config is never touched.
-    assert!(live.resolved.join(JOURNAL).exists(), "{ROW}: journal kept");
+    let after = journal_at(&live, ROW);
+    let (Some(before_writer), Some(after_writer)) = (before.writer.as_ref(), after.writer.as_ref())
+    else {
+        panic!("{ROW}: writer token still present");
+    };
+    assert_eq!(
+        after_writer.intent_id, before_writer.intent_id,
+        "{ROW}: writer token"
+    );
+    assert_eq!(
+        after_writer.intent.payload_json, before_writer.intent.payload_json,
+        "{ROW}: writer intent bytes"
+    );
+    assert_eq!(
+        after_writer.decision, before_writer.decision,
+        "{ROW}: writer decision"
+    );
+    assert_eq!(after.phase, before.phase, "{ROW}: phase");
+    assert_eq!(
+        after.original_revision, before.original_revision,
+        "{ROW}: original_revision"
+    );
+    assert_eq!(after.binding, before.binding, "{ROW}: binding");
+    assert_eq!(
+        after.attempts.len(),
+        before.attempts.len() + 1,
+        "{ROW}: one new attempt"
+    );
+    assert_eq!(
+        &after.attempts[..before.attempts.len()],
+        before.attempts.as_slice(),
+        "{ROW}: earlier attempts unchanged"
+    );
+    let added = &after.attempts[before.attempts.len()];
+    assert_eq!(
+        added.intent.role,
+        Role::RecoveryIntent,
+        "{ROW}: new attempt is a recovery intent"
+    );
+    assert_eq!(added.decision, None, "{ROW}: new attempt is undecided");
     assert_eq!(
         std::fs::read(&live.path).expect(ROW),
         config,
@@ -342,7 +415,8 @@ fn prepare_refuses_unrepairable() {
     free(&live.path, ROW);
 }
 
-/// GATE.4: one handed-over token and one not is `JournalPending` before any caller load.
+/// GATE.4: one handed-over token and one not is `JournalPending` before any caller load, and
+/// the config bytes stay.
 #[test]
 fn prepare_refuses_partial_handover() {
     const ROW: &str = "prepare_refuses_partial_handover";
@@ -353,6 +427,7 @@ fn prepare_refuses_partial_handover() {
     journal.attempts.push(extra);
     drop(live.seed(journal, ROW));
     let before = artifact(&live.resolved, JOURNAL, ROW);
+    let config = std::fs::read(&live.path).expect(ROW);
     let error = super::fixtures::runtime(prepare_start(&live.path)).map(drop);
     assert_eq!(
         error,
@@ -360,6 +435,11 @@ fn prepare_refuses_partial_handover() {
         "{ROW}: partial handover"
     );
     same(&live.resolved, JOURNAL, &before, ROW);
+    assert_eq!(
+        std::fs::read(&live.path).expect(ROW),
+        config,
+        "{ROW}: config byte-identical"
+    );
     free(&live.path, ROW);
 }
 
@@ -477,13 +557,15 @@ trait AmbiguousIfClone<A> {
 impl<T> AmbiguousIfClone<()> for T {}
 impl<T: Clone> AmbiguousIfClone<u8> for T {}
 
-/// GATE.5: dropping the session releases the lock, keeps the journal, and appends nothing.
+/// GATE.5: dropping the session releases the lock, keeps the journal and the config bytes, and
+/// appends nothing.
 #[test]
 fn startup_session_drop_releases() {
     const ROW: &str = "startup_session_drop_releases";
     let _ = <StartupSession as AmbiguousIfClone<_>>::probe;
     let live = Live::new();
     drop(live.seed(state(&live.resolved), ROW));
+    let config = std::fs::read(&live.path).expect(ROW);
     let session = prepared(&live.path, ROW);
     let journal = artifact(&live.resolved, JOURNAL, ROW);
     let records = live.records();
@@ -495,6 +577,11 @@ fn startup_session_drop_releases() {
         records,
         "{ROW}: log unchanged; arrived {}",
         arrived(&records)
+    );
+    assert_eq!(
+        std::fs::read(&live.path).expect(ROW),
+        config,
+        "{ROW}: config byte-identical"
     );
 }
 
@@ -559,6 +646,8 @@ async fn finish_cancelled_releases_the_lock() {
     let live = Live::new();
     plant_staged(&live, ROW);
     let session = must_prepare(&live.path, ROW).await;
+    // Read now: the cancelled worker still drains, and finishing removes the journal.
+    let token = recovery_attempt_token(&live, ROW);
     let pause = Arc::new(Pause::default());
     let _armed = fault::arm(&live.path, Fault::Pause(Arc::clone(&pause)));
     let log = Arc::clone(&live.log);
@@ -586,7 +675,7 @@ async fn finish_cancelled_releases_the_lock() {
     let again = must_prepare(&live.path, ROW).await;
     let finished = finish_start(again, Some(Arc::clone(&live.log))).await;
     assert_eq!(finished, Ok(()), "{ROW}: a fresh start finishes");
-    expect_staged_owed(&live.records(), ROW);
+    expect_staged_owed(&live.records(), &token, ROW);
     free(&live.path, ROW);
 }
 
@@ -605,15 +694,35 @@ async fn refusal_logs_path_and_cause() {
         .expect_err(ROW);
     let text = String::from_utf8_lossy(&buffer.lock().expect(ROW)).into_owned();
     drop(guard);
-    assert!(
-        text.contains(&journal.display().to_string()) && text.contains("OtherLog"),
-        "{ROW}: captured line names {} and OtherLog; captured {text:?}",
-        journal.display()
+    let journal_text = journal.display().to_string();
+    assert_eq!(
+        lines_naming(&text, &journal_text, "OtherLog"),
+        1,
+        "{ROW}: one captured line names {journal_text} and OtherLog; captured {text:?}"
     );
     assert_eq!(error, StartError::JournalPending, "{ROW}: JournalPending");
     assert_eq!(
         error.to_string(),
         SENTENCE,
         "{ROW}: Display is the fixed sentence, with no path"
+    );
+    // A held lock is logged too: the configured path, and Busy as the cause.
+    let held_lock = match lock::lock_config_blocking_deferred(&live.path, Instant::now(), |_| {}) {
+        Ok(held_lock) => held_lock,
+        Err(error) => panic!("{ROW}: the test takes the free lock, got {error:?}"),
+    };
+    let (guard, buffer) = capture();
+    let busy = prepare_start_within(&live.path, Duration::ZERO)
+        .await
+        .map(drop);
+    let text = String::from_utf8_lossy(&buffer.lock().expect(ROW)).into_owned();
+    drop(guard);
+    drop(held_lock);
+    assert_eq!(busy, Err(StartError::Busy), "{ROW}: Busy while held");
+    let config_text = live.path.display().to_string();
+    assert_eq!(
+        lines_naming(&text, &config_text, "Busy"),
+        1,
+        "{ROW}: one captured line names {config_text} and Busy; captured {text:?}"
     );
 }

@@ -27,7 +27,7 @@ fn crashed_after_rename(path: &Path, original: &str, bytes: &str) {
     write_owner_only(crate::identity_grants::journal::resolved(path), bytes).expect("rename");
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Snap {
     Absent,
     File(Vec<u8>),
@@ -75,12 +75,6 @@ fn tree(dir: &Path) -> Vec<(OsString, Snap)> {
     }
     found.sort_by(|left, right| left.0.cmp(&right.0));
     found
-}
-
-// Only the unlocked recheck row lists names, and it needs an unwritable directory.
-#[cfg(unix)]
-fn names(dir: &Path) -> Vec<OsString> {
-    tree(dir).into_iter().map(|(name, _)| name).collect()
 }
 
 /// A directory this account cannot write, for the unwritable-directory
@@ -532,29 +526,26 @@ async fn finish_unlocked_rechecks() {
     {
         let (dir, session) = unlocked_plain("writable directory").await;
         let _keep = Release(&dir);
-        let listed = names(dir.path());
         writable_again(&dir);
+        let before = tree(dir.path());
         expect_recheck_refused("writable directory", finish_start(session, None).await);
-        let after = names(dir.path());
-        let lost: Vec<OsString> = listed
+        let after = tree(dir.path());
+        let kept: Vec<_> = after
             .iter()
-            .filter(|name| !after.contains(name))
-            .cloned()
-            .collect();
-        let gained: Vec<OsString> = after
-            .iter()
-            .filter(|name| !listed.contains(name))
+            .filter(|(name, _)| name != ".gateway.yaml.lock")
             .cloned()
             .collect();
         assert_eq!(
-            lost.len(),
-            0,
-            "{row} writable directory: the listing loses nothing, lost {lost:?}"
+            kept, before,
+            "{row} writable directory: names and bytes stay; only the lock sidecar may be added"
         );
+        let gained = after
+            .iter()
+            .filter(|(name, _)| name == ".gateway.yaml.lock")
+            .count();
         assert_eq!(
-            gained,
-            vec![OsString::from(".gateway.yaml.lock")],
-            "{row} writable directory: the listing gains only the sidecar, gained {gained:?}"
+            gained, 1,
+            "{row} writable directory: one added entry .gateway.yaml.lock, after {after:?}"
         );
     }
 }
@@ -706,46 +697,37 @@ async fn prepare_refuses_unclassifiable_journal() {
 /// GATE.2, GATE.4: each `StartError` displays its one fixed sentence.
 #[test]
 fn start_error_texts() {
-    let rows = [
-        (
-            StartError::Busy,
-            "Another gateway or command holds the config lock past the \
-         30-second wait. Start again when it has finished.",
-        ),
-        (
-            StartError::RepairPending,
-            "A config write that crashed left the config in a state \
-         its journal could neither confirm nor restore. Compare the config with the revisions \
-         the journal records before changing anything, then start again.",
-        ),
-        (
-            StartError::JournalPending,
-            "A config write's journal beside the config still owes \
-         audit records to the log it was bound to. Start with that audit log configured and \
-         reachable.",
-        ),
-        (
-            StartError::AbandonedPending,
-            "The abandoned config-write file beside the config \
-         holds audit records this gateway cannot deliver. Configure the log it names, or move \
-         the file aside by hand to keep it as evidence.",
-        ),
-        (
-            StartError::InvalidAuditPayload,
-            "The audit log refused a pending config-write record \
-         as invalid. The record is parked and kept as evidence, and it needs an operator's \
-         decision before this gateway can start.",
-        ),
-        (
-            StartError::ArtifactCheckFailed,
-            "This gateway could not confirm that no config write \
-         is pending beside the config. Fix access to the config directory, then start again.",
-        ),
-    ];
-    for (error, sentence) in rows {
-        let shown = error.to_string();
+    for error in [
+        StartError::Busy,
+        StartError::RepairPending,
+        StartError::JournalPending,
+        StartError::AbandonedPending,
+        StartError::InvalidAuditPayload,
+        StartError::ArtifactCheckFailed,
+    ] {
+        let sentence = match error {
+            StartError::Busy => {
+                "Another gateway or command holds the config lock past the 30-second wait. Start again when it has finished."
+            }
+            StartError::RepairPending => {
+                "A config write that crashed left the config in a state its journal could neither confirm nor restore. Compare the config with the revisions the journal records before changing anything, then start again."
+            }
+            StartError::JournalPending => {
+                "A config write's journal beside the config still owes audit records to the log it was bound to. Start with that audit log configured and reachable."
+            }
+            StartError::AbandonedPending => {
+                "The abandoned config-write file beside the config holds audit records this gateway cannot deliver. Configure the log it names, or move the file aside by hand to keep it as evidence."
+            }
+            StartError::InvalidAuditPayload => {
+                "The audit log refused a pending config-write record as invalid. The record is parked and kept as evidence, and it needs an operator's decision before this gateway can start."
+            }
+            StartError::ArtifactCheckFailed => {
+                "This gateway could not confirm that no config write is pending beside the config. Fix access to the config directory, then start again."
+            }
+        };
         assert_eq!(
-            shown, sentence,
+            error.to_string(),
+            sentence,
             "start_error_texts: {error:?} displays its sentence"
         );
     }
