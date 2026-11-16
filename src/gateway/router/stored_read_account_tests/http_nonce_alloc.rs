@@ -39,6 +39,11 @@ use crate::security::sanitize::InputSanitizing;
 /// few bytes across the 2 KiB size class does not. This replaced an exact
 /// large-allocation count, which tripped on size classes rather than cost
 /// (#4386, #4411).
+///
+/// Applied on Linux only, where it was measured: Windows runs about 8 KB higher
+/// (76.7 to 76.8 KB), and the allocation code is shared, so Linux catches
+/// growth on every platform. The 1 vs 3 MiB check below runs everywhere, so a
+/// payload copy fails on every platform.
 const EXTRA_CEILING: u64 = 68_387 + 2_048;
 /// The share may differ by at most this much between 1 and 3 MiB.
 ///
@@ -284,13 +289,15 @@ fn verdict_share_is_capped(kind: &str, nonce: impl Fn(&str) -> Option<Value>, ex
                 "ALLOC.2 {kind} {size}: the plain target cost more than the per-user one, \
                  so the baseline is wrong: {share:?}"
             );
-            assert!(
-                share.large_bytes + share.small_bytes <= i128::from(EXTRA_CEILING),
-                "ALLOC.2 {kind} {size}: the verdict's share {share:?} is above \
-                 {EXTRA_CEILING} B (per-user {}, plain {})",
-                readings[0],
-                readings[1]
-            );
+            if cfg!(target_os = "linux") {
+                assert!(
+                    share.large_bytes + share.small_bytes <= i128::from(EXTRA_CEILING),
+                    "ALLOC.2 {kind} {size}: the verdict's share {share:?} is above \
+                     {EXTRA_CEILING} B (per-user {}, plain {})",
+                    readings[0],
+                    readings[1]
+                );
+            }
             // One tagged line per reading (forwarded by the isolated child): the
             // per-user extra the ceiling is set from, and its parts.
             println!(
