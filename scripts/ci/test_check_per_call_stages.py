@@ -106,6 +106,26 @@ class Discovery(unittest.TestCase):
         )
         self.assertEqual(stages.check(self.root, self.table, self.harness), [])
 
+    def test_a_size_variant_counts_only_through_its_named_base(self):
+        self.harness.write_text(
+            'const STAGES: &[(&str, bool, usize, usize)] = '
+            '&[("row_a", true, 16, 1), ("row_a_big", true, 65536, 1)];\n'
+        )
+        check = lambda variants: stages.check(self.root, self.table, self.harness, variants)  # noqa: E731
+        self.assertEqual(check({"row_a_big": "row_a"}), [])
+        self.assertEqual(
+            check({"row_a_big": "row_x"}),
+            ["STAGES row 'row_a_big': no inventory entry names it, so nothing it times is accounted for"],
+        )
+        self.assertEqual(
+            check({"row_a_big": "row_a", "row_gone": "row_a"}),
+            ["VARIANTS row 'row_gone' is not in STAGES (stale variant)"],
+        )
+
+    def test_the_real_harness_variants_are_its_stages(self):
+        self.assertEqual(set(stages.VARIANTS) - stages.stages(), set())
+        self.assertEqual(set(stages.VARIANTS.values()) - stages.stages(), set())
+
     def test_a_table_split_across_two_parts_is_clean(self):
         items = list(self.anchors.items())
         part1 = self.root / "stages_part1.tsv"
