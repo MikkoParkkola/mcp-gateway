@@ -396,7 +396,7 @@ async fn h6_consumed_scenario() {
         "consumed names the header template; saw {names:?}"
     );
     assert!(
-        names.iter().any(|name| *name == secret_spelling.as_str()),
+        names.contains(&secret_spelling.as_str()),
         "consumed names the secret file path {secret_spelling}; saw {names:?}"
     );
 

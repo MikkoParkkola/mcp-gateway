@@ -537,10 +537,7 @@ impl MetaMcp {
             Some(MetaArm::GetProfile) => self.get_profile(session_id, caller.admin.is_gateway()),
             Some(MetaArm::ListProfiles) => self.list_profiles(),
             Some(MetaArm::SetState) => self.set_state(&arguments, session_id, caller.scope()),
-            Some(MetaArm::ReloadConfig) => {
-                let who = AuditWho::from_caller(caller);
-                self.reload_config(&who).await
-            }
+            Some(MetaArm::ReloadConfig) => self.reload_config(&AuditWho::from_caller(caller)).await,
             Some(MetaArm::ReloadCapabilities) => self.reload_capabilities().await,
             // A name that matches no tool is refused before any backend, so it
             // gives its signing nonce back (MIK-8340 A4, MIK-8150's rule). A

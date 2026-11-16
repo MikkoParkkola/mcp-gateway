@@ -74,7 +74,7 @@ pub(crate) struct Event {
     pub outcome: Outcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unchanged: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub still_running: Option<StillRunning>,
@@ -563,11 +563,6 @@ fn save_state(path: &Path, state: &State) -> Result<(), std::io::Error> {
     let bytes = serde_json::to_vec(state).map_err(std::io::Error::from)?;
     let bytes = crate::wiped_bytes::WipedBytes::new(bytes);
     write_atomic(path, bytes.as_bytes(), FileMode::Private, Symlink::Replace)
-}
-
-/// `true` when `value` is false, so a refused event omits `unchanged`.
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 /// A stored version written before `source` existed is a file reload.

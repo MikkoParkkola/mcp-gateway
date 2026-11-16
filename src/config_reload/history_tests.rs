@@ -259,7 +259,7 @@ fn t7_a_rotated_key_gives_a_new_id_and_keeps_the_old() {
     let fresh = ConfigHistory::open(dir.path(), Bounds::default(), 1);
     let names = revision_names(&fresh);
     assert_eq!(names.first().cloned(), k1);
-    assert_eq!(names.iter().nth(1).cloned(), k2);
+    assert_eq!(names.get(1).cloned(), k2);
     assert_eq!(names.len(), 2);
     let kept = match k1.as_deref().map(|revision| fresh.lookup(revision)) {
         Some(Lookup::Kept(snapshot)) => Some(gateway(&snapshot).to_vec()),

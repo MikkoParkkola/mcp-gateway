@@ -45,13 +45,15 @@ fn spec(secret: &str) -> String {
 
 /// The `auth.api_keys` block the keys fixture writes (`yaml_of` / `item`).
 fn auth_block(keys: &[Key]) -> String {
+    use std::fmt::Write as _;
     let mut text = String::from("auth:\n  enabled: true\n  api_keys:\n");
     for key in keys {
-        text.push_str(&format!(
+        let _ = write!(
+            text,
             "    - name: {name}\n      key_sha256: \"{digest}\"\n      backends: [\"*\"]\n",
             name = key.name,
             digest = spec(key.secret),
-        ));
+        );
         if key.admin {
             text.push_str("      admin: true\n");
         }
@@ -371,13 +373,17 @@ async fn settings_save() -> Result<(), String> {
 }
 
 /// Every UI write route, named, so one failure list is the whole table.
+/// One route case: its name and the request it runs.
+#[cfg(feature = "webui")]
+type Case = (
+    &'static str,
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>,
+);
+
 #[cfg(feature = "webui")]
 #[tokio::test]
 async fn h1r_each_ui_write_route_records_its_admin() {
-    let cases: Vec<(
-        &str,
-        std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>,
-    )> = vec![
+    let cases: Vec<Case> = vec![
         ("backend-write", Box::pin(backend_write())),
         ("discovery-adopt", Box::pin(discovery_adopt())),
         ("key-create", Box::pin(key_create())),
