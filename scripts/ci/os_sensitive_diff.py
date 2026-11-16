@@ -123,27 +123,22 @@ def scan(diff_text: str, pattern: re.Pattern = PATTERN, suffixes: tuple = SUFFIX
     return out
 
 
-# A leading comment or cfg attribute is not process code, whatever word it names (184 release-line lines start with
-# one that does); code after it on the same line still counts, and so does a code line with a trailing comment.
+# A line that is wholly a comment or one cfg attribute is not process code, whatever word it names (198 of the 564
+# release-line lines that name one); any other line is scanned whole, its comment text included, so code after a block comment or an
+# attribute counts, and an ambiguous prefix (a string holding ], a nested comment) errs toward flagging, never missing.
 CFG_ATTR = re.compile(r"#!?\[cfg(?:_attr)?\b[^\]]*\]")
 
 
 def code_part(text: str) -> str:
-    """The line with a leading // comment, leading /* */ blocks and leading cfg attributes set aside."""
-    s = text.lstrip()
-    while True:
-        if s.startswith("//"):
-            return ""
-        if s.startswith("/*"):
-            end = s.find("*/", 2)
-            if end < 0:
-                return ""  # the block comment runs past this line
-            s = s[end + 2:].lstrip()
-            continue
-        m = CFG_ATTR.match(s)
-        if not m:
-            return s
-        s = s[m.end():].lstrip()
+    """"" for a line that is wholly a comment or a single cfg attribute; otherwise the line itself."""
+    s = text.strip()
+    if s.startswith("//"):
+        return ""
+    if s.startswith("/*") and s.count("/*") == 1 and (s.count("*/") == 0 or (s.count("*/") == 1 and s.endswith("*/"))):
+        return ""  # one block comment, or the first line of one that runs on
+    if CFG_ATTR.fullmatch(s):
+        return ""
+    return text
 
 
 def scan_proc(diff_text: str) -> list[tuple[str, int, str]]:
