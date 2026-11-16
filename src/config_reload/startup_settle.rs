@@ -26,6 +26,8 @@ use crate::security::transparency_log::TransparencyLogger;
 /// A startup that may go on to load the config: the lock held, or proven unneeded. Not `Clone`.
 pub(crate) struct StartupSession {
     state: StartupState,
+    // The caller's path: DrainSession keeps its copy private, so a re-resolve has to live here.
+    configured: PathBuf,
 }
 
 enum StartupState {
@@ -77,9 +79,19 @@ impl StartupSession {
     /// The resolved config the gate checked. The caller loads the config, and derives the serving
     /// logger, from this path only.
     pub(crate) fn target(&self) -> &Path {
+        // Cloned on both builds so the field is read when the re-resolve arm is compiled out.
+        // Only the on-arm follows the path again; the off-arm still returns the held target.
+        let configured = self.configured.clone();
+        let _ = configured.as_os_str();
         match &self.state {
-            StartupState::Locked(session) => session.target(),
-            StartupState::ArtifactFreeUnlocked { target, .. } => target,
+            StartupState::Locked(session) => mutant!("g26", {
+                let path: &Path = Box::leak(resolved(&configured).into_boxed_path());
+                path
+            }, session.target()),
+            StartupState::ArtifactFreeUnlocked { target, .. } => mutant!("g26", {
+                let path: &Path = Box::leak(resolved(&configured).into_boxed_path());
+                path
+            }, target),
         }
     }
 }
@@ -105,12 +117,21 @@ pub(crate) async fn prepare_start_within(
     let configured = config.to_path_buf();
     // The configured path, as given: resolving it here would touch the filesystem on this task.
     let named = configured.clone();
-    match lock_config_deferred(config, Instant::now() + wait).await {
-        Err(NotLocked::Busy) => Err(logged(refuse(StartError::Busy, named, "Busy"))),
+    let deadline = Instant::now() + wait;
+    match mutant!("g5",
+        crate::config_persistence::lock::lock_config_blocking_deferred(config, deadline, |_| {}),
+        lock_config_deferred(config, deadline).await,
+    ) {
+        Err(NotLocked::Busy) => mutant!("g1", Err(logged(refuse(StartError::ArtifactCheckFailed, named, "Busy"))), Err(logged(refuse(StartError::Busy, named, "Busy")))),
         Err(NotLocked::Failed(_) | NotLocked::Refused(_)) => {
             from_worker(named, move || unlocked(configured)).await
         }
-        Ok(locked) => from_worker(named, move || open_locked(locked, configured)).await,
+        Ok(locked) => mutant!("g41",
+            match open_locked(locked, configured) {
+                Ok(value) => Ok(value),
+                Err(Refusal { class, .. }) => Err(class),
+            },
+            from_worker(named, move || open_locked(locked, configured)).await),
     }
 }
 
@@ -123,43 +144,48 @@ pub(crate) async fn finish_start(
     let named = session.target().to_path_buf();
     match session.state {
         StartupState::ArtifactFreeUnlocked { configured, target } => {
-            from_worker(named, move || recheck(&configured, &target)).await
+            from_worker(named, move || mutant!("g9", Ok(()), recheck(&configured, &target))).await
         }
         StartupState::Locked(session) => {
             // Captured on the caller: the worker is not inside a runtime until `block_on`.
             let handle = tokio::runtime::Handle::current();
-            from_worker(named, move || handle.block_on(drain_locked(*session, log))).await
+            mutant!("g27",
+                match handle.clone().block_on(drain_locked(*session, log)) {
+                    Ok(()) => Ok(()),
+                    Err(Refusal { class, .. }) => Err(class),
+                },
+                from_worker(named, move || handle.block_on(drain_locked(*session, log))).await)
         }
     }
 }
 
 /// The journal drain's error, as a start refusal.
 pub(crate) fn journal_stage(error: DrainError) -> Result<(), StartError> {
-    Err(match error {
-        DrainError::NoLogger
-        | DrainError::OtherLog
-        | DrainError::Journal
-        | DrainError::Refused
-        | DrainError::Unconfirmed
-        | DrainError::Finish
-        | DrainError::FileRefused => StartError::JournalPending,
-        DrainError::RepairPending => StartError::RepairPending,
-        DrainError::Parked => StartError::InvalidAuditPayload,
-    })
+    match error {
+        DrainError::NoLogger => mutant!("g11", Ok(()), Err(StartError::JournalPending)),
+        DrainError::OtherLog => mutant!("g23", Ok(()), Err(StartError::JournalPending)),
+        DrainError::Journal => mutant!("g32", Ok(()), Err(StartError::JournalPending)),
+        DrainError::Refused => mutant!("g29", Ok(()), Err(StartError::JournalPending)),
+        DrainError::Unconfirmed => mutant!("g30", Ok(()), Err(StartError::JournalPending)),
+        DrainError::Finish => mutant!("g31", Ok(()), Err(StartError::JournalPending)),
+        DrainError::FileRefused => mutant!("g33", Ok(()), Err(StartError::JournalPending)),
+        DrainError::RepairPending => mutant!("g34", Ok(()), Err(StartError::RepairPending)),
+        DrainError::Parked => mutant!("g24", Err(StartError::JournalPending), Err(StartError::InvalidAuditPayload)),
+    }
 }
 
 /// The abandoned-file drain's error, as a start refusal (`NoLogger`: logging off, P6, accepts).
 pub(crate) fn file_stage(error: DrainError) -> Result<(), StartError> {
     match error {
-        DrainError::NoLogger => Ok(()),
-        DrainError::Parked => Err(StartError::InvalidAuditPayload),
-        DrainError::OtherLog
-        | DrainError::FileRefused
-        | DrainError::Journal
-        | DrainError::Refused
-        | DrainError::Unconfirmed
-        | DrainError::Finish
-        | DrainError::RepairPending => Err(StartError::AbandonedPending),
+        DrainError::NoLogger => mutant!("g13", Err(StartError::AbandonedPending), Ok(())),
+        DrainError::Parked => mutant!("g15", Err(StartError::AbandonedPending), Err(StartError::InvalidAuditPayload)),
+        DrainError::OtherLog => mutant!("g12", Ok(()), Err(StartError::AbandonedPending)),
+        DrainError::FileRefused => mutant!("g16", Ok(()), Err(StartError::AbandonedPending)),
+        DrainError::Journal => mutant!("g35", Ok(()), Err(StartError::AbandonedPending)),
+        DrainError::Refused => mutant!("g36", Ok(()), Err(StartError::AbandonedPending)),
+        DrainError::Unconfirmed => mutant!("g37", Ok(()), Err(StartError::AbandonedPending)),
+        DrainError::Finish => mutant!("g38", Ok(()), Err(StartError::AbandonedPending)),
+        DrainError::RepairPending => mutant!("g39", Ok(()), Err(StartError::AbandonedPending)),
     }
 }
 
@@ -201,7 +227,7 @@ fn refuse(class: StartError, path: PathBuf, cause: impl Into<String>) -> Refusal
 // Creating the lock sidecar is this probe's only write, and that creation is the refusal.
 fn probe(configured: &Path) -> Result<PathBuf, Refusal> {
     let target = resolved(configured);
-    if no_writer_possible(&target).is_none() {
+    if mutant!("g4", false, no_writer_possible(&target).is_none()) {
         let path = lock_path(&target);
         return Err(refuse(
             StartError::ArtifactCheckFailed,
@@ -210,9 +236,9 @@ fn probe(configured: &Path) -> Result<PathBuf, Refusal> {
         ));
     }
     for (path, cause) in [
-        (journal_path(&target), "journal"),
-        (abandoned_path(&target), "abandoned"),
-        (retired_path(&target), "retired"),
+        (mutant!("g22", target.join(".not-the-journal"), journal_path(&target)), "journal"),
+        (mutant!("g2", target.join(".not-the-abandoned"), abandoned_path(&target)), "abandoned"),
+        (mutant!("g3", target.join(".not-the-retired"), retired_path(&target)), "retired"),
     ] {
         if !absent(&path) {
             return Err(refuse(StartError::ArtifactCheckFailed, path, cause));
@@ -224,13 +250,17 @@ fn probe(configured: &Path) -> Result<PathBuf, Refusal> {
 fn unlocked(configured: PathBuf) -> Result<StartupSession, Refusal> {
     let target = probe(&configured)?;
     Ok(StartupSession {
-        state: StartupState::ArtifactFreeUnlocked { configured, target },
+        state: StartupState::ArtifactFreeUnlocked {
+            configured: configured.clone(),
+            target,
+        },
+        configured,
     })
 }
 
 fn recheck(configured: &Path, target: &Path) -> Result<(), Refusal> {
     let found = probe(configured)?;
-    if found.as_path() == target {
+    if mutant!("g25", true, found.as_path() == target) {
         Ok(())
     } else {
         Err(refuse(StartError::ArtifactCheckFailed, found, "resolved"))
@@ -239,7 +269,8 @@ fn recheck(configured: &Path, target: &Path) -> Result<(), Refusal> {
 
 fn held(locked: Locked, configured: PathBuf, state: Option<JournalV2>) -> StartupSession {
     StartupSession {
-        state: StartupState::Locked(Box::new(DrainSession::new(locked, configured, state))),
+        state: StartupState::Locked(Box::new(DrainSession::new(locked, configured.clone(), state))),
+        configured,
     }
 }
 
@@ -249,22 +280,83 @@ fn open_locked(locked: Locked, configured: PathBuf) -> Result<StartupSession, Re
         Ok(None) => Ok(held(locked, configured, None)),
         Ok(Some(OpenJournal::Legacy(legacy))) => {
             drop(legacy);
-            recover_recorded(&locked, &super::startup_recovery_intent)
-                .map(|()| held(locked, configured, None))
-                .map_err(|why| refuse(StartError::JournalPending, path, why))
+            if mutant!("g7", true, false) {
+                return Ok(held(locked, configured, None));
+            }
+            // The `?` that stops recovery lives inside recover_recorded, not here. Calling
+            // journal::recover directly is a record failure that cannot refuse.
+            mutant!("g21",
+                crate::config_persistence::journal::recover(&locked.target)
+                    .map(|_| ())
+                    .map_err(|why| format!("{why:?}")),
+                recover_recorded(
+                    &locked,
+                    mutant!("g20",
+                        &((|_: &Locked, _: &crate::config::Config| Ok::<(), String>(()))
+                            as fn(&Locked, &crate::config::Config) -> Result<(), String>),
+                        &(super::startup_recovery_intent
+                            as fn(&Locked, &crate::config::Config) -> Result<(), String>),
+                    ),
+                ),
+            )
+            .map(|()| held(locked, configured, None))
+            .map_err(|why| refuse(StartError::JournalPending, path, why))
         }
-        Ok(Some(OpenJournal::Current(state))) => match handover_of(&state) {
+        Ok(Some(OpenJournal::Current(state))) => match mutant!("g28", {
+            // Vacuous-All: JournalV2's token fields are pub(super). Debug is the readable form.
+            let shown = format!("{state:?}");
+            if shown.contains("writer: None") && shown.contains("attempts: []") {
+                Handover::All
+            } else {
+                handover_of(&state)
+            }
+        }, handover_of(&state)) {
             // Repair refuses a donor. The file drain's resume finishes a full handover.
-            Handover::All => Ok(held(locked, configured, Some(*state))),
-            Handover::Partial => Err(refuse(StartError::JournalPending, path, "Partial")),
+            Handover::All => mutant!("g8", {
+                let mut session = DrainSession::new(locked, configured.clone(), Some(*state));
+                let repaired = JournalDrain::repair(&mut session, true);
+                match repaired {
+                    Ok(_) => Ok(StartupSession {
+                        state: StartupState::Locked(Box::new(session)),
+                        configured,
+                    }),
+                    Err(other) => {
+                        // A donor refuses here, before any write.
+                        let class = if other == DrainError::RepairPending {
+                            StartError::RepairPending
+                        } else {
+                            StartError::JournalPending
+                        };
+                        drop(session);
+                        Err(refuse(class, path.clone(), format!("{other:?}")))
+                    }
+                }
+            }, Ok(held(locked, configured, Some(*state)))),
+            Handover::Partial => mutant!("g19",
+                Ok(held(locked, configured, Some(*state))),
+                Err(refuse(StartError::JournalPending, path, "Partial")),
+            ),
             Handover::NotHandedOver => {
-                let mut session = DrainSession::new(locked, configured, Some(*state));
+                let mut session = DrainSession::new(locked, configured.clone(), Some(*state));
+                if mutant!("g6", true, false) {
+                    return Ok(StartupSession {
+                        state: StartupState::Locked(Box::new(session)),
+                        configured,
+                    });
+                }
                 match JournalDrain::repair(&mut session, true) {
                     Ok(_) => Ok(StartupSession {
                         state: StartupState::Locked(Box::new(session)),
+                        configured,
                     }),
                     Err(other) => {
-                        let class = if other == DrainError::RepairPending {
+                        if mutant!("g40", other != DrainError::RepairPending, false) {
+                            return Ok(StartupSession {
+                                state: StartupState::Locked(Box::new(session)),
+                                configured,
+                            });
+                        }
+                        let class = if mutant!("g14", false, other == DrainError::RepairPending) {
                             StartError::RepairPending
                         } else {
                             StartError::JournalPending
@@ -275,11 +367,14 @@ fn open_locked(locked: Locked, configured: PathBuf) -> Result<StartupSession, Re
                 }
             }
         },
-        Err(error) => Err(refuse(
-            StartError::JournalPending,
-            path,
-            format!("{error:?}"),
-        )),
+        Err(error) => mutant!("g17",
+            Ok(held(locked, configured, None)),
+            Err(refuse(
+                StartError::JournalPending,
+                path,
+                format!("{error:?}"),
+            )),
+        ),
     }
 }
 
@@ -294,7 +389,7 @@ async fn drain_locked(
         .journal()
         .is_some_and(|state| handover_of(state) != Handover::All)
     {
-        session = match JournalDrain::run(session, log.clone()).await {
+        session = match mutant!("g10", Ok(session), JournalDrain::run(session, log.clone()).await) {
             Ok(session) => session,
             Err(failure) => {
                 let error = failure.error();
@@ -303,16 +398,16 @@ async fn drain_locked(
                 // `journal_stage` refuses every variant. Ok would skip the file, so it refuses too.
                 let class = match journal_stage(error) {
                     Err(class) => class,
-                    Ok(()) => StartError::JournalPending,
+                    Ok(()) => mutant!("g11", return Ok(()), mutant!("g23", return Ok(()), StartError::JournalPending)),
                 };
                 return Err(refuse(class, journal, cause));
             }
         };
     }
-    let outcome = drain_abandoned(&mut session, log).await.or_else(|error| {
+    let outcome = mutant!("g18", Ok(()), drain_abandoned(&mut session, log).await.or_else(|error| {
         let cause = format!("{error:?}");
         file_stage(error).map_err(|class| refuse(class, abandoned, cause))
-    });
+    }));
     drop(session);
     outcome
 }
