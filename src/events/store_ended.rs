@@ -17,6 +17,14 @@ use crate::events::records::{
     Subscription, load_records, remove_record, verified_file, write_record,
 };
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only: the next ended-file write on this thread is refused, the one
+    /// way an ending fails after its notice record is in place.
+    pub(crate) static FAIL_NEXT_ENDED_WRITE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
 /// Which pending records of a subscription id a cancellation takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Cancel {
@@ -139,6 +147,12 @@ impl Store {
         let placed = write_record(&self.outbox_dir, &file, &record)?;
         state.outbox.insert(record.event_id.clone(), record);
         placed.durable()?;
+        #[cfg(test)]
+        if FAIL_NEXT_ENDED_WRITE.with(|fail| fail.replace(false)) {
+            return Err(std::io::Error::other(
+                "test: the ended file write was refused",
+            ));
+        }
         let file = EndedRow::file(&ended.row.id, ended.row.incarnation);
         write_record(&self.ended_dir, &file, ended)?.durable()
     }

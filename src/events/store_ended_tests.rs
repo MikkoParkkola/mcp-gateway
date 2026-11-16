@@ -429,3 +429,55 @@ fn an_owner_unsubscribe_with_only_an_ended_row_cancels_its_notice() {
     assert!(store.ended_rows().is_empty());
     assert!(names(store.ended_dir()).is_empty());
 }
+
+/// CARRIER.1: a reopened store routes `ended/` back to its ended rows: the
+/// notice is still due and signs with its ended row.
+#[test]
+fn a_reopened_store_keeps_the_notice_due_and_signed_by_its_ended_row() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    {
+        let store = open_with(dir.path(), now, &["s1"]);
+        end(&store, "s1", now, "evt_n1");
+    }
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("reopen");
+    assert!(
+        store.get("s1").is_none(),
+        "the ended row did not load as live"
+    );
+    assert_eq!(store.ended_rows().len(), 1);
+    assert_eq!(ready_ids(&store, now, &[]), vec!["evt_n1".to_owned()]);
+    let Claim::Ready(claimed) = store.claim("evt_n1", now).expect("io") else {
+        panic!("the notice is claimable after a reopen");
+    };
+    assert_eq!(claimed.subscription.secret, "whsec_x");
+}
+
+/// An ending whose ended-file write is refused leaves the row live, with no
+/// notice record and no ended file; the row's queued events are already
+/// cancelled (its access was refused, so they must not go out); a retry
+/// ends it once.
+#[test]
+fn a_refused_ended_file_leaves_the_row_live_and_a_retry_ends_it_once() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("e1", "s1", now), caps).expect("io");
+    super::super::super::ended::FAIL_NEXT_ENDED_WRITE.with(|fail| fail.set(true));
+    let refused = store.end_where("s1", stamp(now, "evt_n1"), TAIL, |_| true);
+    assert!(refused.is_err(), "the refused write fails the ending");
+    assert!(store.get("s1").is_some(), "the row stays live");
+    assert!(store.ended_rows().is_empty());
+    assert!(names(store.ended_dir()).is_empty(), "no ended file");
+    assert!(
+        ready_ids(&store, now, &[]).is_empty(),
+        "no notice record, and the row's queued event is cancelled"
+    );
+    end(&store, "s1", now, "evt_n1");
+    assert_eq!(ready_ids(&store, now, &[]), vec!["evt_n1".to_owned()]);
+    assert_eq!(names(store.ended_dir()).len(), 1);
+}

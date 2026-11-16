@@ -337,6 +337,7 @@ async fn a_refused_notice_is_retried_under_the_same_webhook_id_then_its_row_goes
 /// CARRIER.2 (R23): a notice pending beside a re-grant's event: both arrive.
 #[tokio::test]
 async fn a_notice_and_a_regrants_event_both_arrive() {
+    use base64::Engine as _;
     let (hub, _probe, rx, _dir) = no_expiry_subscriber().await;
     let id = hub
         .store
@@ -346,9 +347,18 @@ async fn a_notice_and_a_regrants_event_both_arrive() {
         .expect("row")
         .id;
     let handle = end_now(&hub).await;
-    // A plain caller's re-grant under the same id: an API key outside this
-    // fixture's live config would be refused at the event's access check.
-    subscribe_at(&hub, "p1", &rx.url).await;
+    // A plain caller's re-grant under the same id, under a new secret: an API
+    // key outside this fixture's live config would be refused at the event's
+    // access check.
+    let regrant_secret = format!(
+        "whsec_{}",
+        base64::engine::general_purpose::STANDARD.encode([9_u8; 32])
+    );
+    let params = json!({"name": NAME, "arguments": {"k": "v"}, "delivery": {
+        "mode": "webhook", "url": rx.url, "secret": regrant_secret}});
+    hub.subscribe(&caller("p1"), Some(&params))
+        .await
+        .expect("re-grant");
     assert!(
         hub.store.get(&id).is_some(),
         "premise: the re-grant took the ended row's id"
@@ -371,6 +381,47 @@ async fn a_notice_and_a_regrants_event_both_arrive() {
         .find(|(_, body)| String::from_utf8_lossy(body).contains("subscription.ended"))
         .expect("the notice");
     assert_ended_notice(notice, &handle, -32012);
+    // On the wire: the notice is signed with the ended row's secret and with
+    // nothing of the re-grant's; the event with the re-grant's.
+    assert!(
+        signed_with(notice, &whsec()),
+        "the notice signs with the ended row"
+    );
+    assert!(
+        !signed_with(notice, &regrant_secret),
+        "the notice carries no signature under the re-grant's secret"
+    );
+    let event_post = posts
+        .iter()
+        .find(|(_, body)| !String::from_utf8_lossy(body).contains("subscription.ended"))
+        .expect("the event");
+    assert!(
+        signed_with(event_post, &regrant_secret),
+        "the event signs with the re-grant"
+    );
+}
+
+/// Whether `post` carries a `v1` webhook signature made with `secret`.
+fn signed_with(post: &(axum::http::HeaderMap, Vec<u8>), secret: &str) -> bool {
+    use base64::Engine as _;
+    use hmac::{KeyInit as _, Mac as _};
+    let header = |name: &str| {
+        post.0
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let key = base64::engine::general_purpose::STANDARD
+        .decode(secret.trim_start_matches("whsec_"))
+        .expect("secret decodes");
+    let mut mac = crate::hashing::HmacSha256::new_from_slice(&key).expect("key");
+    mac.update(format!("{}.{}.", header("webhook-id"), header("webhook-timestamp")).as_bytes());
+    mac.update(&post.1);
+    let expected = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+    header("webhook-signature")
+        .split(' ')
+        .any(|part| part.strip_prefix("v1,") == Some(expected.as_str()))
 }
 
 /// CARRIER.3 (R14b): an unsubscribe while the notice's POST is under way
