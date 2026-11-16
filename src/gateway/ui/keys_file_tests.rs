@@ -283,6 +283,50 @@ fn r1_get_never_serialises_a_key() {
     }
 }
 
+/// The keys route lists names, scopes and expiry only: its production text
+/// names no credential digest, approval or principal field or accessor, so
+/// none can reach its answer even by a path the crate-wide serializer pin
+/// cannot see. One read is allowed: the liveness check's
+/// `approved_by.is_none()`, a presence bool that never leaves the function.
+#[test]
+fn r1_keys_rs_names_no_credential_field() {
+    let text = std::fs::read_to_string(format!(
+        "{}/src/gateway/ui/keys.rs",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("keys.rs");
+    let code = crate::test_source_text::sanitize(&crate::test_source_text::production_text(&text));
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    for name in [
+        "key_sha256",
+        "previous_key_sha256",
+        "digest_tag",
+        "resolve_digest",
+        "resolve_previous_digest",
+        "digest_specs_mut",
+        "approved_by",
+        "ApiKeyBinding",
+        "principal",
+    ] {
+        let named = code
+            .match_indices(name)
+            .filter(|(at, word)| {
+                !code[..*at].ends_with(ident) && !code[at + word.len()..].starts_with(ident)
+            })
+            .count();
+        let allowed = if name == "approved_by" {
+            code.matches("approved_by.is_none()").count().min(1)
+        } else {
+            0
+        };
+        assert_eq!(named, allowed, "keys.rs names {name}");
+    }
+    assert!(
+        !code.contains(".key ") && !code.contains(".key)") && !code.contains(".key;"),
+        "keys.rs reads a key's plaintext field"
+    );
+}
+
 /// R3: no file, and a file that cannot be loaded, each say so, carry no
 /// revision and still list the live table with the full allowlist.
 #[tokio::test]

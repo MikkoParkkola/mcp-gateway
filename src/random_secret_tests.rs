@@ -277,75 +277,334 @@ fn ids_new_v4_is_never_imported_under_another_name() {
     );
 }
 
-/// The randomness entry points a generator can draw from, in any spelling
-/// this codebase uses.
-const RNG_ENTRY_POINTS: &[&str] = &[
-    "rand::rng()",
-    "rand::random",
-    "thread_rng",
-    "OsRng",
-    "SystemRandom",
-    "getrandom",
-    "fill_bytes",
-    "rand::fill",
-];
-
-/// Production files that both draw random bytes and use base64url, each
-/// reviewed as not being a second credential generator. A new such file
-/// fails until it calls `random_secret` or is reviewed and listed here.
-const RANDOM_BASE64URL_REVIEWED: &[(&str, &str)] = &[
-    (
-        "src/a2a/delegation.rs",
-        "a 128-bit cancel token whose RNG failure is recoverable",
-    ),
-    (
-        "src/events/client.rs",
-        "a verification challenge the subscriber echoes, never a credential",
-    ),
-    (
-        "src/gateway/ui/activity/cursor.rs",
-        "an HMAC key; base64url encodes the signed body, not random bytes",
-    ),
-    (
-        "src/gateway/ui/backends/signin_flow.rs",
-        "a 16-byte sign-in attempt id",
-    ),
-    (
-        "src/gateway/ui/restart_confirm.rs",
-        "a single-use 120 s restart confirmation, never a credential; an RNG failure mints nothing",
-    ),
-    (
-        "src/oauth/client/mod.rs",
-        "16-byte state and client ids; its PKCE verifier calls random_secret",
-    ),
-    (
-        "src/protocol/continuation/keyring.rs",
-        "AEAD key material; base64url encodes the encrypted continuation envelope",
-    ),
-];
-
-/// A file-level tripwire, not a proof: a production file that names one of
-/// the RNG entry points above AND uses base64url must be reviewed and listed.
-/// It does not see hex or standard-base64 generators, RNG names brought in by
-/// `use`, or a second site inside a listed file; the enforced replacement is
-/// clippy `disallowed-methods` on the RNG APIs, tracked separately.
+/// Both caller pins count names, so a binding such as
+/// `let mint = crate::random_secret::random_secret;`, or the function passed
+/// on as a value, would let a listed file call it any number of times with
+/// its count unchanged: every production occurrence of either generator is a
+/// direct call.
 #[test]
-fn no_other_credential_generator_exists() {
-    let mut found: Vec<String> = production_sources()
-        .into_iter()
-        .filter(|(file, _)| file != "src/random_secret.rs")
-        .filter(|(_, code)| {
-            code.contains("URL_SAFE") && RNG_ENTRY_POINTS.iter().any(|rng| code.contains(rng))
+fn the_pinned_generators_are_only_called_directly() {
+    let mut values = Vec::new();
+    for (file, code) in production_sources() {
+        for name in ["random_secret::random_secret", "ids::new_v4"] {
+            for (at, _) in code.match_indices(name) {
+                if !code[at + name.len()..].trim_start().starts_with('(') {
+                    values.push(format!("{file}: {name}"));
+                }
+            }
+        }
+    }
+    assert!(
+        values.is_empty(),
+        "call it directly, never as a value or an import: {values:?}"
+    );
+}
+
+/// The entropy crates in Cargo.lock at the versions the clippy.toml list was
+/// enumerated against, each with every package that depends on it: a version
+/// bump, or a new dependent (which can turn on a feature such as uuid's v7),
+/// fails until the list is re-enumerated and this table reviewed.
+const ENTROPY_LOCK: &[(&str, &str, &[&str])] = &[
+    (
+        "getrandom",
+        "0.2.17",
+        &["jsonwebtoken", "rand_core", "redox_users", "ring"],
+    ),
+    (
+        "getrandom",
+        "0.3.4",
+        &[
+            "ahash",
+            "governor",
+            "jsonschema",
+            "jsonschema-value",
+            "rand_core",
+            "referencing",
+            "tempfile",
+        ],
+    ),
+    (
+        "getrandom",
+        "0.4.3",
+        &["jobserver", "quinn-proto", "rand", "uuid"],
+    ),
+    (
+        "rand",
+        "0.10.3",
+        &["mcp-gateway", "quinn-proto", "tungstenite", "uuid"],
+    ),
+    ("rand", "0.9.5", &["governor", "metrics-util"]),
+    ("rand_chacha", "0.9.0", &["rand"]),
+    (
+        "rand_core",
+        "0.10.1",
+        &["chacha20", "getrandom", "rand", "rand_pcg"],
+    ),
+    ("rand_core", "0.6.4", &["signature"]),
+    (
+        "rand_core",
+        "0.9.5",
+        &["rand", "rand_chacha", "rand_xoshiro"],
+    ),
+    ("rcgen", "0.14.10", &["mcp-gateway"]),
+    (
+        "ring",
+        "0.17.14",
+        &[
+            "mcp-gateway",
+            "quinn-proto",
+            "rcgen",
+            "rustls-webpki",
+            "x509-parser",
+        ],
+    ),
+    ("uuid", "1.28.0", &["mcp-gateway", "tower-http"]),
+];
+
+/// The gateway's own declarations of the entropy crates it calls, as written
+/// in Cargo.toml: a feature added here fails until the list is reviewed.
+const ENTROPY_DECLARED: [&str; 4] = [
+    r#"uuid = { version = "1.23", features = ["v4", "fast-rng"] }"#,
+    r#"rand = "0.10""#,
+    r#"ring = "0.17""#,
+    r#"rcgen = { version = "0.14", features = ["pem", "x509-parser"] }"#,
+];
+
+/// Every version of the entropy crates in `lock` with its dependents: a
+/// dependency entry names `name version`, or `name` alone when only one
+/// version of it is locked.
+fn entropy_lock(lock: &str) -> Vec<(String, String, Vec<String>)> {
+    let names: Vec<&str> = ENTROPY_LOCK.iter().map(|(name, _, _)| *name).collect();
+    let packages: Vec<(String, String, Vec<String>)> = lock
+        .split("[[package]]")
+        .skip(1)
+        .map(|block| {
+            let field = |key: &str| {
+                block
+                    .lines()
+                    .find_map(|l| {
+                        l.strip_prefix(key)?
+                            .strip_prefix(" = \"")?
+                            .strip_suffix('"')
+                    })
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let deps = block
+                .split_once("dependencies = [")
+                .map_or(String::new(), |(_, rest)| {
+                    rest.split(']').next().unwrap_or_default().to_string()
+                })
+                .lines()
+                .filter_map(|l| {
+                    let entry = l.trim().trim_end_matches(',').trim_matches('"');
+                    let mut words = entry.split_whitespace();
+                    let name = words.next()?;
+                    Some(
+                        words
+                            .next()
+                            .map_or(name.to_string(), |v| format!("{name} {v}")),
+                    )
+                })
+                .collect();
+            (field("name"), field("version"), deps)
         })
-        .map(|(file, _)| file)
         .collect();
-    found.sort();
-    let want: Vec<String> = RANDOM_BASE64URL_REVIEWED
+    let mut rows: Vec<(String, String, Vec<String>)> = packages
         .iter()
-        .map(|(file, _)| (*file).to_owned())
+        .filter(|(name, _, _)| names.contains(&name.as_str()))
+        .map(|(name, version, _)| {
+            let only = packages.iter().filter(|(n, _, _)| n == name).count() == 1;
+            let exact = format!("{name} {version}");
+            let mut dependents: Vec<String> = packages
+                .iter()
+                .filter(|(_, _, deps)| deps.iter().any(|d| *d == exact || (only && d == name)))
+                .map(|(n, _, _)| n.clone())
+                .collect();
+            dependents.sort();
+            dependents.dedup();
+            (name.clone(), version.clone(), dependents)
+        })
         .collect();
+    rows.sort();
+    rows
+}
+
+#[test]
+fn the_entropy_crates_are_pinned() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lock = std::fs::read_to_string(root.join("Cargo.lock")).expect("Cargo.lock");
+    let mut want: Vec<(String, String, Vec<String>)> = ENTROPY_LOCK
+        .iter()
+        .map(|(name, version, deps)| {
+            let deps = deps.iter().map(|d| (*d).to_string()).collect();
+            ((*name).to_string(), (*version).to_string(), deps)
+        })
+        .collect();
+    want.sort();
     assert_eq!(
-        found, want,
-        "random bytes and base64url outside random_secret.rs: call it, or review the file and list it"
+        entropy_lock(&lock),
+        want,
+        "an entropy crate moved: re-enumerate the clippy.toml list against it, then update this table"
+    );
+    // cargo rewrites the manifest in a packaged crate; the lock is the same.
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml");
+    if !manifest.starts_with("# THIS FILE IS AUTOMATICALLY GENERATED BY CARGO") {
+        for line in ENTROPY_DECLARED {
+            assert!(
+                manifest.lines().any(|l| l.trim() == line),
+                "Cargo.toml no longer declares {line}: review the entropy list"
+            );
+        }
+    }
+}
+
+/// Threat model: a credential digest or approval field must not reach a
+/// serializer, anything that leaves the process as JSON or text; nor may a
+/// whole auth section or config, which holds every key's. Naming a field
+/// anywhere else (the loader, validation, authorization) is not the threat.
+///
+/// Lexical, no syntax tree: a serializer call is one of these names followed
+/// by its balanced argument list. A container under another name (auth.rs's
+/// restart-only `view`, which drops the keys; a `value`) or a digest copied
+/// into a local first is not seen; those spellings stay on register row 805.
+const SERIALIZERS: [&str; 10] = [
+    "json!(",
+    "to_value(",
+    "to_string(",
+    "to_string_pretty(",
+    "to_vec(",
+    "to_vec_pretty(",
+    "to_writer(",
+    "to_writer_pretty(",
+    "canonical_json(",
+    "canonical_json_sha256(",
+];
+
+/// Text that leaves the process too: log lines, formatted strings and panic
+/// messages. A field read in one is barred like a serializer's; a whole
+/// container is not, because a key's `Debug` already redacts its digests.
+const TEXT_OUTPUTS: [&str; 13] = [
+    "info!(",
+    "warn!(",
+    "error!(",
+    "debug!(",
+    "trace!(",
+    "event!(",
+    "format!(",
+    "format_args!(",
+    "write!(",
+    "writeln!(",
+    "println!(",
+    "eprintln!(",
+    "panic!(",
+];
+
+/// The credential digest and approval reads no serializer argument may hold.
+const DIGEST_READS: [&str; 7] = [
+    ".key_sha256",
+    ".previous_key_sha256",
+    ".digest_tag",
+    ".approved_by",
+    "resolve_digest(",
+    "resolve_previous_digest(",
+    "digest_specs_mut(",
+];
+
+/// The only sites that serialise an auth section or a whole config, with how
+/// many each file holds, so a second site in one of these files fails too.
+const CONTAINER_SERIALIZERS: &[(&str, usize, &str)] = &[
+    (
+        "src/config_persistence_splice.rs",
+        1,
+        "config writer: the whole config back to gateway.yaml, keys through AuthConfig's mirror",
+    ),
+    (
+        "src/config_persistence_url.rs",
+        1,
+        "config writer: the whole config back to gateway.yaml, keys through AuthConfig's mirror",
+    ),
+    (
+        "src/config_reload/diff.rs",
+        1,
+        "reload diff: compares the auth section as canonical JSON inside the process, never output",
+    ),
+    (
+        "src/config_reload/live_config.rs",
+        2,
+        "same-auth check: two auth sections compared as JSON values inside the process, never output",
+    ),
+];
+
+/// Each balanced argument list in `code` of a call to one of `names`.
+fn call_arguments<'c>(code: &'c str, names: &[&str]) -> Vec<&'c str> {
+    let mut found = Vec::new();
+    for name in names {
+        for (at, _) in code.match_indices(name) {
+            let open = at + name.len() - 1;
+            let mut depth = 0_usize;
+            for (offset, c) in code[open..].char_indices() {
+                match c {
+                    '(' | '[' | '{' => depth += 1,
+                    ')' | ']' | '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            found.push(&code[open + 1..open + offset]);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    found
+}
+
+/// An auth section or a whole config: `config` / `auth` alone, or a `.auth`
+/// (`.auth()`) that is the value itself, not a member read such as
+/// `.auth().enabled`.
+fn is_container(arguments: &str) -> bool {
+    let bare = arguments.trim().trim_start_matches('&').trim();
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    bare == "config"
+        || bare == "auth"
+        || arguments.match_indices(".auth").any(|(at, word)| {
+            let rest = &arguments[at + word.len()..];
+            let rest = rest.strip_prefix("()").unwrap_or(rest).trim_start();
+            !rest.starts_with(ident) && !rest.starts_with('.')
+        })
+}
+
+#[test]
+fn no_credential_field_reaches_a_serializer() {
+    let mut reads = Vec::new();
+    let mut containers: Vec<(String, usize)> = Vec::new();
+    for (file, code) in production_sources() {
+        let arguments = call_arguments(&code, &SERIALIZERS);
+        let outputs = call_arguments(&code, &[&SERIALIZERS[..], &TEXT_OUTPUTS[..]].concat());
+        for read in DIGEST_READS {
+            if outputs.iter().any(|a| a.contains(read)) {
+                reads.push(format!("{file}: {read}"));
+            }
+        }
+        let count = arguments.iter().filter(|a| is_container(a)).count();
+        if count > 0 {
+            containers.push((file, count));
+        }
+    }
+    assert!(
+        reads.is_empty(),
+        "a credential field reaches a serializer or text output: {reads:?}"
+    );
+    containers.sort();
+    let mut want: Vec<(String, usize)> = CONTAINER_SERIALIZERS
+        .iter()
+        .map(|(file, count, _)| ((*file).to_owned(), *count))
+        .collect();
+    want.sort();
+    assert_eq!(
+        containers, want,
+        "an auth section or config reaches a serializer outside the listed sites"
     );
 }
