@@ -400,8 +400,8 @@ async fn start_busy_past_the_bound() {
     let (dir, config) = fresh_config();
     let resolved = crate::identity_grants::journal::resolved(&config);
     let lock_path = crate::config_persistence::lock::lock_path(&resolved);
+    let before = tree_with_sidecar(dir.path(), &lock_path);
     let held = ExclusiveFileLock::try_acquire(&lock_path).expect("the test holds the lock");
-    let before = tree(dir.path());
     let outcome = prepare_start_within(&config, Duration::ZERO).await;
     want_session(row, "held", outcome, StartError::Busy);
     drop(held);
@@ -769,4 +769,11 @@ fn stage_maps_every_drain_error() {
         assert_eq!(journal_stage(error), journal, "{row}: journal {error:?}");
         assert_eq!(file_stage(error), file, "{row}: file {error:?}");
     }
+}
+
+/// The tree with the lock sidecar created first, by a lock taken and freed:
+/// Windows refuses to read a file this process holds locked.
+fn tree_with_sidecar(dir: &Path, lock: &Path) -> Vec<(OsString, Snap)> {
+    drop(ExclusiveFileLock::try_acquire(lock).expect("the sidecar exists"));
+    tree(dir)
 }
