@@ -1,0 +1,9 @@
+head_sha	b4fc7c1daddf5567a7d3b194a59f61f157e7ad7c
+#mutant m-literal-blind
+mcp_gateway	clock::tests::literals_and_comments_move_no_scope	src/clock_tests.rs:459
+#mutant m-stmt-scope
+mcp_gateway	clock::tests::an_allow_reaches_exactly_its_statement_or_item	src/clock_tests.rs:459
+#mutant m-introducer
+mcp_gateway	clock::tests::the_item_introducer_picks_the_scope	src/clock_tests.rs:459
+#mutant m-mod-fail-open
+mcp_gateway	clock::tests::the_item_introducer_picks_the_scope	src/clock_tests.rs:459
