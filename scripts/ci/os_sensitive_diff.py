@@ -49,7 +49,7 @@ OS_PROC_WORDS = (
     r"\bSignal::[A-Z]+", r"\bSIG(?:TERM|KILL|INT|HUP|QUIT|CHLD|STOP|CONT|USR1|USR2|PIPE|ALRM)\b", r"nix::sys::signal",
     r"libc::kill\b", r"\bkillpg\b", r"\bsigaction\b", r"\bSIG_(?:IGN|DFL)\b", r"\bstart_kill\b",
     r"(?<![\"\w])kill_process\(", r"(?<![\"\w])kill_process_group\(", r"\btest_kill_process\(",
-    r"(?<![A-Za-z0-9_])(?!(?:idp|live)\.kill\(\))[A-Za-z_][A-Za-z0-9_]*\.kill\(\)", r"Command::new\(\"kill\"\)",
+    r"(?:(?<![A-Za-z0-9_])(?!(?:idp|live)\.kill\(\))[A-Za-z_][A-Za-z0-9_]*|[\])])\.kill\(\)", r"Command::new\(\"kill\"\)",
     r"\bprocess_group\b", r"\bpre_exec\b", r"\bsetsid\b", r"\bgetsid\b", r"\bsetpgid\b", r"\bgetpgid\b",
     r"\btcsetpgrp\b", r"\bwaitpid\b", r"\bwaitid\b", r"\bWaitId(?:Options)?\b", r"\btry_wait\b",
     r"\bwait_with_output\b", r"rustix::process::wait\b", r"\bNOHANG\b", r"\bchild\.wait\(",
@@ -80,7 +80,7 @@ def header_path(line: str, prefix: str) -> str | None:
     return raw[2:] if raw[:2] in ("a/", "b/") else raw
 
 
-def scan(diff_text: str, pattern: re.Pattern = PATTERN, suffixes: tuple = SUFFIXES) -> list[tuple[str, int, str]]:
+def scan(diff_text: str, pattern: re.Pattern = PATTERN, suffixes: tuple = SUFFIXES, skip=None) -> list[tuple[str, int, str]]:
     """(path, line number, the changed line) for each added or removed line in a .rs or .toml file that matches.
     An added line is numbered in the new file, a removed one where it stood in the old file. File headers are read
     only outside a hunk: a hunk's own line counts say where its body ends, so a body line that starts with `++ ` or
@@ -95,14 +95,14 @@ def scan(diff_text: str, pattern: re.Pattern = PATTERN, suffixes: tuple = SUFFIX
                 continue
             if line.startswith("+") and left_new > 0:
                 path = new_path or old_path
-                if path and path.endswith(suffixes) and pattern.search(line[1:]):
+                if path and path.endswith(suffixes) and pattern.search(line[1:]) and not (skip and skip(line[1:])):
                     out.append((path, new, line[1:].strip()))
                 new += 1
                 left_new -= 1
                 continue
             if line.startswith("-") and left_old > 0:
                 path = old_path or new_path  # a removed line belongs to the old file, which a rename changes
-                if path and path.endswith(suffixes) and pattern.search(line[1:]):
+                if path and path.endswith(suffixes) and pattern.search(line[1:]) and not (skip and skip(line[1:])):
                     out.append((path, old, line[1:].strip()))
                 old += 1
                 left_old -= 1
@@ -123,9 +123,14 @@ def scan(diff_text: str, pattern: re.Pattern = PATTERN, suffixes: tuple = SUFFIX
     return out
 
 
+# A changed line that starts with a comment or a cfg attribute is not process code, whatever word it names (184 such
+# lines on the release line name one); a code line with a trailing comment still counts.
+NON_CODE = re.compile(r"\s*(?://|/\*|#!?\[cfg)")
+
+
 def scan_proc(diff_text: str) -> list[tuple[str, int, str]]:
     """The OS-process lines (OS_PROC) in changed Rust files: they demand os-sensitive."""
-    return scan(diff_text, OS_PROC, (".rs",))
+    return scan(diff_text, OS_PROC, (".rs",), skip=NON_CODE.match)
 
 
 # kind -> (label, what the matched lines touch, the shard the label runs)
