@@ -50,11 +50,11 @@ fn id_of(key: &[u8; 32], part: &CapabilityPart<PartDigest>) -> String {
     )
 }
 
-/// The gateway.yaml bytes the attached LiveConfig started from; any fixed
+/// The gateway.yaml bytes the attached `LiveConfig` started from; any fixed
 /// bytes do, the rows compare ids built over the same ones.
 const YAML: &[u8] = b"server:\n  port: 1\n";
 
-/// A LiveConfig with the process's revision key and a startup revision whose
+/// A `LiveConfig` with the process's revision key and a startup revision whose
 /// capability part is not loaded, as a real startup builds one: a delivery
 /// into it changes its published revision.
 fn keyed_live(config: &Config, key: [u8; 32]) -> Arc<LiveConfig> {
@@ -69,7 +69,7 @@ fn keyed_live(config: &Config, key: [u8; 32]) -> Arc<LiveConfig> {
     )
 }
 
-/// The id that LiveConfig publishes once `part` reaches it.
+/// The id that `LiveConfig` publishes once `part` reaches it.
 fn live_id(key: &[u8; 32], part: &CapabilityPart<PartDigest>) -> String {
     config_revision(
         key,
