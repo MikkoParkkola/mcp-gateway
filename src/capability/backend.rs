@@ -390,7 +390,7 @@ impl CapabilityBackend {
         // Held through the publish; this reload's log lines are written after
         // it is released, so a blocked log write never holds up the next
         // catalogue operation.
-        let _operation = self.lock_operation().await;
+        let operation = self.lock_operation().await;
         let dirs: Vec<String> = self.directories.read().clone();
         let mut failed_dirs: Vec<(String, String)> = Vec::new();
         let mut refused_logs: Vec<(String, String)> = Vec::new();
@@ -500,7 +500,7 @@ impl CapabilityBackend {
         self.publish_revision(seq, part);
         self.catalogue_changed();
         self.note_admitted(trusted, !partial);
-        drop(_operation);
+        drop(operation);
 
         if dirs.is_empty() {
             debug!(backend = %self.name, "No directories to reload");

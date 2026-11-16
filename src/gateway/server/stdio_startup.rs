@@ -17,6 +17,21 @@ use crate::gateway::oauth::GatewayKeyPair;
 
 const PARENT_TARGET: &str = "mcp_gateway::gateway::server::stdio_loop";
 
+/// Each capability directory's load outcome. Called only after the
+/// operation lock is released: a blocked log write must not hold up a reload.
+fn log_capability_dirs(logs: &[(String, std::result::Result<usize, String>)]) {
+    for (dir, outcome) in logs {
+        match outcome {
+            Ok(count) => {
+                debug!(target: PARENT_TARGET, directory = %dir, count, "Loaded capabilities (stdio)");
+            }
+            Err(error) => {
+                debug!(target: PARENT_TARGET, directory = %dir, %error, "Failed to load optional capabilities (stdio)");
+            }
+        }
+    }
+}
+
 impl Gateway {
     pub(super) async fn install_stdio_startup_catalogue(
         &self,
@@ -59,19 +74,6 @@ impl Gateway {
             // fails is still checked for pin mismatches below.
             cap_backend.register_directories(&self.config.capabilities.directories);
             let mut refused = Vec::new();
-            // Defined before the lock is taken, and called only after it is released.
-            let log_dirs = |logs: &[(String, std::result::Result<usize, String>)]| {
-                for (dir, outcome) in logs {
-                    match outcome {
-                        Ok(count) => {
-                            debug!(target: PARENT_TARGET, directory = %dir, count, "Loaded capabilities (stdio)")
-                        }
-                        Err(error) => {
-                            debug!(target: PARENT_TARGET, directory = %dir, %error, "Failed to load optional capabilities (stdio)")
-                        }
-                    }
-                }
-            };
             // The load, the snapshot and the publish are one operation.
             let operation = cap_backend.lock_operation().await;
             // Before any directory is read: this startup's unreadable set
@@ -98,7 +100,7 @@ impl Gateway {
             }
             if !refused.is_empty() {
                 drop(operation);
-                log_dirs(&dir_logs);
+                log_capability_dirs(&dir_logs);
                 return Err(crate::Error::Config(format!(
                     "capabilities rejected by the account admission gate: {}",
                     refused.join("; ")
@@ -119,7 +121,7 @@ impl Gateway {
                 cap_backend.mark_initial_scan_complete();
             }
             drop(operation);
-            log_dirs(&dir_logs);
+            log_capability_dirs(&dir_logs);
             meta_mcp.set_capabilities(cap_backend);
         }
 

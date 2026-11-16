@@ -106,7 +106,7 @@ impl Gateway {
                 }
                 // Load, the post-rug-pull snapshot and the publish are one
                 // operation. The guard drops after the publish, before the logs.
-                let _operation = cap_backend_for_load.lock_operation().await;
+                let operation = cap_backend_for_load.lock_operation().await;
 
                 let mut total_caps = 0;
                 // Every capability the account admission gate refused during the
@@ -180,12 +180,12 @@ impl Gateway {
                 if transitioned {
                     cap_backend_for_load.announce_scanned(&registry_for_load);
                 }
-                drop(_operation);
+                drop(operation);
                 for (dir, outcome) in &dir_logs {
                     match outcome {
                         Ok(count) => debug!(directory = %dir, count, "Loaded capabilities"),
                         Err(error) => {
-                            debug!(directory = %dir, error = %error, "Failed to load capabilities")
+                            debug!(directory = %dir, error = %error, "Failed to load capabilities");
                         }
                     }
                 }
