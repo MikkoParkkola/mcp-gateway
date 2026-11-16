@@ -64,3 +64,34 @@ async fn a_handed_trees_grace_is_cut_once_at_the_stage_deadline() {
         .expect("tree reaped")
         .expect("close");
 }
+
+/// A cut plan's on-time SIGTERM keeps the cut's last third before the kill,
+/// on synthetic steps. The signal-record rows prove the order on a real stop;
+/// this proves the interval, which a child's own mark showed only when a
+/// loaded host scheduled the child in time. Red if a cut kills at the SIGTERM
+/// step, or moves the kill off the cut.
+#[tokio::test]
+async fn a_cut_plans_on_time_sigterm_keeps_its_third_before_the_kill() {
+    let (w, t) = started(IGNORES_TERM_READY, None).await;
+    let end = EndOnDrop::new(&t);
+    let t0 = planned_tree(&t, &w, &end).await;
+    // Waits cut from 2 s to 1.5 s, applied at t0 + 100 ms: a third of the
+    // 1.4 s left keeps SIGTERM at its planned 1 s, the kill moves to 1.5 s.
+    end.deadline().move_earlier(
+        t0 + super::super::super::super::reaper::KILL_RESERVE + Duration::from_millis(1500),
+    );
+    with_tree(&t, |tree| {
+        let term_at = t0 + Duration::from_secs(1);
+        let kill_at = t0 + Duration::from_millis(1500);
+        tree.reap_step(t0 + Duration::from_millis(100));
+        tree.reap_step(before(term_at, Duration::from_millis(1)));
+        assert_eq!(tree.term_signals_sent, 0, "no SIGTERM before its instant");
+        tree.reap_step(term_at);
+        assert_eq!(tree.term_signals_sent, 1, "the on-time step sent SIGTERM");
+        tree.reap_step(before(kill_at, Duration::from_millis(1)));
+        assert_eq!(tree.group_signals_sent, 0, "the SIGTERM keeps its third");
+        tree.reap_step(kill_at);
+        assert!(tree.group_signals_sent > 0, "the kill lands at the cut");
+    })
+    .await;
+}
