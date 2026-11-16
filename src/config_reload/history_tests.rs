@@ -178,7 +178,7 @@ fn t5_an_unreadable_file_is_moved_aside_by_hard_link() {
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(ConfigHistory::FILE);
-    std::fs::write(&path, b"{not json").unwrap();
+    crate::gateway::test_helpers::write_owner_only(&path, b"{not json").unwrap();
     let inode = std::fs::metadata(&path).unwrap().ino();
 
     let history = ConfigHistory::open(dir.path(), Bounds::default(), 1000);
@@ -188,7 +188,7 @@ fn t5_an_unreadable_file_is_moved_aside_by_hard_link() {
     assert_eq!(std::fs::metadata(&aside).unwrap().ino(), inode);
     assert_eq!(std::fs::read(&aside).unwrap(), b"{not json");
 
-    std::fs::write(&path, b"{not json").unwrap();
+    crate::gateway::test_helpers::write_owner_only(&path, b"{not json").unwrap();
     let _ = ConfigHistory::open(dir.path(), Bounds::default(), 1000);
     assert_eq!(std::fs::read(&aside).unwrap(), b"{not json");
     assert_eq!(std::fs::metadata(&aside).unwrap().ino(), inode);
@@ -206,11 +206,8 @@ fn t6_the_file_is_owner_only() {
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(ConfigHistory::FILE);
-    std::fs::write(&path, br#"{"snapshots":[],"events":[]}"#).unwrap();
-    let mut perms = std::fs::metadata(&path).unwrap().permissions();
-    perms.set_mode(0o644);
-    std::fs::set_permissions(&path, perms).unwrap();
-
+    // No file yet: the store's own write makes it, where a plain write
+    // would leave 0644.
     let history = ConfigHistory::open(dir.path(), Bounds::default(), 1);
     record_version(&history, "r1", 1, b"a: 1\n", "r1");
     let mode = std::fs::metadata(&path).unwrap().permissions().mode();
@@ -240,7 +237,7 @@ fn t7_ids_are_never_recomputed() {
 fn t8_an_event_written_without_a_diff_field_loads() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(ConfigHistory::FILE);
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         r#"{
   "snapshots": [],
