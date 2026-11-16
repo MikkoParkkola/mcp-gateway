@@ -91,7 +91,7 @@ impl ChainExecutor {
     ///
     /// Returns `Error::Io` if the temp dir cannot be created.
     pub fn with_temp_store() -> Result<Self> {
-        let tmp = std::env::temp_dir().join(format!("mcp-gateway-chains-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("mcp-gateway-chains-{}", crate::ids::new_v4()));
         Ok(Self::new(
             ChainCheckpointStore::new(&tmp)?,
             ChainRetryPolicy::default(),

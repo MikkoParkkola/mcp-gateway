@@ -124,7 +124,7 @@ impl Message {
     /// A user message with one text part and a fresh `messageId`.
     pub(crate) fn user_text(text: &str) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: crate::ids::new_v4().to_string(),
             role: "ROLE_USER".to_owned(),
             parts: vec![Part::text(text)],
             context_id: None,

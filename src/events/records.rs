@@ -443,7 +443,12 @@ pub(crate) fn write_record<T: Serialize>(
     value: &T,
 ) -> std::io::Result<Placed> {
     let bytes = serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?;
-    let temp = dir.join(format!(".{name}.{}.tmp", rand::random::<u64>()));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "temp name: a record's temporary write name"
+    )]
+    let suffix = rand::random::<u64>();
+    let temp = dir.join(format!(".{name}.{suffix}.tmp"));
     // The handle is closed before the rename: Windows refuses to move a file
     // that is still open under an exclusive share mode.
     let written = {

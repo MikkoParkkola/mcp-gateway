@@ -111,13 +111,18 @@ impl OperationalSource {
         let Some(hub) = self.hub.upgrade() else {
             return;
         };
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "id: a fresh upstream id per operational event"
+        )]
+        let upstream_id = hex::encode(rand::random::<[u8; 16]>());
         hub.emit_dated(|occurred_at| SourceEvent {
             kind: SourceKind::GatewayOperational,
             name: name.into(),
             backend: backend.into(),
             scope,
             owner: None,
-            upstream_id: hex::encode(rand::random::<[u8; 16]>()),
+            upstream_id,
             occurred_at,
             data,
             lifecycle_key: None,

@@ -94,6 +94,10 @@ fn publish_new_key(
     link: impl Fn(&Path, &Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use rand::RngExt as _;
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "record key: the events record key, written once to its key file"
+    )]
     let bytes: [u8; 32] = rand::rng().random();
     publish_new_file(
         key_file,
@@ -113,6 +117,10 @@ pub(crate) fn publish_new_file(
 ) -> std::io::Result<()> {
     use rand::RngExt as _;
     let dir = target.parent().unwrap_or(Path::new("."));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "temp name: the key file's temporary publish name"
+    )]
     let nonce: [u8; 8] = rand::rng().random();
     let mut temp_name = target.file_name().unwrap_or_default().to_owned();
     temp_name.push(format!(

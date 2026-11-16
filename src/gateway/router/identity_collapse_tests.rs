@@ -5,6 +5,10 @@
 //! principal. Requests go through `create_router`, so the real
 //! `auth_middleware` resolves each credential; one loopback ES256 identity
 //! provider serves its JWKS to the delegated-bearer verifier.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use std::sync::Arc;
 

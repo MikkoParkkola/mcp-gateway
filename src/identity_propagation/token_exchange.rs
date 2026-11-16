@@ -239,7 +239,7 @@ impl TokenExchangeStrategy {
             aud: endpoint.to_string(),
             iat: now,
             exp: now + CLIENT_ASSERTION_TTL_SECS,
-            jti: uuid::Uuid::new_v4().to_string(),
+            jti: crate::ids::new_v4().to_string(),
         };
         sign_es256_jwt(&self.key, &claims)
     }

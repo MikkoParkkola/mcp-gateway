@@ -388,7 +388,7 @@ impl InMemoryTokenStore {
     /// Generate a UUID v4 JTI.
     #[must_use]
     pub fn generate_jti() -> String {
-        uuid::Uuid::new_v4().to_string()
+        crate::ids::new_v4().to_string()
     }
 }
 

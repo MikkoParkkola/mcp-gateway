@@ -3,6 +3,10 @@
 //! An HTTPS callback receiver with its own CA, and a bare TCP listener that
 //! counts connections. The receiver checks Standard Webhooks signatures with
 //! its own HMAC code, not the gateway's.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;

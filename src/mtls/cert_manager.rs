@@ -191,6 +191,7 @@ impl CertGenerator {
     ///
     /// Returns an error if key generation or certificate serialisation fails.
     pub fn init_ca(params: &CaParams<'_>) -> Result<GeneratedCert> {
+        #[allow(clippy::disallowed_methods, reason = "key: the mTLS CA key pair")]
         let key_pair = KeyPair::generate()
             .map_err(|e| Error::Config(format!("Failed to generate CA key: {e}")))?;
 
@@ -233,6 +234,7 @@ impl CertGenerator {
             .map_err(|e| Error::Config(format!("Failed to parse CA cert: {e}")))?;
 
         // Build leaf params
+        #[allow(clippy::disallowed_methods, reason = "key: an mTLS leaf key pair")]
         let leaf_key = KeyPair::generate()
             .map_err(|e| Error::Config(format!("Failed to generate leaf key: {e}")))?;
 

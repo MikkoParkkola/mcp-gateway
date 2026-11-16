@@ -107,6 +107,10 @@ impl CallbackClient {
         handle: &str,
         key: &[u8],
     ) -> Result<(), CallbackFailure> {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "nonce: a verification challenge the subscriber echoes, never a credential"
+        )]
         let challenge =
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
         let body = serde_json::to_vec(&serde_json::json!({
@@ -114,10 +118,9 @@ impl CallbackClient {
             "challenge": challenge,
         }))
         .unwrap_or_default();
-        let id = format!(
-            "msg_verification_{}",
-            hex::encode(rand::random::<[u8; 16]>())
-        );
+        #[allow(clippy::disallowed_methods, reason = "id: the verification message id")]
+        let id_bytes = rand::random::<[u8; 16]>();
+        let id = format!("msg_verification_{}", hex::encode(id_bytes));
         let answer = self
             .post(url, handle, &id, &[key], body, ReadBody::Echo)
             .await?;

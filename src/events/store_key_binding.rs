@@ -75,7 +75,12 @@ impl super::Store {
 /// Write `id` to `root/record-key.id` owner-only, through a temp file and a
 /// rename, then sync `root`.
 fn write_key_id(root: &Path, id: &str) -> std::io::Result<()> {
-    let temp = root.join(format!(".{KEY_ID_FILE}.{}.tmp", rand::random::<u64>()));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "temp name: the key id file's temporary write name"
+    )]
+    let suffix = rand::random::<u64>();
+    let temp = root.join(format!(".{KEY_ID_FILE}.{suffix}.tmp"));
     let written = {
         let mut file = crate::config_persistence::create_new_private(&temp)?;
         writeln!(file, "{id}").and_then(|()| file.sync_all())

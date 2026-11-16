@@ -183,7 +183,7 @@ impl BnautAttestationSigner {
         audience: String,
     ) -> AttestationToken {
         let claims = TokenClaims {
-            token_id: Uuid::new_v4().to_string(),
+            token_id: crate::ids::new_v4().to_string(),
             issuer: BNAUT_ISSUER.to_string(),
             algorithm: SIGNING_ALGORITHM.to_string(),
             key_id: self.key_id.clone(),
@@ -233,7 +233,7 @@ mod tests {
     fn request() -> TokenRequest {
         TokenRequest {
             agent_identity: "agent-7".to_string(),
-            task_uuid: Uuid::new_v4(),
+            task_uuid: crate::ids::new_v4(),
             capabilities: vec!["tools:search".to_string()],
         }
     }

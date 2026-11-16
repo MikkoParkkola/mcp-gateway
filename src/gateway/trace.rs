@@ -27,8 +27,6 @@
 //! }).await;
 //! ```
 
-use uuid::Uuid;
-
 tokio::task_local! {
     /// Task-local storage for the current request trace ID.
     ///
@@ -46,7 +44,7 @@ tokio::task_local! {
 /// ```
 #[must_use]
 pub fn generate() -> String {
-    format!("gw-{}", Uuid::new_v4())
+    format!("gw-{}", crate::ids::new_v4())
 }
 
 /// Return the trace ID set for the current task, or `None` if none is set.
@@ -117,7 +115,7 @@ mod tests {
     fn generate_embeds_valid_uuid_v4() {
         let id = generate();
         let uuid_part = id.strip_prefix("gw-").expect("prefix must be 'gw-'");
-        let uuid = Uuid::parse_str(uuid_part).expect("UUID part must parse");
+        let uuid = uuid::Uuid::parse_str(uuid_part).expect("UUID part must parse");
         assert_eq!(uuid.get_version_num(), 4, "must be UUID v4");
     }
 

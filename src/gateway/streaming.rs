@@ -22,7 +22,6 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tracing::{debug, info, trace};
-use uuid::Uuid;
 
 use crate::Result;
 use crate::backend::BackendRegistry;
@@ -466,7 +465,7 @@ impl NotificationMultiplexer {
         sessions: &mut HashMap<SessionId, Arc<ClientSession>>,
         owner: &SessionOwner,
     ) -> Arc<ClientSession> {
-        let id = format!("gw-{}", Uuid::new_v4());
+        let id = format!("gw-{}", crate::ids::new_v4());
         let session = self.insert_session(sessions, &id, owner.clone());
         // The id's fingerprint, made once when it was inserted (PERF.2a).
         let fp = session.id.fp();

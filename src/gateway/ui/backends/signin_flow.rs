@@ -60,6 +60,10 @@ pub(super) enum Started {
 fn new_attempt_id() -> String {
     use base64::Engine as _;
     use rand::RngExt as _;
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "id: a 16-byte sign-in attempt id"
+    )]
     let bytes: [u8; 16] = rand::rng().random();
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }

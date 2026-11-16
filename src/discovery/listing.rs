@@ -135,7 +135,12 @@ impl DiscoveryCache {
     #[cfg(test)]
     pub(crate) fn new(source: Arc<dyn ScanSource>) -> Self {
         use rand::RngExt as _;
-        Self::with_key(source, rand::rng().random())
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "test code: a fresh process key for a test cache"
+        )]
+        let key = rand::rng().random();
+        Self::with_key(source, key)
     }
 
     /// A cache whose radar ids are keyed by the gateway's record key.
@@ -144,9 +149,14 @@ impl DiscoveryCache {
         record_key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
     ) -> Self {
         use rand::RngExt as _;
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "HMAC key: the radar listing's process key"
+        )]
+        let key = rand::rng().random();
         Self {
             record_key,
-            ..Self::with_key(source, rand::rng().random())
+            ..Self::with_key(source, key)
         }
     }
 

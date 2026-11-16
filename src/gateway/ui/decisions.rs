@@ -153,6 +153,10 @@ fn start_with(
     store: Option<Arc<dyn ControlPlaneStore>>,
 ) -> tokio::task::JoinHandle<()> {
     let config_path: Option<Arc<Path>> = config_path.map(Arc::from);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "HMAC key: the decision set's process key"
+    )]
     let shared = Arc::new(Shared::with_key(rand::rng().random()));
     meta.set_decisions(Arc::clone(&shared));
     match store {

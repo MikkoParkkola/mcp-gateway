@@ -198,6 +198,10 @@ fn create(file: &Path, configured: Option<&str>) -> Result<(), String> {
     let (mode, key_hex) = if let Some(text) = configured {
         (Mode::Configured, text.trim_end_matches('\n').to_owned())
     } else {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "HMAC key: the key server's email HMAC key"
+        )]
         let bytes: [u8; 32] = rand::rng().random();
         (Mode::Generated, hex::encode(bytes))
     };

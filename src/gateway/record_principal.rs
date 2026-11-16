@@ -138,6 +138,10 @@ pub(crate) fn read_key(
 /// material where none exists; ids under it hold for that report alone.
 pub(crate) fn one_run_key() -> RecordPrincipalKey {
     use rand::RngExt as _;
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "record key: a one-report key held in memory only"
+    )]
     let bytes: [u8; 32] = rand::rng().random();
     RecordPrincipalKey(bytes.to_vec())
 }

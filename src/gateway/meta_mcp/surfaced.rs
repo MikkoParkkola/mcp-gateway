@@ -245,7 +245,7 @@ pub(super) fn apply_surfaced_reload(
                 "Surfaced tool names a backend that is not configured"
             );
         }
-        // T2.6, as at startup (run.rs): repeated only when the set changed.
+        // T2.6, as at startup (warn_cold_surfaced_tools): repeated only when the set changed.
         if !config.meta_mcp.warm_start.contains(&surfaced.server) {
             warn!(
                 tool = %surfaced.tool,

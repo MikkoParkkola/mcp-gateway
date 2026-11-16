@@ -3,6 +3,10 @@
 //! The direct route's reach and its declared effect. A direct call names a
 //! registry backend; a capability provider is no registry backend, so the
 //! direct route answers its name as absent and never records a grant.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

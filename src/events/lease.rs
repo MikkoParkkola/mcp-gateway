@@ -197,7 +197,7 @@ impl LeaseStore {
         if expires_at < now.saturating_add(min_remaining_secs) {
             return Err(LeaseRefusal::Expired);
         }
-        let generation = uuid::Uuid::new_v4().as_u128();
+        let generation = crate::ids::new_v4().as_u128();
         let mut held = self.held.lock().await;
         if let Some(old) = held.remove(&key) {
             // Bump first (§3.5): from here a record observed under the old

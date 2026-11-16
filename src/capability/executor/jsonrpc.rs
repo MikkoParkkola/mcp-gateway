@@ -58,7 +58,7 @@ impl JsonRpcExecutor<'_> {
         // Merge default_params with caller params (caller wins)
         let merged_params = Self::merge_params(&config.default_params, params);
 
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = crate::ids::new_v4().to_string();
 
         let mut body = serde_json::Map::new();
         body.insert("jsonrpc".to_string(), Value::String("2.0".to_string()));

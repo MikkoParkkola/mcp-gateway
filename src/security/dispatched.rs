@@ -145,6 +145,10 @@ fn key() -> Option<&'static [u8; 32]> {
     KEY.get_or_init(|| {
         use ring::rand::SecureRandom as _;
         let mut bytes = [0_u8; 32];
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "HMAC key: the dispatched-call fingerprint key"
+        )]
         ring::rand::SystemRandom::new().fill(&mut bytes).ok()?;
         Some(bytes)
     })

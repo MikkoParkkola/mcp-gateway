@@ -13,7 +13,6 @@
     )
 )]
 use chrono::Utc;
-use uuid::Uuid;
 
 use super::wiring::{ATTESTATION_AUDIENCE_ENV, resolve_attestation_wiring};
 use super::{
@@ -35,7 +34,7 @@ fn token_for(audience: Option<&str>) -> AttestationToken {
     signer(audience).issue(
         &TokenRequest {
             agent_identity: "agent".to_string(),
-            task_uuid: Uuid::new_v4(),
+            task_uuid: crate::ids::new_v4(),
             capabilities: vec!["read".to_string()],
         },
         Utc::now(),
