@@ -34,7 +34,7 @@ GRACE = 10 * MIN                                       # a queued or absent prod
 # and int's download (3).
 RUN_LIMIT = {"xbuild": 65 * MIN, "lib-b": (75 + 120 + 5 + 3) * MIN}
 CAP = {"lib-b": 75 * MIN, "int": 210 * MIN}            # the leg's wait, from JOB_START (255 less the later steps)
-LOCAL_BUILD_BY = 100 * MIN                             # int builds lib-a itself only on none-left before this
+LOCAL_BUILD_BY = 100 * MIN                             # int builds lib-a itself only when no binary can come before this
 REREAD = 60                                            # a completed producer is re-read once after this
 # Every poll costs 2-3 REST calls on the repository's shared GITHUB_TOKEN budget (1000 an hour): 30 s keeps a lib-b
 # wait of 45 min near 180 calls.
@@ -153,13 +153,15 @@ def obtain(leg: str, producers: list, job_start: float, look, get, clock, sleep,
         try:
             names, state = look()
         except Misconfigured as e:
-            return result(leg, None, "misconfigured", now - job_start, why=str(e))
+            return result(leg, None, "misconfigured", clock() - job_start, why=str(e))
         except (RuntimeError, OSError, ValueError, KeyError) as e:
             look_failures += 1
             warn(f"::warning::obtain-lib: {e}; failed look {look_failures} of {LOOK_TRIES}")
-            if look_failures >= LOOK_TRIES:
-                # The API is down for this run: stop waiting while int can still build its half.
-                return result(leg, None, "unavailable", now - job_start, why=str(e))
+            # Give up early only while a fallback remains: lib-b can always build natively, int only before
+            # LOCAL_BUILD_BY. Past that, int keeps polling to its cap, since a producer may still deliver.
+            fallback = leg != "int" or clock() - job_start < LOCAL_BUILD_BY
+            if look_failures >= LOOK_TRIES and fallback:
+                return result(leg, None, "unavailable", clock() - job_start, why=str(e))
             sleep(POLL)
             continue
         look_failures = 0
@@ -281,6 +283,13 @@ def self_test() -> int:
     # Ten failed looks in a row (0, 30, ..., 270 s) end the wait while int can still build its half.
     check("API down: unavailable after 10 looks", case("int", api_down), reason="unavailable", waited="270",
           local_build="true")
+    # Past minute 100 int has no fallback, so an outage there is waited out: ten failed looks from minute 150, then
+    # lib-b's artifact appears at minute 160 and int takes it.
+    def late_outage(s):
+        if 150 * MIN <= s < 160 * MIN:
+            raise RuntimeError("HTTP 502")
+        return snap([lb[1]] if s >= 160 * MIN else [], x=("completed", 0), b=("in_progress", 0))
+    check("late outage waited out", case("int", late_outage), producer="lib-b", reason="found", waited="9600")
     calls = [0]
 
     def blip(s):
