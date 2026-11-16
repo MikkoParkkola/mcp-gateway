@@ -277,6 +277,26 @@ fn handover_admits_prefrozen_unparseable() {
     );
 }
 
+/// A token that still owes its terminal, whose terminal cannot be built (its intent payload does
+/// not parse), is one the file drain could not finish: the shared judgement gives no bound and
+/// the handover refuses, writing nothing.
+#[test]
+fn handover_refuses_unbuildable_terminal() {
+    const ROW: &str = "handover_refuses_unbuildable_terminal";
+    let edit = |donor: &mut JournalV2| {
+        let writer = donor.writer.as_mut().expect("a writer");
+        writer.records.clear();
+        writer.intent.payload_json = b"not json".to_vec();
+    };
+    let rig = rig(edit);
+    assert_eq!(
+        maximal_size(&marked(&rig.donor)),
+        usize::MAX,
+        "{ROW}: an owed terminal that does not build gives no bound"
+    );
+    refuses(ROW, edit);
+}
+
 /// OUTCOME.9 (b), the handover half of the pair: a token whose terminal is already frozen but
 /// whose delivered intent has no counter is one the file drain refuses, so the size bound refuses
 /// it too and nothing is written.
