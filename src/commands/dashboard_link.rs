@@ -175,7 +175,13 @@ pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result
     body["link"]
         .as_str()
         .map(ToString::to_string)
-        .ok_or_else(|| token_free("the gateway's answer carried no link", token))
+        .ok_or_else(|| {
+            mutant!(
+                "m8",
+                "the gateway's answer carried no link".to_string(),
+                token_free("the gateway's answer carried no link", token)
+            )
+        })
 }
 
 /// One admin request to the gateway at `base`; the JSON answer of a success,
@@ -196,7 +202,7 @@ pub(crate) async fn admin_call(
 ) -> Result<serde_json::Value, String> {
     admin_call_raw(method, base, path, token, tls)
         .await
-        .map_err(|message| token_free(&message, token))
+        .map_err(|message| mutant!("m2", message.clone(), token_free(&message, token)))
 }
 
 async fn admin_call_raw(
@@ -235,7 +241,7 @@ async fn admin_call_raw(
     }
     // The answer is redacted here, so every caller (the link included) reads
     // the redacted body.
-    if !redact_body(&mut body, token) {
+    if mutant!("m3", false, !redact_body(&mut body, token)) {
         return Err(UNSAFE_ANSWER.to_string());
     }
     Ok(body)
@@ -251,7 +257,7 @@ const UNSAFE_ANSWER: &str = "the gateway's answer could not be printed safely";
 pub(crate) fn redact_body(body: &mut serde_json::Value, token: &str) -> bool {
     let entries = object_entry_count(body);
     mcp_gateway::cli::redact::json(body, &[token.to_string()]);
-    object_entry_count(body) == entries
+    mutant!("m4", true, object_entry_count(body) == entries)
 }
 
 fn object_entry_count(value: &serde_json::Value) -> usize {
@@ -564,7 +570,11 @@ async fn dashboard_link_args_output(
     let base = dashboard_link_base(args.url, args.tls, load, port_override, host_override);
     match (base, token) {
         (Ok((base, tls)), Ok(token)) => dashboard_link_output(&base, &tls, &token).await,
-        (Err(message), Ok(token)) => gate(PREFIX, &token, Err(message)),
+        (Err(message), Ok(token)) => mutant!(
+            "m6",
+            unmasked(PREFIX, &message),
+            gate(PREFIX, &token, Err(message))
+        ),
         (Err(message), Err(_)) => unmasked(PREFIX, &message),
         (Ok(_), Err(error)) => unmasked(PREFIX, &error.to_string()),
     }
@@ -650,7 +660,7 @@ struct Printed {
 /// prefix, status, note or transport detail is printed unredacted.
 fn gate(prefix: &str, token: &str, result: Result<(String, &str), String>) -> Printed {
     let result = result.and_then(|(stdout, note)| {
-        if stdout.contains(token) {
+        if mutant!("m5", false, stdout.contains(token)) {
             Err(UNSAFE_ANSWER.to_string())
         } else {
             Ok((stdout, note))
@@ -665,7 +675,15 @@ fn gate(prefix: &str, token: &str, result: Result<(String, &str), String>) -> Pr
     let stderr = if line.is_empty() {
         line
     } else {
-        token_free(&format!("{line}\n"), token)
+        mutant!(
+            "m1",
+            format!("{line}\n"),
+            mutant!(
+                "m7",
+                format!("{}\n", token_free(&line, token)),
+                token_free(&format!("{line}\n"), token)
+            )
+        )
     };
     Printed { stdout, stderr, ok }
 }
