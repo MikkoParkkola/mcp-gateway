@@ -1,0 +1,2 @@
+head_sha	8523b3af505e482cc2e4ba0d543b51a49d0f8b2a
+repro-8threads	windows	threads8.patch	--test cli_broken_pipe -- probe_one_line_reader_under_load --exact --nocapture

@@ -1,0 +1,13 @@
+diff --git a/tests/cli_broken_pipe.rs b/tests/cli_broken_pipe.rs
+index bda09a9da7..46ff10a558 100644
+--- a/tests/cli_broken_pipe.rs
++++ b/tests/cli_broken_pipe.rs
+@@ -252,7 +252,7 @@ fn library_printed_output_exits_as_with_a_reader() {
+ /// `THREADS` threads, beside a thread running the gone-reader case, so a hang
+ /// on this OS fails at a bound naming its wait. Every failure is reported,
+ /// then the probe fails if there was any.
+-const THREADS: usize = 4;
++const THREADS: usize = 8;
+ const ROUNDS: usize = 75;
+ 
+ fn probe_message(payload: &Box<dyn std::any::Any + Send>) -> String {
