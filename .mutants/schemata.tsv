@@ -1,0 +1,7 @@
+head_sha	e2cbed8e42c8af3de72ed05b8efffc8565f3f896
+#mutant m-literal-blind
+mcp_gateway	clock::tests::an_allow_reaches_exactly_its_statement_or_item	src/clock_tests.rs:445
+#mutant m-stmt-scope
+mcp_gateway	clock::tests::an_allow_reaches_exactly_its_statement_or_item	src/clock_tests.rs:445
+#mutant m-let-word
+mcp_gateway	clock::tests::an_allow_reaches_exactly_its_statement_or_item	src/clock_tests.rs:445
