@@ -12,7 +12,7 @@ use crate::cli::stdout::println;
 use std::io::{self, IsTerminal, Read};
 use std::process::ExitCode;
 
-use mcp_gateway::config::api_key_digest_spec;
+use mcp_gateway::config::{MIN_SECRET_LEN, api_key_digest_spec};
 use subtle::ConstantTimeEq;
 
 /// Longest accepted input, line ending included.
@@ -21,7 +21,8 @@ const MAX_KEY_BYTES: u64 = 64 * 1024;
 const USAGE: &str = "usage: printf %s \"$KEY\" | mcp-gateway hash-key [--verify sha256:<hex>]";
 
 /// Run `hash-key`. Exit codes: 0 printed or matched, 1 mismatch, 2 usage error
-/// (stdin is a terminal, empty key, unreadable input, or a malformed digest).
+/// (stdin is a terminal, empty key, a new key under [`MIN_SECRET_LEN`] bytes,
+/// unreadable input, or a malformed digest).
 pub fn run_hash_key_command(verify: Option<&str>) -> ExitCode {
     let stdin = io::stdin();
     if stdin.is_terminal() {
@@ -46,6 +47,14 @@ pub fn run_hash_key_command(verify: Option<&str>) -> ExitCode {
     let key = strip_one_line_ending(&raw);
     if key.is_empty() {
         eprintln!("hash-key: the key is empty\n{USAGE}");
+        return ExitCode::from(2);
+    }
+    // New keys only: `--verify` still checks a key chosen before the floor.
+    if verify.is_none() && key.len() < MIN_SECRET_LEN {
+        eprintln!(
+            "hash-key: the key is {} bytes; a new key needs at least {MIN_SECRET_LEN} bytes\n{USAGE}",
+            key.len()
+        );
         return ExitCode::from(2);
     }
     let presented = api_key_digest_spec(key);

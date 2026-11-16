@@ -21,6 +21,9 @@ use crate::config::AuthConfig;
 
 const KEY: &str = "k-abc";
 
+/// The address a client claims in its forwarding headers (T8).
+const SPOOFED: &str = "198.51.100.9";
+
 fn hex_of(key: &str) -> String {
     crate::hashing::sha256_hex(key.as_bytes())
 }
@@ -86,9 +89,14 @@ fn principal_unchanged_across_migration() {
     assert_eq!(client.principal.storage_form(), expected);
 }
 
-/// Drive the real middleware on a protected path. Returns the status and
-/// whether a client extension reached the handler.
-async fn call_protected(config: ResolvedAuthConfig, bearer: &str) -> (StatusCode, bool) {
+/// Drive the real middleware on a protected path, from `peer` when the
+/// connection has one. Returns the status and whether a client extension
+/// reached the handler.
+async fn call_protected(
+    config: ResolvedAuthConfig,
+    bearer: &str,
+    peer: Option<std::net::SocketAddr>,
+) -> (StatusCode, bool) {
     let seen: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     let sink = Arc::clone(&seen);
     let state = AuthState {
@@ -120,11 +128,26 @@ async fn call_protected(config: ResolvedAuthConfig, bearer: &str) -> (StatusCode
         ))
         // The pin the router puts on every request (ADR-023).
         .layer(axum::Extension(state.live_config.generation()));
-    let request = Request::builder()
+    let mut request = Request::builder()
         .uri("/protected")
         .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
         .body(Body::empty())
         .expect("request builds");
+    if let Some(peer) = peer {
+        // What both serve paths install (`into_make_service_with_connect_info`),
+        // plus forwarding headers the client wrote, which name someone else.
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(peer));
+        for (name, value) in [
+            ("x-forwarded-for", SPOOFED),
+            ("forwarded", "for=198.51.100.9"),
+        ] {
+            request
+                .headers_mut()
+                .insert(name, value.parse().expect("header value"));
+        }
+    }
     let response = router.call(request).await.expect("infallible");
     let reached = *seen.lock().expect("sink");
     (response.status(), reached)
@@ -134,7 +157,7 @@ async fn call_protected(config: ResolvedAuthConfig, bearer: &str) -> (StatusCode
 #[tokio::test]
 async fn expired_key_is_refused() {
     let past = (chrono::Utc::now() - crate::duration_bound::delta!(seconds, 1)).to_rfc3339();
-    let (status, reached) = call_protected(digest_key(Some(past)), KEY).await;
+    let (status, reached) = call_protected(digest_key(Some(past)), KEY, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(!reached, "an expired key must publish no client");
 }
@@ -143,9 +166,44 @@ async fn expired_key_is_refused() {
 #[tokio::test]
 async fn unexpired_key_is_accepted() {
     let ahead = (chrono::Utc::now() + crate::duration_bound::delta!(hours, 1)).to_rfc3339();
-    let (status, reached) = call_protected(digest_key(Some(ahead)), KEY).await;
+    let (status, reached) = call_protected(digest_key(Some(ahead)), KEY, None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(reached);
+}
+
+/// T8: the "Invalid token" warn names the peer the
+/// kernel accepted, never an address the client wrote in a header, so a
+/// guesser can be found and blocked; the ephemeral port is left out. Without connect info the line has no peer field. The 401 is
+/// unchanged.
+#[test]
+fn a_refused_token_logs_its_peer() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let peer: std::net::SocketAddr = "203.0.113.7:47011".parse().expect("address");
+    for given in [Some(peer), None] {
+        // Current-thread runtime: the capture is this thread's subscriber.
+        let ((status, reached), lines) = crate::test_log_capture::capture_warnings(|| {
+            runtime.block_on(call_protected(digest_key(None), "not-the-key", given))
+        });
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{given:?}");
+        assert!(!reached, "{given:?}");
+        let line = lines
+            .lines()
+            .find(|line| line.contains("Invalid token"))
+            .unwrap_or_else(|| panic!("the refusal is logged: {lines}"));
+        if given.is_some() {
+            assert!(line.contains("peer=203.0.113.7"), "{line}");
+            assert!(!line.contains("47011"), "the port is noise: {line}");
+            assert!(
+                !line.contains(SPOOFED),
+                "a client header named the peer: {line}"
+            );
+        } else {
+            assert!(!line.contains("peer"), "no connection, no peer: {line}");
+        }
+    }
 }
 
 // E4-T14

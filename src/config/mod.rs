@@ -96,8 +96,8 @@ pub use features::{
     ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS, DashboardSessionConfig, ErrorBudgetSection,
     FailsafeConfig, FileRoots, HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool,
     IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig,
-    KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig,
-    ProcessCommand, ProcessExecution, RateLimitConfig, RecordPrincipalKeyRef,
+    KeyServerProviderConfig, MIN_SECRET_LEN, PlaybooksConfig, PolicyMatchConfig,
+    PolicyScopesConfig, ProcessCommand, ProcessExecution, RateLimitConfig, RecordPrincipalKeyRef,
     RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeConfig,
     RuntimeProfileConfig, SecretStoreChoice, SecretsConfig, SecurityConfig, SignatureChainConfig,
     StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
@@ -544,6 +544,10 @@ impl Config {
         }
         let (mut secret_refs, mut files, configured) = match expansion {
             Expansion::Resolve => {
+                // Before references become values: a stored token is not measured.
+                config
+                    .auth
+                    .enforce_bearer_floor(config.security.posture, &overlay)?;
                 let (mut refs, configured) = config.expand_env_vars(&overlay)?;
                 posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
                 let auth_enabled = config.auth.enabled;
