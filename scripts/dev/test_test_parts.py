@@ -150,6 +150,12 @@ class Invariant(Rows):
     def test_tp_partial_outside_the_crate_root_allow_is_refused(self):
         self.assert_refused(with_files(src__a_DOT_rs="#[cfg(tp_partial)]\npub fn f() {}\n" + BASE["src/a.rs"]), "stray-cfg")
 
+    def test_a_malformed_part_tag_is_refused(self):
+        # A cfg nobody sets compiles its item out of every part (a mutant rewrote a tag to tpNone and passed).
+        for bad in ("tpNone", "tpx", "tp_1"):
+            with self.subTest(bad=bad):
+                self.assert_refused(with_files(src__a_DOT_rs=BASE["src/a.rs"].replace("tp1", bad)), "stray-cfg")
+
     def test_a_comment_naming_tp1_is_not_code(self):
         # Review-round labels in comments ("gpt tp1 F3") are common in this tree.
         self.assert_green(with_files(src__a_DOT_rs="/// Pinned after the gpt tp1 F3 finding.\n" + BASE["src/a.rs"]))
@@ -296,6 +302,13 @@ class Codemod(Rows):
         first, _ = self.applied(files)
         self.assertNotIn("#[cfg(tp1)]\n#[cfg(test)]\nmod tests", first["src/a.rs"])
         self.assertIn("    #[cfg(tp1)]\n    #[test]\n    fn t()", first["src/a.rs"])
+        self.assert_green(first)
+
+    def test_a_module_declared_in_a_container_is_one_unit_with_one_tag(self):
+        # Its whole body compiles in one part (helpers included); its tests carry no tag of their own.
+        nested = CONTAINER["src/a/x_support.rs"] + "\nmod deep {\n    fn helper() {}\n    #[test]\n    fn d() {}\n}\n"
+        first, _ = self.applied(untagged(container(src__a__x_support_DOT_rs=nested)))
+        self.assertIn("#[cfg(tp2)]\nmod deep {\n    fn helper() {}\n    #[test]\n    fn d()", first["src/a/x_support.rs"])
         self.assert_green(first)
 
     def test_a_shared_listed_helper_nested_in_a_container_loses_its_tag(self):

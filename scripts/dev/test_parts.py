@@ -26,9 +26,20 @@ CRATE_ALLOW = "#![cfg_attr(tp_partial, allow(dead_code, unused_imports, unused_v
 CANDIDATE = re.compile(r"^(tests?|.*_tests?)$")
 TAG = re.compile(r"^tp([0-9]+)$")
 CONST_N = re.compile(r"\bconst\s+N\s*:\s*u32\s*=\s*([0-9]+)\s*;")
-STRAY_TP = re.compile(r"\btp[0-9]+\b")
-TAG_ONLY = re.compile(r"#\[cfg\(tp[0-9]+\)\]")
 TAG_LINE = re.compile(r"^\s*#\[cfg\(tp([0-9]+)\)\]\s*$")
+CFG_PREDICATE = re.compile(r"#!?\[\s*cfg(?:_attr)?\s*\((.*)\)\s*\]")
+PART_NAME = re.compile(r"\btp\w*")
+
+
+def _stray_part_cfg(rel: str, line: str) -> bool:
+    """Whether a line of blanked code names a part cfg anywhere but an exact tag line or the crate-root allow: a
+    compound predicate with a tag, a malformed tag (`tpx`, `tpNone`: a cfg nobody sets compiles the item out
+    everywhere), or `tp_partial` elsewhere."""
+    if TAG_LINE.match(line) or (rel == "src/lib.rs" and line.strip() == CRATE_ALLOW):
+        return False
+    if "tp_partial" in line:
+        return True
+    return any(PART_NAME.search(m.group(1)) for m in CFG_PREDICATE.finditer(line))
 FIX = "scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py apply"
 
 
@@ -225,15 +236,9 @@ def walk_file(rel: str, text: str) -> FileWalk:
                 visit(body, (*path, name), len(items) - 1)
 
     visit(root, (), None)
-    # tp_partial only in the crate-root allow; a tpK only as an exact tag line (a same-line tag is refused on its own).
     # Read from code with comments and literals blanked, so a comment naming a review round ("tp1") is not code.
     code_lines = g.blank(text)[0].splitlines()
-    partial = [
-        no
-        for no, line in enumerate(code_lines, 1)
-        if ("tp_partial" in line and not (rel == "src/lib.rs" and line.strip() == CRATE_ALLOW))
-        or (STRAY_TP.search(line) and not TAG_ONLY.search(line))
-    ]
+    partial = [no for no, line in enumerate(code_lines, 1) if _stray_part_cfg(rel, line)]
     return FileWalk(items, generators, invocations, errors, parse_ok, partial)
 
 
