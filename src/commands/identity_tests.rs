@@ -144,9 +144,11 @@ fn subject_parser_keeps_url_authority() {
     assert_eq!(subject.label(), Some("Alice"));
 }
 
-/// `grant_input` is the `docs/identity_grants.md` CLI example. The gateway
-/// then sees that caller as an API key named `alice`, labelled with its own
-/// name, carrying no proven agent id, calling a read-only capability.
+/// `grant_input` carries the `docs/identity_grants.md` CLI example's subject,
+/// agent, capability and scope, the flags pinned below (it also sets a label
+/// and a TTL, which the example leaves to their defaults). The gateway then
+/// sees that caller as an API key named `alice`, carrying no proven agent
+/// id, calling a read-only capability.
 #[tokio::test]
 async fn the_documented_grant_command_allows_the_api_key_caller_it_names() {
     let doc = include_str!("../../docs/identity_grants.md");
