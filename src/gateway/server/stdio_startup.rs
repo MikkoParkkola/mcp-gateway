@@ -60,7 +60,7 @@ impl Gateway {
             cap_backend.register_directories(&self.config.capabilities.directories);
             let mut refused = Vec::new();
             // The load, the snapshot and the publish are one operation.
-            let _operation = cap_backend.lock_operation().await;
+            let operation = cap_backend.lock_operation().await;
             // Before any directory is read: this startup's unreadable set
             // starts empty and is the one its catalogue carries.
             cap_backend.begin_incremental_coverage();
@@ -100,7 +100,7 @@ impl Gateway {
             if !transitioned {
                 cap_backend.mark_initial_scan_complete();
             }
-            drop(_operation);
+            drop(operation);
             meta_mcp.set_capabilities(cap_backend);
         }
 

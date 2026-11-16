@@ -8,9 +8,11 @@
 //! that already looked.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicU8;
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicU8, Ordering};
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 
 use parking_lot::Mutex;
 
@@ -110,6 +112,7 @@ impl Handoff {
             let mut inner = self.inner.lock();
             stage(&mut inner, seq, &part)
         };
+        #[cfg(test)]
         self.remember(seq, &part, &staged);
         #[cfg(test)]
         reach(Step::Deliver);
@@ -146,6 +149,7 @@ impl Handoff {
             };
             (staged, completes)
         };
+        #[cfg(test)]
         self.remember(seq, &part, &staged);
         #[cfg(test)]
         reach(Step::Deliver);
@@ -179,7 +183,7 @@ impl Handoff {
                 panic!("attach is once per backend; a second call would replace the live config");
                 #[cfg(not(debug_assertions))]
                 {
-                    self.deliver_attached(live, None, false);
+                    self.deliver_attached(&live, None, false);
                     return None;
                 }
             }
@@ -203,7 +207,7 @@ impl Handoff {
             };
             (taken, completes, announce)
         };
-        let fresh = self.deliver_attached(live, taken, completes);
+        let fresh = self.deliver_attached(&live, taken, completes);
         announce.filter(|_| fresh)
     }
 
@@ -212,7 +216,7 @@ impl Handoff {
     /// passed it. `true` when this call marked the scan complete.
     fn deliver_attached(
         &self,
-        live: Arc<LiveConfig>,
+        live: &LiveConfig,
         taken: Option<(u64, Part)>,
         completes: bool,
     ) -> bool {
@@ -249,15 +253,14 @@ impl Handoff {
         fresh
     }
 
-    /// Record an accepted publish once. A dropped seq is not a delivery.
+    /// Record an accepted publish once, for the rows. A dropped seq is not a
+    /// delivery.
+    #[cfg(test)]
     fn remember(&self, seq: u64, part: &Part, staged: &Staged) {
         if matches!(staged, Staged::Dropped) {
             return;
         }
-        #[cfg(test)]
         self.delivered.lock().push((seq, part.clone()));
-        #[cfg(not(test))]
-        let _ = (seq, part);
     }
 
     #[cfg(test)]

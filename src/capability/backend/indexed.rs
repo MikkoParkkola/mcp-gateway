@@ -115,6 +115,7 @@ impl IndexedCapabilities {
     /// Replace all entries atomically, rebuilding both index and tool cache.
     ///
     /// No file: callers that install definitions they did not read from a path.
+    #[cfg(test)]
     pub(super) fn replace_all(&mut self, caps: Vec<CapabilityDefinition>) {
         self.install(caps.into_iter().map(|cap| (cap, None)).collect());
     }

@@ -36,7 +36,7 @@ static ARRIVALS: Mutex<Vec<Step>> = Mutex::new(Vec::new());
 fn record_arrival(step: Step) {
     ARRIVALS
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .push(step);
 }
 
@@ -44,7 +44,7 @@ fn record_arrival(step: Step) {
 pub(crate) fn arrivals() -> Vec<Step> {
     ARRIVALS
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
 }
 
@@ -52,7 +52,7 @@ pub(crate) fn arrivals() -> Vec<Step> {
 pub(crate) fn clear_arrivals() {
     ARRIVALS
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clear();
 }
 

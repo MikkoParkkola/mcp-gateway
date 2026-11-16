@@ -89,7 +89,7 @@ pub(crate) struct DecisionFinding {
 
 /// How much of the capability catalogue a config revision covers.
 ///
-/// Serialized snake_case: `covered`, `not_loaded`, `partial`.
+/// Serialized as `covered`, `not_loaded` or `partial`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Coverage {

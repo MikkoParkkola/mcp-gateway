@@ -170,8 +170,10 @@ impl CapabilityBackend {
         // One set, shared, until an operation replaces it. A note before any
         // operation has started is on the catalogue a snapshot would read.
         let unread = OperationUnread::default();
-        let mut catalogue = IndexedCapabilities::default();
-        catalogue.unread = unread.clone();
+        let catalogue = IndexedCapabilities {
+            unread: unread.clone(),
+            ..IndexedCapabilities::default()
+        };
         // Shared with the handoff: it marks a scan complete, and the bit the
         // rest of the backend reads has to be this one.
         let initial_scan = Arc::new(std::sync::atomic::AtomicU8::new(1));

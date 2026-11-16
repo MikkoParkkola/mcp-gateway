@@ -24,10 +24,9 @@ pub(crate) struct LoadedCapability {
 
 /// A file in a readable directory that could not be read or parsed.
 pub(crate) struct FileFailure {
-    /// [`source_path`] of the file that failed.
+    /// [`source_path`] of the file that failed. The error itself is logged
+    /// where the read fails; callers need only which file.
     pub(crate) path: String,
-    /// The read or parse error, rendered.
-    pub(crate) error: String,
 }
 
 /// What one directory read produced.
@@ -124,10 +123,7 @@ impl CapabilityLoader {
         let mut failures = Vec::new();
         Self::load_directory_recursive(root, path, &mut files, &mut failures).await?;
 
-        let unpinned = files
-            .iter()
-            .filter(|file| lacks_pin(&file.definition))
-            .count();
+        let unpinned = count_unpinned(files.iter().map(|file| &file.definition));
         info!(
             count = files.len(),
             unpinned,
@@ -194,7 +190,6 @@ impl CapabilityLoader {
                         warn!(error = %e, path = %path.display(), "Failed to load capability");
                         failures.push(FileFailure {
                             path: source_path(root, &path),
-                            error: e.to_string(),
                         });
                     }
                 }
@@ -340,8 +335,8 @@ fn lacks_pin(capability: &CapabilityDefinition) -> bool {
     capability.sha256.is_none()
 }
 
-fn count_unpinned(capabilities: &[CapabilityDefinition]) -> usize {
-    capabilities.iter().filter(|c| lacks_pin(c)).count()
+fn count_unpinned<'a>(capabilities: impl IntoIterator<Item = &'a CapabilityDefinition>) -> usize {
+    capabilities.into_iter().filter(|c| lacks_pin(c)).count()
 }
 
 #[cfg(test)]

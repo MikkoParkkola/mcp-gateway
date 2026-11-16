@@ -104,7 +104,7 @@ fn within_30s(step: impl FnOnce() + Send + 'static) {
     }
 }
 
-fn wait_arrived(worker: JoinHandle<()>, arrived: Receiver<()>) -> JoinHandle<()> {
+fn wait_arrived(worker: JoinHandle<()>, arrived: &Receiver<()>) -> JoinHandle<()> {
     match arrived.recv_timeout(HANG) {
         Ok(()) => worker,
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("hung past 30s"),
@@ -141,7 +141,7 @@ fn hold(step: Step, body: impl FnOnce() + Send + 'static) -> JoinHandle<()> {
         arm(gate);
         body();
     });
-    let worker = wait_arrived(worker, arrived);
+    let worker = wait_arrived(worker, &arrived);
     release
         .send(())
         .expect("the step stopped waiting before it was released");
@@ -218,7 +218,7 @@ fn h1_attach_between_publish_and_end() {
         arm(gate);
         backend.handoff().publish_and_end(1, part);
     });
-    let scan = wait_arrived(scan, arrived);
+    let scan = wait_arrived(scan, &arrived);
     assert!(
         started.backend.handoff().lock_held(),
         "the scan still holds the handoff"
@@ -299,8 +299,8 @@ fn race_after_unlock(
         arm(publish_gate);
         backend.handoff().publish(3, seq3);
     });
-    let attach = wait_arrived(attach, attach_arrived);
-    let publish = wait_arrived(publish, publish_arrived);
+    let attach = wait_arrived(attach, &attach_arrived);
+    let publish = wait_arrived(publish, &publish_arrived);
     match order {
         Release::AttachFirst => {
             attach_release

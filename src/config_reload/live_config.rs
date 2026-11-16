@@ -239,6 +239,7 @@ impl LiveConfig {
     ///
     /// Owned: the value lives beside the published revision, behind the same
     /// lock, so a borrow cannot outlive the read.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn running_revision(&self) -> Option<String> {
         self.inner.read().running_revision.clone()
@@ -375,8 +376,7 @@ impl LiveConfig {
             .read()
             .applied
             .as_ref()
-            .map(|applied| applied.inputs.capability_seq)
-            .unwrap_or(0)
+            .map_or(0, |applied| applied.inputs.capability_seq)
     }
 
     fn replace_part(&self, change: impl FnOnce(&[u8; 32], &mut AppliedInputs)) {

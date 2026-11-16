@@ -41,6 +41,7 @@ impl CapabilityBackend {
     /// because their slots are gone. `Partial` when the operation that
     /// installed this catalogue left a path unread; the entries are the same
     /// either way.
+    #[cfg(test)]
     pub(crate) fn capability_snapshot(&self) -> CapabilityPart<PartDigest> {
         let caps = self.capabilities.read();
         part_from(&caps)

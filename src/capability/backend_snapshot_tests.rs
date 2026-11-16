@@ -80,10 +80,9 @@ fn admitting() -> Arc<CapabilityBackend> {
 }
 
 async fn wait<T>(work: impl std::future::Future<Output = T>) -> T {
-    match tokio::time::timeout(Duration::from_secs(30), work).await {
-        Ok(value) => value,
-        Err(_) => panic!("hung past 30s"),
-    }
+    tokio::time::timeout(Duration::from_secs(30), work)
+        .await
+        .expect("hung past 30s")
 }
 
 /// The snapshot, off this thread. A lock the stub does not take yet still
@@ -410,7 +409,7 @@ impl ModeGuard {
     /// the path (one running as root) would make the row prove nothing.
     fn deny(path: &Path) -> Self {
         use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0))
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000))
             .expect("the mode can be cleared");
         let guard = Self(path.to_path_buf());
         let readable = if path.is_dir() {
