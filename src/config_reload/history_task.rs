@@ -40,7 +40,16 @@ impl RecordSlot {
     /// to finish; a holder with no history takes nothing.
     pub(crate) async fn take(live: &crate::config_reload::LiveConfig) -> Self {
         let guard = match live.history_hook() {
-            Some(hook) => Some(hook.store.record_guard().lock_owned().await),
+            Some(hook) => {
+                let lock = hook.store.record_guard();
+                #[cfg(test)]
+                if lock.try_lock().is_err()
+                    && let Some(seams) = seams::for_file(&hook.store.file())
+                {
+                    seams.note_guard_wait();
+                }
+                Some(lock.lock_owned().await)
+            }
             None => None,
         };
         Self { guard, task: None }

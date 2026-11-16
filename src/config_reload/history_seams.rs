@@ -150,6 +150,7 @@ pub(crate) struct Seams {
     fault: Mutex<Option<Fault>>,
     record_reached: Mutex<Option<Arc<Gate>>>,
     log: Mutex<Vec<Observed>>,
+    guard_waits: Notify,
 }
 
 impl Seams {
@@ -203,6 +204,16 @@ impl Seams {
             Some(Fault::ReadIo | Fault::Unparseable) => slot.take(),
             _ => None,
         }
+    }
+
+    /// Code under test: a reload found the record guard held and waits for it.
+    pub(crate) fn note_guard_wait(&self) {
+        self.guard_waits.notify_one();
+    }
+
+    /// The test: wait until a reload waits for the record guard.
+    pub(crate) async fn guard_waited(&self) {
+        self.guard_waits.notified().await;
     }
 
     /// Code under test: append to the ordered log.

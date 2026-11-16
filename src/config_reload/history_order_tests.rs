@@ -129,9 +129,9 @@ async fn r_order_records_land_in_swap_order_through_every_entry_point() {
 
 /// C-CANCEL: a reload dropped while its record is in flight (parked at
 /// record-reached) does not lose the record, and a second reload's record
-/// lands after it. The second reload is given time to finish first (it can
-/// only if the order is broken: its record would not wait), then the first
-/// record is released.
+/// lands after it. The second reload either waits for the first record's
+/// guard (a seam says so) or, with the order broken, finishes while the first
+/// record is parked; only then is the first record released. No timing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn c_cancel_a_dropped_reload_keeps_its_record_and_its_place() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -149,10 +149,11 @@ async fn c_cancel_a_dropped_reload_keeps_its_record_and_its_place() {
     write_owner_only(&rig.path, THREE_BACKENDS).expect("second bytes");
     let ctx = Arc::clone(&rig.ctx);
     let second = tokio::spawn(async move { ctx.reload_outcome().await });
-    // Real time for the second reload to run as far as it can.
-    let waited = std::time::Instant::now();
-    while !second.is_finished() && waited.elapsed() < Duration::from_secs(2) {
-        tokio::time::sleep(Duration::from_millis(10)).await;
+    // Either the second reload waits for the first record's guard (the order
+    // holds), or it finishes while the first record is still parked (broken).
+    tokio::select! {
+        () = installed.seams.guard_waited() => {}
+        () = async { while !second.is_finished() { tokio::task::yield_now().await; } } => {}
     }
     first_gate.release();
     tokio::time::timeout(HANG, second)
