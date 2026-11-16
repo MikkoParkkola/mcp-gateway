@@ -130,6 +130,7 @@ pub(crate) use server::listener_mint_for_test;
 // MIK-8407: the capability executor answers a changed account choice with it.
 pub(crate) use meta_mcp::stored_binding::Refusal as StoredBindingRefusal;
 /// The router fixture, for history rows outside `gateway` (`router` is private).
+/// Exists for the configuration-history rows (`src/config_reload/history_*_tests.rs`).
 #[cfg(test)]
 pub(crate) use router::tests::audience_state;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};
@@ -201,6 +202,7 @@ pub(crate) fn is_tls_or_loopback(url: &url::Url) -> bool {
 pub mod test_helpers {
     pub use super::meta_mcp::prune_constant_signals;
     #[cfg(test)]
+    /// Exists for the configuration-history rows (`src/config_reload/history_*_tests.rs`).
     pub(crate) use super::meta_mcp::{Authentication, MetaMcpCallerContext};
     pub use super::meta_mcp::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
     pub use super::meta_mcp::{InvokeScope, MetaMcp};

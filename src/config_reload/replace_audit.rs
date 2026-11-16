@@ -270,6 +270,7 @@ pub(crate) async fn replace_audited_revoke(
     ctx: Arc<ReloadContext>,
     replace: Replace,
     audit: Audit,
+    _source: crate::config_reload::history::Source,
     wait: Duration,
     check: super::receipt::RevokeCheck,
 ) -> Result<super::receipt::RevokeReceipt, ReplaceError> {

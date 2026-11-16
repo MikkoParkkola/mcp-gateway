@@ -462,5 +462,8 @@ mod record_tests;
 #[path = "history_reload_tests.rs"]
 mod reload_tests;
 #[cfg(test)]
+#[path = "history_route_tests.rs"]
+mod route_tests;
+#[cfg(test)]
 #[path = "history_tests.rs"]
 mod tests;

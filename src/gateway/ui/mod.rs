@@ -106,6 +106,7 @@ async fn write_audited(
     context: Arc<ReloadContext>,
     replace: Replace,
     kind: IntentKind,
+    who: &crate::security::audit::AuditWho,
 ) -> Result<ReplaceOutcome, ReplaceError> {
     let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
     let audit = AuditPosture::of(state.transparency_log.clone(), auth).audit(kind)?;
@@ -113,7 +114,12 @@ async fn write_audited(
         context,
         replace,
         audit,
-        crate::config_reload::history::Source::Ui { who: String::new() },
+        crate::config_reload::history::Source::Ui {
+            who: {
+                let _ = who;
+                String::new()
+            },
+        },
         RELOAD_LOCK_WAIT,
     )
     .await

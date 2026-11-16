@@ -130,7 +130,14 @@ pub(super) async fn revoke_key(
             Ok(template)
         }),
     };
-    let result = replace_audited_revoke(context, replace, audit, RELOAD_LOCK_WAIT, check)
+    let result = replace_audited_revoke(
+        context,
+        replace,
+        audit,
+        crate::config_reload::history::Source::Ui { who: String::new() },
+        RELOAD_LOCK_WAIT,
+        check,
+    )
         .await
         .map(|receipt| serde_json::json!({"name": receipt.name, "revoked": true, "revision": receipt.revision.as_str()}));
     revoke_response(&target_name, result)
