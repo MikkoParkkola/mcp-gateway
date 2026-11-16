@@ -402,15 +402,15 @@ fn applied_event(at: u64, source: Source, revision: &str, unchanged: bool) -> Ev
 }
 
 fn file_bytes(snapshot: &Snapshot) -> usize {
-    snapshot.files.iter().fold(0, |sum, file| {
+    snapshot.files.iter().fold(0_usize, |sum, file| {
         sum.saturating_add(file.bytes.as_ref().map_or(0, Vec::len))
     })
 }
 
 fn snapshot_total(snapshots: &[Snapshot]) -> usize {
-    snapshots
-        .iter()
-        .fold(0, |sum, snapshot| sum.saturating_add(file_bytes(snapshot)))
+    snapshots.iter().fold(0_usize, |sum, snapshot| {
+        sum.saturating_add(file_bytes(snapshot))
+    })
 }
 
 /// Drop non-running versions past `max_age_secs`, then the oldest non-running
@@ -439,7 +439,9 @@ fn event_json_len(event: &Event) -> usize {
 /// Drop the oldest event until the count and the serialized-byte total both fit.
 fn evict_events(events: &mut Vec<Event>, bounds: Bounds) {
     let mut sizes: Vec<usize> = events.iter().map(event_json_len).collect();
-    let mut total = sizes.iter().fold(0, |sum, size| sum.saturating_add(*size));
+    let mut total = sizes
+        .iter()
+        .fold(0_usize, |sum, size| sum.saturating_add(*size));
     while events.len() > bounds.events || total > bounds.event_bytes {
         if events.is_empty() {
             break;
