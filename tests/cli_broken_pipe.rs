@@ -252,8 +252,8 @@ fn library_printed_output_exits_as_with_a_reader() {
 /// `THREADS` threads, beside a thread running the gone-reader case, so a hang
 /// on this OS fails at a bound naming its wait. Every failure is reported,
 /// then the probe fails if there was any.
-const THREADS: usize = 4;
-const ROUNDS: usize = 75;
+const THREADS: usize = 16;
+const ROUNDS: usize = 1000;
 
 fn probe_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     payload
