@@ -289,6 +289,24 @@ fn parse<T: serde::de::DeserializeOwned>(line: &str, what: &str) -> Result<T, Re
         .map_err(|_| Refusal::Step(format!("the sandbox sent something other than {what}")))
 }
 
+/// One step of the session, bounded by the preview's deadline as well as its
+/// own bounds: once the deadline has passed the step is refused without being
+/// polled (a ready write would still go out under a zero timeout), and a step
+/// in progress ends at the deadline, whenever its first byte came.
+async fn by_deadline<T>(
+    deadline: tokio::time::Instant,
+    what: &str,
+    step: impl std::future::Future<Output = Result<T, Refusal>>,
+) -> Result<T, Refusal> {
+    let late = || Refusal::Step(format!("the preview's deadline passed before {what}"));
+    if tokio::time::Instant::now() >= deadline {
+        return Err(late());
+    }
+    tokio::time::timeout_at(deadline, step)
+        .await
+        .map_err(|_| late())?
+}
+
 /// Run one helper's session on `stream`: `fetch_start`, then the fetch's
 /// credential, then `fetch_done`, then `expired` once the credential's
 /// tunnels are shut. Any other line, a closed socket or a missed bound ends
@@ -302,11 +320,14 @@ pub(crate) async fn serve_session(
     let (read, mut write) = stream.into_split();
     let mut read = tokio::io::BufReader::new(read);
     // The helper asks for the fetch after building its root: its first byte
-    // gets the setup bound, cut short by the preview's deadline.
-    let setup = bounds
-        .setup
-        .min(deadline.saturating_duration_since(tokio::time::Instant::now()));
-    let start: FetchStart = parse(&read_line(&mut read, setup, bounds).await?, "fetch_start")?;
+    // gets the setup bound. Every read and write below also ends at the
+    // preview's deadline, and none starts after it.
+    let line = by_deadline(
+        deadline,
+        "fetch_start",
+        read_line(&mut read, bounds.setup, bounds),
+    );
+    let start: FetchStart = parse(&line.await?, "fetch_start")?;
     if !start.fetch_start {
         return Err(Refusal::Step("the sandbox sent fetch_start false".into()));
     }
@@ -324,15 +345,27 @@ pub(crate) async fn serve_session(
         credential: credential.secret().to_owned(),
         deadline_ms,
     })?;
-    write_line(&mut write, &issued, bounds).await?;
+    by_deadline(
+        deadline,
+        "the credential",
+        write_line(&mut write, &issued, bounds),
+    )
+    .await?;
     let first = deadline.saturating_duration_since(tokio::time::Instant::now());
-    let done: FetchDone = parse(&read_line(&mut read, first, bounds).await?, "fetch_done")?;
+    let line = by_deadline(deadline, "fetch_done", read_line(&mut read, first, bounds));
+    let done: FetchDone = parse(&line.await?, "fetch_done")?;
     if !done.fetch_done {
         return Err(Refusal::Step("the sandbox sent fetch_done false".into()));
     }
     // The revoke returns only once every tunnel of the credential is shut.
     drop(fetch);
-    write_line(&mut write, &encode(&Expired { expired: true })?, bounds).await?;
+    let expired = encode(&Expired { expired: true })?;
+    by_deadline(
+        deadline,
+        "expired",
+        write_line(&mut write, &expired, bounds),
+    )
+    .await?;
     Ok(())
 }
 
