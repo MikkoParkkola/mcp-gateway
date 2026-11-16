@@ -101,7 +101,7 @@ pub(crate) enum Lookup {
     Unknown,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 struct State {
     snapshots: Vec<Snapshot>,
     events: Vec<Event>,
@@ -162,6 +162,15 @@ impl ConfigHistory {
         }
         Lookup::Unknown
     }
+
+    /// Write the whole store to `data_dir` as it stands: in place, with the
+    /// process's default mode.
+    fn save_as_is(&self) {
+        let state = self.inner.lock();
+        if let Ok(json) = serde_json::to_vec(&*state) {
+            let _ = std::fs::write(self.data_dir.join(Self::FILE), json);
+        }
+    }
 }
 
 /// The store a `LiveConfig` records its publishes into, with the paths of the
@@ -173,16 +182,22 @@ pub(crate) struct HistoryHook {
 }
 
 impl HistoryHook {
-    /// Record one applied publish under `revision`. The stub records every
-    /// publish as a file reload, keeps gateway.yaml alone and no restart fields.
+    /// Record one applied publish under `revision` and save the store. The
+    /// stub records every publish as a file reload, keeps gateway.yaml and
+    /// every value the load consumed, and no restart fields.
     pub(crate) fn on_publish(&self, raw: &RawInputs, revision: &str, now: u64) {
         let snapshot = Snapshot {
             revision: revision.to_string(),
             at: now,
-            files: vec![StoredFile {
+            files: std::iter::once(StoredFile {
                 path: self.config_path.clone(),
                 bytes: Some(raw.gateway_yaml.clone()),
-            }],
+            })
+            .chain(raw.consumed.iter().map(|input| StoredFile {
+                path: input.name.clone(),
+                bytes: Some(input.value.clone()),
+            }))
+            .collect(),
             pending_restart: Vec::new(),
         };
         let event = Event {
@@ -196,9 +211,13 @@ impl HistoryHook {
             attempted_diff: None,
         };
         self.store.record(event, Some(snapshot), revision, now);
+        self.store.save_as_is();
     }
 }
 
+#[cfg(test)]
+#[path = "history_record_tests.rs"]
+mod record_tests;
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod tests;
