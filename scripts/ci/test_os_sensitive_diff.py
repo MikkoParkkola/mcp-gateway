@@ -193,7 +193,9 @@ def main() -> int:
     # Delta review: only the leading comment or cfg attribute is set aside; code after it on the same line counts.
     row("code after a leading block comment or cfg attribute still demands os-sensitive",
         [bool(scan_proc(diff("src/a.rs", f"+    {w}"))) for w in
-         ("/* note */ libc::kill(pid, 15);", "#[cfg(unix)] fn f() { libc::kill(pid, 15); }")], [True, True])
+         ("/* note */ libc::kill(pid, 15);", "#[cfg(unix)] fn f() { libc::kill(pid, 15); }",
+          '#[cfg(feature = "] //")] fn f() { libc::kill(pid, 15); }',
+          "/* outer /* inner */ // still outer */ libc::kill(pid, 15);")], [True, True, True, True])
     spellings = ["SIG" + s for s in "TERM KILL INT HUP QUIT CHLD STOP CONT USR1 USR2 PIPE ALRM".split()] + [
         "SIG_IGN", "SIG_DFL", "WaitId::All", "WaitIdOptions::EXITED", "Errno::CHILD", "Errno::SRCH", "Errno::INTR",
         "ESRCH", "ECHILD", "Signal::KILL"]
