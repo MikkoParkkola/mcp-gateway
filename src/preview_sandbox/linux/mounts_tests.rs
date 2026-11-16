@@ -118,7 +118,8 @@ fn config_dir(root: &Path) -> (u64, u64) {
     let dir = root.join("cfg");
     fs::create_dir_all(dir.join("empty-certs")).expect("empty-certs");
     fs::write(dir.join("ca.pem"), b"pem").expect("ca.pem");
-    fs::write(dir.join("empty.npmrc"), b"").expect("empty.npmrc");
+    fs::write(dir.join("empty-user.npmrc"), b"").expect("empty-user.npmrc");
+    fs::write(dir.join("empty-global.npmrc"), b"").expect("empty-global.npmrc");
     fs::write(root.join("outside"), b"").expect("outside");
     fs::create_dir(root.join("outside-dir")).expect("outside-dir");
     let meta = fs::metadata(dir.join("ca.pem")).expect("ca.pem metadata");
@@ -137,9 +138,9 @@ fn relink(root: &Path, name: &str, target: &Path) {
 }
 
 /// Kills each dropped or weakened direct check: the layout `preview_config`
-/// makes passes; an extra entry, a non-empty `empty-certs` or `empty.npmrc`,
-/// a FIFO `empty.npmrc`, a symlink in place of any of the three, and a
-/// `ca.pem` with another inode each refuse.
+/// makes passes; an extra entry, a non-empty `empty-certs` or
+/// `empty-user.npmrc`, a FIFO `empty-global.npmrc`, a symlink in place of an
+/// entry, and a `ca.pem` with another inode each refuse.
 #[test]
 fn the_preview_config_check_refuses_every_deviation() {
     type Spoil = fn(&Path);
@@ -155,16 +156,16 @@ fn the_preview_config_check_refuses_every_deviation() {
             relink(r, "empty-certs", &r.join("outside-dir"));
         }),
         ("npmrc not empty", |r| {
-            fs::write(r.join("cfg/empty.npmrc"), b"registry=x").expect("npmrc");
+            fs::write(r.join("cfg/empty-user.npmrc"), b"registry=x").expect("npmrc");
         }),
         ("npmrc a fifo", |r| {
-            let path = r.join("cfg/empty.npmrc");
+            let path = r.join("cfg/empty-global.npmrc");
             fs::remove_file(&path).expect("remove npmrc");
             let (fifo, mode) = (rustix::fs::FileType::Fifo, rustix::fs::Mode::RUSR);
             rustix::fs::mknodat(rustix::fs::CWD, path.as_path(), fifo, mode, 0).expect("fifo");
         }),
         ("npmrc a symlink", |r| {
-            relink(r, "empty.npmrc", &r.join("outside"));
+            relink(r, "empty-user.npmrc", &r.join("outside"));
         }),
         ("ca another inode", |r| {
             // Made before the old one goes, so its inode cannot be reused.

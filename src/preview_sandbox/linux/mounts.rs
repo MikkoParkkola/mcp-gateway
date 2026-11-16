@@ -131,8 +131,8 @@ pub(super) fn build_root(
 }
 
 /// The preview config's files, checked directly once mounted: exactly
-/// `ca.pem`, `empty-certs` and `empty.npmrc`; the two empty ones empty and of
-/// their type; `ca.pem` the snapshot itself, by the device and inode the
+/// `ca.pem`, `empty-certs`, `empty-global.npmrc` and `empty-user.npmrc`; the
+/// empty ones empty and of their type (npm refuses one file as both configs); `ca.pem` the snapshot itself, by the device and inode the
 /// helper read from the descriptor it bound.
 pub(super) fn check_preview_config(snapshot: (u64, u64)) -> Step {
     check_config_dir(&staged(PREVIEW_CONFIG), snapshot)
@@ -148,7 +148,14 @@ fn check_config_dir(dir: &Path, snapshot: (u64, u64)) -> Step {
         names.push(entry.file_name().to_string_lossy().into_owned());
     }
     names.sort();
-    if names != ["ca.pem", "empty-certs", "empty.npmrc"] {
+    if names
+        != [
+            "ca.pem",
+            "empty-certs",
+            "empty-global.npmrc",
+            "empty-user.npmrc",
+        ]
+    {
         return fail("unexpected entries");
     }
     let certs = dir.join("empty-certs");
@@ -161,10 +168,12 @@ fn check_config_dir(dir: &Path, snapshot: (u64, u64)) -> Step {
     {
         return fail("empty-certs is not an empty directory");
     }
-    let npmrc = dir.join("empty.npmrc");
-    let npmrc_meta = fs::symlink_metadata(&npmrc).map_err(at("reading", &npmrc))?;
-    if !npmrc_meta.is_file() || npmrc_meta.len() != 0 {
-        return fail("empty.npmrc is not an empty file");
+    for name in ["empty-global.npmrc", "empty-user.npmrc"] {
+        let npmrc = dir.join(name);
+        let npmrc_meta = fs::symlink_metadata(&npmrc).map_err(at("reading", &npmrc))?;
+        if !npmrc_meta.is_file() || npmrc_meta.len() != 0 {
+            return fail(&format!("{name} is not an empty file"));
+        }
     }
     let ca = dir.join("ca.pem");
     let ca_meta = fs::symlink_metadata(&ca).map_err(at("reading", &ca))?;
@@ -222,7 +231,8 @@ pub(super) fn remove_proxy_socket() -> Step {
 
 /// The fetch's CA trust files at [`PREVIEW_CONFIG`]: a tmpfs holding
 /// `ca.pem` (the snapshot, bound from its descriptor), an empty `empty-certs`
-/// and an empty `empty.npmrc`; the bind and the tmpfs then read-only.
+/// and two empty npmrc files (user and global: npm refuses one file as both);
+/// the bind and the tmpfs then read-only.
 fn preview_config(ca: &rustix::fd::OwnedFd) -> Step {
     use std::os::fd::AsRawFd as _;
     let dir = staged(PREVIEW_CONFIG);
@@ -240,8 +250,10 @@ fn preview_config(ca: &rustix::fd::OwnedFd) -> Step {
     fs::write(&ca_pem, b"").map_err(at("creating", &ca_pem))?;
     let certs = dir.join("empty-certs");
     fs::create_dir(&certs).map_err(at("creating", &certs))?;
-    let npmrc = dir.join("empty.npmrc");
-    fs::write(&npmrc, b"").map_err(at("creating", &npmrc))?;
+    for name in ["empty-global.npmrc", "empty-user.npmrc"] {
+        let npmrc = dir.join(name);
+        fs::write(&npmrc, b"").map_err(at("creating", &npmrc))?;
+    }
     let source = PathBuf::from(format!("/proc/self/fd/{}", ca.as_raw_fd()));
     mount_bind(&source, &ca_pem)
         .map_err(io::Error::from)

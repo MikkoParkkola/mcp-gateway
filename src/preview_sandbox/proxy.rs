@@ -240,6 +240,13 @@ impl AllowlistProxy {
         &self.unix_path
     }
 
+    /// How many fetches have begun: past zero, a credential has been issued.
+    pub(crate) fn fetches_begun(&self) -> u64 {
+        self.shared
+            .fetches
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Replace the time bounds, for the rows.
     #[cfg(test)]
     pub(crate) fn set_bounds(&self, bounds: Bounds) {

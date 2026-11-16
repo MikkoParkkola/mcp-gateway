@@ -12,7 +12,8 @@ fn the_npm_environment_is_exactly_the_designed_list() {
     got.sort();
     let proxy = "http://x:c0ffee@127.0.0.1:41234";
     let ca = "/etc/mcp-gateway-preview/ca.pem";
-    let empty = "/etc/mcp-gateway-preview/empty.npmrc";
+    let user = "/etc/mcp-gateway-preview/empty-user.npmrc";
+    let global = "/etc/mcp-gateway-preview/empty-global.npmrc";
     let mut want: Vec<(String, String)> = [
         ("PATH", "/usr/lib/node/bin:/usr/lib/npm/bin"),
         ("HOME", "/preview-home"),
@@ -30,8 +31,8 @@ fn the_npm_environment_is_exactly_the_designed_list() {
         ("npm_config_update_notifier", "false"),
         ("npm_config_cafile", ca),
         ("npm_config_strict_ssl", "true"),
-        ("npm_config_userconfig", empty),
-        ("npm_config_globalconfig", empty),
+        ("npm_config_userconfig", user),
+        ("npm_config_globalconfig", global),
     ]
     .iter()
     .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -141,4 +142,34 @@ fn an_oversized_fetch_deadline_gives_none() {
     assert_eq!(fetch_deadline(u128::MAX), None);
     let now = std::time::Instant::now();
     assert!(fetch_deadline(1_500).is_some_and(|d| d > now));
+}
+
+/// RF5 (NPM.8, precedence), kills "a teardown failure is reported over the
+/// fetch's own": the fetch's failure wins, then the first failed teardown
+/// step in order; all Ok is Ok.
+#[test]
+fn rf5_the_first_failure_is_reported() {
+    use super::{FetchFailure, first_failure};
+    use crate::preview_sandbox::control_msg::FetchStep;
+    let fail = |step: FetchStep| -> Result<(), FetchFailure> {
+        Err(FetchFailure {
+            step,
+            detail: format!("{step:?}"),
+        })
+    };
+    let reported = |r: Result<(), FetchFailure>| r.err().map(|f| f.step);
+    let fetch_first = first_failure(
+        fail(FetchStep::NpmCi),
+        [fail(FetchStep::Sweep), Ok(()), fail(FetchStep::ProxySocket)],
+    );
+    assert_eq!(reported(fetch_first), Some(FetchStep::NpmCi));
+    let in_order = first_failure(
+        Ok(()),
+        [Ok(()), fail(FetchStep::Relay), fail(FetchStep::ProxySocket)],
+    );
+    assert_eq!(reported(in_order), Some(FetchStep::Relay));
+    assert_eq!(
+        reported(first_failure(Ok(()), [Ok(()), Ok(()), Ok(())])),
+        None
+    );
 }

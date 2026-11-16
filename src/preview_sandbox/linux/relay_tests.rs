@@ -110,10 +110,20 @@ fn unread(side: &UnixStream) -> usize {
 /// within its bound, as an error.
 #[test]
 fn a_stalled_proxy_fails_the_stop_within_its_bound() {
-    use rustix::net::{AddressFamily, SocketAddrUnix, SocketType, bind, listen, socket};
+    use rustix::net::{
+        AddressFamily, SocketAddrUnix, SocketFlags, SocketType, bind, listen, socket_with,
+    };
     let dir = tempfile::tempdir().expect("dir");
     let path = dir.path().join("proxy.sock");
-    let fd = socket(AddressFamily::UNIX, SocketType::STREAM, None).expect("socket");
+    // Close-on-exec: the fetch rows in this test binary spawn sandboxes whose
+    // helper refuses any inherited descriptor.
+    let fd = socket_with(
+        AddressFamily::UNIX,
+        SocketType::STREAM,
+        SocketFlags::CLOEXEC,
+        None,
+    )
+    .expect("socket");
     bind(&fd, &SocketAddrUnix::new(&path).expect("address")).expect("bind");
     listen(&fd, 0).expect("listen");
     let _queued = UnixStream::connect(&path).expect("fills the backlog");

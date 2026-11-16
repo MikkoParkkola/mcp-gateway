@@ -242,7 +242,7 @@ async fn start_fetching_with(
             };
             match ended_first {
                 Some(served) => served,
-                None => Err(helper_ended(&mut child).await),
+                None => Err(helper_ended(&mut child, proxy.fetches_begun() > 0).await),
             }
         }
     };
@@ -268,19 +268,27 @@ async fn start_fetching_with(
 /// How long a refused start waits for its killed `unshare` to be reaped.
 const REAP_BOUND: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Why the sandbox ended before its fetch step finished, from what the
-/// helper (or `unshare`) printed.
-async fn helper_ended(child: &mut tokio::process::Child) -> Refusal {
+/// Why the sandbox ended before its fetch step finished. Once the credential
+/// is out its stderr may hold npm output, URLs or paths, so it is never read.
+async fn helper_ended(child: &mut tokio::process::Child, credential_issued: bool) -> Refusal {
     use tokio::io::AsyncReadExt as _;
     let mut text = String::new();
-    if let Some(mut stderr) = child.stderr.take() {
+    if let (false, Some(mut stderr)) = (credential_issued, child.stderr.take()) {
         let read = stderr.read_to_string(&mut text);
         let _ = tokio::time::timeout(std::time::Duration::from_secs(1), read).await;
     }
-    if text.trim().is_empty() {
+    ended_refusal(credential_issued, &text)
+}
+
+/// The refusal for a sandbox that ended first: fixed words once the
+/// credential was out, else the helper's own refusal from its stderr.
+fn ended_refusal(credential_issued: bool, stderr: &str) -> Refusal {
+    if credential_issued {
+        Refusal::Step("the fetch (the sandbox ended before it finished)".into())
+    } else if stderr.trim().is_empty() {
         Refusal::Step("the sandbox helper ended before its fetch step".into())
     } else {
-        classify(&text)
+        classify(stderr)
     }
 }
 

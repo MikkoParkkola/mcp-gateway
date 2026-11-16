@@ -15,19 +15,22 @@ use super::control_client::{self, HELPER_BOUNDS};
 use super::mounts::{PREVIEW_CONFIG, PROXY_SOCKET};
 use super::plan::{self, Limits, NpmFetch};
 use super::relay::{MAX_PAIRS, Relay};
+use crate::preview_sandbox::control_msg::FetchStep;
 use crate::preview_sandbox::fetch_output::{last_line, read_tail};
 use crate::preview_sandbox::install::check_lock;
 
 /// The npm fetch command's whole environment: the D5 list (proxy through the
 /// relay with the fetch credential, no scripts, no git, the public registry)
 /// plus the CA amendment's trust variables (the snapshot as `cafile`, strict
-/// TLS, and an empty npmrc as both the user and the global config). `path` is
+/// TLS, and empty user and global npmrc files, two of them since npm refuses
+/// one file as both). `path` is
 /// node's directory, then npm's.
 pub(super) fn npm_env(credential: &str, port: u16, path: &str) -> Vec<(String, String)> {
     let proxy = format!("http://x:{credential}@127.0.0.1:{port}");
     let home = super::plan::HOME;
     let ca = format!("{PREVIEW_CONFIG}/ca.pem");
-    let empty = format!("{PREVIEW_CONFIG}/empty.npmrc");
+    let user = format!("{PREVIEW_CONFIG}/empty-user.npmrc");
+    let global = format!("{PREVIEW_CONFIG}/empty-global.npmrc");
     [
         ("PATH", path),
         ("HOME", home),
@@ -46,8 +49,8 @@ pub(super) fn npm_env(credential: &str, port: u16, path: &str) -> Vec<(String, S
         // npm's cafile replaces node's built-in roots (npm >= 9, the probe's floor).
         ("npm_config_cafile", ca.as_str()),
         ("npm_config_strict_ssl", "true"),
-        ("npm_config_userconfig", empty.as_str()),
-        ("npm_config_globalconfig", empty.as_str()),
+        ("npm_config_userconfig", user.as_str()),
+        ("npm_config_globalconfig", global.as_str()),
     ]
     .iter()
     .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -156,11 +159,13 @@ pub(super) fn npm(control: &mut UnixStream, npm: &NpmFetch, limits: Limits) -> R
     // One deadline for the whole fetch: both npm steps and the lock check.
     let fetched = match fetch_deadline(issued.deadline_ms) {
         Some(deadline) => install(npm, &issued.credential, relay.port(), deadline, limits),
-        None => Err("the gateway's fetch deadline is out of range".into()),
+        None => {
+            // A channel failure: no step to report; the gateway refuses at EOF.
+            let _ = relay.stop(RELAY_BOUND);
+            return Err("the gateway's fetch deadline is out of range".into());
+        }
     };
-    let torn = teardown(control, relay);
-    fetched?;
-    torn?;
+    teardown(control, relay, fetched)?;
     npm_run(
         Path::new(plan::HOME),
         &npm.spec,
@@ -168,6 +173,30 @@ pub(super) fn npm(control: &mut UnixStream, npm: &NpmFetch, limits: Limits) -> R
         &npm.node_dir,
     )
     .map_err(|r| r.to_string())
+}
+
+/// A failed fetch step: the step the gateway is told, and the detail kept for
+/// the helper's own stderr (it never crosses the control socket).
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct FetchFailure {
+    pub(super) step: FetchStep,
+    pub(super) detail: String,
+}
+
+impl FetchFailure {
+    fn at(step: FetchStep) -> impl FnOnce(String) -> Self {
+        move |detail| Self { step, detail }
+    }
+}
+
+/// The failure the gateway is told: the fetch's own, else the first failed
+/// teardown step, in order.
+fn first_failure(
+    fetched: Result<(), FetchFailure>,
+    teardown: [Result<(), FetchFailure>; 3],
+) -> Result<(), FetchFailure> {
+    fetched?;
+    teardown.into_iter().try_for_each(|step| step)
 }
 
 /// The fetch's one deadline, `ms` from now; `None` when `ms` does not fit
@@ -178,14 +207,26 @@ fn fetch_deadline(ms: u128) -> Option<Instant> {
     Instant::now().checked_add(Duration::from_millis(left))
 }
 
-/// The teardown, in order, every step attempted; the first failure is
-/// returned.
-fn teardown(control: &mut UnixStream, relay: Relay) -> Result<(), String> {
-    let swept = sweep(SWEEP_BOUND);
-    let stopped = relay.stop(RELAY_BOUND);
-    let finished = control_client::finish_fetch(control, HELPER_BOUNDS);
-    let removed = super::mounts::remove_proxy_socket();
-    swept.and(stopped).and(finished).and(removed)
+/// The teardown, in order, every step attempted: sweep, relay stopped, the
+/// proxy socket removed, then `fetch_done` naming the first failure (the
+/// fetch's own before any teardown step's). Only an unrefused fetch goes on
+/// to `expired` and its acknowledgement; the run follows only on Ok.
+fn teardown(
+    control: &mut UnixStream,
+    relay: Relay,
+    fetched: Result<(), FetchFailure>,
+) -> Result<(), String> {
+    let swept = sweep(SWEEP_BOUND).map_err(FetchFailure::at(FetchStep::Sweep));
+    let stopped = relay
+        .stop(RELAY_BOUND)
+        .map_err(FetchFailure::at(FetchStep::Relay));
+    let removed =
+        super::mounts::remove_proxy_socket().map_err(FetchFailure::at(FetchStep::ProxySocket));
+    let failed = first_failure(fetched, [swept, stopped, removed]);
+    let step = failed.as_ref().err().map(|failure| failure.step);
+    let reported = control_client::finish_fetch(control, HELPER_BOUNDS, step);
+    failed.map_err(|failure| failure.detail)?;
+    reported
 }
 
 /// `ip link set lo up`, run by the helper itself (it keeps the namespace's
@@ -221,17 +262,21 @@ fn wait_until(child: &mut Child, deadline: Instant) -> Option<ExitStatus> {
     }
 }
 
-/// The two npm steps with the lock check between them, under one deadline.
+/// The two npm steps with the lock check between them, under one deadline;
+/// each failure carries the step it happened in.
 fn install(
     npm: &NpmFetch,
     credential: &str,
     port: u16,
     deadline: Instant,
     limits: Limits,
-) -> Result<(), String> {
+) -> Result<(), FetchFailure> {
+    let setup = FetchFailure::at(FetchStep::Setup);
     let pkg = Path::new(plan::HOME).join("pkg");
-    fs::create_dir_all(&pkg).map_err(|e| format!("creating {} ({e})", pkg.display()))?;
-    let prefix = pkg.to_str().ok_or("the install prefix is not UTF-8")?;
+    fs::create_dir_all(&pkg).map_err(|e| setup(format!("creating {} ({e})", pkg.display())))?;
+    let prefix = pkg.to_str().ok_or_else(|| {
+        FetchFailure::at(FetchStep::Setup)("the install prefix is not UTF-8".into())
+    })?;
     let npm_dir = Path::new(&npm.npm)
         .parent()
         .and_then(Path::to_str)
@@ -245,8 +290,11 @@ fn install(
         prefix,
         npm.spec.as_str(),
     ];
-    run_npm(&npm.npm, &lock_only, &env, deadline, limits, credential)?;
-    check_lock(&read_lock(&pkg.join("package-lock.json"))?).map_err(|r| r.to_string())?;
+    run_npm(&npm.npm, &lock_only, &env, deadline, limits, credential)
+        .map_err(FetchFailure::at(FetchStep::NpmInstall))?;
+    read_lock(&pkg.join("package-lock.json"))
+        .and_then(|lock| check_lock(&lock).map_err(|r| r.to_string()))
+        .map_err(FetchFailure::at(FetchStep::LockCheck))?;
     run_npm(
         &npm.npm,
         &["ci", "--ignore-scripts", "--prefix", prefix],
@@ -255,6 +303,7 @@ fn install(
         limits,
         credential,
     )
+    .map_err(FetchFailure::at(FetchStep::NpmCi))
 }
 
 /// The lock npm wrote, at most [`LOCK_CAP`] bytes.
