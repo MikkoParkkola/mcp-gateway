@@ -1,0 +1,32 @@
+head_sha	d628e331b4d4459d4f094c25e42b5899f7369350
+#mutant mlock
+mcp_gateway	gateway::meta_mcp::invoke::admin::publish_tests::l2_watcher_and_admin_reloads_are_ordered	src/gateway/meta_mcp/invoke/admin_publish_tests.rs:266
+#mutant mswap
+mcp_gateway	gateway::meta_mcp::invoke::admin::publish_tests::p4_admin_and_watcher_reload_deliver_after_the_swap	src/gateway/meta_mcp/invoke/admin_publish_tests.rs:110
+mcp_gateway	gateway::meta_mcp::invoke::admin::publish_tests::l2_watcher_and_admin_reloads_are_ordered	src/gateway/meta_mcp/invoke/admin_publish_tests.rs:275
+#mutant mseq
+mcp_gateway	config_reload::live_config::capability_tests::l1_the_same_seq_twice_publishes_once	src/config_reload/live_config_capability_tests.rs:120
+#mutant e1
+mcp_gateway	config_reload::revision::encoding_tests::e1_the_three_encodings_are_the_literal_preimages	src/config_reload/revision_encoding_tests.rs:64
+#mutant s2 multi=2
+mcp_gateway	gateway::server::run_steps::run_steps_pin_tests::a_capability_changed_while_down_reaches_the_decisions_after_http_startup	src/gateway/server/run_steps_pin_tests.rs:164
+#mutant park
+mcp_gateway	gateway::server::capability_publish_tests::h2_account_bound_http_startup_reaches_a_covered_part	src/gateway/server/capability_publish_tests.rs:187
+#mutant h1
+mcp_gateway	capability::backend::handoff::handoff_tests::h1_attach_between_publish_and_end	src/capability/backend/handoff_tests.rs:164
+mcp_gateway	capability::backend::handoff::handoff_tests::h1c_cancel_after_publish_ends_ended_not_failed	src/capability/backend/handoff_tests.rs:164
+mcp_gateway	capability::backend::handoff::handoff_tests::h1_park_then_attach	src/capability/backend/handoff_tests.rs:164
+mcp_gateway	capability::backend::handoff::handoff_tests::h2_account_bound_http_parks_first	src/capability/backend/handoff_tests.rs:164
+mcp_gateway	capability::backend::handoff::handoff_tests::r24_stale_publish_after_attach_is_dropped	src/capability/backend/handoff_tests.rs:561
+mcp_gateway	capability::backend::handoff::handoff_tests::h1b_seq3_stays_published_in_both_orders	src/capability/backend/handoff_tests.rs:339
+mcp_gateway	gateway::server::capability_publish_tests::h2_account_bound_http_startup_reaches_a_covered_part	src/gateway/server/capability_publish_tests.rs:272
+#mutant endpark
+mcp_gateway	capability::backend::handoff::handoff_tests::h1c_cancel_after_publish_ends_ended_not_failed	src/capability/backend/handoff_tests.rs:361
+mcp_gateway	gateway::server::capability_publish_tests::h2_account_bound_http_startup_reaches_a_covered_part	src/gateway/server/capability_publish_tests.rs:187
+#mutant announce
+mcp_gateway	capability::backend::handoff::handoff_tests::h1d_attach_announces_the_parked_scan_once	src/capability/backend/handoff_tests.rs:406
+#mutant receipt
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_says_what_the_config_revision_covers	src/gateway/ui/activity/decision_receipt_tests.rs:86
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_v2_record_serves_the_full_decision_projection	src/gateway/ui/activity/decision_receipt_tests.rs:55
+#mutant hook multi=2
+mcp_gateway	capability::backend::handoff::handoff_tests::the_readiness_snapshot_is_set_before_readiness_is_visible	src/capability/backend/handoff_tests.rs:451
