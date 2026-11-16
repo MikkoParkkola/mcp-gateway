@@ -208,7 +208,8 @@ function visibleTabs(id) {
 
 // ---------------------------------------------------------------- elements
 
-function el(tag, attrs = {}, ...children) {
+/** One element: attributes set through setAttribute, children appended as nodes or text. Screens use it too. */
+export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (v !== null && v !== undefined && v !== false) node.setAttribute(k, v === true ? '' : String(v));
@@ -373,14 +374,47 @@ let bearer = null;
 let authEpoch = 0;
 
 /**
- * An error from /ui/api: its HTTP status (0 when no answer came at all), and
- * whether an ok answer's body could not be read.
+ * An error from /ui/api: its HTTP status (0 when no answer came at all),
+ * whether an ok answer's body could not be read, and for a refusal the
+ * gateway's own code and sentence when its JSON body carried them.
  */
 export class ApiError extends Error {
-  constructor(status, path, { unreadable = false } = {}) {
+  constructor(status, path, { unreadable = false, code = null, serverMessage = null } = {}) {
     super(`${path} answered ${status}`);
     this.status = status;
     this.unreadable = unreadable;
+    this.code = code;
+    this.serverMessage = serverMessage;
+  }
+}
+
+/** Longest gateway sentence kept on an ApiError; a longer one is cut there. */
+const SERVER_MESSAGE_MAX = 500;
+/** How long a refusal's body may take to arrive before the refusal is told by its status alone. */
+const REFUSAL_BODY_MS = 2000;
+
+/**
+ * A JSON refusal's words: `{error: code, message: sentence}`, or a flat
+ * `{error: sentence}`. Any other body, or one that cannot be read, gives none.
+ */
+async function refusalWords(reply) {
+  if (!(reply.headers.get('content-type') ?? '').includes('json')) return {};
+  const text = (v) => (typeof v === 'string' && v.trim() ? v.slice(0, SERVER_MESSAGE_MAX) : null);
+  let timer;
+  try {
+    const late = new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), REFUSAL_BODY_MS); });
+    const parse = reply.json();
+    parse.catch(() => {}); // settled late, after the race: nothing waits for it any more
+    const body = await Promise.race([parse, late]);
+    if (!body || typeof body !== 'object') return {};
+    const message = text(body.message);
+    if (message) return { code: text(body.error), serverMessage: message };
+    return body.message === undefined ? { serverMessage: text(body.error) } : {};
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err; // the caller's own cancel stays a cancel
+    return {}; // an unreadable refusal body: its status still says what happened
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -401,8 +435,9 @@ export async function api(path, init = {}) {
   }
   // A 401 to a request sent before the latest sign-in says nothing about now.
   if (reply.status === 401 && epoch === authEpoch) showSignIn();
-  // A refusal is judged by its status alone; its body is never read.
-  if (!reply.ok) throw new ApiError(reply.status, path);
+  // A refusal is judged by its status alone. Its body only lends the gateway's own
+  // sentence to a screen that shows it, and a 401's is never read.
+  if (!reply.ok) throw new ApiError(reply.status, path, reply.status === 401 ? {} : await refusalWords(reply));
   if (reply.status === 204) return null;
   try {
     return await reply.json();
@@ -871,7 +906,9 @@ export function confirmAction(spec) {
     phase = kind;
     line.hidden = true;
     note.hidden = false;
-    note.replaceChildren(el('p', {}, `⊘ ${words.reason}`), el('p', {}, words.next));
+    // A not-confirmed outcome keeps its headline; the gateway's own sentence, when it gave one, sits under it.
+    const detail = words.detail ? [el('p', { class: 'confirm-detail' }, words.detail)] : [];
+    note.replaceChildren(el('p', {}, `⊘ ${words.reason}`), ...detail, el('p', {}, words.next));
     if (typed) typed.value = '';
     arm();
     const buttons = [close];
@@ -880,7 +917,7 @@ export function confirmAction(spec) {
     acts.replaceChildren(...buttons);
     place();
     note.focus();
-    announce(`${words.reason} ${words.next}`, { subject: 'confirm', guard: { epoch: authEpoch, seq: null } });
+    announce([words.reason, words.detail, words.next].filter(Boolean).join(' '), { subject: 'confirm', guard: { epoch: authEpoch, seq: null } });
   };
 
   const start = () => {
@@ -928,11 +965,14 @@ export function confirmAction(spec) {
       }
       const c = classify(err, spec);
       if (c.kind === 'refusal') show('refusal', c);
-      else { unconfirmedKeys().add(key); showUnconfirmed(); }
+      else { unconfirmedKeys().add(key); showUnconfirmed(err); }
     });
   };
-  const showUnconfirmed = () => show('unconfirmed', {
-    reason: 'The gateway did not confirm the outcome.', next: `Reload to see whether ${object} changed.`, reload: true,
+  const showUnconfirmed = (err) => show('unconfirmed', {
+    reason: 'The gateway did not confirm the outcome.',
+    detail: err instanceof ApiError ? err.serverMessage : null,
+    next: `Reload to see whether ${object} changed.`,
+    reload: true,
   });
 
   const landDone = (value) => {
@@ -1823,7 +1863,7 @@ async function showEnvironment(auth) {
   // The tooltip module and its stylesheet load only when a fallback name needs them.
   let m;
   try {
-    m = await import('/ui/assets/tooltip.fc459693146e.js');
+    m = await import('/ui/assets/tooltip.d82a4a9834d8.js');
   } catch {
     return;
   }

@@ -48,7 +48,12 @@ fn cleartext_yaml() -> String {
 #[test]
 fn api4_3_a_cleartext_reload_refusal_is_classified_with_its_fix() {
     let ledger = RefusalLedger::with_clock(fixed_clock);
-    ledger.record(RefusalKind::Reload, None, &reload_error(&cleartext_yaml()));
+    ledger.record(
+        RefusalKind::Reload,
+        None,
+        &reload_error(&cleartext_yaml()),
+        None,
+    );
 
     let list = ledger.list();
     assert_eq!(list.len(), 1, "{list:?}");
@@ -68,17 +73,24 @@ fn api4_3_a_cleartext_reload_refusal_is_classified_with_its_fix() {
 #[test]
 fn api4_3_no_canary_reaches_the_served_body() {
     let ledger = RefusalLedger::new();
-    ledger.record(RefusalKind::Reload, None, &reload_error(&cleartext_yaml()));
+    ledger.record(
+        RefusalKind::Reload,
+        None,
+        &reload_error(&cleartext_yaml()),
+        None,
+    );
     ledger.record(
         RefusalKind::Add,
         Some("inventory"),
         &reload_error(&cleartext_yaml()),
+        None,
     );
     // An unclassified refusal whose text carries every canary.
     ledger.record(
         RefusalKind::Edit,
         Some("inventory"),
         &format!("Failed to validate config: {CANARY_HEADER} {CANARY_QUERY} {CANARY_USER}"),
+        None,
     );
 
     let body = serde_json::to_string(&ledger.list()).expect("serialises");
@@ -94,6 +106,7 @@ fn api4_3_an_unclassified_cause_is_withheld() {
         RefusalKind::Reload,
         None,
         "Failed to parse config: sets protocol_version secret-ish-value on a ws_url",
+        None,
     );
     let list = ledger.list();
     assert_eq!(list.len(), 1);
@@ -109,7 +122,7 @@ fn api4_3_an_unclassified_cause_is_withheld() {
 #[test]
 fn api4_3_a_shutdown_is_not_a_refusal() {
     let ledger = RefusalLedger::new();
-    ledger.record(RefusalKind::Reload, None, STOPPED);
+    ledger.record(RefusalKind::Reload, None, STOPPED, None);
     assert!(ledger.list().is_empty());
 }
 
@@ -118,17 +131,24 @@ fn api4_3_an_applied_reload_resolves_earlier_reload_refusals_only() {
     // One clock instant for every entry: resolution must come from order,
     // not from timestamps.
     let ledger = RefusalLedger::with_clock(fixed_clock);
-    ledger.record(RefusalKind::Reload, None, "Failed to parse config: bad");
+    ledger.record(
+        RefusalKind::Reload,
+        None,
+        "Failed to parse config: bad",
+        None,
+    );
     ledger.record(
         RefusalKind::Add,
         Some("inventory"),
         "Failed to validate config: bad",
+        None,
     );
     ledger.reload_applied();
     ledger.record(
         RefusalKind::Reload,
         None,
         "Failed to parse config: bad again",
+        None,
     );
 
     let list = ledger.list();
@@ -148,8 +168,8 @@ fn api4_3_an_applied_reload_resolves_earlier_reload_refusals_only() {
 #[test]
 fn api4_3_an_applied_write_resolves_that_backend_only() {
     let ledger = RefusalLedger::new();
-    ledger.record(RefusalKind::Add, Some("inventory"), "x");
-    ledger.record(RefusalKind::Edit, Some("billing"), "x");
+    ledger.record(RefusalKind::Add, Some("inventory"), "x", None);
+    ledger.record(RefusalKind::Edit, Some("billing"), "x", None);
     // The pair the admin write handler uses: a place reserved inside the
     // write's lock, stamped once the write committed.
     let ticket = ledger.reserve();
@@ -174,6 +194,7 @@ fn api4_3_the_ledger_is_bounded_newest_first() {
             RefusalKind::Add,
             Some(&format!("b{i}")),
             "Failed to validate config: x",
+            None,
         );
     }
     let list = ledger.list();
@@ -189,7 +210,12 @@ fn api4_3_the_ledger_is_bounded_newest_first() {
 fn api4_3_the_same_refusal_in_a_row_is_one_entry_with_repeats() {
     let ledger = RefusalLedger::new();
     for _ in 0..3 {
-        ledger.record(RefusalKind::Reload, None, &reload_error(&cleartext_yaml()));
+        ledger.record(
+            RefusalKind::Reload,
+            None,
+            &reload_error(&cleartext_yaml()),
+            None,
+        );
     }
     let list = ledger.list();
     assert_eq!(list.len(), 1, "{list:?}");
@@ -206,6 +232,7 @@ fn api4_3_a_posture_refusal_gets_fixed_text() {
             "{} refusing to serve HTTP on {CANARY_QUERY}:8080 No backend was started or stopped",
             crate::config_reload::POSTURE_REFUSED_PREFIX
         ),
+        None,
     );
     let list = ledger.list();
     assert_eq!(list[0].code, RefusalCode::Posture);
@@ -218,7 +245,7 @@ fn api4_3_an_unreadable_clock_serves_no_time() {
         UNIX_EPOCH - Duration::from_secs(1)
     }
     let ledger = RefusalLedger::with_clock(before_epoch);
-    ledger.record(RefusalKind::Reload, None, "Failed to parse config: x");
+    ledger.record(RefusalKind::Reload, None, "Failed to parse config: x", None);
     assert_eq!(ledger.list()[0].at, None);
 }
 
@@ -232,7 +259,7 @@ fn api4_3_a_value_that_imitates_the_cleartext_refusal_is_withheld() {
         crate::config::CLEARTEXT_REFUSAL
     );
     let ledger = RefusalLedger::new();
-    ledger.record(RefusalKind::Reload, None, &error);
+    ledger.record(RefusalKind::Reload, None, &error, None);
     let list = ledger.list();
     assert_eq!(list[0].code, RefusalCode::InvalidConfig);
     assert_eq!(list[0].backend, None);
@@ -247,9 +274,9 @@ fn api4_3_a_value_that_imitates_the_cleartext_refusal_is_withheld() {
 fn api4_3_an_older_write_success_does_not_resolve_a_newer_refusal() {
     let ledger = RefusalLedger::new();
     // Different kinds, so the two are not merged as repeats.
-    ledger.record(RefusalKind::Add, Some("inventory"), "x");
+    ledger.record(RefusalKind::Add, Some("inventory"), "x", None);
     let older = ledger.reserve();
-    ledger.record(RefusalKind::Edit, Some("inventory"), "y");
+    ledger.record(RefusalKind::Edit, Some("inventory"), "y", None);
     ledger.write_applied_at("inventory", older);
     let list = ledger.list();
     assert!(list[0].active, "the newer refusal stays active: {list:?}");

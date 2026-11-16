@@ -23,6 +23,13 @@ type written on the statement or in the function's return type (a bare
 `let x = serde_json::from_str(s)?` used later) is not seen; a lexical check
 cannot know that type. The checked constructors and the stored-token
 read-back check still refuse a nameless identity wherever it is used.
+
+Known over-reach (the statement-slicing limit, H6 in the identity-guard
+review table): a read-back's statement is cut at the next `;`, so a read whose
+statement has none before its fn ends (a `match` on the read) runs on into the
+next fn and is flagged by a carrier named there. `parse_journal` is flagged
+this way: it reads `JournalEntry`, which holds ids and digests and no identity
+type. It over-flags and never hides a carrier, so the row stays listed.
 """
 
 from __future__ import annotations
@@ -235,7 +242,7 @@ READ_BACKS = {
     ("src/capability/parser.rs", "parse_capability"): "rule: a definition's identity_owner",
     ("src/capability/file_writer_headers.rs", "check"): "rule: the editor judges a submitted definition's credential headers; its identity_owner is rule data, never a request's identity",
     ("src/identity_grants.rs", "read_identity_grants_file_with_bytes"): "rule: the grant file, with the bytes its config revision digests",
-    ("src/identity_grants/journal.rs", "parse_journal"): "rule: persisted grants",
+    ("src/identity_grants/journal.rs", "parse_journal"): "reads JournalEntry (ids and digests, no identity); flagged by statement slicing past the fn end, see the module docstring",
     ("src/identity_grants_matching.rs", "parse_refusal"): "rule: grant-file error report",
     ("src/identity_grants_matching.rs", "remainder_error"): "rule: grant-file error report",
 }

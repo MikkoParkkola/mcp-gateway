@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Drain the framed abandoned file into its own log: deliver what the file still owes, freeze
-//! the terminals it lacks, and remove the file once every token is complete. A refused file is
-//! kept exactly as found.
+//! the terminals it lacks, and remove the file once every token is complete. A file refused
+//! before delivery is kept exactly as found; one delivered and still incomplete keeps its
+//! rewritten bytes (the delivered flags) for the next drain.
 
 use std::sync::Arc;
 
@@ -20,7 +21,8 @@ use crate::security::transparency_log::settle::Role;
 
 /// Deliver the abandoned file beside the session's config through `log`, with the config lock
 /// held in `session` for the whole call. A handed-over journal beside the file is first finished
-/// by the handover's own resume; a refused file is kept exactly as found.
+/// by the handover's own resume. A file refused before delivery is kept exactly as found; one
+/// delivered and still incomplete is reported as such and keeps its rewritten bytes.
 pub(crate) async fn drain_abandoned(
     session: &mut DrainSession,
     log: Option<Arc<TransparencyLogger>>,
@@ -89,7 +91,7 @@ pub(crate) async fn drain_abandoned(
     let sink: &dyn SettleSink = &logger;
     deliver_all(&mut file, sink, &binding).await?;
     if !complete(&file.state) {
-        return Err(refused(&path, Refusal::Shape, DrainError::FileRefused));
+        return Err(refused(&path, Refusal::Incomplete, DrainError::FileRefused));
     }
     remove(&target, &path)
 }
@@ -167,21 +169,48 @@ pub(super) fn state_from_frames(frames: Vec<AbandonedFrame>) -> Option<JournalV2
 /// the drain's own builder (a `settled_by` names an attempt in the file). Checked before any
 /// delivery, so an unfinishable file is refused as found instead of half delivered.
 fn completable(state: &JournalV2) -> bool {
+    widest_finished(state).is_some()
+}
+
+/// `state` at its widest, every terminal the drain may still freeze built into its token, or
+/// `None` when the drain could not finish it from the file alone: a delivered intent with no
+/// counter, or an owed terminal that does not build. A terminal already frozen is kept and never
+/// built again, so its intent is never parsed. `Some` says only that, not that the state is
+/// settled or complete (an undecided or delivery-stopped token can still return `Some`). The
+/// finishability check above and the handover's size bound both judge through this one
+/// function, so they never disagree on a missing counter or a terminal that does not build.
+/// The shape checks in `state_from_frames` (one binding, decided tokens, `terminals_agree`) are
+/// separate and not part of this judgement. `pub(super)` for the handover only: drain.rs, the
+/// shared parent, is at its file-size ceiling until it is split.
+pub(super) fn widest_finished(state: &JournalV2) -> Option<JournalV2> {
     let mut widest = state.clone();
     for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
         if token.intent.delivered && token.intent_counter.is_none() {
-            return false;
+            return None;
         }
-        token.intent_counter.get_or_insert(u64::MAX);
+        token.intent_counter = Some(u64::MAX);
     }
-    widest.writer.iter().chain(&widest.attempts).all(|token| {
-        // A terminal already frozen is never built again: the same skip as the size bound.
-        token
-            .records
-            .iter()
-            .any(|record| matches!(record.role, Role::Outcome | Role::Abandoned))
-            || super::terminal_record(&widest, token).is_ok()
-    })
+    // Built against the widened state, so a `settled_by` counter is the widest too.
+    let snapshot = widest.clone();
+    for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
+        if holds_terminal(token) {
+            continue;
+        }
+        match super::terminal_record(&snapshot, token) {
+            Ok(Some(record)) => token.records.push(record),
+            Ok(None) => {}
+            Err(_) => return None,
+        }
+    }
+    Some(widest)
+}
+
+/// Whether `token` already holds a frozen terminal.
+fn holds_terminal(token: &TokenState) -> bool {
+    token
+        .records
+        .iter()
+        .any(|record| matches!(record.role, Role::Outcome | Role::Abandoned))
 }
 
 /// Whether every token is settled (the journal's own per-token check, without its handed-over
@@ -204,6 +233,8 @@ enum Refusal {
     Shape,
     MixedBinding,
     ForeignDonor,
+    /// Delivered, and still not complete: not a refusal of the file as found.
+    Incomplete,
 }
 
 impl Refusal {
@@ -216,18 +247,28 @@ impl Refusal {
             Self::Shape => "shape",
             Self::MixedBinding => "mixed_binding",
             Self::ForeignDonor => "foreign_donor",
+            Self::Incomplete => "incomplete",
         }
     }
 }
 
-/// Report a refused file and leave it exactly as found: one WARN with the path and the reason,
-/// one count. Nothing here touches the file.
+/// Report a file the drain could not finish: one WARN with the path and the reason, one count.
+/// Nothing here touches the file. Every reason but `Incomplete` comes before delivery, so the
+/// file is as found; `Incomplete` comes after it, and says so.
 fn refused(path: &Path, why: Refusal, error: DrainError) -> DrainError {
-    tracing::warn!(
-        path = %path.display(),
-        reason = why.as_str(),
-        "the abandoned config-write file is refused and kept as found"
-    );
+    if why == Refusal::Incomplete {
+        tracing::warn!(
+            path = %path.display(),
+            reason = why.as_str(),
+            "the abandoned config-write file was delivered and is still not complete; it is kept for the next drain"
+        );
+    } else {
+        tracing::warn!(
+            path = %path.display(),
+            reason = why.as_str(),
+            "the abandoned config-write file is refused and kept as found"
+        );
+    }
     telemetry_metrics::counter!("mcp_config_abandoned_refused_total", "reason" => why.as_str())
         .increment(1);
     error

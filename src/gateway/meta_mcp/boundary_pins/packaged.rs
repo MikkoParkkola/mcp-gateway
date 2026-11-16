@@ -55,6 +55,9 @@ pub(super) enum PinnedFile {
     CiWorkflow,
     /// ADR-016, read by `b26_the_adr_and_crate_root_name_both_unsafe_modules`.
     UnsafeAdr,
+    /// `scripts/release/check_identity_sources.py`, read by
+    /// `the_table_names_every_case_the_scanner_catches`.
+    IdentityScanner,
 }
 
 impl PinnedFile {
@@ -65,6 +68,7 @@ impl PinnedFile {
             PinnedFile::PrePush => "scripts/dev/pre-push.sh",
             PinnedFile::CiWorkflow => ".github/workflows/ci.yml",
             PinnedFile::UnsafeAdr => "docs/adr/ADR-016-scoped-unsafe-windows-acl.md",
+            PinnedFile::IdentityScanner => "scripts/release/check_identity_sources.py",
         }
     }
 }
@@ -153,12 +157,14 @@ fn pinned_repo_files_are_read_in_a_checkout() {
         PinnedFile::PrePush,
         PinnedFile::CiWorkflow,
         PinnedFile::UnsafeAdr,
+        PinnedFile::IdentityScanner,
     ] {
         let rel = match file {
             PinnedFile::RegistryBanClippy => "scripts/lint/registry-ban/clippy.toml",
             PinnedFile::PrePush => "scripts/dev/pre-push.sh",
             PinnedFile::CiWorkflow => ".github/workflows/ci.yml",
             PinnedFile::UnsafeAdr => "docs/adr/ADR-016-scoped-unsafe-windows-acl.md",
+            PinnedFile::IdentityScanner => "scripts/release/check_identity_sources.py",
         };
         assert_eq!(rel, file.path(), "path() names the pinned file");
         assert!(
