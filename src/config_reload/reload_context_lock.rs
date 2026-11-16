@@ -163,10 +163,19 @@ impl ReloadContext {
                 self.reporting.tally.applied();
             }
             Err(refusal) => {
+                // The typed error was flattened to text on the way here.
+                // Parse the file once more and pass that error's location.
+                // Never a line taken out of the text.
+                let line = if crate::config_reload::refusals::carries_file_line(&refusal.text) {
+                    line_of_refused_file(path)
+                } else {
+                    None
+                };
                 refusals.record(
                     crate::config_reload::refusals::RefusalKind::Reload,
                     None,
                     &refusal.text,
+                    line,
                 );
                 self.reporting.tally.refused();
                 self.live_config.record_refused(source);
@@ -212,6 +221,27 @@ impl ReloadContext {
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
+}
+
+/// The parser line of a file a reload just refused, when the parser has one.
+///
+/// `figment_data` runs `from_str` and then stringifies the error, so the
+/// location is gone before the reload sees it. This is that same parse, into
+/// `Config` rather than the loose `Dict`: a `Dict` accepts a scalar of the
+/// wrong type, and a type error would then have no location. `Error::location`
+/// covers a syntax error and a serde message the deserializer placed. A file
+/// that deserializes has no location; that is a later validation. The line is
+/// the location's, never a number read out of the message.
+///
+/// The file is read again, so a save landing between the refusal and this
+/// read is the text parsed; the watcher reloads that save and records it on
+/// its own. The parse sees the file alone, without the `MCP_GATEWAY_*`
+/// overlay: a wrong-typed value the overlay replaces still yields its line,
+/// which is a real fault in the file.
+fn line_of_refused_file(path: &std::path::Path) -> Option<u32> {
+    let text = crate::config::Config::guarded_text(path).ok()?;
+    let error = crate::yaml::from_str::<crate::config::Config>(&text).err()?;
+    u32::try_from(error.location()?.line()).ok()
 }
 
 /// The reload lock and the config sidecar, held until dropped.

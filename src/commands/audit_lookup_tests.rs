@@ -272,9 +272,9 @@ async fn an_answer_that_is_not_the_typed_shape_is_an_error() {
 /// MIK-9456.CLI.2: a gateway that is not there is an error.
 #[tokio::test]
 async fn an_unreachable_gateway_is_an_error() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    drop(listener);
+    // A port from the reserved test range with nothing listening on it: every
+    // connect is refused, and no parallel test's port-0 bind can be handed it.
+    let base = format!("http://127.0.0.1:{}", crate::test_ports::reserved_port());
     assert!(ask(&base).await.is_err());
 }
 
@@ -460,9 +460,9 @@ async fn the_composed_command_exits_nonzero_on_every_failure_class() {
         fail,
         "wrong shape"
     );
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let dead = format!("http://{}", listener.local_addr().unwrap());
-    drop(listener);
+    // A port from the reserved test range with nothing listening on it: every
+    // connect is refused, and no parallel test's port-0 bind can be handed it.
+    let dead = format!("http://127.0.0.1:{}", crate::test_ports::reserved_port());
     assert_eq!(
         code(run(&dead, EMAIL.as_bytes(), Some(TOKEN)).await),
         fail,

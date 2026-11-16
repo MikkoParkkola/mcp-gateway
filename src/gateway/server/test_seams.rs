@@ -155,25 +155,29 @@ impl TestSeams {
 
 /// `shutdown_signal`, also started by a test's trigger. Test builds only, so
 /// the production signal handler is the unchanged `support::shutdown_signal`.
+/// The handlers are installed when this is called, as in production.
 #[cfg(test)]
-pub(super) async fn shutdown_signal_or_trigger(
+pub(super) fn shutdown_signal_or_trigger(
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
     trigger: Option<oneshot::Receiver<()>>,
-) {
+) -> impl std::future::Future<Output = ()> + Send + 'static {
     let on_trigger = shutdown_tx.clone();
-    tokio::select! {
-        () = super::support::shutdown_signal(shutdown_tx) => {},
-        () = async {
-            match trigger {
-                // A dropped sender starts it too: the test is over either way.
-                Some(trigger) => {
-                    trigger.await.ok();
+    let signal = super::support::shutdown_signal(shutdown_tx);
+    async move {
+        tokio::select! {
+            () = signal => {},
+            () = async {
+                match trigger {
+                    // A dropped sender starts it too: the test is over either way.
+                    Some(trigger) => {
+                        trigger.await.ok();
+                    }
+                    None => std::future::pending::<()>().await,
                 }
-                None => std::future::pending::<()>().await,
-            }
-        } => {
-            on_trigger.send(()).ok();
-        },
+            } => {
+                on_trigger.send(()).ok();
+            },
+        }
     }
 }
 
