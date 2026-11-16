@@ -459,38 +459,75 @@ async fn an_unsubscribe_answers_after_a_notice_in_flight() {
 }
 
 /// CARRIER.4 (R16b): a source event named `subscription.ended` is dropped at
-/// fan-out, even for a row that names it.
+/// fan-out, even for a row that names it. A control row admitted the same way
+/// under another name receives its event, so fan-out reaches the queue for
+/// such a row and only the reserved name stops it.
 #[tokio::test]
 async fn a_source_event_with_the_reserved_name_is_dropped_at_fan_out() {
+    use crate::events::services::{AccessVerdict, forced_verdict};
+    // The test services hold no API keys, so admission is forced: the row is
+    // about the name, not the grant.
+    let _admits = forced_verdict::answer(AccessVerdict::Admits);
     let (hub, _probe, _rx, dir) = no_expiry_subscriber().await;
-    let mut row = hub
+    let template = hub
         .store
         .subscriptions()
         .into_iter()
         .find(|s| s.name == NAME)
         .expect("row");
-    row.id = "sub_reserved".to_owned();
-    row.name = "subscription.ended".to_owned();
     let now = chrono::Utc::now();
     let caps = crate::events::store::Caps {
         per_principal: 10,
         global: 10,
     };
-    hub.store
-        .admit(
-            row,
-            true,
-            caps,
-            chrono::Duration::zero(),
-            now,
-            super::super::tail_policy(&hub.config),
-        )
-        .expect("io")
-        .expect("premise: a row naming the reserved event");
+    for (id, name) in [
+        ("sub_control", "probe.control"),
+        ("sub_reserved", "subscription.ended"),
+    ] {
+        let mut row = template.clone();
+        row.id = id.to_owned();
+        row.name = name.to_owned();
+        hub.store
+            .admit(
+                row,
+                true,
+                caps,
+                chrono::Duration::zero(),
+                now,
+                super::super::tail_policy(&hub.config),
+            )
+            .expect("io")
+            .expect("premise: an admitted row");
+    }
+    let queued_for = |dir: &std::path::Path| -> Vec<String> {
+        crate::events::records::committed_records(&dir.join("outbox"))
+            .iter()
+            .map(|path| {
+                let bytes = std::fs::read(path).expect("record");
+                let record: super::super::outbox::OutboxRecord =
+                    serde_json::from_slice(&bytes).expect("an outbox record");
+                record.subscription_id
+            })
+            .collect()
+    };
+    let control = SourceEvent {
+        name: "probe.control".into(),
+        ..event()
+    };
+    hub.fan_out(&services(), &control).await;
+    assert_eq!(
+        queued_for(dir.path()),
+        vec!["sub_control".to_owned()],
+        "premise: a row admitted this way receives its event"
+    );
     let reserved = SourceEvent {
         name: "subscription.ended".into(),
         ..event()
     };
     hub.fan_out(&services(), &reserved).await;
-    assert_eq!(outbox_files(dir.path()), 0, "nothing queued for it");
+    assert_eq!(
+        queued_for(dir.path()),
+        vec!["sub_control".to_owned()],
+        "nothing queued for the reserved name"
+    );
 }
