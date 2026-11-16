@@ -72,9 +72,9 @@ fn refuse_bound(row: &str, foreign: bool) -> Result<(), String> {
     drop(live.seed(state(&live.resolved), row));
     let session = prepared(&live.path, row);
     let baseline = artifact(&live.resolved, JOURNAL, row);
-    let live_log = std::fs::read(&live.log_path).unwrap_or_default();
+    let live_log = log_bytes(&live.log_path, row);
     // P3 passes no log. Only a foreign finish (P2) has a second log to keep identical.
-    let other_log = foreign.then(|| std::fs::read(&other.log_path).unwrap_or_default());
+    let other_log = foreign.then(|| log_bytes(&other.log_path, row));
     let log = foreign.then(|| Arc::clone(&other.log));
     let error = super::super::fixtures::runtime(finish_start(session, log));
     if error != Err(StartError::JournalPending) {
@@ -82,13 +82,13 @@ fn refuse_bound(row: &str, foreign: bool) -> Result<(), String> {
     }
     same(&live.resolved, JOURNAL, &baseline, row);
     assert_eq!(
-        std::fs::read(&live.log_path).unwrap_or_default(),
+        log_bytes(&live.log_path, row),
         live_log,
         "{row}: live log byte-identical"
     );
     if let Some(before_log) = other_log {
         assert_eq!(
-            std::fs::read(&other.log_path).unwrap_or_default(),
+            log_bytes(&other.log_path, row),
             before_log,
             "{row}: other log byte-identical"
         );
@@ -127,8 +127,8 @@ fn policy_p5() -> Result<(), String> {
     let other = Live::new();
     let session = abandon(&live, ROW, |_| {});
     let baseline = artifact(&live.resolved, ABANDONED, ROW);
-    let live_log = std::fs::read(&live.log_path).unwrap_or_default();
-    let other_log = std::fs::read(&other.log_path).unwrap_or_default();
+    let live_log = log_bytes(&live.log_path, ROW);
+    let other_log = log_bytes(&other.log_path, ROW);
     let error = super::super::fixtures::runtime(finish_start(session, Some(other.log)));
     if error != Err(StartError::AbandonedPending) {
         return Err(format!("{ROW}: want AbandonedPending, got {error:?}"));
@@ -136,12 +136,12 @@ fn policy_p5() -> Result<(), String> {
     // Section 5 names the error. The abandoned file and both logs stay byte-identical.
     same(&live.resolved, ABANDONED, &baseline, ROW);
     assert_eq!(
-        std::fs::read(&live.log_path).unwrap_or_default(),
+        log_bytes(&live.log_path, ROW),
         live_log,
         "{ROW}: live log byte-identical"
     );
     assert_eq!(
-        std::fs::read(&other.log_path).unwrap_or_default(),
+        log_bytes(&other.log_path, ROW),
         other_log,
         "{ROW}: other log byte-identical"
     );
@@ -332,15 +332,17 @@ fn crash_s4() {
         "{ROW}: writer-1 intent not flagged delivered"
     );
     let records = live.records();
-    let intents = records
-        .iter()
-        .filter(|record| record["token"] == "writer-1" && record["event"] == "config_save_intent")
-        .count();
-    assert!(
-        intents >= 1,
-        "{ROW}: log holds writer-1's intent; arrived {}",
-        arrived(&records)
-    );
+    intent_arrived(&records, "writer-1", ROW);
     owe(&records, "writer-1", "config_write_outcome", None, 0, ROW);
     free(&live.path, ROW);
+}
+
+/// A log's bytes, or `None` when it does not exist; any other read error fails the row, so a
+/// missing, an empty and an unreadable log stay three different findings.
+fn log_bytes(path: &Path, row: &str) -> Option<Vec<u8>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => panic!("{row}: read {}: {error}", path.display()),
+    }
 }
