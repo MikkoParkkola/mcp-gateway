@@ -234,8 +234,9 @@ const UNSAFE_ANSWER: &str = "the gateway's answer could not be printed safely";
 
 /// Redact the token out of `body` with the shared redactor. `false` when the
 /// redaction lost an entry (a key renamed onto another), so the body can no
-/// longer be printed faithfully.
-fn redact_body(body: &mut serde_json::Value, token: &str) -> bool {
+/// longer be printed faithfully. Shared with the api command's success path
+/// (approved by the lead on 2026-11-16), so the refusal lives in one place.
+pub(crate) fn redact_body(body: &mut serde_json::Value, token: &str) -> bool {
     let entries = object_entry_count(body);
     mcp_gateway::cli::redact::json(body, &[token.to_string()]);
     object_entry_count(body) == entries
