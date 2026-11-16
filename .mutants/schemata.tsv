@@ -1,0 +1,85 @@
+head_sha	47dabdc018ed7538be0931d14148d20a505330b2
+#mutant g1
+mcp_gateway	config_reload::startup_settle::tests::start_busy_past_the_bound	src/config_reload/startup_settle_tests.rs:170
+#mutant g2
+mcp_gateway	config_reload::startup_settle::tests::startup_artifact_probe_refuses	src/config_reload/startup_settle_tests.rs:172
+#mutant g3
+mcp_gateway	config_reload::startup_settle::tests::startup_artifact_probe_refuses	src/config_reload/startup_settle_tests.rs:172
+#mutant g4
+mcp_gateway	config_reload::startup_settle::tests::startup_artifact_probe_refuses	src/config_reload/startup_settle_tests.rs:172
+#mutant g5
+mcp_gateway	config_reload::startup_settle::tests::lock_wait_keeps_the_runtime_ticking	src/config_reload/startup_settle_tests.rs:435
+#mutant g6
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::prepare_repairs_before_load	src/config_persistence_journal_v2_drain_startup_tests.rs:282
+#mutant g7
+mcp_gateway	config_reload::startup_settle::tests::prepare_recovers_a_v1_journal	src/config_reload/startup_settle_tests.rs:579
+#mutant g8
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::prepare_leaves_handover_to_the_file_drain	src/config_persistence_journal_v2_drain_startup_tests.rs:115
+#mutant g9
+mcp_gateway	config_reload::startup_settle::tests::finish_unlocked_rechecks	src/config_reload/startup_settle_tests.rs:473
+#mutant g10
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::policy::finish_maps_each_policy	src/config_persistence_journal_v2_drain_startup_policy_tests.rs:28
+#mutant g11 multi=2
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::policy::finish_maps_each_policy	src/config_persistence_journal_v2_drain_startup_policy_tests.rs:28
+#mutant g12
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::policy::finish_maps_each_policy	src/config_persistence_journal_v2_drain_startup_policy_tests.rs:28
+#mutant g13
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::policy::finish_maps_each_policy	src/config_persistence_journal_v2_drain_startup_policy_tests.rs:28
+#mutant g14
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::prepare_refuses_unrepairable	src/config_persistence_journal_v2_drain_startup_tests.rs:365
+#mutant g15
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::policy::finish_parks_invalid_payload	src/config_persistence_journal_v2_drain_startup_policy_tests.rs:238
+#mutant g16
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::policy::finish_refuses_unreadable_file_without_log	src/config_persistence_journal_v2_drain_startup_policy_tests.rs:302
+#mutant g17
+mcp_gateway	config_reload::startup_settle::tests::prepare_refuses_unclassifiable_journal	src/config_reload/startup_settle_tests.rs:172
+#mutant g18
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::policy::finish_drains_journal_then_file	src/config_persistence_journal_v2_drain_startup_tests.rs:207
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::policy::finish_maps_each_policy	src/config_persistence_journal_v2_drain_startup_policy_tests.rs:28
+#mutant g19
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::prepare_refuses_partial_handover	src/config_persistence_journal_v2_drain_startup_tests.rs:421
+#mutant g20
+mcp_gateway	config_reload::startup_settle::tests::prepare_records_a_v1_recovery	src/config_reload/startup_settle_tests.rs:617
+#mutant g21
+mcp_gateway	config_reload::startup_settle::tests::prepare_refuses_unrecordable_v1	src/config_reload/startup_settle_tests.rs:172
+#mutant g22
+mcp_gateway	config_reload::startup_settle::tests::startup_artifact_probe_refuses	src/config_reload/startup_settle_tests.rs:172
+#mutant g23 multi=2
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::policy::finish_maps_each_policy	src/config_persistence_journal_v2_drain_startup_policy_tests.rs:28
+#mutant g24
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::policy::finish_parks_invalid_journal_payload	src/config_persistence_journal_v2_drain_startup_policy_tests.rs:271
+#mutant g25
+mcp_gateway	config_reload::startup_settle::tests::finish_unlocked_rechecks	src/config_reload/startup_settle_tests.rs:473
+#mutant g26 multi=2
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::locked_target_survives_a_repoint	src/config_persistence_journal_v2_drain_startup_tests.rs:597
+mcp_gateway	config_reload::startup_settle::tests::finish_unlocked_rechecks	src/config_reload/startup_settle_tests.rs:520
+#mutant g27
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::finish_runs_off_the_async_workers	src/config_persistence_journal_v2_drain_startup_tests.rs:307
+#mutant g28
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::prepare_repairs_an_unaudited_v2_journal	src/config_persistence_journal_v2_drain_startup_tests.rs:376
+#mutant g29
+mcp_gateway	config_reload::startup_settle::tests::stage_maps_every_drain_error	src/config_reload/startup_settle_tests.rs:769
+#mutant g30
+mcp_gateway	config_reload::startup_settle::tests::stage_maps_every_drain_error	src/config_reload/startup_settle_tests.rs:769
+#mutant g31
+mcp_gateway	config_reload::startup_settle::tests::stage_maps_every_drain_error	src/config_reload/startup_settle_tests.rs:769
+#mutant g32
+mcp_gateway	config_reload::startup_settle::tests::stage_maps_every_drain_error	src/config_reload/startup_settle_tests.rs:769
+#mutant g33
+mcp_gateway	config_reload::startup_settle::tests::stage_maps_every_drain_error	src/config_reload/startup_settle_tests.rs:769
+#mutant g34
+mcp_gateway	config_reload::startup_settle::tests::stage_maps_every_drain_error	src/config_reload/startup_settle_tests.rs:769
+#mutant g35
+mcp_gateway	config_reload::startup_settle::tests::stage_maps_every_drain_error	src/config_reload/startup_settle_tests.rs:770
+#mutant g36
+mcp_gateway	config_reload::startup_settle::tests::stage_maps_every_drain_error	src/config_reload/startup_settle_tests.rs:770
+#mutant g37
+mcp_gateway	config_reload::startup_settle::tests::stage_maps_every_drain_error	src/config_reload/startup_settle_tests.rs:770
+#mutant g38
+mcp_gateway	config_reload::startup_settle::tests::stage_maps_every_drain_error	src/config_reload/startup_settle_tests.rs:770
+#mutant g39
+mcp_gateway	config_reload::startup_settle::tests::stage_maps_every_drain_error	src/config_reload/startup_settle_tests.rs:770
+#mutant g40
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::prepare_refuses_a_failed_repair	src/config_persistence_journal_v2_drain_startup_tests.rs:505
+#mutant g41
+mcp_gateway	config_persistence::journal::v2::drain::startup_tests::prepare_runs_off_the_async_workers	src/config_persistence_journal_v2_drain_startup_tests.rs:307
