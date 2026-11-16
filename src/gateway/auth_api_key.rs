@@ -89,7 +89,14 @@ impl std::fmt::Debug for ResolvedApiKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedApiKey")
             // Not even a prefix: the digest is the stored principal (MIK-8697).
-            .field("digest", &"<redacted>")
+            .field(
+                "digest",
+                mutant!(
+                    "m-resolved-debug",
+                    &self.digest as &dyn std::fmt::Debug,
+                    &"<redacted>" as &dyn std::fmt::Debug
+                ),
+            )
             .field("expires_at", &self.expires_at)
             .field("name", &self.name)
             .field("rate_limit", &self.rate_limit)
