@@ -32,7 +32,7 @@ PRODUCERS = {"lib-b": ["xbuild"], "int": ["xbuild", "lib-b"]}
 GRACE = 10 * MIN                                       # a queued or absent producer, from JOB_START
 # A running producer, from its own started_at: the Intel job's timeout; lib-b's wait (75), build (120), upload (5)
 # and int's download (3).
-RUN_LIMIT = {"xbuild": 85 * MIN, "lib-b": (75 + 120 + 5 + 3) * MIN}
+RUN_LIMIT = {"xbuild": 90 * MIN, "lib-b": (75 + 120 + 5 + 3) * MIN}
 CAP = {"lib-b": 75 * MIN, "int": 210 * MIN}            # the leg's wait, from JOB_START (255 less the later steps)
 LOCAL_BUILD_BY = 100 * MIN                             # int builds lib-a itself only when no binary can come before this
 REREAD = 60                                            # a completed producer is re-read once after this

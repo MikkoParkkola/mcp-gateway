@@ -872,8 +872,9 @@ jobs:
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
     runs-on: macos-15-intel
     # Step limits 3 + 4 + 4 + 70 + 3 = 84. Measured on this runner: the cross-build took 55.6 min with a cold cache and
-    # 45.9 min warm, so 70 is 1.25x cold. The legs wait for it up to its start + 85.
-    timeout-minutes: 85
+    # 45.9 min warm, so 70 is 1.25x cold. The job's 90 keeps at least 5 min past the steps for rust-cache's save after
+    # a timed-out cross-build. The legs wait for it up to its start + 90.
+    timeout-minutes: 90
     continue-on-error: true
     permissions:
       contents: read

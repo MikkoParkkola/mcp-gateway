@@ -278,7 +278,8 @@ MACOS_E = [
     (f"{SH} run macos lib-a", "matrix.shard == 'int' && steps.obtain_int.outputs.local_build == 'true'", 150),
 ]
 XBUILD = ("macos-xbuild", "macOS lib test binary (cross-built)", "macos-lib-xbuild")  # job id, name, artifact
-MACOS_LIMIT, XBUILD_LIMIT = 255, 85
+MACOS_LIMIT, XBUILD_LIMIT = 255, 90
+CACHE_SAVE_RESERVE = 5  # minutes the Intel job keeps past its steps for rust-cache's post step
 UPLOAD = "actions/upload-artifact@"
 REPORT = "Runner, swap and memory pressure during the build"
 # int with no binary and no time left to build: red, so the lib-a half is never silently skipped.
@@ -374,8 +375,9 @@ def xbuild_job_problems(jobs: dict, xb: dict) -> list[str]:
     if xb.get("permissions") != {"contents": "read"}:
         out.append(f"{XBUILD[0]}: permissions must be contents: read only")
     limits = [s.get("timeout-minutes") for s in xb.get("steps", [])]
-    if not all(isinstance(m, int) for m in limits) or sum(limits) > XBUILD_LIMIT:
-        out.append(f"{XBUILD[0]}: step limits {limits} must all be set and sum to at most {XBUILD_LIMIT}")
+    if not all(isinstance(m, int) for m in limits) or sum(limits) > XBUILD_LIMIT - CACHE_SAVE_RESERVE:
+        out.append(f"{XBUILD[0]}: step limits {limits} must all be set and sum to at most {XBUILD_LIMIT} less "
+                   f"{CACHE_SAVE_RESERVE} min for the cache save")
     # The cache saves even when the cross-build hits its step limit, so a timed-out run still leaves the next one warm.
     caches = [s.get("with") or {} for s in xb.get("steps", []) if "Swatinem/rust-cache@" in s.get("uses", "")]
     if [c.get("cache-on-failure") for c in caches] != [True]:
@@ -578,6 +580,7 @@ def option_e_rows(jobs: dict, workflows: dict, ol) -> None:
         "Intel limit drifts from RUN_LIMIT": lambda j, w, o: j[XBUILD[0]].__setitem__("timeout-minutes", 70),
         "Intel step limits over the job's": lambda j, w, o: xstep(j, "export-lib").__setitem__("timeout-minutes", 80),
         "Intel step runs on after failing": lambda j, w, o: xstep(j, "export-lib").__setitem__("continue-on-error", True),
+        "no time left for the cache save": lambda j, w, o: xstep(j, "export-lib").__setitem__("timeout-minutes", 74),
         "Intel cache saved only on success": lambda j, w, o: next(
             s for s in j[XBUILD[0]]["steps"] if "Swatinem/rust-cache@" in s.get("uses", ""))["with"].pop("cache-on-failure"),
         "Intel build for its own arch": lambda j, w, o: xstep(j, "export-lib")["env"].pop("CARGO_BUILD_TARGET"),
