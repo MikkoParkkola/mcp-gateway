@@ -54,9 +54,14 @@ tr '\0' '\n' < /proc/$$/environ | LC_ALL=C sort > "$obs/$step.env"
 if [ "$step" = install ]; then
   printf '%s' '{lock}' > "$pkg/package-lock.json"
 else
-  mkdir -p "$pkg/node_modules/.bin"
-  cp "{run_bin}" "$pkg/node_modules/.bin/mcp-shim"
-  chmod 755 "$pkg/node_modules/.bin/mcp-shim"
+  # As npm ci lays it out: the package with its manifest naming its bin, and
+  # the .bin link; the run's entry point is read from the manifest.
+  mkdir -p "$pkg/node_modules/mcp-shim" "$pkg/node_modules/.bin"
+  printf '%s' '{{"name":"mcp-shim","version":"1.0.0","bin":{{"mcp-shim":"cli.sh"}}}}' \
+    > "$pkg/node_modules/mcp-shim/package.json"
+  cp "{run_bin}" "$pkg/node_modules/mcp-shim/cli.sh"
+  chmod 755 "$pkg/node_modules/mcp-shim/cli.sh"
+  ln -sf ../mcp-shim/cli.sh "$pkg/node_modules/.bin/mcp-shim"
 fi
 {hook}
 exit 0
