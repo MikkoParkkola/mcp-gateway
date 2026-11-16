@@ -91,7 +91,11 @@ pub(crate) async fn drain_abandoned(
     let sink: &dyn SettleSink = &logger;
     deliver_all(&mut file, sink, &binding).await?;
     if !complete(&file.state) {
-        return Err(refused(&path, Refusal::Incomplete, DrainError::FileRefused));
+        return Err(refused(
+            &path,
+            mutant!("s5", Refusal::Shape, Refusal::Incomplete),
+            DrainError::FileRefused,
+        ));
     }
     remove(&target, &path)
 }
@@ -169,7 +173,7 @@ pub(super) fn state_from_frames(frames: Vec<AbandonedFrame>) -> Option<JournalV2
 /// the drain's own builder (a `settled_by` names an attempt in the file). Checked before any
 /// delivery, so an unfinishable file is refused as found instead of half delivered.
 fn completable(state: &JournalV2) -> bool {
-    widest_finished(state).is_some()
+    mutant!("s4", true, widest_finished(state).is_some())
 }
 
 /// `state` at its widest, every terminal the drain may still freeze built into its token, or
@@ -183,10 +187,10 @@ fn completable(state: &JournalV2) -> bool {
 pub(super) fn widest_finished(state: &JournalV2) -> Option<JournalV2> {
     let mut widest = state.clone();
     for token in widest.writer.iter_mut().chain(widest.attempts.iter_mut()) {
-        if token.intent.delivered && token.intent_counter.is_none() {
+        if mutant!("s1", false, token.intent.delivered && token.intent_counter.is_none()) {
             return None;
         }
-        token.intent_counter = Some(u64::MAX);
+        token.intent_counter = mutant!("s7", token.intent_counter.or(Some(u64::MAX)), Some(u64::MAX));
     }
     // Built against the widened state, so a `settled_by` counter is the widest too.
     let snapshot = widest.clone();
@@ -197,6 +201,7 @@ pub(super) fn widest_finished(state: &JournalV2) -> Option<JournalV2> {
         match super::terminal_record(&snapshot, token) {
             Ok(Some(record)) => token.records.push(record),
             Ok(None) => {}
+            Err(_) if mutant!("s8", true, false) => {}
             Err(_) => return None,
         }
     }
@@ -205,10 +210,14 @@ pub(super) fn widest_finished(state: &JournalV2) -> Option<JournalV2> {
 
 /// Whether `token` already holds a frozen terminal.
 fn holds_terminal(token: &TokenState) -> bool {
-    token
-        .records
-        .iter()
-        .any(|record| matches!(record.role, Role::Outcome | Role::Abandoned))
+    mutant!(
+        "s2",
+        false,
+        token
+            .records
+            .iter()
+            .any(|record| matches!(record.role, Role::Outcome | Role::Abandoned))
+    )
 }
 
 /// Whether every token is settled (the journal's own per-token check, without its handed-over
@@ -245,7 +254,7 @@ impl Refusal {
             Self::Shape => "shape",
             Self::MixedBinding => "mixed_binding",
             Self::ForeignDonor => "foreign_donor",
-            Self::Incomplete => "incomplete",
+            Self::Incomplete => mutant!("s6", "shape", "incomplete"),
         }
     }
 }

@@ -110,7 +110,7 @@ fn private_to_us(_meta: &std::fs::Metadata) -> bool {
 /// and parked with the longest reason. `usize::MAX` when that state cannot be built or encoded.
 pub(super) fn maximal_size(donor: &JournalV2) -> usize {
     // The file drain's own judgement: a donor it could not finish has no bound.
-    let Some(mut widest) = super::file::widest_finished(donor) else {
+    let Some(mut widest) = mutant!("s3", Some(donor.clone()), super::file::widest_finished(donor)) else {
         return usize::MAX;
     };
     let longest = [
