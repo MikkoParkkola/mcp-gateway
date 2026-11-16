@@ -342,7 +342,11 @@ impl LiveConfig {
             let Some(current) = inner.applied.as_deref() else {
                 return;
             };
-            if seq <= current.inputs.capability_seq {
+            if mutant!(
+                "mseq",
+                seq < current.inputs.capability_seq,
+                seq <= current.inputs.capability_seq
+            ) {
                 return;
             }
             (current.pending_restart.clone(), current.inputs.clone())

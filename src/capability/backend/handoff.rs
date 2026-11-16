@@ -193,7 +193,7 @@ impl Handoff {
             let target = Arc::clone(&live);
             let prev = std::mem::replace(&mut inner.state, State::Attached(live));
             let taken = match prev {
-                State::Unattached { held } => held,
+                State::Unattached { held } => mutant!("h1", None, held),
                 State::Attached(_) => None,
             };
             // Only a parked scan is completed by attach. A scan that has not
@@ -240,7 +240,11 @@ impl Handoff {
     /// `true` then, and the caller marks it failed and completes it.
     fn end_failed(&self) -> bool {
         let mut inner = self.inner.lock();
-        if inner.scan == Scan::NotEnded {
+        if mutant!(
+            "endpark",
+            matches!(inner.scan, Scan::NotEnded | Scan::Parked),
+            inner.scan == Scan::NotEnded
+        ) {
             inner.scan = Scan::Failed;
             return true;
         }
@@ -331,7 +335,7 @@ impl super::CapabilityBackend {
         // The readiness-order snapshot needs nothing here: a parked scan set
         // it in its publish, before this attach can make it ready.
         let announce = self.handoff.attach_revision(live);
-        if let Some(registry) = announce {
+        if let Some(registry) = mutant!("announce", None, announce) {
             self.announce_scanned(&registry);
         }
     }

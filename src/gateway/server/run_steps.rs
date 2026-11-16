@@ -149,7 +149,9 @@ impl Gateway {
                 // the file watcher records one that changes while it runs.
                 // Before readiness and before webhook routes are registered, so
                 // nothing it unloads keeps a route.
-                cap_backend_for_load.detect_rug_pulls().await;
+                mutant!("s2", {}, {
+                    cap_backend_for_load.detect_rug_pulls().await;
+                });
 
                 // Before the publish, which can make the scan ready: a client
                 // that sees readiness finds every capability's webhook route.
@@ -168,12 +170,28 @@ impl Gateway {
                 let (seq, part) = cap_backend_for_load.take_served_revision();
                 cap_backend_for_load.announce_scan_through(Arc::clone(&registry_for_load));
                 let transitioned = cap_backend_for_load.publish_initial_scan(seq, part);
+                mutant!(
+                    "s2",
+                    {
+                        cap_backend_for_load.detect_rug_pulls().await;
+                    },
+                    {}
+                );
 
                 // Readiness waits on this (MIK-7268), and clients served during the
                 // scan hear of its catalogue; refusals are reported below.
                 // Attached, the publish marked ready and only the announcement
                 // is left. Unattached, the scan parked: it stays not ready
                 // until attach delivers its part, and attach announces it.
+                mutant!(
+                    "park",
+                    {
+                        if !cap_backend_for_load.initial_scan_complete() {
+                            cap_backend_for_load.finish_initial_scan(&registry_for_load);
+                        }
+                    },
+                    {}
+                );
                 if transitioned {
                     cap_backend_for_load.announce_scanned(&registry_for_load);
                 }

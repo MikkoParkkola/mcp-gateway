@@ -264,7 +264,7 @@ fn write_capability_entries(out: &mut Vec<u8>, entries: &[(String, PartDigest)])
 /// sequence is not written: it is not an input.
 fn write_capability_part(out: &mut Vec<u8>, part: &CapabilityPart<PartDigest>) {
     match part {
-        CapabilityPart::NotLoaded => push_count(out, u64::MAX),
+        CapabilityPart::NotLoaded => push_count(out, mutant!("e1", 0, u64::MAX)),
         CapabilityPart::Partial(entries) => {
             push_count(out, u64::MAX - 1);
             write_capability_entries(out, entries);

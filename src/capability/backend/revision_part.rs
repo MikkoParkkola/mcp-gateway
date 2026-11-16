@@ -118,10 +118,22 @@ impl CapabilityBackend {
         // row reads what a probe that sees the scan complete could see. A scan
         // that parks here is completed later by attach, after this was set.
         #[cfg(test)]
-        let _ = self
-            .records_at_scan_complete
-            .set(self.rug_pull_records().len());
+        mutant!("hook", {}, {
+            let _ = self
+                .records_at_scan_complete
+                .set(self.rug_pull_records().len());
+        });
         let transitioned = self.handoff.publish_and_end(seq, part);
+        #[cfg(test)]
+        mutant!(
+            "hook",
+            {
+                let _ = self
+                    .records_at_scan_complete
+                    .set(self.rug_pull_records().len());
+            },
+            {}
+        );
         #[cfg(test)]
         self.notify_delivery();
         transitioned

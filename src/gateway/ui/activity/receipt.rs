@@ -125,7 +125,7 @@ fn decision_projection(decision: Option<&Decision>) -> Value {
     // adds nothing. A record with no id has nothing to qualify.
     if d.config_revision.is_some() {
         let line = read::capabilities_line(d.config_revision_capabilities);
-        if !line.is_empty() {
+        if mutant!("receipt", false, !line.is_empty()) {
             out.insert("config_revision_capabilities".into(), line.into());
         }
     }
