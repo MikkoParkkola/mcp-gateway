@@ -349,6 +349,19 @@ scan() {
 merge_base=""
 declare -A added=()
 if [[ -n "$base" ]]; then
+  # A bare name resolves to a local branch first. A shared clone held a local copy of the line two
+  # months stale, so a bare --base scanned that whole history and reported thousands of findings the
+  # change never made. A local branch that differs from its origin/ namesake is refused; checked only
+  # when git resolves the name to that branch (a tag of the same name resolves first).
+  git rev-parse --verify -q "$base^{commit}" >/dev/null ||
+    { printf -- '--base %s is not a commit\n' "$base" >&2; exit 2; }
+  if [[ "$(git rev-parse --symbolic-full-name "$base" 2>/dev/null)" == "refs/heads/$base" ]] &&
+    origin_sha="$(git rev-parse --verify -q "refs/remotes/origin/$base")" &&
+    [[ "$(git rev-parse "refs/heads/$base")" != "$origin_sha" ]]; then
+    printf -- '--base %s is the local branch at %s, not origin/%s at %s; pass --base origin/%s, or --base refs/heads/%s for the local branch\n' \
+      "$base" "$(git rev-parse --short=10 "refs/heads/$base")" "$base" "${origin_sha:0:10}" "$base" "$base" >&2
+    exit 2
+  fi
   merge_base="$(git merge-base "$base" HEAD)"
   # No rename detection: a file renamed into a private path or a ticket-id
   # name is judged as the addition it is.

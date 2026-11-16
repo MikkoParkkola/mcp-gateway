@@ -24,8 +24,7 @@ const BACKEND_RESERVE: Duration = Duration::from_millis(10_400);
 /// Reserved for retirement: runtime and main-stack coordination, then the logger.
 const TERMINAL_RESERVE: Duration = Duration::from_millis(2_250);
 /// The logger's share of the terminal reserve: the runtime wait ends this long
-/// before the total does. Test-only with `runtime_end`.
-#[cfg(test)]
+/// before the total does.
 const LOGGER_TAIL: Duration = Duration::from_secs(2);
 
 /// The most an in-flight, override or task drain waits, whatever is left to Dp.
@@ -83,9 +82,8 @@ impl StopBudget {
         Self { t0, total }
     }
 
-    /// D: the end of the whole stop. Test-only: the stages are given Db, Dp and
-    /// Dl, and nothing in production waits on D itself until retirement does.
-    #[cfg(test)]
+    /// D: the end of the whole stop, which retirement and the process exit
+    /// end by (see `crate::retire`).
     pub(crate) fn end(&self) -> Instant {
         self.t0 + self.total
     }
@@ -114,9 +112,7 @@ impl StopBudget {
                 .saturating_sub(POST_RESERVE + BACKEND_RESERVE + TERMINAL_RESERVE)
     }
 
-    /// Dr: where the runtime wait ends, before the logger's share. Test-only
-    /// until the retirement slice waits on it.
-    #[cfg(test)]
+    /// Dr: where the runtime wait ends, before the logger's share.
     pub(crate) fn runtime_end(&self) -> Instant {
         self.end() - LOGGER_TAIL
     }

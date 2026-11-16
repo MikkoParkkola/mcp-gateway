@@ -46,7 +46,11 @@ fn row(report: &SecretStoreReport) -> CheckResult {
             })
         }
         (Some(_), false, Some(count)) if count > 0 => CheckResult::warn("secret-store", detail)
-            .with_hint("unused entries stay until an admin removes them"),
+            .with_hint(
+                "unused entries stay until an admin removes them; doctor reads the config's \
+                 capability directories, and the running gateway's Settings list, which also reads \
+                 its live ones, can show fewer",
+            ),
         (Some(_), false, None) => CheckResult::warn("secret-store", detail)
             .with_hint("the unused entries could not be counted; run doctor again"),
         _ => CheckResult::pass("secret-store", detail),

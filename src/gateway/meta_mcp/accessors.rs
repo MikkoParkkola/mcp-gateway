@@ -32,7 +32,16 @@ impl MetaMcp {
     pub(in crate::gateway) fn restart_board(
         &self,
     ) -> &Arc<crate::gateway::restart_status::RestartBoard> {
-        &self.restart_board
+        self.restart_slot.board()
+    }
+
+    /// This boot's restart slot, over the same board.
+    #[allow(
+        dead_code,
+        reason = "the admin restart route, a later slice, is the slot's only caller"
+    )]
+    pub(in crate::gateway) fn restart_slot(&self) -> &crate::gateway::restart_slot::RestartSlot {
+        &self.restart_slot
     }
 
     pub(in crate::gateway) fn get_webhook_registry(
