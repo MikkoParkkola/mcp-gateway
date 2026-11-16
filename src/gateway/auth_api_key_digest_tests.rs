@@ -133,20 +133,21 @@ async fn call_protected(
         .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
         .body(Body::empty())
         .expect("request builds");
+    // Forwarding headers the client wrote, naming someone else: never the peer,
+    // with or without connect info.
+    for (name, value) in [
+        ("x-forwarded-for", SPOOFED),
+        ("forwarded", "for=198.51.100.9"),
+    ] {
+        request
+            .headers_mut()
+            .insert(name, value.parse().expect("header value"));
+    }
     if let Some(peer) = peer {
-        // What both serve paths install (`into_make_service_with_connect_info`),
-        // plus forwarding headers the client wrote, which name someone else.
+        // What both serve paths install (`into_make_service_with_connect_info`).
         request
             .extensions_mut()
             .insert(axum::extract::ConnectInfo(peer));
-        for (name, value) in [
-            ("x-forwarded-for", SPOOFED),
-            ("forwarded", "for=198.51.100.9"),
-        ] {
-            request
-                .headers_mut()
-                .insert(name, value.parse().expect("header value"));
-        }
     }
     let response = router.call(request).await.expect("infallible");
     let reached = *seen.lock().expect("sink");
@@ -202,6 +203,10 @@ fn a_refused_token_logs_its_peer() {
             );
         } else {
             assert!(!line.contains("peer"), "no connection, no peer: {line}");
+            assert!(
+                !line.contains(SPOOFED),
+                "a client header named the peer: {line}"
+            );
         }
     }
 }

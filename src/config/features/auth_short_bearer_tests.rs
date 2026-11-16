@@ -148,15 +148,24 @@ fn a_short_bearer_warns_once_at_load() {
             "{spec}: repeated: {lines}"
         );
     }
-    let (other, lines) = crate::test_log_capture::capture_warnings(|| {
-        load(dir.path(), "standard", "t6-short-bearer-two", env)
-    });
-    other.expect("loads");
-    assert_eq!(
-        lines.matches("auth.bearer_token").count(),
-        1,
-        "a new short token warns: {lines}"
-    );
+    // A new short token warns again: a new literal, and a new value behind the
+    // same `env:` reference (the warning follows the token, not the config text).
+    for (spec, env) in [
+        ("t6-short-bearer-two", env),
+        (
+            "env:MIK9721_T6_TOKEN",
+            "MIK9721_T6_TOKEN=t6-short-env-other\n",
+        ),
+    ] {
+        let (other, lines) =
+            crate::test_log_capture::capture_warnings(|| load(dir.path(), "standard", spec, env));
+        other.expect("loads");
+        assert_eq!(
+            lines.matches("auth.bearer_token").count(),
+            1,
+            "{spec}: {lines}"
+        );
+    }
 }
 
 /// T7: hardened refuses a short literal or `env:` token, naming the field,
