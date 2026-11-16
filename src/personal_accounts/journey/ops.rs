@@ -10,7 +10,7 @@ use super::{
     ISSUER_MAX, JourneyError, JourneyId, JourneyLimits, JourneyReason, JourneyRecord,
     JourneyRefusal, JourneyStatus, JourneyTable, JourneyView, NewJourney, RETURN_PATH_MAX,
     START_WINDOW, SUBJECT_MAX, Secret, StartSecrets, digests_equal, keyed_digest, principal_digest,
-    principal_digest_of, random_secret,
+    principal_digest_of,
 };
 use crate::personal_accounts::config::AccountDescriptor;
 use crate::personal_accounts::service::ConsentExpectation;
@@ -138,9 +138,9 @@ struct Minted {
 
 fn mint(config: &StoreConfig) -> Result<Minted, AccountError> {
     let secrets = StartSecrets {
-        state: random_secret()?,
-        binding: random_secret()?,
-        verifier: random_secret()?,
+        state: crate::random_secret::random_secret(""),
+        binding: crate::random_secret::random_secret(""),
+        verifier: crate::random_secret::random_secret(""),
     };
     let key_id = config.current_key_id.clone();
     let digest = |secret, value: &str| {

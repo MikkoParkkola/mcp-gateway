@@ -96,10 +96,10 @@ src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Err
 src/gateway/server/identity_grants.rs	load_configured_identity_grants	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/identity_grants.rs	start_identity_grant_audit	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/run.rs	run	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/run.rs	run	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/run.rs	run	Error::Config(..)	3	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/run_steps.rs	start_capability_watcher	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/run_steps.rs	start_key_server	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/run_wiring.rs	open_tasks	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/run_wiring.rs	open_tasks	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/run_wiring.rs	refuse_or_warn_before_bind	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/start_checks.rs	clock	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/start_checks.rs	http	Error::Config (as value)	1	no-record	start-up: the gateway refuses to start, no call exists

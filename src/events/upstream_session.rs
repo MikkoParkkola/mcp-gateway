@@ -95,7 +95,12 @@ fn backoff(failures: u32) -> Duration {
         .saturating_mul(1u32 << failures.min(9))
         .min(BACKOFF_CAP);
     // ±25 % jitter, so a restarted fleet does not reconnect in lockstep.
-    base.mul_f64(0.75 + 0.5 * rand::random::<f64>())
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "jitter: reconnect backoff spread"
+    )]
+    let spread = rand::random::<f64>();
+    base.mul_f64(0.75 + 0.5 * spread)
 }
 
 fn event_name(backend: &str, kind: NoteKind) -> String {

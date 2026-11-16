@@ -99,6 +99,9 @@ impl Store {
             ..record
         };
         match state.subs.get(&record.subscription_id) {
+            // An ended row's notice is never replayed: the row it reported
+            // is gone, and a live row under its id is another grant.
+            _ if !record.is_event() => return Ok(Revived::NoSubscription),
             // An expired subscription takes nothing, even before its sweep.
             Some(sub) if sub.live(now) => {
                 // Suspended: never attempted, and dropped unburied should it

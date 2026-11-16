@@ -49,6 +49,8 @@ pub(super) fn read_or_skip(root: &Path, rel: &str, packaged: bool) -> Option<Str
 pub(super) enum PinnedFile {
     /// `scripts/lint/registry-ban/clippy.toml`, read by `t1f`.
     RegistryBanClippy,
+    /// The root `clippy.toml`, read by `the_root_ban_span_is_the_root_config_list`.
+    RootClippy,
     /// `scripts/dev/pre-push.sh`, read by `t1f`.
     PrePush,
     /// `.github/workflows/ci.yml`, read by `checked_in_workflow`.
@@ -65,6 +67,7 @@ impl PinnedFile {
     pub(super) fn path(self) -> &'static str {
         match self {
             PinnedFile::RegistryBanClippy => "scripts/lint/registry-ban/clippy.toml",
+            PinnedFile::RootClippy => "clippy.toml",
             PinnedFile::PrePush => "scripts/dev/pre-push.sh",
             PinnedFile::CiWorkflow => ".github/workflows/ci.yml",
             PinnedFile::UnsafeAdr => "docs/adr/ADR-016-scoped-unsafe-windows-acl.md",
@@ -154,6 +157,7 @@ fn pinned_repo_files_are_read_in_a_checkout() {
     }
     for file in [
         PinnedFile::RegistryBanClippy,
+        PinnedFile::RootClippy,
         PinnedFile::PrePush,
         PinnedFile::CiWorkflow,
         PinnedFile::UnsafeAdr,
@@ -161,6 +165,7 @@ fn pinned_repo_files_are_read_in_a_checkout() {
     ] {
         let rel = match file {
             PinnedFile::RegistryBanClippy => "scripts/lint/registry-ban/clippy.toml",
+            PinnedFile::RootClippy => "clippy.toml",
             PinnedFile::PrePush => "scripts/dev/pre-push.sh",
             PinnedFile::CiWorkflow => ".github/workflows/ci.yml",
             PinnedFile::UnsafeAdr => "docs/adr/ADR-016-scoped-unsafe-windows-acl.md",

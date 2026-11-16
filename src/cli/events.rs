@@ -44,7 +44,7 @@ pub struct DeadLettersArgs {
     #[arg(long)]
     pub subscription: Option<String>,
     /// Only dead letters with this reason (`list`).
-    #[arg(long)]
+    #[arg(hide = true, long)]
     pub reason: Option<String>,
     /// Gateway base URL (default as for `dashboard-link`).
     #[arg(short, long)]

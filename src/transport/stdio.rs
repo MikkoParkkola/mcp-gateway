@@ -506,6 +506,8 @@ mod sweep;
 #[cfg(all(test, unix))]
 pub(crate) const NESTED_TERM_NEED_FOR_TEST: std::time::Duration = child_tree::NESTED_TERM_NEED;
 #[cfg(all(test, unix))]
+pub(crate) use child_tree::signal_log;
+#[cfg(all(test, unix))]
 pub(crate) use reaper::HURRY_WINDOW;
 #[cfg(all(test, unix))]
 pub(crate) use reaper::KILL_RESERVE as KILL_RESERVE_FOR_TEST;

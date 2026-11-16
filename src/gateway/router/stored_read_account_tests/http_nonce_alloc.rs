@@ -9,8 +9,8 @@
 //! Why not the stdio caps (2 large, 8 KiB small, MIK-8400): those bound a
 //! whole refusal after parse; this share is a fixed cost per refused call
 //! with no payload term, the same at 1 and 3 MiB. The cap is on that share
-//! and on its staying payload-independent; the pinned large count and how it
-//! moved are at [`LARGE_ALLOCATIONS`]. HTTP intake's own cost is outside it
+//! and on its staying payload-independent; the ceiling and the readings it
+//! was set from are at [`EXTRA_CEILING`]. HTTP intake's own cost is outside it
 //! (the plain target pays it too).
 //!
 //! Custody work runs in `spawn_blocking`, off the request's thread, so the
@@ -28,17 +28,23 @@ use crate::gateway::alloc_meter::{
 };
 use crate::security::sanitize::InputSanitizing;
 
-/// Exactly this many more large allocations on the per-user target
-/// (all threads; the lead's ruling keeps the count exact). Measured 3 at
-/// first, 2 after merges #3954/#3965/#3974/#3973/#3977/#3956, 1 after #3976:
-/// a change in either direction must be re-measured and re-ruled, not
-/// absorbed.
-const LARGE_ALLOCATIONS: u64 = 1;
-/// At most this many more bytes in large allocations.
-const LARGE_BUDGET: u64 = 16 * 1024;
-/// At most this many more bytes in small allocations: measured 62,210 to
-/// 62,260 B, most of it the custody read on the blocking pool.
-const SMALL_BUDGET: u64 = 96 * 1024;
+/// At most this many more bytes (large plus small, every thread of the
+/// isolated child) on the per-user target than on the plain one.
+///
+/// Set 2026-11-15 from 50 isolated runs of each of the three rows on Spark
+/// (300 readings at 1 and 3 MiB): the per-user extra ran 67,485 to 68,387 B,
+/// most of it the custody read on the blocking pool. Ceiling = the highest
+/// reading plus a margin of the spread (902 B) rounded up to the next KiB plus
+/// 1 KiB, 2,048 B: a new per-call buffer of 4 KiB fails, a future grown by a
+/// few bytes across the 2 KiB size class does not. This replaced an exact
+/// large-allocation count, which tripped on size classes rather than cost
+/// (#4386, #4411).
+///
+/// Applied on Linux only, where it was measured: Windows runs about 8 KB higher
+/// (76.7 to 76.8 KB), and the allocation code is shared, so Linux catches
+/// growth on every platform. The 1 vs 3 MiB check below runs everywhere, so a
+/// payload copy fails on every platform.
+const EXTRA_CEILING: u64 = 68_387 + 2_048;
 /// The share may differ by at most this much between 1 and 3 MiB.
 ///
 /// 2 KiB (lead ruling 2026-10-27; was 1 KiB): the refused call's delivery
@@ -283,15 +289,23 @@ fn verdict_share_is_capped(kind: &str, nonce: impl Fn(&str) -> Option<Value>, ex
                 "ALLOC.2 {kind} {size}: the plain target cost more than the per-user one, \
                  so the baseline is wrong: {share:?}"
             );
-            assert!(
-                share.large == i128::from(LARGE_ALLOCATIONS)
-                    && share.large_bytes <= i128::from(LARGE_BUDGET)
-                    && share.small_bytes <= i128::from(SMALL_BUDGET),
-                "ALLOC.2 {kind} {size}: the verdict's share {share:?} is not \
-                 {LARGE_ALLOCATIONS} large within {LARGE_BUDGET} B and {SMALL_BUDGET} B small \
-                 (per-user {}, plain {})",
-                readings[0],
-                readings[1]
+            if cfg!(target_os = "linux") {
+                assert!(
+                    share.large_bytes + share.small_bytes <= i128::from(EXTRA_CEILING),
+                    "ALLOC.2 {kind} {size}: the verdict's share {share:?} is above \
+                     {EXTRA_CEILING} B (per-user {}, plain {})",
+                    readings[0],
+                    readings[1]
+                );
+            }
+            // One tagged line per reading (forwarded by the isolated child): the
+            // per-user extra the ceiling is set from, and its parts.
+            println!(
+                "\n{TAG}ALLOC.2 {kind} size={size} extra={} large={} large_bytes={} small_bytes={}",
+                share.large_bytes + share.small_bytes,
+                share.large,
+                share.large_bytes,
+                share.small_bytes
             );
             shares.push(share);
         }

@@ -674,7 +674,7 @@ fn recovery_token() -> String {
         .issue(
             &crate::attestation::TokenRequest {
                 agent_identity: "alice".to_string(),
-                task_uuid: uuid::Uuid::new_v4(),
+                task_uuid: crate::ids::new_v4(),
                 capabilities: vec![TOOL.to_string()],
             },
             chrono::Utc::now(),

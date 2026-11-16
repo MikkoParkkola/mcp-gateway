@@ -482,7 +482,7 @@ impl SignedAssertionStrategy {
             iat: now,
             nbf: now,
             exp,
-            jti: uuid::Uuid::new_v4().to_string(),
+            jti: crate::ids::new_v4().to_string(),
         };
         let token = sign_es256_jwt(&self.key, &claims)?;
         Ok((token, exp))

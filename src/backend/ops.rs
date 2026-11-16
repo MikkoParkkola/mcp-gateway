@@ -38,7 +38,7 @@ impl Backend {
         fields(
             backend = %self.name,
             method = %method,
-            request_id = %uuid::Uuid::new_v4()
+            request_id = %crate::ids::new_v4()
         )
     )]
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
@@ -633,7 +633,7 @@ impl Backend {
         fields(
             backend = %self.name,
             method = %method,
-            request_id = %uuid::Uuid::new_v4()
+            request_id = %crate::ids::new_v4()
         )
     )]
     pub(crate) async fn notify_with_headers_lent(

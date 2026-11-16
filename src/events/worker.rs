@@ -54,6 +54,10 @@ impl EventsHub {
         } = *claimed;
         #[cfg(test)]
         self.after_claim.pause().await;
+        if !record.is_event() {
+            self.attempt_ended(services, &record, &sub).await;
+            return;
+        }
         let url = url::Url::parse(&sub.url).ok();
         let ctx = Ctx {
             sub: &sub,
@@ -533,14 +537,12 @@ impl EventsHub {
         // attempt's window check fails closed (MIK-8202).
         let now = now.unwrap_or(record.next_attempt_at);
         let first = record.first_attempt_at.unwrap_or(now);
-        judge(
-            answer,
-            record.sends(),
-            first,
-            now,
-            policy,
-            rand::random::<f64>(),
-        )
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "sample: the retry delay's random spread"
+        )]
+        let roll = rand::random::<f64>();
+        judge(answer, record.sends(), first, now, policy, roll)
     }
 }
 
@@ -764,6 +766,8 @@ const fn dead(reason: DeadReason, status: &'static str) -> Settle {
 
 #[path = "worker_dispatch.rs"]
 mod dispatch;
+#[path = "worker_ended.rs"]
+mod ended;
 #[path = "worker_fence.rs"]
 mod fence;
 #[path = "worker_settle.rs"]
