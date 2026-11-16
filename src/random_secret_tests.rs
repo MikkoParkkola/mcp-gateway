@@ -484,7 +484,7 @@ const SERIALIZERS: [&str; 10] = [
 /// Text that leaves the process too: log lines, formatted strings and panic
 /// messages. A field read in one is barred like a serializer's; a whole
 /// container is not, because a key's `Debug` already redacts its digests.
-const TEXT_OUTPUTS: [&str; 13] = [
+const TEXT_OUTPUTS: [&str; 22] = [
     "info!(",
     "warn!(",
     "error!(",
@@ -497,7 +497,16 @@ const TEXT_OUTPUTS: [&str; 13] = [
     "writeln!(",
     "println!(",
     "eprintln!(",
+    "print!(",
+    "eprint!(",
     "panic!(",
+    "assert!(",
+    "assert_eq!(",
+    "assert_ne!(",
+    "dbg!(",
+    "todo!(",
+    "unimplemented!(",
+    "unreachable!(",
 ];
 
 /// The credential digest and approval reads no serializer argument may hold.
@@ -513,16 +522,22 @@ const DIGEST_READS: [&str; 7] = [
 
 /// The only sites that serialise an auth section or a whole config, with how
 /// many each file holds, so a second site in one of these files fails too.
+/// Every one is the config writer or an equality check inside the process.
 const CONTAINER_SERIALIZERS: &[(&str, usize, &str)] = &[
     (
-        "src/config_persistence_splice.rs",
+        "src/config_persistence.rs",
         1,
-        "config writer: the whole config back to gateway.yaml, keys through AuthConfig's mirror",
+        "in-memory equality: the comment-loss check compares the configs before and after as JSON values",
+    ),
+    (
+        "src/config_persistence_splice.rs",
+        3,
+        "in-memory equality: the spliced text must reload as the config, compared as JSON values",
     ),
     (
         "src/config_persistence_url.rs",
         1,
-        "config writer: the whole config back to gateway.yaml, keys through AuthConfig's mirror",
+        "config writer: the whole config rendered to gateway.yaml, keys through AuthConfig's mirror",
     ),
     (
         "src/config_reload/diff.rs",
@@ -536,8 +551,9 @@ const CONTAINER_SERIALIZERS: &[(&str, usize, &str)] = &[
     ),
 ];
 
-/// Each balanced argument list in `code` of a call to one of `names`.
-fn call_arguments<'c>(code: &'c str, names: &[&str]) -> Vec<&'c str> {
+/// Each balanced argument list in `code` of a call to one of `names`, with
+/// where the call starts.
+fn call_arguments<'c>(code: &'c str, names: &[&str]) -> Vec<(usize, &'c str)> {
     let mut found = Vec::new();
     for name in names {
         for (at, _) in code.match_indices(name) {
@@ -549,7 +565,7 @@ fn call_arguments<'c>(code: &'c str, names: &[&str]) -> Vec<&'c str> {
                     ')' | ']' | '}' => {
                         depth -= 1;
                         if depth == 0 {
-                            found.push(&code[open + 1..open + offset]);
+                            found.push((at, &code[open + 1..open + offset]));
                             break;
                         }
                     }
@@ -561,14 +577,24 @@ fn call_arguments<'c>(code: &'c str, names: &[&str]) -> Vec<&'c str> {
     found
 }
 
-/// An auth section or a whole config: `config` / `auth` alone, or a `.auth`
-/// (`.auth()`) that is the value itself, not a member read such as
-/// `.auth().enabled`.
-fn is_container(arguments: &str) -> bool {
+/// An auth section or a whole config: `config` / `auth` alone; a value built
+/// by `Config::` or `AuthConfig::`; a closure parameter typed `&Config` or
+/// `&AuthConfig` on the call's line; or a `.auth` (`.auth()`) that is the
+/// value itself, not a member read such as `.auth().enabled`.
+fn is_container(code: &str, at: usize, arguments: &str) -> bool {
     let bare = arguments.trim().trim_start_matches('&').trim();
     let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let line_start = code[..at].rfind('\n').map_or(0, |n| n + 1);
+    let line = &code[line_start..at];
+    let typed_closure = !bare.is_empty()
+        && bare.chars().all(ident)
+        && ["Config", "AuthConfig"]
+            .iter()
+            .any(|ty| line.contains(&format!("|{bare}: &{ty}|")));
     bare == "config"
         || bare == "auth"
+        || typed_closure
+        || arguments.contains("Config::")
         || arguments.match_indices(".auth").any(|(at, word)| {
             let rest = &arguments[at + word.len()..];
             let rest = rest.strip_prefix("()").unwrap_or(rest).trim_start();
@@ -584,11 +610,14 @@ fn no_credential_field_reaches_a_serializer() {
         let arguments = call_arguments(&code, &SERIALIZERS);
         let outputs = call_arguments(&code, &[&SERIALIZERS[..], &TEXT_OUTPUTS[..]].concat());
         for read in DIGEST_READS {
-            if outputs.iter().any(|a| a.contains(read)) {
+            if outputs.iter().any(|(_, a)| a.contains(read)) {
                 reads.push(format!("{file}: {read}"));
             }
         }
-        let count = arguments.iter().filter(|a| is_container(a)).count();
+        let count = arguments
+            .iter()
+            .filter(|(at, a)| is_container(&code, *at, a))
+            .count();
         if count > 0 {
             containers.push((file, count));
         }

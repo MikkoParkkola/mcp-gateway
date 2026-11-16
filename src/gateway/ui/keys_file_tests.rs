@@ -321,10 +321,10 @@ fn r1_keys_rs_names_no_credential_field() {
         };
         assert_eq!(named, allowed, "keys.rs names {name}");
     }
-    assert!(
-        !code.contains(".key ") && !code.contains(".key)") && !code.contains(".key;"),
-        "keys.rs reads a key's plaintext field"
-    );
+    let plaintext = code
+        .match_indices(".key")
+        .any(|(at, word)| !code[at + word.len()..].starts_with(ident));
+    assert!(!plaintext, "keys.rs reads a key's plaintext field");
 }
 
 /// R3: no file, and a file that cannot be loaded, each say so, carry no

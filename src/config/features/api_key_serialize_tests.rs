@@ -86,6 +86,36 @@ fn shapes() -> AuthConfig {
     }
 }
 
+/// Kills "a key's Debug prints a credential": the serializer pin lets a whole
+/// key reach a log line only because its `Debug` redacts every credential
+/// field. Neither a key nor the auth config that prints its keys shows a
+/// plaintext key, a digest, a principal or an approval value.
+#[test]
+fn a_key_debug_prints_no_credential_value() {
+    let auth = shapes();
+    let hex = |c: char| std::iter::repeat_n(c, 64).collect::<String>();
+    let secrets = [
+        "plaintext-never-written".to_owned(),
+        hex('a'),
+        hex('b'),
+        hex('c'),
+        "env:PREVIOUS_KEY".to_owned(),
+        "env:KEY_DIGEST".to_owned(),
+        "0123456789ab".to_owned(),
+    ];
+    let printed: Vec<String> = std::iter::once(format!("{auth:?}"))
+        .chain(auth.api_keys.iter().map(|key| format!("{key:?}")))
+        .collect();
+    for text in &printed {
+        for secret in &secrets {
+            assert!(
+                !text.contains(secret.as_str()),
+                "Debug prints {secret}: {text}"
+            );
+        }
+    }
+}
+
 /// The config's YAML and JSON before the key type stopped being Serialize.
 /// A change to another auth field's output changes them too: take the new
 /// bytes from the failure message and check that only that field moved.
