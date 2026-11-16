@@ -64,6 +64,8 @@ pub(crate) mod restart_confirm;
 #[cfg(test)]
 mod restart_confirm_tests;
 #[cfg(test)]
+mod restart_get_tests;
+#[cfg(test)]
 mod restart_tests;
 mod secret_slots;
 pub(crate) mod session;
