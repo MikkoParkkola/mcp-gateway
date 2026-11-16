@@ -192,7 +192,11 @@ fn t8_a_duplicated_status_field_is_refused() {
 
 /// T8, kills "the listener outlives the accept": once the helper's one
 /// connection is taken, whatever the peer check said, no second connection
-/// is served.
+/// is served. A live listener, leaked or accepting in a loop, takes every
+/// connect, so connects never become refused and the guard fails the row.
+/// The first connect may still succeed: a child another test forks copies
+/// the listener's fd until its exec, and a connect in that window is only
+/// queued on a socket nothing accepts on. After the exec, connects refuse.
 #[tokio::test]
 async fn t8_no_second_connection_is_served() {
     let dir = tempfile::tempdir().expect("dir");
@@ -204,7 +208,13 @@ async fn t8_no_second_connection_is_served() {
         .expect("the accept did not end within the guard");
     drop(accepted);
     let _first = first.await.expect("join");
-    assert!(tokio::net::UnixStream::connect(&path).await.is_err());
+    tokio::time::timeout(GUARD, async {
+        while tokio::net::UnixStream::connect(&path).await.is_ok() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("a second connection kept being taken after the accept");
 }
 
 /// A `/proc/<pid>/stat` line: field 22, the start time, is `start`.
