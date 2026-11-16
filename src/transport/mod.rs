@@ -40,6 +40,8 @@ pub(crate) use self::stdio::NESTED_TERM_NEED_FOR_TEST;
 #[cfg(test)]
 pub(crate) use self::stdio::assigned_package_cache_dir;
 pub(crate) use self::stdio::isolated_env_and_assigned_cache;
+#[cfg(all(test, unix))]
+pub(crate) use self::stdio::signal_log;
 pub use self::stdio::{
     CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES, StdioTransport,
     isolated_package_manager_env,

@@ -9,8 +9,8 @@ use super::*;
 use crate::transport::KILL_RESERVE_FOR_TEST;
 
 /// [`PEER`], but SIGTERM leaves a `term` mark in its dir and is otherwise
-/// ignored from its first line on: a row then sees that the reaper's plan
-/// sent SIGTERM before its kill. Only the group SIGKILL ends it.
+/// ignored from its first line on, so only the group SIGKILL ends it. Rows
+/// prove the plan's order from the reaper's record, not from this mark.
 fn marking_peer() -> String {
     const IGNORE: &str = "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n";
     const MARK: &str =
@@ -40,9 +40,11 @@ fn marking(
 }
 
 /// Waits (30 s watchdog) until the leader at `pid` has ended, then requires
-/// the `term` mark: the graceful plan sends SIGTERM before its kill, while an
-/// immediate kill (a stop's sweep, a retire) sends none.
-async fn ended_after_term(dir: &std::path::Path, pid: Pid) {
+/// the reaper's record (armed before the stop): the graceful plan sends SIGTERM
+/// before its kill, while an immediate kill (a stop's sweep, a retire) sends
+/// none. The record, not the peer's `term` mark: a loaded host may not run the
+/// peer's handler inside the gap.
+async fn ended_after_term(pid: Pid) {
     let by = std::time::Instant::now() + Duration::from_secs(30);
     while kernel_view(pid) == Some(false) {
         assert!(
@@ -51,10 +53,8 @@ async fn ended_after_term(dir: &std::path::Path, pid: Pid) {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert!(
-        dir.join("term").exists(),
-        "the tree ended without the SIGTERM its graceful plan sends first"
-    );
+    crate::transport::signal_log::assert_term_then_kill(pid, "the handed tree's graceful plan")
+        .await;
 }
 
 /// A registry with one started [`marking`] backend in `dir`, the premise
@@ -90,6 +90,7 @@ fn stage_deadline() -> tokio::time::Instant {
 async fn the_early_stop_hands_a_lock_held_backends_tree_over_at_its_first_step() {
     let dir = tempfile::tempdir().expect("temp dir");
     let (registry, backend, _end, pid) = one_live(dir.path()).await;
+    crate::transport::signal_log::arm(pid);
     let once = backend.stop_once.lock().await;
     let lifecycle = backend.lifecycle.write().await;
     let mut stop =
@@ -105,7 +106,7 @@ async fn the_early_stop_hands_a_lock_held_backends_tree_over_at_its_first_step()
     );
     // Locks still held and the stop not polled again: no sweep can run, so
     // only the reaper's plan can end the tree.
-    ended_after_term(dir.path(), pid).await;
+    ended_after_term(pid).await;
     drop((once, lifecycle));
     tokio::time::timeout(Duration::from_secs(30), stop)
         .await
@@ -119,6 +120,7 @@ async fn the_early_stop_hands_a_lock_held_backends_tree_over_at_its_first_step()
 async fn an_early_stop_dropped_after_its_first_step_still_ends_its_trees() {
     let dir = tempfile::tempdir().expect("temp dir");
     let (registry, backend, _end, pid) = one_live(dir.path()).await;
+    crate::transport::signal_log::arm(pid);
     let _once = backend.stop_once.lock().await;
     let _lifecycle = backend.lifecycle.write().await;
     {
@@ -130,7 +132,7 @@ async fn an_early_stop_dropped_after_its_first_step_still_ends_its_trees() {
             "premise: the held locks keep the stop waiting"
         );
     }
-    ended_after_term(dir.path(), pid).await;
+    ended_after_term(pid).await;
 }
 
 /// R2 (HANDOVER.2): the stop's first step latches every backend, so a start
