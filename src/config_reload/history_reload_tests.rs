@@ -205,7 +205,7 @@ async fn h1a_an_env_file_edit_seen_by_the_poll_is_its_own_version() {
         snapshots
             .last()
             .and_then(|snapshot| stored(snapshot, &gateway))
-            .map(|file| file.bytes.clone()),
+            .and_then(|file| file.bytes.clone()),
         previous_gateway
     );
 }
@@ -493,7 +493,8 @@ async fn h10_the_version_holds_the_published_bytes_not_the_disk() {
         .expect("the edit applies");
 
     let gateway = path_string(&started.path);
-    let newest = started.store.snapshots().last();
+    let snapshots = started.store.snapshots();
+    let newest = snapshots.last();
     assert_eq!(
         newest
             .and_then(|snapshot| stored(snapshot, &gateway))
