@@ -1,0 +1,1 @@
+src/gateway/router/process_facts.rs	restart_confirm	1	Hands the restart confirmation registry to its caller; decides nothing (the checks live in gateway/ui/restart_confirm.rs).

@@ -517,8 +517,16 @@ fn after_a_cut_custody_step_the_final_detach_keeps_the_last_drop_off_the_caller(
         let _ = release.send(());
         let _ = op.await;
         let provider = Arc::clone(&fx.provider);
+        // The last drop may run on the release thread after the operation lets
+        // go, so nothing above orders it before the read below. The done signal
+        // does: the service drops before its done guard.
+        let mut done = fx.handle.done.clone();
         // The gateway is dropped last, as `run_stdio` returns.
         drop(fx);
+        tokio::time::timeout(HANG_BOUND, done.wait_for(|gone| *gone))
+            .await
+            .expect("the store's release finished within the hang bound")
+            .expect("the done signal");
         let dropped_on = provider
             .drop_thread
             .lock()

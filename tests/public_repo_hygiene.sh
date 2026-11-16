@@ -51,7 +51,7 @@ assert_fail_contains() {
     echo "expected hygiene check to fail in $repo" >&2
     exit 1
   fi
-  if ! grep -F -q "$expected" "$output"; then
+  if ! grep -F -q -- "$expected" "$output"; then
     cat "$output" >&2
     echo "expected failure output to contain: $expected" >&2
     exit 1
@@ -231,7 +231,7 @@ assert_base_fail_contains() {
     echo "expected hygiene check to fail against $base in $repo" >&2
     exit 1
   fi
-  if ! grep -F -q "$expected" "$output"; then
+  if ! grep -F -q -- "$expected" "$output"; then
     cat "$output" >&2
     echo "expected failure output to contain: $expected" >&2
     exit 1
@@ -244,6 +244,18 @@ assert_base_pass() {
   if ! (cd "$repo" && scripts/dev/check-public-repo-hygiene.sh --base "$base" >"$output" 2>&1); then
     cat "$output" >&2
     echo "expected hygiene check to pass against $base in $repo" >&2
+    exit 1
+  fi
+}
+
+# A refused --base is a usage error: exit 2, never the hygiene failure's 1.
+assert_base_refused() {
+  local repo="$1" base="$2" expected="$3" rc=0
+  local output="$tmp_root/refused.out"
+  (cd "$repo" && scripts/dev/check-public-repo-hygiene.sh --base "$base" >"$output" 2>&1) || rc=$?
+  if [[ "$rc" -ne 2 ]] || ! grep -F -q -- "$expected" "$output"; then
+    cat "$output" >&2
+    echo "expected --base $base to be refused with exit 2 and: $expected (exit was $rc)" >&2
     exit 1
   fi
 }
@@ -329,6 +341,44 @@ commit_all "$repo" "seed"
 printf 'fn reload() {}\n' >>"$repo/src/lib.rs"
 commit_all "$repo" "change"
 assert_base_pass "$repo" HEAD~1
+
+# A bare --base resolves to a local branch first. A stale local copy of the line once made the check
+# scan months of old history and report thousands of findings this change never made. A local branch
+# that differs from its origin/ namesake is refused with the refs to pass; one equal to it still works.
+# Every other form is used as given: the explicit local ref, a branch with no origin/ copy, a tag, a sha.
+repo="$(make_repo base-stale-local-branch)"
+mkdir -p "$repo/src"
+printf 'fn start() {}\n' >"$repo/src/lib.rs"
+commit_all "$repo" "seed"
+for b in line docs/line solo dual; do git -C "$repo" branch "$b"; done
+git -C "$repo" tag seed-tag
+mkdir -p "$repo/tests"
+printf 'fn main() {}\n' >"$repo/tests/mik_9999_old.rs"
+commit_all "$repo" "the line moves on"
+for b in line docs/line dual; do git -C "$repo" update-ref "refs/remotes/origin/$b" HEAD; done
+git -C "$repo" tag dual HEAD
+printf 'fn warm() {}\n' >>"$repo/src/lib.rs"
+commit_all "$repo" "change"
+assert_base_refused "$repo" line "--base line is the local branch"
+assert_base_refused "$repo" line "pass --base origin/line, or --base refs/heads/line for the local branch"
+assert_base_refused "$repo" docs/line "--base docs/line is the local branch"
+assert_base_pass "$repo" origin/line
+assert_base_pass "$repo" origin/docs/line
+assert_base_pass "$repo" "$(git -C "$repo" rev-parse HEAD~1)"
+assert_base_fail_contains "$repo" refs/heads/line "tests/mik_9999_old.rs names a ticket id"
+assert_base_fail_contains "$repo" solo "tests/mik_9999_old.rs names a ticket id"
+assert_base_fail_contains "$repo" seed-tag "tests/mik_9999_old.rs names a ticket id"
+# dual is a tag at the line's tip and a stale branch; git resolves the tag first, so it is not refused.
+assert_base_pass "$repo" dual
+git -C "$repo" branch -f line origin/line
+assert_base_pass "$repo" line
+# A local branch ahead of origin differs too; refs/heads/line is the way to mean it.
+git -C "$repo" branch -f line HEAD
+assert_base_refused "$repo" line "--base line is the local branch"
+
+repo="$(make_repo base-not-a-commit)"
+commit_all "$repo" "seed"
+assert_base_refused "$repo" no-such-ref "--base no-such-ref is not a commit"
 
 repo="$(make_repo ticket-id-in-new-file-name)"
 commit_all "$repo" "seed"

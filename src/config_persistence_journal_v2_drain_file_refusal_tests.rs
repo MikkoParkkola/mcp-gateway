@@ -11,9 +11,10 @@ use super::super::super::abandoned::{
 };
 use super::super::DrainError;
 use super::super::fixtures::{Live, actor, attributed, runtime};
-use super::super::handover::abandoned_path;
 use super::drain_abandoned;
-use super::tests::{DrainRig, drain_rig, unfrozen};
+use super::tests::{DrainRig, drain_rig, terminal_contents, unfrozen};
+use crate::config_persistence::journal::v2::abandoned_path;
+use crate::security::transparency_log::settle::Role;
 
 /// Replace the abandoned file with `bytes`, private to this user as a handover leaves it.
 fn plant(rig: &DrainRig, bytes: &[u8]) {
@@ -333,5 +334,194 @@ fn drain_parks_prefrozen_unparseable() {
         Err(DrainError::Parked),
         "{ROW}: parked, not refused"
     );
-    assert!(rig.file().is_some(), "{ROW}: the file is kept");
+    let parked = rig.file().expect("the file is kept");
+    assert!(
+        decode_frames(&parked).expect(ROW).frames[0]
+            .record
+            .parked
+            .is_some(),
+        "{ROW}: the park is persisted in the file"
+    );
+    let token = writer_token(&rig);
+    assert!(
+        terminal_contents(&rig.live, &token).is_empty(),
+        "{ROW}: no terminal for the token reached the log"
+    );
+    let records = rig.live.records().len();
+    assert_eq!(rig.drain(), Err(DrainError::Parked), "{ROW}: parked again");
+    assert_eq!(rig.file(), Some(parked), "{ROW}: the file is unchanged");
+    assert_eq!(
+        rig.live.records().len(),
+        records,
+        "{ROW}: nothing is resent"
+    );
+}
+
+fn writer_token(rig: &DrainRig) -> String {
+    rig.donor
+        .writer
+        .as_ref()
+        .expect("fixture writer")
+        .intent_id
+        .0
+        .clone()
+}
+
+/// Drain once under observation and assert a Shape refusal: the file byte-identical, nothing
+/// appended, one WARN naming the path and `shape`, and `shape` counted once.
+fn refused_as_shape(rig: &mut DrainRig, row: &str) {
+    let before = rig.file();
+    let records = rig.live.records().len();
+    let (result, warnings, metrics) = observed(rig);
+    assert_eq!(result, Err(DrainError::FileRefused), "{row}: refused");
+    assert_eq!(rig.file(), before, "{row}: the file is byte-identical");
+    assert_eq!(rig.live.records().len(), records, "{row}: nothing appended");
+    let named = abandoned_path(&rig.live.path).display().to_string();
+    let lines = warnings
+        .lines()
+        .filter(|line| line.contains(&named) && line.contains("shape"))
+        .count();
+    assert_eq!(
+        lines, 1,
+        "{row}: one WARN names the path and shape: {warnings}"
+    );
+    #[cfg(feature = "metrics")]
+    assert!(
+        metrics.lines().any(|line| {
+            line.starts_with("mcp_config_abandoned_refused_total")
+                && line.contains("reason=\"shape\"")
+                && line.ends_with(" 1")
+        }),
+        "{row}: shape counted once: {metrics}"
+    );
+    #[cfg(not(feature = "metrics"))]
+    assert!(metrics.is_empty(), "{row}: no recorder without metrics");
+}
+
+/// OUTCOME.9 (b), the drain half of the pair: a token whose terminal is already frozen but whose
+/// delivered intent has no counter is refused as found. `terminals_agree` may decide this file
+/// before the finishability judgement does, so no mutant is scored on this row;
+/// `drain_refuses_counterless_unfrozen` isolates the judgement.
+#[test]
+fn drain_refuses_prefrozen_counterless() {
+    const ROW: &str = "drain_refuses_prefrozen_counterless";
+    let mut rig = drain_rig(ROW, |_| {});
+    let mut altered = frames(&rig);
+    assert!(
+        altered
+            .iter()
+            .any(|frame| matches!(frame.record.role, Role::Outcome | Role::Abandoned)),
+        "{ROW}: premise: the terminal is frozen"
+    );
+    altered[0].record.delivered = true;
+    altered[0]
+        .owner
+        .as_mut()
+        .expect("intent owner facts")
+        .intent_counter = None;
+    plant(&rig, &encoded(&altered));
+    refused_as_shape(&mut rig, ROW);
+}
+
+/// OUTCOME.9 (b), isolated: no terminal is frozen, so `terminals_agree` has nothing to judge,
+/// and a delivered intent with no counter is refused by the shared finishability judgement alone.
+#[test]
+fn drain_refuses_counterless_unfrozen() {
+    const ROW: &str = "drain_refuses_counterless_unfrozen";
+    let mut rig = drain_rig(ROW, unfrozen);
+    let mut altered = frames(&rig);
+    assert!(
+        altered
+            .iter()
+            .all(|frame| !matches!(frame.record.role, Role::Outcome | Role::Abandoned)),
+        "{ROW}: premise: no terminal is frozen"
+    );
+    assert_eq!(
+        altered[0]
+            .owner
+            .as_ref()
+            .expect("intent owner facts")
+            .intent_counter,
+        None,
+        "{ROW}: premise: no counter"
+    );
+    altered[0].record.delivered = true;
+    plant(&rig, &encoded(&altered));
+    refused_as_shape(&mut rig, ROW);
+}
+
+/// OUTCOME.10: a drain that delivered everything and still finds the file incomplete (a decision
+/// that owes a `DeliveryStopped` record the drain never freezes) reports that under its own WARN and
+/// counter reason, never as "refused and kept as found"; a second drain resends nothing.
+#[test]
+fn drain_reports_incomplete_after_delivery() {
+    const ROW: &str = "drain_reports_incomplete_after_delivery";
+    let mut rig = drain_rig(ROW, |donor| {
+        donor
+            .writer
+            .as_mut()
+            .expect("fixture writer")
+            .decision
+            .as_mut()
+            .expect("decided")
+            .delivery_stopped = true;
+    });
+    let token = writer_token(&rig);
+    let (result, warnings, metrics) = observed(&mut rig);
+    assert_eq!(result, Err(DrainError::FileRefused), "{ROW}: not complete");
+    let kept = rig.file().expect("the file is kept");
+    let named = abandoned_path(&rig.live.path).display().to_string();
+    let lines: Vec<&str> = warnings
+        .lines()
+        .filter(|line| line.contains(&named))
+        .collect();
+    assert_eq!(lines.len(), 1, "{ROW}: one WARN names the path: {warnings}");
+    assert!(
+        lines[0].contains("incomplete") && !lines[0].contains("kept as found"),
+        "{ROW}: its own report, not the refusal's: {}",
+        lines[0]
+    );
+    #[cfg(feature = "metrics")]
+    {
+        assert!(
+            metrics.lines().any(|line| {
+                line.starts_with("mcp_config_abandoned_refused_total")
+                    && line.contains("reason=\"incomplete\"")
+                    && line.ends_with(" 1")
+            }),
+            "{ROW}: incomplete counted once: {metrics}"
+        );
+        assert!(
+            !metrics
+                .lines()
+                .any(|line| line.contains("reason=\"shape\"")),
+            "{ROW}: no shape count: {metrics}"
+        );
+    }
+    #[cfg(not(feature = "metrics"))]
+    assert!(metrics.is_empty(), "{ROW}: no recorder without metrics");
+    assert!(
+        !terminal_contents(&rig.live, &token).is_empty(),
+        "{ROW}: the terminal reached the log"
+    );
+    assert!(
+        decode_frames(&kept)
+            .expect(ROW)
+            .frames
+            .iter()
+            .all(|frame| frame.record.delivered),
+        "{ROW}: every record is marked delivered in the kept file"
+    );
+    let records = rig.live.records().len();
+    assert_eq!(
+        rig.drain(),
+        Err(DrainError::FileRefused),
+        "{ROW}: still incomplete"
+    );
+    assert_eq!(rig.file(), Some(kept), "{ROW}: the file is not rewritten");
+    assert_eq!(
+        rig.live.records().len(),
+        records,
+        "{ROW}: nothing is resent"
+    );
 }

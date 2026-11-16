@@ -429,11 +429,23 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
         "gateway/meta_mcp/invoke/admin.rs",
     ] {
         let text = std::fs::read_to_string(src.join(entry)).expect("read entry point");
+        // A manual reload goes through the config gate's wrapper, which must itself
+        // run the same transaction (asserted below).
         assert!(
-            text.contains(".reload_outcome().await"),
+            text.contains(".reload_outcome().await")
+                || text.contains(".manual_reload_outcome().await"),
             "{entry} no longer reloads through ReloadContext::reload_outcome"
         );
     }
+    let wrapper = source_span(
+        "config_reload/reload_context.rs",
+        "pub async fn manual_reload_outcome",
+        "\n    }\n",
+    );
+    assert!(
+        wrapper.contains("self.reload_outcome().await"),
+        "manual_reload_outcome no longer runs ReloadContext::reload_outcome"
+    );
 }
 
 /// The source text of `file` under `src/`, from the first `from` to the

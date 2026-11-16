@@ -6,9 +6,10 @@ use super::super::super::abandoned::{Placement, against_donor, marked};
 use super::super::super::fixtures::collect_case;
 use super::super::fault::{self, At, Fault};
 use super::super::fixtures::{acquire, reopen, state_of};
+use super::hand_over;
 use super::tests::{Rig, file_bytes, good_file, journal_bytes, rig};
-use super::{abandoned_path, hand_over};
 use crate::config_persistence::crash_fs::{self, Mode};
+use crate::config_persistence::journal::v2::abandoned_path;
 
 const MODES: [Mode; 4] = [
     Mode::DropAll,

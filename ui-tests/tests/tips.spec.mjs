@@ -83,6 +83,57 @@ test.describe('C2 planted faults', () => {
   });
 });
 
+// A page lands child by child: its first child builds the Status tab, and an id
+// a later part of the page draws there stays pending, naming that part.
+test.describe('C2 pending later', () => {
+  const LOAD = { title: 'Load', text: 'Calls per hour.' };
+  // Clean: the built Status tab keeps servers.status.load for the chart, drawn later.
+  const LATER = { ...OK, 'servers.status.load': LOAD, _pending_later: { 'servers.status.load': 'the 24 h chart' } };
+  const later = (part) => ({ ...LATER, _pending_later: { 'servers.status.load': part } });
+  test('an id a later part draws may stay pending under a built tab', () => {
+    expect(pair(LATER, "tip('servers.status.paused');")).toEqual([]);
+  });
+  test('a pending-later id that is drawn fails', () => {
+    expect(pair(LATER, "tip('servers.status.paused'); tip('servers.status.load');"))
+      .toEqual(['servers.status.load: pending-later but drawn']);
+  });
+  test('the part may be 60 characters, not 61, and not empty', () => {
+    expect(pair(later('x'.repeat(60)), "tip('servers.status.paused');")).toEqual([]);
+    expect(pair(later('x'.repeat(61)), "tip('servers.status.paused');")).toEqual(['servers.status.load: pending-later names no part']);
+    expect(pair(later('  '), "tip('servers.status.paused');")).toEqual(['servers.status.load: pending-later names no part']);
+    expect(pair(later(7), "tip('servers.status.paused');")).toEqual(['servers.status.load: pending-later names no part']);
+  });
+  test('a pending-later id under a null tab fails: it belongs in _pending', () => {
+    const copy = { ...OK, _pending: {}, _pending_later: { 'servers.actions.add': 'the add flow' } };
+    expect(pair(copy, "tip('servers.status.paused');"))
+      .toEqual(['servers.actions.add: pending-later under unbuilt servers.actions, list it in _pending']);
+  });
+  test('a pending-later id with no copy fails', () => {
+    const copy = { ...OK, _pending_later: { 'servers.status.ghost': 'the 24 h chart' } };
+    expect(pair(copy, "tip('servers.status.paused');")).toEqual(['servers.status.ghost: pending-later with no copy']);
+  });
+  test('an id both pending and pending-later fails', () => {
+    const copy = { ...LATER, _pending: { servers: ['servers.actions.add', 'servers.status.load'] } };
+    expect(pair(copy, "tip('servers.status.paused');")).toEqual(['servers.status.load: pending twice']);
+  });
+  test('the pending-later map is not read as a copy entry', () => {
+    expect(shapeProblems(LATER)).toEqual([]);
+  });
+  test('a pending-later map that is not a plain object fails its shape', () => {
+    expect(shapeProblems({ ...LATER, _pending_later: ['servers.status.load'] })).toEqual(['_pending_later: not an object']);
+    expect(shapeProblems({ ...LATER, _pending_later: 'the 24 h chart' })).toEqual(['_pending_later: not an object']);
+  });
+  test('a pending-later id on a page no screen registers fails: it belongs in _pending', () => {
+    const copy = { ...OK, 'billing.status.due': LOAD, _pending_later: { 'billing.status.due': 'the invoice list' } };
+    expect(pair(copy, "tip('servers.status.paused');"))
+      .toEqual(['billing.status.due: pending-later under unbuilt billing.status, list it in _pending']);
+  });
+  test('a screen cannot draw the bookkeeping key itself', () => {
+    expect(pair(LATER, "tip('servers.status.paused'); tip('_pending_later');"))
+      .toContain('_pending_later: not <page>.<tab>.<subject>');
+  });
+});
+
 test.describe('C8 planted faults', () => {
   const one = (e) => shapeProblems({ _pending: {}, 'a.status.b': e });
   for (const [label, entry, problem] of [

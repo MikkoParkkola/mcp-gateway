@@ -1,5 +1,6 @@
 # Sources under src/preview_sandbox that still carry expect(dead_code): <path><TAB><the part that wires it up>.
 # The ratchet row in staged_tests.rs keeps this list exact; the sandbox ticket closes when it is empty.
+src/preview_sandbox/control.rs	the helper's fetch step (the sandbox fetch part)
 src/preview_sandbox/fetch.rs	the fetch session and helper fetch step (the sandbox fetch part)
 src/preview_sandbox/fetch_output.rs	the fetch session and helper fetch step (the sandbox fetch part)
 src/preview_sandbox/install.rs	the fetch session and helper fetch step (the sandbox fetch part)

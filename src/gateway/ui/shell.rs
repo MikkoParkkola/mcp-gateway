@@ -37,32 +37,40 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/fonts/OverpassMono-400.9b51e031ff0d.woff2"),
     ),
     (
-        "shell.260480aea22f.js",
-        include_bytes!("shell/shell.260480aea22f.js"),
+        "gateway.03e9ffebd104.css",
+        include_bytes!("shell/gateway.03e9ffebd104.css"),
+    ),
+    (
+        "gateway.54be98229a14.js",
+        include_bytes!("shell/gateway.54be98229a14.js"),
+    ),
+    (
+        "shell.4dc4dc7764c1.js",
+        include_bytes!("shell/shell.4dc4dc7764c1.js"),
     ),
     (
         "shell.8a1ede0f5317.css",
         include_bytes!("shell/shell.8a1ede0f5317.css"),
     ),
     (
-        "tips.2b1d0c91519f.json",
-        include_bytes!("shell/tips.2b1d0c91519f.json"),
-    ),
-    (
-        "tools.2f9082957179.js",
-        include_bytes!("shell/tools.2f9082957179.js"),
+        "tips.93dac071a1b5.json",
+        include_bytes!("shell/tips.93dac071a1b5.json"),
     ),
     (
         "tools.5cacef0c94f9.css",
         include_bytes!("shell/tools.5cacef0c94f9.css"),
     ),
     (
+        "tools.efb0aec389d0.js",
+        include_bytes!("shell/tools.efb0aec389d0.js"),
+    ),
+    (
         "tooltip.5251c22696fd.css",
         include_bytes!("shell/tooltip.5251c22696fd.css"),
     ),
     (
-        "tooltip.fc459693146e.js",
-        include_bytes!("shell/tooltip.fc459693146e.js"),
+        "tooltip.d82a4a9834d8.js",
+        include_bytes!("shell/tooltip.d82a4a9834d8.js"),
     ),
 ];
 
@@ -157,3 +165,7 @@ pub(super) async fn not_found() -> StatusCode {
 #[cfg(test)]
 #[path = "shell_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "shell_budget_tests.rs"]
+mod budget_tests;

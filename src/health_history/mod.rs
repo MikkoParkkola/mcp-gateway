@@ -146,6 +146,9 @@ struct Inner {
 pub(crate) struct HealthHistory(Mutex<Inner>);
 
 pub(crate) mod file;
+pub(crate) mod gate;
+#[cfg(test)]
+pub(crate) mod pause_points;
 // The readers serve the Gateway Status route (the next change); built for
 // tests until then.
 #[cfg(test)]

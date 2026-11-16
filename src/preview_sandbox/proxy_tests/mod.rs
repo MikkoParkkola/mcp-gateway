@@ -25,6 +25,7 @@ mod deny;
 mod deny_vectors;
 mod hardening;
 mod host_addresses;
+mod session;
 mod teardown;
 mod tunnels;
 

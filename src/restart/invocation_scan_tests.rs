@@ -53,8 +53,8 @@ fn inv22_capture_is_the_first_statement_of_cli_run() {
     let rest = &code[at + want.len()..];
     let body = rest.find(" fn ").map_or(rest, |end| &rest[..end]);
     assert!(
-        body.contains("setup_tracing("),
-        "positive control: setup_tracing after the capture, inside cli::run"
+        body.contains("setup_tracing_flush("),
+        "positive control: setup_tracing_flush after the capture, inside cli::run"
     );
 }
 
