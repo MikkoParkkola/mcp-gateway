@@ -83,7 +83,7 @@ impl Store {
             self.trim_tails(&mut state, at, tail)?;
             return Ok(false);
         };
-        self.cancel_pending(&mut state, id, Cancel::Events)?;
+        self.cancel_pending(&mut state, id, mutant!("m10", Cancel::All, Cancel::Events))?;
         let ended = EndedRow {
             row: sub.clone(),
             ended: stamp,

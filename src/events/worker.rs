@@ -54,7 +54,7 @@ impl EventsHub {
         } = *claimed;
         #[cfg(test)]
         self.after_claim.pause().await;
-        if !record.is_event() {
+        if mutant!("m17", false, !record.is_event()) {
             self.attempt_ended(services, &record, &sub).await;
             return;
         }

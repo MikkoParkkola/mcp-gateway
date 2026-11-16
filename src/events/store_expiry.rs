@@ -126,7 +126,7 @@ impl Store {
             .outbox
             .values()
             // A notice maps to its ended row, never to a live row's expiry.
-            .filter(|r| r.is_event() && r.state == OutboxState::Pending)
+            .filter(|r| mutant!("m11", true, r.is_event()) && r.state == OutboxState::Pending)
             .filter(|r| {
                 state
                     .subs
