@@ -48,10 +48,18 @@ fn a_well_formed_binding_loads_and_round_trips() {
     assert_eq!(bound.quota_principal, PRINCIPAL);
     assert_eq!(bound.digest_tag, TAG);
     assert_eq!(key.cli_host.as_deref(), Some("laptop"));
-    let written = crate::yaml::to_string(key).expect("serialise");
-    let back: crate::config::ApiKeyConfig = crate::yaml::from_str(&written).expect("reparse");
+    // A key is written only inside its config (`ApiKeyConfig` is not `Serialize`).
+    let auth = crate::config::AuthConfig {
+        api_keys: vec![key.clone()],
+        ..crate::config::AuthConfig::default()
+    };
+    let written = crate::yaml::to_string(&auth).expect("serialise");
+    let back: crate::config::AuthConfig = crate::yaml::from_str(&written).expect("reparse");
     assert_eq!(
-        back.approved_by.as_ref().map(|b| b.digest_tag.as_str()),
+        back.api_keys[0]
+            .approved_by
+            .as_ref()
+            .map(|b| b.digest_tag.as_str()),
         Some(TAG)
     );
 }

@@ -8,6 +8,10 @@
 //! opens such a split fails here. Not covered, as rcgen cannot emit them and
 //! each needs a hand-re-signed TBS: a negative serial (rcgen always writes a
 //! positive INTEGER) and an unusual signature-algorithm encoding.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use std::sync::Arc;
 

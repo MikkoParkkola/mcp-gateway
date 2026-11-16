@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8512 network fixtures: an HTTPS fake registry on 127.0.0.1 with its
 //! own test CA, and a recording CONNECT proxy. Used by `npm_pin_wire_tests.rs`.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

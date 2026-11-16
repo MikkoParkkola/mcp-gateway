@@ -398,7 +398,9 @@ struct Run {
 /// in step. Never shrunk: two polls stay at least the interval apart, so the
 /// 60 s floor holds for the polls, not only the setting.
 fn jitter(base: Duration) -> Duration {
-    base.mul_f64(1.0 + rand::random::<f64>() / 10.0)
+    #[allow(clippy::disallowed_methods, reason = "jitter: poll start spread")]
+    let spread = rand::random::<f64>();
+    base.mul_f64(1.0 + spread / 10.0)
 }
 
 impl Run {
@@ -581,6 +583,11 @@ impl Run {
         if let Some((before, digest_before)) = last.as_ref()
             && *digest_before != digest_after
         {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "id: a fresh upstream id per watch transition"
+            )]
+            let upstream_id = hex::encode(rand::random::<[u8; 16]>());
             hub.emit(SourceEvent {
                 kind: SourceKind::RestWatch,
                 name: self.name.clone(),
@@ -589,7 +596,7 @@ impl Run {
                 owner: None,
                 // A fresh id per transition: a flap A->B->A is three
                 // occurrences, and a restarted poller repeats none.
-                upstream_id: hex::encode(rand::random::<[u8; 16]>()),
+                upstream_id,
                 occurred_at: now,
                 data: json!({
                     "capability": target.capability,

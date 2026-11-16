@@ -123,8 +123,8 @@ pub(super) fn signing(mut meta: MetaMcp) -> MetaMcp {
             // Generated per run: no cell needs its value, and none is committed.
             format!(
                 "{}{}",
-                uuid::Uuid::new_v4().simple(),
-                uuid::Uuid::new_v4().simple()
+                crate::ids::new_v4().simple(),
+                crate::ids::new_v4().simple()
             )
             .into_bytes(),
             None,
@@ -139,7 +139,7 @@ pub(super) fn signing(mut meta: MetaMcp) -> MetaMcp {
 /// Put a signing nonce beside `server` and `tool`, where signing reads it.
 pub(super) fn with_nonce(mut body: Value) -> Value {
     // Fresh per call: a signing nonce is single-use, and none is committed.
-    body["params"]["arguments"]["nonce"] = json!(uuid::Uuid::new_v4().to_string());
+    body["params"]["arguments"]["nonce"] = json!(crate::ids::new_v4().to_string());
     body
 }
 

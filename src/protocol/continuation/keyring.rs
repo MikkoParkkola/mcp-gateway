@@ -123,12 +123,17 @@ impl Keyring {
                 minted: std::sync::atomic::AtomicU64::new(0),
             });
         }
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "key: the keyring's generator for AEAD key material and nonces, each draw an allowed fill"
+        )]
+        let rng = SystemRandom::new();
         Ok(Self {
             ring: std::sync::RwLock::new(Ring {
                 minting_kid: *minting_kid,
                 keys: unbound,
             }),
-            rng: SystemRandom::new(),
+            rng,
             mint_budget: MINT_BUDGET,
         })
     }
@@ -221,6 +226,10 @@ impl Keyring {
         }
 
         let mut material = [0u8; 32];
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "key: AEAD key material for continuation envelopes"
+        )]
         self.rng
             .fill(&mut material)
             .map_err(|_| ContinuationError::Malformed)?;
@@ -351,6 +360,10 @@ impl Keyring {
             return Err(ContinuationError::MintBudgetExhausted);
         }
         let mut nonce_bytes = [0u8; NONCE_LEN];
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "nonce: the AEAD nonce of one continuation envelope"
+        )]
         self.rng
             .fill(&mut nonce_bytes)
             .map_err(|_| ContinuationError::Malformed)?;

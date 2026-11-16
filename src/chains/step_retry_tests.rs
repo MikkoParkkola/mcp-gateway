@@ -94,7 +94,7 @@ async fn run_one(invoker: &Scripted, optional: bool) -> crate::chains::ChainStep
     );
     let step = ChainStep::new("pay", "charge_card").input(json!({"amount": 1}));
     let step = if optional { step.optional() } else { step };
-    let chain = Chain::new(format!("chain-{}", uuid::Uuid::new_v4())).step(step);
+    let chain = Chain::new(format!("chain-{}", crate::ids::new_v4())).step(step);
     let result = executor
         .execute(&chain, json!({}), invoker)
         .await

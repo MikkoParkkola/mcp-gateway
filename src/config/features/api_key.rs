@@ -66,18 +66,21 @@ impl ApiKeyKind {
 /// `Default` is for struct literals in tests (`..Default::default()`); it adds
 /// no serde default. Every field already defaults on its own, and a key with
 /// no digest is refused by load validation, not by serde.
-#[derive(Clone, Default, Serialize, Deserialize)]
+///
+/// Not `Serialize`: a key is never serialised whole. A config holding keys
+/// writes them through the private `KeyOut` mirror below.
+#[derive(Clone, Default, Deserialize)]
 pub struct ApiKeyConfig {
     /// Legacy plaintext key. Parsed only so the load can refuse it by name;
     /// never written back.
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub key: Option<String>,
     /// `sha256:<64 lowercase hex>`, or `env:VAR` holding that form. Produce it
     /// with `mcp-gateway hash-key`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub key_sha256: Option<String>,
     /// Optional RFC 3339 expiry. A matched key past it is refused with 401.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub expires_at: Option<DateTime<Utc>>,
     /// Name for this client: non-empty, unique across `api_keys`, and the
     /// key's identity-grant subject (`api_key:<name>`).
@@ -104,30 +107,109 @@ pub struct ApiKeyConfig {
     #[serde(default)]
     pub admin: bool,
     /// Who holds the key; `shared` unless set.
-    #[serde(default, skip_serializing_if = "ApiKeyKind::is_shared")]
+    #[serde(default)]
     pub kind: ApiKeyKind,
     /// The key's principal, 12 lowercase hex digits, written at its first
     /// rotation so the key keeps owning its sessions, grants and tasks under a
     /// new digest (ADR-022). Absent: derived from `key_sha256` as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub principal: Option<String>,
     /// The digest the key had before its last rotation, in the forms
     /// `key_sha256` takes. Accepted until `previous_expires_at`, never without it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub previous_key_sha256: Option<String>,
     /// RFC 3339 end of the rotation's grace; past it the previous digest is
     /// refused.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub previous_expires_at: Option<DateTime<Utc>>,
     /// The admin key that approved this CLI login key: present only on a key
     /// minted by `mcp-gateway login`, and what makes it a CLI key. The key is
     /// live only while that approver is (see `ResolvedAuthConfig`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub approved_by: Option<ApiKeyBinding>,
     /// The host the CLI reported at login, sanitised; shown on the Keys screen
     /// and never trusted for a decision.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub cli_host: Option<String>,
+}
+
+/// How `AuthConfig` writes its keys: field for field what a derived
+/// `Serialize` on [`ApiKeyConfig`] wrote (names, order, skip rules), so config
+/// files and the reload diff keep their bytes. `ApiKeyConfig` itself is not
+/// `Serialize`, so a key can never be serialised whole (`json!(key)` does not
+/// compile); only a config that holds keys can, through this mirror.
+#[derive(Serialize)]
+struct KeyOut<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key_sha256: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<&'a DateTime<Utc>>,
+    name: &'a str,
+    rate_limit: u32,
+    backends: &'a [String],
+    allowed_tools: Option<&'a [String]>,
+    denied_tools: Option<&'a [String]>,
+    admin: bool,
+    #[serde(skip_serializing_if = "ApiKeyKind::is_shared")]
+    kind: ApiKeyKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    principal: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_key_sha256: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_expires_at: Option<&'a DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approved_by: Option<&'a ApiKeyBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cli_host: Option<&'a str>,
+}
+
+impl<'a> From<&'a ApiKeyConfig> for KeyOut<'a> {
+    fn from(config: &'a ApiKeyConfig) -> Self {
+        // Exhaustive: a new field fails to compile here until it is mirrored
+        // (and added to the golden in api_key_serialize_tests).
+        let ApiKeyConfig {
+            key: _never_written,
+            key_sha256,
+            expires_at,
+            name,
+            rate_limit,
+            backends,
+            allowed_tools,
+            denied_tools,
+            admin,
+            kind,
+            principal,
+            previous_key_sha256,
+            previous_expires_at,
+            approved_by,
+            cli_host,
+        } = config;
+        Self {
+            key_sha256: key_sha256.as_deref(),
+            expires_at: expires_at.as_ref(),
+            name,
+            rate_limit: *rate_limit,
+            backends,
+            allowed_tools: allowed_tools.as_deref(),
+            denied_tools: denied_tools.as_deref(),
+            admin: *admin,
+            kind: *kind,
+            principal: principal.as_deref(),
+            previous_key_sha256: previous_key_sha256.as_deref(),
+            previous_expires_at: previous_expires_at.as_ref(),
+            approved_by: approved_by.as_ref(),
+            cli_host: cli_host.as_deref(),
+        }
+    }
+}
+
+/// `serialize_with` for `AuthConfig::api_keys`: each key through [`KeyOut`].
+pub(super) fn serialize_keys<S: serde::Serializer>(
+    keys: &[ApiKeyConfig],
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.collect_seq(keys.iter().map(KeyOut::from))
 }
 
 /// The approver a CLI key is bound to: its stable principal (the quota limit

@@ -93,7 +93,7 @@ pub(super) fn frozen(token: &str, role: Role, payload: &Value) -> FrozenRecord {
 }
 
 fn writer() -> TokenState {
-    let token = IntentId(uuid::Uuid::new_v4().simple().to_string());
+    let token = IntentId(crate::ids::new_v4().simple().to_string());
     TokenState {
         intent: frozen(&token.0, INTENT, &json!({"kind": "settle.save"})),
         intent_id: token,
