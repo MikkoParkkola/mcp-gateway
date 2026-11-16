@@ -313,7 +313,10 @@ async fn a_token_in_the_success_answer_is_never_printed() {
         assert!(out.ok, "{command}: {out:?}");
         assert!(!out.stdout.is_empty(), "{command}: the answer is printed");
     }
-    assert!(link.stdout.starts_with("http://127.0.0.1:1/dashboard?bootstrap="));
+    assert!(
+        link.stdout
+            .starts_with("http://127.0.0.1:1/dashboard?bootstrap=")
+    );
     let printed: serde_json::Value = serde_json::from_str(&events.stdout).expect("JSON");
     assert_eq!(printed["items"][0]["id"], "d1");
 }
@@ -330,7 +333,11 @@ async fn an_answer_that_loses_an_entry_to_redaction_is_refused() {
         printed_nowhere(command, "#", &out);
         assert!(!out.ok, "{command}: refused");
         assert!(out.stdout.is_empty(), "{command}: nothing on stdout");
-        assert!(out.stderr.contains("printed safely"), "{command}: {}", out.stderr);
+        assert!(
+            out.stderr.contains("printed safely"),
+            "{command}: {}",
+            out.stderr
+        );
     }
 }
 

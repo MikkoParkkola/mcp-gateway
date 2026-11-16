@@ -210,18 +210,45 @@ pub(crate) async fn admin_call(
             _ => error.to_string(),
         })?;
     let status = response.status;
-    let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
+    let mut body: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
+    // Error messages leave unredacted: the caller's output gate redacts each
+    // whole printed line, status text included, which a redaction of the
+    // reason alone missed (a token equal to "404" or "OK").
     if !status.is_success() {
         let reason = gateway_reason(&body).unwrap_or("no reason given");
-        // A gateway that echoes the bearer in its message must not put it on
-        // the terminal: the same shared redactor as `api`.
-        let reason = mcp_gateway::cli::redact::text(reason, &[token.to_string()]);
         return Err(format!("the gateway answered {status}: {reason}"));
     }
     if body.is_null() {
         return Err(format!("the gateway answered {status} with no JSON body"));
     }
+    // The answer is redacted here, so every caller (the link included) reads
+    // the redacted body.
+    if !redact_body(&mut body, token) {
+        return Err(UNSAFE_ANSWER.to_string());
+    }
     Ok(body)
+}
+
+/// Printed instead of an answer the redactor cannot make safe.
+const UNSAFE_ANSWER: &str = "the gateway's answer could not be printed safely";
+
+/// Redact the token out of `body` with the shared redactor. `false` when the
+/// redaction lost an entry (a key renamed onto another), so the body can no
+/// longer be printed faithfully.
+fn redact_body(body: &mut serde_json::Value, token: &str) -> bool {
+    let entries = object_entry_count(body);
+    mcp_gateway::cli::redact::json(body, &[token.to_string()]);
+    object_entry_count(body) == entries
+}
+
+fn object_entry_count(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Object(entries) => {
+            entries.len() + entries.values().map(object_entry_count).sum::<usize>()
+        }
+        serde_json::Value::Array(items) => items.iter().map(object_entry_count).sum(),
+        _ => 0,
+    }
 }
 
 /// The server's reason across its structured, JSON-RPC and flat error shapes.
@@ -545,25 +572,72 @@ async fn run_dead_letters_command(
     tls: &LinkTls,
     args: &mcp_gateway::cli::events::DeadLettersArgs,
 ) -> ExitCode {
-    let result = match (
-        read_token(|name| std::env::var(name).ok()).map_err(|error| error.to_string()),
-        dead_letters_request(args),
-    ) {
-        (Ok(token), Ok((method, path))) => admin_call(method, base, &path, &token, tls).await,
-        (Err(message), _) | (_, Err(message)) => Err(message),
-    };
-    match result {
-        Ok(body) => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
-            );
-            ExitCode::SUCCESS
-        }
-        Err(message) => {
-            eprintln!("events dead-letters: {message}");
+    match read_token(|name| std::env::var(name).ok()) {
+        Ok(token) => print(dead_letters_output(base, tls, args, &token).await),
+        Err(error) => {
+            eprintln!("events dead-letters: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// What `events dead-letters` prints, through the output gate.
+async fn dead_letters_output(
+    base: &str,
+    tls: &LinkTls,
+    args: &mcp_gateway::cli::events::DeadLettersArgs,
+    token: &str,
+) -> Printed {
+    let result = match dead_letters_request(args) {
+        Ok((method, path)) => admin_call(method, base, &path, token, tls).await,
+        Err(message) => Err(message),
+    };
+    let result = result.map(|body| {
+        let json = serde_json::to_string_pretty(&body).unwrap_or_default();
+        (format!("{json}\n"), "")
+    });
+    gate("events dead-letters", token, result)
+}
+
+/// What one `dashboard-link` or `events` run prints once the token is read,
+/// and whether it succeeded.
+#[derive(Debug)]
+struct Printed {
+    stdout: String,
+    stderr: String,
+    ok: bool,
+}
+
+/// The one output gate once the token is read. Stdout still holding the token
+/// (JSON syntax, which the JSON redactor cannot mask) is refused, and the
+/// whole stderr text passes the shared redactor as the last step, so no
+/// prefix, status, note or transport detail is printed unredacted.
+fn gate(prefix: &str, token: &str, result: Result<(String, &str), String>) -> Printed {
+    let result = result.and_then(|(stdout, note)| {
+        if stdout.contains(token) {
+            Err(UNSAFE_ANSWER.to_string())
+        } else {
+            Ok((stdout, note))
+        }
+    });
+    let (stdout, stderr, ok) = match result {
+        Ok((stdout, note)) => (stdout, note.to_string(), true),
+        Err(message) => (String::new(), format!("{prefix}: {message}\n"), false),
+    };
+    Printed {
+        stdout,
+        stderr: mcp_gateway::cli::redact::text(&stderr, &[token.to_string()]),
+        ok,
+    }
+}
+
+fn print(out: Printed) -> ExitCode {
+    print!("{}", out.stdout);
+    eprint!("{}", out.stderr);
+    if out.ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 
@@ -644,21 +718,21 @@ fn transport_error(base: &str, error: reqwest::Error, tls: &LinkTls) -> String {
 
 /// Run the command against the gateway at `base`.
 pub async fn run_dashboard_link_command(base: &str, tls: &LinkTls) -> ExitCode {
-    let result = match read_token(|name| std::env::var(name).ok()) {
-        Ok(token) => fetch_link(base, &token, tls).await,
-        Err(error) => Err(error.to_string()),
-    };
-    match result {
-        Ok(link) => {
-            println!("{link}");
-            eprintln!("Opens once, from this machine only.");
-            ExitCode::SUCCESS
-        }
-        Err(message) => {
-            eprintln!("dashboard-link: {message}");
+    match read_token(|name| std::env::var(name).ok()) {
+        Ok(token) => print(dashboard_link_output(base, tls, &token).await),
+        Err(error) => {
+            eprintln!("dashboard-link: {error}");
             ExitCode::FAILURE
         }
     }
+}
+
+/// What `dashboard-link` prints, through the output gate.
+async fn dashboard_link_output(base: &str, tls: &LinkTls, token: &str) -> Printed {
+    let result = fetch_link(base, token, tls)
+        .await
+        .map(|link| (format!("{link}\n"), "Opens once, from this machine only.\n"));
+    gate("dashboard-link", token, result)
 }
 
 #[cfg(test)]
