@@ -500,11 +500,41 @@ def analyse(root: Path) -> Analysis:
             if not any(a in desired and nodes[a].item.kind == "mod" for a in chain):
                 add("test-macro", rel, line, f"{name}! makes tests; invoke it only inside a tagged module")
     _check_table(root, rows, crate, desired, add)
-    paths = {n.crate_path: n.item.kind for n in nodes}
+    _check_package(root, add)
+    by_path: dict[tuple[str, ...], list[int]] = {}
+    for ix, n in enumerate(nodes):
+        if n.item.kind == "mod":
+            by_path.setdefault(n.crate_path, []).append(ix)
+    first_seen: dict[str, int] = {}
     for p, no in shared_rows:
-        if paths.get(tuple(p.split("::"))) != "mod":
-            add("shared-entry", SHARED.as_posix(), no, f"{p} names no module")
+        if p in first_seen:
+            add("shared-entry", SHARED.as_posix(), no, f"{p} is listed again (first on line {first_seen[p]})")
+            continue
+        first_seen[p] = no
+        hits = by_path.get(tuple(p.split("::")), [])
+        if len(hits) != 1:
+            add("shared-entry", SHARED.as_posix(), no, f"{p} names {len(hits)} modules, not exactly one")
+            continue
+        chain = [hits[0], *_ancestors(crate, hits[0])]
+        if not any(nodes[a].item.kind == "mod" and nodes[a].item.test_cfg_line for a in chain):
+            add("shared-entry", SHARED.as_posix(), no, f"{p} is production code, in every part already")
+        tagged = [a for a in chain[1:] if a in desired]
+        if tagged:
+            above = "::".join(nodes[tagged[0]].crate_path)
+            add("shared-entry", SHARED.as_posix(), no, f"{p} sits under the tagged {above}; share {above} instead")
     return Analysis(crate, desired, containers, out)
+
+
+def _check_package(root: Path, add) -> None:
+    """Cargo builds and packages this build script: Cargo.toml's `build` names it and its `include` list holds it
+    (without the include, the packaged crate has no build script and every tagged test is compiled out of
+    package-tests)."""
+    toml = (root / "Cargo.toml").read_text(encoding="utf-8")
+    want = BUILD_RS.as_posix()
+    if not re.search(rf'^build\s*=\s*"{re.escape(want)}"\s*$', toml, re.M):
+        add("package", "Cargo.toml", 1, f'[package] needs build = "{want}"')
+    if not re.search(rf'^\s*"{re.escape(want)}",?\s*$', toml, re.M):
+        add("package", "Cargo.toml", 1, f'the include list needs "{want}"')
 
 
 def _check_table(root: Path, rows, crate: Crate, desired: dict[int, int], add) -> None:
@@ -512,7 +542,11 @@ def _check_table(root: Path, rows, crate: Crate, desired: dict[int, int], add) -
     if n is None:
         add("table-range", BUILD_RS.as_posix(), 1, "the build script declares no `const N: u32`")
         return
+    seen_dirs: dict[str, int] = {}
     for directory, part, no in rows:
+        if directory in seen_dirs:
+            add("table-dup", TABLE.as_posix(), no, f"{directory} is listed again (first on line {seen_dirs[directory]})")
+        seen_dirs.setdefault(directory, no)
         if not 1 <= part <= n:
             add("table-range", TABLE.as_posix(), no, f"part {part} is outside 1..={n}")
     unit_dirs = {crate.nodes[ix].rel.rsplit("/", 1)[0] for ix in desired}
@@ -599,8 +633,8 @@ def apply(root: Path) -> list[str]:
     return sorted(edits)
 
 
-def main(argv: list[str]) -> int:
-    root = Path(__file__).resolve().parents[2]
+def main(argv: list[str], root: Path | None = None) -> int:
+    root = root or Path(__file__).resolve().parents[2]
     if argv[1:] == ["apply"]:
         try:
             changed = apply(root)
@@ -608,7 +642,11 @@ def main(argv: list[str]) -> int:
             print(f"test_parts: refused, nothing written: {err}", file=sys.stderr)
             return 1
         print(f"test_parts: {len(changed)} files changed")
-        return 0
+        # What apply cannot fix (a stale table row, a bad shared entry, a test macro in a container) still fails.
+        left = check(root)
+        for f in left:
+            print(f"{f.path}:{f.line}: {f.code}: {f.message}", file=sys.stderr)
+        return 1 if left else 0
     if argv[1:] == ["check"]:
         findings = check(root)
         for f in findings:

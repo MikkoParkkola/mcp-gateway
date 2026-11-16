@@ -51,6 +51,7 @@ CRATE_ALLOW = "#![cfg_attr(tp_partial, allow(dead_code, unused_imports, unused_v
 # Two parts: `src` (and src/a) in part 1, src/b in part 2. Tagged and green.
 BASE = {
     BUILD: "fn main() {\n    const N: u32 = 2;\n    let _ = N;\n}\n",
+    "Cargo.toml": '[package]\nname = "x"\nbuild = "scripts/dev/test-parts-build.rs"\ninclude = [\n    "src/**",\n    "scripts/dev/test-parts-build.rs",\n]\n',
     "scripts/dev/test-parts.tsv": "src\t1\nsrc/b\t2\n",
     "scripts/dev/test-parts-shared.txt": "",
     "src/lib.rs": CRATE_ALLOW + "mod a;\nmod b;\n",
@@ -227,6 +228,18 @@ class SharedAndContainers(Rows):
     def test_a_shared_entry_that_names_no_module_is_refused(self):
         self.assert_refused(with_files(**{SHARED: "a::gone_tests\n"}), "shared-entry")
 
+    def test_a_shared_entry_that_is_production_code_is_refused(self):
+        # Sharing is for test modules; a production module is in every part already (code review r1).
+        lib = BASE["src/lib.rs"] + "mod live;\n"
+        files = with_files(src__lib_DOT_rs=lib, **{SHARED: "live\n"})
+        files["src/live.rs"] = "pub fn h() {}\n"
+        self.assert_refused(files, "shared-entry")
+
+    def test_a_shared_entry_under_a_tagged_unit_is_refused(self):
+        # Its unit's tag still gates it, so the other parts cannot reach it (code review r1).
+        body = BASE["src/a.rs"].replace("    #[test]\n    fn t() {}\n", "    #[test]\n    fn t() {}\n    pub mod helpers {}\n")
+        self.assert_refused(with_files(src__a_DOT_rs=body, **{SHARED: "a::tests::helpers\n"}), "shared-entry")
+
     def test_a_test_generating_macro_inside_a_tagged_module_is_green(self):
         body = BASE["src/a.rs"].replace("    #[test]\n    fn t() {}\n", "    #[test]\n    fn t() {}\n    gen_tests!(made);\n")
         self.assert_green(with_files(src__a_DOT_rs=GEN_MACRO + body))
@@ -261,6 +274,55 @@ class TableAndBuildRs(Rows):
 
     def test_a_part_with_units_but_no_test_is_refused(self):
         self.assert_refused(with_files(src__b__b_tests_DOT_rs="pub fn not_a_test() {}\n"), "empty-part")
+
+
+class PackageAndLists(Rows):
+    """The build script is the one Cargo builds and packages; the table and shared list hold no duplicate (code review r1)."""
+
+    def test_a_cargo_toml_without_the_build_key_is_refused(self):
+        toml = BASE["Cargo.toml"].replace('build = "scripts/dev/test-parts-build.rs"\n', "")
+        self.assert_refused(with_files(**{"Cargo.toml": toml}), "package")
+
+    def test_a_cargo_toml_that_does_not_package_the_build_script_is_refused(self):
+        # Without it the packaged crate has no build script and every tagged test is compiled out of package-tests.
+        toml = BASE["Cargo.toml"].replace('    "scripts/dev/test-parts-build.rs",\n', "")
+        self.assert_refused(with_files(**{"Cargo.toml": toml}), "package")
+
+    def test_a_duplicate_table_row_is_refused(self):
+        self.assert_refused(with_files(**{TABLE: BASE[TABLE] + "src/b\t1\n"}), "table-dup")
+
+    def test_a_duplicate_shared_entry_is_refused(self):
+        body = "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[cfg(tp1)]\n    #[test]\n    fn t() {}\n}\n"
+        self.assert_refused(with_files(src__a_DOT_rs=body, **{SHARED: "a::tests\na::tests\n"}), "shared-entry")
+
+
+class TokenInventory(Rows):
+    """The second, independent read on its own (code review r1): module paths and direct test counts."""
+
+    def test_nesting_raw_identifiers_and_direct_counts(self):
+        text = "mod r#outer {\n    #[test]\n    fn a() {}\n    mod inner {\n        #[tokio::test]\n        async fn b() {}\n    }\n}\n#[test]\nfn top() {}\n"
+        self.assertEqual(self.tool.token_inventory("src/x.rs", text), {(): 1, ("outer",): 1, ("outer", "inner"): 1})
+
+    def test_tests_in_fn_bodies_macros_and_comments_are_not_counted(self):
+        text = "fn f() {\n    #[test]\n    fn nested() {}\n}\nmacro_rules! m {\n    () => {\n        #[test]\n        fn g() {}\n    };\n}\n// #[test]\n"
+        self.assertEqual(self.tool.token_inventory("src/x.rs", text), {(): 0})
+
+    def test_it_agrees_with_the_tree_walk_on_the_base_tree(self):
+        for rel, text in BASE.items():
+            if rel.endswith(".rs") and rel.startswith("src/"):
+                walk = self.tool.walk_file(rel, text)
+                self.assertEqual(self.tool.walk_inventory(walk), self.tool.token_inventory(rel, text), rel)
+
+
+class ApplyExit(Rows):
+    def test_apply_exits_nonzero_when_a_finding_it_cannot_fix_remains(self):
+        # A stale table row is not apply's to fix; the run says so instead of passing (code review r1).
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_tree(root, with_files(**{TABLE: BASE[TABLE] + "src/gone\t2\n"}))
+            self.assertEqual(self.tool.main(["test_parts.py", "apply"], root), 1)
+            write_tree(root, BASE)
+            self.assertEqual(self.tool.main(["test_parts.py", "apply"], root), 0)
 
 
 class ParseSafety(Rows):
