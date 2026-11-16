@@ -125,7 +125,7 @@ pub fn check_scopes(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

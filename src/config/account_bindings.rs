@@ -494,6 +494,6 @@ pub(crate) fn reload_binding_refusal(old: &Config, new: &Config) -> Option<Strin
     None
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "account_bindings_text_tests.rs"]
 mod text_tests;

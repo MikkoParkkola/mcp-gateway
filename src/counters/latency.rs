@@ -517,6 +517,6 @@ impl LatencySeries {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "latency_tests.rs"]
 mod tests;

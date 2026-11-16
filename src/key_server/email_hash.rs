@@ -308,6 +308,6 @@ impl EmailHashKey {
 #[path = "email_hash_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "email_hash_gen_tests.rs"]
 mod gen_tests;

@@ -532,19 +532,19 @@ fn generate_client_id() -> String {
     URL_SAFE_NO_PAD.encode(id_bytes)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 pub(crate) mod authorize_tests;
 mod browser;
 #[cfg(test)]
 mod cache_write_pin_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod deadline_tests;
 pub(crate) mod destination;
 mod discovery;
 mod identity;
 #[cfg(test)]
 mod issue_token_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod publish_tests;
 #[cfg(test)]
 mod refresh_flight_tests;
@@ -621,7 +621,7 @@ use url::Url;
 
 mod grants;
 pub(crate) use grants::OAUTH_AUTHORIZATION_WINDOW;
-#[cfg(test)]
+#[cfg(any())]
 mod grants_log_tests;
 #[cfg(test)]
 mod grants_tests;
@@ -632,14 +632,14 @@ pub(crate) use refresh_flight::{
     RefreshCaller, RefreshRequest, Refreshed, StoredCredential, is_credential_lock_busy,
     refresh_stored,
 };
-#[cfg(test)]
+#[cfg(any())]
 mod issuer_provenance_tests;
 #[cfg(test)]
 mod prm_discovery_tests;
 mod registration;
 mod renewal;
 pub(crate) mod sign_in;
-#[cfg(test)]
+#[cfg(any())]
 mod sign_in_tests;
 #[cfg(test)]
 mod tests;

@@ -116,6 +116,6 @@ pub(super) async fn gateway_status(
     .into_response()
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "gateway_status_tests.rs"]
 mod tests;

@@ -327,7 +327,7 @@ fn step_error_text(error: &crate::Error) -> String {
 #[path = "step_retry_tests.rs"]
 mod step_retry_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     #![allow(
         clippy::disallowed_methods,

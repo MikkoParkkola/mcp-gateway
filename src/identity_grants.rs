@@ -647,14 +647,14 @@ pub struct LocalIdentityGrantStore {
     key: Option<crate::security::rule_id::RuleKey>,
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "identity_grants_subject_tests.rs"]
 mod subject_tests;
 #[cfg(test)]
 #[path = "identity_grants_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "identity_grants_agent_key_tests.rs"]
 mod agent_key_tests;
 

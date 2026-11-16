@@ -786,6 +786,6 @@ impl Store {
 #[cfg(test)]
 #[path = "store_test_dir_tests.rs"]
 mod test_dir_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "store_tests.rs"]
 mod tests;

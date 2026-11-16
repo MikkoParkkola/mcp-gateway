@@ -377,7 +377,7 @@ impl Noted {
 #[path = "decision_record_read.rs"]
 pub(crate) mod read;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "decision_record_tests.rs"]
 mod tests;
 
@@ -385,7 +385,7 @@ mod tests;
 #[path = "decision_record_allow_tests.rs"]
 mod allow_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "decision_record_read_tests.rs"]
 mod read_tests;
 

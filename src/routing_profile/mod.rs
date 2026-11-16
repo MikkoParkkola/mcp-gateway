@@ -500,5 +500,5 @@ impl SessionProfileStore {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

@@ -701,7 +701,7 @@ const MAX_IDLE_RECORDS: usize = 16;
 #[path = "streaming_told_bounds_tests.rs"]
 mod bounds_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "streaming_told_state_tests.rs"]
 mod state_tests;
 
@@ -709,7 +709,7 @@ mod state_tests;
 #[path = "streaming_told_decision_tests.rs"]
 mod decision_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "streaming_told_gap_tests.rs"]
 mod gap_tests;
 

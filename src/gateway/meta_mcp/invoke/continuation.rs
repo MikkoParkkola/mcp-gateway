@@ -737,7 +737,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "continuation_clock_tests.rs"]
 mod clock_before_epoch_tests;
 

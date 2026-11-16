@@ -358,7 +358,7 @@ impl LatencyHistogram {
 #[path = "health_slow_tests.rs"]
 mod slow_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

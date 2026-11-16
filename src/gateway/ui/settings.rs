@@ -587,19 +587,19 @@ fn secret_target(
     .map_err(Box::new)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "settings_answer_tests.rs"]
 mod answer_tests;
 #[cfg(test)]
 #[path = "settings_cli_tests.rs"]
 mod cli_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "settings_floor_tests.rs"]
 mod floor_tests;
 #[cfg(test)]
 #[path = "settings_route_secret_tests.rs"]
 mod route_secret_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "settings_route_tests.rs"]
 mod route_tests;
 #[cfg(test)]

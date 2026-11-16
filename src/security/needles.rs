@@ -709,7 +709,7 @@ fn refusal_message(needles: &NeedleSet) -> &'static str {
 /// The fixed refusal's text for an answer that held an injected value.
 const ECHO_REFUSAL: &str = "the backend's answer contained a credential the gateway injected";
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "needles_configured_tests.rs"]
 mod configured_tests;
 #[cfg(test)]

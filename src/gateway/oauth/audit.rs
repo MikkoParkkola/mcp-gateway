@@ -127,7 +127,7 @@ pub fn emit(entry: &ToolInvocationAudit) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

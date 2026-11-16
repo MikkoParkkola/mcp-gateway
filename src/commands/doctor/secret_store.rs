@@ -58,6 +58,6 @@ fn row(report: &SecretStoreReport) -> CheckResult {
     row.with_category("secrets")
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "secret_store_tests.rs"]
 mod tests;

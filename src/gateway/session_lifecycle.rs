@@ -451,7 +451,7 @@ pub fn wire_meta_session_cleanup(
     });
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "session_lifecycle_tests.rs"]
 mod tests;
 

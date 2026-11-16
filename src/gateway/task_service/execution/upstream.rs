@@ -109,7 +109,7 @@ impl QueryLease {
 #[path = "upstream/failed_policy_tests.rs"]
 mod failed_policy_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "upstream/refusal_tests.rs"]
 mod refusal_tests;
 

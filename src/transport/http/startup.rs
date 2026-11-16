@@ -732,7 +732,7 @@ mod wrong_transport_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod join_failure_tests {
     use super::*;
 

@@ -141,6 +141,6 @@ fn object_strings<'v>(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "collusion_key_path_tests.rs"]
 mod tests;

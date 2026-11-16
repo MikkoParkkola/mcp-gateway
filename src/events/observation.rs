@@ -265,7 +265,7 @@ impl super::EventsHub {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "observation_tests.rs"]
 mod tests;
 

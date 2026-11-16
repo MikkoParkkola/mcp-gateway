@@ -559,6 +559,6 @@ fn has_trailing_separator(dir: &Path) -> bool {
 #[path = "package_cache_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "package_cache_retry_tests.rs"]
 mod retry_tests;

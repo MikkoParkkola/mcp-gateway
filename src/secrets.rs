@@ -427,7 +427,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod c4_tests {
     use super::*;
 

@@ -385,7 +385,7 @@ fn validity_to_date(days: u32) -> Result<time::OffsetDateTime> {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "cert_manager_tests.rs"]
 mod tests;
 

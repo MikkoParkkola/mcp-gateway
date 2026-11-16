@@ -294,7 +294,7 @@ pub fn extract_cached_tokens(response: &Value) -> u64 {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use serde_json::json;

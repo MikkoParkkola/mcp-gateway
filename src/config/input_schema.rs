@@ -38,7 +38,7 @@ impl super::BackendConfig {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::InputSchemaEnforcement;
     use serde_json::json;

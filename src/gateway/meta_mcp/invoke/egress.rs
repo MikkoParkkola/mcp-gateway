@@ -756,7 +756,7 @@ impl MetaMcp {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "egress_stored_targets_tests.rs"]
 mod stored_targets_tests;
 

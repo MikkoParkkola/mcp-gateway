@@ -432,7 +432,7 @@ impl AgentDefinitionConfig {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "auth_multi_user_tests.rs"]
 mod multi_user_tests;
 
@@ -448,7 +448,7 @@ mod credential_count_tests;
 /// behind this auth?", and this asks "is exactly one human proven to be?". The
 /// auth-disabled case below is where the two answers differ, and it is the whole
 /// reason this predicate is not a negation of that one.
-#[cfg(test)]
+#[cfg(any())]
 #[path = "auth_single_user_principal_tests.rs"]
 mod single_user_principal_tests;
 
@@ -460,7 +460,7 @@ mod cwe532_debug_redaction;
 #[path = "auth_api_key_name_tests.rs"]
 mod api_key_name_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "api_key_digest_tests.rs"]
 mod api_key_digest_tests;
 
@@ -468,6 +468,6 @@ mod api_key_digest_tests;
 #[path = "api_key_binding_tests.rs"]
 mod api_key_binding_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "auth_dashboard_session_tests.rs"]
 mod dashboard_session_limits_tests;

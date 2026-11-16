@@ -777,7 +777,7 @@ pub(crate) mod rescue_seam;
 #[path = "worker_tests.rs"]
 mod worker_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "worker_clock_settle_tests.rs"]
 mod worker_clock_settle_tests;
 

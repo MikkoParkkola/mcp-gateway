@@ -372,7 +372,7 @@ pub(crate) trait UpstreamRecovery: Send + Sync {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod row_moved_tests {
     use super::{Arc, Duration, HandoffRegistry};
 

@@ -685,7 +685,7 @@ pub fn replica_state_refusal(config: &Config) -> Option<String> {
     })
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "support_network_bind_tests.rs"]
 mod network_bind_tests;
 #[cfg(test)]

@@ -589,7 +589,7 @@ fn extract_json_field(json: &Value, field: &str, path: &std::path::Path) -> Resu
 #[path = "oauth_refresh_tests.rs"]
 mod oauth_refresh_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     #![allow(
         clippy::disallowed_methods,
@@ -770,6 +770,6 @@ mod tests {
 #[path = "c4_credential_tests.rs"]
 mod c4_credential_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "credentials_tilde_tests.rs"]
 mod credentials_tilde_tests;

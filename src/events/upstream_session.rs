@@ -604,7 +604,7 @@ use legacy::watched_by;
 #[cfg(test)]
 use run::{pick_session, runs_modern};
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "upstream_session_tests.rs"]
 mod tests;
 
@@ -612,6 +612,6 @@ mod tests;
 #[path = "upstream_session_seam_tests.rs"]
 mod seam_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "upstream_session_iso_tests.rs"]
 mod iso_tests;

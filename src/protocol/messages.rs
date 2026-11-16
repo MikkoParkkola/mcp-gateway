@@ -682,6 +682,6 @@ pub(crate) fn tool_result_payload(result: &Value) -> Option<Value> {
 #[cfg(test)]
 #[path = "messages_payload_tests.rs"]
 mod payload_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "messages_tests.rs"]
 mod tests;

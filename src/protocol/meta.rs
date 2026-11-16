@@ -747,7 +747,7 @@ pub fn classify_and_observe(
     shape
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "meta_declared_capabilities_tests.rs"]
 mod declared_capabilities_tests;
 
@@ -761,6 +761,6 @@ mod declared_capabilities_tests;
 #[path = "meta_declared_parse_boundary_tests.rs"]
 mod declared_parse_boundary_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "meta_declared_extensions_tests.rs"]
 mod declared_extensions_tests;

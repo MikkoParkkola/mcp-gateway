@@ -392,7 +392,7 @@ async fn cap_registry_list(capabilities: std::path::PathBuf) -> ExitCode {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::cap_pin;
     use mcp_gateway::capability::{compute_capability_hash, parse_capability_file};

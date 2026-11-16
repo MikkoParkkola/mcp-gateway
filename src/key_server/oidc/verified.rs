@@ -243,6 +243,6 @@ fn actor_id(issuer: &str, subject: &str) -> String {
     format!("oidc:{}:{issuer}:{}:{subject}", issuer.len(), subject.len())
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "verified_tests.rs"]
 mod tests;

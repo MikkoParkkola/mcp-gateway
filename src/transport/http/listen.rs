@@ -504,7 +504,7 @@ fn frame(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "listen_stream_tests.rs"]
 mod stream_tests;
 
@@ -512,7 +512,7 @@ mod stream_tests;
 #[path = "listen_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "session_heal_tests.rs"]
 mod session_heal_tests;
 

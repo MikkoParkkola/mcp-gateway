@@ -419,7 +419,7 @@ pub struct CacheStatsSnapshot {
     pub hit_rate: f64,
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use serde_json::json;

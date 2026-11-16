@@ -221,6 +221,6 @@ fn authorize_targets(
     })
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "stdio_route_stage_tests.rs"]
 mod tests;

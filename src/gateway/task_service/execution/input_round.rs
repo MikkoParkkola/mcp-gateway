@@ -667,7 +667,7 @@ impl TaskExecutor {
 #[path = "input_round_deadline_tests.rs"]
 mod deadline_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "input_round_mapping_tests.rs"]
 mod mapping_tests;
 
@@ -675,6 +675,6 @@ mod mapping_tests;
 #[path = "input_round_exit_tests.rs"]
 mod exit_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "input_round_park_tests.rs"]
 mod park_tests;

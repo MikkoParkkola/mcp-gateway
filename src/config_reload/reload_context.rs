@@ -670,6 +670,6 @@ pub(super) fn with_pending_restart(
 
 // Mounted here, not under `reload_tally`: they drive the lock-recovery and
 // lock-skip paths, which are private to this module.
-#[cfg(test)]
+#[cfg(any())]
 #[path = "reload_tally_tests.rs"]
 mod tally_tests;

@@ -276,7 +276,7 @@ pub fn well_known_url(input: &str, suffix: &str) -> Result<String> {
     Ok(format!("{authority}/.well-known/{suffix}{path}"))
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

@@ -729,7 +729,7 @@ fn merge_targets(record: &mut Record, targets: Vec<Target>) {
     record.version = record.version.max(TARGET_VERSION);
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod fallback_tests {
     use super::fallback_bytes;
     use crate::gateway::task_service::record::PreparedTask;

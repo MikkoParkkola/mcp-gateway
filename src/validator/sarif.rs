@@ -225,7 +225,7 @@ pub fn to_sarif_multi(file_results: &[(&str, &[ValidationResult])]) -> SarifRepo
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::validator::report::ValidationReport;

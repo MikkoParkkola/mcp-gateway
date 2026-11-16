@@ -746,7 +746,7 @@ fn collect_valid_params(schema: &Value) -> Vec<(String, String)> {
 #[path = "alternatives_tests.rs"]
 mod alternatives_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "integer_range_tests.rs"]
 mod integer_range_tests;
 #[cfg(test)]

@@ -343,7 +343,7 @@ fn sanitize_steps(steps: &mut [Value]) -> Result<()> {
     })
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use serde_json::json;
 

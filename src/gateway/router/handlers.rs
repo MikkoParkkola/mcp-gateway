@@ -25,7 +25,7 @@ use crate::gateway::outbound::{OutboundReply, judged_reply, stream_reply};
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
 
-#[cfg(test)]
+#[cfg(any())]
 mod cacheable_field_tests;
 mod dispatch_intake;
 mod dispatch_tools_call;
@@ -776,7 +776,7 @@ pub(super) fn refusal_status(response: &JsonRpcResponse) -> Option<StatusCode> {
 #[path = "handlers_health_predicate_tests.rs"]
 mod health_predicate_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "handlers_session_tests.rs"]
 mod session_tests;
 

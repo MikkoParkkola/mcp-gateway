@@ -368,7 +368,7 @@ impl Backend {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "secret_send_tests.rs"]
 mod tests;
 

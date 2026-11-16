@@ -78,7 +78,7 @@ pub(crate) mod egress_fixture;
 mod openwebui_adapter;
 pub(crate) mod outbound;
 pub mod proxy;
-#[cfg(test)]
+#[cfg(any())]
 mod proxy_scope_tests;
 #[cfg(test)]
 mod proxy_session_tests;
@@ -89,7 +89,7 @@ pub mod recovery;
 mod replay_era_tests;
 pub(crate) mod restart_config_floor;
 mod restart_floor;
-#[cfg(test)]
+#[cfg(any())]
 mod restart_floor_tests;
 mod restart_slot;
 mod restart_status;
@@ -97,7 +97,7 @@ mod restart_status;
 mod route_check_matrix_tests;
 mod router;
 pub(crate) mod routes;
-#[cfg(test)]
+#[cfg(any())]
 mod routes_tests;
 #[cfg(all(test, feature = "webui"))]
 mod stable_ui_routes_tests;

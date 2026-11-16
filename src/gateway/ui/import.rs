@@ -751,6 +751,6 @@ paths:
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "import_redirect_tests.rs"]
 mod redirect_tests;

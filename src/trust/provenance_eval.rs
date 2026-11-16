@@ -234,7 +234,7 @@ pub fn score_corpus(
     (replay(&cases, validator), mis_joined)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO;

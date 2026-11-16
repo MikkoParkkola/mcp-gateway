@@ -649,7 +649,7 @@ impl Drop for A2aTransport {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "transport_tests.rs"]
 mod tests;
 

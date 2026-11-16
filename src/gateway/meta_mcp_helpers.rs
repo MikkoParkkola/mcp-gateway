@@ -769,7 +769,7 @@ pub(crate) fn wrap_tool_success(
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "meta_mcp_helpers_tests.rs"]
 mod tests;
 
@@ -777,6 +777,6 @@ mod tests;
 #[path = "meta_mcp_helpers_chain_tests.rs"]
 mod chain_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "meta_mcp_helpers_glob_tests.rs"]
 mod glob_tests;

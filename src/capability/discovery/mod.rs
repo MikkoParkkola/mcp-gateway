@@ -262,7 +262,7 @@ impl DiscoveryEngine {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

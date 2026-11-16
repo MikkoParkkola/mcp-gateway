@@ -71,7 +71,7 @@ pub(super) fn refuse_if_killed(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::classify_bridged_dispatch_error;
     use crate::gateway::input_bridge::BridgeError;

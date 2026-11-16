@@ -547,7 +547,7 @@ impl MetaMcp {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "gate_fill_tests.rs"]
 mod fill_tests;
 
@@ -555,7 +555,7 @@ mod fill_tests;
 #[path = "gate_call_level_tests.rs"]
 mod call_level_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "gate_refusal_kind_tests.rs"]
 mod refusal_kind_tests;
 

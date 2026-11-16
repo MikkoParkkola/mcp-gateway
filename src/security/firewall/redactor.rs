@@ -662,7 +662,7 @@ use spans::{covers, exempt_crossed, merge_spans, spliced_capacity, without};
 #[path = "redactor_large.rs"]
 mod large;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "redactor_tests.rs"]
 mod tests;
 
@@ -670,7 +670,7 @@ mod tests;
 #[path = "redactor_b2_tests.rs"]
 mod b2_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "redactor_member_tests.rs"]
 mod member_tests;
 

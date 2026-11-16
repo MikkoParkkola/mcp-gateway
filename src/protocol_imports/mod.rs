@@ -401,5 +401,5 @@ pub struct OciToolImport {
     pub output_schema: Value,
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

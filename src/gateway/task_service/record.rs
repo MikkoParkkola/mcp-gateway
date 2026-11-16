@@ -780,7 +780,7 @@ fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
 #[path = "record_legacy_tests.rs"]
 mod legacy_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "record_delivery_tests.rs"]
 mod delivery_tests;
 

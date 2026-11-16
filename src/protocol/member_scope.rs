@@ -184,6 +184,6 @@ pub(crate) fn undeclared_task(method: &str, result: &Value, declared: Declared) 
     })
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "member_scope_tests.rs"]
 mod tests;

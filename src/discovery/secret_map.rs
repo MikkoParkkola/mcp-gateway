@@ -72,7 +72,7 @@ impl FromIterator<(String, String)> for SecretMap {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

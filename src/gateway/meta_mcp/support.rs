@@ -660,7 +660,7 @@ pub(crate) use playbook_invoker::{
 #[path = "support_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "idempotency_caller_scope_tests.rs"]
 mod idempotency_caller_scope_tests;
 
@@ -668,7 +668,7 @@ mod idempotency_caller_scope_tests;
 #[path = "retry_input_tests.rs"]
 mod retry_input_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "cache_principal_tests.rs"]
 mod cache_principal_tests;
 

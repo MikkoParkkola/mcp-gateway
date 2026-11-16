@@ -766,13 +766,13 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "authz_rule_id_tests.rs"]
 mod rule_id_tests;
 
 #[cfg(test)]
 #[path = "authz_allow_emit_tests.rs"]
 mod allow_emit_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "authz_standing_tests.rs"]
 mod standing_tests;

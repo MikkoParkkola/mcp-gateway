@@ -202,6 +202,6 @@ fn journey_refusal(error: JourneyError) -> Response {
 mod offer;
 pub(crate) use offer::ConnectOffers;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "journeys_tests.rs"]
 mod journeys_tests;

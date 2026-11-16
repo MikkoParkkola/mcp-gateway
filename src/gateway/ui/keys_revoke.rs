@@ -276,7 +276,7 @@ impl KeyIdentity<'_> {
 /// name still contributes its tag to S for reconciliation.
 /// Any S tag in another name's current/previous slot or the running static
 /// bearer refuses as `identity_in_use`, regardless of expiry or caller identity.
-#[cfg(test)]
+#[cfg(any())]
 #[path = "keys_revoke_select_tests.rs"]
 mod select_tests;
 

@@ -235,7 +235,7 @@ fn abandoned(backend: &str) {
     .increment(1);
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

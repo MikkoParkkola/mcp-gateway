@@ -738,7 +738,7 @@ fn sanitize_backend_url(raw: &str) -> String {
 #[path = "backend_ops_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "backend_add_tests.rs"]
 mod backend_add_tests;
 

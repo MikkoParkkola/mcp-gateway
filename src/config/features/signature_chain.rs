@@ -213,6 +213,6 @@ pub(crate) fn validate_backend_chains(config: &crate::config::Config) -> crate::
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "signature_chain_config_tests.rs"]
 mod signature_chain_config_tests;

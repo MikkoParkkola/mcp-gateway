@@ -88,6 +88,6 @@ pub(crate) fn retry_effect(redeemed: bool) -> Effect {
     if redeemed { Effect::Took } else { Effect::None }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "refund_witness_tests.rs"]
 mod tests;

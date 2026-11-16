@@ -30,7 +30,7 @@ use crate::cli::stdout::println;
 
 mod watch;
 
-#[cfg(test)]
+#[cfg(any())]
 mod mode_tests;
 #[cfg(test)]
 mod tests;

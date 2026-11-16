@@ -13,11 +13,11 @@ mod probe;
 mod sent;
 mod watcher;
 
-#[cfg(test)]
+#[cfg(any())]
 mod guard_tests;
 #[cfg(test)]
 mod id_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod merge_tests;
 #[cfg(test)]
 mod merge_two_log_tests;

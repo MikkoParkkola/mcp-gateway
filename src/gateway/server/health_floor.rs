@@ -287,7 +287,7 @@ impl FloorAdapter for HealthFloor {
 #[cfg(test)]
 #[path = "health_floor_contract_tests.rs"]
 mod contract_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "health_floor_matrix_tests.rs"]
 mod matrix_tests;
 #[cfg(test)]

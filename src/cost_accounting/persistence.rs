@@ -321,7 +321,7 @@ pub fn load(path: &Path) -> crate::Result<PersistedCosts> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

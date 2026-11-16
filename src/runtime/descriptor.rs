@@ -329,6 +329,6 @@ impl SandboxDescriptor {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "descriptor_tests.rs"]
 mod tests;

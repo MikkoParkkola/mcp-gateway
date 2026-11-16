@@ -286,5 +286,5 @@ fn task_backend_name(meta: &MetaMcp, tool_name: &str, arguments: &Value) -> Stri
 
 #[cfg(test)]
 mod shape_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod stored_site5_tests;

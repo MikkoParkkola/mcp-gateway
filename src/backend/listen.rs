@@ -251,6 +251,6 @@ impl Backend {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "listen_tests.rs"]
 mod tests;

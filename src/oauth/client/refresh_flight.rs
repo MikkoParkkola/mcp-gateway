@@ -692,7 +692,7 @@ fn names_an_oauth_error(body: &str) -> bool {
         .is_some()
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

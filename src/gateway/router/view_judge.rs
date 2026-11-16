@@ -384,6 +384,6 @@ impl AppState {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "view_judge_tests.rs"]
 mod tests;

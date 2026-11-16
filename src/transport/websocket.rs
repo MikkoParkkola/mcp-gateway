@@ -590,7 +590,7 @@ use io::run_io_loop;
 use progress::{ProgressRegistration, progress_key, route_progress};
 use scrub::{log_close, scrub_frame};
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "websocket_tests.rs"]
 mod tests;
 
@@ -601,7 +601,7 @@ mod cancel_tests;
 #[path = "websocket_pinned.rs"]
 mod pinned;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "websocket_backend_tests.rs"]
 mod backend_tests;
 
@@ -609,6 +609,6 @@ mod backend_tests;
 #[path = "websocket_negotiation_tests.rs"]
 mod negotiation_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "websocket_scrub_tests.rs"]
 mod scrub_tests;

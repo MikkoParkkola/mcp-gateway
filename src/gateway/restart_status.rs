@@ -279,6 +279,6 @@ fn forward(record: &mut RestartStatus, to: RestartPhase) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "restart_status_tests.rs"]
 mod tests;

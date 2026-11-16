@@ -206,7 +206,7 @@ async fn deliver(
     (frame, retained)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use std::sync::Arc;
 

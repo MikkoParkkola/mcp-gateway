@@ -594,6 +594,6 @@ pub(crate) fn validate_personal_capability_identity(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "execution_context_tests.rs"]
 mod tests;

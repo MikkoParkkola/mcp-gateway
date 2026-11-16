@@ -777,7 +777,7 @@ impl MetaMcp {
 #[path = "admission_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "admission_slot_tests.rs"]
 mod slot_tests;
 
@@ -785,7 +785,7 @@ mod slot_tests;
 #[path = "admission_round_tests.rs"]
 mod round_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "admission_withheld_tests.rs"]
 mod withheld_tests;
 

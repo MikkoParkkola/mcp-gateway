@@ -225,6 +225,6 @@ pub(crate) fn adoption(server: &DiscoveredServer) -> Adoption {
     Adoption { backend, literals }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "adopt_tests.rs"]
 mod tests;

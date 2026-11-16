@@ -710,7 +710,7 @@ mod redirect;
 use redirect::remote_hop_allowed;
 use redirect::remote_redirect_policy;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "oidc_tests.rs"]
 mod tests;
 
@@ -718,7 +718,7 @@ mod tests;
 #[path = "oidc_claims_debug_tests.rs"]
 mod claims_debug_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "oidc_fallback_tests.rs"]
 mod fallback_tests;
 

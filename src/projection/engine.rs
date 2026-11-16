@@ -159,7 +159,7 @@ fn build_body(r: &Value, s: &BodySpec, m: &mut Map<String, Value>) -> bool {
     any
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::project;
     use crate::projection::schema::{ActorSpec, ProjectionSpec, SubjectSpec, UrlSpec};

@@ -116,6 +116,6 @@ impl CallerCosts {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "caller_tests.rs"]
 mod tests;

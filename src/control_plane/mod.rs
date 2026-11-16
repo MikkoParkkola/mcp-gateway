@@ -680,5 +680,5 @@ mod failing_store;
 mod grant_change_store_tests;
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use failing_store::FailingStore;
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

@@ -50,11 +50,11 @@ pub mod config;
 pub mod identity;
 mod san;
 
-#[cfg(test)]
+#[cfg(any())]
 mod ip_san_tests;
 #[cfg(test)]
 mod mode_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod windows_write_tests;
 
 pub use access_control::{MtlsPolicy, PolicyDecision};

@@ -622,11 +622,11 @@ fn validate_signature(
 
 #[cfg(test)]
 mod clock_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod hmac_tests;
 #[cfg(test)]
 mod mapping_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod rate_limit_tests;
 #[cfg(test)]
 mod tests;

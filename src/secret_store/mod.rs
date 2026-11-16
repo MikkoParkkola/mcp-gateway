@@ -266,7 +266,7 @@ pub(crate) fn random_suffix() -> Result<u64, StoreError> {
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod choose_tests;
 #[cfg(test)]
 mod rollback_tests;

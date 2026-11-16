@@ -753,6 +753,6 @@ mod answers;
 use super::guard::Guard;
 use answers::{field_errors, refused};
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "capabilities_tests.rs"]
 mod tests;

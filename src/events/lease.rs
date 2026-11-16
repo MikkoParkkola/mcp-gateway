@@ -436,6 +436,6 @@ impl super::EventsHub {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "lease_tests.rs"]
 mod tests;

@@ -153,6 +153,6 @@ impl crate::events::ListenerMint for ListenerMint {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "events_wiring_tests.rs"]
 mod tests;

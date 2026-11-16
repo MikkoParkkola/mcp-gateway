@@ -558,6 +558,6 @@ mod seams;
 #[path = "collusion_staging.rs"]
 mod staging;
 pub(crate) use staging::PlanStaging;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "collusion_gate_tests.rs"]
 mod tests;

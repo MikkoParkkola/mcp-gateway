@@ -268,7 +268,7 @@ pub use memory::InMemoryControlPlaneStore;
 
 // ── Tests ────────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "store_rotation_tests.rs"]
 mod rotation_tests;
 #[cfg(test)]

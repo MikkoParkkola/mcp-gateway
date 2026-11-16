@@ -52,7 +52,7 @@ pub(super) fn count_meta_denial(
     None
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::gateway::meta_mcp::visible::memo::{

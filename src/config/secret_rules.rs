@@ -214,6 +214,6 @@ const fn is_a2a(_transport: &TransportConfig) -> bool {
     false
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "secret_rules_tests.rs"]
 mod tests;

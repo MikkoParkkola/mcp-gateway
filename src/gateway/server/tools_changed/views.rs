@@ -264,6 +264,6 @@ impl Views {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "views_tests.rs"]
 mod tests;

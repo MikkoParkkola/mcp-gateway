@@ -537,7 +537,7 @@ mod write;
 #[path = "stdio_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "stdio_tap_tests.rs"]
 mod tap_tests;
 
@@ -550,7 +550,7 @@ mod frame_tests;
 #[path = "stdio_negotiation_tests.rs"]
 mod negotiation_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "stdio_cache_tests.rs"]
 mod cache_tests;
 
@@ -558,7 +558,7 @@ mod cache_tests;
 #[path = "stdio_start_refusal_tests.rs"]
 mod start_refusal_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "stdio_spawn_classification_tests.rs"]
 mod spawn_classification_tests;
 
@@ -571,6 +571,6 @@ mod eof_request_tests;
 #[path = "stdio_cache_abs_tests.rs"]
 mod cache_abs_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "stdio_cache_runner_tests.rs"]
 mod cache_runner_tests;

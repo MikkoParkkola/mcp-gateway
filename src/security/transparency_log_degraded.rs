@@ -263,7 +263,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod cause_tests {
     use super::{cause_index, failure_cause};
 

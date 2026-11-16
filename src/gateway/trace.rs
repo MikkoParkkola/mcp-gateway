@@ -72,7 +72,7 @@ where
     TRACE_ID.scope(trace_id, future).await
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

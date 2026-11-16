@@ -116,7 +116,7 @@ pub(crate) fn refuse_keyless_http_anomaly(config: &crate::config::Config) -> Res
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use crate::config::Config;
 

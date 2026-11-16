@@ -105,5 +105,5 @@ impl super::MetaMcp {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

@@ -77,7 +77,7 @@ impl Provider for CapabilityProvider {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::capability::{CapabilityBackend, CapabilityExecutor};

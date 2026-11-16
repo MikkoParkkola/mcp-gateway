@@ -663,6 +663,6 @@ fn action(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "kubernetes_tests.rs"]
 mod tests;

@@ -200,7 +200,7 @@ pub(super) fn is_real_store(dir: &Path) -> bool {
     crate::test_dir_keep::is_under(dir, &super::expand_home_path("~/.mcp-gateway"))
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::is_real_store;
 

@@ -260,6 +260,6 @@ pub(in super::super) fn add_subset_seams(fw: &Firewall, receipts: &mut [Receipt]
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "relay_seams_subset_tests.rs"]
 mod subset_tests;

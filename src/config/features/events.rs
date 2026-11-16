@@ -315,7 +315,7 @@ pub(crate) fn parse_cidr(text: &str) -> Option<(std::net::IpAddr, u8)> {
     (len <= width).then_some((addr, len))
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

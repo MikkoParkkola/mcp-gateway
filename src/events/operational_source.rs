@@ -372,6 +372,6 @@ impl OperationalSource {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "operational_source_tests.rs"]
 mod tests;

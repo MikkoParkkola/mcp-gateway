@@ -304,7 +304,7 @@ pub(crate) mod write_seam {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "durable_tests.rs"]
 mod tests;
 

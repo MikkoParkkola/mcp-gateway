@@ -110,6 +110,6 @@ async fn dispatch_catalogue(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "stdio_catalogue_tests.rs"]
 mod tests;

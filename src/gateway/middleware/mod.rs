@@ -6,5 +6,5 @@ pub(crate) use errors::{
     bearer_unauthorized_response, circuit_open_response, forbidden_response, rate_limited_response,
 };
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

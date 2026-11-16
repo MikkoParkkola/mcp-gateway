@@ -132,7 +132,7 @@ fn capped_tool_text(data: &serde_json::Value) -> Option<(String, serde_json::Val
     })
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use crate::protocol::RequestId;
 

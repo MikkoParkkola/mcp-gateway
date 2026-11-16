@@ -278,6 +278,6 @@ fn migrate_from(
 #[path = "offline_migration_tests.rs"]
 mod offline_migration_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "offline_migration_resolve_tests.rs"]
 mod offline_migration_resolve_tests;

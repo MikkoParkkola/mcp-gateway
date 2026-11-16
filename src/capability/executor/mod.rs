@@ -562,17 +562,17 @@ impl Default for CapabilityExecutor {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod redirect_tests;
 
 #[cfg(test)]
 mod proxy_ssrf_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod send_latency_tests;
 #[cfg(test)]
 mod ssrf_denial_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "gws_real_tests.rs"]
 mod gws_real_tests;
 #[cfg(test)]

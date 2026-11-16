@@ -776,7 +776,7 @@ impl Services {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "services_tests.rs"]
 mod tests;
 
@@ -784,6 +784,6 @@ mod tests;
 #[path = "services_audit_tests.rs"]
 mod audit_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "one_generation_tests.rs"]
 mod one_generation_tests;

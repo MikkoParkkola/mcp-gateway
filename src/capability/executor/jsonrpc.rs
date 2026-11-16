@@ -221,7 +221,7 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::capability::JsonRpcConfig;

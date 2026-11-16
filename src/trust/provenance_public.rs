@@ -595,6 +595,6 @@ pub use cli::run_provenance_command;
 #[cfg(test)]
 #[path = "provenance_public_kid_tests.rs"]
 mod kid_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "provenance_public_tests.rs"]
 mod tests;

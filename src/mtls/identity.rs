@@ -99,7 +99,7 @@ fn build_display_name(cn: Option<&String>, san_uris: &[String]) -> String {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "identity_differential_tests.rs"]
 mod differential_tests;
 

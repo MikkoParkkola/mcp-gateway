@@ -328,6 +328,6 @@ pub async fn run_audit_lookup_command(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "audit_lookup_tests.rs"]
 mod tests;

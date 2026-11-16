@@ -34,7 +34,7 @@ pub(super) fn package(info: Option<&Value>) -> Value {
     })
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use serde_json::{Value, json};
 

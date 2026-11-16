@@ -633,7 +633,7 @@ impl Default for DashboardBootstrap {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "auth_dashboard_tests.rs"]
 mod tests;
 

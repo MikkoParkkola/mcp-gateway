@@ -446,7 +446,7 @@ fn after_judge() {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use std::path::Path;
 

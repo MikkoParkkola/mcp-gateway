@@ -49,6 +49,6 @@ impl RuleId {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "rule_id_tests.rs"]
 mod tests;

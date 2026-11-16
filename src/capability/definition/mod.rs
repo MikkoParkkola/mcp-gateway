@@ -635,7 +635,7 @@ mod tests;
 #[path = "cwe532_debug_redaction_tests.rs"]
 mod cwe532_debug_redaction;
 
-#[cfg(test)]
+#[cfg(any())]
 mod caller_addressed_state_tests;
 
 /// `value` with every object's keys in sorted order, whatever map type

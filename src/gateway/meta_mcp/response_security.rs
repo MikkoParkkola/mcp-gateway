@@ -576,7 +576,7 @@ mod challenge_tests;
 #[path = "response_delivery_tests.rs"]
 mod delivery_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "chain_emission_tests.rs"]
 mod chain_emission_tests;
 

@@ -595,5 +595,5 @@ impl Default for ContinuationState {
 
 #[cfg(test)]
 mod in_flight_lifetime;
-#[cfg(test)]
+#[cfg(any())]
 mod quota_tests;

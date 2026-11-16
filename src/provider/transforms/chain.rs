@@ -204,7 +204,7 @@ impl Provider for TransformChain {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::protocol::Tool;

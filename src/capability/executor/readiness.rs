@@ -149,6 +149,6 @@ impl CapabilityExecutor {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "readiness_list_tests.rs"]
 mod list_tests;

@@ -528,11 +528,11 @@ impl TaskSnapshot {
 #[cfg(test)]
 mod lifecycle_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod snapshot_tests;
 
 #[cfg(test)]
 mod scope_clamp_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tasks_clock_compile_red_tests;

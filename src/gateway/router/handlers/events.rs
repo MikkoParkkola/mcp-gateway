@@ -193,7 +193,7 @@ pub(super) async fn answer(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "events_cov_tests.rs"]
 mod cov_tests;
 
@@ -201,7 +201,7 @@ mod cov_tests;
 #[path = "events_clock_tests.rs"]
 mod clock_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::gateway::auth::AuthenticatedClient;

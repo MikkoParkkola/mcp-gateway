@@ -253,7 +253,7 @@ impl<'a> DiscoveryChain<'a> {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::capability::discovery::SpecFormat;

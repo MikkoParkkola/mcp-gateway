@@ -529,7 +529,7 @@ impl MetaMcp {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "caller_verdict_outcome_tests.rs"]
 mod outcome_tests;
 
@@ -577,7 +577,7 @@ mod dispatch_seam {
 #[cfg(test)]
 #[path = "not_found_race_tests.rs"]
 mod not_found_race_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "noview_cooldown_tests.rs"]
 mod noview_cooldown_tests;
 

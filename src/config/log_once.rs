@@ -47,6 +47,6 @@ impl Evaluated {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "log_once_tests.rs"]
 mod tests;

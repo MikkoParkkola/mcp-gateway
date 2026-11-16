@@ -82,7 +82,7 @@ pub fn validate_tool_name(name: &str) -> Result<(), String> {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

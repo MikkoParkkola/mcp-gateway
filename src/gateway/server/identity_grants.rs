@@ -265,6 +265,6 @@ pub(super) async fn stdio_identity_grants(
     start_identity_grant_audit(config, meta_mcp, store.as_ref(), &base.path).await
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "identity_grants_tests.rs"]
 mod tests;

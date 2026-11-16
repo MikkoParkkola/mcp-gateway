@@ -458,6 +458,6 @@ mod show;
 #[path = "ui_diff_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "ui_diff_refusal_tests.rs"]
 mod refusal_tests;

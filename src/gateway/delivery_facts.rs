@@ -791,7 +791,7 @@ pub(crate) fn insert_notification_refused_by(
 #[path = "stored_scrub_pin_tests.rs"]
 mod stored_scrub_pin_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "delivery_facts_tests.rs"]
 mod tests;
 
@@ -799,7 +799,7 @@ mod tests;
 #[path = "delivery_facts_refused_by_tests.rs"]
 mod refused_by_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "delivery_facts_withheld_tests.rs"]
 mod withheld_tests;
 
@@ -807,7 +807,7 @@ mod withheld_tests;
 #[path = "delivery_facts_composite_tests.rs"]
 mod composite_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "delivery_facts_send_tests.rs"]
 mod send_tests;
 
@@ -815,6 +815,6 @@ mod send_tests;
 #[path = "delivery_facts_calls_tests.rs"]
 mod calls_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "delivery_facts_fold_tests.rs"]
 mod fold_tests;

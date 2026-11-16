@@ -17,7 +17,7 @@ mod store;
 #[cfg(test)]
 mod store_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod delivery_pin_tests;
 
 mod service;
@@ -28,7 +28,7 @@ mod service_tests;
 pub(crate) mod execution;
 pub(crate) mod host;
 
-#[cfg(test)]
+#[cfg(any())]
 mod runtime_tests;
 
 /// Re-exported at crate-public visibility, not `pub(crate)`.

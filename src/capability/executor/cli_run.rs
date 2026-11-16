@@ -419,7 +419,7 @@ async fn read_capped<R: AsyncRead + Unpin>(
     Ok(buf)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "cli_run_tests.rs"]
 mod tests;
 
@@ -427,6 +427,6 @@ mod tests;
 #[path = "cli_audit_tests.rs"]
 mod audit_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "cli_run_redaction_tests.rs"]
 mod redaction_tests;

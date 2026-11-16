@@ -538,7 +538,7 @@ fn raw_io_inside_an_inline_test_module_does_not_count() {
     let source = "\
 fn product() {}
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     fn fixture() -> String {
         std::fs::read_to_string(\"x\").unwrap()

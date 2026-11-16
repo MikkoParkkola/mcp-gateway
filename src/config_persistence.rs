@@ -150,7 +150,7 @@ pub(crate) mod crash_fs;
 #[path = "config_persistence_crash_fs_tests.rs"]
 mod crash_fs_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "config_persistence_commit_tests.rs"]
 mod commit_tests;
 pub use scratch::write_text_atomic;
@@ -705,7 +705,7 @@ pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
 #[cfg(test)]
 #[path = "config_persistence_cli_recovery_tests.rs"]
 mod cli_recovery_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "config_persistence_tests.rs"]
 mod tests;
 

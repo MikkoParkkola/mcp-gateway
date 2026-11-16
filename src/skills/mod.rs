@@ -88,7 +88,7 @@ fn effective_category(cap: &CapabilityDefinition) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::capability::{

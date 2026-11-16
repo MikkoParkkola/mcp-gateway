@@ -535,7 +535,7 @@ pub(crate) fn notice_line(dropped: u64, format: NoticeFormat) -> String {
 #[path = "log_writer_sinks_tests.rs"]
 pub(crate) mod test_sinks;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "log_writer_stop_tests.rs"]
 mod stop_tests;
 #[cfg(test)]

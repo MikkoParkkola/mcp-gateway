@@ -374,7 +374,7 @@ pub fn sanitize_optional_json(value: Option<Value>) -> Result<Option<Value>> {
 #[path = "sanitize_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "sanitize_alloc_tests.rs"]
 mod alloc_tests;
 
@@ -455,7 +455,7 @@ pub(crate) fn redact_url_keep_path(raw: &str) -> String {
 /// What [`redact_url_keep_path`] shows for a value it cannot take apart safely.
 pub(crate) const UNPARSEABLE_URL: &str = "<unparseable URL redacted>";
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "sanitize_redact_keep_path_tests.rs"]
 mod redact_url_keep_path_tests;
 

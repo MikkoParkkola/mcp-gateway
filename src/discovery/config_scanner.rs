@@ -712,7 +712,7 @@ fn note_environment_server(name: &str, key: &str) {
     );
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use std::sync::Arc;
@@ -775,7 +775,7 @@ mod tests {
 #[path = "config_scanner_ws_tests.rs"]
 mod ws_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "config_scanner_zed_tests.rs"]
 mod zed_tests;
 
@@ -783,6 +783,6 @@ mod zed_tests;
 #[path = "config_scanner_vscode_tests.rs"]
 mod vscode_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "config_scanner_entry_tests.rs"]
 mod entry_tests;

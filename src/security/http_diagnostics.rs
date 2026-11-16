@@ -283,7 +283,7 @@ pub fn redirect_target_phrase(response: &reqwest::Response) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

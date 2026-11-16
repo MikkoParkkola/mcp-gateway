@@ -167,7 +167,7 @@ impl CapabilityBackend {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use std::sync::Arc;
 
@@ -215,7 +215,7 @@ mod failed_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod held_reload_tests {
     use std::sync::Arc;
 

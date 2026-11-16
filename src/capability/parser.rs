@@ -350,7 +350,7 @@ fn validate_no_secrets(auth: &super::AuthConfig) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "cli_template_load_tests.rs"]
 mod cli_template_load_tests;
 

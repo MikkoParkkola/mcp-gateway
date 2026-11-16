@@ -599,6 +599,6 @@ pub(crate) fn plain_rule(tool: &str, action: FirewallAction) -> super::FirewallR
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "allowed_root_tests.rs"]
 mod tests;

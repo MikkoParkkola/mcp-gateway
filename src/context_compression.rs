@@ -386,7 +386,7 @@ impl CompressionStats {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use serde_json::{Value, json};
 

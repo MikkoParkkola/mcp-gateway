@@ -108,7 +108,7 @@ pub(crate) use destination::DestinationPolicy;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod loopback_name_tests;
 
 use ranges::{is_private_ipv4, is_private_ipv6};

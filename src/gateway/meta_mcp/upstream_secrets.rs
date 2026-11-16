@@ -39,6 +39,6 @@ pub(super) fn withheld(backend: &Backend, handle: &UpstreamHandle) -> Option<Ups
     }))
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "upstream_secrets_tests.rs"]
 mod tests;

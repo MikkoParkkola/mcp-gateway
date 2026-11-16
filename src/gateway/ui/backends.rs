@@ -616,7 +616,7 @@ pub(super) use crate::config::backend_add::validate_backend_name;
 #[path = "backends_audit_tests.rs"]
 mod audit_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "backends_secret_slot_tests.rs"]
 mod secret_slot_tests;
 

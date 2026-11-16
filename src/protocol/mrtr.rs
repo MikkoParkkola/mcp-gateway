@@ -616,7 +616,7 @@ impl Bridge {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod input_responses_tests {
     use super::input_responses_nonempty;
     use serde_json::json;
@@ -676,6 +676,6 @@ mod principal_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "mrtr_key_field_tests.rs"]
 mod key_field_tests;

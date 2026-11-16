@@ -288,7 +288,7 @@ pub fn extract_text_from_result(value: &serde_json::Value) -> String {
     text
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

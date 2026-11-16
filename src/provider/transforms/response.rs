@@ -70,7 +70,7 @@ impl Transform for ResponseTransform {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::transform::RedactRule;

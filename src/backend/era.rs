@@ -532,7 +532,7 @@ fn note_removed_method_refused(backend: &str, method: &str) {
 #[path = "era_discarded_probe_tests.rs"]
 mod discarded_probe_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION;

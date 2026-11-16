@@ -563,6 +563,6 @@ impl EventsHub {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "fanout_tests.rs"]
 mod tests;

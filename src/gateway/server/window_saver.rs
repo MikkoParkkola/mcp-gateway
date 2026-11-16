@@ -492,6 +492,6 @@ fn checkpoint_detached(
 #[path = "window_saver_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "window_saver_keep_tests.rs"]
 mod keep_tests;

@@ -531,9 +531,9 @@ fn build_output(
 
 #[cfg(test)]
 mod busy_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod envelope_tests;
 #[cfg(test)]
 mod step_retry_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

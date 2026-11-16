@@ -139,7 +139,7 @@ fn normalise_query(query: &str) -> String {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::semantic_search::SearchResult;

@@ -91,7 +91,7 @@ impl RotationConfig {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

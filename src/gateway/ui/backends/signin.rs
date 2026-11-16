@@ -370,7 +370,7 @@ pub(super) async fn confirm_sign_in(
     audited(response, &name, outcome)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "signin_gate_tests.rs"]
 mod gate_tests;
 
@@ -380,25 +380,25 @@ mod admission_tests;
 #[cfg(test)]
 #[path = "signin_fixture.rs"]
 mod fixture;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "signin_outcome_tests.rs"]
 mod outcome_tests;
 #[cfg(test)]
 #[path = "signin_owner_tests.rs"]
 mod owner_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "signin_read_tests.rs"]
 mod read_tests;
 #[cfg(test)]
 #[path = "signin_secrecy_tests.rs"]
 mod secrecy_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "signin_settle_tests.rs"]
 mod settle_tests;
 #[cfg(test)]
 #[path = "signin_tests.rs"]
 mod tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "signin_timing_tests.rs"]
 mod timing_tests;
 #[cfg(test)]

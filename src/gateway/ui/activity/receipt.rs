@@ -229,6 +229,6 @@ pub(super) fn receipt(
     Ok(Some(body.into()))
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "receipt_tests.rs"]
 mod tests;

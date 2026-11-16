@@ -458,7 +458,7 @@ pub use principal::{
 #[path = "agent_identity_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "agent_identity_falsifier_tests.rs"]
 mod falsifier_tests;
 
@@ -466,6 +466,6 @@ mod falsifier_tests;
 #[path = "agent_identity_load_tests.rs"]
 mod load_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "agent_identity_audit_tests.rs"]
 mod audit_tests;

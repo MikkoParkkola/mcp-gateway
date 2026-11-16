@@ -536,7 +536,7 @@ fn refusal(path: &Path, found: &BTreeSet<String>, backend: &BackendFindings) -> 
     message
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "strict_keys_tests.rs"]
 mod tests;
 

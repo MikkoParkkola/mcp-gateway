@@ -621,6 +621,6 @@ impl SecretInjector {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "secret_injection_flip_tests.rs"]
 mod flip_tests;

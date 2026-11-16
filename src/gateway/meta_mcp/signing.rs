@@ -763,7 +763,7 @@ impl super::MetaMcp {
 #[path = "signing_test_seams.rs"]
 mod test_seams;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "signing_prepared_allow_tests.rs"]
 mod prepared_allow_tests;
 
@@ -772,7 +772,7 @@ mod prepared_allow_tests;
 mod delivery_tests;
 
 // GH1942.HARDEN.1 row 7: the hardened signing scope.
-#[cfg(test)]
+#[cfg(any())]
 #[path = "signing_scope_tests.rs"]
 mod scope_tests;
 

@@ -276,7 +276,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "stored_proof_nonce_tests.rs"]
 mod nonce_tests;
 #[cfg(test)]

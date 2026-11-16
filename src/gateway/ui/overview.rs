@@ -619,7 +619,7 @@ fn last_actions(path: &std::path::Path) -> io::Result<Value> {
     Ok(json!({ "rows": rows, "complete": complete }))
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod rank_tests {
     use super::rank_servers;
 

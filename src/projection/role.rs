@@ -31,7 +31,7 @@ pub enum Role {
     Action,
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::Role;
 

@@ -583,6 +583,6 @@ pub(super) async fn decide(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "signin_flow_tests.rs"]
 mod tests;

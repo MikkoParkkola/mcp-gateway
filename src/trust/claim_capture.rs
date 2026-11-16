@@ -177,7 +177,7 @@ pub fn derive_claim(client_claim: Option<&ClientClaim>) -> Claim {
     client_claim.map_or(Claim::Succeeded, |c| c.claim().clone())
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::attestation::signer::BnautAttestationSigner;

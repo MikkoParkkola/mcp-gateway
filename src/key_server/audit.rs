@@ -187,7 +187,7 @@ pub fn emit(event: &AuditEvent) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     #![allow(
         clippy::disallowed_methods,

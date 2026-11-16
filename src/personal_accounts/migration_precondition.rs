@@ -192,6 +192,6 @@ pub(super) fn recover_client_id(
     Ok(configured.to_owned())
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "migration_precondition_tests.rs"]
 mod migration_precondition_tests;

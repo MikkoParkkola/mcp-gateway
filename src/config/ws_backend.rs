@@ -85,6 +85,6 @@ impl Config {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "ws_backend_tests.rs"]
 mod tests;

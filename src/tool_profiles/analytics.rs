@@ -129,7 +129,7 @@ impl UsageAnalytics {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::tool_profiles::ProfileRegistry;

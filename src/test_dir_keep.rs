@@ -372,7 +372,7 @@ pub(crate) fn run_before_first_fs_call() {
 #[path = "test_dir_keep_registry_tests.rs"]
 mod registry_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "test_dir_keep_registered_tests.rs"]
 mod registered_tests;
 

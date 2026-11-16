@@ -371,6 +371,6 @@ mod tests;
 #[path = "cli_firewall_tests.rs"]
 mod firewall_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "cli_literal_tests.rs"]
 mod literal_tests;

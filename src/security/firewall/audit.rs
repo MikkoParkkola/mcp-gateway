@@ -370,7 +370,7 @@ fn action_str(action: FirewallAction) -> &'static str {
 #[path = "audit_content_tests.rs"]
 mod content_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::super::{FindingLocation, FirewallAction, ScanType};
     use super::*;

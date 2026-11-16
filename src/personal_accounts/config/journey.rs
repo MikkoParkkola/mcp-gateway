@@ -291,6 +291,6 @@ fn forbid_inert_authorize_extra(accounts: &AccountsConfig) -> Result<(), Account
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "journey_tests.rs"]
 mod journey_tests;

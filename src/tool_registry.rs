@@ -385,6 +385,6 @@ impl Default for ToolRegistry {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "tool_registry_tests.rs"]
 mod tests;

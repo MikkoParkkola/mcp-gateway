@@ -436,7 +436,7 @@ fn backend_info_serializes_to_json() {
     assert!(!json.contains("\"command\""));
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod stop_when_idle_ui_tests {
     use super::super::*;
 

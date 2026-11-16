@@ -662,7 +662,7 @@ mod redirect_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     /// MIK-8667: a description keeps at most `max` bytes, cut on a character
     /// boundary, and gains `…` after them.

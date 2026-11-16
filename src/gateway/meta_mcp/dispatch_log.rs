@@ -128,7 +128,7 @@ pub(super) fn note_completed(args: &Value) {
     let _ = DISPATCH_LOG.try_with(|log| log.note(server, tool));
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod round_tests {
     use std::sync::Arc;
 

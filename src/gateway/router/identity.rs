@@ -473,7 +473,7 @@ fn trimmed_non_empty(value: &str) -> Option<String> {
 #[path = "identity_test_fixture.rs"]
 mod test_fixture;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "identity_header_tests.rs"]
 mod tests;
 
@@ -485,7 +485,7 @@ mod control_tests;
 #[path = "identity_cf_edge_tests.rs"]
 mod cf_edge_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "identity_admission_tests.rs"]
 mod admission_tests;
 

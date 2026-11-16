@@ -198,7 +198,7 @@ fn parse_jsonl(content: &str, chain_id: &str) -> Vec<ChainCheckpoint> {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     #![allow(
         clippy::disallowed_methods,

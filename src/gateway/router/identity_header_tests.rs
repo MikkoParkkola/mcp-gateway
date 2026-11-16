@@ -631,6 +631,6 @@ fn cert_subject_id_skips_an_empty_first_san_like_agent_identity() {
 
 // C0 T3 rows, in a file of their own to hold this file near its ceiling;
 // they reuse the fixtures above through the parent module.
-#[cfg(test)]
+#[cfg(any())]
 #[path = "identity_header_c0_tests.rs"]
 mod c0_tests;

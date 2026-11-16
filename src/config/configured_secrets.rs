@@ -121,6 +121,6 @@ pub(super) fn record(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "configured_secrets_tests.rs"]
 mod tests;

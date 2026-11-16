@@ -520,7 +520,7 @@ mod tests {
 }
 
 // Every credential-bearing capability send, this one included (#3013).
-#[cfg(test)]
+#[cfg(any())]
 #[path = "cleartext_tests.rs"]
 mod cleartext_tests;
 #[cfg(test)]

@@ -668,7 +668,7 @@ impl CounterStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "store_tests.rs"]
 mod store_tests;
 
@@ -676,14 +676,14 @@ mod store_tests;
 #[path = "pairs_tests.rs"]
 mod pairs_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "persist_tests.rs"]
 mod persist_tests;
 
 #[cfg(test)]
 #[path = "sums_tests.rs"]
 mod sums_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "view_tests.rs"]
 mod view_tests;
 

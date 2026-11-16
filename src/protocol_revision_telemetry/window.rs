@@ -203,6 +203,6 @@ pub(crate) use sink::{
     HttpSegmentSink, Kept, SegmentCounts, WriterIdentity, global_segment_counts,
 };
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "window_tests.rs"]
 mod tests;

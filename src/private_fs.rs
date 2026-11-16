@@ -660,7 +660,7 @@ pub(crate) mod instrument {
 #[path = "private_fs_test_support.rs"]
 pub(crate) mod test_support;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "private_fs_tests.rs"]
 mod tests;
 

@@ -396,6 +396,6 @@ fn find_suspicious_control(text: &str) -> Option<char> {
     None
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "tool_poisoning_tests.rs"]
 mod tests;

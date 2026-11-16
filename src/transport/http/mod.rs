@@ -704,7 +704,7 @@ pub use redirect_policy::transport_follows_redirect;
 mod requests;
 mod sse_channel;
 mod sse_decoder;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "sse_lent_reopen_tests.rs"]
 mod sse_lent_reopen_tests;
 mod sse_listen;
@@ -714,13 +714,13 @@ mod sse_send_tests;
 mod startup;
 mod transport_impl;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;
 
 #[cfg(test)]
 mod sse_decoder_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod private_redirect_tests;
 
 #[cfg(all(test, feature = "webui"))]

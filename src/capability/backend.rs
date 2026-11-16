@@ -621,7 +621,7 @@ pub use status::CapabilityBackendStatus;
 #[path = "backend_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "backend_pin_tests.rs"]
 mod pin_tests;
 

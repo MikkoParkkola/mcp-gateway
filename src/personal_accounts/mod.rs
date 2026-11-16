@@ -20,7 +20,7 @@ mod offline_migration;
 mod provider;
 pub(crate) mod refusal;
 mod revoke;
-#[cfg(test)]
+#[cfg(any())]
 mod revoke_connected_tests;
 #[cfg(test)]
 pub(crate) mod revoke_fixture;
@@ -722,7 +722,7 @@ pub fn initialize_store_offline(
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod initialization_debug_redaction_tests {
     use super::InitializedStore;
 

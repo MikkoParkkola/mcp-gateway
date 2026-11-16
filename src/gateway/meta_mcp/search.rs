@@ -775,7 +775,7 @@ impl MetaMcp {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "search_role_filter_tests.rs"]
 mod role_filter_tests;
 

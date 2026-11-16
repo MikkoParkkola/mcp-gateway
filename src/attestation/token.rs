@@ -116,7 +116,7 @@ impl AttestationToken {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

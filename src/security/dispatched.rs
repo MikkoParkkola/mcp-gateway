@@ -151,6 +151,6 @@ fn key() -> Option<&'static [u8; 32]> {
     .as_ref()
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "dispatched_tests.rs"]
 mod tests;

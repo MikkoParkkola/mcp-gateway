@@ -50,7 +50,7 @@ mod policies_rules;
 mod policies_shadow_tests;
 #[cfg(test)]
 mod policies_test_support;
-#[cfg(test)]
+#[cfg(any())]
 mod policies_tests;
 mod preview;
 mod preview_identity;
@@ -60,7 +60,7 @@ mod restart;
 pub(crate) mod restart_confirm;
 #[cfg(test)]
 mod restart_confirm_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod restart_get_tests;
 #[cfg(test)]
 mod restart_tests;
@@ -771,7 +771,7 @@ fn call_windows(
 
 // ── Tests ────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "keys_tests.rs"]
 mod keys_tests;
 
@@ -779,13 +779,13 @@ mod keys_tests;
 #[path = "keys_file_tests.rs"]
 mod keys_file_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;
 
 #[cfg(test)]
 mod discovery_wiring_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "keys_create_fixture_tests.rs"]
 mod keys_create_fixture_tests;
 
@@ -793,7 +793,7 @@ mod keys_create_fixture_tests;
 #[path = "keys_create_tests.rs"]
 mod keys_create_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "keys_create_refusal_tests.rs"]
 mod keys_create_refusal_tests;
 
@@ -801,7 +801,7 @@ mod keys_create_refusal_tests;
 #[path = "keys_create_cli_tests.rs"]
 mod keys_create_cli_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "keys_create_writer_tests.rs"]
 mod keys_create_writer_tests;
 

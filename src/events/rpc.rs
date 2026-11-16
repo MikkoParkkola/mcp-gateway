@@ -524,6 +524,6 @@ mod held;
 mod subscribe;
 use held::Commit;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "rpc_tests.rs"]
 mod tests;

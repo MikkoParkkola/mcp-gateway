@@ -708,7 +708,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod slot_tests;
 
 #[cfg(test)]

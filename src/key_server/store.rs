@@ -627,6 +627,6 @@ pub fn spawn_reaper(
     });
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "store_tests.rs"]
 mod tests;

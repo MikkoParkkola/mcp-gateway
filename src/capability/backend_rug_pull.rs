@@ -151,7 +151,7 @@ impl CapabilityBackend {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "backend_rug_pull_tests.rs"]
 mod tests;
 

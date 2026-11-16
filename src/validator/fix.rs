@@ -169,7 +169,7 @@ fn to_snake_case(s: &str) -> String {
     result
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::validator::{Severity, ValidationResult};

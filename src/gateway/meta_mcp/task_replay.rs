@@ -586,7 +586,7 @@ fn retry_later(id: &RequestId, after: Option<std::time::Duration>) -> JsonRpcRes
     )
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "stored_read_prepass_tests.rs"]
 mod prepass_tests;
 

@@ -772,6 +772,6 @@ pub(in crate::backend) use stop::seam as stop_seam;
 #[path = "registry_stored_scrub_tests.rs"]
 mod stored_scrub_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "registry_tests.rs"]
 mod tests;

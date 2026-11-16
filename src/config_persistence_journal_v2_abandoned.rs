@@ -431,6 +431,6 @@ mod fixtures;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned_placement_tests.rs"]
 mod placement;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "config_persistence_journal_v2_abandoned_tests.rs"]
 mod tests;

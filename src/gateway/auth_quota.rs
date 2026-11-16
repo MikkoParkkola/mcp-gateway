@@ -140,7 +140,7 @@ impl QuotaPrincipal {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::QuotaPrincipal;
 

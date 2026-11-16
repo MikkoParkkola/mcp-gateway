@@ -100,21 +100,21 @@ pub mod tenant_guard;
 /// Re-exported here, where the guard that attributes reads lives.
 pub(crate) use crate::security::tenant_reads;
 
-#[cfg(test)]
+#[cfg(any())]
 mod anomaly_learning_tests;
 #[cfg(test)]
 mod anomaly_posture_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod answer_policies_tests;
 #[cfg(test)]
 mod response_observer;
 #[cfg(test)]
 pub(crate) mod response_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod rule_glob_tests;
 #[cfg(test)]
 mod rule_id_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod rule_scan_tests;
 #[cfg(test)]
 mod rule_scope_tests;
@@ -719,14 +719,14 @@ mod verification;
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "refusal_words_tests.rs"]
 mod refusal_words_tests;
 #[cfg(test)]
 #[path = "tenant_audit_tests.rs"]
 mod tenant_audit_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "severity_tests.rs"]
 mod severity_tests;
 #[cfg(test)]

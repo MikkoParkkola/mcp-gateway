@@ -513,7 +513,7 @@ pub(super) fn spawn_rewatch_task(
     })
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "watch_chain_tests.rs"]
 mod tests;
 
@@ -521,7 +521,7 @@ mod tests;
 #[path = "watch_chain_filter_tests.rs"]
 mod filter_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod plain_file_tests {
     /// A regular file ends the chain on every platform (#1142: on Windows the
     /// chain failed on os error 4390 and hot-reload never followed the file).

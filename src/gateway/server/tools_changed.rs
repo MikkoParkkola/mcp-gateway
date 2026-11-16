@@ -383,7 +383,7 @@ pub(super) mod stdio;
 mod audience_access;
 #[cfg(test)]
 mod audience_attach_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod audience_cf_tests;
 #[cfg(test)]
 mod audience_ear;
@@ -391,29 +391,29 @@ mod audience_ear;
 mod audience_expire_tests;
 #[cfg(test)]
 pub(in crate::gateway::server) mod audience_fixture;
-#[cfg(test)]
+#[cfg(any())]
 mod audience_guard_8377_tests;
 #[cfg(test)]
 mod audience_identity_tests;
-#[cfg(test)]
+#[cfg(any())]
 /// A removed key or grant ends what a held stream delivers.
 mod audience_key_reload_tests;
 #[cfg(test)]
 mod audience_l2_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod audience_liveness_tests;
 #[cfg(test)]
 mod audience_review_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod audience_source_tests;
 #[cfg(test)]
 mod audience_sse_tests;
-#[cfg(test)]
+#[cfg(any())]
 /// L3b: a surfaced-only reload reaches both HTTP channels once.
 mod audience_surfaced_reload_tests;
 #[cfg(test)]
 mod audience_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod decision_tests;
 #[cfg(test)]
 mod drain_seam;

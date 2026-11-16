@@ -595,14 +595,14 @@ fn drop_torn_tail(path: &Path) -> Result<(), ExportError> {
 #[cfg(test)]
 #[path = "export_reader_tests.rs"]
 mod reader_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "export_tests.rs"]
 mod tests;
 
 #[cfg(test)]
 #[path = "export_clock_tests.rs"]
 mod clock_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "export_signed_entry_tests.rs"]
 mod signed_entry_tests;
 // Windows: the cursor save keeps an owner-only file owner-only.

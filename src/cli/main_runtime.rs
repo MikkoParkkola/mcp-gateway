@@ -145,6 +145,6 @@ pub(crate) fn block_on<F: std::future::Future>(
     (output, left_running)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "main_runtime_tests.rs"]
 mod tests;

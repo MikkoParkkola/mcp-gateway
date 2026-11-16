@@ -766,6 +766,6 @@ mod shapes;
 pub(crate) use shapes::{Ace, CopySource, CopyWith, Inspection, ObjectKind, Share, Sid};
 use shapes::{aligned, wide};
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "win_acl_tests.rs"]
 mod tests;

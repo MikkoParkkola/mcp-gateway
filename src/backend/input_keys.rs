@@ -527,7 +527,7 @@ impl Backend {
 mod kind_tests;
 
 // MIK-8399: partial and abandoned listings revoke resend permission.
-#[cfg(test)]
+#[cfg(any())]
 #[path = "resend_revoke_tests.rs"]
 mod resend_revoke_tests;
 

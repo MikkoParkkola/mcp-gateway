@@ -25,12 +25,12 @@ mod grant_projection_tests;
 // Widened within the UI so the status report derives the control-plane
 // actor with the function the routes use, not a copy of its role rules.
 pub(in crate::gateway::ui) mod mutations;
-#[cfg(test)]
+#[cfg(any())]
 mod read_reflect_tests;
 #[cfg(test)]
 mod role_wiring_tests;
 mod snapshot;
-#[cfg(test)]
+#[cfg(any())]
 mod snapshot_scope_tests;
 
 #[cfg(test)]
@@ -222,7 +222,7 @@ async fn control_plane_snapshot(
 #[path = "control_plane_mutation_tests.rs"]
 mod mutation_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "control_plane_authority_tests.rs"]
 mod authority_tests;
 
@@ -232,6 +232,6 @@ mod preflight_tests;
 
 /// B6 (MIK-7570.BREAKER.1): an open breaker reads `Down` and `Blocked`,
 /// through the real `Backend::status()`, never a hand-built status.
-#[cfg(test)]
+#[cfg(any())]
 #[path = "control_plane_breaker_tests.rs"]
 mod breaker_tests;

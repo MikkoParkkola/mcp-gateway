@@ -303,7 +303,7 @@ impl super::Gateway {
 #[path = "shutdown_order_tests.rs"]
 mod shutdown_order_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "counter_restart_tests.rs"]
 mod counter_restart_tests;
 

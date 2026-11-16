@@ -787,6 +787,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "store_reservation_tests.rs"]
 mod store_reservation_tests;

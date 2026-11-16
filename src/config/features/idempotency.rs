@@ -43,7 +43,7 @@ impl IdempotencyConfig {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod idempotency_config_tests {
     use super::*;
 

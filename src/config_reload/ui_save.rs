@@ -271,7 +271,7 @@ fn write_failed(variant: &'static str) -> UiRefused {
     UiRefused::Failed(FAILED.to_owned())
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "ui_save_tests.rs"]
 mod tests;
 

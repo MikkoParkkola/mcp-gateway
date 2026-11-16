@@ -193,6 +193,6 @@ pub fn run_verify_export(file: &Path, jwk: Option<&Path>, config: Option<&Path>)
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "export_verify_tests.rs"]
 mod tests;

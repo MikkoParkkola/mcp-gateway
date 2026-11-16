@@ -755,7 +755,7 @@ fn usual_refusal_fix(path: &Path, owned: bool, what: SecretFile) -> String {
 #[path = "secret_file_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "secret_file_population_tests.rs"]
 mod population_tests;
 

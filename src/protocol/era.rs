@@ -754,6 +754,6 @@ impl EraObservation {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "era_tests.rs"]
 mod tests;

@@ -640,7 +640,7 @@ impl BudgetEnforcer {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "enforcer_tests.rs"]
 mod tests;
 

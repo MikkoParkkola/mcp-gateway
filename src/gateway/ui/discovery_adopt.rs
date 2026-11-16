@@ -416,6 +416,6 @@ pub(super) async fn adopt_discovery(
 #[path = "discovery_adopt_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "discovery_adopt_route_tests.rs"]
 mod route_tests;

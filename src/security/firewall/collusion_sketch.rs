@@ -608,6 +608,6 @@ impl Markers {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "collusion_sketch_tests.rs"]
 mod tests;

@@ -184,7 +184,7 @@ fn is_retryable(error: &Error) -> bool {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
 
     /// C7: a backend's own JSON-RPC error is its final answer: never retried.

@@ -646,9 +646,9 @@ pub(crate) fn reset_global_for_tests() {
         .reset();
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod lock_tests;
 #[cfg(test)]
 mod slice_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

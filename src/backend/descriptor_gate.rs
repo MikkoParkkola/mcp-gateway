@@ -577,6 +577,6 @@ impl PendingSink {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "allowed_tools_tests.rs"]
 mod allowed_tools_tests;

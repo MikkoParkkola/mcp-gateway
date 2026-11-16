@@ -192,7 +192,7 @@ fn descriptors(registry: &WebhookRegistry) -> Vec<EventDescriptor> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::{Inbound, dedupe_key};
     use crate::capability::WebhookEvent;

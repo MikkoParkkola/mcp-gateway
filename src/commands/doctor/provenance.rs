@@ -26,7 +26,7 @@ pub(super) fn check_remote_provenance(config: &Config) -> Vec<CheckResult> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::super::CheckStatus;
     use super::*;

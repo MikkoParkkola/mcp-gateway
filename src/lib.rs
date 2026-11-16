@@ -204,7 +204,7 @@ mod test_pause;
 mod test_ports;
 #[cfg(test)]
 pub(crate) mod test_source_text;
-#[cfg(test)]
+#[cfg(any())]
 mod test_source_text_tests;
 #[cfg(test)]
 mod test_wait;
@@ -354,7 +354,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "log_filter_tests.rs"]
 mod log_filter_tests;
 

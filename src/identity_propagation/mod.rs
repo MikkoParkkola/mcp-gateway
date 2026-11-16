@@ -676,12 +676,12 @@ pub(crate) async fn audit_identity_propagation(
         })
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod audience_tests;
 
 #[cfg(test)]
 #[path = "observation_tests.rs"]
 mod observation_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

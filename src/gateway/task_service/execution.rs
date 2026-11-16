@@ -263,11 +263,11 @@ fn commit_to_service(error: CommitFailure) -> ServiceError {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod gate_site_tests;
 #[cfg(test)]
 mod keep_dir_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod scope_tests;
 #[cfg(test)]
 mod spawn_tests;

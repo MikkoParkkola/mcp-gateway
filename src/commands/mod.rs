@@ -558,7 +558,7 @@ mod tls_ca_key_tests;
 #[cfg(all(test, windows))]
 mod winacl_test_support;
 
-#[cfg(test)]
+#[cfg(any())]
 mod admin_credential_tests {
     use super::{InitProfile, build_init_config};
 

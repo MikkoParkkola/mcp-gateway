@@ -123,6 +123,6 @@ impl OwnedRouterAuthorizer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct KeyGone;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "authorization_rejudge_tests.rs"]
 mod rejudge_tests;

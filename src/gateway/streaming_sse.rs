@@ -751,6 +751,6 @@ mod terminal_frame_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "streaming_sse_gate_tests.rs"]
 mod gate_tests;

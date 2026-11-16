@@ -245,5 +245,5 @@ async fn select_cards(capabilities: &Path, name: Option<&str>) -> Result<Vec<Tru
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

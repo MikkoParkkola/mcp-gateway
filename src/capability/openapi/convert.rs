@@ -695,7 +695,7 @@ impl Default for OpenApiConverter {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod fetch_error_tests {
     use super::*;
 

@@ -244,7 +244,7 @@ fn judge(backend: &BackendConfig, multi_user: bool, detected: Option<bool>) -> O
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

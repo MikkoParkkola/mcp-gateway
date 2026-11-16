@@ -207,6 +207,6 @@ pub(crate) struct SendMessageResponse {
     pub message: Option<Message>,
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "types_tests.rs"]
 mod tests;

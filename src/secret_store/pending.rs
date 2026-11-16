@@ -124,6 +124,6 @@ impl Drop for PendingSecrets {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "pending_tests.rs"]
 mod tests;

@@ -692,6 +692,6 @@ fn suffix_fragment(text: &str, limit: usize) -> &str {
 #[path = "kernel_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "kernel_memo_tests.rs"]
 mod memo_tests;

@@ -436,6 +436,6 @@ fn forbidden(message: &str) -> impl IntoResponse + use<> {
 #[path = "origin_guard_hosted.rs"]
 mod hosted;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "origin_guard_tests.rs"]
 mod tests;

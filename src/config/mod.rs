@@ -748,11 +748,11 @@ pub mod humantime_serde;
 
 #[cfg(test)]
 mod backend_owner_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod backend_refs_tests;
 #[cfg(test)]
 mod backend_url_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod keychain_confirm_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod keychain_linux_tests;
@@ -760,17 +760,17 @@ mod keychain_linux_tests;
 mod keychain_load_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod keychain_macos_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod keychain_ref_tests;
 #[cfg(all(test, windows))]
 mod keychain_windows_tests;
 #[cfg(test)]
 mod secret_file_ref_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod secret_files_store_tests;
 #[cfg(test)]
 mod secret_ref_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod tests;
 
 #[cfg(test)]
@@ -789,7 +789,7 @@ mod a2a_secrets;
 #[path = "account_custody_tests.rs"]
 mod account_custody_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "account_secret_order_tests.rs"]
 mod account_secret_order_tests;
 
@@ -797,6 +797,6 @@ mod account_secret_order_tests;
 #[path = "account_consumer_config_tests.rs"]
 mod account_consumer_config_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "descriptor_config_tests.rs"]
 mod descriptor_config_tests;

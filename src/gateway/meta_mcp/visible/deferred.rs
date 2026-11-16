@@ -57,7 +57,7 @@ pub(crate) fn deferred_replay_key(
     })
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::super::memo::{record_deferred_replay, take_deferred_replay, with_visibility_memo};
     use super::{DeferredReplay, deferred_replay_key};

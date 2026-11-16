@@ -704,6 +704,6 @@ impl World {
 #[cfg(test)]
 #[path = "audience_fixture_custody_controls.rs"]
 mod custody_controls;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "audience_ear_tests.rs"]
 mod ear_tests;

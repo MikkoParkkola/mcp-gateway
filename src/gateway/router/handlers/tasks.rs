@@ -516,7 +516,7 @@ mod stored_read;
 use stored_read::{prepare_stored_read, prepare_stored_read_with_policy};
 #[cfg(test)]
 mod frame_subject_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod intent_tests;
 #[cfg(test)]
 mod scope_tests;

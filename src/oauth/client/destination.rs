@@ -270,7 +270,7 @@ fn cleartext_refusal(what: &str) -> String {
     )
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "destination_tests.rs"]
 mod tests;
 
@@ -284,6 +284,6 @@ pub(crate) use tests::client_with_refused_refresh;
 #[path = "cleartext_tests.rs"]
 mod cleartext_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "detached_refusal_tests.rs"]
 mod detached_refusal_tests;

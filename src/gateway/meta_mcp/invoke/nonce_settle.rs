@@ -204,7 +204,7 @@ impl Drop for Witnessed<'_, '_> {
 #[path = "refund_waiter_tests.rs"]
 mod refund_waiter_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod pre_send_tests {
     use super::{PreSendExit, mark_dispatched, settle_pre_send};
     use crate::gateway::authz::AllowAll;

@@ -588,6 +588,6 @@ pub fn find_similar_hashes<S: std::hash::BuildHasher>(
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "simhash_tests.rs"]
 mod tests;

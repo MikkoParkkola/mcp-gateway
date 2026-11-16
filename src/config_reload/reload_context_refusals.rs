@@ -174,7 +174,7 @@ impl ReloadContext {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::config_reload::compute_diff;

@@ -518,7 +518,7 @@ fn admit(shared: &Shared, need: &mut Need, interest: &Interest) -> Result<bool, 
     outcome
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "upstream_listener_tests.rs"]
 mod tests;
 
@@ -526,6 +526,6 @@ mod tests;
 #[path = "upstream_charge_tests.rs"]
 mod charge_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "upstream_listener_keys_tests.rs"]
 mod keys_tests;

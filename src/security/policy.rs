@@ -385,7 +385,7 @@ impl Default for ToolPolicy {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

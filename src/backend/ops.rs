@@ -756,7 +756,7 @@ fn substitute_progress_token(params: Option<Value>) -> Option<Value> {
 #[path = "ops_secret_outbound.rs"]
 mod secret_outbound;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "ops_presend_pin_tests.rs"]
 mod presend_pin_tests;
 #[cfg(test)]

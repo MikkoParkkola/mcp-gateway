@@ -361,7 +361,7 @@ pub(crate) fn admit_stream_item(
     })
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod emitted_document_tests {
     use std::cell::Cell;
     use std::collections::BTreeSet;

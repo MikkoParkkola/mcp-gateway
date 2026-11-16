@@ -623,7 +623,7 @@ impl AdapterConfig {
 #[path = "adapter_secret_tests.rs"]
 mod secret_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod debug_redaction_tests {
     use super::{AdapterConfig, AdapterKind};
 

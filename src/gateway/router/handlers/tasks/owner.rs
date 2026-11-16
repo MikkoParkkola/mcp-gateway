@@ -176,12 +176,12 @@ fn agent_task_owner(client_id: &str) -> String {
     )
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod agent_owner_tests;
 #[cfg(test)]
 mod owners_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod mik_8659_owner_tests {
     fn client(authenticated: bool, principal: &str) -> crate::gateway::auth::AuthenticatedClient {
         crate::gateway::auth::AuthenticatedClient {

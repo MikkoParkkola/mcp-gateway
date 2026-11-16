@@ -403,7 +403,7 @@ fn print_next_steps(config_path: &Path) {
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

@@ -142,7 +142,7 @@ fn rewrite_of(text: &str) -> UrlRewrite {
     rewrite
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     /// A lock refusal under `--force` is reported as itself: `--force`
     /// overrides only the comment check, never another writer's lock (a

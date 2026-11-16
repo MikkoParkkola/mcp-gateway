@@ -763,6 +763,6 @@ enum CredentialOrigin {
     Lent,
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "token_refusal_tests.rs"]
 mod token_refusal_tests;

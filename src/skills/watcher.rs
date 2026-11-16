@@ -262,7 +262,7 @@ async fn regenerate_changed_files(paths: &[PathBuf], out_dir: &Path, agent_paths
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

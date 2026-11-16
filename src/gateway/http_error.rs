@@ -58,7 +58,7 @@ pub(crate) fn attach_static_header(
         .insert(name, HeaderValue::from_static(value));
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

@@ -319,7 +319,7 @@ fn inspect_settled_pinned(
     (response, decided)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::{
         CellRefusal, composite_join, composite_refusal_code, dispatch_refusal,

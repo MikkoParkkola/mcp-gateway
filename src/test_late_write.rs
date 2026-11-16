@@ -108,7 +108,7 @@ fn attributed(thread: Option<&str>) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

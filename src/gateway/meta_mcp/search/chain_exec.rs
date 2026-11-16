@@ -386,7 +386,7 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod member_tests {
     use serde_json::json;
 

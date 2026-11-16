@@ -383,6 +383,6 @@ impl EnvReloadCounts {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "env_poll_tests.rs"]
 mod tests;

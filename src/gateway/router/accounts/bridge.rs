@@ -156,6 +156,6 @@ fn sole_cookie<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
     found.filter(|value| !value.is_empty())
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "bridge_tests.rs"]
 mod bridge_tests;

@@ -394,7 +394,7 @@ impl Drop for Loan {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

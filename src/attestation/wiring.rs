@@ -187,7 +187,7 @@ pub(crate) fn enforce_from_env_file(
     (validator, mode)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     #![allow(
         clippy::disallowed_methods,

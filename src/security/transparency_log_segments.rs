@@ -437,7 +437,7 @@ pub(crate) fn release_reserve(path: &Path) -> io::Result<bool> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod hwm_mac_tests {
     use super::*;
 

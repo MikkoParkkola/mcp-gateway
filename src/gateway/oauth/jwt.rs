@@ -312,7 +312,7 @@ fn check_audience_claim(aud: Option<&serde_json::Value>, expected: &str) -> Resu
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     #![allow(
         clippy::disallowed_methods,

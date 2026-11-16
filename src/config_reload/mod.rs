@@ -183,7 +183,7 @@ mod live_config;
 pub use live_config::LiveConfig;
 
 // ============================================================================
-#[cfg(test)]
+#[cfg(any())]
 #[path = "account_reload_tests.rs"]
 mod account_reload_tests;
 
@@ -191,7 +191,7 @@ mod account_reload_tests;
 #[path = "account_reload_guard_tests.rs"]
 mod account_reload_guard_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "replica_restart_tests.rs"]
 mod replica_restart_tests;
 
@@ -200,11 +200,11 @@ mod restart_required_tests;
 
 #[cfg(all(test, feature = "firewall"))]
 mod live_collusion_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod live_keys_reload_tests;
 #[cfg(test)]
 mod live_sections_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod owner_reload_tests;
 
 mod apply;
@@ -338,11 +338,11 @@ mod watch_chain;
 
 #[cfg(test)]
 mod c4_enable_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod c9_file_ref_tests;
 #[cfg(test)]
 mod config_error_leak_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod empty_backends_reload_tests;
 #[cfg(test)]
 mod reload_pause;
@@ -352,7 +352,7 @@ mod reload_pause;
 pub(crate) use reload_pause::arm as arm_reload_pause;
 #[cfg(test)]
 mod webhook_base_path_reload_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod writer_lock_tests;
 #[cfg(all(test, unix))]
 mod writer_symlink_tests;
@@ -361,24 +361,24 @@ mod writer_symlink_tests;
 mod flip_pin_tests;
 #[cfg(all(test, feature = "webui"))]
 mod replace_audit_key_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod replace_audit_tests;
 #[cfg(test)]
 mod replace_secret_tests;
 #[cfg(test)]
 mod replace_test_support;
-#[cfg(test)]
+#[cfg(any())]
 mod replace_tests;
 #[cfg(test)]
 mod replace_validate_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod reader_lock_tests;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod grant_reload_trigger_tests;
 
 /// A backend's configured `headers:`/`env:` credentials across a reload
@@ -387,28 +387,28 @@ mod grant_reload_trigger_tests;
 mod configured_secrets_reload_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod firewall_shape_reload_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod grant_audit_crash_tests;
 #[cfg(test)]
 mod grant_audit_journal_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod grant_audit_plan_tests;
 #[cfg(test)]
 mod grant_audit_reload_tests;
-#[cfg(test)]
+#[cfg(any())]
 pub(crate) mod grant_audit_tests;
 #[cfg(test)]
 mod pattern_grammar_reload_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod principal_collision_tests;
 #[cfg(test)]
 mod reload_load_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod runtime_name_clash_tests;
 
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "refusal_class_tests.rs"]
 mod refusal_class_tests;

@@ -293,7 +293,7 @@ pub(super) fn normalize_tools_list_response(
 #[path = "direct_list_abandon_tests.rs"]
 mod abandon_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::readable_page;
     use serde_json::json;

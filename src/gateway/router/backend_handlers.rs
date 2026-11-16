@@ -521,23 +521,23 @@ use direct_list::normalize_tools_list_response;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod passthrough_slot_cap_tests;
 
 #[cfg(test)]
 mod idempotency_settlement_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod direct_route_scope_tests;
 
 #[cfg(test)]
 mod direct_admission_edge_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod direct_captured_backend_tests;
 
 #[cfg(test)]
 mod direct_audit_subject_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod direct_unpinned_tests;

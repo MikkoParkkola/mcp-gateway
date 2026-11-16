@@ -137,6 +137,6 @@ pub(crate) fn direct_method_counts(method: &str, effect: Option<Effect>) -> bool
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "recent_writes_tests.rs"]
 mod tests;

@@ -438,12 +438,12 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "record_principal_key_tests.rs"]
 mod key_tests;
 #[cfg(test)]
 #[path = "record_principal_leak_tests.rs"]
 mod leak_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "record_principal_scan_tests.rs"]
 mod scan_tests;

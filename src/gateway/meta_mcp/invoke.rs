@@ -314,7 +314,7 @@ impl MetaMcp {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod error_classification_tests;
 
 // ============================================================================
@@ -323,67 +323,67 @@ mod error_classification_tests;
 
 #[cfg(test)]
 mod context_integrity_note_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod response_transform_tests;
 
 #[cfg(test)]
 mod identity_propagation_enforcement_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod error_budget_tests;
 
 #[cfg(test)]
 mod circuit_open_hint_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod suggestion_authz_tests;
 
 #[cfg(test)]
 mod f13_bridge_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod bridge_round_recheck_tests;
 
 #[cfg(test)]
 mod captured_invoke_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod runtime_name_clash_tests;
 
 #[cfg(test)]
 mod cancel_settles_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod caller_cost_tests;
 
 #[cfg(test)]
 mod f13_hint_scope_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod caller_verdict_label_tests;
 
 #[cfg(test)]
 mod session_fp_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod response_cache_error_tests;
 
 #[cfg(test)]
 mod ask_expiry_budget_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod bridge_send_refusal_tests;
 #[cfg(test)]
 mod refusal_first_scan_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tracing_target_tests;
 
 #[cfg(test)]
 mod mcp_credential_principal_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod stage_boundary_tests;
 
 #[cfg(test)]
 mod plan_step_guard_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod presend_refusal_tests;

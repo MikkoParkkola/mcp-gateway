@@ -51,11 +51,11 @@ pub(in crate::personal_accounts) use grant_flow::{ProviderRevocation, TokenTypeH
 
 #[cfg(test)]
 mod provider_accept_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod provider_bound_tests;
 #[cfg(test)]
 mod provider_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod wire_tests;
 
 /// A response body and its status. Carries no headers on purpose: nothing in

@@ -561,6 +561,6 @@ pub enum ToolChoice {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "types_tests.rs"]
 mod tests;

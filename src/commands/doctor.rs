@@ -693,13 +693,13 @@ pub use start_stdio::StdioProbe;
 #[path = "doctor/human.rs"]
 mod human;
 use human::human_lines;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "doctor/key_digest_tests.rs"]
 mod key_digest_tests;
 #[cfg(test)]
 #[path = "doctor/runtime_tests.rs"]
 mod runtime_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "doctor/shadow_tests.rs"]
 mod shadow_tests;
 

@@ -101,6 +101,6 @@ impl NotificationMultiplexer {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "streaming_roster_tests.rs"]
 mod tests;

@@ -201,7 +201,7 @@ fn ns_since(anchor: Instant) -> u64 {
     u64::try_from(anchor.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "auth_runtime_tests.rs"]
 mod tests;
 

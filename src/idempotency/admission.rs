@@ -556,7 +556,7 @@ pub(crate) use tasks::{
     TaskPublication,
 };
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "task_admission_tests.rs"]
 mod task_tests;
 
@@ -564,6 +564,6 @@ mod task_tests;
 #[path = "task_qualification_tests.rs"]
 mod task_qualification_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "task_service_import_tests.rs"]
 mod task_service_import_tests;

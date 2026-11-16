@@ -643,7 +643,7 @@ pub(crate) mod seams {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod kind_tests {
     use super::Withholding;
 

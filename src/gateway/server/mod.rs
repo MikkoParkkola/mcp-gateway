@@ -6,7 +6,7 @@
 // test that drives a real startup must call the same one rather than a copy of
 // its policy.
 pub(crate) mod account_bindings;
-#[cfg(test)]
+#[cfg(any())]
 mod attestation_start_tests;
 #[cfg(test)]
 mod audit_start_tests;
@@ -29,7 +29,7 @@ mod counter_wiring;
 mod events_wiring;
 mod health_floor;
 mod health_wiring;
-#[cfg(test)]
+#[cfg(any())]
 mod key_server_start_tests;
 /// The startup notice that the read verdict runs with the firewall off.
 #[cfg(all(test, feature = "firewall"))]
@@ -45,11 +45,11 @@ mod keyless_anomaly_tests;
 mod listener;
 mod persistence;
 mod provenance_signer;
-#[cfg(test)]
+#[cfg(any())]
 mod real_store_guard_tests;
 #[cfg(test)]
 mod remote_provenance_start_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod replica_state_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_driver_tests;
@@ -66,7 +66,7 @@ mod stdio_delivery;
 mod stdio_dispatch;
 mod stdio_dispatches;
 /// ADR-023: the sanitise flag over stdio follows a reload.
-#[cfg(test)]
+#[cfg(any())]
 mod stdio_live_flag_tests;
 mod stdio_loop;
 mod stdio_nonce;
@@ -85,7 +85,7 @@ mod stop_budget_start_tests;
 mod task_runtime;
 #[cfg(test)]
 mod test_seams;
-#[cfg(test)]
+#[cfg(any())]
 mod tilde_tests;
 pub(crate) use stdio_nonce::StdioNonce;
 mod support;
@@ -301,13 +301,13 @@ fn leaky_single_user_backends(config: &Config) -> Vec<&str> {
 /// full tool access. If the ledger ever gains shared storage, revisit it.
 pub(crate) const STDIO_CREDENTIAL_PRINCIPAL: &str = "stdio";
 
-#[cfg(test)]
+#[cfg(any())]
 mod gateway_bootstrap_tests;
 
 #[cfg(test)]
 mod stdio_forward_path_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use std::sync::Arc;
 

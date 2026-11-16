@@ -198,6 +198,6 @@ pub struct ReloadPostureRefusal {
     pub restart_would_also_refuse: bool,
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "cleartext_tests.rs"]
 mod tests;

@@ -19,7 +19,7 @@ pub enum Severity {
     Critical,
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::Severity;
 

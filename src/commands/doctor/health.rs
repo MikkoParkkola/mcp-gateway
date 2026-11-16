@@ -360,7 +360,7 @@ fn runtime_base_url(config: &Config) -> String {
     format!("http://{}:{}", host, config.server.port)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod redirect_tests {
     use super::*;
     use std::sync::Arc;

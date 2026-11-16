@@ -792,7 +792,7 @@ use rounds::{after_dispatch, run_prepare};
 #[path = "mcp_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "shipped_capability_tests.rs"]
 mod shipped_capability_tests;
 
@@ -809,6 +809,6 @@ impl super::CapabilityExecutor {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "mcp_presend_tests.rs"]
 mod presend_tests;

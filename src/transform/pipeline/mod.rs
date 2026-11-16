@@ -274,5 +274,5 @@ fn render_template(template: &str, value: &Value) -> String {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

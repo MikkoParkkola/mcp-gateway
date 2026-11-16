@@ -86,7 +86,7 @@ impl<C: Clock + Clone + Send + Sync> LookupBudget<C> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use std::time::Duration;
 

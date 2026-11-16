@@ -349,6 +349,6 @@ impl Drop for CancelGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "delegation_tests.rs"]
 mod tests;

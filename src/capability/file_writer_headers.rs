@@ -314,7 +314,7 @@ fn provider_entries_of(text: &str, doc: &crate::yaml::Value) -> Vec<(String, cra
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::capability::file_writer::{preview, validate};

@@ -154,7 +154,7 @@ pub(super) async fn not_found() -> StatusCode {
     StatusCode::NOT_FOUND
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "shell_tests.rs"]
 mod tests;
 

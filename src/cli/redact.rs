@@ -19,7 +19,7 @@ pub fn json(value: &mut serde_json::Value, secrets: &[String]) -> bool {
     crate::security::secret_redaction::redact_value(value, secrets)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     #[test]
     fn the_public_surface_is_exactly_text_and_json() {

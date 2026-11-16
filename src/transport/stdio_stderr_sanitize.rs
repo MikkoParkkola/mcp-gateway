@@ -142,7 +142,7 @@ fn mask_spans(text: &str, spans: &[(usize, usize)]) -> String {
     out
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

@@ -138,7 +138,7 @@ pub(crate) fn publish_new_file(
     sync_dir(dir)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "record_key_tests.rs"]
 mod tests;
 

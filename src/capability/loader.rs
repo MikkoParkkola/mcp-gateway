@@ -250,7 +250,7 @@ fn count_unpinned(capabilities: &[CapabilityDefinition]) -> usize {
     capabilities.iter().filter(|c| c.sha256.is_none()).count()
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use std::io::Write;

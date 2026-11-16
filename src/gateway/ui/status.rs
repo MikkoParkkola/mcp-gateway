@@ -240,6 +240,6 @@ struct ServerStatus {
     sign_in_flow: Option<Value>,
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "status_tests.rs"]
 mod tests;

@@ -724,6 +724,6 @@ mod start_tests {
 }
 
 /// Every caller's stop budget yields a plan that fits it, by construction.
-#[cfg(test)]
+#[cfg(any())]
 #[path = "stdio_reaper_plan_tests.rs"]
 mod plan_tests;

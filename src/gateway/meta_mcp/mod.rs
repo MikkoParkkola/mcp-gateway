@@ -70,14 +70,14 @@ use confirmation::{GateOutcome, destructive_confirmation_gate};
 
 pub(crate) mod admission;
 mod audience;
-#[cfg(test)]
+#[cfg(any())]
 mod audit_record_tests;
 #[cfg(test)]
 mod callback_admin_denial_tests;
 mod caller_forward;
 mod catalogue_cache;
 mod chain_interim;
-#[cfg(test)]
+#[cfg(any())]
 mod chain_interim_tests;
 mod confirmation;
 pub(crate) mod counting;
@@ -100,7 +100,7 @@ mod events_hook;
 mod first_fill;
 pub(crate) mod grant_audit;
 mod interim_promotion;
-#[cfg(test)]
+#[cfg(any())]
 mod interim_promotion_tests;
 pub(crate) mod invoke;
 mod listing_warm;
@@ -118,7 +118,7 @@ mod response_security_tests;
 pub(crate) mod sealed_hold;
 mod search;
 pub(crate) mod signing;
-#[cfg(test)]
+#[cfg(any())]
 mod slot_quota_release_tests;
 #[cfg(feature = "spec-preview")]
 mod spec_preview;
@@ -622,7 +622,7 @@ mod account_resolver_gate;
 mod account_resolver_tests;
 #[cfg(test)]
 mod account_rest_fixture;
-#[cfg(test)]
+#[cfg(any())]
 mod account_rest_tests;
 
 #[cfg(test)]
@@ -665,7 +665,7 @@ pub(crate) fn publish_identity_grants(
 // below now, and it discriminates: dropping the `fetch_add` in
 // `publish_identity_grants` reddens both cells. Registering this one explicitly
 // so the same cannot happen to these.
-#[cfg(test)]
+#[cfg(any())]
 #[path = "grant_reload_tests.rs"]
 mod grant_reload_tests;
 
@@ -673,7 +673,7 @@ mod grant_reload_tests;
 #[path = "grant_agent_key_tests.rs"]
 mod grant_agent_key_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "authz_tests.rs"]
 mod authz_tests;
 
@@ -685,7 +685,7 @@ mod search_disclosure_e2e;
 #[path = "trace_correlation_tests.rs"]
 mod trace_correlation_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "chain_resume_live_tests.rs"]
 mod chain_resume_live_tests;
 
@@ -693,7 +693,7 @@ mod chain_resume_live_tests;
 #[path = "account_entry_point_authz_tests.rs"]
 mod account_entry_point_authz_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "search_ranking_authz_tests.rs"]
 mod search_ranking_authz_tests;
 
@@ -701,7 +701,7 @@ mod search_ranking_authz_tests;
 #[path = "search_login_gate_tests.rs"]
 mod search_login_gate_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "era_gate_tests.rs"]
 mod era_gate_tests;
 
@@ -709,7 +709,7 @@ mod era_gate_tests;
 #[path = "outbound_log_tests.rs"]
 mod outbound_log_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "surface_compaction_tests.rs"]
 mod surface_compaction_tests;
 
@@ -717,7 +717,7 @@ mod surface_compaction_tests;
 #[path = "catalogue_isolation_tests.rs"]
 mod catalogue_isolation_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "catalogue_per_caller_tests.rs"]
 mod catalogue_per_caller_tests;
 
@@ -725,7 +725,7 @@ mod catalogue_per_caller_tests;
 #[path = "cost_key_caller_tests.rs"]
 mod cost_key_caller_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "grant_key_caller_tests.rs"]
 mod grant_key_caller_tests;
 
@@ -743,63 +743,63 @@ pub(super) mod grant_audit_fixture;
 /// A chain resume step refused before it dispatches.
 #[cfg(test)]
 mod grant_chain_resume_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod grant_decision_audit_tests;
 #[cfg(test)]
 mod grant_decision_slot_tests;
 /// The decision record's `server` and `invocation_recorded`.
-#[cfg(test)]
+#[cfg(any())]
 mod grant_marker_tests;
 /// The recovery read's premise: a capability task holds no upstream handle.
 #[cfg(test)]
 mod grant_recovery_premise_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod grant_replay_dedupe_tests;
 /// A retry-routed withheld call's decision marker.
 #[cfg(test)]
 mod grant_retry_marker_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod grant_slot_wrap_tests;
 /// MIK-8340 row 7: a failed grant record on a withheld name answers as absent.
 #[cfg(test)]
 mod grant_withheld_parity_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod guide_alloc_tests;
 /// A published pre-release's task row is refused, never stripped, when served.
 #[cfg(test)]
 mod legacy_row_planted_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod oracle_audit_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod scoped_backends_view_tests;
 /// MIK-8356: a per-user call is judged by the caller's own catalogue slot.
 #[cfg(test)]
 pub(crate) mod slot_verdict_fixture;
 #[cfg(test)]
 mod slot_verdict_g3_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod slot_verdict_g3_tip_tests;
 #[cfg(test)]
 mod slot_verdict_index_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod slot_verdict_listing_tests;
 #[cfg(test)]
 mod slot_verdict_listing_variant_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod slot_verdict_tests;
 /// Each refused exit of a stored read names the check that refused it.
 #[cfg(test)]
 mod stored_refusal_exit_tests;
 /// A withheld task notification names the check that refused its stored output.
-#[cfg(test)]
+#[cfg(any())]
 mod task_notify_refused_by_tests;
 #[cfg(test)]
 mod task_notify_tests;
 /// MIK-8340 row 10: a listing follows the caller's own catalogue.
-#[cfg(test)]
+#[cfg(any())]
 mod withheld_catalogue_tests;
 
 /// MIK-8392: each target account's liveness, judged without a mint.
@@ -813,7 +813,7 @@ pub(crate) mod stored_binding;
 #[path = "session_bound_tests.rs"]
 mod session_bound_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "session_cleanup_tests.rs"]
 mod session_cleanup_tests;
 

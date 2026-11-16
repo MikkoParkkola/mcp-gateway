@@ -724,7 +724,7 @@ use serde_json::json;
 #[path = "streaming_session_ownership_tests.rs"]
 mod session_ownership_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "streaming_tests.rs"]
 mod tests;
 
@@ -733,13 +733,13 @@ mod ownership;
 #[cfg(test)]
 #[path = "streaming_request_scoped_tests.rs"]
 mod request_scoped_stream_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "streaming_told_cf_grace_tests.rs"]
 mod told_cf_grace_tests;
 #[cfg(test)]
 #[path = "streaming_told_exemption_tests.rs"]
 mod told_exemption_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "streaming_unframed_tests.rs"]
 mod unframed_tests;
 

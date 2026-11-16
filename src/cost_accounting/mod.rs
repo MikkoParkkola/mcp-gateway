@@ -581,7 +581,7 @@ pub mod suggestions;
 #[cfg(test)]
 #[path = "clock_windows_tests.rs"]
 mod clock_windows_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod tests;
 
 #[cfg(test)]

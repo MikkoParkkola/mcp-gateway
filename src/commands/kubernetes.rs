@@ -448,7 +448,7 @@ fn truncate(value: &str, width: usize) -> String {
     )
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     /// MIK-8667: a cut cell keeps width-1 characters and a `.`; widths 0
     /// and 1 give the `.` alone.

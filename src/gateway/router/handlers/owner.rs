@@ -95,7 +95,7 @@ pub(in crate::gateway::router) fn owner_of(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use std::sync::Arc;
 

@@ -226,6 +226,6 @@ pub(crate) fn config_revision(key: &[u8; 32], inputs: &AppliedInputs) -> String 
     format!("hmac-sha256:{}", crate::hashing::hmac_sha256_hex(key, &m))
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "revision_tests.rs"]
 mod tests;

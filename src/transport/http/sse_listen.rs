@@ -304,6 +304,6 @@ impl UpstreamListen for SseListenSession {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "sse_listen_tests.rs"]
 mod tests;

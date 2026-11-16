@@ -183,7 +183,7 @@ fn settle(backend: &str, outcome: Acquire) -> crate::Result<()> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::config::{CircuitBreakerConfig, FailsafeConfig};

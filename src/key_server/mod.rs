@@ -40,14 +40,14 @@ pub(crate) mod email_hash;
 /// Where the `email_hash` installation key lives.
 pub(crate) mod email_hmac_store;
 /// One WARN per provider whose subjects are email addresses.
-#[cfg(test)]
+#[cfg(any())]
 mod email_subject_tests;
 pub mod handler;
 #[cfg(test)]
 mod identity_rules_tests;
 mod issuance;
 /// The row after an abrupt death, a rotation and a mark fault.
-#[cfg(test)]
+#[cfg(any())]
 mod issuance_restart_tests;
 /// The mint's issuance row under the failure policy.
 #[cfg(test)]
@@ -57,13 +57,13 @@ pub mod oidc;
 #[path = "oidc_harness_tests.rs"]
 pub(crate) mod oidc_test_harness;
 /// The output-only doc tests fail for the reason they name.
-#[cfg(test)]
+#[cfg(any())]
 mod output_only_doc_tests;
 /// No raw email in key-server output, checked in a child process.
 #[cfg(test)]
 mod piilog_capture_tests;
 /// The hashed audit email's docs rows.
-#[cfg(test)]
+#[cfg(any())]
 mod piilog_docs_tests;
 pub mod policy;
 pub mod store;

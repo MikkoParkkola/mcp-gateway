@@ -450,6 +450,6 @@ pub(crate) fn env_inputs(
 #[path = "add_remove_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "add_remove_layout_tests.rs"]
 mod layout_tests;

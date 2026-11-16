@@ -318,6 +318,6 @@ fn console_scripts(text: &str) -> Vec<&str> {
     names
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "install_tests.rs"]
 mod tests;

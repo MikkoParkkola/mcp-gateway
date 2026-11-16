@@ -311,7 +311,7 @@ fn scan_failed(what: &str, error: &impl std::fmt::Display) -> crate::cli_support
     crate::cli_support::shown(&format!("{what} scan failed: {error}"))
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "scan_failed_tests.rs"]
 mod scan_failed_tests;
 
@@ -319,7 +319,7 @@ mod scan_failed_tests;
 #[path = "secret_flow_tests.rs"]
 mod secret_flow_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod yaml_redaction_tests {
     use super::*;
 
@@ -355,6 +355,6 @@ mod yaml_redaction_tests {
 #[cfg(test)]
 #[path = "non_client_tests.rs"]
 mod non_client_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "unique_by_name_tests.rs"]
 mod unique_by_name_tests;

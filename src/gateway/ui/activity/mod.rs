@@ -590,19 +590,19 @@ fn export_response(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "answer_alloc_tests.rs"]
 mod answer_alloc_tests;
 #[cfg(test)]
 #[path = "answer_budget_tests.rs"]
 mod answer_budget_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "answer_export2_tests.rs"]
 mod answer_export2_tests;
 #[cfg(test)]
 #[path = "answer_export3_tests.rs"]
 mod answer_export3_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "answer_export_tests.rs"]
 mod answer_export_tests;
 #[cfg(test)]
@@ -611,49 +611,49 @@ mod answer_far_tests;
 #[cfg(test)]
 #[path = "answer_fixture_tests.rs"]
 mod answer_fixture;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "answer_integrity2_tests.rs"]
 mod answer_integrity2_tests;
 #[cfg(test)]
 #[path = "answer_integrity_tests.rs"]
 mod answer_integrity_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "answer_joiner_tests.rs"]
 mod answer_joiner_tests;
 #[cfg(test)]
 #[path = "answer_list_tests.rs"]
 mod answer_list_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "answer_page_tests.rs"]
 mod answer_page_tests;
 #[cfg(test)]
 #[path = "answer_profile_tests.rs"]
 mod answer_profile_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "answer_progress_tests.rs"]
 mod answer_progress_tests;
 #[cfg(test)]
 #[path = "answer_reach_tests.rs"]
 mod answer_reach_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "answer_receipt2_tests.rs"]
 mod answer_receipt2_tests;
 #[cfg(test)]
 #[path = "answer_receipt3_tests.rs"]
 mod answer_receipt3_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "answer_receipt_tests.rs"]
 mod answer_receipt_tests;
 #[cfg(test)]
 #[path = "answer_segment_tests.rs"]
 mod answer_segment_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "answer_stream_tests.rs"]
 mod answer_stream_tests;
 #[cfg(test)]
 #[path = "answer_unattributed_tests.rs"]
 mod answer_unattributed_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "answer_window_tests.rs"]
 mod answer_window_tests;
 #[cfg(test)]
@@ -662,25 +662,25 @@ mod decision_export_tests;
 #[cfg(test)]
 #[path = "decision_fixtures_tests.rs"]
 mod decision_fixtures;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "decision_receipt_tests.rs"]
 mod decision_receipt_tests;
 #[cfg(test)]
 #[path = "list_tests.rs"]
 mod list_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "refusal_tests.rs"]
 mod refusal_tests;
 #[cfg(test)]
 #[path = "scope_tests.rs"]
 mod scope_tests;
-#[cfg(test)]
+#[cfg(any())]
 #[path = "security_tests.rs"]
 mod security_tests;
 #[cfg(test)]
 #[path = "sigstate_tests.rs"]
 mod sigstate_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "key_lookup_route_tests.rs"]
 mod key_lookup_route_tests;

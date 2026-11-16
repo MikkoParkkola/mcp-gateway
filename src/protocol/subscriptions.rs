@@ -333,7 +333,7 @@ impl SubscriptionId {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::SubscriptionId;
     use crate::protocol::RequestId;

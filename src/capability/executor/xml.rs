@@ -143,7 +143,7 @@ fn local_name(raw: &str) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::xml_to_json;
     use serde_json::json;

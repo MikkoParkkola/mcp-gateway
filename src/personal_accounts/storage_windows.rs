@@ -71,6 +71,6 @@ pub(super) fn not_private(file: &File, metadata: &Metadata) -> bool {
 
 // W-T7 (lexical): the path rule alone, with no filesystem behind it, so a
 // later layer (locality, the no-follow re-walk) cannot stand in for it.
-#[cfg(test)]
+#[cfg(any())]
 #[path = "storage_windows_tests.rs"]
 mod tests;

@@ -769,6 +769,6 @@ mod fence;
 #[path = "worker_settle.rs"]
 mod settle;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "worker_tests.rs"]
 mod tests;

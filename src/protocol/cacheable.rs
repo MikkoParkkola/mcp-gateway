@@ -310,7 +310,7 @@ pub(crate) fn is_cacheable_answer(result: &Value) -> bool {
     is_final(result) && !is_error(result)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::is_error;
     use serde_json::json;

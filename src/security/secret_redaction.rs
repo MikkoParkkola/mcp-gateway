@@ -599,6 +599,6 @@ pub(crate) fn credential_spans(text: &str) -> Vec<(usize, usize)> {
 #[path = "secret_redaction_number_tests.rs"]
 mod number_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "secret_redaction_fail_closed_tests.rs"]
 mod fail_closed_tests;

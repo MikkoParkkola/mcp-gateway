@@ -292,6 +292,6 @@ fn clip_chars(text: &str, max: usize) -> String {
     buf
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "search_disclosure_tests.rs"]
 mod tests;

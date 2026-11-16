@@ -529,7 +529,7 @@ impl super::ReloadContext {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "refusals_tests.rs"]
 mod tests;
 

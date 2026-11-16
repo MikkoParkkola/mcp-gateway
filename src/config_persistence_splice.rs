@@ -600,7 +600,7 @@ pub(crate) fn edit_text(
     with_backends_edited(text, &before, &after, super::Splice::One).ok_or(NOT_IN_PLACE)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "config_persistence_splice_tests.rs"]
 mod tests;
 

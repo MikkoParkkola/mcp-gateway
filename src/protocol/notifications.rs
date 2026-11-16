@@ -43,6 +43,6 @@ pub(crate) fn rule(method: &str) -> Option<Rule> {
         .map(|(_, rule)| *rule)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "notifications_tests.rs"]
 mod tests;

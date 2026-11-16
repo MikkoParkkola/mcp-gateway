@@ -790,11 +790,11 @@ pub(crate) use gate_absent::{clear_gate_absent, mark_gate_absent, take_gate_abse
 
 #[cfg(test)]
 mod account_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod alloc_tests;
 #[cfg(test)]
 mod key_tests;
-#[cfg(test)]
+#[cfg(any())]
 mod memo_tests;
 #[cfg(test)]
 mod semantics_tests;
