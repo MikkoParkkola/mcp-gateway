@@ -62,6 +62,28 @@ def init_repo(repo: Path, env: dict, hooks: Path) -> str:
     return git(repo, env, hooks, "rev-parse", "HEAD")
 
 
+WORKFLOW_REL = ".github/workflows/repeat.yml"
+REVIEWED_WORKFLOW = "name: Repeat\n"
+
+
+def commit_workflow(repo: Path, env: dict, hooks: Path, text: str) -> str:
+    """Commit `text` as the workflow on the current branch. Returns HEAD."""
+    path = repo / WORKFLOW_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    git(repo, env, hooks, "add", "--", WORKFLOW_REL)
+    git(repo, env, hooks, "commit", "-q", "-m", "workflow")
+    return git(repo, env, hooks, "rev-parse", "HEAD")
+
+
+def side_workflow(repo: Path, env: dict, hooks: Path, text: str) -> str:
+    """Commit the reviewed workflow on a side branch and return to main."""
+    git(repo, env, hooks, "checkout", "-q", "-B", "release-line")
+    sha = commit_workflow(repo, env, hooks, text)
+    git(repo, env, hooks, "checkout", "-q", "main")
+    return sha
+
+
 def commit_overlay(repo: Path, env: dict, hooks: Path, content: str | None, extra: tuple[str, ...] = ()) -> None:
     if content is not None:
         (repo / ".repeat").mkdir(exist_ok=True)
@@ -178,11 +200,13 @@ def test_plan() -> None:
         env = git_env(cfg)
 
         repo = tmp / "good"
-        sha = init_repo(repo, env, hooks)
-        spec = base_spec(sha)
+        init_repo(repo, env, hooks)
+        release = commit_workflow(repo, env, hooks, REVIEWED_WORKFLOW)
+        spec = base_spec(release)
         commit_overlay(repo, env, hooks, json.dumps(spec) + "\n")
         out = repo / "output"
-        proc = run_py(["plan"], repo, script_env(cfg, REF_OK, GITHUB_OUTPUT=str(out)), 30)
+        proc = run_py(["plan"], repo, script_env(
+            cfg, REF_OK, GITHUB_OUTPUT=str(out), REPEAT_RELEASE_TREEISH=release), 30)
         line = proc.stdout.strip()
         try:
             got = json.loads(line)
@@ -198,8 +222,9 @@ def test_plan() -> None:
                    raw_text: str | None = None, extra: tuple[str, ...] = (), missing: bool = False,
                    ref: str = REF_OK) -> None:
             case = tmp / name
-            parent = init_repo(case, env, hooks)
-            body = base_spec(parent)
+            init_repo(case, env, hooks)
+            release = commit_workflow(case, env, hooks, REVIEWED_WORKFLOW)
+            body = base_spec(release)
             for key in drop:
                 del body[key]
             if overlay:
@@ -211,7 +236,8 @@ def test_plan() -> None:
             else:
                 commit_overlay(case, env, hooks, json.dumps(body) + "\n", extra)
             output = case / "output"
-            ran = run_py(["plan"], case, script_env(cfg, ref, GITHUB_OUTPUT=str(output)), 30)
+            ran = run_py(["plan"], case, script_env(
+                cfg, ref, GITHUB_OUTPUT=str(output), REPEAT_RELEASE_TREEISH=release), 30)
             text = combined(ran)
             bad = []
             if ran.returncode != 2:
@@ -233,6 +259,10 @@ def test_plan() -> None:
         refuse("filter-empty", "filter", overlay={"filter": ""})
         refuse("filter-long", "filter", overlay={"filter": "a" * 201})
         refuse("filter-chars", "filter", overlay={"filter": "foo-bar"})
+        refuse("filter-semi", "filter", overlay={"filter": "a;b"})
+        refuse("filter-dollar", "filter", overlay={"filter": "a$b"})
+        refuse("filter-space", "filter", overlay={"filter": "a b"})
+        refuse("filter-dash", "start with", overlay={"filter": "-x"})
         refuse("runs-0", "runs", overlay={"runs": 0})
         refuse("runs-51", "runs", overlay={"runs": 51})
         refuse("parallel-5", "parallel", overlay={"parallel": 5})
@@ -241,6 +271,58 @@ def test_plan() -> None:
         refuse("bad-ref", "GITHUB_REF", ref="refs/heads/main")
         refuse("head-mismatch", "sha", overlay={"sha": "c" * 40})
         refuse("outside", "src/x", extra=("src/x",))
+
+        def plan_adding_workflow(name: str, workflow: str, extra: tuple[str, ...] = ()):
+            case = tmp / name
+            parent = init_repo(case, env, hooks)
+            release = side_workflow(case, env, hooks, REVIEWED_WORKFLOW)
+            spec = base_spec(parent)
+            (case / ".repeat").mkdir()
+            (case / ".repeat" / "spec.json").write_text(json.dumps(spec) + "\n")
+            git(case, env, hooks, "add", "--", ".repeat/spec.json")
+            path = case / WORKFLOW_REL
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(workflow)
+            git(case, env, hooks, "add", "--", WORKFLOW_REL)
+            for rel in extra:
+                dest = case / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text("x\n")
+                git(case, env, hooks, "add", "--", rel)
+            git(case, env, hooks, "commit", "-q", "-m", "repeat")
+            output = case / "output"
+            ran = run_py(["plan"], case, script_env(
+                cfg, REF_OK, GITHUB_OUTPUT=str(output), REPEAT_RELEASE_TREEISH=release), 30)
+            return ran, output, spec
+
+        same, same_out, same_spec = plan_adding_workflow("wf-same", REVIEWED_WORKFLOW)
+        same_line = same.stdout.strip()
+        try:
+            same_got = json.loads(same_line)
+        except json.JSONDecodeError:
+            same_got = None
+        if same.returncode != 0 or "\n" in same_line or same_got != same_spec:
+            problems.append(
+                f"wf-same: rc={same.returncode} stdout={same.stdout!r} stderr={same.stderr!r}")
+        elif not same_out.is_file() or "valid=true" not in same_out.read_text().splitlines():
+            problems.append("wf-same did not write valid=true")
+
+        # One byte differs from the release-line copy (R -> X in "Repeat").
+        byte, byte_out, _byte_spec = plan_adding_workflow("wf-byte", "name: Xepeat\n")
+        byte_text = combined(byte)
+        if (byte.returncode != 2
+                or "repeat.yml differs from the release line; copy it byte-identical" not in byte_text):
+            problems.append(f"wf-byte: rc={byte.returncode} text={byte_text.strip()[:300]!r}")
+        elif byte_out.is_file() and "valid=true" in byte_out.read_text().splitlines():
+            problems.append("wf-byte wrote valid=true")
+
+        stray, stray_out, _stray_spec = plan_adding_workflow(
+            "wf-and-src", REVIEWED_WORKFLOW, extra=("src/x",))
+        stray_text = combined(stray)
+        if stray.returncode != 2 or "src/x" not in stray_text:
+            problems.append(f"wf-and-src: rc={stray.returncode} text={stray_text.strip()[:300]!r}")
+        elif stray_out.is_file() and "valid=true" in stray_out.read_text().splitlines():
+            problems.append("wf-and-src wrote valid=true")
     if problems:
         raise AssertionError("\n".join(problems))
 
@@ -637,6 +719,48 @@ printf '%s\\n' "running 3 tests"
 printf '%s\\n' "test something ... ok"
 exit 0
 """, {"filter": "none_case", "runs": 1, "parallel": 1, "exact": False}, 3, (0, 1, 1), 0)
+        once("crash", """#!/bin/sh
+exit 137
+""", {"filter": "crash_case", "runs": 1, "parallel": 1, "exact": False}, 1, (0, 1, 0), 0)
+
+        # One copy executes nothing; the other crashes. The iteration fails.
+        mix_spec = {"filter": "mix_case", "runs": 1, "parallel": 2, "exact": False}
+        mix_repo = repo_for("mix", mix_spec)
+        mix_dir = tmp / "mix-count"
+        write_exe(tmp / "mix-bin", """#!/bin/sh
+dir="$MIX_DIR"
+mkdir -p "$dir"
+while ! mkdir "$dir/lock" 2>/dev/null; do sleep 0.01; done
+n=0
+if [ -f "$dir/n" ]; then n=$(cat "$dir/n"); fi
+n=$((n + 1))
+printf '%s\\n' "$n" > "$dir/n"
+rmdir "$dir/lock"
+if [ "$n" -eq 1 ]; then
+  printf '%s\\n' "running 0 tests"
+  printf '%s\\n' "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out"
+  exit 0
+fi
+exit 137
+""")
+        mix_out = tmp / "mix-out"
+        mix = run_py(["run", "--binary", str(tmp / "mix-bin"), "--out", str(mix_out)],
+                     mix_repo, penv(MIX_DIR=str(mix_dir)), 30)
+        try:
+            mix_got = json.loads((mix_out / "results.json").read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            problems.append(f"mix: no results.json ({exc})")
+        else:
+            mix_it = (mix_got.get("iterations") or [{}])[0]
+            mix_copies = mix_it.get("copies") or []
+            mix_exits = sorted(copy.get("exit") for copy in mix_copies)
+            if (mix.returncode != 1 or "repeat: 0/1" not in mix.stdout
+                    or mix_it.get("result") != "fail" or mix_got.get("void") != 0
+                    or mix_got.get("passed") != 0 or mix_exits != [0, 137]):
+                problems.append(
+                    f"mix: rc={mix.returncode} result={mix_it.get('result')!r} "
+                    f"exits={mix_exits!r} void={mix_got.get('void')} "
+                    f"stdout={mix.stdout!r} stderr={mix.stderr!r}")
 
         sleep_spec = {"filter": "sleep_case", "runs": 1, "parallel": 2, "exact": False}
         sleep_repo = repo_for("sleep", sleep_spec)
@@ -760,7 +884,8 @@ exit 0
             summary_body = budget_summary.read_text() if budget_summary.is_file() else ""
             if (budget_proc.returncode != 1 or got.get("incomplete") is not True or len(iters) != 1
                     or got.get("total") != 1 or got.get("completed") != 1 or got.get("verdict") != "1/5"
-                    or "repeat: 1/1" not in budget_stdout or got.get("source_run_id") != "77"
+                    or "repeat: 1/5 (INCOMPLETE after 1 runs)" not in budget_stdout
+                    or got.get("source_run_id") != "77"
                     or got.get("artifact") != "linux-lib-tests" or got.get("runner") != "Linux-X64"
                     or "INCOMPLETE: 1 of 5 runs executed" not in summary_body
                     or "Verdict: 1/5" not in summary_body):
@@ -901,8 +1026,17 @@ def test_workflow() -> None:
     if (conc.get("group") != "repeat-linux-hosted" or conc.get("cancel-in-progress") is not False
             or conc.get("queue") != "max"):
         problems.append(f"concurrency {conc!r}")
-    if not isinstance(job.get("timeout-minutes"), int) or job.get("timeout-minutes") <= 0:
-        problems.append(f"timeout-minutes {job.get('timeout-minutes')!r}")
+    repeat_spec = importlib.util.spec_from_file_location("run_repeat_timeout_bounds", SCRIPT)
+    if repeat_spec is None or repeat_spec.loader is None:
+        raise AssertionError(ABSENT)
+    repeat_mod = importlib.util.module_from_spec(repeat_spec)
+    repeat_spec.loader.exec_module(repeat_mod)
+    timeout = job.get("timeout-minutes")
+    floor = repeat_mod.RUN_BUDGET / 60 + repeat_mod.COPY_TIMEOUT / 60 + 10
+    if not isinstance(timeout, int) or timeout < floor or timeout > 360:
+        problems.append(
+            f"timeout-minutes {timeout!r} not in [{floor:g}, 360] "
+            f"(RUN_BUDGET={repeat_mod.RUN_BUDGET} COPY_TIMEOUT={repeat_mod.COPY_TIMEOUT})")
     perms = job["permissions"] if "permissions" in job else doc.get("permissions")
     if perms != {"contents": "read", "actions": "read"}:
         problems.append(f"permissions {perms!r}")

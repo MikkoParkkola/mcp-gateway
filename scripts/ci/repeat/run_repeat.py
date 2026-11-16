@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Re-run one filtered lib test on the binary CI already built.
 
-The branch is the commit under test plus ONE commit that adds only
-`.repeat/spec.json`:
+The branch is the commit under test plus ONE commit that adds
+`.repeat/spec.json`. That commit may also add `.github/workflows/repeat.yml`,
+and only when that blob is byte-identical to the release line (a head older
+than the workflow lacks it, and the push trigger needs it):
 
   sha       40-hex parent of this commit (CI must have finished for it)
   filter    libtest filter, 1..200 of [A-Za-z0-9_:]
@@ -19,8 +21,11 @@ newest finished CI run for the sha; the binary is kept 1 day), `run
 `--self-test`. Standard library only.
 
 Exit: plan 0 or 2; fetch 0 or 4; run 0 when every repeat passed, 1 when one
-failed or the run stopped early (incomplete), 3 when a finished run had a
-repeat that executed no tests (void, nothing to judge).
+failed (including a copy that exited non-zero with no harness summary) or the
+run stopped early (incomplete), 3 when a finished run had a repeat that
+executed no tests (void, nothing to judge). A finished run prints
+`repeat: <passed>/<runs>`. An early stop prints
+`repeat: <passed>/<runs> (INCOMPLETE after <k> runs)`.
 """
 from __future__ import annotations
 
@@ -42,6 +47,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 SPEC_PATH = ".repeat/spec.json"
+WORKFLOW_BLOB = ".github/workflows/repeat.yml"
+RELEASE_LINE = "docs/ranking-1-release-line"
+WORKFLOW_MISMATCH = "repeat.yml differs from the release line; copy it byte-identical"
 REF_RE = re.compile(r"^refs/heads/throwaway/repeat-.+")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 FILTER_RE = re.compile(r"^[A-Za-z0-9_:]{1,200}$")
@@ -107,6 +115,10 @@ def spec_error(data: object) -> str | None:
     sha, filt, runs, parallel, exact = (data[key] for key in KEYS)
     if not isinstance(sha, str) or SHA_RE.fullmatch(sha) is None:
         return "sha must be 40 hex characters, the parent commit"
+    # A leading dash is a flag, not a test name. Refused on its own so a later
+    # widening of the charset cannot start passing options through to libtest.
+    if isinstance(filt, str) and filt.startswith("-"):
+        return "filter must not start with a dash"
     if not isinstance(filt, str) or FILTER_RE.fullmatch(filt) is None:
         return "filter must be 1..200 characters of letters, digits, underscore or colon"
     if not _count(runs, RUNS_MAX):
@@ -124,15 +136,19 @@ def _count(value: object, upper: int) -> bool:
 
 
 def load_spec() -> dict:
-    """The spec on this commit, or PlanError. The commit may add only that file."""
+    """The spec on this commit, or PlanError.
+
+    The commit adds the spec. It may also add the repeat workflow; plan then
+    requires that blob to match the release line. Anything else is refused.
+    """
     ref = os.environ.get("GITHUB_REF", "")
     if REF_RE.fullmatch(ref) is None:
         raise PlanError(f"GITHUB_REF must be refs/heads/throwaway/repeat-<name>, got {ref or 'unset'}")
     files = [ln for ln in git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").splitlines() if ln]
-    extra = [path for path in files if path != SPEC_PATH]
-    if files != [SPEC_PATH]:
-        if SPEC_PATH not in files:
-            raise PlanError(f"spec is absent: {SPEC_PATH}")
+    extra = [path for path in files if path not in (SPEC_PATH, WORKFLOW_BLOB)]
+    if SPEC_PATH not in files:
+        raise PlanError(f"spec is absent: {SPEC_PATH}")
+    if extra:
         raise PlanError(f"repeat commit must add only {SPEC_PATH}, found " + ", ".join(extra))
     try:
         data = json.loads(git("show", f"HEAD:{SPEC_PATH}"))
@@ -159,11 +175,15 @@ def lib_argv(spec: dict, skips: list[str]) -> list[str]:
 def judge(exit_code: int, text: str) -> tuple[int, str]:
     """(tests_run, kind). tests_run is passed+failed from the harness summary.
 
-    No summary, or a summary that executed nothing, is void: there is no result
-    to repeat. A non-zero exit with tests executed is a failure.
+    A non-zero exit with no `test result:` summary is a failure: the copy
+    crashed, was killed (OOM is 137), or failed to load. Void stays an exit of
+    0 with no summary, or a summary that executed nothing (`running 0 tests`).
+    A non-zero exit with tests executed is a failure.
     """
     found = list(RESULT_RE.finditer(text))
     if not found:
+        if exit_code != 0:
+            return 0, "fail"
         return 0, "void"
     status, passed_s, failed_s, _ignored = found[-1].groups()
     tests_run = int(passed_s) + int(failed_s)
@@ -179,9 +199,67 @@ def failure_tail(text: str) -> str:
     return "\n".join(text.splitlines()[-TAIL_LINES:])
 
 
+def fetch_release_line() -> None:
+    """Fetch the release-line tip into FETCH_HEAD.
+
+    `--depth=1` only when the checkout is already shallow (a CI checkout). In a
+    full clone it would shallow the object store, and a local run shares that
+    store with every worktree. A fetch that fails because the caller already
+    fetched the line is tolerated when that ref still resolves.
+    """
+    shallow = git("rev-parse", "--is-shallow-repository").strip() == "true"
+    depth = ["--depth=1"] if shallow else []
+    proc = subprocess.run(
+        ["git", "fetch", "--quiet", *depth, "origin", RELEASE_LINE],
+        capture_output=True, text=True)
+    if proc.returncode == 0:
+        return
+    ref = os.environ.get("REPEAT_RELEASE_REF", "FETCH_HEAD").strip() or "FETCH_HEAD"
+    try:
+        git("rev-parse", "--verify", "--quiet", ref)
+    except PlanError:
+        detail = proc.stderr.strip() or f"git fetch origin {RELEASE_LINE} failed"
+        raise PlanError(detail) from None
+
+
+def release_treeish() -> str:
+    """Commit whose repeat.yml is the reviewed copy.
+
+    REPEAT_RELEASE_TREEISH names it directly (tests; no network).
+    REPEAT_RELEASE_REF names a ref the caller already fetched (default
+    FETCH_HEAD when the variable is unset and this function fetches).
+    """
+    named = os.environ.get("REPEAT_RELEASE_TREEISH", "").strip()
+    if named:
+        return named
+    if "REPEAT_RELEASE_REF" in os.environ:
+        return os.environ["REPEAT_RELEASE_REF"].strip() or "FETCH_HEAD"
+    fetch_release_line()
+    return "FETCH_HEAD"
+
+
+def _blob(treeish: str, path: str) -> str | None:
+    proc = subprocess.run(
+        ["git", "rev-parse", f"{treeish}:{path}"],
+        capture_output=True, text=True)
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+def require_reviewed_workflow() -> None:
+    """HEAD's repeat.yml must be the release-line blob. A missing file differs."""
+    treeish = release_treeish()
+    head = _blob("HEAD", WORKFLOW_BLOB)
+    reviewed = _blob(treeish, WORKFLOW_BLOB)
+    if head is None or reviewed is None or head != reviewed:
+        raise PlanError(WORKFLOW_MISMATCH)
+
+
 def cmd_plan() -> int:
     try:
         spec = load_spec()
+        require_reviewed_workflow()
     except PlanError as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -554,11 +632,12 @@ def cmd_run(binary: Path, out: Path) -> int:
             copies = list(pool.map(
                 lambda _i: _one_copy(str(binary), args, repo, by_binary, lib_target),
                 range(spec["parallel"])))
+        # A crash beside a void copy is a failure. Void only if nothing failed.
         kinds = [copy["kind"] for copy in copies]
-        if "void" in kinds:
-            result = "void"
-        elif "fail" in kinds:
+        if "fail" in kinds:
             result = "fail"
+        elif "void" in kinds:
+            result = "void"
         else:
             result = "pass"
         if tail is None:
@@ -576,15 +655,20 @@ def cmd_run(binary: Path, out: Path) -> int:
         publish(True)
     passed = sum(1 for it in iterations if it["result"] == "pass")
     void = sum(1 for it in iterations if it["result"] == "void")
-    total = len(iterations)
-    print(f"repeat: {passed}/{total}")
+    done = len(iterations)
+    spec_runs = spec["runs"]
+    # Denominator is the spec. A budget or kill stop must not read as N of N.
+    if incomplete:
+        print(f"repeat: {passed}/{spec_runs} (INCOMPLETE after {done} runs)")
+    else:
+        print(f"repeat: {passed}/{spec_runs}")
     if tail:
         print(tail)
     if incomplete:
         return 1
     if void:
         return 3
-    if passed != total:
+    if passed != done:
         return 1
     return 0
 
@@ -605,6 +689,8 @@ def self_test() -> int:
     bare = "running 3 tests\ntest something ... ok\n"
     if judge(0, ok) != (1, "pass") or judge(0, empty) != (0, "void") or judge(0, bare) != (0, "void"):
         problems.append(f"judge ok={judge(0, ok)} empty={judge(0, empty)} bare={judge(0, bare)}")
+    if judge(137, "killed\n") != (0, "fail") or judge(1, "load error\n") != (0, "fail"):
+        problems.append(f"crash was not a failure: 137={judge(137, 'killed')} 1={judge(1, 'load error')}")
     if judge(1, red)[1] != "fail":
         problems.append("a FAILED summary was not a failure")
     good = {"sha": "a" * 40, "filter": "gateway::foo_1", "runs": 3, "parallel": 2, "exact": True}
@@ -617,6 +703,10 @@ def self_test() -> int:
         ({**good, "filter": ""}, "filter"),
         ({**good, "filter": "a" * 201}, "filter"),
         ({**good, "filter": "foo-bar"}, "filter"),
+        ({**good, "filter": "a;b"}, "filter"),
+        ({**good, "filter": "a$b"}, "filter"),
+        ({**good, "filter": "a b"}, "filter"),
+        ({**good, "filter": "-x"}, "dash"),
         ({**good, "runs": 0}, "runs"),
         ({**good, "runs": 51}, "runs"),
         ({**good, "parallel": 5}, "parallel"),
