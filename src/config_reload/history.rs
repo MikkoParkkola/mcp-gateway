@@ -121,17 +121,18 @@ impl ConfigHistory {
 
     /// Start a store for `data_dir`. A missing file is an empty store. A file
     /// that does not parse is moved aside and the store starts empty. A file
-    /// that cannot be read, or moved aside, is left as it is and this store
+    /// that is refused (a link, not owner-only, another account's) or cannot
+    /// be read or moved aside is left as it is, said once, and this store
     /// keeps its history in memory only.
     pub(crate) fn open(data_dir: &Path, bounds: Bounds, now: u64) -> Self {
         let path = data_dir.join(Self::FILE);
-        let (state, saves) = match std::fs::read(&path) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (State::default(), true),
-            Err(error) => {
-                tracing::warn!(%error, "config history could not be read; not saving over it");
+        let (state, saves) = match read_stored(&path) {
+            Ok(None) => (State::default(), true),
+            Err(reason) => {
+                tracing::warn!(%reason, "config history kept in memory only; its file is left as it is");
                 (State::default(), false)
             }
-            Ok(bytes) => match serde_json::from_slice::<State>(&bytes) {
+            Ok(Some(text)) => match serde_json::from_str::<State>(&text) {
                 Ok(state) => (state, true),
                 Err(error) => match crate::counters::persist::quarantine(&path, now) {
                     Ok(_) => (State::default(), true),
@@ -360,6 +361,30 @@ impl HistoryHook {
             });
         }
         files
+    }
+}
+
+/// The stored history, read as the secret file it is (it holds env-file
+/// bytes): `None` when there is none, the refusal or read error otherwise.
+fn read_stored(path: &Path) -> Result<Option<String>, String> {
+    // The guarded read follows links, so a link is refused first. The check
+    // and the open are two calls: swapping the file between them takes write
+    // access to the data directory, which only the gateway's own user has.
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(format!(
+                "Refusing to load config history file {}: it is a symbolic link, and the \
+                 history is read only from the file the gateway writes.",
+                path.display()
+            ));
+        }
+        _ => {}
+    }
+    match crate::config::read_checked_file(path, crate::config::CheckedFile::ConfigHistory) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
     }
 }
 
