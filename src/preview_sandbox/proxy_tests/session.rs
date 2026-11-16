@@ -390,3 +390,31 @@ async fn r7g_no_expired_after_the_preview_deadline() {
     secret_of(&issued);
     assert_eq!(expired, "", "no expired after the deadline");
 }
+
+/// R7h, kills "a `fetch_start` read after the preview's deadline gets a
+/// credential" (the design's R7c case): a `fetch_start` already waiting when
+/// the gateway first reads, after the deadline, is refused and no credential
+/// is written.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn r7h_a_fetch_start_read_after_the_deadline_gets_no_credential() {
+    let rig = rig().await;
+    let (helper, gateway) = UnixStream::pair().expect("pair");
+    let (read, mut write) = helper.into_split();
+    write
+        .write_all(b"{\"fetch_start\":true}\n")
+        .await
+        .expect("write");
+    let passed = tokio::time::Instant::now();
+    // The reactor sees the line waiting before the gateway's first read.
+    tokio::time::sleep(SEC).await;
+    let served = tokio::time::timeout(
+        GUARD,
+        serve_session(gateway, &rig.proxy, passed, CONTROL_BOUNDS),
+    )
+    .await
+    .expect("the session did not end within the guard");
+    assert!(served.is_err(), "{served:?}");
+    let mut answer = String::new();
+    let _ = BufReader::new(read).read_line(&mut answer).await;
+    assert_eq!(answer, "", "no credential after the deadline");
+}
