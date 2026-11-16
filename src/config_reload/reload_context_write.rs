@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::config_persistence::CommentLoss;
 use crate::config_persistence::lock::lock_config;
+use crate::config_reload::history::Source;
 use crate::config_reload::write::MutateError;
 use crate::config_reload::{ConfigMutation, ConfigWriteError, RELOAD_LOCK_WAIT, ReloadOutcome};
 
@@ -103,7 +104,8 @@ impl ReloadContext {
             &locked.held,
         )
         .map_err(|e| ConfigWriteError::from(MutateError::from(e)))?;
-        self.reload_outcome_locked_at(&locked.target)
+        // The principal arrives with its own row (H8).
+        self.reload_outcome_locked_at(&locked.target, Source::Ui { who: String::new() })
             .await
             .map_err(|e| {
                 ConfigWriteError::Failed(format!("Config written but reload failed: {}", e.text))
@@ -205,8 +207,9 @@ impl ReloadContext {
         crate::security::firewall::refuse_while_running(self.live_config.running(), &config)
             .map_err(|e| format!("Failed to validate config: {e}"))?;
         crate::config_persistence::write_config_with(target, &config, mode, &locked.held)?;
+        // The principal arrives with its own row (H8).
         let outcome = self
-            .reload_outcome_locked_at(target)
+            .reload_outcome_locked_at(target, Source::Ui { who: String::new() })
             .await
             .map_err(|e| crate::config_reload::write::reload_failure(&e.text, mode))?;
         Ok(ConfigMutation::Applied(value, Some(outcome)))

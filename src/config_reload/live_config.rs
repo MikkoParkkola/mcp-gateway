@@ -13,6 +13,7 @@ use super::diff::pending_restart_fields;
 use super::revision::{self, AppliedInputs, RawInputs};
 use super::with_env_restart;
 use crate::config::Config;
+use crate::config_reload::history::Source;
 
 /// A published generation and the revision naming it.
 struct Published {
@@ -115,20 +116,41 @@ impl LiveConfig {
         self
     }
 
-    /// The configuration history this holder records into, if any.
-    pub(crate) fn history(&self) -> Option<&Arc<crate::config_reload::history::ConfigHistory>> {
-        self.history.as_ref().map(|hook| &hook.store)
-    }
-
     /// Record the publish just made from `raw`, after every lock is released.
-    fn record_publish(&self, raw: Option<RawInputs>) {
-        let (Some(hook), Some(raw), Some(applied)) =
-            (self.history.as_ref(), raw, self.applied_now())
-        else {
+    /// `previous` and `published` were both read under the write lock that
+    /// swapped them, so a grants publish landing before this call cannot
+    /// relabel these bytes with its own revision.
+    fn record_publish(
+        &self,
+        raw: Option<RawInputs>,
+        previous: Option<String>,
+        published: Option<Arc<Applied>>,
+        source: Source,
+    ) {
+        let (Some(hook), Some(raw), Some(applied)) = (self.history.as_ref(), raw, published) else {
             return;
         };
-        let now = crate::clock::unix_secs().unwrap_or(0);
-        hook.on_publish(&raw, &applied.revision, now);
+        hook.on_publish(
+            &raw,
+            &applied.revision,
+            applied.pending_restart.as_slice(),
+            previous.as_deref(),
+            source,
+            crate::clock::unix_secs().unwrap_or(0),
+        );
+    }
+
+    /// Record a refused reload into the history hook, when one is set.
+    pub(crate) fn record_refused(&self, source: Source) {
+        let Some(hook) = &self.history else {
+            return;
+        };
+        let served = self.applied_now().map(|applied| applied.revision.clone());
+        hook.on_refused(
+            source,
+            served.as_deref(),
+            crate::clock::unix_secs().unwrap_or(0),
+        );
     }
 
     /// [`Self::from_prepared`] for `config` with `auth`, for unit-test
@@ -221,7 +243,14 @@ impl LiveConfig {
     ) -> Self {
         let live = self.with_revision_key(record_key.config_revision_key());
         match raw {
-            Some(raw) => live.with_applied(raw),
+            Some(raw) => {
+                // Cloned only when a hook will record it; `with_applied` takes the original.
+                let recorded = live.history.as_ref().map(|_| raw.clone());
+                let live = live.with_applied(raw);
+                let published = live.applied_now();
+                live.record_publish(recorded, None, published, Source::Start);
+                live
+            }
             None => live,
         }
     }
@@ -275,31 +304,46 @@ impl LiveConfig {
         generation: Arc<Generation>,
         raw: RawInputs,
         env_restart: &[String],
+        source: Source,
     ) {
         let recorded = self.history.as_ref().map(|_| raw.clone());
+        // Both read inside the swap, under its write lock.
+        let mut swapped = (None, None);
         self.publish_with(generation, |current, pending| {
-            self.digest_over(raw, current)
-                .and_then(|inputs| self.applied(inputs, with_env_restart(pending, env_restart)))
+            let applied = self
+                .digest_over(raw, current)
+                .and_then(|inputs| self.applied(inputs, with_env_restart(pending, env_restart)));
+            swapped = (current.map(|a| a.revision.clone()), applied.clone());
+            applied
         });
-        self.record_publish(recorded);
+        let (previous, published) = swapped;
+        self.record_publish(recorded, previous, published, source);
     }
 
     /// The env files changed under an unchanged config file: same config,
-    /// new inputs, new revision.
+    /// new inputs, new revision. Recorded as a file reload.
     pub(crate) fn set_inputs(&self, raw: RawInputs, env_restart: &[String]) {
+        self.set_inputs_from(raw, env_restart, Source::File);
+    }
+
+    /// [`Self::set_inputs`] recording `source`. The replaced and the new
+    /// revision are both read under this write lock.
+    pub(crate) fn set_inputs_from(&self, raw: RawInputs, env_restart: &[String], source: Source) {
         let recorded = self.history.as_ref().map(|_| raw.clone());
-        {
+        let (previous, published) = {
             let _gate = self.admission.write();
             let mut inner = self.inner.write();
             let current = inner.applied.as_deref();
+            let previous = current.map(|applied| applied.revision.clone());
             let pending = current
-                .map(|a| a.pending_restart.clone())
+                .map(|applied| applied.pending_restart.clone())
                 .unwrap_or_default();
             let inputs = self.digest_over(raw, current);
             let pending = with_env_restart(pending, env_restart);
-            inner.applied = inputs.and_then(|i| self.applied(i, pending));
-        }
-        self.record_publish(recorded);
+            inner.applied = inputs.and_then(|inputs| self.applied(inputs, pending));
+            (previous, inner.applied.clone())
+        };
+        self.record_publish(recorded, previous, published, source);
     }
 
     /// New grants over the published config: only the grants part changes,

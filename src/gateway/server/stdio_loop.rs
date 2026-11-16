@@ -120,18 +120,22 @@ impl Gateway {
         // Its auth is the default one: stdio authenticates by API key nothing,
         // and the gateway's own `auth` is never resolved here, so one that does
         // not resolve cannot turn stdio's tasks off.
+        let mut live_config = crate::config_reload::LiveConfig::from_prepared(
+            crate::config_reload::Generation::prepare_startup(
+                self.config.clone(),
+                Arc::new(stdio_tasks::default_auth(
+                    self.env.startup(),
+                    Arc::clone(&record_key),
+                )),
+            ),
+        )
+        .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch));
+        if let Some(hook) = self.history_hook(&data_dir) {
+            live_config = live_config.with_history(hook);
+        }
         let live_config = Arc::new(
-            crate::config_reload::LiveConfig::from_prepared(
-                crate::config_reload::Generation::prepare_startup(
-                    self.config.clone(),
-                    Arc::new(stdio_tasks::default_auth(
-                        self.env.startup(),
-                        Arc::clone(&record_key),
-                    )),
-                ),
-            )
-            .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
-            .with_startup_revision(meta_mcp.record_key(), self.env.take_startup_inputs()),
+            live_config
+                .with_startup_revision(meta_mcp.record_key(), self.env.take_startup_inputs()),
         );
         meta_mcp.set_live_config(Arc::clone(&live_config));
         // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.

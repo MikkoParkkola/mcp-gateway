@@ -25,6 +25,7 @@ use crate::config::UnreadConfig;
 use crate::config_persistence::journal;
 use crate::config_persistence::lock::{Locked, NotLocked, lock_config, lock_config_deferred};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
+use crate::config_reload::history::Source;
 use crate::config_reload::{ConfigWriteError, ReloadOutcome};
 use crate::secret_store::{
     NewSecretOwned, PendingSecrets, SaveError, SecretStore, Vault, create_secrets,
@@ -552,8 +553,9 @@ impl ReloadContext {
             // Nothing to write, but still a reload, so a retry after a failed
             // one does not leave the runtime stale. Nothing was committed, so
             // a refusal needs no rollback.
+            // The principal arrives with its own row (H8).
             let reload = self
-                .reload_outcome_locked_at(target)
+                .reload_outcome_locked_at(target, Source::Ui { who: String::new() })
                 .await
                 .map_err(|refusal| ReplaceError::ReloadRefused {
                     class: post_write_class(&refusal),
@@ -622,7 +624,10 @@ impl ReloadContext {
         }
         #[cfg(test)]
         order::record(target, "commit");
-        let reloaded = self.reload_outcome_locked_at(target).await;
+        // The principal arrives with its own row (H8).
+        let reloaded = self
+            .reload_outcome_locked_at(target, Source::Ui { who: String::new() })
+            .await;
         // The reload reads gateway.yaml through its configured path. If a
         // symlink there moved meanwhile, it loaded some other file: put ours
         // back, and owe a reload so the runtime leaves that other file too.

@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::config_reload::history::Source;
 use crate::config_reload::{ConfigWriteError, ReloadOutcome};
 
 use super::{EvaluatedReload, ReloadContext, STOPPED};
@@ -147,11 +148,12 @@ impl ReloadContext {
     pub(super) async fn reload_outcome_locked_at(
         &self,
         path: &std::path::Path,
+        source: Source,
     ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         // Audits the overrides the registry holds however this ends: applied,
         // refused, or dropped at an await after registering backends.
         let _audit = (self.reporting.override_audit.as_deref()).map(|a| a.guard(&self.registry));
-        let outcome = self.reload_transaction(path).await;
+        let outcome = self.reload_transaction(path, source.clone()).await;
         let refusals = &self.reporting.refusals;
         match &outcome {
             Ok(_) => {
@@ -167,6 +169,7 @@ impl ReloadContext {
                     &refusal.text,
                 );
                 self.reporting.tally.refused();
+                self.live_config.record_refused(source);
             }
         }
         outcome
@@ -187,7 +190,7 @@ impl ReloadContext {
             self.reload_owed.store(true, SeqCst);
         }
         if self.reload_owed.load(SeqCst)
-            && let Err(error) = self.reload_outcome_locked_at(target).await
+            && let Err(error) = self.reload_outcome_locked_at(target, Source::File).await
         {
             let class = match crate::config_reload::reload_failure(&error.text) {
                 crate::config_reload::ReloadFailure::ShuttingDown => "shutting_down",

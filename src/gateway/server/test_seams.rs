@@ -189,18 +189,22 @@ impl super::Gateway {
         &self,
     ) -> crate::Result<super::build_meta::BuiltMetaMcp> {
         let built = self.build_meta_mcp().await?;
+        let mut live_config = crate::config_reload::LiveConfig::from_prepared(
+            crate::config_reload::Generation::prepare_startup(
+                self.config.clone(),
+                std::sync::Arc::new(super::stdio_tasks::default_auth(
+                    self.env.startup(),
+                    std::sync::Arc::clone(&built.record_key),
+                )),
+            ),
+        )
+        .with_policy_epoch(std::sync::Arc::clone(&built.meta_mcp.policy_epoch));
+        if let Some(hook) = self.history_hook(&built.data_dir) {
+            live_config = live_config.with_history(hook);
+        }
         let live_config = std::sync::Arc::new(
-            crate::config_reload::LiveConfig::from_prepared(
-                crate::config_reload::Generation::prepare_startup(
-                    self.config.clone(),
-                    std::sync::Arc::new(super::stdio_tasks::default_auth(
-                        self.env.startup(),
-                        std::sync::Arc::clone(&built.record_key),
-                    )),
-                ),
-            )
-            .with_policy_epoch(std::sync::Arc::clone(&built.meta_mcp.policy_epoch))
-            .with_startup_revision(built.meta_mcp.record_key(), self.env.take_startup_inputs()),
+            live_config
+                .with_startup_revision(built.meta_mcp.record_key(), self.env.take_startup_inputs()),
         );
         built.meta_mcp.set_live_config(live_config);
         Ok(built)

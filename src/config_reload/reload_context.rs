@@ -15,6 +15,7 @@ use crate::config::{Config, EnvOverlay, LiveEnv, ResolvedEnvFiles};
 use crate::security::{posture, ssrf::DestinationPolicy};
 
 use super::{IdentityGrantSink, LiveConfig, ReloadOutcome, SHUTDOWN_ABORTED_ERROR, apply_patch};
+use crate::config_reload::history::Source;
 
 #[path = "reload_context_write.rs"]
 mod write_api;
@@ -459,7 +460,7 @@ impl ReloadContext {
                 return Err(skipped);
             }
         };
-        let mut outcome = match self.reload_outcome_locked_at(&target).await {
+        let mut outcome = match self.reload_outcome_locked_at(&target, Source::File).await {
             Ok(outcome) => {
                 // An applied reload marks the charts; a refused one
                 // returns below and marks nothing.
@@ -493,6 +494,7 @@ impl ReloadContext {
     async fn reload_transaction(
         &self,
         path: &std::path::Path,
+        source: Source,
     ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
@@ -540,7 +542,8 @@ impl ReloadContext {
             // would serve a value the operator has already replaced.
             self.publish_overlay(overlay);
             // The same rotation changes what the config was built from.
-            self.live_config.set_inputs(inputs, &env_restart_keys);
+            self.live_config
+                .set_inputs_from(inputs, &env_restart_keys, source);
             // No difference from the published snapshot does not mean nothing is
             // outstanding: a restart-only edit was published on an earlier
             // reload and the running process still has not applied it.
@@ -594,7 +597,7 @@ impl ReloadContext {
         // Published together: a resolver that read the new config against the
         // old overlay would resolve an `env:` reference the reload just changed.
         self.live_config
-            .set_applied(Arc::clone(&generation), inputs, &env_restart_keys);
+            .set_applied(Arc::clone(&generation), inputs, &env_restart_keys, source);
         self.publish_overlay(overlay);
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());
