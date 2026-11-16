@@ -396,3 +396,107 @@ fn t10_a_refused_history_file_is_one_warning_naming_it() {
         "it says why: {warnings}"
     );
 }
+
+/// A second start of the same inputs is an unchanged event and no new version.
+#[test]
+fn t11_a_restart_of_an_unchanged_config_stores_no_second_version() {
+    use crate::config::Config;
+    use crate::config_reload::revision::RawInputs;
+
+    const V1: &[u8] = b"backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
+    let dir = tempfile::tempdir().unwrap();
+    let raw = RawInputs {
+        gateway_yaml: V1.to_vec(),
+        ..RawInputs::default()
+    };
+    let k = {
+        let (_live, store) = super::record_tests::hold_at(
+            dir.path(),
+            raw.clone(),
+            "gateway.yaml".to_string(),
+            None,
+            Config::default(),
+            None,
+        );
+        store
+            .snapshots()
+            .last()
+            .map(|snapshot| snapshot.revision.clone())
+    };
+    let _restart = super::record_tests::hold_at(
+        dir.path(),
+        raw,
+        "gateway.yaml".to_string(),
+        None,
+        Config::default(),
+        None,
+    );
+
+    let fresh = ConfigHistory::open(dir.path(), Bounds::default(), 1);
+    let one: Vec<String> = k.iter().cloned().collect();
+    assert_eq!(revision_names(&fresh), one);
+    let outcomes: Vec<Outcome> = fresh.events().iter().map(|event| event.outcome).collect();
+    assert_eq!(outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    let pairs: Vec<(Source, bool)> = fresh
+        .events()
+        .iter()
+        .map(|event| (event.source.clone(), event.unchanged))
+        .collect();
+    assert_eq!(pairs, vec![(Source::Start, false), (Source::Start, true)]);
+}
+
+/// The count bound pins only the newest copy of the running revision.
+#[test]
+fn t12_only_the_newest_copy_of_the_running_version_is_pinned() {
+    let bounds = Bounds {
+        snapshots: 2,
+        ..Bounds::default()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let history = ConfigHistory::open(dir.path(), bounds, 0);
+    record_version(&history, "r1", 1, b"first-r1\n", "r1");
+    record_version(&history, "r2", 2, b"r2\n", "r1");
+    record_version(&history, "r1", 3, b"second-r1\n", "r1");
+    record_version(&history, "r3", 4, b"r3\n", "r1");
+
+    let kept = history.snapshots();
+    assert_eq!(revision_names(&history), expect(&["r1", "r3"]));
+    let running = kept.iter().find(|snapshot| snapshot.revision == "r1");
+    assert_eq!(running.map(gateway), Some(b"second-r1\n".as_slice()));
+}
+
+/// Puts `dir` back to 0o700, including when an assertion fails or the row returns.
+#[cfg(unix)]
+struct RestoreDirMode(std::path::PathBuf);
+
+#[cfg(unix)]
+impl Drop for RestoreDirMode {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+    }
+}
+
+/// A save that cannot create its temp file keeps the new version in memory.
+#[cfg(unix)]
+#[test]
+fn t13_a_failed_save_keeps_the_record_in_memory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let history = ConfigHistory::open(dir.path(), Bounds::default(), 0);
+    record_version(&history, "r1", 1, b"a: 1\n", "r1");
+
+    let _restore = RestoreDirMode(dir.path().to_path_buf());
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    // Root ignores the mode, so a probe that lands is not a failed save.
+    if std::fs::write(dir.path().join("probe-write"), b"x").is_ok() {
+        return;
+    }
+    record_version(&history, "r2", 2, b"a: 2\n", "r2");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert_eq!(revision_names(&history), expect(&["r1", "r2"]));
+    let on_disk = ConfigHistory::open(dir.path(), Bounds::default(), 1);
+    assert_eq!(revision_names(&on_disk), expect(&["r1"]));
+}
