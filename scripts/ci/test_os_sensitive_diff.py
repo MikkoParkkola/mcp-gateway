@@ -180,6 +180,21 @@ def main() -> int:
                    "KillSwitch::kill(x)", "fn kill(id: u32, server: &S) {}", "err.raw_os_error()", "// sigterm",
                    "x.Try_Wait()", "Errno::PERM", "SIGNAL_COUNT"]
     row("near misses demand nothing", [w for w in near_misses if scan_proc(diff("src/a.rs", f"+    {w}"))], [])
+    # Final-diff review: .kill() counts on an indexed or call-chain receiver too; comment and cfg lines demand nothing,
+    # but a code line with a trailing comment does; every spelling inside a grouped word has a row of its own.
+    row(".kill() on an indexed or a call-chain receiver demands os-sensitive",
+        [bool(scan_proc(diff("src/a.rs", f"+    {w}"))) for w in ("children[0].kill();", "child.lock().unwrap().kill();")],
+        [True, True])
+    non_code = ["// SIGTERM goes first", "/// Sends SIGKILL to the group", "//! waitpid loop", "/* setsid */",
+                '#[cfg(feature = "process_group")]', "#![cfg(not(feature = \"process_group\"))]"]
+    row("comment and cfg lines demand nothing", [w for w in non_code if scan_proc(diff("src/a.rs", f"+    {w}"))], [])
+    row("a code line with a trailing comment still demands os-sensitive",
+        bool(scan_proc(diff("src/a.rs", "+    libc::kill(pid, 15); // SIGTERM"))), True)
+    spellings = ["SIG" + s for s in "TERM KILL INT HUP QUIT CHLD STOP CONT USR1 USR2 PIPE ALRM".split()] + [
+        "SIG_IGN", "SIG_DFL", "WaitId::All", "WaitIdOptions::EXITED", "Errno::CHILD", "Errno::SRCH", "Errno::INTR",
+        "ESRCH", "ECHILD", "Signal::KILL"]
+    row("every spelling inside a grouped word demands os-sensitive",
+        [w for w in spellings if not scan_proc(diff("src/a.rs", f"+    let x = {w};"))], [])
     row("an OS word in TOML or markdown demands nothing",
         (scan_proc(diff("Cargo.toml", '+signal-hook = "0.3"')), scan_proc(diff("README.md", "+Send SIGTERM first."))),
         ([], []))
