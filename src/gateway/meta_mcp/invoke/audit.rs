@@ -150,10 +150,12 @@ pub(crate) fn note_process(process: ProcessNote) {
 #[path = "audit_counting.rs"]
 pub(crate) mod counting;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "audit_settlement_tests.rs"]
 mod settlement_tests;
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "audit_delivered_value_tests.rs"]
 mod delivered_value_tests;

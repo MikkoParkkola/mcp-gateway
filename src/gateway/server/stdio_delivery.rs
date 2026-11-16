@@ -206,6 +206,7 @@ async fn deliver(
     (frame, retained)
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

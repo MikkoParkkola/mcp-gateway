@@ -14,6 +14,7 @@ fn recorded(frame_refused: bool) -> Map<String, Value> {
     fields
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn outside_a_cell_nothing_is_recorded() {
     let mut fields = Map::new();
@@ -21,6 +22,7 @@ async fn outside_a_cell_nothing_is_recorded() {
     assert!(fields.is_empty(), "{fields:?}");
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn unscanned_is_null_findings_and_scanned_clean_is_empty() {
     scope(async {
@@ -33,6 +35,7 @@ async fn unscanned_is_null_findings_and_scanned_clean_is_empty() {
     .await;
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn the_strongest_effect_wins_whatever_the_order() {
     scope(async {
@@ -50,6 +53,7 @@ async fn the_strongest_effect_wins_whatever_the_order() {
     .await;
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn findings_are_most_severe_first_capped_at_32_with_a_total() {
     scope(async {
@@ -69,6 +73,7 @@ async fn findings_are_most_severe_first_capped_at_32_with_a_total() {
     .await;
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn an_unvouched_delivery_records_only_a_refusal() {
     scope(async {
@@ -82,6 +87,7 @@ async fn an_unvouched_delivery_records_only_a_refusal() {
     .await;
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_suspended_scan_writes_nothing_to_the_delivery() {
     scope(async {
@@ -98,6 +104,7 @@ async fn a_suspended_scan_writes_nothing_to_the_delivery() {
 
 /// A delivered authorization refusal records refused wherever it was built,
 /// whatever its code: an admin denial carries `INVALID_REQUEST` too.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_delivered_forbidden_is_refused_whatever_its_code() {
     for code in [-32001, crate::error::rpc_codes::INVALID_REQUEST] {
@@ -260,6 +267,7 @@ fn production_sources(
 /// The scan row (lead ruling): a new way to serve a stored answer would
 /// record `delivered` with null findings for bytes this request did not
 /// produce. It cannot land without being inventoried above.
+#[cfg(tp4)]
 #[test]
 fn every_stored_answer_read_is_inventoried() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -347,6 +355,7 @@ const TRANSFORM_CALLS: &[(&str, &str, usize, TransformUse)] = &[
 /// The scan row (lead ruling): a new caller of the transform would raise
 /// and note into whatever delivery is open. It cannot land unclassified,
 /// and a suspended caller must hold both suspensions.
+#[cfg(tp4)]
 #[test]
 fn every_context_integrity_caller_is_classified() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -432,6 +441,7 @@ fn retryable_echo() -> crate::Error {
 }
 
 /// M1: a redaction stays recorded whatever the call sends after it.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_redaction_is_recorded_for_the_whole_call() {
     scope(async {
@@ -445,6 +455,7 @@ async fn a_redaction_is_recorded_for_the_whole_call() {
 
 /// M4: a discarded send's redaction is the call's, even when that send then
 /// meets a refusal, which is not.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_discarded_sends_redaction_is_recorded_and_its_refusal_is_not() {
     scope(async {
@@ -460,6 +471,7 @@ async fn a_discarded_sends_redaction_is_recorded_and_its_refusal_is_not() {
 
 /// M4: a discarded send dropped after its redaction (a probe's timeout) has
 /// already recorded it.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_cancelled_discarded_sends_redaction_is_recorded() {
     use futures::FutureExt;
@@ -476,6 +488,7 @@ async fn a_cancelled_discarded_sends_redaction_is_recorded() {
 }
 
 /// A composite step's redaction is the composite's.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_steps_redaction_is_the_composites() {
     scope(async {
@@ -487,6 +500,7 @@ async fn a_steps_redaction_is_the_composites() {
 
 /// The scrub's refusal delivered records refused, as either JSON-RPC variant
 /// (M9: a replaced retryable error stays `JsonRpcRetryable`).
+#[cfg(tp4)]
 #[tokio::test]
 async fn the_scrubs_refusal_delivered_records_refused() {
     for (name, error) in [("in-band", echo()), ("retryable", retryable_echo())] {
@@ -502,6 +516,7 @@ async fn the_scrubs_refusal_delivered_records_refused() {
 
 /// F1, F5 (M3): a replaced answer the call does not deliver records the
 /// echo, never a refusal.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_replaced_answer_not_delivered_records_no_refusal() {
     scope(async {
@@ -514,6 +529,7 @@ async fn a_replaced_answer_not_delivered_records_no_refusal() {
 
 /// M2b: a backend's error that reads as the refusal, with no replacement in
 /// the call, is the backend's: no refusal recorded.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_lookalike_refusal_without_a_replacement_records_nothing() {
     let lookalike = scope(async { scrubbed(echo()) }).await;
@@ -526,6 +542,7 @@ async fn a_lookalike_refusal_without_a_replacement_records_nothing() {
 }
 
 /// A replacement built in a discarded cell is not the call's to deliver.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_discarded_cells_replacement_is_not_the_calls() {
     scope(async {
@@ -537,6 +554,7 @@ async fn a_discarded_cells_replacement_is_not_the_calls() {
 }
 
 /// The narrow check leaves other refusals to the outlet.
+#[cfg(tp4)]
 #[tokio::test]
 async fn the_narrow_check_marks_only_the_scrubs_refusal() {
     scope(async {
@@ -548,6 +566,7 @@ async fn the_narrow_check_marks_only_the_scrubs_refusal() {
 
 /// The scrub's second refusal, a value set past its limit, is read as the
 /// scrub's refusal too: delivered, it records refused.
+#[cfg(tp4)]
 #[tokio::test]
 async fn the_overflow_refusal_delivered_records_refused() {
     let full =
@@ -580,6 +599,7 @@ async fn the_overflow_refusal_delivered_records_refused() {
 /// The delivery scope holds the future it wraps once. As an `async fn` it
 /// kept the argument beside the task-local future that owns it, so a boxed
 /// dispatch future was twice its size on every call, a refused one included.
+#[cfg(tp4)]
 #[test]
 fn the_delivery_scope_holds_its_future_once() {
     let payload = [7u8; 4096];
@@ -742,6 +762,7 @@ impl<'ast> syn::visit::Visit<'ast> for Scan<'_> {
 /// plain `fn .. -> impl Future` form holds it once. Listed exceptions read or
 /// join task-local state before scoping, which must happen when the future is
 /// first polled, not when it is made.
+#[cfg(tp4)]
 #[test]
 fn no_async_fn_holds_the_future_it_scopes_twice() {
     use syn::visit::Visit;

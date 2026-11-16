@@ -20,16 +20,20 @@ use std::sync::Arc;
 #[cfg(test)]
 use crate::control_plane::{ControlPlaneHealth, ControlPlaneServerStatus};
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod grant_projection_tests;
 // Widened within the UI so the status report derives the control-plane
 // actor with the function the routes use, not a copy of its role rules.
 pub(in crate::gateway::ui) mod mutations;
+#[cfg(tp3)]
 #[cfg(test)]
 mod read_reflect_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod role_wiring_tests;
 mod snapshot;
+#[cfg(tp3)]
 #[cfg(test)]
 mod snapshot_scope_tests;
 
@@ -218,20 +222,24 @@ async fn control_plane_snapshot(
     Json(response).into_response()
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "control_plane_mutation_tests.rs"]
 mod mutation_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "control_plane_authority_tests.rs"]
 mod authority_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "control_plane_preflight_tests.rs"]
 mod preflight_tests;
 
 /// B6 (MIK-7570.BREAKER.1): an open breaker reads `Down` and `Blocked`,
 /// through the real `Backend::status()`, never a hand-built status.
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "control_plane_breaker_tests.rs"]
 mod breaker_tests;

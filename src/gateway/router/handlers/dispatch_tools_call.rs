@@ -30,6 +30,7 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::response_policy::ResponsePolicyTarget;
 
 mod route_stage;
+#[cfg(tp5)]
 #[cfg(test)]
 mod route_stage_order_tests;
 

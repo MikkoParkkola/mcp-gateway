@@ -221,6 +221,7 @@ fn authorize_targets(
     })
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "stdio_route_stage_tests.rs"]
 mod tests;

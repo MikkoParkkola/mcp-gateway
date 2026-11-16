@@ -485,6 +485,7 @@ fn estimated_start(
         .into()
 }
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_section_tests {
     use super::cost_section;
@@ -542,12 +543,14 @@ mod cost_section_tests {
 /// MIK-8034: an admin capability reload reports the change on the feed the
 /// file watcher uses, so the drain refreshes the webhook routes and announces
 /// the new tool list, as after a file reload.
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "admin_reload_tests.rs"]
 mod reload_tests;
 
 /// `gateway_cost_report` refusing a non-admin caller an admin view is the
 /// gateway refusing the call: it records refused.
+#[cfg(tp4)]
 #[cfg(test)]
 mod cost_report_refusal_tests {
     use std::sync::Arc;

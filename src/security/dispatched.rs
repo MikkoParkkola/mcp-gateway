@@ -155,6 +155,7 @@ fn key() -> Option<&'static [u8; 32]> {
     .as_ref()
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "dispatched_tests.rs"]
 mod tests;

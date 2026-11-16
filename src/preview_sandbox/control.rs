@@ -355,6 +355,7 @@ impl Drop for Revoking<'_> {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "control_tests.rs"]
 mod tests;

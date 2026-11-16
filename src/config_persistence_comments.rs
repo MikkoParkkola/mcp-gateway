@@ -89,6 +89,7 @@ thread_local! {
     static PARSE_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::{PARSE_CHECKS, dropped_comment_lines};

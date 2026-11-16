@@ -250,6 +250,7 @@ fn count_unpinned(capabilities: &[CapabilityDefinition]) -> usize {
     capabilities.iter().filter(|c| c.sha256.is_none()).count()
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

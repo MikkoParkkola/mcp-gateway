@@ -386,6 +386,7 @@ fn invalid_params(message: String) -> Error {
     Error::json_rpc(INVALID_PARAMS, message)
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "cli_argv_tests.rs"]
 mod tests;

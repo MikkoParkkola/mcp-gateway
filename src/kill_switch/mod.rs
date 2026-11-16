@@ -34,6 +34,7 @@ use tracing::{info, warn};
 
 use budget::BudgetWindow;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests;
 

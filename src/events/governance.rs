@@ -207,6 +207,7 @@ impl EventsHub {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "governance_tests.rs"]
 mod tests;

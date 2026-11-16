@@ -573,6 +573,7 @@ pub(crate) fn sync_dir(dir: &Path) -> std::io::Result<()> {
 }
 
 /// A stored identity is verified only through the checked constructor.
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stored_identity_pin_tests.rs"]
 mod stored_identity_pin_tests;

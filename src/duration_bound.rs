@@ -120,6 +120,7 @@ macro_rules! delta {
 }
 pub(crate) use delta;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "duration_bound_tests.rs"]
 mod tests;

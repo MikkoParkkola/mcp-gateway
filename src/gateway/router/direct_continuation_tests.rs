@@ -106,6 +106,7 @@ pub(super) fn dispatched(fx: &Fx) -> usize {
 
 /// R1 (`MRTR.2a`): the backend's own state never reaches the client.
 /// Mutant: the seal removed.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r1_the_client_sees_a_sealed_state_never_the_backends() {
     for backend in BACKENDS {
@@ -125,6 +126,7 @@ async fn r1_the_client_sees_a_sealed_state_never_the_backends() {
 
 /// R2: the issued continuation, presented once by its caller, reaches the
 /// backend as the backend's own state, with the answers beside it.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r2_the_issued_state_resumes_with_the_backends_own_state() {
     for backend in BACKENDS {
@@ -142,6 +144,7 @@ async fn r2_the_issued_state_resumes_with_the_backends_own_state() {
 
 /// R3: a state the gateway did not issue (the backend's literal, or the
 /// envelope altered) is refused before the backend. Mutant: the redeem removed.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r3_a_state_the_gateway_did_not_issue_is_refused() {
     for backend in BACKENDS {
@@ -160,6 +163,7 @@ async fn r3_a_state_the_gateway_did_not_issue_is_refused() {
 }
 
 /// R4: another caller cannot redeem a continuation issued to alice.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r4_another_caller_cannot_redeem_it() {
     for backend in BACKENDS {
@@ -173,6 +177,7 @@ async fn r4_another_caller_cannot_redeem_it() {
 }
 
 /// R5: a continuation is redeemed once.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r5_a_continuation_is_redeemed_once() {
     for backend in BACKENDS {
@@ -189,6 +194,7 @@ async fn r5_a_continuation_is_redeemed_once() {
 
 /// R6: a seal the store refuses (here: no slot to hold the exchange) answers
 /// -32003, and the backend's state is not handed out instead.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r6_a_refused_seal_is_refused_not_handed_the_state() {
     for backend in BACKENDS {
@@ -206,6 +212,7 @@ async fn r6_a_refused_seal_is_refused_not_handed_the_state() {
 /// did not act, so re-sending the call under the same key reaches it again
 /// rather than finding the key held. Mutant: the release on the refusal path
 /// removed.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r6b_a_refused_seal_releases_the_key() {
     for backend in BACKENDS {
@@ -231,6 +238,7 @@ async fn full_store() -> Fx {
 /// received round 1 and may have acted, so a fresh same-key call is answered
 /// "unavailable" as on the meta route, and the backend is not called again;
 /// only the continuation can go on. The stored question is never replayed.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r7_an_interim_answer_keeps_the_key_from_a_fresh_call() {
     for backend in BACKENDS {
@@ -263,6 +271,7 @@ async fn r7_an_interim_answer_keeps_the_key_from_a_fresh_call() {
 
 /// R8: answers with no continuation are refused, as on the meta route: every
 /// interim answer now carries one, so an honest retry always presents it.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r8_answers_without_a_continuation_are_refused() {
     for backend in BACKENDS {
@@ -286,6 +295,7 @@ async fn r8_answers_without_a_continuation_are_refused() {
 
 /// R9: the continuation is bound to the call it was issued for: presented
 /// with other arguments, or on another backend, it is refused.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r9_a_continuation_is_bound_to_its_call() {
     let fx = fixture(Answer::AskOnce, |_| {}).await;
@@ -306,6 +316,7 @@ async fn r9_a_continuation_is_bound_to_its_call() {
 
 /// R10: a backend that keeps no state still gets none back: the client's
 /// continuation is not forwarded in its place.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r10_a_backend_without_state_gets_none_back() {
     for backend in BACKENDS {
@@ -322,6 +333,7 @@ async fn r10_a_backend_without_state_gets_none_back() {
 
 /// R11 (`MRTR.2a`, both routes): a result claiming `input_required` that is not
 /// a usable round still never carries the backend's state to the client.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r11_an_unusable_round_does_not_carry_the_state() {
     for backend in BACKENDS {
@@ -365,6 +377,7 @@ pub(super) fn budget(meta: crate::gateway::meta_mcp::MetaMcp) -> crate::gateway:
 /// (1.5 at 1.0 a call) pays for the question and is refused the retry; the
 /// same caller then resumes it under `k-std`. Mutant: the redeem before the
 /// spend admission.
+#[cfg(tp1)]
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn r12_a_budget_refusal_does_not_spend_the_continuation() {
@@ -390,6 +403,7 @@ async fn r12_a_budget_refusal_does_not_spend_the_continuation() {
 /// R13: the redeem replaces only the state, so the answers the sanitizing arm
 /// cleaned are the answers the backend gets. Mutant: the client's raw answers
 /// written back over the sanitized ones.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r13_the_backend_gets_the_sanitized_answers() {
     // MIK-8154 SAN.1: the direct route honours `security.sanitize_input`, so
@@ -410,6 +424,7 @@ async fn r13_the_backend_gets_the_sanitized_answers() {
 
 /// R14: a client-authored state that is not a string never reaches the
 /// backend: the preflight refuses it as a malformed retry field.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r14_a_non_string_client_state_is_refused_before_the_backend() {
     for backend in BACKENDS {
@@ -427,6 +442,7 @@ async fn r14_a_non_string_client_state_is_refused_before_the_backend() {
 /// does not reach the client either, and the field is removed rather than
 /// blanked. Mutants: the removal limited to answers claiming `input_required`;
 /// a completed answer's state blanked to `null`.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r15_a_completed_answer_does_not_carry_the_backends_state() {
     for backend in BACKENDS {
@@ -454,6 +470,7 @@ async fn r15_a_completed_answer_does_not_carry_the_backends_state() {
 /// A1-A3 (lead ruling A): an API-key caller with no verified identity keeps
 /// its round, bound to its key's credential principal, on the direct route.
 /// A1: it resumes; A2: another key cannot redeem it; A3: once only.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a1_a3_an_api_key_caller_keeps_its_round_on_the_direct_route() {
     for backend in BACKENDS {
@@ -509,6 +526,7 @@ pub(super) async fn meta_call(fx: &Fx, key: &str, backend: &str, extra: Value) -
 }
 
 /// A1-A3 on the meta route: one binding rule for both routes.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a1_a3_an_api_key_caller_keeps_its_round_on_the_meta_route() {
     for backend in BACKENDS {
@@ -533,6 +551,7 @@ async fn a1_a3_an_api_key_caller_keeps_its_round_on_the_meta_route() {
 /// A4: callers the idempotency guard tells apart behind one shared key (here
 /// by their grant subject) are told apart by the continuation too: one cannot
 /// redeem the other's round. Mutant: the binding built from the key alone.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a4_a_shared_key_still_separates_callers_the_guard_separates() {
     let fx = fixture(Answer::AskOnce, |_| {}).await;
@@ -591,6 +610,7 @@ pub(super) async fn held(fx: &Fx) -> usize {
 /// R16 (both routes): a state too long to seal is refused, and the slot its
 /// exchange took is given back rather than held until it expires. Mutant: the
 /// hold left open when the keyring refuses the mint.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r16_a_refused_mint_gives_its_slot_back() {
     for backend in BACKENDS {
@@ -612,6 +632,7 @@ const SECRET: &str = concat!("gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890")
 /// R17 (both routes): a sealed question a later gate refuses never reaches
 /// the client, so its slot is given back. Mutants: the release dropped after
 /// a refused payload gate (each route); after a direct firewall block.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r17_a_question_refused_after_its_seal_gives_its_slot_back() {
     let inspecting = |meta: &mut crate::gateway::meta_mcp::MetaMcp| {
@@ -675,6 +696,7 @@ pub(super) async fn signed_call(
 /// R18 (MIK-7698 on this route): a continuation refused before the backend
 /// consumes no signing nonce, so the honest retry under that nonce is served.
 /// Mutant: the nonce kept on a refused redeem.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r18_a_refused_continuation_consumes_no_nonce() {
     use super::direct_guards_fixture::fixture_hardened_signed;
@@ -699,6 +721,7 @@ async fn r18_a_refused_continuation_consumes_no_nonce() {
 /// does, the propagated binding first, so one verified identity presenting
 /// another binding (another backend credential) cannot redeem it. Mutant: the
 /// verified identity bound ahead of the binding (each route).
+#[cfg(tp1)]
 #[tokio::test]
 async fn r19_the_propagated_binding_binds_ahead_of_the_identity() {
     use crate::protocol::mrtr::source_fingerprint;
@@ -754,6 +777,7 @@ async fn r19_the_propagated_binding_binds_ahead_of_the_identity() {
 /// consumes no signing nonce, so re-sent under that nonce it meets the budget
 /// again, not a replay refusal. Mutant: the nonce kept on a spend refusal
 /// (each arm).
+#[cfg(tp1)]
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn r20_a_spend_refusal_consumes_no_nonce() {

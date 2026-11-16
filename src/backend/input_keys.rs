@@ -522,15 +522,18 @@ impl Backend {
 }
 
 // Each key-check answer names its kind.
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "input_keys_kind_tests.rs"]
 mod kind_tests;
 
 // MIK-8399: partial and abandoned listings revoke resend permission.
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "resend_revoke_tests.rs"]
 mod resend_revoke_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::Ordering;

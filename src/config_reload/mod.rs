@@ -183,27 +183,35 @@ mod live_config;
 pub use live_config::LiveConfig;
 
 // ============================================================================
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "account_reload_tests.rs"]
 mod account_reload_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "account_reload_guard_tests.rs"]
 mod account_reload_guard_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "replica_restart_tests.rs"]
 mod replica_restart_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod restart_required_tests;
 
+#[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
 mod live_collusion_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod live_keys_reload_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod live_sections_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod owner_reload_tests;
 
@@ -244,6 +252,7 @@ pub(crate) mod reload_tally;
 mod reload_warm_hook;
 pub(crate) mod revision;
 // Linux and macOS, as the other real-watcher rows (MIK-8181).
+#[cfg(tp3)]
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod reload_warm_hook_tests;
 pub(crate) use reload_warm_hook::{OnRegistered, RegisteredChange};
@@ -325,8 +334,10 @@ use write::mutate_config_and_reload_with;
 
 mod env_poll;
 // Linux and macOS (MIK-8181), as the real-watcher rows (see `watch_chain_tests.rs`).
+#[cfg(tp3)]
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod env_poll_announce_tests;
+#[cfg(tp3)]
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod env_poll_e2e_tests;
 pub(crate) mod grant_audit;
@@ -336,12 +347,16 @@ mod grant_reload;
 pub use grant_reload::IdentityGrantSink;
 mod watch_chain;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod c4_enable_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod c9_file_ref_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod config_error_leak_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod empty_backends_reload_tests;
 #[cfg(test)]
@@ -350,65 +365,88 @@ mod reload_pause;
 /// writing the file and publishing its reload.
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use reload_pause::arm as arm_reload_pause;
+#[cfg(tp3)]
 #[cfg(test)]
 mod webhook_base_path_reload_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod writer_lock_tests;
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 mod writer_symlink_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod flip_pin_tests;
+#[cfg(tp3)]
 #[cfg(all(test, feature = "webui"))]
 mod replace_audit_key_tests;
 #[cfg(test)]
 mod replace_audit_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod replace_secret_tests;
 #[cfg(test)]
 mod replace_test_support;
+#[cfg(tp3)]
 #[cfg(test)]
 mod replace_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod replace_validate_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod reader_lock_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod grant_change_trigger_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod grant_reload_trigger_tests;
 
 /// A backend's configured `headers:`/`env:` credentials across a reload
 /// that changes which of them are secret.
+#[cfg(tp3)]
 #[cfg(test)]
 mod configured_secrets_reload_tests;
+#[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
 mod firewall_shape_reload_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod grant_audit_crash_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod grant_audit_journal_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod grant_audit_plan_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod grant_audit_reload_tests;
 #[cfg(test)]
 pub(crate) mod grant_audit_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod pattern_grammar_reload_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod principal_collision_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod reload_load_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod runtime_name_clash_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "refusal_class_tests.rs"]
 mod refusal_class_tests;

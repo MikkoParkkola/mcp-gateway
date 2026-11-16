@@ -162,10 +162,12 @@ pub(super) async fn not_found() -> StatusCode {
     StatusCode::NOT_FOUND
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "shell_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "shell_budget_tests.rs"]
 mod budget_tests;

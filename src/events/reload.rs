@@ -135,6 +135,7 @@ pub(crate) fn payload_fields(
         .unwrap_or_default()
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

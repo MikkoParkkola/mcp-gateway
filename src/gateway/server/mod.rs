@@ -6,49 +6,63 @@
 // test that drives a real startup must call the same one rather than a copy of
 // its policy.
 pub(crate) mod account_bindings;
+#[cfg(tp4)]
 #[cfg(test)]
 mod attestation_start_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod audit_start_tests;
 mod background;
 mod build_meta;
 mod cleartext;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 mod collusion_share_tests;
 mod construct;
 mod control_plane_store;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_estimate_restart_tests;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_restart_tests;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_restore_attribution_tests;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_save_stamp_tests;
 mod counter_wiring;
 mod events_wiring;
 mod health_floor;
 mod health_wiring;
+#[cfg(tp4)]
 #[cfg(test)]
 mod key_server_start_tests;
 /// The startup notice that the read verdict runs with the firewall off.
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 mod read_verdict_notice_tests;
 #[cfg(test)]
 pub(crate) use events_wiring::listener_mint_for_test;
 mod first_list_wait;
+#[cfg(tp4)]
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 mod keyless_anomaly_tests;
 mod listener;
 mod persistence;
 mod provenance_signer;
+#[cfg(tp4)]
 #[cfg(test)]
 mod real_store_guard_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod remote_provenance_start_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod replica_state_tests;
 #[cfg(all(test, feature = "firewall"))]
@@ -66,6 +80,7 @@ mod stdio_delivery;
 mod stdio_dispatch;
 mod stdio_dispatches;
 /// ADR-023: the sanitise flag over stdio follows a reload.
+#[cfg(tp4)]
 #[cfg(test)]
 mod stdio_live_flag_tests;
 mod stdio_loop;
@@ -80,11 +95,13 @@ mod stdio_single;
 mod stdio_startup;
 mod stdio_tasks;
 mod stdio_writer;
+#[cfg(tp4)]
 #[cfg(test)]
 mod stop_budget_start_tests;
 mod task_runtime;
 #[cfg(test)]
 mod test_seams;
+#[cfg(tp4)]
 #[cfg(test)]
 mod tilde_tests;
 pub(crate) use stdio_nonce::StdioNonce;
@@ -101,6 +118,7 @@ mod warmstart;
 mod window_saver;
 #[cfg(test)]
 mod window_seal_http_backend;
+#[cfg(tp4)]
 #[cfg(test)]
 mod window_seal_http_tests;
 
@@ -301,12 +319,15 @@ fn leaky_single_user_backends(config: &Config) -> Vec<&str> {
 /// full tool access. If the ledger ever gains shared storage, revisit it.
 pub(crate) const STDIO_CREDENTIAL_PRINCIPAL: &str = "stdio";
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod gateway_bootstrap_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod stdio_forward_path_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

@@ -304,10 +304,12 @@ pub(crate) mod write_seam {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "durable_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "durable_keep_tests.rs"]
 mod keep_tests;

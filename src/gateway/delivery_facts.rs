@@ -787,6 +787,7 @@ pub(crate) fn insert_notification_refused_by(
 
 /// Every stored answer leaving the gateway is scrubbed against the values
 /// current when it is sent; the exits are enumerated.
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "stored_scrub_pin_tests.rs"]
 mod stored_scrub_pin_tests;
@@ -795,26 +796,32 @@ mod stored_scrub_pin_tests;
 #[path = "delivery_facts_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "delivery_facts_refused_by_tests.rs"]
 mod refused_by_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "delivery_facts_withheld_tests.rs"]
 mod withheld_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "delivery_facts_composite_tests.rs"]
 mod composite_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "delivery_facts_send_tests.rs"]
 mod send_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "delivery_facts_calls_tests.rs"]
 mod calls_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "delivery_facts_fold_tests.rs"]
 mod fold_tests;

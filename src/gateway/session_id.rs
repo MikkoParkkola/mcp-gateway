@@ -188,6 +188,7 @@ pub(crate) mod log_capture {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

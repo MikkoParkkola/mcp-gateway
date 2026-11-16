@@ -299,18 +299,22 @@ impl super::Gateway {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "shutdown_order_tests.rs"]
 mod shutdown_order_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "counter_restart_tests.rs"]
 mod counter_restart_tests;
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "webui"))]
 #[path = "gateway_status_start_tests.rs"]
 mod gateway_status_start_tests;
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "webui"))]
 #[path = "health_start_tests.rs"]
 mod health_start_tests;

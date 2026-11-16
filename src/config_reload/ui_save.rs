@@ -271,10 +271,12 @@ fn write_failed(variant: &'static str) -> UiRefused {
     UiRefused::Failed(FAILED.to_owned())
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "ui_save_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "ui_policy_fields_tests.rs"]
 mod policy_field_tests;

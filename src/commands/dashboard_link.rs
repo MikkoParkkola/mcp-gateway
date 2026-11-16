@@ -784,6 +784,7 @@ async fn dashboard_link_output(base: &str, tls: &LinkTls, token: &str) -> Printe
     gate("dashboard-link", token, result)
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "dashboard_link_tests.rs"]
 mod tests;

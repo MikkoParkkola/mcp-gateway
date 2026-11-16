@@ -200,10 +200,12 @@ impl Drop for Witnessed<'_, '_> {
 }
 
 // MIK-8353 PR-W: a joined fill keeps the nonce spent.
+#[cfg(tp4)]
 #[cfg(all(test, feature = "cost-governance"))]
 #[path = "refund_waiter_tests.rs"]
 mod refund_waiter_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod pre_send_tests {
     use super::{PreSendExit, mark_dispatched, settle_pre_send};

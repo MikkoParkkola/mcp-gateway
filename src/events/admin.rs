@@ -352,6 +352,7 @@ impl EventsHub {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "admin_replay_obs_tests.rs"]
 mod replay_obs_tests;

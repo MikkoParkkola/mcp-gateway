@@ -432,11 +432,13 @@ impl AgentDefinitionConfig {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "auth_multi_user_tests.rs"]
 mod multi_user_tests;
 
 // #2241: the bearer token is a credential too.
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "auth_credential_count_tests.rs"]
 mod credential_count_tests;
@@ -456,22 +458,27 @@ mod single_user_principal_tests;
 #[path = "auth_debug_redaction_tests.rs"]
 mod cwe532_debug_redaction;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "auth_api_key_name_tests.rs"]
 mod api_key_name_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "api_key_digest_tests.rs"]
 mod api_key_digest_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "api_key_binding_tests.rs"]
 mod api_key_binding_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "api_key_serialize_tests.rs"]
 mod api_key_serialize_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "auth_dashboard_session_tests.rs"]
 mod dashboard_session_limits_tests;

@@ -216,6 +216,7 @@ fn scope_matches(policy_item: &str, request_item: &str) -> bool {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

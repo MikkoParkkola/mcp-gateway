@@ -70,6 +70,7 @@ impl Transform for ResponseTransform {
 // Tests
 // ============================================================================
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

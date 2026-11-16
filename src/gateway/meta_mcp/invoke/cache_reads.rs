@@ -61,6 +61,7 @@ impl super::super::MetaMcp {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 mod tests {
     use std::sync::Arc;

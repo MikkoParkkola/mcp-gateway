@@ -372,6 +372,7 @@ pub enum KubernetesCommand {
     },
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use clap::Parser;

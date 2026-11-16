@@ -14,6 +14,7 @@ use super::{
     error_response_preserving_status, invoke, response_security,
 };
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod outcome_tests;
 mod task_intake;

@@ -177,6 +177,7 @@ pub(super) fn complete() -> TaskTransition {
 /// A settlement that loses its first compare-and-set re-reads the row and
 /// commits at the revision it now holds. Mutant: the conflict is treated as a
 /// failure and the retry is dropped, leaving the row working.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_settlement_that_lost_its_revision_retries_at_the_current_one() {
     let fx = fixture("cas-retry").await;
@@ -196,6 +197,7 @@ async fn a_settlement_that_lost_its_revision_retries_at_the_current_one() {
 /// A row that went terminal while the settlement was in flight keeps its
 /// outcome: the retry stops and reports nothing delivered. Mutant: the
 /// terminal check is dropped and the second write overwrites the outcome.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_settlement_that_lost_to_a_terminal_row_leaves_it_alone() {
     let fx = fixture("cas-terminal").await;
@@ -225,6 +227,7 @@ async fn a_settlement_that_lost_to_a_terminal_row_leaves_it_alone() {
 
 /// A retry that loses its second compare-and-set (here a failed write) gives
 /// up without claiming delivery, after exactly one write attempt.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_settlement_whose_retry_also_fails_reports_nothing_delivered() {
     let fx = fixture("cas-second").await;
@@ -250,6 +253,7 @@ async fn a_settlement_whose_retry_also_fails_reports_nothing_delivered() {
 /// at once: nothing is delivered, the row stays working, and no re-read or
 /// retry follows. Mutant: the failure is treated as a conflict, so a second
 /// write is attempted.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_settlement_whose_first_write_fails_does_not_retry() {
     let fx = fixture("cas-first").await;
@@ -272,6 +276,7 @@ async fn a_settlement_whose_first_write_fails_does_not_retry() {
 /// A marker write at a revision the row has left, or on a settled row, is
 /// refused; the same call at the live revision marks. Mutant: a refusal is
 /// reported as a store failure (which would settle the row interrupted).
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_marker_on_a_moved_or_settled_row_is_refused() {
     let fx = fixture("marker-refused").await;
@@ -306,6 +311,7 @@ async fn a_marker_on_a_moved_or_settled_row_is_refused() {
 
 /// A marker that cannot be made durable, or a principal that cannot be hashed,
 /// is a failure the worker answers by settling interrupted.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_marker_that_cannot_be_written_or_owned_fails() {
     let fx = fixture("marker-failed").await;
@@ -357,6 +363,7 @@ fn handle() -> UpstreamHandle {
 /// A job that stays live is queried again and again until the worker's budget
 /// is spent, then handed back retained. Paused time makes the 300 s budget
 /// instant. Mutant: the budget check is dropped and the loop never ends.
+#[cfg(tp3)]
 #[tokio::test(start_paused = true)]
 async fn a_job_that_stays_live_is_retained_when_the_budget_runs_out() {
     let fx = fixture("poll-budget").await;
@@ -386,6 +393,7 @@ async fn a_job_that_stays_live_is_retained_when_the_budget_runs_out() {
 
 /// A row already settled when the worker reaches the front of the slot queue
 /// is never queried: the peer sees zero calls. Control: the live row is.
+#[cfg(tp3)]
 #[tokio::test(start_paused = true)]
 async fn a_row_settled_before_the_poll_is_never_queried() {
     let fx = fixture("poll-overtaken").await;

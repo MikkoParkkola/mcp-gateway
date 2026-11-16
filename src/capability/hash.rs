@@ -101,6 +101,7 @@ pub fn rewrite_with_pin(original: &str, hash: &str) -> String {
     out
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

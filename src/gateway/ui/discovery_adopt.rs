@@ -412,10 +412,12 @@ pub(super) async fn adopt_discovery(
     )
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "discovery_adopt_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "discovery_adopt_route_tests.rs"]
 mod route_tests;

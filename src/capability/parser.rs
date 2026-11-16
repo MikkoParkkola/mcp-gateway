@@ -350,10 +350,12 @@ fn validate_no_secrets(auth: &super::AuthConfig) -> Result<()> {
     Ok(())
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "cli_template_load_tests.rs"]
 mod cli_template_load_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

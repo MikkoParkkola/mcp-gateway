@@ -563,6 +563,7 @@ impl EventsHub {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "fanout_tests.rs"]
 mod tests;

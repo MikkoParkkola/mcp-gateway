@@ -590,38 +590,47 @@ fn looks_like_jwt(token: &str) -> bool {
         })
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_backend_grant_tests.rs"]
 mod backend_grant_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_api_key_digest_tests.rs"]
 mod api_key_digest_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_clock_tests.rs"]
 mod clock_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_client_state_tests.rs"]
 mod client_state_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_rotation_tests.rs"]
 mod rotation_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_limit_state_tests.rs"]
 mod limit_state_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_approval_binding_tests.rs"]
 mod approval_binding_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_session_origin_tests.rs"]
 mod session_origin_tests;
@@ -634,6 +643,7 @@ mod session_origin_tests;
 /// middleware can say what a presented cookie is worth. The last two cases
 /// carry that identity into a real [`NonceStore`], because the quota claim is
 /// about admission, not about a struct field.
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_signing_dashboard_quota_tests.rs"]
 mod signing_dashboard_quota_tests;

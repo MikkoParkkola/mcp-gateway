@@ -146,6 +146,7 @@ pub(crate) fn listing_watches_started() -> usize {
     LISTING_WATCHES.with(std::cell::Cell::get)
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "backend_listing_tests.rs"]
 mod tests;

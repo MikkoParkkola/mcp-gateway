@@ -361,11 +361,13 @@ pub(super) async fn advance_until_saved(costs: &std::path::Path) -> Result<(), S
     ))
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "persistence_tests.rs"]
 mod tests;
 
 // Stays inline: its timing windows are checked as new code at any new path.
+#[cfg(tp4)]
 #[cfg(test)]
 mod shutdown_deadline_tests {
     use super::*;

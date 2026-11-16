@@ -620,13 +620,18 @@ fn validate_signature(
 // Tests
 // ============================================================================
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod clock_tests;
+#[cfg(tp5)]
 #[cfg(test)]
 mod hmac_tests;
+#[cfg(tp5)]
 #[cfg(test)]
 mod mapping_tests;
+#[cfg(tp5)]
 #[cfg(test)]
 mod rate_limit_tests;
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests;

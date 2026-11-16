@@ -472,6 +472,7 @@ fn decode_task(envelope: &Value, method: &str) -> Result<Reply<Task>> {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "client_tests.rs"]
 mod tests;

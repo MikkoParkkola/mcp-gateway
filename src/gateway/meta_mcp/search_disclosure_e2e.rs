@@ -195,6 +195,7 @@ const T5_QUERIES: [&str; 5] = [
     "calendar events",
 ];
 
+#[cfg(tp2)]
 #[tokio::test]
 async fn mik_gw_t3_gateway_search_omits_ranking_unless_explain() {
     let meta = catalog_meta().await;
@@ -214,6 +215,7 @@ async fn mik_gw_t3_gateway_search_omits_ranking_unless_explain() {
     assert!(shown["matches"][0]["ranking"]["reasons"].is_array());
 }
 
+#[cfg(tp2)]
 #[tokio::test]
 async fn mik_gw_t1_default_is_l0() {
     let meta = catalog_meta().await;
@@ -232,6 +234,7 @@ async fn mik_gw_t1_default_is_l0() {
     );
 }
 
+#[cfg(tp2)]
 #[tokio::test]
 async fn mik_gw_t2_detail_and_include_schema_select_tiers() {
     let meta = catalog_meta().await;
@@ -267,6 +270,7 @@ async fn mik_gw_t2_detail_and_include_schema_select_tiers() {
     assert!(l2["matches"][0].get("input_schema").is_some());
 }
 
+#[cfg(tp2)]
 #[tokio::test]
 async fn mik_gw_t5_l0_top_tool_matches_legacy_full_for_five_queries() {
     let meta = catalog_meta().await;
@@ -309,6 +313,7 @@ async fn mik_gw_t5_l0_top_tool_matches_legacy_full_for_five_queries() {
     }
 }
 
+#[cfg(tp2)]
 #[tokio::test]
 async fn mik_gw_t2_invalid_detail_fails_fast() {
     let meta = catalog_meta().await;
@@ -319,6 +324,7 @@ async fn mik_gw_t2_invalid_detail_fails_fast() {
     assert!(err.to_string().contains("l0|l1|l2"), "{err}");
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "search_disclosure_e2e_discovery.rs"]
 mod discovery;

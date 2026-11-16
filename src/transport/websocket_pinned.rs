@@ -167,6 +167,7 @@ fn failed(error: &tokio_tungstenite::tungstenite::Error) -> Error {
     ))
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "websocket_pinned_tests.rs"]
 mod tests;

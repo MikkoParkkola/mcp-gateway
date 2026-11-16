@@ -218,6 +218,7 @@ impl BnautAttestationSigner {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     #![allow(

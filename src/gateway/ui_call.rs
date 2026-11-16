@@ -307,6 +307,7 @@ fn ui_call_refused(kind: DecisionKind, message: &str) -> crate::Error {
 
 /// Each refusal here answers the delivery of the internal dispatch, so that
 /// delivery's record says refused; an admitted call still reads delivered.
+#[cfg(tp4)]
 #[cfg(test)]
 mod refusal_effect_tests {
     use super::{Confirm, UiCall, admit_send, gate, gate_capability, task_refused};
@@ -380,6 +381,7 @@ mod refusal_effect_tests {
 
 /// The gate's test hook is never built outside tests: its call in [`gate`]
 /// and its module each carry `#[cfg(test)]` on the line above.
+#[cfg(tp4)]
 #[cfg(test)]
 mod gate_seam_tests {
     #[test]

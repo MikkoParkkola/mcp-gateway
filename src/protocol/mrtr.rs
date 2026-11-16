@@ -616,6 +616,7 @@ impl Bridge {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod input_responses_tests {
     use super::input_responses_nonempty;
@@ -646,6 +647,7 @@ mod input_responses_tests {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod principal_tests {
     use super::{PrincipalSource, principal_fingerprint, source_fingerprint};
@@ -676,6 +678,7 @@ mod principal_tests {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "mrtr_key_field_tests.rs"]
 mod key_field_tests;

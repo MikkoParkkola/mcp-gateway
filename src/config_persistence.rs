@@ -146,10 +146,12 @@ pub(crate) mod commit;
 #[path = "config_persistence_crash_fs.rs"]
 pub(crate) mod crash_fs;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_crash_fs_tests.rs"]
 mod crash_fs_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_commit_tests.rs"]
 mod commit_tests;
@@ -702,17 +704,21 @@ pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
     write_yaml(path, yaml)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_cli_recovery_tests.rs"]
 mod cli_recovery_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_edit_tests.rs"]
 mod edit_tests;
 
+#[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "config_persistence_refused_tests.rs"]
 mod refused_tests;

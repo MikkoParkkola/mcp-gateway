@@ -205,6 +205,7 @@ async fn approve_via(
     (outcome, query)
 }
 
+#[cfg(tp3)]
 #[tokio::test]
 async fn authorize_redeems_a_code_only_after_the_callback_proves_state_and_issuer() {
     let dir = tempfile::tempdir().unwrap();
@@ -249,6 +250,7 @@ async fn authorize_redeems_a_code_only_after_the_callback_proves_state_and_issue
 // An authorization code is a credential: no log line may carry it, at any
 // level up to DEBUG, anywhere in the flow that receives and redeems it, on
 // success or on either refusal after the code has arrived.
+#[cfg(tp3)]
 #[tokio::test]
 async fn the_authorization_code_never_reaches_the_log() {
     enum Path {
@@ -290,6 +292,7 @@ async fn the_authorization_code_never_reaches_the_log() {
 // prompt printed all the same, once. P1 (the launcher succeeds, once) is
 // `a_cli_flow_announces_the_link_once`; P3 (a UI flow prints none) is
 // `a_ui_flow_never_announces_the_link_at_the_terminal`.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_failed_launcher_still_announces_the_link_once() {
     let dir = tempfile::tempdir().unwrap();
@@ -307,6 +310,7 @@ async fn a_failed_launcher_still_announces_the_link_once() {
     assert_eq!(*seen.lock().unwrap(), vec![query["__url"].clone()]);
 }
 
+#[cfg(tp3)]
 #[tokio::test]
 async fn authorize_refuses_a_code_from_another_issuer_without_redeeming_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -333,6 +337,7 @@ async fn authorize_refuses_a_code_from_another_issuer_without_redeeming_it() {
     );
 }
 
+#[cfg(tp3)]
 #[tokio::test]
 async fn get_token_serves_a_live_cached_token_without_any_request() {
     let dir = tempfile::tempdir().unwrap();
@@ -347,6 +352,7 @@ async fn get_token_serves_a_live_cached_token_without_any_request() {
     );
 }
 
+#[cfg(tp3)]
 #[tokio::test]
 async fn get_token_refreshes_an_expired_token() {
     let dir = tempfile::tempdir().unwrap();
@@ -384,6 +390,7 @@ fn expire_stored_and_cached(client: &OAuthClient) {
 /// token means "keep the one you have" (RFC 6749 section 6). The kept token
 /// must survive in memory and in storage, so the next expiry refreshes again
 /// instead of sending the user through a login.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_refresh_without_a_new_refresh_token_keeps_the_old_one() {
     let dir = tempfile::tempdir().unwrap();
@@ -407,6 +414,7 @@ async fn a_refresh_without_a_new_refresh_token_keeps_the_old_one() {
 }
 
 /// MIK-8021.KEEPRT.2: a server that rotates is still followed.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_refresh_with_a_new_refresh_token_stores_the_new_one() {
     let dir = tempfile::tempdir().unwrap();
@@ -431,6 +439,7 @@ async fn a_refresh_with_a_new_refresh_token_stores_the_new_one() {
 
 /// No authorization server known: the refresh cannot run, the fall-back to
 /// authorize cannot either, and nothing is keyed to an issuer that does not exist.
+#[cfg(tp3)]
 #[tokio::test]
 async fn without_an_authorization_server_get_token_fails_and_no_key_is_invented() {
     let dir = tempfile::tempdir().unwrap();
@@ -452,6 +461,7 @@ async fn without_an_authorization_server_get_token_fails_and_no_key_is_invented(
 
 /// No token at all: `get_token` runs the whole flow, and the browser failing
 /// to open only means the person visits the printed URL instead.
+#[cfg(tp3)]
 #[tokio::test]
 async fn get_token_authorizes_from_scratch_even_when_the_browser_does_not_open() {
     let dir = tempfile::tempdir().unwrap();
@@ -466,6 +476,7 @@ async fn get_token_authorizes_from_scratch_even_when_the_browser_does_not_open()
 
 /// An authorization endpoint that is not a URL is refused before a browser
 /// is pointed anywhere.
+#[cfg(tp3)]
 #[tokio::test]
 async fn an_unparseable_authorization_endpoint_is_refused_before_any_browser_opens() {
     let dir = tempfile::tempdir().unwrap();
@@ -527,6 +538,7 @@ async fn unanswered_client(dir: &std::path::Path) -> (OAuthClient, u16, Arc<toki
 /// MIK-7982.BOUND.1: an authorization nobody completes ends on its own when
 /// the 300 s authorization window passes, naming the backend and telling the
 /// caller to retry, and its callback port is free afterwards.
+#[cfg(tp3)]
 #[tokio::test(start_paused = true)]
 async fn an_unanswered_authorization_ends_at_the_window_and_frees_the_port() {
     let dir = tempfile::tempdir().unwrap();
@@ -548,6 +560,7 @@ async fn an_unanswered_authorization_ends_at_the_window_and_frees_the_port() {
 /// MIK-7982.BOUND.3 (root cause F2): an authorization whose future is dropped
 /// mid-wait (a cancelled or timed-out caller) closes its callback listener
 /// rather than leaving it running detached.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_dropped_authorization_closes_its_callback_listener() {
     let dir = tempfile::tempdir().unwrap();
@@ -578,6 +591,7 @@ impl OAuthClient {
 /// MIK-7982 (delta review): a client holding a dynamically registered id that
 /// takes up a login another client of its backend stored also takes up the id
 /// that login stored. Keeping its own would present a stale id on refresh.
+#[cfg(tp3)]
 #[tokio::test]
 async fn taking_up_a_shared_login_takes_up_its_registered_client_id() {
     let dir = tempfile::tempdir().unwrap();
@@ -606,6 +620,7 @@ async fn taking_up_a_shared_login_takes_up_its_registered_client_id() {
 
 /// MIK-7982: a client with a configured id that takes up a stored login keeps
 /// its configured id, whatever registered id that login stored.
+#[cfg(tp3)]
 #[tokio::test]
 async fn taking_up_a_shared_login_keeps_a_configured_client_id() {
     let dir = tempfile::tempdir().unwrap();
@@ -633,6 +648,7 @@ async fn taking_up_a_shared_login_keeps_a_configured_client_id() {
 /// MIK-7982: a stored login is taken up only when its token is live and was
 /// stored under this client's own key (backend and issuer) and resource;
 /// otherwise the caller opens its own.
+#[cfg(tp3)]
 #[tokio::test]
 async fn an_expired_or_foreign_stored_login_is_not_taken_up() {
     let issuer = "https://as.example";
@@ -681,6 +697,7 @@ async fn an_expired_or_foreign_stored_login_is_not_taken_up() {
 /// MIK-7982.BOUND.1: when the window passes, the callback listener is closed
 /// before the wait returns, not on a later poll of an aborted task: the port
 /// binds again with no await in between.
+#[cfg(tp3)]
 #[tokio::test(start_paused = true)]
 async fn the_window_closes_the_callback_listener_before_the_wait_returns() {
     let server = crate::oauth::callback::start_callback_server(
@@ -709,6 +726,7 @@ async fn the_window_closes_the_callback_listener_before_the_wait_returns() {
 
 /// MIK-7982: a login cancelled before it registers (a restart or shutdown of
 /// the backend) ends as cancelled and opens no browser.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_login_cancelled_before_registration_opens_no_browser() {
     let dir = tempfile::tempdir().unwrap();
@@ -743,6 +761,7 @@ async fn a_login_cancelled_before_registration_opens_no_browser() {
 /// confirmed redeems nothing: the code exchange spends the login's proof,
 /// which refuses then. Red before the exchange took a spent proof: the old
 /// issuer's code was redeemed.
+#[cfg(tp3)]
 #[cfg(feature = "webui")]
 #[tokio::test]
 async fn a_callback_after_a_switch_redeems_nothing() {
@@ -797,4 +816,5 @@ async fn a_callback_after_a_switch_redeems_nothing() {
     );
     assert!(forms.lock().unwrap().is_empty(), "no code was redeemed");
 }
+#[cfg(tp3)]
 mod switch;

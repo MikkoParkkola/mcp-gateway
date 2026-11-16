@@ -186,6 +186,7 @@ pub(super) fn jwk_for(seed: &[u8; 32], kid: &str) -> String {
     )
 }
 
+#[cfg(tp4)]
 #[test]
 fn a0_fixtures_match_the_committed_bytes() {
     let signer = signer_one();
@@ -232,6 +233,7 @@ fn a0_fixtures_match_the_committed_bytes() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn an_absent_seed_resolves_to_no_signer() {
     assert!(
@@ -247,6 +249,7 @@ fn an_absent_seed_resolves_to_no_signer() {
     assert!(resolved.is_none());
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_blank_seed_resolves_to_no_signer() {
     for (written, blank) in [("", ""), ("\"   \"", "   ")] {
@@ -271,6 +274,7 @@ fn a_blank_seed_resolves_to_no_signer() {
 /// (`Ed25519KeyPair::from_seed_unchecked` converts the slice to `[u8; 32]`),
 /// so this pins the dependency's behaviour, not only two lengths. A 0-byte
 /// seed encodes to an empty value, which resolves to no signer.
+#[cfg(tp4)]
 #[test]
 fn a_short_or_long_seed_is_refused() {
     for seed in [vec![7u8; 1], vec![7u8; 31], vec![7u8; 33], vec![7u8; 64]] {
@@ -302,6 +306,7 @@ fn a_short_or_long_seed_is_refused() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_non_base64_seed_is_refused() {
     let encoded = "!!!not-base64!!!".to_owned();
@@ -313,6 +318,7 @@ fn a_non_base64_seed_is_refused() {
     assert_value_free(&error, encoded.as_bytes());
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_valid_seed_and_kid_resolve() {
     let encoded = seed_b64(&SEED_ONE);
@@ -326,6 +332,7 @@ fn a_valid_seed_and_kid_resolve() {
     assert_eq!(signer.kid(), KID_ONE);
 }
 
+#[cfg(tp4)]
 #[test]
 fn signer_debug_prints_only_the_kid() {
     let rendered = format!("{:?}", signer_one());
@@ -345,6 +352,7 @@ fn signer_debug_prints_only_the_kid() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn the_thumbprint_is_the_rfc7638_hash() {
     let key_pair = Ed25519KeyPair::from_seed_unchecked(&SEED_ONE).expect("seed");
@@ -354,6 +362,7 @@ fn the_thumbprint_is_the_rfc7638_hash() {
     assert_eq!(signer_one().jwk_thumbprint(), expected);
 }
 
+#[cfg(tp4)]
 #[test]
 fn bound_with_the_same_result() {
     let result = result_json();
@@ -365,6 +374,7 @@ fn bound_with_the_same_result() {
     assert_eq!(verified.receipt, sample());
 }
 
+#[cfg(tp4)]
 #[test]
 fn mismatch_with_another_result() {
     let result = result_json();
@@ -377,6 +387,7 @@ fn mismatch_with_another_result() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn bound_receipt_with_an_unhashable_offer_is_unhashable() {
     let result = result_json();
@@ -389,6 +400,7 @@ fn bound_receipt_with_an_unhashable_offer_is_unhashable() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn signature_only_without_a_result() {
     let result = result_json();
@@ -399,6 +411,7 @@ fn signature_only_without_a_result() {
     assert_eq!(verified.kid, KID_ONE);
 }
 
+#[cfg(tp4)]
 #[test]
 fn unbound_when_signed_without_a_result() {
     let prov = signed_prov(None);
@@ -417,6 +430,7 @@ fn unbound_when_signed_without_a_result() {
     assert!(payload["result_sha256"].is_null(), "and its value is null");
 }
 
+#[cfg(tp4)]
 #[test]
 fn unbound_for_an_unsafe_integer() {
     let unhashable = serde_json::json!({"n": 9_007_199_254_740_992u64});
@@ -436,6 +450,7 @@ fn unbound_for_an_unsafe_integer() {
     assert_eq!(without.status, VerifyStatus::Unbound);
 }
 
+#[cfg(tp4)]
 #[test]
 fn bound_for_safe_numbers() {
     for safe in [
@@ -449,6 +464,7 @@ fn bound_for_safe_numbers() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn unbound_for_a_non_object_result() {
     let array = serde_json::json!([1, 2]);
@@ -465,6 +481,7 @@ fn unbound_for_a_non_object_result() {
     assert_eq!(without.status, VerifyStatus::Unbound);
 }
 
+#[cfg(tp4)]
 #[test]
 fn unknown_kid_is_refused() {
     let result = result_json();
@@ -476,6 +493,7 @@ fn unknown_kid_is_refused() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_flipped_signature_byte_is_refused() {
     let result = result_json();
@@ -496,6 +514,7 @@ fn a_flipped_signature_byte_is_refused() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_short_or_padded_signature_is_bad_encoding() {
     let result = result_json();
@@ -518,6 +537,7 @@ fn a_short_or_padded_signature_is_bad_encoding() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn an_edited_outer_receipt_mismatches() {
     let result = result_json();
@@ -530,6 +550,7 @@ fn an_edited_outer_receipt_mismatches() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn an_outer_only_extra_member_mismatches() {
     let result = result_json();
@@ -553,6 +574,7 @@ fn profile_payload(v: u64, alg: &str) -> Vec<u8> {
     serde_json::to_vec(&payload).expect("payload serializes")
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_wrong_version_or_algorithm_is_a_bad_profile() {
     for payload in [profile_payload(2, "EdDSA"), profile_payload(1, "HS256")] {
@@ -565,6 +587,7 @@ fn a_wrong_version_or_algorithm_is_a_bad_profile() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_duplicate_payload_member_is_refused() {
     let clean = serde_json::to_string(&serde_json::json!({
@@ -586,6 +609,7 @@ fn a_duplicate_payload_member_is_refused() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_duplicate_member_inside_receipt_is_refused() {
     let receipt_text = serde_json::to_string(&receipt_json()).expect("receipt serializes");
@@ -602,6 +626,7 @@ fn a_duplicate_member_inside_receipt_is_refused() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_signature_without_the_domain_tag_is_bad_signature() {
     let payload = serde_json::to_vec(&serde_json::json!({
@@ -626,6 +651,7 @@ fn a_signature_without_the_domain_tag_is_bad_signature() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_non_canonical_payload_verifies_verbatim() {
     let text = format!(
@@ -640,6 +666,7 @@ fn a_non_canonical_payload_verifies_verbatim() {
     assert_eq!(payload_of(&prov), text.as_bytes());
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_plain_signature_has_no_public_part() {
     let plain = serde_json::to_value(sample().sign(&hmac())).expect("signed serializes");
@@ -652,11 +679,13 @@ fn a_plain_signature_has_no_public_part() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_single_jwk_is_a_trust_set() {
     assert!(TrustSet::from_json(&jwk_for(&SEED_ONE, KID_ONE)).is_ok());
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_jwks_selects_by_kid() {
     let text = format!(
@@ -676,6 +705,7 @@ fn a_jwks_selects_by_kid() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_non_edwards_key_is_refused() {
     let x = x_of(&SEED_ONE);
@@ -690,6 +720,7 @@ fn a_non_edwards_key_is_refused() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_short_x_is_refused() {
     let x = URL_SAFE_NO_PAD.encode([0u8; 31]);
@@ -701,6 +732,7 @@ fn a_short_x_is_refused() {
     ));
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_private_member_is_refused() {
     let text = format!(
@@ -713,6 +745,7 @@ fn a_private_member_is_refused() {
     ));
 }
 
+#[cfg(tp4)]
 #[test]
 fn unsigned_stamping_is_byte_identical_and_field_pinned() {
     const RECEIPT: &str = concat!(
@@ -738,6 +771,7 @@ fn unsigned_stamping_is_byte_identical_and_field_pinned() {
     assert_eq!(text, expected);
 }
 
+#[cfg(tp4)]
 #[test]
 fn dual_signing_keeps_the_hmac_seal() {
     let signed = sample().sign(&hmac());
@@ -761,6 +795,7 @@ fn dual_signing_keeps_the_hmac_seal() {
     assert!(validator.verify_result_provenance(&back));
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_wide_receipt_with_u64_max_row_count_verifies() {
     let stamped = wide_sample().sign(&hmac());

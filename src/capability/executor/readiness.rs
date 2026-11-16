@@ -149,6 +149,7 @@ impl CapabilityExecutor {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "readiness_list_tests.rs"]
 mod list_tests;

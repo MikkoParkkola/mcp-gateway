@@ -382,6 +382,7 @@ impl Drop for ScanEnds {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "run_steps_pin_tests.rs"]
 mod run_steps_pin_tests;

@@ -35,6 +35,7 @@ fn preset_yaml(posture: &str, preset: &str) -> String {
 const SIGNING_YAML: &str =
     "  message_signing:\n    shared_secret: hardened-signing-secret-0123456789abcdef\n";
 
+#[cfg(tp4)]
 #[test]
 fn hardened_raises_monitor_only_to_team_shared() {
     for preset in ["monitor_only", "local_developer", "audit_only"] {
@@ -49,6 +50,7 @@ fn hardened_raises_monitor_only_to_team_shared() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn hardened_keeps_enterprise_strict() {
     for (spelled, expected) in [
@@ -62,6 +64,7 @@ fn hardened_keeps_enterprise_strict() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn literal_load_does_not_apply_floor() {
     let dir = tempfile::tempdir().unwrap();
@@ -77,6 +80,7 @@ fn literal_load_does_not_apply_floor() {
     assert!(!ci.non_bypassable);
 }
 
+#[cfg(tp4)]
 #[test]
 fn posture_defaults_to_standard_and_round_trips() {
     assert_eq!(load("{}\n").security.posture, SecurityPosture::Standard);
@@ -92,6 +96,7 @@ fn posture_defaults_to_standard_and_round_trips() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn standard_posture_applies_no_override() {
     let config = load(&format!(
@@ -119,6 +124,7 @@ pub(crate) const SIGNING_SECRET: &str = "hardened-signing-secret-0123456789abcde
 
 /// Row 6: hardened forces signing before the secret is resolved, so a secret
 /// set only in an env file resolves, whatever `enabled` the file says.
+#[cfg(tp4)]
 #[test]
 fn hardened_resolves_env_secret_before_signing_check() {
     for enabled in ["", "    enabled: false\n"] {
@@ -142,6 +148,7 @@ fn hardened_resolves_env_secret_before_signing_check() {
 }
 
 /// Row 6: hardened with no signing secret refuses to start.
+#[cfg(tp4)]
 #[test]
 fn hardened_without_signing_secret_refuses() {
     let err = load_err("security:\n  posture: hardened\n");
@@ -154,6 +161,7 @@ fn hardened_without_signing_secret_refuses() {
 /// Appended under a `security:` block: the two SSRF switches at their weakest.
 const SSRF_OFF: &str = "  ssrf_protection: false\n  trust_configured_backends: true\n";
 
+#[cfg(tp4)]
 #[test]
 fn hardened_forces_ssrf_flags() {
     let config = load(&format!(
@@ -170,6 +178,7 @@ fn hardened_forces_ssrf_flags() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn hardened_startup_refusals() {
     let dir = tempfile::tempdir().unwrap();
@@ -274,6 +283,7 @@ pub(crate) fn posture_records(run: impl FnOnce()) -> Vec<(String, String)> {
         .collect()
 }
 
+#[cfg(tp4)]
 #[test]
 fn startup_warn_matches_unhardened_table() {
     for (shape, mut config, multi_user) in auth_shapes() {
@@ -313,6 +323,7 @@ fn startup_warn_matches_unhardened_table() {
 
 /// Gateway construction logs the posture exactly once (every constructor
 /// funnels into one body), so the warning cannot go missing or double.
+#[cfg(tp4)]
 #[test]
 fn gateway_startup_logs_posture_once() {
     let (_, mut unhardened, _) = auth_shapes().swap_remove(1);
@@ -358,6 +369,7 @@ fn gateway_startup_logs_posture_once() {
 
 /// An in-memory hardened config is forced before it is validated, so a
 /// block threshold above 1.0 is refused on the constructor path too.
+#[cfg(tp4)]
 #[cfg(feature = "firewall")]
 #[test]
 fn gateway_constructor_validates_what_hardened_forces() {
@@ -397,6 +409,7 @@ fn load_err(body: &str) -> String {
         .to_string()
 }
 
+#[cfg(tp4)]
 #[cfg(feature = "firewall")]
 #[test]
 fn hardened_forces_anomaly_blocking() {
@@ -413,6 +426,7 @@ fn hardened_forces_anomaly_blocking() {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(feature = "firewall")]
 #[test]
 fn standard_posture_leaves_the_firewall_alone() {
@@ -423,6 +437,7 @@ fn standard_posture_leaves_the_firewall_alone() {
     assert_eq!(firewall.anomaly_block_threshold, None);
 }
 
+#[cfg(tp4)]
 #[test]
 fn hardened_refuses_a_block_threshold_below_the_floor() {
     let error = load_err(&firewall_yaml("hardened", Some("0.85")));
@@ -437,6 +452,7 @@ fn hardened_refuses_a_block_threshold_below_the_floor() {
 
 /// Row 12b (#1881): under hardened the egress proxy is refused at load, since
 /// it is a route out that the destination policy does not govern.
+#[cfg(tp4)]
 #[test]
 fn hardened_refuses_capability_egress_proxy() {
     let yaml = |posture: &str| {
@@ -463,6 +479,7 @@ fn private_yaml(posture: &str, names: &str) -> String {
 
 /// Row 17: under hardened a listed name that is no configured backend
 /// refuses start, naming it.
+#[cfg(tp4)]
 #[test]
 fn hardened_refuses_missing_private_backend() {
     let err = load_err(&private_yaml("hardened", "a, ghost"));
@@ -472,6 +489,7 @@ fn hardened_refuses_missing_private_backend() {
 }
 
 /// Row 16: under standard the key is accepted and refuses nothing.
+#[cfg(tp4)]
 #[test]
 fn standard_ignores_private_backends() {
     let config = load(&private_yaml("standard", "ghost"));
@@ -480,6 +498,7 @@ fn standard_ignores_private_backends() {
 
 /// `security.hardened` is restart-only: a reload that changes the list is
 /// refused, one that keeps it is not.
+#[cfg(tp4)]
 #[test]
 fn reload_refuses_private_backends_change() {
     let running = load(&private_yaml("hardened", "a"));

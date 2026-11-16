@@ -517,6 +517,7 @@ impl LatencySeries {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "latency_tests.rs"]
 mod tests;

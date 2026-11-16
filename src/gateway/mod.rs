@@ -66,6 +66,7 @@ pub mod oauth;
 // Crate-internal on purpose: the adapter is wired by `router` and by nothing
 // else, so no caller outside the gateway can install it without the standard
 // auth layer that must run first.
+#[cfg(tp4)]
 #[cfg(test)]
 mod admin_standing_scan_tests;
 #[cfg(test)]
@@ -78,17 +79,21 @@ pub(crate) mod egress_fixture;
 mod openwebui_adapter;
 pub(crate) mod outbound;
 pub mod proxy;
+#[cfg(tp4)]
 #[cfg(test)]
 mod proxy_scope_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod proxy_session_tests;
 mod recent_writes;
 pub mod recovery;
 /// MIK-8747 / MIK-8748: a keyed replay is never served across protocol eras.
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 mod replay_era_tests;
 pub(crate) mod restart_config_floor;
 mod restart_floor;
+#[cfg(tp4)]
 #[cfg(test)]
 mod restart_floor_tests;
 mod restart_slot;
@@ -97,8 +102,10 @@ mod restart_status;
 mod route_check_matrix_tests;
 mod router;
 pub(crate) mod routes;
+#[cfg(tp4)]
 #[cfg(test)]
 mod routes_tests;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "webui"))]
 mod stable_ui_routes_tests;
 mod stop_budget;

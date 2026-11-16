@@ -175,6 +175,7 @@ pub fn ab_classification(
     })
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

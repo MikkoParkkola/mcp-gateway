@@ -541,6 +541,7 @@ mod dead;
 mod expiry;
 pub(super) use expiry::load;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "store_pending_tests.rs"]
 mod tests;

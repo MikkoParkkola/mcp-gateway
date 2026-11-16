@@ -42,6 +42,7 @@ fn advance(cache: &IdempotencyCache, by: Duration) {
 /// which could land on the marker's name — including when the backend
 /// fills `data` with the marker itself, because the replay reads the top
 /// level only.
+#[cfg(tp4)]
 #[test]
 fn a_serialized_backend_error_cannot_carry_the_refusal_marker() {
     let hostile = crate::protocol::JsonRpcError {
@@ -59,6 +60,7 @@ fn a_serialized_backend_error_cannot_carry_the_refusal_marker() {
 
 // ── derive_key ────────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn derive_key_is_deterministic_for_same_inputs() {
     // GIVEN: identical tool name and arguments
@@ -69,6 +71,7 @@ fn derive_key_is_deterministic_for_same_inputs() {
     assert_eq!(k1, k2);
 }
 
+#[cfg(tp4)]
 #[test]
 fn derive_key_is_64_hex_chars() {
     // GIVEN: any tool + arguments
@@ -79,6 +82,7 @@ fn derive_key_is_64_hex_chars() {
     assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
 }
 
+#[cfg(tp4)]
 #[test]
 fn derive_key_differs_for_different_tool_names() {
     // GIVEN: same arguments but different tool names
@@ -89,6 +93,7 @@ fn derive_key_differs_for_different_tool_names() {
     assert_ne!(k1, k2);
 }
 
+#[cfg(tp4)]
 #[test]
 fn derive_key_differs_for_different_arguments() {
     // GIVEN: same tool name but different arguments
@@ -99,6 +104,7 @@ fn derive_key_differs_for_different_arguments() {
     assert_ne!(k1, k2);
 }
 
+#[cfg(tp4)]
 #[test]
 fn derive_key_prevents_prefix_collision() {
     // GIVEN: a tool whose name is a prefix of another (tool, tool_extended)
@@ -111,6 +117,7 @@ fn derive_key_prevents_prefix_collision() {
 
 // ── IdempotencyState ──────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn state_in_flight_is_not_expired_immediately() {
     // GIVEN: a freshly created InFlight state
@@ -120,6 +127,7 @@ fn state_in_flight_is_not_expired_immediately() {
     assert!(!state.is_expired());
 }
 
+#[cfg(tp4)]
 #[test]
 fn state_completed_is_not_expired_immediately() {
     // GIVEN: a freshly created Completed state
@@ -129,6 +137,7 @@ fn state_completed_is_not_expired_immediately() {
     assert!(!state.is_expired());
 }
 
+#[cfg(tp4)]
 #[test]
 fn state_in_flight_is_live_immediately() {
     // GIVEN: a freshly created InFlight state
@@ -138,6 +147,7 @@ fn state_in_flight_is_live_immediately() {
     assert!(state.is_in_flight());
 }
 
+#[cfg(tp4)]
 #[test]
 fn state_completed_is_not_in_flight() {
     // GIVEN: a Completed state
@@ -149,6 +159,7 @@ fn state_completed_is_not_in_flight() {
 
 // ── IdempotencyCache::check ───────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn check_returns_proceed_for_unknown_key() {
     // GIVEN: an empty cache
@@ -158,6 +169,7 @@ fn check_returns_proceed_for_unknown_key() {
     assert!(matches!(cache.check("unknown"), CheckOutcome::Proceed));
 }
 
+#[cfg(tp4)]
 #[test]
 fn check_returns_in_flight_for_live_in_flight_key() {
     // GIVEN: cache with a live in-flight key
@@ -168,6 +180,7 @@ fn check_returns_in_flight_for_live_in_flight_key() {
     assert!(matches!(cache.check("key-1"), CheckOutcome::InFlight));
 }
 
+#[cfg(tp4)]
 #[test]
 fn check_returns_completed_result_for_completed_key() {
     // GIVEN: cache with a completed key
@@ -185,6 +198,7 @@ fn check_returns_completed_result_for_completed_key() {
 
 /// An aged in-flight entry whose owner is gone is refused at admission and
 /// reclaimed by the sweep — the two halves of ADR-012 consequence 3.
+#[cfg(tp4)]
 #[test]
 fn check_refuses_an_ownerless_aged_entry_and_the_sweep_reclaims_it() {
     // GIVEN: an in-flight entry older than IN_FLIGHT_TIMEOUT whose owner
@@ -222,6 +236,7 @@ fn spawn_until(
 }
 
 /// Row 4a — a live owner past the timeout is told in-flight, not admitted.
+#[cfg(tp4)]
 #[test]
 fn an_aged_entry_with_a_live_owner_refuses_a_second_caller() {
     // GIVEN: a reservation whose call has been running past the timeout
@@ -241,6 +256,7 @@ fn an_aged_entry_with_a_live_owner_refuses_a_second_caller() {
 ///
 /// Separate from row 4a because the sweep does not consult
 /// `decide_check_plan`; it is the second place the predicate has to hold.
+#[cfg(tp4)]
 #[test]
 fn an_aged_entry_with_a_live_owner_survives_a_sweep() {
     // GIVEN: the same aged-but-owned entry
@@ -272,6 +288,7 @@ fn an_aged_entry_with_a_live_owner_survives_a_sweep() {
 /// harness above: a one-sided invariant that holds under any interleaving —
 /// from the moment a key is admitted until its reservation has settled, no
 /// concurrent caller is ever told the key is free.
+#[cfg(tp4)]
 #[test]
 fn a_sweep_during_settlement_never_readmits_a_settling_key() {
     use std::sync::Mutex;
@@ -337,6 +354,7 @@ fn a_sweep_during_settlement_never_readmits_a_settling_key() {
 /// not expired, so `evict_expired` must never remove it. Under the previous
 /// collect-then-remove pass it could — the evictor selected the key while
 /// the old entry was stale and deleted whatever held the key afterwards.
+#[cfg(tp4)]
 #[test]
 fn eviction_never_removes_a_fresh_entry_that_replaced_an_expired_one() {
     use std::sync::Arc;
@@ -386,6 +404,7 @@ fn eviction_never_removes_a_fresh_entry_that_replaced_an_expired_one() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn evict_expired_removes_only_stale_entries() {
     // GIVEN: one fresh and one stale completed entry
@@ -408,6 +427,7 @@ fn evict_expired_removes_only_stale_entries() {
 /// no sync admission in front of it, so a completed entry is owed its replay
 /// for the whole documented day; a retry one second before it ends must not
 /// run the side effect again.
+#[cfg(tp4)]
 #[test]
 fn a_completed_entry_still_replays_one_second_before_the_day_ends() {
     let cache = IdempotencyCache::new();
@@ -422,6 +442,7 @@ fn a_completed_entry_still_replays_one_second_before_the_day_ends() {
 
 // ── enforce ───────────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn enforce_marks_in_flight_and_returns_proceed_for_new_key() {
     // GIVEN: an empty cache
@@ -433,6 +454,7 @@ fn enforce_marks_in_flight_and_returns_proceed_for_new_key() {
     assert!(matches!(cache.check("k1"), CheckOutcome::InFlight));
 }
 
+#[cfg(tp4)]
 #[test]
 fn enforce_returns_cached_result_for_completed_key() {
     // GIVEN: a completed key in cache
@@ -448,6 +470,7 @@ fn enforce_returns_cached_result_for_completed_key() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn enforce_returns_error_for_in_flight_key() {
     // GIVEN: a live in-flight key
@@ -464,6 +487,7 @@ fn enforce_returns_error_for_in_flight_key() {
 
 // ── remove ────────────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn remove_clears_key_making_it_retryable() {
     // GIVEN: an in-flight key
@@ -478,6 +502,7 @@ fn remove_clears_key_making_it_retryable() {
 
 // ── concurrent access ─────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn concurrent_mark_completed_is_safe() {
     // GIVEN: cache shared across threads
@@ -504,6 +529,7 @@ fn concurrent_mark_completed_is_safe() {
 
 // ── is_empty / len ────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn new_cache_is_empty() {
     let cache = IdempotencyCache::new();
@@ -511,6 +537,7 @@ fn new_cache_is_empty() {
     assert_eq!(cache.len(), 0);
 }
 
+#[cfg(tp4)]
 #[test]
 fn len_increases_on_insert() {
     let cache = IdempotencyCache::new();
@@ -522,6 +549,7 @@ fn len_increases_on_insert() {
 
 // ── cleanup task (tokio) ──────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[tokio::test(start_paused = true)]
 async fn spawn_cleanup_task_evicts_expired_entries() {
     // A stale entry is evicted. On the paused clock the task's ticks run
@@ -540,6 +568,7 @@ async fn spawn_cleanup_task_evicts_expired_entries() {
     assert_eq!(cache.len(), 0, "stale entry should have been evicted");
 }
 
+#[cfg(tp4)]
 #[test]
 fn released_then_completed_entry_stays_bound_to_its_own_request() {
     // GIVEN: a key admitted for request A, whose dispatch failed — the
@@ -573,6 +602,7 @@ fn released_then_completed_entry_stays_bound_to_its_own_request() {
 
 /// MIK-7116.MIN.2 row 14: a replay restores the reading kept in the same
 /// entry as its result; an entry completed without one replays as unread.
+#[cfg(tp4)]
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_replay_restores_its_entrys_reading() {

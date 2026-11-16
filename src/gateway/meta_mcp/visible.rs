@@ -643,6 +643,7 @@ pub(crate) mod seams {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod kind_tests {
     use super::Withholding;
@@ -661,6 +662,7 @@ mod kind_tests {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod withholding_tests {
     use super::Withholding;

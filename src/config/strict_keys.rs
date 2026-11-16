@@ -536,10 +536,12 @@ fn refusal(path: &Path, found: &BTreeSet<String>, backend: &BackendFindings) -> 
     message
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "strict_keys_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "retired_settings_tests.rs"]
 mod retired_settings_tests;

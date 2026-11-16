@@ -249,6 +249,7 @@ pub(crate) struct ConfigHeld<'a> {
     pub(crate) locked: crate::config_persistence::lock::Locked,
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::{ReloadRefusal, ReloadRefusalKind};

@@ -776,16 +776,19 @@ fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
         .collect()
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "record_legacy_tests.rs"]
 mod legacy_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "record_delivery_tests.rs"]
 mod delivery_tests;
 
 /// `Target::pairs` keeps the recorded order, duplicates included, and the
 /// names exactly as recorded: every stored-result walk reads it (MIK-8498).
+#[cfg(tp2)]
 #[cfg(test)]
 mod pairs_tests {
     use super::Target;

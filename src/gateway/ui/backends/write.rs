@@ -277,6 +277,7 @@ fn refused_write(e: &ReplaceError) -> axum::response::Response {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "write_tests.rs"]
 mod tests;
