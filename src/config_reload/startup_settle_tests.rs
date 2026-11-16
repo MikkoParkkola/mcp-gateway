@@ -77,6 +77,8 @@ fn tree(dir: &Path) -> Vec<(OsString, Snap)> {
     found
 }
 
+// Only the unlocked recheck row lists names, and it needs an unwritable directory.
+#[cfg(unix)]
 fn names(dir: &Path) -> Vec<OsString> {
     tree(dir).into_iter().map(|(name, _)| name).collect()
 }
@@ -363,6 +365,35 @@ async fn prepare_locks_a_writable_config() {
         outcome,
         StartError::Busy,
     );
+}
+
+/// GATE.4: with nothing pending under the lock, finishing accepts and releases the lock.
+#[tokio::test]
+async fn finish_accepts_a_clean_start() {
+    let row = "finish_accepts_a_clean_start";
+    let (dir, config) = fresh_config();
+    let before = read_bytes(&config);
+    let session = match prepare_start(&config).await {
+        Ok(session) => session,
+        Err(error) => panic!("{row}: Locked, got {error:?}"),
+    };
+    assert_locked_no_journal(row, &session);
+    assert_eq!(finish_start(session, None).await, Ok(()), "{row}: accepts");
+    assert_eq!(
+        read_bytes(&config),
+        before,
+        "{row}: the config is unchanged"
+    );
+    for name in ["gateway.yaml.abandoned", ".gateway.yaml.replace-journal"] {
+        assert_eq!(
+            snap(&dir.path().join(name)),
+            Snap::Absent,
+            "{row}: {name} is not created"
+        );
+    }
+    // Released: a fresh start takes the lock at once.
+    let again = prepare_start_within(&config, Duration::ZERO).await;
+    assert!(again.is_ok(), "{row}: the lock is free after finishing");
 }
 
 /// GATE.2: a held lock past a zero bound is Busy and leaves the files unchanged.

@@ -225,7 +225,9 @@ impl Pause {
         state.0
     }
 
-    /// Entered and not yet left: the parked worker is still inside the pause.
+    /// Entered and not yet left: the parked worker is still inside the pause. Only the startup
+    /// gate's worker rows ask, and they are Unix only (their module's handover fixtures are).
+    #[cfg(unix)]
     pub(super) fn parked(&self) -> bool {
         let state = self.state.lock().expect("pause");
         state.0 && !state.2
