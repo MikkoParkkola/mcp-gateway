@@ -7,7 +7,7 @@
 //! access table (which the router agreement test keeps equal to the mounted
 //! routes), clap's command tree, and the CLI's own source.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use clap::CommandFactory;
 
@@ -329,42 +329,57 @@ const CLI_COMMANDS: &[CliCommand] = &[
 ];
 
 /// One call in the CLI's production source of a shared config writer: its
-/// file, the fn it sits in, and its class.
+/// file, the fn it sits in, which writer it calls, and its class. A fn that
+/// calls a writer twice is listed twice.
 struct WriteSite {
     file: &'static str,
     func: &'static str,
+    writer: &'static str,
     class: Class,
 }
 
-const fn site(file: &'static str, func: &'static str, class: Class) -> WriteSite {
-    WriteSite { file, func, class }
+const fn site(
+    file: &'static str,
+    func: &'static str,
+    writer: &'static str,
+    class: Class,
+) -> WriteSite {
+    WriteSite {
+        file,
+        func,
+        writer,
+        class,
+    }
 }
+
+const SPLICE: &str = "config_write::write";
+const REWRITE: &str = "rewrite_url_aliases_in";
+const ATOMIC: &str = "config_persistence::write_atomic";
+const ATOMIC_TEXT: &str = "config_persistence::write_text_atomic";
+const BACKUP: &str = "config_persistence::copy_keeping_access";
 
 /// The shared writers a CLI command persists config through: the config
 /// writer's in-place splice and alias rewrite, and the persistence layer's
-/// atomic writes and backup copy. `src/commands/config_write.rs` is the
-/// writer itself and is not scanned.
-const WRITERS: [&str; 5] = [
-    "config_write::write(",
-    "rewrite_url_aliases_in(",
-    "config_persistence::write_atomic(",
-    "config_persistence::write_text_atomic(",
-    "config_persistence::copy_keeping_access(",
-];
+/// atomic writes and backup copy, each found by its call (`name(`).
+/// `src/commands/config_write.rs` is the writer itself and is not scanned;
+/// [`no_import_hides_a_config_writer`] keeps every call findable this way.
+const WRITERS: [&str; 5] = [SPLICE, REWRITE, ATOMIC, ATOMIC_TEXT, BACKUP];
 
 const CLIENT_CONFIG: &str = "an AI client's own config file on this host";
 const UPGRADE: &str = "migrates local config files";
 
-/// Every call site of a [`WRITERS`] entry under src/commands and src/cli.
+/// Every call of a [`WRITERS`] entry under src/commands and src/cli.
 const CONFIG_WRITES: &[WriteSite] = &[
     site(
         "src/cli/entry.rs",
         "write_discovered_to_config",
+        SPLICE,
         PartB(1, "adds discovered servers to the config"),
     ),
     site(
         "src/commands/add_remove.rs",
         "run_add_command",
+        SPLICE,
         Remote {
             method: "POST",
             path: routes::UI_BACKENDS,
@@ -374,6 +389,7 @@ const CONFIG_WRITES: &[WriteSite] = &[
     site(
         "src/commands/add_remove.rs",
         "run_remove_command",
+        SPLICE,
         Remote {
             method: "DELETE",
             path: routes::UI_BACKEND,
@@ -383,37 +399,49 @@ const CONFIG_WRITES: &[WriteSite] = &[
     site(
         "src/commands/config_export/mod.rs",
         "create_backup",
+        BACKUP,
         LocalOnly(CLIENT_CONFIG),
     ),
     site(
         "src/commands/config_export/mod.rs",
         "merge_into_config",
+        ATOMIC_TEXT,
         LocalOnly(CLIENT_CONFIG),
     ),
     site(
         "src/commands/config_export/mod.rs",
         "rollback_client_config",
+        ATOMIC_TEXT,
         LocalOnly(CLIENT_CONFIG),
     ),
     site(
         "src/commands/protocol_import.rs",
         "write_atomic",
+        ATOMIC,
         PartB(4, "writes protocol-import drafts"),
     ),
     site(
         "src/commands/setup.rs",
         "import_servers",
+        SPLICE,
         LocalOnly("first-time setup on this host"),
     ),
     site(
         "src/commands/upgrade.rs",
         "backup_config",
+        BACKUP,
         PartB(8, UPGRADE),
     ),
-    site("src/commands/upgrade.rs", "write_stamp", PartB(8, UPGRADE)),
+    site(
+        "src/commands/upgrade.rs",
+        "write_stamp",
+        ATOMIC,
+        PartB(8, UPGRADE),
+    ),
     site(
         "src/commands/upgrade_url_keys.rs",
         "run_upgrade_with_config",
+        REWRITE,
         PartB(8, UPGRADE),
     ),
 ];
@@ -489,27 +517,38 @@ fn production_files(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec
     }
 }
 
-/// Every call of a [`WRITERS`] entry in the CLI's production code, as
-/// (file, enclosing fn); comments, strings and test-only items are blanked.
-fn write_sites() -> BTreeSet<(String, String)> {
+/// The CLI's production sources under src/commands and src/cli, as (file,
+/// code): comments, strings and test-only items blanked.
+fn production_sources() -> Vec<(String, String)> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     for dir in ["src/commands", "src/cli"] {
         production_files(root, &root.join(dir), &mut files);
     }
+    files
+        .into_iter()
+        .map(|file| {
+            let text = std::fs::read_to_string(root.join(&file)).expect("read a source file");
+            let code =
+                crate::test_source_text::sanitize(&crate::test_source_text::production_text(&text));
+            (file, code)
+        })
+        .collect()
+}
+
+/// How many calls of each [`WRITERS`] entry each (file, enclosing fn) makes in
+/// the CLI's production code, keyed `file fn writer`.
+fn write_sites() -> BTreeMap<String, usize> {
     let fn_name = regex::Regex::new(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)").expect("pattern");
-    let mut sites = BTreeSet::new();
-    for file in files {
-        let text = std::fs::read_to_string(root.join(&file)).expect("read a source file");
-        let code =
-            crate::test_source_text::sanitize(&crate::test_source_text::production_text(&text));
-        for needle in WRITERS {
-            for (at, _) in code.match_indices(needle) {
+    let mut sites = BTreeMap::new();
+    for (file, code) in production_sources() {
+        for writer in WRITERS {
+            for (at, _) in code.match_indices(&format!("{writer}(")) {
                 let func = fn_name
                     .captures_iter(&code[..at])
                     .last()
                     .map_or_else(|| "?".to_owned(), |c| c[1].to_owned());
-                sites.insert((file.clone(), func));
+                *sites.entry(format!("{file} {func} {writer}")).or_insert(0) += 1;
             }
         }
     }
@@ -590,31 +629,73 @@ fn every_cli_subcommand_is_classified() {
 }
 
 /// Every call of a shared config writer in the CLI's production code is
-/// classified by file and fn, and no entry names a call that is gone.
+/// classified, counted per file, fn and writer: a call added to or removed
+/// from a listed fn fails, and so does an entry for a call that is gone.
 #[test]
 fn every_config_write_site_is_classified() {
-    let found: BTreeSet<String> = write_sites()
-        .into_iter()
-        .map(|(file, func)| format!("{file} {func}"))
-        .collect();
+    let found = write_sites();
     assert!(
         found
-            .iter()
+            .keys()
             .any(|s| s.starts_with("src/commands/add_remove.rs ")),
         "premise: the scan sees the add command's write, found {found:?}"
     );
-    let mut table = BTreeSet::new();
+    let mut table: BTreeMap<String, usize> = BTreeMap::new();
     for s in CONFIG_WRITES {
-        let key = format!("{} {}", s.file, s.func);
-        assert!(table.insert(key.clone()), "listed twice: {key}");
+        *table
+            .entry(format!("{} {} {}", s.file, s.func, s.writer))
+            .or_insert(0) += 1;
     }
-    let diff = difference(
-        &found,
-        &table,
-        "unclassified write sites",
-        "entries with no write",
+    let keys: BTreeSet<&String> = found.keys().chain(table.keys()).collect();
+    let disagree: Vec<String> = keys
+        .into_iter()
+        .filter_map(|key| {
+            let in_source = found.get(key).copied().unwrap_or(0);
+            let in_table = table.get(key).copied().unwrap_or(0);
+            (in_source != in_table)
+                .then(|| format!("{key}: {in_source} in the source, {in_table} in the table"))
+        })
+        .collect();
+    assert!(
+        disagree.is_empty(),
+        "write sites disagree:\n{}",
+        disagree.join("\n")
     );
-    assert!(diff.is_empty(), "{diff}");
+}
+
+/// No import renames a config writer or its module, or brings `write` or a
+/// persistence writer in by its bare name, so every call keeps the name
+/// [`write_sites`] looks for (the alias rewrite's name is unique already).
+#[test]
+fn no_import_hides_a_config_writer() {
+    let hides = regex::Regex::new(concat!(
+        r"(?s)\buse\s[^;]*?(?:",
+        r"config_write\s+as\b|config_persistence\s+as\b|rewrite_url_aliases_in\s+as\b",
+        r"|config_write::write\b|config_write::\{[^}]*\bwrite\b[^}]*\}",
+        r"|config_persistence::(?:write_atomic|write_text_atomic|copy_keeping_access)\b",
+        r"|config_persistence::\{[^}]*\b(?:write_atomic|write_text_atomic|copy_keeping_access)\b[^}]*\}",
+        r")[^;]*;",
+    ))
+    .expect("pattern");
+    let sources = production_sources();
+    assert!(
+        sources.len() >= 50,
+        "premise: the CLI's sources are scanned, saw {}",
+        sources.len()
+    );
+    let found: Vec<String> = sources
+        .iter()
+        .flat_map(|(file, code)| {
+            hides.find_iter(code).map(move |m| {
+                let text: Vec<&str> = m.as_str().split_whitespace().collect();
+                format!("{file}: {}", text.join(" "))
+            })
+        })
+        .collect();
+    assert!(
+        found.is_empty(),
+        "imports that hide a config writer from the scan: {found:?}"
+    );
 }
 
 /// Every class that claims a remote form names a change in [`UI_CHANGES`].

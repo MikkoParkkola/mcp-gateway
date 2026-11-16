@@ -12,7 +12,7 @@ use mcp_gateway::cli::{Cli, Command};
 use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
 
-use super::api::{ApiRequest, run_api_with};
+use super::api::{ApiExit, ApiRequest, run_api_with};
 use super::dashboard_link::{AdminCallError, AdminResponse, LinkTls, TOKEN_ENV};
 use crate::gateway::ui::cli_parity_tests::{CliForm, UI_CHANGES, filled};
 
@@ -28,7 +28,7 @@ async fn each_ui_change_cli_form_sends_that_method_and_path() {
             panic!("{form}: parses as another command");
         };
         let sent = Mutex::new(Vec::new());
-        let _ = run_api_with(
+        let outcome = run_api_with(
             &args,
             "http://127.0.0.1:9",
             &LinkTls::default(),
@@ -52,6 +52,11 @@ async fn each_ui_change_cli_form_sends_that_method_and_path() {
             sent,
             [(change.method.to_owned(), path)],
             "{form}: must send that method and path once"
+        );
+        assert_eq!(
+            outcome.exit,
+            ApiExit::Ok,
+            "{form}: a 204 answer must exit 0"
         );
         checked += 1;
     }
