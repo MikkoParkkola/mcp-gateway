@@ -92,7 +92,7 @@ impl EventsHub {
     /// Fan one occurrence out to every matching subscription.
     pub(super) async fn fan_out(self: &Arc<Self>, services: &Services, event: &SourceEvent) {
         // Only the gateway signs an ended notice.
-        if event.name == super::outbox::ENDED_NAME {
+        if mutant!("m16", false, event.name == super::outbox::ENDED_NAME) {
             return;
         }
         let Some(source) = self.source(event.kind) else {
