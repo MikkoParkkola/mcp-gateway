@@ -126,6 +126,7 @@ pub(super) fn queued_stamped(
         attribution_keys: Vec::new(),
         firewall: None,
         observed: None,
+        ended_incarnation: None,
     };
     edit(&mut sub, &mut record);
     let id = sub.id.clone();
@@ -176,6 +177,7 @@ pub(super) fn queued_event(hub: &EventsHub, event_id: &str) {
         attribution_keys: Vec::new(),
         firewall: None,
         observed: None,
+        ended_incarnation: None,
     };
     let caps = OutboxCaps {
         global: 10,
