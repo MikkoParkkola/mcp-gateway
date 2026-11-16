@@ -258,7 +258,7 @@ fn printed_nowhere(command: &str, token: &str, out: &super::Printed) {
     );
 }
 
-/// MIK-9679.CLIUX.14: a token equal to the status text is never printed.
+/// A token equal to the status text is never printed.
 #[tokio::test]
 async fn a_token_equal_to_the_status_text_is_never_printed() {
     for (token, status, body) in [
@@ -281,7 +281,7 @@ async fn a_token_equal_to_the_status_text_is_never_printed() {
     }
 }
 
-/// MIK-9679.CLIUX.26 (register row 1185): a token echoed in any of the
+/// A token echoed in any of the
 /// gateway's reason shapes is never printed; the status still is.
 #[tokio::test]
 async fn a_token_echoed_in_the_error_reason_is_never_printed() {
@@ -301,7 +301,7 @@ async fn a_token_echoed_in_the_error_reason_is_never_printed() {
     }
 }
 
-/// MIK-9679.CLIUX.15: a token in the success answer, in a value, a key or the
+/// A token in the success answer, in a value, a key or the
 /// link, is never printed; the rest of the answer is.
 #[tokio::test]
 async fn a_token_in_the_success_answer_is_never_printed() {
@@ -326,7 +326,7 @@ async fn a_token_in_the_success_answer_is_never_printed() {
     assert_eq!(printed["items"][0]["id"], "d1");
 }
 
-/// MIK-9679.CLIUX.15: an answer whose redaction would merge two entries is
+/// An answer whose redaction would merge two entries is
 /// refused, not printed short.
 #[tokio::test]
 async fn an_answer_that_loses_an_entry_to_redaction_is_refused() {
@@ -346,7 +346,7 @@ async fn an_answer_that_loses_an_entry_to_redaction_is_refused() {
     }
 }
 
-/// MIK-9679.CLIUX.15: the stdout backstop and the whole-stderr gate. A token
+/// The stdout backstop and the whole-stderr gate. A token
 /// equal to JSON syntax, which the JSON redactor cannot mask, is refused; a
 /// token equal to the note or the error prefix is masked there.
 #[tokio::test]
@@ -386,7 +386,7 @@ fn dead_letters(
     }
 }
 
-/// MIK-9679.CLIUX.14: a config error that quotes the token is gated once a
+/// A config error that quotes the token is gated once a
 /// token is set; it still comes before the token error.
 #[tokio::test]
 async fn a_config_error_quoting_the_token_is_never_printed() {
@@ -434,7 +434,7 @@ async fn a_config_error_quoting_the_token_is_never_printed() {
     );
 }
 
-/// MIK-9679.CLIUX.14: a usage error, a single character in the redaction
+/// A usage error, a single character in the redaction
 /// marker, and a token re-formed at a marker's edge are never printed.
 #[tokio::test]
 async fn usage_and_marker_edge_tokens_are_never_printed() {
@@ -455,7 +455,7 @@ async fn usage_and_marker_edge_tokens_are_never_printed() {
     }
 }
 
-/// MIK-9679.CLIUX.14 and CLIUX.26: `admin_call` itself returns its errors
+/// `admin_call` itself returns its errors
 /// redacted, status text included, for any caller that prints them.
 #[tokio::test]
 async fn admin_call_errors_never_hold_the_token() {
