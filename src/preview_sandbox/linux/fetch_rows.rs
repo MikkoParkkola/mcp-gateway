@@ -214,6 +214,12 @@ pub(super) async fn preview(
     Ok(out)
 }
 
+/// Whether `refusal` is the fetch refused at `step`; the launcher appends how
+/// long into the fetch step it came, which the rows do not pin.
+pub(super) fn at_step(refusal: &Refusal, step: &str) -> bool {
+    matches!(refusal, Refusal::Step(text) if text == step || text.starts_with(&format!("{step} (")))
+}
+
 pub(super) fn lines(out: &str) -> Vec<&str> {
     out.lines().map(str::trim_end).collect()
 }
@@ -278,9 +284,8 @@ async fn l4a_a_git_dependency_refuses_the_fetch() {
     };
     let refusal = ran.expect_err("a git dependency was installed");
     // npm fails the git edge itself, or the lock check refuses it.
-    let at = |step: &str| refusal == Refusal::Step(step.into());
     assert!(
-        at("the fetch's npm install") || at("the fetch's lock check"),
+        at_step(&refusal, "the fetch's npm install") || at_step(&refusal, "the fetch's lock check"),
         "{refusal:?}"
     );
 }
@@ -672,7 +677,8 @@ async fn rf6_a_failed_npm_install_never_reports_started() {
     let Some(ran) = npx("mcp-missing", &[MARKER], Vec::new(), Bundle::Registry).await else {
         return;
     };
-    assert_eq!(ran, Err(Refusal::Step("the fetch's npm install".into())));
+    let refusal = ran.expect_err("a missing package started");
+    assert!(at_step(&refusal, "the fetch's npm install"), "{refusal:?}");
     let ended = async {
         while !marked(MARKER).is_empty() {
             tokio::time::sleep(Duration::from_millis(100)).await;

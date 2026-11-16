@@ -11,7 +11,7 @@ use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::fetch_rows::{GUARD, gateway_bin, lines, preview, sandbox_runs};
+use super::fetch_rows::{GUARD, at_step, gateway_bin, lines, preview, sandbox_runs};
 use crate::preview_sandbox::{Refusal, Target};
 
 /// The lock the shim's first step writes: one registry tarball.
@@ -200,12 +200,15 @@ async fn l_env_each_npm_step_sees_exactly_the_fetch_environment() {
             .strip_prefix("http://x:")
             .and_then(|rest| rest.split_once("@127.0.0.1:"))
             .expect("the proxy URL's form");
-        let bin = shim.bin.display().to_string();
-        let mut want = super::fetch_step::npm_env(
-            credential,
-            port.parse().expect("port"),
-            &format!("{bin}:{bin}"),
+        // node's directory, then the directory npm's resolved CLI is in.
+        let tree = shim.bin.parent().expect("tree");
+        let path = format!(
+            "{}:{}",
+            shim.bin.display(),
+            tree.join("lib/node_modules/npm/bin").display()
         );
+        let mut want =
+            super::fetch_step::npm_env(credential, port.parse().expect("port"), &path);
         want.sort();
         assert_eq!(seen, want, "{step}: {out}");
     }
@@ -236,7 +239,9 @@ fi"#;
         .into_iter()
         .skip_while(|l| !l.starts_with("bin-ran"))
         .collect();
-    assert_eq!(tail, ["bin-ran", "escapee-gone", "other 1"], "{out}");
+    // PID 1 may be hidden from the run; nothing else may be there.
+    assert_eq!(tail.get(..2), Some(&["bin-ran", "escapee-gone"][..]), "{out}");
+    assert!(tail[2..].iter().all(|l| *l == "other 1"), "{out}");
 }
 
 /// L-deadline2: both npm steps take just under the fetch's deadline, so
@@ -253,8 +258,10 @@ async fn l_deadline2_the_two_npm_steps_share_one_deadline() {
         return;
     };
     let refusal = ran.expect_err("two steps ran past the one deadline");
-    // The gateway's own deadline ends the session first; either way a refusal.
-    assert!(refusal.to_string().contains("deadline"), "{refusal}");
+    // The gateway's own deadline ends the session first: its wait for
+    // fetch_done times out at the deadline, either way a refusal.
+    let text = refusal.to_string();
+    assert!(text.contains("deadline") || text.contains("never came"), "{text}");
 }
 
 /// The shim itself, outside the sandbox (runs where user namespaces are
@@ -302,7 +309,7 @@ async fn l4b_a_lock_entry_off_the_registry_refuses_before_npm_ci() {
     let refusal = ran.expect_err("a git-resolved lock entry was installed");
     // Only the step crosses the control socket; the reason is check_lock's
     // own pure rows.
-    assert_eq!(refusal, Refusal::Step("the fetch's lock check".into()));
+    assert!(at_step(&refusal, "the fetch's lock check"), "{refusal:?}");
 }
 
 /// L4b, kills q24 (the lock's edge check skipped): a dependency with no entry
@@ -314,7 +321,7 @@ async fn l4b_a_dependency_missing_from_the_lock_refuses() {
         return;
     };
     let refusal = ran.expect_err("a lock missing an entry was installed");
-    assert_eq!(refusal, Refusal::Step("the fetch's lock check".into()));
+    assert!(at_step(&refusal, "the fetch's lock check"), "{refusal:?}");
 }
 
 /// Connect probes in `bash` (`/dev/tcp`), bounded, each printing
@@ -372,7 +379,7 @@ fi"#
 #[tokio::test]
 async fn f2_t2b_the_fetch_child_holds_no_control_connection() {
     let hook = r#"if [ "$step" = install ]; then
-  ls -l /proc/self/fd/ /proc/1/fd/ > "$obs/fds" 2>&1
+  ls -l /proc/$$/fd/ /proc/1/fd/ > "$obs/fds" 2>&1
   echo listed >> "$obs/report"
 fi"#;
     let shim = Shim::new(hook);
