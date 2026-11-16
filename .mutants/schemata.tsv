@@ -1,0 +1,3 @@
+head_sha	7c482698b81c0c8c4fd85748f6fce587314162b6
+#mutant mlock
+mcp_gateway	gateway::meta_mcp::invoke::admin::publish_tests::l2_watcher_and_admin_reloads_are_ordered	src/gateway/meta_mcp/invoke/admin_publish_tests.rs:272
