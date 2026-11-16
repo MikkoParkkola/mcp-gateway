@@ -418,3 +418,46 @@ async fn r7h_a_fetch_start_read_after_the_deadline_gets_no_credential() {
     let _ = BufReader::new(read).read_line(&mut answer).await;
     assert_eq!(answer, "", "no credential after the deadline");
 }
+
+/// R7i, kills "the rest of `fetch_done` outlives the preview's deadline": a
+/// `fetch_done` whose first byte comes just before the deadline and whose rest
+/// never comes ends the session at the deadline, not a frame bound after that
+/// first byte: the helper finds its socket closed a second past the deadline.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn r7i_the_rest_of_fetch_done_ends_at_the_preview_deadline() {
+    let rig = rig().await;
+    let (helper, gateway) = UnixStream::pair().expect("pair");
+    let bounds = ControlBounds {
+        setup: 30 * SEC,
+        frame: 30 * SEC,
+        ..CONTROL_BOUNDS
+    };
+    let soon = tokio::time::Instant::now() + 5 * SEC;
+    let session = serve_session(gateway, &rig.proxy, soon, bounds);
+    let script = async {
+        let (read, mut write) = helper.into_split();
+        let mut read = BufReader::new(read);
+        write
+            .write_all(b"{\"fetch_start\":true}\n")
+            .await
+            .expect("write");
+        let mut issued = String::new();
+        read.read_line(&mut issued).await.expect("credential");
+        tokio::time::sleep_until(soon - Duration::from_millis(100)).await;
+        write.write_all(b"{\"fetch_").await.expect("write");
+        // The write half stays open here: a close would end the session too.
+        let mut rest = String::new();
+        let closed = tokio::time::timeout_at(soon + SEC, read.read_line(&mut rest)).await;
+        (issued, closed.is_ok())
+    };
+    let (served, (issued, closed)) =
+        tokio::time::timeout(GUARD, async { tokio::join!(session, script) })
+            .await
+            .expect("the session did not end within the guard");
+    assert!(served.is_err(), "{served:?}");
+    secret_of(&issued);
+    assert!(
+        closed,
+        "the session was still open a second past the deadline"
+    );
+}
