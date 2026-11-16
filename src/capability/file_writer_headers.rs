@@ -441,4 +441,25 @@ mod tests {
             Err(Refused::LiteralCredential { .. })
         ));
     }
+
+    /// A capability whose owner names no one is refused by the
+    /// header check's own read of the definition, before any header is
+    /// judged; the same file naming its owner gets past that read.
+    #[test]
+    fn an_owner_naming_no_one_is_refused_by_the_header_check() {
+        let owned = |subject: &str| {
+            format!(
+                "name: owned\ndescription: d\nmetadata:\n  exposure: personal\n  identity_owner: {{authority: api_key, subject: \"{subject}\"}}\n\
+                 cache:\n  ttl: 60\n  strategy: memory\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://api.invalid\n      path: /x\n"
+            )
+        };
+        let refused_read = |result: &Result<(), Refused>| {
+            matches!(result, Err(Refused::Invalid { errors, .. })
+                if errors.iter().any(|e| e.message == "Capability YAML could not be parsed safely"))
+        };
+        let nameless = check(&owned(""));
+        assert!(refused_read(&nameless), "{nameless:?}");
+        let named = check(&owned("alice"));
+        assert!(!refused_read(&named), "control: {named:?}");
+    }
 }

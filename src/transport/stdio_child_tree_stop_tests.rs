@@ -6,6 +6,7 @@
 //! waits. Helpers are the parent module's.
 
 use super::*;
+use crate::transport::signal_log;
 
 /// A backend that writes on its way out after stdin closes (a gateway run as
 /// a stdio backend saves its telemetry, costs and audit then) gets to finish
@@ -34,9 +35,13 @@ async fn a_shutdown_write_after_stdin_closes_lands_before_close_returns() {
 #[tokio::test]
 async fn a_backend_that_ignores_eof_gets_sigterm_before_sigkill() {
     let (w, t) = started(
-        "trap 'echo termed > term.mark; exit 0' TERM\nwhile :; do sleep 0.05; done",
+        "trap 'echo termed > term.mark; exit 0' TERM\necho ready > ready.mark\nwhile :; do sleep 0.05; done",
         None,
     )
+    .await;
+    poll_until("the TERM handler is installed", || {
+        w.path().join("ready.mark").exists()
+    })
     .await;
     t.close().await.expect("close");
     assert_eq!(
@@ -48,8 +53,8 @@ async fn a_backend_that_ignores_eof_gets_sigterm_before_sigkill() {
     );
 }
 
-/// A backend that ignores EOF and SIGTERM is still killed, and close still
-/// returns, within the bound: no backend can hold a stop open.
+/// A backend that ignores EOF and SIGTERM is killed and reaped (no zombie), and close
+/// returns, within the bound, even when its kills find the group gone (macOS).
 #[tokio::test]
 async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
     // The fixed plan outside a shutdown (EOF wait, SIGTERM wait, the reap
@@ -58,6 +63,7 @@ async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
     let (w, t) = started_unhurried(&resists_term(), None).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
+    signal_log::arm(pid);
     let started_at = std::time::Instant::now();
     tokio::time::timeout(BOUND, t.close())
         .await
@@ -69,6 +75,7 @@ async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
         started_at.elapsed()
     );
     assert_killed(pid).await;
+    signal_log::assert_term_then_kill_strict(pid, "the uncut plan").await;
     gone(child).await;
 }
 
@@ -214,31 +221,24 @@ async fn cut_close(t: &Arc<StdioTransport>, end: &EndOnDrop, cut_in: Duration) -
 /// plan was, its last third after SIGTERM.
 #[tokio::test]
 async fn a_cut_stop_still_sends_sigterm_before_the_kill() {
-    let (w, t) = started_unhurried(MARKS_TERM, None).await;
+    let (_w, t) = started_unhurried(MARKS_TERM, None).await;
     let end = EndOnDrop::new(&t);
+    signal_log::arm(leader(&t).await);
     let pid = cut_close(&t, &end, Duration::from_secs(3)).await;
     assert_killed(pid).await;
-    assert_eq!(
-        std::fs::read_to_string(w.path().join("term.mark"))
-            .ok()
-            .as_deref(),
-        Some("termed\n"),
-        "the cut stop killed the backend without a SIGTERM first"
-    );
+    signal_log::assert_term_then_kill(pid, "the cut stop").await;
 }
 
 /// A cut that leaves under the minimum phase skips SIGTERM: the kill comes
 /// at the cut, with nothing sent for a wait too short to use.
 #[tokio::test]
 async fn a_cut_under_the_minimum_phase_skips_sigterm() {
-    let (w, t) = started_unhurried(MARKS_TERM, None).await;
+    let (_w, t) = started_unhurried(MARKS_TERM, None).await;
     let end = EndOnDrop::new(&t);
+    signal_log::arm(leader(&t).await);
     let pid = cut_close(&t, &end, Duration::from_millis(50)).await;
     assert_killed(pid).await;
-    assert!(
-        !w.path().join("term.mark").exists(),
-        "a SIGTERM was sent with no time left to act on it"
-    );
+    signal_log::assert_kill_without_term(pid, "a cut with no time left for a SIGTERM").await;
 }
 
 /// A cut that leaves under the minimum phase skips SIGTERM even when the
@@ -248,9 +248,10 @@ async fn a_cut_under_the_minimum_phase_skips_sigterm() {
 /// 220 ms (the old `min` with the uncut time sent one there).
 #[tokio::test]
 async fn a_short_cut_drops_an_earlier_uncut_sigterm() {
-    let (w, t) = started_unhurried(MARKS_TERM, None).await;
+    let (_w, t) = started_unhurried(MARKS_TERM, None).await;
     let end = EndOnDrop::new(&t);
     let pid = leader(&t).await;
+    signal_log::arm(pid);
     let reserve = super::super::super::reaper::KILL_RESERVE;
     // The cut is set before the close, so the handover's first step applies it.
     end.deadline()
@@ -261,10 +262,7 @@ async fn a_short_cut_drops_an_earlier_uncut_sigterm() {
     )
     .await;
     assert_killed(pid).await;
-    assert!(
-        !w.path().join("term.mark").exists(),
-        "the uncut plan's earlier SIGTERM survived a cut that left too little for one"
-    );
+    signal_log::assert_kill_without_term(pid, "a cut too short for the uncut plan's SIGTERM").await;
 }
 
 /// Hand `t`'s tree straight to the reaper with a graceful ending under
@@ -795,3 +793,6 @@ pub(super) async fn started_unhurried(
 
 #[path = "stdio_child_tree_stage_tests.rs"]
 mod stage;
+
+#[path = "stdio_child_tree_stop_gone_tests.rs"]
+mod gone;

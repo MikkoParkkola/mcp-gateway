@@ -6,7 +6,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
-use tracing::{debug, info, warn};
 
 use super::Gateway;
 use super::control_plane_store::{build_control_plane_store_with_log, control_plane_base};
@@ -32,7 +31,6 @@ use crate::gateway::router::{
 use crate::gateway::stop_budget::{DRAIN_CAP, StopBudget};
 use crate::gateway::streaming::NotificationMultiplexer;
 use crate::gateway::webhooks::WebhookRegistry;
-use crate::playbook::PlaybookEngine;
 use crate::retire::{Exit, RetirePlan};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
@@ -128,17 +126,7 @@ impl Gateway {
         let ranker_for_shutdown = Arc::clone(&ranker);
         let tracker_for_shutdown = Arc::clone(&transition_tracker);
 
-        // T2.6: warn when a surfaced tool's backend is not in warm_start.
-        for surfaced in &self.config.meta_mcp.surfaced_tools {
-            if !self.config.meta_mcp.warm_start.contains(&surfaced.server) {
-                warn!(
-                    tool = %surfaced.tool,
-                    server = %surfaced.server,
-                    "Surfaced tool's backend is not in meta_mcp.warm_start — \
-                     schema may be absent until the backend is first used"
-                );
-            }
-        }
+        self.warn_cold_surfaced_tools();
 
         let webhook_registry = WebhookRegistry::new(self.config.webhooks.clone())
             .with_env(Arc::clone(&self.env))
@@ -152,26 +140,7 @@ impl Gateway {
             .start_capability_watcher(&meta_mcp, &webhook_registry, &shutdown_tx)
             .await?;
 
-        // Load playbooks if enabled
-        if self.config.playbooks.enabled {
-            let mut engine = PlaybookEngine::new();
-            let mut total_playbooks = 0;
-            for dir in &self.config.playbooks.directories {
-                match engine.load_from_directory(dir) {
-                    Ok(count) => {
-                        total_playbooks += count;
-                        debug!(directory = %dir, count, "Loaded playbooks");
-                    }
-                    Err(e) => {
-                        debug!(directory = %dir, error = %e, "Failed to load playbooks");
-                    }
-                }
-            }
-            if total_playbooks > 0 {
-                info!(playbooks = total_playbooks, "Playbook engine ready");
-            }
-            meta_mcp.set_playbook_engine(engine);
-        }
+        self.load_playbooks(&meta_mcp);
 
         let multiplexer = Arc::new(NotificationMultiplexer::new(
             Arc::clone(&self.backends),
@@ -383,84 +352,9 @@ impl Gateway {
                 },
             ),
         );
-        // The runtime shares meta-MCP's admission authority rather than opening
-        // one of its own: a task and a later synchronous call carrying the same
-        // owner and idempotency key have to meet at ONE admission index, or the
-        // backend runs twice for what the caller sent once.
-        //
-        // The adapters that are BOTH named in `tasks.recovery_adapters` and
-        // still configured backends. Computed here because this is the one
-        // place that can see both lists before `AppState` exists; it is the
-        // weakest evaluable test on purpose, since deferring a row is not a
-        // trust claim and issues no upstream call. Empty means the recovery
-        // below is byte-identical to the no-adapter behaviour.
-        let managed_adapters: Vec<String> = self.managed_recovery_adapters();
-        let (task_service, task_executor) = task_runtime::open(
-            &self.config,
-            &task_store_dir,
-            Arc::clone(&subscriptions),
-            &meta_mcp,
-            &managed_adapters,
-        )
-        .await
-        .map_err(|error| {
-            // A held lease is most often a stdio gateway on the same
-            // directory (MIK-7272.OWNER.2, design D6 rev 5 item 7).
-            Error::Config(format!(
-                "task store at '{}' could not be opened: {error} (a task record refused \
-                 here is named in the task store warning above; if the store is held by \
-                 another gateway process, possibly a stdio gateway using \
-                 '<store_dir>/stdio', give each gateway its own tasks.store_dir)",
-                task_store_dir.display()
-            ))
-        })?;
-        let skipped = task_service.skipped_records();
-        info!(
-            path = %task_store_dir.display(),
-            max_workers = self.config.tasks.max_workers,
-            skipped_kept_key = skipped.reserved,
-            skipped_sealed = skipped.sealed,
-            "Durable task store opened"
-        );
-        // The trusted upstream adapter, installed after the store recovered and
-        // before the socket serves. It needs the started backend registry, which
-        // is why it cannot be a constructor argument to `open`. With no
-        // configured names it is not installed at all and every upstream path
-        // stays unreachable.
-        if !managed_adapters.is_empty() {
-            let installed = task_executor.install_recovery(Arc::new(
-                crate::gateway::meta_mcp::upstream::NativeUpstreamTasks::new(
-                    Arc::clone(&self.backends),
-                    &managed_adapters,
-                ),
-            ));
-            info!(
-                adapters = ?managed_adapters,
-                installed,
-                "Upstream task recovery adapter configured"
-            );
-        }
-        // The periodic expiry owner, started only now: the recovery inside
-        // `open_runtime_with_admission` has succeeded, so the sweep can never see
-        // a row a restart had not yet settled. The guard is held for the server's
-        // lifetime and joined below, before the store closes — dropping it on an
-        // early return signals the loop to stop without cutting a deletion that
-        // is already in flight.
-        let expiry_sweep: crate::gateway::task_service::execution::ExpirySweep =
-            match task_executor.start_expiry(self.config.tasks.expiry_interval) {
-                Ok(sweep) => sweep,
-                Err(error) => {
-                    let _ = task_service.shutdown().await;
-                    return Err(Error::Config(format!(
-                        "task expiry sweep at {:?} could not be started: {error}",
-                        self.config.tasks.expiry_interval
-                    )));
-                }
-            };
-        info!(
-            interval = ?self.config.tasks.expiry_interval,
-            "Durable task expiry sweep started"
-        );
+        let (task_service, task_executor, expiry_sweep) = self
+            .open_tasks(&task_store_dir, &subscriptions, &meta_mcp)
+            .await?;
         // Cloned before the state takes them: shutdown drains the SAME executor
         // that served the traffic, not a second one built to stand in for it.
         let task_service_for_shutdown = Arc::clone(&task_service);
@@ -758,42 +652,7 @@ impl Gateway {
         )
         .await;
 
-        // Release the custody store before the backends go: the drain above is
-        // what guarantees no in-flight request is still holding a credential.
-        // Not covered by gateway_bootstrap_tests — no test drives `run`.
-        budget
-            .stage("account custody shutdown", total, async {
-                if let Err(e) = self
-                    .shutdown_account_custody_by(budget.post_listener_end())
-                    .await
-                {
-                    warn!(error = %e, "Personal account custody shutdown failed");
-                }
-            })
-            .await;
-
-        // Stop all backends, after their warmers can no longer start one.
-        info!("Shutting down backends...");
-        // It may use the time up to Db: an aborted warm-start must have unwound
-        // before the backends are listed.
-        budget
-            .stage_until_backend_end("warmer cancel", warmer.cancel())
-            .await;
-        // One deadline for the whole stage: each stdio backend gets its EOF,
-        // then SIGTERM, then the kill, planned to end by then. The stop budget
-        // fixes it, however long the stages before took.
-        let stop_deadline = budget.backend_end();
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
-        )]
-        self.backends
-            .stop_all_by(stop_deadline, crate::backend::Handover::AtEntry)
-            .await;
-
-        // Whatever the custody stage did not release (it was skipped or cut):
-        // never drop the store on this thread when `self` drops.
-        self.detach_custody_release();
+        self.stop_custody_and_backends(&budget, total, warmer).await;
 
         Ok(())
     }

@@ -86,6 +86,7 @@ fn oauth_error_code(body: &str) -> &'static str {
 
 #[cfg(test)]
 fn random_256() -> String {
+    #[allow(clippy::disallowed_methods, reason = "test code: random test values")]
     let bytes: [u8; 32] = rand::rng().random();
     URL_SAFE_NO_PAD.encode(bytes)
 }

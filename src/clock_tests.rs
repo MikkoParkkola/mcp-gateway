@@ -242,6 +242,113 @@ fn block_from(code: &str, from: usize) -> &str {
     &code[start..]
 }
 
+/// The statement that starts at `from`, through its `;` outside any bracket.
+fn statement_from(code: &str, from: usize) -> &str {
+    let mut depth = 0_i64;
+    for (at, c) in code[from..].char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ';' if depth == 0 => return &code[from..=from + at],
+            _ => {}
+        }
+    }
+    &code[from..]
+}
+
+/// The code an allow reaches, judged from what follows its attribute.
+enum AllowScope {
+    /// An item with a brace body (a function, impl, module, trait, type or
+    /// extern block): that body.
+    Body,
+    /// A statement (a `let`, an expression) or a bodiless item (a `const`, a
+    /// `static`, a signature): through its `;`.
+    Statement,
+    /// `mod name;`: its code is another file, which this scan does not read.
+    OutOfLineModule,
+}
+
+/// The byte just past the bracket group `text` opens (after any leading
+/// `#`), nested groups included.
+fn balanced_end(text: &str) -> usize {
+    let mut depth = 0_i64;
+    for (at, c) in text.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return at + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    text.len()
+}
+
+/// The identifier `text` starts with, or "" if it starts with anything else.
+fn leading_word(text: &str) -> &str {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .next()
+        .unwrap_or("")
+}
+
+/// Past further attributes, visibility and qualifiers, the item introducer
+/// decides: an item keyword whose brace body comes before any `;` is a body,
+/// `mod name;` is out of line, and anything else is a statement, whatever
+/// words its type or arguments hold.
+fn allow_scope(rest: &str) -> AllowScope {
+    let mut rest = rest.trim_start();
+    while rest.starts_with("#[") {
+        rest = rest[balanced_end(rest)..].trim_start();
+    }
+    loop {
+        let word = leading_word(rest);
+        match word {
+            "pub" => {
+                rest = rest[word.len()..].trim_start();
+                if rest.starts_with('(') {
+                    rest = rest[balanced_end(rest)..].trim_start();
+                }
+            }
+            "const" | "async" | "unsafe" | "default" | "extern" => {
+                rest = rest[word.len()..].trim_start();
+                // An ABI string (`extern "C"`), its contents already blanked.
+                if let Some(abi) = rest.strip_prefix('"') {
+                    rest = abi.find('"').map_or("", |end| &abi[end + 1..]).trim_start();
+                }
+                if word == "extern" && rest.starts_with('{') {
+                    return AllowScope::Body;
+                }
+            }
+            _ => break,
+        }
+    }
+    let introducer = leading_word(rest);
+    if !matches!(
+        introducer,
+        "fn" | "impl" | "mod" | "trait" | "struct" | "enum" | "union"
+    ) {
+        return AllowScope::Statement;
+    }
+    let mut depth = 0_i64;
+    for c in rest.chars() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            '{' if depth == 0 => return AllowScope::Body,
+            ';' if depth == 0 => break,
+            _ => {}
+        }
+    }
+    if introducer == "mod" {
+        AllowScope::OutOfLineModule
+    } else {
+        AllowScope::Statement
+    }
+}
+
 /// What the guard found in one product file: aliases of a clock type, and
 /// `disallowed_methods` allows whose scope holds a clock read.
 fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
@@ -256,7 +363,9 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
         r"\b(?:SystemTime|Utc|{epoch}|{jwt})\b|\bLocal\s*::\s*now\b"
     ))
     .expect("read pattern");
-    let code = product_code(src);
+    // Comments and string and char literals blanked: a `;` or bracket inside
+    // one neither ends nor opens a scope, and a clock name in one is no read.
+    let code = crate::test_source_text::sanitize(&product_code(src));
     let mut holes: Vec<String> = alias
         .find_iter(&code)
         .map(|m| format!("{rel}: a clock type aliased: {}", m.as_str()))
@@ -272,7 +381,17 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
         let scope = if attr.starts_with("#!") {
             code.as_str()
         } else {
-            block_from(&code, close)
+            match allow_scope(&code[close..]) {
+                AllowScope::Body => block_from(&code, close),
+                AllowScope::Statement => statement_from(&code, close),
+                AllowScope::OutOfLineModule => {
+                    // Fails closed: the module's own file is not read here.
+                    holes.push(format!(
+                        "{rel}: a disallowed_methods allow on an out-of-line module, whose file this scan does not read"
+                    ));
+                    continue;
+                }
+            }
         };
         if read.is_match(scope) {
             holes.push(format!(
@@ -321,4 +440,154 @@ fn no_disallowed_methods_allow_or_clock_alias_hides_a_clock_read() {
         "the scan found no disallowed_methods allow at all (src/home_dir.rs holds four): it is reading nothing"
     );
     assert!(holes.is_empty(), "{holes:#?}");
+}
+
+/// The allow the scope cases put over their code.
+const ALLOW: &str = "#[allow(clippy::disallowed_methods, reason = \"id: x\")]";
+
+/// A clock read, assembled so this file holds no raw read itself.
+const READ: &str = concat!("U", "tc::now()");
+
+/// `lines` inside a function body, under one allow.
+fn under_allow(lines: &str) -> String {
+    format!("fn f() {{\n    {ALLOW}\n{lines}}}\n")
+}
+
+/// Each case's code and the number of holes the guard must report for it.
+fn assert_holes(cases: &[(&str, String, usize)]) {
+    for (name, code, holes) in cases {
+        assert_eq!(
+            clock_lint_holes("case.rs", code).len(),
+            *holes,
+            "{name}:\n{code}"
+        );
+    }
+}
+
+/// Kills "a statement allow is scoped to the next block": a statement's allow
+/// reaches that statement only, a function's its body, past further
+/// attributes and line breaks.
+#[test]
+fn an_allow_reaches_exactly_its_statement_or_item() {
+    assert_holes(&[
+        (
+            "in the statement",
+            under_allow(&format!("    let at = ({READ}, rand::random::<u8>());\n")),
+            1,
+        ),
+        (
+            "after the statement",
+            under_allow(&format!(
+                "    let id = rand::random::<u8>();\n    emit(Event {{ id, at: {READ} }});\n"
+            )),
+            0,
+        ),
+        (
+            "in the function",
+            format!("{ALLOW}\nfn f() {{\n    let at = {READ};\n}}\n"),
+            1,
+        ),
+        (
+            "under a second attribute",
+            under_allow(&format!("    #[rustfmt::skip]\n    let at = {READ};\n")),
+            1,
+        ),
+        (
+            "a let on its own line",
+            under_allow(&format!("    let\n        at = {READ};\n")),
+            1,
+        ),
+        (
+            "in an expression statement",
+            under_allow(&format!("    emit({READ});\n    let id = 1;\n")),
+            1,
+        ),
+        (
+            "after an expression statement",
+            under_allow(&format!(
+                "    emit(rand::random::<u8>());\n    emit(Event {{ at: {READ} }});\n"
+            )),
+            0,
+        ),
+    ]);
+}
+
+/// Kills "a literal or a comment moves the scope": a `;` or a bracket inside
+/// a literal or a comment neither ends nor opens a scope, and a clock name
+/// inside a literal is no read.
+#[test]
+fn literals_and_comments_move_no_scope() {
+    assert_holes(&[
+        (
+            "past a char ';'",
+            under_allow(&format!("    let at = c == ';' || late({READ});\n")),
+            1,
+        ),
+        (
+            "past a string ';' and brace",
+            under_allow(&format!("    let at = (\";}}\", {READ});\n")),
+            1,
+        ),
+        (
+            "past a comment ';'",
+            under_allow(&format!("    let at = /* ; */ {READ};\n")),
+            1,
+        ),
+        (
+            "a clock name in a string",
+            under_allow(&format!("    let s = \"{READ}\";\n")),
+            0,
+        ),
+    ]);
+}
+
+/// Kills "any word picks the scope": the item introducer after visibility and
+/// qualifiers decides, so a type or a turbofish naming `fn` stays a statement,
+/// an allow on `mod name;` fails closed, and an extern block is a body.
+#[test]
+fn the_item_introducer_picks_the_scope() {
+    assert_holes(&[
+        (
+            "a let whose type names fn",
+            under_allow(&format!("    let f: fn() -> T = || {READ};\n")),
+            1,
+        ),
+        (
+            "a const whose type names fn",
+            under_allow(&format!("    const AT: fn() -> u64 = make({READ});\n")),
+            1,
+        ),
+        (
+            "an expression whose turbofish names fn",
+            under_allow(&format!("    consume::<fn()>({READ});\n")),
+            1,
+        ),
+        (
+            "a static with a block initialiser",
+            under_allow(&format!("    static AT: u64 = {{ {READ} }};\n")),
+            1,
+        ),
+        (
+            "a let with a closure body",
+            under_allow(&format!("    let f = || {{ {READ} }};\n")),
+            1,
+        ),
+        (
+            "an out-of-line module (fails closed)",
+            format!("{ALLOW}\nmod clocks;\n"),
+            1,
+        ),
+        (
+            "an extern block, a read after it",
+            format!(
+                "{ALLOW}\nextern \"C\" {{\n    fn now() -> u64;\n}}\nfn g() {{\n    let at = {READ};\n}}\n"
+            ),
+            0,
+        ),
+        (
+            "under a nested-bracket attribute",
+            under_allow(&format!("    #[shape([1, 2])]\n    let at = {READ};\n")),
+            1,
+        ),
+    ]);
 }

@@ -134,4 +134,24 @@ mod tests {
         assert!((FIRST..FIRST + SPAN).contains(&b), "{b}");
         assert_ne!(a, b, "each call gets its own port");
     }
+
+    /// A reserved port is a port nothing listens on that no port-0 bind can be
+    /// handed: it is in the reserved range, below every OS's ephemeral range,
+    /// and a connect to it is refused (on macOS too, unlike a bound socket that
+    /// never listens, whose connects time out there).
+    #[test]
+    fn a_reserved_port_is_outside_the_ephemeral_range_and_refuses() {
+        let port = reserved_port();
+        assert!(
+            (FIRST..FIRST + SPAN).contains(&port),
+            "{port} is in the reserved range"
+        );
+        assert_eq!(
+            std::net::TcpStream::connect(("127.0.0.1", port))
+                .map(|_| ())
+                .map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::ConnectionRefused),
+            "a connect to the reserved port {port} was not refused"
+        );
+    }
 }

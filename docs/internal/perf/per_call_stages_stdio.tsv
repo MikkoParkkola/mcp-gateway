@@ -155,8 +155,12 @@ src/gateway/server/run_wiring.rs	build_agent_auth	-	startup step of Gateway::run
 src/gateway/server/run_wiring.rs	declare_multi_user	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_wiring.rs	drain_inflight	-	shutdown drain of in-flight requests, after the listener stops
 src/gateway/server/run_wiring.rs	install_identity_propagation	-	startup step of Gateway::run, once per serve
+src/gateway/server/run_wiring.rs	load_playbooks	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_wiring.rs	log_feature_states	-	startup logging, once per serve
+src/gateway/server/run_wiring.rs	open_tasks	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_wiring.rs	refuse_or_warn_before_bind	-	startup pre-bind checks, before any listener opens
+src/gateway/server/run_wiring.rs	stop_custody_and_backends	-	shutdown step of Gateway::run, after the listener stops
+src/gateway/server/run_wiring.rs	warn_cold_surfaced_tools	-	startup step of Gateway::run, once per serve
 src/gateway/server/start_checks.rs	clock	-	startup clock check, before serving
 src/gateway/server/start_checks.rs	http	-	startup HTTP config check, before serving
 src/gateway/server/start_checks.rs	new_evaluated	-	Gateway construction, once at startup
