@@ -434,7 +434,7 @@ async fn a_config_error_quoting_the_token_is_never_printed() {
     );
 }
 
-/// A usage error, a single character in the redaction
+/// A usage error, single characters in the redaction
 /// marker, and a token re-formed at a marker's edge are never printed.
 #[tokio::test]
 async fn usage_and_marker_edge_tokens_are_never_printed() {
@@ -444,7 +444,10 @@ async fn usage_and_marker_edge_tokens_are_never_printed() {
     let usage = super::dead_letters_output(&base, &tls, &replay, "replay").await;
     printed_nowhere("events", "replay", &usage);
     assert!(!usage.ok && !usage.stderr.is_empty(), "{usage:?}");
-    for token in ["d", "d]z"] {
+    // "r" is in the first two markers, so the redactor rotates to the third;
+    // "d]z" re-forms at the first marker's edge, so the backstop's sentence
+    // prints.
+    for token in ["r", "d]z"] {
         for (command, out) in both(&base, token).await {
             printed_nowhere(command, token, &out);
             assert!(
@@ -452,6 +455,12 @@ async fn usage_and_marker_edge_tokens_are_never_printed() {
                 "{command} {token:?}: {out:?}"
             );
         }
+    }
+    // "d" is in every marker, so the redactor fails closed: nothing holding
+    // it is printed, possibly nothing at all.
+    for (command, out) in both(&base, "d").await {
+        printed_nowhere(command, "d", &out);
+        assert!(!out.ok && out.stdout.is_empty(), "{command}: {out:?}");
     }
 }
 
