@@ -325,7 +325,7 @@ fn allow_scope(rest: &str) -> AllowScope {
             _ => break,
         }
     }
-    let introducer = leading_word(rest);
+    if mutant!("m-introducer", rest[..rest.find(['{', ';', '=']).unwrap_or(rest.len())].split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|w| matches!(w, "fn" | "impl" | "mod" | "trait" | "struct" | "enum" | "union")), false) { return AllowScope::Body; } let introducer = leading_word(rest);
     if !matches!(
         introducer,
         "fn" | "impl" | "mod" | "trait" | "struct" | "enum" | "union"
@@ -342,7 +342,7 @@ fn allow_scope(rest: &str) -> AllowScope {
             _ => {}
         }
     }
-    if introducer == "mod" {
+    if mutant!("m-mod-fail-open", false, introducer == "mod") {
         AllowScope::OutOfLineModule
     } else {
         AllowScope::Statement
@@ -365,7 +365,7 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
     .expect("read pattern");
     // Comments and string and char literals blanked: a `;` or bracket inside
     // one neither ends nor opens a scope, and a clock name in one is no read.
-    let code = crate::test_source_text::sanitize(&product_code(src));
+    let code = mutant!("m-literal-blind", product_code(src), crate::test_source_text::sanitize(&product_code(src)));
     let mut holes: Vec<String> = alias
         .find_iter(&code)
         .map(|m| format!("{rel}: a clock type aliased: {}", m.as_str()))
@@ -381,7 +381,7 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
         let scope = if attr.starts_with("#!") {
             code.as_str()
         } else {
-            match allow_scope(&code[close..]) {
+            match mutant!("m-stmt-scope", AllowScope::Body, allow_scope(&code[close..])) {
                 AllowScope::Body => block_from(&code, close),
                 AllowScope::Statement => statement_from(&code, close),
                 AllowScope::OutOfLineModule => {
