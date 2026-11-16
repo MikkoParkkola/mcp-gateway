@@ -383,7 +383,7 @@ pub(super) mod stdio;
 mod audience_access;
 #[cfg(test)]
 mod audience_attach_tests;
-#[cfg(any())]
+#[cfg(test)]
 mod audience_cf_tests;
 #[cfg(test)]
 mod audience_ear;

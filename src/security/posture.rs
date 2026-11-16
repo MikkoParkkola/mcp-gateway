@@ -235,7 +235,7 @@ pub(crate) fn log_startup(config: &Config) {
     }
 }
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "posture_tests.rs"]
 pub(crate) mod tests;
 

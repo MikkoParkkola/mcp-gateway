@@ -604,7 +604,7 @@ use legacy::watched_by;
 #[cfg(test)]
 use run::{pick_session, runs_modern};
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "upstream_session_tests.rs"]
 mod tests;
 

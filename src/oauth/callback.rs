@@ -534,6 +534,6 @@ fn provider_error_code(raw: &str) -> &'static str {
         .unwrap_or("other")
 }
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "callback_tests.rs"]
 pub(in crate::oauth) mod tests;

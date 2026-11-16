@@ -144,7 +144,7 @@ mod direct_list_scope_tests;
 mod direct_log_escape_tests;
 #[cfg(test)]
 mod direct_modern_shape_tests;
-#[cfg(any())]
+#[cfg(test)]
 mod direct_nonce_witness_tests;
 #[cfg(test)]
 mod direct_notification_credential_tests;

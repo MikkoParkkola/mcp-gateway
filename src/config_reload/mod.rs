@@ -361,7 +361,7 @@ mod writer_symlink_tests;
 mod flip_pin_tests;
 #[cfg(all(test, feature = "webui"))]
 mod replace_audit_key_tests;
-#[cfg(any())]
+#[cfg(test)]
 mod replace_audit_tests;
 #[cfg(test)]
 mod replace_secret_tests;
