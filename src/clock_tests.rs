@@ -232,6 +232,20 @@ pub(crate) fn product_code(src: &str) -> String {
     out.join("\n")
 }
 
+/// The lib test split puts a `#[cfg(tpK)]` line above a test module's
+/// unchanged `#[cfg(test)]`: the module is still dropped from product code.
+#[test]
+fn product_code_drops_a_part_tagged_test_module() {
+    let code = product_code(
+        "fn live() {}\n#[cfg(tp3)]\n#[cfg(test)]\nmod t {\n    fn probe() { now(); }\n}\nfn after() {}\n",
+    );
+    assert!(
+        code.contains("fn live()") && code.contains("fn after()"),
+        "{code}"
+    );
+    assert!(!code.contains("probe"), "{code}");
+}
+
 /// The brace-balanced block that opens at the first `{` from `from`.
 fn block_from(code: &str, from: usize) -> &str {
     let Some(start) = code[from..].find('{').map(|at| from + at) else {

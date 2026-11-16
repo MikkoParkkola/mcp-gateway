@@ -36,6 +36,14 @@ class WithoutTestModules(unittest.TestCase):
     def test_a_cfg_all_test_module_is_removed(self):
         self.assertEqual(fns("fn a(){}\n#[cfg(all(test, x))]\nmod t { fn h(){} }\nfn e(){}\n"), ["a", "e"])
 
+    # The lib test split's part tag is a separate cfg line above the test one: the first cfg in the run is the tag.
+    def test_a_part_tagged_test_module_is_removed(self):
+        self.assertEqual(fns("fn a(){}\n#[cfg(tp3)]\n#[cfg(test)]\nmod t {\n fn h(){}\n}\nfn d(){}\n"), ["a", "d"])
+
+    def test_a_part_tagged_path_mount_keeps_what_follows(self):
+        src = 'fn a(){}\n#[cfg(tp3)]\n#[cfg(test)]\n#[path = "x.rs"]\nmod t;\nfn c(){}\n'
+        self.assertEqual(fns(src), ["a", "c"])
+
     # MIK-9387.TCFG.2: the shared reader decides, wherever `test` sits.
     def test_test_in_any_operand_of_all_is_removed(self):
         self.assertEqual(fns("fn a(){}\n#[cfg(all(x, test))]\nmod t { fn h(){} }\nfn e(){}\n"), ["a", "e"])

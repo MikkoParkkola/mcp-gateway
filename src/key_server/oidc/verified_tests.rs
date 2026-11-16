@@ -78,9 +78,7 @@ fn the_test_constructor_is_crate_only_and_test_only() {
         let syn::Item::Impl(block) = item else {
             continue;
         };
-        let gated = block.attrs.iter().any(|a| {
-            a.path().is_ident("cfg") && a.parse_args::<syn::Ident>().is_ok_and(|i| i == "test")
-        });
+        let gated = crate::test_source_text::test_only(&block.attrs);
         for inner in &block.items {
             let syn::ImplItem::Fn(f) = inner else {
                 continue;

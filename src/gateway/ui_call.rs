@@ -388,7 +388,7 @@ mod gate_seam_tests {
     fn the_gate_hook_is_built_only_in_tests() {
         let source = include_str!("ui_call.rs");
         let lines: Vec<&str> = source.lines().collect();
-        let gated = |needle: &str| {
+        let gated = |lines: &[&str], needle: &str| {
             let at = lines
                 .iter()
                 .position(|line| line.trim_start() == needle)
@@ -399,8 +399,14 @@ mod gate_seam_tests {
                 "`{needle}` is built outside tests"
             );
         };
-        gated("gate_seam::admitted();");
-        gated("pub(crate) mod gate_seam {");
+        gated(&lines, "gate_seam::admitted();");
+        gated(&lines, "pub(crate) mod gate_seam {");
+        // The lib test split's part tag goes above the test cfg, never
+        // between it and the item, so the line above is still the test cfg.
+        gated(
+            &["#[cfg(tp4)]", "#[cfg(test)]", "pub(crate) mod gate_seam {"],
+            "pub(crate) mod gate_seam {",
+        );
         assert_eq!(
             lines
                 .iter()

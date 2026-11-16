@@ -386,6 +386,13 @@ fn a_part_tag_beside_the_test_cfg_still_reads_as_test_only() {
     assert!(!cfg_test_only(
         &module("#[cfg(tp2)]\n#[cfg(unix)]\nmod t {}").attrs
     ));
+    // The token check's test-fn reader goes through cfg_test_only after
+    // dropping doc comments.
+    let function = |text: &str| syn::parse_str::<syn::ItemFn>(text).expect("a fn item");
+    assert!(cfg_test_fn(
+        &function("/// Doc.\n#[cfg(tp4)]\n#[cfg(test)]\nfn f() {}").attrs
+    ));
+    assert!(!cfg_test_fn(&function("#[cfg(tp4)]\nfn f() {}").attrs));
 }
 
 /// Every exposed function of the judge, whatever its parameters, opens with
