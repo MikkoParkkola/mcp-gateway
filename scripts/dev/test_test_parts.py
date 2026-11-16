@@ -305,6 +305,37 @@ class Codemod(Rows):
         self.assertNotIn("#[cfg(tp2)]\nmod fixtures", first["src/a/x_support.rs"])
         self.assert_green(first)
 
+    def compound(self, attrs: str) -> str:
+        """src/a.rs after `apply`, starting from a test module carrying `attrs` instead of `#[cfg(test)]`."""
+        body = f"pub fn f() {{}}\n\n{attrs}\nmod tests {{\n    #[test]\n    fn t() {{}}\n}}\n"
+        first, second = self.applied(untagged(with_files(src__a_DOT_rs=body)))
+        self.assertEqual(second, first)
+        self.assert_green(first)
+        for attr in attrs.split("\n"):
+            self.assertIn(f"\n{attr}\n", first["src/a.rs"], "every original attribute line is kept byte for byte")
+        return first["src/a.rs"]
+
+    def test_r_compound_a_compound_test_predicate_keeps_its_text_and_gains_a_separate_tag(self):
+        # Separate cfg attributes AND together, so the tag never changes what the predicate means.
+        self.assertIn("#[cfg(tp1)]\n#[cfg(all(test, unix))]\nmod tests", self.compound("#[cfg(all(test, unix))]"))
+
+    def test_r_compound_several_cfg_attributes_get_the_tag_above_the_test_one(self):
+        out = self.compound("#[cfg(unix)]\n#[cfg(test)]")
+        self.assertIn("#[cfg(unix)]\n#[cfg(tp1)]\n#[cfg(test)]\nmod tests", out)
+
+    def test_r_compound_a_cfg_attr_beside_the_test_cfg_is_kept(self):
+        out = self.compound("#[cfg(test)]\n#[cfg_attr(unix, allow(dead_code))]")
+        self.assertIn("#[cfg(tp1)]\n#[cfg(test)]\n#[cfg_attr(unix, allow(dead_code))]\nmod tests", out)
+
+    def test_r_compound_an_any_predicate_is_not_test_only_so_its_test_carries_its_own_tag(self):
+        # any(test, unix) also builds outside tests: the module is production code, its test function is tagged.
+        out = self.compound("#[cfg(any(test, unix))]")
+        self.assertIn("#[cfg(any(test, unix))]\nmod tests {\n    #[cfg(tp1)]\n    #[test]", out)
+
+    def test_r_compound_a_not_test_module_is_left_alone(self):
+        out = self.compound("#[cfg(not(test))]")
+        self.assertIn("#[cfg(not(test))]\nmod tests {\n    #[cfg(tp1)]\n    #[test]", out)
+
     def assert_apply_refuses_and_leaves_the_tree(self, files: dict[str, str]) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
