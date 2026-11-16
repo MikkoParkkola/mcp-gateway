@@ -64,6 +64,13 @@ const REMOVED_KEYS: &[(&[&str], &str)] = &[
     ),
 ];
 
+/// Whether `path` names a key retired in 4.0: it still loads, is warned about
+/// once, and is never honoured, so a section holding only such keys applies
+/// nothing (doctor's hidden-key row asks this).
+pub(crate) fn is_retired_key(path: &[&str]) -> bool {
+    RETIRED_KEYS.iter().any(|(retired, _)| *retired == path)
+}
+
 /// Keys retired in 4.0 that still load, with the reason, warned once (#2360).
 /// The settings-automatic-first rows (MIK-8782, MIK-8783) are settings the
 /// gateway now picks itself; each value is ignored, never honoured.
