@@ -1,0 +1,11 @@
+head_sha	f237d53a39338b647f0155b37994f08d0545b39a
+#mutant m1a
+mcp_gateway	config_reload::history::reload_tests::h1a_an_env_file_edit_seen_by_the_poll_is_its_own_version	src/config_reload/history_reload_tests.rs:182
+#mutant m5
+mcp_gateway	config_reload::history::reload_tests::h5_a_version_holds_every_operator_file_with_presence	src/config_reload/history_reload_tests.rs:307
+#mutant m6
+mcp_gateway	config_reload::history::reload_tests::h6_no_consumed_value_reaches_the_history	src/config_reload/history_reload_tests.rs:355
+#mutant m7
+mcp_gateway	config_reload::history::tests::t7_a_rotated_key_gives_a_new_id_and_keeps_the_old	src/config_reload/history_tests.rs:261
+#mutant m10
+mcp_gateway	config_reload::history::reload_tests::h10_the_version_holds_the_published_bytes_not_the_disk	src/config_reload/history_reload_tests.rs:498
