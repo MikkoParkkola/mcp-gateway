@@ -434,8 +434,8 @@ async fn a_config_error_quoting_the_token_is_never_printed() {
     );
 }
 
-/// A usage error, single characters in the redaction
-/// marker, and a token re-formed at a marker's edge are never printed.
+/// A usage error, single characters in the redaction markers, and a token
+/// that would re-form at a marker's edge are never printed.
 #[tokio::test]
 async fn usage_and_marker_edge_tokens_are_never_printed() {
     let base = answering(400, r#"{"error":"denied: Xd]zz"}"#.into()).await;
@@ -445,8 +445,7 @@ async fn usage_and_marker_edge_tokens_are_never_printed() {
     printed_nowhere("events", "replay", &usage);
     assert!(!usage.ok && !usage.stderr.is_empty(), "{usage:?}");
     // "r" is in the first two markers, so the redactor rotates to the third;
-    // "d]z" re-forms at the first marker's edge, so the backstop's sentence
-    // prints.
+    // "d]z" would re-form at the first marker's edge, so it takes the second.
     for token in ["r", "d]z"] {
         for (command, out) in both(&base, token).await {
             printed_nowhere(command, token, &out);
@@ -490,7 +489,7 @@ async fn admin_call_errors_never_hold_the_token() {
         assert!(!error.contains(token), "token {token:?}: {error}");
         assert!(error.contains("the gateway answered"), "{error}");
     }
-    // A token re-formed at the marker's edge: the shared backstop's sentence.
+    // A token that would re-form at the first marker's edge takes the next.
     let base = answering(400, r#"{"error":"denied: Xd]zz"}"#.into()).await;
     let error = super::admin_call(
         reqwest::Method::GET,

@@ -547,7 +547,7 @@ pub async fn run_dashboard_link_args(
     host_override: Option<&str>,
 ) -> ExitCode {
     let token = read_token(|name| std::env::var(name).ok());
-    emit(dashboard_link_args_output(args, load, port_override, host_override, token).await)
+    emit(&dashboard_link_args_output(args, load, port_override, host_override, token).await)
 }
 
 /// What `dashboard-link` prints for `token`. A resolution error comes before a
@@ -580,7 +580,7 @@ pub async fn run_events_command(
 ) -> ExitCode {
     let mcp_gateway::cli::events::EventsCommand::DeadLetters(args) = args.command;
     let token = read_token(|name| std::env::var(name).ok());
-    emit(events_args_output(&args, load, port_override, host_override, token).await)
+    emit(&events_args_output(&args, load, port_override, host_override, token).await)
 }
 
 /// What `events dead-letters` prints for `token`, resolving like
@@ -670,9 +670,10 @@ fn gate(prefix: &str, token: &str, result: Result<(String, &str), String>) -> Pr
     Printed { stdout, stderr, ok }
 }
 
-/// `text` through the shared redactor; when a token re-formed at a redaction
-/// marker's edge survives it, one fixed sentence instead, or nothing if even
-/// that holds the token (the api command's rule).
+/// `text` through the shared redactor, which keeps the first marker whose
+/// output holds no token and fails closed to empty output when none does.
+/// If the token is still there whatever the redactor did, one fixed sentence
+/// instead, or nothing if even that holds the token (the api command's rule).
 fn token_free(text: &str, token: &str) -> String {
     let newline = if text.ends_with('\n') { "\n" } else { "" };
     let text = mcp_gateway::cli::redact::text(text, &[token.to_string()]);
@@ -690,7 +691,7 @@ fn token_free(text: &str, token: &str) -> String {
 
 /// Write a run's output: stdout through the CLI's `print!`, which ends the
 /// process cleanly when the reader has gone.
-fn emit(out: Printed) -> ExitCode {
+fn emit(out: &Printed) -> ExitCode {
     print!("{}", out.stdout);
     eprint!("{}", out.stderr);
     if out.ok {
