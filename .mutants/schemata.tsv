@@ -1,0 +1,17 @@
+head_sha	0af74bea3566779227170edfa40f1b023a6e1253
+#mutant s1
+mcp_gateway	config_persistence::journal::v2::drain::file::refusal_tests::drain_refuses_counterless_unfrozen	src/config_persistence_journal_v2_drain_file_refusal_tests.rs:376
+#mutant s2
+mcp_gateway	config_persistence::journal::v2::drain::handover::admit_tests::handover_admits_prefrozen_unparseable	src/config_persistence_journal_v2_drain_handover_admit_tests.rs:271
+#mutant s3
+mcp_gateway	config_persistence::journal::v2::drain::handover::admit_tests::handover_refuses_prefrozen_counterless	src/config_persistence_journal_v2_drain_handover_admit_tests.rs:319
+#mutant s4
+mcp_gateway	config_persistence::journal::v2::drain::file::refusal_tests::drain_refuses_counterless_unfrozen	src/config_persistence_journal_v2_drain_file_refusal_tests.rs:376
+#mutant s5
+mcp_gateway	config_persistence::journal::v2::drain::file::refusal_tests::drain_reports_incomplete_after_delivery	src/config_persistence_journal_v2_drain_file_refusal_tests.rs:479
+#mutant s6
+mcp_gateway	config_persistence::journal::v2::drain::file::refusal_tests::drain_reports_incomplete_after_delivery	src/config_persistence_journal_v2_drain_file_refusal_tests.rs:479
+#mutant s7
+mcp_gateway	config_persistence::journal::v2::drain::handover::admit_tests::maximal_size_bounds_every_state	src/config_persistence_journal_v2_drain_handover_admit_tests.rs:211
+#mutant s8
+mcp_gateway	config_persistence::journal::v2::drain::handover::admit_tests::handover_refuses_unbuildable_terminal	src/config_persistence_journal_v2_drain_handover_admit_tests.rs:292
