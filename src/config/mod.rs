@@ -231,32 +231,25 @@ impl Config {
     /// Returns `None` if none of the candidates exist (caller uses defaults).
     #[must_use]
     pub fn fallback_config_path() -> Option<PathBuf> {
-        // Static relative candidates
-        for candidate in Self::FALLBACK_PATHS {
-            let p = PathBuf::from(candidate);
-            if p.exists() {
-                tracing::debug!("Auto-discovered config: {}", p.display());
-                return Some(p);
-            }
+        let found = Self::fallback_candidates().into_iter().find(|p| p.exists());
+        if let Some(p) = &found {
+            tracing::debug!("Auto-discovered config: {}", p.display());
         }
+        found
+    }
 
-        // Home-relative candidate
-        if let Some(home) = crate::home_dir::home_dir() {
-            let p = home.join(".config/mcp-gateway/gateway.yaml");
-            if p.exists() {
-                tracing::debug!("Auto-discovered config: {}", p.display());
-                return Some(p);
-            }
-        }
-
-        // System-wide candidate
-        let system = PathBuf::from("/etc/mcp-gateway/gateway.yaml");
-        if system.exists() {
-            tracing::debug!("Auto-discovered config: {}", system.display());
-            return Some(system);
-        }
-
-        None
+    /// The locations [`Config::fallback_config_path`] searches, in order: the
+    /// relative ones, the home-relative one (absent without a home
+    /// directory), then the system-wide one.
+    #[must_use]
+    pub(crate) fn fallback_candidates() -> Vec<PathBuf> {
+        let home = crate::home_dir::home_dir().map(|h| h.join(".config/mcp-gateway/gateway.yaml"));
+        Self::FALLBACK_PATHS
+            .iter()
+            .map(PathBuf::from)
+            .chain(home)
+            .chain([PathBuf::from("/etc/mcp-gateway/gateway.yaml")])
+            .collect()
     }
 
     /// Load configuration from file and environment.
@@ -650,6 +643,29 @@ impl Config {
         Ok((self.resolve_secret_refs(overlay), configured))
     }
 
+    /// Every secret slot the loader substitutes (the metrics token is only
+    /// read by name, never substituted). The one list: evaluation resolves
+    /// these and the restart checkpoint checks them, so a new slot added
+    /// here reaches both.
+    pub(crate) fn secret_slots_mut(&mut self) -> impl Iterator<Item = &mut String> {
+        self.auth
+            .bearer_token
+            .iter_mut()
+            .chain(
+                self.auth
+                    .api_keys
+                    .iter_mut()
+                    .flat_map(ApiKeyConfig::digest_specs_mut),
+            )
+            .chain(
+                self.agent_auth
+                    .agents
+                    .iter_mut()
+                    .filter_map(|agent| agent.hs256_secret.as_mut()),
+            )
+            .chain(self.key_server.admin_token.iter_mut())
+    }
+
     /// Substitute `env:NAME` secret references with the value the overlay holds.
     ///
     /// Done here, once, rather than at each holder's construction: an env file
@@ -690,21 +706,8 @@ impl Config {
             }
         };
 
-        if let Some(token) = self.auth.bearer_token.as_mut() {
-            subst(token, &mut seen);
-        }
-        for key in &mut self.auth.api_keys {
-            for digest in key.digest_specs_mut() {
-                subst(digest, &mut seen);
-            }
-        }
-        for agent in &mut self.agent_auth.agents {
-            if let Some(secret) = agent.hs256_secret.as_mut() {
-                subst(secret, &mut seen);
-            }
-        }
-        if let Some(token) = self.key_server.admin_token.as_mut() {
-            subst(token, &mut seen);
+        for slot in self.secret_slots_mut() {
+            subst(slot, &mut seen);
         }
         // Names and digests only: `resolve_metrics_token` reads the reference
         // itself, so the spelling stays. Without this a rotated token was

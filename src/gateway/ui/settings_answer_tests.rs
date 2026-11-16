@@ -5,8 +5,10 @@ use super::test_support::{BASE, Route, client, decode};
 use super::*;
 use crate::config_persistence::keyedit::{GiveUp, Segment};
 use crate::config_reload::ui_fields::FieldId;
+use crate::config_reload::{
+    BusyReason, Patch, PatchStep, PreviewRefused, Shown, UiPreview, UiRefused,
+};
 use crate::config_reload::{FileRevision, RefusalClass};
-use crate::config_reload::{Patch, PatchStep, PreviewRefused, Shown, UiPreview, UiRefused};
 use axum::http::{StatusCode, header::RETRY_AFTER};
 
 const CANARY: &str = "answer-payload-canary";
@@ -196,7 +198,7 @@ row!(
 );
 row!(
     busy,
-    UiRefused::Busy,
+    UiRefused::Busy(BusyReason::Locked),
     CONFLICT,
     "the config is being written; retry",
     true

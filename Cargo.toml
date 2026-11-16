@@ -1,6 +1,6 @@
 [package]
 name = "mcp-gateway"
-version = "4.0.0-beta.3"
+version = "4.0.0-beta.4"
 edition = "2024"
 rust-version = "1.95"
 authors = ["Mikko Parkkola <mikko.parkkola@iki.fi>"]
@@ -86,6 +86,7 @@ include = [
     "docs/PRIVACY.md",
     "docs/release/4.0.0-beta.2-notes.md",
     "docs/release/4.0.0-beta.3-notes.md",
+    "docs/release/4.0.0-beta.4-notes.md",
     "docs/release/v4.0.0-supported-matrix.md",
     "docs/release/verify/2026-09-23-claude-code-2.1.280.md",
     "docs/requirements/nfr-sec1-control-inventory.md",
@@ -287,7 +288,7 @@ security-framework = { version = "3.7", default-features = false }
 # at =0.5.0). libc is already in the lock file; only its syscall numbers and
 # errno constants are used.
 [target.'cfg(target_os = "linux")'.dependencies]
-rustix = { version = "1.1", features = ["fs", "process", "mount", "thread"] }
+rustix = { version = "1.1", features = ["fs", "process", "mount", "thread", "time"] }
 seccompiler = "=0.5.0"
 libc = "0.2"
 
