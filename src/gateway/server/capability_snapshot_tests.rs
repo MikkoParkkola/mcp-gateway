@@ -40,7 +40,7 @@ impl ModeGuard {
     /// Clears the mode and checks the premise: a process that can still read
     /// the path (one running as root) would make the row prove nothing.
     fn deny(path: &Path) -> Self {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0))
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000))
             .expect("the mode can be cleared");
         let guard = Self(path.to_path_buf());
         let readable = if path.is_dir() {
@@ -109,9 +109,7 @@ async fn http_scan(dirs: &[PathBuf]) -> HttpScan {
     backend.attach_revision(Arc::new(LiveConfig::new(gateway.config.clone())));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while !backend.initial_scan_complete() {
-        if tokio::time::Instant::now() >= deadline {
-            panic!("hung past 30s");
-        }
+        assert!(tokio::time::Instant::now() < deadline, "hung past 30s");
         tokio::task::yield_now().await;
     }
     HttpScan {
@@ -148,7 +146,7 @@ async fn stdio_catalogue(dirs: &[String]) -> (Arc<CapabilityBackend>, [u8; 32]) 
     {
         Ok(Ok(())) => {}
         Ok(Err(error)) => panic!("stdio startup refused: {error}"),
-        Err(_) => panic!("hung past 30s"),
+        Err(elapsed) => panic!("hung past 30s: {elapsed}"),
     }
     let backend = meta.get_capabilities().expect("the catalogue is installed");
     (backend, meta.record_key().config_revision_key())

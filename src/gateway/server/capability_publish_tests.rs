@@ -19,6 +19,9 @@ use crate::config_reload::revision::{
 };
 use crate::gateway::webhooks::WebhookRegistry;
 
+/// A row's look at one delivery, copied into the backend a startup builds.
+type Observer = Arc<dyn Fn(&CapabilityBackend) + Send + Sync>;
+
 fn yaml_bytes(name: &str) -> Vec<u8> {
     format!(
         "name: {name}\ndescription: served\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://example.com\n      path: /{name}\n"
@@ -114,11 +117,7 @@ fn bind_one_shared_account(gateway: &mut Gateway) {
     });
 }
 
-async fn start_http(
-    dirs: &[PathBuf],
-    account_bound: bool,
-    observer: Option<Arc<dyn Fn(&CapabilityBackend) + Send + Sync>>,
-) -> Started {
+async fn start_http(dirs: &[PathBuf], account_bound: bool, observer: Option<Observer>) -> Started {
     let mut config = Config::default();
     config.capabilities.enabled = true;
     config.capabilities.directories = dirs.iter().map(|dir| dir.display().to_string()).collect();
@@ -162,9 +161,7 @@ async fn start_http(
     backend.attach_revision(Arc::new(LiveConfig::new(gateway.config.clone())));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while !backend.initial_scan_complete() {
-        if tokio::time::Instant::now() >= deadline {
-            panic!("hung past 30s");
-        }
+        assert!(tokio::time::Instant::now() < deadline, "hung past 30s");
         tokio::task::yield_now().await;
     }
     Started {
@@ -175,10 +172,7 @@ async fn start_http(
     }
 }
 
-async fn start_stdio(
-    dir: &str,
-    observer: Option<Arc<dyn Fn(&CapabilityBackend) + Send + Sync>>,
-) -> (Arc<CapabilityBackend>, [u8; 32]) {
+async fn start_stdio(dir: &str, observer: Option<Observer>) -> (Arc<CapabilityBackend>, [u8; 32]) {
     let mut config = Config::default();
     config.capabilities.enabled = true;
     config.capabilities.directories = vec![dir.to_string()];
@@ -207,17 +201,13 @@ async fn start_stdio(
     {
         Ok(Ok(())) => {}
         Ok(Err(error)) => panic!("stdio startup refused: {error}"),
-        Err(_) => panic!("hung past 30s"),
+        Err(elapsed) => panic!("hung past 30s: {elapsed}"),
     }
     let backend = meta.get_capabilities().expect("the catalogue is installed");
     (backend, meta.record_key().config_revision_key())
 }
 
-fn watch_delivery() -> (
-    Arc<AtomicBool>,
-    Arc<AtomicBool>,
-    Arc<dyn Fn(&CapabilityBackend) + Send + Sync>,
-) {
+fn watch_delivery() -> (Arc<AtomicBool>, Arc<AtomicBool>, Observer) {
     let ran = Arc::new(AtomicBool::new(false));
     let lock_free = Arc::new(AtomicBool::new(false));
     let (ran_flag, free_flag) = (Arc::clone(&ran), Arc::clone(&lock_free));
@@ -257,7 +247,7 @@ async fn h2_account_bound_http_startup_reaches_a_covered_part() {
     let bytes = yaml_bytes("alpha");
     write_good(dir.path(), "alpha", &bytes);
     let root = root_of(dir.path());
-    let started = start_http(&[dir.path().to_path_buf()], true, None).await;
+    let started = Box::pin(start_http(&[dir.path().to_path_buf()], true, None)).await;
     covered(
         &started.backend,
         &started.key,
@@ -273,7 +263,7 @@ async fn h2_background_http_startup_reaches_a_covered_part() {
     let bytes = yaml_bytes("alpha");
     write_good(dir.path(), "alpha", &bytes);
     let root = root_of(dir.path());
-    let started = start_http(&[dir.path().to_path_buf()], false, None).await;
+    let started = Box::pin(start_http(&[dir.path().to_path_buf()], false, None)).await;
     covered(
         &started.backend,
         &started.key,
@@ -296,7 +286,7 @@ async fn s1_a_two_directory_startup_delivers_one_part_naming_both() {
     write_good(first.path(), "alpha", &alpha);
     write_good(second.path(), "beta", &beta);
     let dirs = [first.path().to_path_buf(), second.path().to_path_buf()];
-    let started = start_http(&dirs, false, None).await;
+    let started = Box::pin(start_http(&dirs, false, None)).await;
     // The part is sorted by path, and the temp dirs' names order the two.
     let mut files = vec![
         (
@@ -328,7 +318,7 @@ async fn h2_stdio_startup_reaches_a_covered_part() {
     let bytes = yaml_bytes("alpha");
     write_good(dir.path(), "alpha", &bytes);
     let root = root_of(dir.path());
-    let (backend, key) = start_stdio(&root, None).await;
+    let (backend, key) = Box::pin(start_stdio(&root, None)).await;
     covered(
         &backend,
         &key,
@@ -349,10 +339,15 @@ async fn l3_every_publish_point_delivers_with_no_catalogue_lock_held() {
     let root = root_of(dir.path());
 
     let (http_ran, http_free, http_observer) = watch_delivery();
-    let _http = start_http(&[dir.path().to_path_buf()], false, Some(http_observer)).await;
+    let _http = Box::pin(start_http(
+        &[dir.path().to_path_buf()],
+        false,
+        Some(http_observer),
+    ))
+    .await;
 
     let (stdio_ran, stdio_free, stdio_observer) = watch_delivery();
-    let _stdio = start_stdio(&root, Some(stdio_observer)).await;
+    let _stdio = Box::pin(start_stdio(&root, Some(stdio_observer))).await;
 
     let (reload_ran, reload_free, reload_observer) = watch_delivery();
     let backend = Arc::new(
@@ -365,7 +360,7 @@ async fn l3_every_publish_point_delivers_with_no_catalogue_lock_held() {
     match tokio::time::timeout(Duration::from_secs(30), backend.reload()).await {
         Ok(Ok(_)) => {}
         Ok(Err(error)) => panic!("the reload refused: {error}"),
-        Err(_) => panic!("hung past 30s"),
+        Err(elapsed) => panic!("hung past 30s: {elapsed}"),
     }
 
     assert!(

@@ -54,7 +54,7 @@ fn with_one_file(marker: Option<[u8; 8]>) -> Vec<u8> {
     out
 }
 
-/// NotLoaded is the max count and nothing else. Partial is the max-minus-one
+/// `NotLoaded` is the max count and nothing else. Partial is the max-minus-one
 /// marker, then the count and the one sorted entry. Loaded is today's count
 /// and that entry. A sequence number is not an input: each literal is the
 /// whole preimage.

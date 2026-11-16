@@ -124,7 +124,7 @@ fn l1_the_same_seq_twice_publishes_once() {
     assert_eq!(twice.revision, id_of(YAML, part_a()), "the id stays A's");
 }
 
-/// A gateway.yaml reload while the capability part is still NotLoaded, then
+/// A gateway.yaml reload while the capability part is still `NotLoaded`, then
 /// the first capability publish. `set_applied` is the publish that reload makes.
 #[test]
 fn r2x_yaml_reload_then_first_capability_publish() {

@@ -173,7 +173,7 @@ impl Handoff {
         &self,
         live: Arc<LiveConfig>,
     ) -> Option<Arc<crate::backend::BackendRegistry>> {
-        let (taken, completes, announce) = {
+        let (target, taken, completes, announce) = {
             let mut inner = self.inner.lock();
             #[cfg(test)]
             reach(Step::Attach);
@@ -187,7 +187,9 @@ impl Handoff {
                     return None;
                 }
             }
-            let prev = std::mem::replace(&mut inner.state, State::Attached(Arc::clone(&live)));
+            // The handle this call delivers to; the state keeps `live` itself.
+            let target = Arc::clone(&live);
+            let prev = std::mem::replace(&mut inner.state, State::Attached(live));
             let taken = match prev {
                 State::Unattached { held } => held,
                 State::Attached(_) => None,
@@ -205,9 +207,9 @@ impl Handoff {
             } else {
                 None
             };
-            (taken, completes, announce)
+            (target, taken, completes, announce)
         };
-        let fresh = self.deliver_attached(&live, taken, completes);
+        let fresh = self.deliver_attached(&target, taken, completes);
         announce.filter(|_| fresh)
     }
 

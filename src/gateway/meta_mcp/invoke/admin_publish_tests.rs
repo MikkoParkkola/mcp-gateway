@@ -59,7 +59,7 @@ fn part_ids(delivered: &[(u64, CapabilityPart<PartDigest>)]) -> Vec<String> {
 async fn within_30s<T>(work: impl std::future::Future<Output = T>) -> T {
     match tokio::time::timeout(Duration::from_secs(30), work).await {
         Ok(value) => value,
-        Err(_) => panic!("hung past 30s"),
+        Err(elapsed) => panic!("hung past 30s: {elapsed}"),
     }
 }
 
