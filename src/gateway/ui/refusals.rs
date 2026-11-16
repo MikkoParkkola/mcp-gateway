@@ -75,7 +75,8 @@ impl WriteTicket {
 
     pub(super) fn record(&self, kind: RefusalKind, name: &str, error: &str) {
         if let Some(ledger) = &self.ledger {
-            ledger.record(kind, Some(name), error);
+            // An admin write's error is already text, and it has no syntax line.
+            ledger.record(kind, Some(name), error, None);
         }
     }
 
