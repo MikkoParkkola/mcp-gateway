@@ -551,6 +551,9 @@ fn read_ca_files(
 #[path = "api_tests.rs"]
 mod api_tests;
 #[cfg(all(test, feature = "webui"))]
+#[path = "api_parity_tests.rs"]
+mod api_parity_tests;
+#[cfg(all(test, feature = "webui"))]
 mod dashboard_link_tls_tests;
 #[cfg(test)]
 mod tls_ca_key_tests;
