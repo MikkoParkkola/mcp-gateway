@@ -26,8 +26,12 @@ type LiveKey = ((SourceKind, String), String, String, serde_json::Value);
 pub(super) type Started = tokio::sync::Mutex<HashSet<(SourceKind, String)>>;
 
 impl EventsHub {
-    /// The source that offers event type `name`.
+    /// The source that offers event type `name`. None offers the gateway's
+    /// own ended notice.
     pub(super) fn source_offering(&self, name: &str) -> Option<Arc<dyn EventSource>> {
+        if name == super::outbox::ENDED_NAME {
+            return None;
+        }
         // ponytail: scans every source's descriptors per call, delivery
         // included; sources are few. Index by name if that changes.
         self.sources.read().iter().find(|s| s.offers(name)).cloned()

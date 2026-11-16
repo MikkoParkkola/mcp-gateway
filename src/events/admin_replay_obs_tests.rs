@@ -161,6 +161,7 @@ fn bury_observed(f: &Fixture, event: &str) {
         dead_as: None,
         replayed: false,
         observed,
+        ended_incarnation: None,
     };
     f.hub.store.enqueue(record, CAPS).expect("io");
     let Claim::Ready(_) = f.hub.store.claim(event, now).expect("io") else {
