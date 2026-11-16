@@ -21,6 +21,7 @@
 // Macro-generated arrays (e.g. include_bytes!) may exceed the 16 KiB stack
 // threshold.  Clippy cannot show a source location for these — allow crate-wide.
 #![allow(clippy::large_stack_arrays)]
+#![cfg_attr(test, allow(unused, dead_code))] // measurement branch: disabled test modules leave unused items under -Dwarnings
 
 // Commands behind cli::run keep crate-name paths; later cleanup can use `crate::`.
 extern crate self as mcp_gateway;
