@@ -401,7 +401,7 @@ fn refused_as_shape(rig: &mut DrainRig, row: &str) {
 /// OUTCOME.9 (b), the drain half of the pair: a token whose terminal is already frozen but whose
 /// delivered intent has no counter is refused as found. `terminals_agree` may decide this file
 /// before the finishability judgement does, so no mutant is scored on this row;
-/// drain_refuses_counterless_unfrozen isolates the judgement.
+/// `drain_refuses_counterless_unfrozen` isolates the judgement.
 #[test]
 fn drain_refuses_prefrozen_counterless() {
     const ROW: &str = "drain_refuses_prefrozen_counterless";
@@ -451,7 +451,7 @@ fn drain_refuses_counterless_unfrozen() {
 }
 
 /// OUTCOME.10: a drain that delivered everything and still finds the file incomplete (a decision
-/// that owes a DeliveryStopped record the drain never freezes) reports that under its own WARN and
+/// that owes a `DeliveryStopped` record the drain never freezes) reports that under its own WARN and
 /// counter reason, never as "refused and kept as found"; a second drain resends nothing.
 #[test]
 fn drain_reports_incomplete_after_delivery() {
