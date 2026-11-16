@@ -105,11 +105,21 @@ pub(super) fn check_args(args: &ApiArgs, url: &reqwest::Url) -> Result<(), ApiEr
     }
     // The streamed sender carries no body and no If-Match; both routes are
     // GET-only, so a request that sets either is refused, never sent without.
-    if mode_of(url) != Mode::Buffered && (args.data.is_some() || args.if_match.is_some()) {
-        return usage(
-            "--data and --if-match do not apply to the event stream or the activity export.",
-            "Remove --data and --if-match, then retry.",
-        );
+    if mode_of(url) != Mode::Buffered {
+        let flag = if args.data.is_some() {
+            Some("--data")
+        } else if args.if_match.is_some() {
+            Some("--if-match")
+        } else {
+            None
+        };
+        if let Some(flag) = flag {
+            return Err(ApiError::new(
+                ApiExit::Usage,
+                format!("{flag} does not apply to {}.", url.path()),
+                format!("Remove {flag}, then retry."),
+            ));
+        }
     }
     Ok(())
 }

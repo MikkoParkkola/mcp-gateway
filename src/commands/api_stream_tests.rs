@@ -166,7 +166,13 @@ async fn stream_flags_and_credentials_are_checked_before_sending() {
     with_data.data = Some("{}".to_owned());
     let mut with_if_match = args(EXPORT, None, false);
     with_if_match.if_match = Some("\"v1\"".to_owned());
-    for request in [with_data, with_if_match] {
+    for (request, named) in [
+        (with_data, "--data does not apply to /ui/api/stream."),
+        (
+            with_if_match,
+            "--if-match does not apply to /ui/api/activity/export.",
+        ),
+    ] {
         let (out, outcome, sends) = run(&request, None).await;
         assert_eq!(
             (outcome.exit, sends, out.len()),
@@ -174,6 +180,7 @@ async fn stream_flags_and_credentials_are_checked_before_sending() {
             "{}",
             request.path
         );
+        assert!(outcome.stderr.contains(named), "{}", outcome.stderr);
     }
     for bad in ["two\nlines", "tab\there"] {
         let refused = super::super::resolve_token(Ok(bad.to_owned()), BASE);
