@@ -215,21 +215,57 @@ fn t6_the_file_is_owner_only() {
 }
 
 #[test]
-fn t7_ids_are_never_recomputed() {
-    let dir = tempfile::tempdir().unwrap();
-    let history = ConfigHistory::open(dir.path(), Bounds::default(), 0);
-    let bytes = b"same-bytes";
-    record_version(&history, "r1", 1, bytes, "r1");
-    record_version(&history, "r2", 2, bytes, "r2");
+fn t7_a_rotated_key_gives_a_new_id_and_keeps_the_old() {
+    use std::sync::Arc;
 
-    assert_eq!(revision_names(&history), expect(&["r1", "r2"]));
-    assert!(matches!(history.lookup("r1"), Lookup::Kept(_)));
-    if let Lookup::Kept(found) = history.lookup("r1") {
-        assert_eq!(gateway(&found), bytes);
-    }
-    let path = dir.path().join(ConfigHistory::FILE);
-    assert!(path.exists());
-    let text = std::fs::read_to_string(&path).unwrap();
+    use crate::config::Config;
+    use crate::config_reload::LiveConfig;
+    use crate::config_reload::revision::RawInputs;
+    use crate::gateway::record_principal::RecordPrincipalKey;
+
+    const V1: &[u8] = b"backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
+    let dir = tempfile::tempdir().unwrap();
+    let raw = RawInputs {
+        gateway_yaml: V1.to_vec(),
+        ..RawInputs::default()
+    };
+    let (_live, store) = super::record_tests::hold_at(
+        dir.path(),
+        raw.clone(),
+        "gateway.yaml".to_string(),
+        None,
+        Config::default(),
+        None,
+    );
+    let k1 = store
+        .snapshots()
+        .last()
+        .map(|snapshot| snapshot.revision.clone());
+
+    let rotated = RecordPrincipalKey::from_text("rotated-test-record-key-0123456789abcdef-two")
+        .expect("the rotated key is long enough");
+    let second = Arc::new(ConfigHistory::open(dir.path(), Bounds::default(), 1));
+    let live = LiveConfig::new(Config::default())
+        .with_history(super::HistoryHook {
+            store: Arc::clone(&second),
+            config_path: "gateway.yaml".to_string(),
+            grants_path: None,
+        })
+        .with_startup_revision(&rotated, Some(raw));
+    let k2 = live.applied_now().map(|applied| applied.revision);
+
+    assert_ne!(k1, k2);
+    let fresh = ConfigHistory::open(dir.path(), Bounds::default(), 1);
+    let names = revision_names(&fresh);
+    assert_eq!(names.first().cloned(), k1);
+    assert_eq!(names.iter().nth(1).cloned(), k2);
+    assert_eq!(names.len(), 2);
+    let kept = match k1.as_deref().map(|revision| fresh.lookup(revision)) {
+        Some(Lookup::Kept(snapshot)) => Some(gateway(&snapshot).to_vec()),
+        _ => None,
+    };
+    assert_eq!(kept.as_deref(), Some(V1));
+    let text = std::fs::read_to_string(dir.path().join(ConfigHistory::FILE)).unwrap();
     assert!(!text.contains("\"alias\""));
 }
 

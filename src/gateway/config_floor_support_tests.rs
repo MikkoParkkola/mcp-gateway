@@ -252,7 +252,14 @@ pub(crate) async fn write_bytes(
     let audit = AuditPosture::of(None, GatewayAuth::Off)
         .audit(IntentKind::Adopt)
         .expect("an unaudited gateway with auth off writes");
-    replace_audited(ctx, replace, audit, RELOAD_LOCK_WAIT).await
+    replace_audited(
+        ctx,
+        replace,
+        audit,
+        crate::config_reload::history::Source::Ui { who: String::new() },
+        RELOAD_LOCK_WAIT,
+    )
+    .await
 }
 
 /// A manual reload through `reload_outcome`, the entry the UI route and the

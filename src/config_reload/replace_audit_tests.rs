@@ -91,6 +91,7 @@ async fn a_pending_journal_with_a_failing_intent_changes_nothing() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -125,6 +126,7 @@ async fn an_owed_reload_runs_after_its_recovery_intent() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await
@@ -165,6 +167,7 @@ async fn an_owed_reload_flag_alone_gets_a_recovery_intent() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await
@@ -194,6 +197,7 @@ async fn an_intent_failure_writes_nothing() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -568,6 +572,7 @@ async fn a_save_the_loader_refuses_records_no_intent() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -603,6 +608,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -630,6 +636,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await
@@ -666,6 +673,7 @@ async fn a_config_others_can_write_is_refused_before_its_intent() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -701,6 +709,7 @@ async fn a_pending_recovery_on_a_config_others_can_write_is_refused_before_its_i
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;

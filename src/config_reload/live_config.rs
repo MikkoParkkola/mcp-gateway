@@ -66,6 +66,10 @@ pub struct LiveConfig {
     /// G5: how many generations this holder has published.
     #[cfg(test)]
     publishes: std::sync::atomic::AtomicU64,
+    /// Test seam: runs inside [`Self::record_publish`], after the published
+    /// bytes are captured and before they are handed to the history hook.
+    #[cfg(test)]
+    record_pause: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl LiveConfig {
@@ -106,6 +110,8 @@ impl LiveConfig {
             history: None,
             #[cfg(test)]
             publishes: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            record_pause: None,
         }
     }
 
@@ -117,6 +123,14 @@ impl LiveConfig {
         hook: impl Into<Option<crate::config_reload::history::HistoryHook>>,
     ) -> Self {
         self.history = hook.into();
+        self
+    }
+
+    /// Install the pause [`Self::record_publish`] runs before the history hook.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_record_pause(mut self, pause: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.record_pause = Some(pause);
         self
     }
 
@@ -134,6 +148,10 @@ impl LiveConfig {
         let (Some(hook), Some(raw), Some(applied)) = (self.history.as_ref(), raw, published) else {
             return;
         };
+        #[cfg(test)]
+        if let Some(pause) = &self.record_pause {
+            pause();
+        }
         hook.on_publish(
             &raw,
             &applied.revision,
@@ -145,7 +163,8 @@ impl LiveConfig {
     }
 
     /// Record a refused reload into the history hook, when one is set.
-    pub(crate) fn record_refused(&self, source: Source) {
+    /// `line` is the parser line of a file refusal; the hook does not store it yet.
+    pub(crate) fn record_refused(&self, source: Source, line: Option<u32>) {
         let Some(hook) = &self.history else {
             return;
         };
@@ -153,6 +172,7 @@ impl LiveConfig {
         hook.on_refused(
             source,
             served.as_deref(),
+            line,
             crate::clock::unix_secs().unwrap_or(0),
         );
     }

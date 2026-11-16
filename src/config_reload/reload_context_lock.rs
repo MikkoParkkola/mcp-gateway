@@ -178,7 +178,7 @@ impl ReloadContext {
                     line,
                 );
                 self.reporting.tally.refused();
-                self.live_config.record_refused(source);
+                self.live_config.record_refused(source, line);
             }
         }
         outcome

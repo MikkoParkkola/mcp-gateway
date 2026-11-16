@@ -204,7 +204,14 @@ async fn failing_secret_save(
     let audit = AuditPosture::of(None, GatewayAuth::Off)
         .audit(IntentKind::Adopt)
         .expect("an unaudited gateway with auth off writes");
-    replace_audited(ctx, replace, audit, RELOAD_LOCK_WAIT).await
+    replace_audited(
+        ctx,
+        replace,
+        audit,
+        crate::config_reload::history::Source::Ui { who: String::new() },
+        RELOAD_LOCK_WAIT,
+    )
+    .await
 }
 
 /// The live secret entries no config names, in the store at `dir`.

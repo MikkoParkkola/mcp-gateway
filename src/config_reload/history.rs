@@ -317,7 +317,13 @@ impl HistoryHook {
 
     /// Record a refused reload. No version is stored. `served` is the revision
     /// still published, when there is one.
-    pub(crate) fn on_refused(&self, source: Source, served: Option<&str>, now: u64) {
+    pub(crate) fn on_refused(
+        &self,
+        source: Source,
+        served: Option<&str>,
+        _line: Option<u32>,
+        now: u64,
+    ) {
         let still_running = served.map(|revision| StillRunning {
             revision: revision.to_string(),
             since: self.store.stored_at(revision).unwrap_or(now),
@@ -452,6 +458,9 @@ fn evict_events(events: &mut Vec<Event>, bounds: Bounds) {
 #[cfg(test)]
 #[path = "history_record_tests.rs"]
 mod record_tests;
+#[cfg(test)]
+#[path = "history_reload_tests.rs"]
+mod reload_tests;
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod tests;

@@ -121,7 +121,15 @@ pub(crate) async fn ui_save(
         replaced: Replaced::Discard,
         secrets,
     };
-    let error = match replace_audited(Arc::clone(&ctx), replace, audit, wait).await {
+    let error = match replace_audited(
+        Arc::clone(&ctx),
+        replace,
+        audit,
+        crate::config_reload::history::Source::Ui { who: String::new() },
+        wait,
+    )
+    .await
+    {
         Ok(outcome) => {
             return Ok(UiSaved {
                 changed: outcome.revision.is_some(),

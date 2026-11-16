@@ -109,7 +109,14 @@ async fn write_audited(
 ) -> Result<ReplaceOutcome, ReplaceError> {
     let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
     let audit = AuditPosture::of(state.transparency_log.clone(), auth).audit(kind)?;
-    replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await
+    replace_audited(
+        context,
+        replace,
+        audit,
+        crate::config_reload::history::Source::Ui { who: String::new() },
+        RELOAD_LOCK_WAIT,
+    )
+    .await
 }
 
 /// Embedded HTML — compiled into the binary, zero filesystem dependency.
