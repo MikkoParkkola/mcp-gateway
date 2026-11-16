@@ -175,7 +175,7 @@ pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result
     body["link"]
         .as_str()
         .map(ToString::to_string)
-        .ok_or_else(|| "the gateway's answer carried no link".to_string())
+        .ok_or_else(|| token_free("the gateway's answer carried no link", token))
 }
 
 /// One admin request to the gateway at `base`; the JSON answer of a success,
@@ -660,11 +660,12 @@ fn gate(prefix: &str, token: &str, result: Result<(String, &str), String>) -> Pr
         Ok((stdout, note)) => (stdout, note.to_string(), true),
         Err(message) => (String::new(), format!("{prefix}: {message}"), false),
     };
-    let line = token_free(&line, token);
+    // Checked as printed, newline included: a token ending in a newline
+    // would otherwise form only after the check.
     let stderr = if line.is_empty() {
         line
     } else {
-        format!("{line}\n")
+        token_free(&format!("{line}\n"), token)
     };
     Printed { stdout, stderr, ok }
 }
@@ -673,14 +674,17 @@ fn gate(prefix: &str, token: &str, result: Result<(String, &str), String>) -> Pr
 /// marker's edge survives it, one fixed sentence instead, or nothing if even
 /// that holds the token (the api command's rule).
 fn token_free(text: &str, token: &str) -> String {
-    const UNPRINTABLE: &str = "A message could not be printed without exposing the credential.";
+    let newline = if text.ends_with('\n') { "\n" } else { "" };
     let text = mcp_gateway::cli::redact::text(text, &[token.to_string()]);
     if !text.contains(token) {
-        text
-    } else if UNPRINTABLE.contains(token) {
+        return text;
+    }
+    let sentence =
+        format!("A message could not be printed without exposing the credential.{newline}");
+    if sentence.contains(token) {
         String::new()
     } else {
-        UNPRINTABLE.to_string()
+        sentence
     }
 }
 

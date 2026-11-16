@@ -494,3 +494,23 @@ async fn admin_call_errors_never_hold_the_token() {
     .expect_err("an error");
     assert!(!error.contains("d]z"), "{error}");
 }
+
+/// Round 3: `fetch_link`'s own error is token-free for any caller, and the
+/// gate checks stderr as printed, so a token ending in a newline cannot form
+/// after the check.
+#[tokio::test]
+async fn fixed_text_and_the_final_newline_never_complete_the_token() {
+    let base = answering(200, r#"{"items":[]}"#.into()).await;
+    let error = fetch_link(&base, "link").await.expect_err("no link");
+    assert!(!error.contains("link"), "{error}");
+    let out = super::gate("dashboard-link", "given\n", Err("no reason given".into()));
+    assert!(!out.stderr.contains("given\n"), "{out:?}");
+    assert!(!out.ok && out.stdout.is_empty(), "{out:?}");
+}
+
+/// Run output goes through the CLI's `print!`, which exits cleanly when the
+/// reader closes the pipe; std's panics, and the release build aborts.
+#[test]
+fn run_output_uses_the_cli_print() {
+    assert!(include_str!("dashboard_link.rs").contains("\nuse crate::cli::stdout::print;\n"));
+}
