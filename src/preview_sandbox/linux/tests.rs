@@ -587,3 +587,25 @@ fn a_linked_node_is_found_on_path_through_its_real_directory() {
     let real_bin = std::fs::canonicalize(real.join("bin")).expect("real bin");
     assert_eq!(node_dir, real_bin);
 }
+
+/// RF8 (G2), kills "the helper's stderr reaches the caller after the
+/// credential": once the credential is out, a sandbox that ended first is
+/// refused in fixed words whatever its stderr held; before it, the helper's
+/// own refusal is still classified from its stderr.
+#[test]
+fn rf8_no_helper_stderr_reaches_the_caller_after_the_credential() {
+    let url = ["https", "://x", ":0123abcd", "@registry.npmjs.org/p"].concat();
+    let stderr = format!(
+        "preview-sandbox: refused at fetching the package (npm ERR! {url} /home/runner/.npmrc)"
+    );
+    let after = super::ended_refusal(true, &stderr);
+    let text = format!("{after:?} {after}");
+    for leaked in ["0123abcd", "registry.npmjs.org", ".npmrc", "npm ERR"] {
+        assert!(!text.contains(leaked), "{text}");
+    }
+    assert_eq!(after, super::ended_refusal(true, ""));
+    assert_eq!(
+        super::ended_refusal(false, &stderr),
+        super::classify(&stderr)
+    );
+}

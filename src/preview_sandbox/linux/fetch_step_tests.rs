@@ -142,3 +142,33 @@ fn an_oversized_fetch_deadline_gives_none() {
     let now = std::time::Instant::now();
     assert!(fetch_deadline(1_500).is_some_and(|d| d > now));
 }
+
+/// RF5 (NPM.8, precedence), kills "a teardown failure is reported over the
+/// fetch's own": the fetch's failure wins, then the first failed teardown
+/// step in order; all Ok is Ok.
+#[test]
+fn rf5_the_first_failure_is_reported() {
+    use super::{FetchFailure, first_failure};
+    use crate::preview_sandbox::control_msg::FetchStep;
+    let fail = |step: FetchStep| -> Result<(), FetchFailure> {
+        Err(FetchFailure {
+            step,
+            detail: format!("{step:?}"),
+        })
+    };
+    let reported = |r: Result<(), FetchFailure>| r.err().map(|f| f.step);
+    let fetch_first = first_failure(
+        fail(FetchStep::NpmCi),
+        [fail(FetchStep::Sweep), Ok(()), fail(FetchStep::ProxySocket)],
+    );
+    assert_eq!(reported(fetch_first), Some(FetchStep::NpmCi));
+    let in_order = first_failure(
+        Ok(()),
+        [Ok(()), fail(FetchStep::Relay), fail(FetchStep::ProxySocket)],
+    );
+    assert_eq!(reported(in_order), Some(FetchStep::Relay));
+    assert_eq!(
+        reported(first_failure(Ok(()), [Ok(()), Ok(()), Ok(())])),
+        None
+    );
+}

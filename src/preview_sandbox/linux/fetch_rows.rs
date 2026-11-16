@@ -277,9 +277,11 @@ async fn l4a_a_git_dependency_refuses_the_fetch() {
         return;
     };
     let refusal = ran.expect_err("a git dependency was installed");
+    // npm fails the git edge itself, or the lock check refuses it.
+    let at = |step: &str| refusal == Refusal::Step(step.into());
     assert!(
-        refusal.to_string().to_ascii_lowercase().contains("git"),
-        "{refusal}"
+        at("the fetch's npm install") || at("the fetch's lock check"),
+        "{refusal:?}"
     );
 }
 
@@ -659,4 +661,24 @@ async fn l6b_a_start_dropped_mid_fetch_leaves_nothing_running() {
     tokio::time::timeout(GUARD, ended)
         .await
         .expect("the sandbox and every registry connection ended within the guard");
+}
+
+/// RF6 (NPM.8), kills "a failed npm install reports Started": the fake
+/// registry lacks the package, so the start itself refuses at the npm
+/// install, and nothing carrying the target's marker is left running.
+#[tokio::test]
+async fn rf6_a_failed_npm_install_never_reports_started() {
+    const MARKER: &str = "rf6-marker-77aa";
+    let Some(ran) = npx("mcp-missing", &[MARKER], Vec::new(), Bundle::Registry).await else {
+        return;
+    };
+    assert_eq!(ran, Err(Refusal::Step("the fetch's npm install".into())));
+    let ended = async {
+        while !marked(MARKER).is_empty() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    tokio::time::timeout(GUARD, ended)
+        .await
+        .expect("the sandbox ended within the guard");
 }

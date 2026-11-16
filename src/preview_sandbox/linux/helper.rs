@@ -125,7 +125,7 @@ fn open_path(
 /// for `expired`. The fetch command itself runs between them (the next part).
 fn fetch(control: &mut UnixStream) -> Result<(), String> {
     let _issued = control_client::start_fetch(control, HELPER_BOUNDS)?;
-    control_client::finish_fetch(control, HELPER_BOUNDS)
+    control_client::finish_fetch(control, HELPER_BOUNDS, None)
 }
 
 /// Refuse unless every namespace differs from the gateway's.
