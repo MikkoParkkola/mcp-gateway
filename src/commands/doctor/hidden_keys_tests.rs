@@ -376,3 +376,110 @@ fn a_file_that_does_not_parse_prints_nothing_from_it() {
         "the row never prints the value: {shown}"
     );
 }
+
+/// A config written before the second hide pass keeps working: a newly hidden
+/// config key and a newly hidden environment variable both still take effect,
+/// and doctor names the key. (Naming hidden variables is a separate change.)
+#[test]
+fn a_newly_hidden_key_and_variable_still_take_effect_and_doctor_names_the_key() {
+    use crate::gateway::test_helpers::write_owner_only;
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let env = dir.path().join("hidden.env");
+    write_owner_only(
+        &env,
+        "MCP_GATEWAY_SERVER__PUBLIC_URL=https://gw-9641.example\n",
+    )
+    .expect("env file");
+    let path = dir.path().join("gateway.yaml");
+    let config = format!(
+        "env_files:\n  - '{}'\nsecurity:\n  tool_policy:\n    deny: ['sentinel_tool_9641']\n    log_denied: false\n",
+        env.display()
+    );
+    write_owner_only(&path, config).expect("config");
+    let cfg =
+        crate::config::Config::load(Some(&path)).expect("a config with hidden settings loads");
+    // The variable's effect: the overlay sets the public URL.
+    assert_eq!(
+        cfg.server.public_url.as_deref(),
+        Some("https://gw-9641.example")
+    );
+    // The key's effect: a denied call writes no warning, where the default
+    // writes one.
+    let warnings = |policy: &crate::security::policy::ToolPolicy| {
+        crate::test_log_capture::records(|| {
+            assert!(
+                policy.check("s", "sentinel_tool_9641").is_err(),
+                "premise: the tool is denied"
+            );
+        })
+        .iter()
+        .filter(|r| r["fields"]["message"] == "Tool invocation denied by policy")
+        .count()
+    };
+    let quiet = crate::security::policy::ToolPolicy::from_config(&cfg.security.tool_policy);
+    assert_eq!(warnings(&quiet), 0, "log_denied: false writes no warning");
+    let default = crate::security::policy::ToolPolicyConfig {
+        deny: vec!["sentinel_tool_9641".to_owned()],
+        ..crate::security::policy::ToolPolicyConfig::default()
+    };
+    let loud = crate::security::policy::ToolPolicy::from_config(&default);
+    assert_eq!(warnings(&loud), 1, "control: the default warns once");
+    let row = check_hidden_keys(&path).expect("doctor names a set hidden key");
+    assert!(
+        row.detail.contains("security.tool_policy.log_denied"),
+        "{}",
+        row.detail
+    );
+}
+
+/// `kind: personal` is a setting an operator writes by hand (the hardened
+/// posture admits a key held by one person), so doctor never calls it
+/// hidden; a machine-written field of the same key still is.
+#[test]
+fn a_hand_written_api_key_kind_is_not_a_hidden_setting() {
+    let raw = yaml("auth:\n  api_keys:\n    - name: k\n      kind: personal\n");
+    assert!(
+        set_hidden_keys(&raw).is_empty(),
+        "{:?}",
+        set_hidden_keys(&raw)
+    );
+    let raw = yaml("auth:\n  api_keys:\n    - name: k\n      kind: personal\n      cli_host: h\n");
+    assert_eq!(set_hidden_keys(&raw), vec!["auth.api_keys[].cli_host"]);
+}
+
+/// A hidden section holding only a retired key applies no hidden setting, so
+/// doctor names none, while the loader still warns about the retired key.
+#[test]
+fn a_section_holding_only_a_retired_key_names_no_hidden_setting() {
+    use crate::gateway::test_helpers::write_owner_only;
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, "cache:\n  enabled: false\n").expect("config");
+    assert!(
+        check_hidden_keys(&path).is_none(),
+        "doctor names no hidden cache setting"
+    );
+    let logs = crate::test_log_capture::records(|| {
+        assert!(crate::config::Config::load(Some(&path)).is_ok(), "loads");
+    });
+    assert_eq!(
+        crate::test_log_capture::count(&logs, "WARN", "`cache.enabled` is ignored since 4.0"),
+        1,
+        "the loader's retired-key warning still fires: {logs:?}"
+    );
+}
+
+/// A real hidden key in that section is named, with or without the retired one.
+#[test]
+fn a_real_hidden_key_beside_a_retired_one_is_named() {
+    for text in [
+        "cache:\n  max_entries: 10\n",
+        "cache:\n  enabled: false\n  max_entries: 10\n",
+    ] {
+        assert_eq!(
+            set_hidden_keys(&yaml(text)),
+            vec!["cache.max_entries"],
+            "{text}"
+        );
+    }
+}
