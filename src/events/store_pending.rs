@@ -172,7 +172,9 @@ impl Store {
         let mine = state
             .outbox
             .values()
-            .filter(|r| r.is_event() && r.subscription_id == record.subscription_id)
+            .filter(|r| {
+                mutant!("m12", true, r.is_event()) && r.subscription_id == record.subscription_id
+            })
             .count();
         if mine >= caps.per_subscription {
             return Ok(Enqueued::DroppedPerSubscription);
@@ -205,7 +207,13 @@ impl Store {
         let orphans: Vec<String> = state
             .outbox
             .values()
-            .filter(|r| state.row_of(r).is_none())
+            .filter(|r| {
+                mutant!(
+                    "m1",
+                    !state.subs.contains_key(&r.subscription_id),
+                    state.row_of(r).is_none()
+                )
+            })
             .map(|r| r.event_id.clone())
             .collect();
         for id in orphans {
@@ -271,11 +279,13 @@ impl Store {
         let Some(record) = state.outbox.get(event_id) else {
             return Ok(Claim::Skip);
         };
-        let Some(subscription) = state
-            .row_of(record)
-            .filter(|s| !record.is_event() || sendable(s, now))
-            .cloned()
-        else {
+        let Some(subscription) = mutant!(
+            "m3",
+            state.subs.get(&record.subscription_id),
+            state.row_of(record)
+        )
+        .filter(|s| !record.is_event() || sendable(s, now))
+        .cloned() else {
             return Ok(Claim::Skip);
         };
         if record.state != OutboxState::Pending {
@@ -366,7 +376,13 @@ impl Store {
         // ended row with it; one that retries keeps it.
         let ended_cleanup = ended_key
             .as_ref()
-            .filter(|_| !state.outbox.contains_key(event_id))
+            .filter(|_| {
+                mutant!(
+                    "m6",
+                    true,
+                    mutant!("m5", false, !state.outbox.contains_key(event_id))
+                )
+            })
             .map(|key| self.drop_ended(&mut state, key));
         let status_line = match outcome {
             Settle::Delivered => Some((true, None)),
@@ -380,7 +396,7 @@ impl Store {
         }
         // A notice never writes a row's status: the live row under its id is
         // another grant (design Y'' 5).
-        .filter(|_| ended_key.is_none());
+        .filter(|_| mutant!("m7", true, ended_key.is_none()));
         // The subscription's delivery history is a status line: a failed
         // write of it never undoes the settlement.
         #[cfg(test)]
@@ -492,7 +508,12 @@ impl Store {
             .get(&record.event_id)
             .is_some_and(|r| r.state == OutboxState::InFlight && r.created_at == record.created_at);
         if claimed {
-            state.row_of(record).cloned()
+            mutant!(
+                "m4",
+                state.subs.get(&record.subscription_id),
+                state.row_of(record)
+            )
+            .cloned()
         } else {
             None
         }

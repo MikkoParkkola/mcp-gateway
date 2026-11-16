@@ -508,12 +508,13 @@ impl EventsHub {
     async fn settled(&self, id: &str) -> bool {
         let deadline = tokio::time::Instant::now() + super::client::TOTAL_TIMEOUT * 2;
         loop {
-            let busy = self
-                .runtime
-                .busy
-                .lock()
-                .iter()
-                .any(|key| super::outbox::busy_key_of(key, id));
+            let busy = self.runtime.busy.lock().iter().any(|key| {
+                mutant!(
+                    "m18",
+                    key.as_str() == id,
+                    super::outbox::busy_key_of(key, id)
+                )
+            });
             if !busy {
                 return true;
             }

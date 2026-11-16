@@ -156,7 +156,11 @@ impl OutboxRecord {
     pub(crate) fn busy_key(&self) -> String {
         match self.ended_incarnation {
             None => self.subscription_id.clone(),
-            Some(incarnation) => ended_busy_key(&self.subscription_id, incarnation),
+            Some(incarnation) => mutant!(
+                "m2",
+                self.subscription_id.clone(),
+                ended_busy_key(&self.subscription_id, incarnation)
+            ),
         }
     }
 }

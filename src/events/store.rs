@@ -701,7 +701,7 @@ impl Store {
         let removed = self.remove_where(id, now, tail, |_| true)?;
         // The owner said stop: that supersedes the id's earlier endings too,
         // whether or not a live row was left.
-        Ok(self.forget_ended(id)? || removed)
+        Ok(mutant!("m9", removed, self.forget_ended(id)? || removed))
     }
 
     /// Delete subscription `id` when `still` holds for the stored row under

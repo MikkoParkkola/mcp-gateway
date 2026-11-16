@@ -83,7 +83,7 @@ impl Store {
             self.trim_tails(&mut state, at, tail)?;
             return Ok(false);
         };
-        self.cancel_pending(&mut state, id, Cancel::Events)?;
+        self.cancel_pending(&mut state, id, mutant!("m10", Cancel::All, Cancel::Events))?;
         let ended = EndedRow {
             row: sub.clone(),
             ended: stamp,
@@ -100,7 +100,11 @@ impl Store {
             }
             return Err(error);
         }
-        if let Err(error) = remove_record(&self.subs_dir, &format!("{id}.json")) {
+        if let Err(error) = mutant!(
+            "m20",
+            Ok(()),
+            remove_record(&self.subs_dir, &format!("{id}.json"))
+        ) {
             tracing::warn!(%error, "events store: an ended row's live file was not removed");
         }
         state.drop_row(id);
@@ -154,7 +158,11 @@ impl Store {
             ));
         }
         let file = EndedRow::file(&ended.row.id, ended.row.incarnation);
-        write_record(&self.ended_dir, &file, ended)?.durable()
+        mutant!(
+            "m19",
+            Ok(()),
+            write_record(&self.ended_dir, &file, ended)?.durable()
+        )
     }
 
     /// Delete ended row `key` and its file. Memory follows the disk.
