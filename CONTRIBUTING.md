@@ -303,6 +303,12 @@ every mutant (format and rules in `scripts/ci/mutants/run_mutants.py`).
 The batch must carry the harness (`run_mutants.py`, `mutants.yml`) byte-identical to the release
 branch, or the run aborts: after a harness change merges, re-copy both files into every open
 `throwaway/mutants-*` branch before pushing it again.
+Hosted repeats re-run one filtered lib test on the binary CI already built. Push
+`throwaway/repeat-<name>` as the commit under test plus one commit that adds only
+`.repeat/spec.json` (`sha`, `filter`, `runs`, `parallel`, `exact`). CI for that sha must
+have finished; its binary artifact lives 1 day. The job reuses that binary and compiles
+nothing. Read the verdict as PASSED/TOTAL in the job summary. Limits: `runs` <= 50,
+`parallel` <= 4. One queue is shared with other lanes (concurrency group `repeat-linux-hosted`).
 
 ### Moving code between files
 
