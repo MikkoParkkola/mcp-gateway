@@ -823,8 +823,9 @@ async fn tokens_the_redactor_cannot_mask_stop_the_run() {
         )
     };
     for (request, reply, token) in [
-        (args(EXPORT, None, false), export("abc\n"), "d"),
-        (args(STREAM, Some(1), false), event("abc"), "d"),
+        // The token must be present: with no match the line passes unchanged.
+        (args(EXPORT, None, false), export("ad\n"), "d"),
+        (args(STREAM, Some(1), false), event("ad"), "d"),
         (args(STREAM, Some(1), true), event("1"), ":"),
     ] {
         let (out, outcome, _) = run_as(&request, Some(reply), token).await;
