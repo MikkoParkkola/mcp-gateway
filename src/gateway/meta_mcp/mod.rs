@@ -510,7 +510,9 @@ pub struct MetaMcp {
             reason = "the web UI status reads it; the restart coordinator will in every build"
         )
     )]
-    pub(super) restart_board: Arc<crate::gateway::restart_status::RestartBoard>,
+    /// The restart slot, which owns this boot's restart status board: the
+    /// slot and the status view always share one board.
+    pub(super) restart_slot: crate::gateway::restart_slot::RestartSlot,
 }
 
 /// The session a request belongs to, if it has one.

@@ -19,6 +19,11 @@ fn admit(hub: &StreamHub, who: &str) -> Result<Guard, Refusal> {
     hub.admit(who, idle_task)
 }
 
+/// The current attempt's id: these steps move the current attempt.
+fn cur(board: &crate::gateway::restart_status::RestartBoard) -> u64 {
+    board.status().map_or(0, |s| s.attempt_id())
+}
+
 #[tokio::test]
 async fn the_global_cap_refuses_the_33rd_and_a_drop_admits_the_next() {
     let hub = StreamHub::new();
@@ -180,14 +185,14 @@ async fn b7_restart_record_changes_raise_only_the_status_generation() {
         ("id", |b| {
             b.accept();
         }),
-        ("phase", |b| b.checkpoint(1_000)),
-        ("deadline", |b| b.commit(2_000)),
-        ("remaining calls", |b| b.set_remaining_calls(4)),
-        ("phase after commit", RestartBoard::restarting),
+        ("phase", |b| b.checkpoint(cur(b), 1_000)),
+        ("deadline", |b| b.commit(cur(b), 2_000)),
+        ("remaining calls", |b| b.set_remaining_calls(cur(b), 4)),
+        ("phase after commit", |b| b.restarting(cur(b))),
         ("a fresh attempt", |b| {
             b.accept();
         }),
-        ("reason", |b| b.cancel(RestartCancel::Recheck)),
+        ("reason", |b| b.cancel(cur(b), RestartCancel::Recheck)),
     ];
     for (what, step) in steps {
         step(&board);
