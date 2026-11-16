@@ -185,6 +185,7 @@ root_doc_allowlist=(
   ".gitleaksignore"
   ".license-scope-exclude"
   ".trivyignore"
+  "build.rs"
   "Cargo.lock"
   "Cargo.toml"
   "clippy.toml"
