@@ -24,22 +24,56 @@ SHARED = Path("scripts/dev/test-parts-shared.txt")
 BUILD_RS = Path("scripts/dev/test-parts-build.rs")  # the package build script (Cargo.toml `build`)
 CRATE_ALLOW = "#![cfg_attr(tp_partial, allow(dead_code, unused_imports, unused_variables))]"
 CANDIDATE = re.compile(r"^(tests?|.*_tests?)$")
-TAG = re.compile(r"^tp([0-9]+)$")
+# Canonical tags only: tp1, tp12; never tp0 or tp01, which the build script never emits.
+TAG = re.compile(r"^tp([1-9][0-9]*)$")
 CONST_N = re.compile(r"\bconst\s+N\s*:\s*u32\s*=\s*([0-9]+)\s*;")
-TAG_LINE = re.compile(r"^\s*#\[cfg\(tp([0-9]+)\)\]\s*$")
-CFG_PREDICATE = re.compile(r"#!?\[\s*cfg(?:_attr)?\s*\((.*)\)\s*\]")
+TAG_LINE = re.compile(r"^\s*#\[cfg\(tp([1-9][0-9]*)\)\]\s*$")
 PART_NAME = re.compile(r"\btp\w*")
 
 
-def _stray_part_cfg(rel: str, line: str) -> bool:
-    """Whether a line of blanked code names a part cfg anywhere but an exact tag line or the crate-root allow: a
-    compound predicate with a tag, a malformed tag (`tpx`, `tpNone`: a cfg nobody sets compiles the item out
-    everywhere), or `tp_partial` elsewhere."""
-    if TAG_LINE.match(line) or (rel == "src/lib.rs" and line.strip() == CRATE_ALLOW):
-        return False
-    if "tp_partial" in line:
-        return True
-    return any(PART_NAME.search(m.group(1)) for m in CFG_PREDICATE.finditer(line))
+def _cfg_attr_applied(code: str) -> list[str]:
+    """The attributes a `#[cfg_attr(pred, a, b)]` applies (`a`, `b`), split at top-level commas; the predicate, which
+    may itself hold commas and `test`, is skipped."""
+    inner = code[code.index("(") + 1 : code.rindex(")")]
+    args, depth, start = [], 0, 0
+    for i, ch in enumerate(inner):
+        depth += {"(": 1, "[": 1, "{": 1, ")": -1, "]": -1, "}": -1}.get(ch, 0)
+        if ch == "," and depth == 0:
+            args.append(inner[start:i].strip())
+            start = i + 1
+    args.append(inner[start:].strip())
+    return args[1:]
+
+
+def _attr_problems(rel: str, src: bytes, root) -> list[tuple[int, str, str]]:
+    """(line, code, message) for every attribute that misuses a part cfg or makes a test through cfg_attr. Walks the
+    tree's attribute nodes, so a predicate spread over lines is read whole and its owner is known: an exact tag may
+    sit only on a module or a function (where the placement rules see it), `tp_partial` only in the crate-root
+    allow, and any other cfg naming a part (a compound, a malformed tag such as tp01 or tpNone) is refused."""
+    g = gate()
+    out = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type not in ("attribute_item", "inner_attribute_item"):
+            stack.extend(node.children)
+            continue
+        path, _args = _attr_path_and_args(src, node)
+        if path not in ("cfg", "cfg_attr"):
+            continue
+        code = " ".join(g.blank(_text(src, node))[0].split())
+        line = _line(src, node.start_byte)
+        if path == "cfg_attr" and any(re.match(r"(?:tokio\s*::\s*)?test\b", a) for a in _cfg_attr_applied(code)):
+            out.append((line, "test-attr", "a test attribute applied through cfg_attr is not supported; write #[test]"))
+        if not PART_NAME.search(code):
+            continue
+        if rel == "src/lib.rs" and node.type == "inner_attribute_item" and code == CRATE_ALLOW:
+            continue
+        owner = g._owner(node) if node.type == "attribute_item" else None
+        if TAG_LINE.match(code) and owner is not None and owner.type in ("mod_item", "function_item"):
+            continue
+        out.append((line, "stray-cfg", "a part cfg may only be an exact #[cfg(tpK)] line on a module or function"))
+    return out
 FIX = "scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py apply"
 
 
@@ -126,7 +160,7 @@ class FileWalk(NamedTuple):
     invocations: list[tuple[str, int, int | None]]  # (macro name, line, enclosing module item) at item level
     errors: list[tuple[int, int]]  # error byte ranges
     parse_ok: bool
-    tp_partial_lines: list[int]  # lines naming tp_partial outside the crate-root allow
+    attr_problems: list[tuple[int, str, str]]  # (line, code, message), from _attr_problems
 
 
 TEST_ATTRS = ("test", "tokio::test")
@@ -236,10 +270,7 @@ def walk_file(rel: str, text: str) -> FileWalk:
                 visit(body, (*path, name), len(items) - 1)
 
     visit(root, (), None)
-    # Read from code with comments and literals blanked, so a comment naming a review round ("tp1") is not code.
-    code_lines = g.blank(text)[0].splitlines()
-    partial = [no for no, line in enumerate(code_lines, 1) if _stray_part_cfg(rel, line)]
-    return FileWalk(items, generators, invocations, errors, parse_ok, partial)
+    return FileWalk(items, generators, invocations, errors, parse_ok, _attr_problems(rel, src, root))
 
 
 TEST_ATTR_TEXT = re.compile(r"(?:tokio\s*::\s*)?test\s*[\](]")
@@ -408,8 +439,8 @@ def analyse(root: Path) -> Analysis:
                 add("parse", rel, it.line, f"{it.name} overlaps a grammar gap")
         if walk_inventory(walk) != token_inventory(rel, crate.texts[rel]):
             add("cross-check", rel, 1, "the tree walk and the token scan disagree on modules or test functions")
-        for no in walk.tp_partial_lines:
-            add("stray-cfg", rel, no, "tp_partial or a tpK outside an exact tag line or the crate-root allow")
+        for no, code, message in walk.attr_problems:
+            add(code, rel, no, message)
     if CRATE_ALLOW not in [line.strip() for line in crate.texts.get("src/lib.rs", "").splitlines()]:
         add("crate-allow", "src/lib.rs", 1, f"add the line: {CRATE_ALLOW}")
 
@@ -513,7 +544,15 @@ def apply(root: Path) -> list[str]:
             if text != lines[line - 1]:
                 edits.setdefault(n.rel, []).append((line, 0, text))
         if want is not None and not have:
-            at = n.item.test_cfg_line if n.item.kind == "mod" and n.item.test_cfg_line else n.item.first_attr_line
+            if n.item.kind == "mod" and n.item.test_cfg_line:
+                at = n.item.test_cfg_line
+                alone = lines[at - 1].lstrip().startswith("#[")
+            else:
+                at = n.item.first_attr_line
+                alone = not n.item.indent.strip()
+            if not alone:
+                # A tag line inserted above code that shares the item's line would gate that code instead.
+                raise Refusal([Finding("same-line", n.rel, at, f"put {n.item.name} on its own line, then rerun ({FIX})")])
             indent = re.match(r"^(\s*)", lines[at - 1]).group(1)
             edits.setdefault(n.rel, []).append((at, 1, f"{indent}#[cfg(tp{want})]"))
     lib = a.crate.texts.get("src/lib.rs")

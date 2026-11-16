@@ -152,9 +152,29 @@ class Invariant(Rows):
 
     def test_a_malformed_part_tag_is_refused(self):
         # A cfg nobody sets compiles its item out of every part (a mutant rewrote a tag to tpNone and passed).
-        for bad in ("tpNone", "tpx", "tp_1"):
+        # tp01 too: the build script emits tp1, never tp01 (code review r1).
+        for bad in ("tpNone", "tpx", "tp_1", "tp01", "tp0"):
             with self.subTest(bad=bad):
                 self.assert_refused(with_files(src__a_DOT_rs=BASE["src/a.rs"].replace("tp1", bad)), "stray-cfg")
+
+    def test_a_part_named_in_a_multiline_cfg_is_refused(self):
+        # A line scan missed a predicate spread over lines (code review r1).
+        body = BASE["src/a.rs"].replace("    #[test]\n", "    #[cfg(any(\n        tp2,\n        tp3\n    ))]\n    #[test]\n")
+        self.assert_refused(with_files(src__a_DOT_rs=body), "stray-cfg")
+
+    def test_an_exact_tag_on_an_item_that_is_not_a_module_or_function_is_refused(self):
+        # Nothing places or deletes a tag on a struct, so it may only sit on a module or a function (code review r1).
+        self.assert_refused(with_files(src__a_DOT_rs="#[cfg(tp1)]\nstruct Probe;\n" + BASE["src/a.rs"]), "stray-cfg")
+
+    def test_a_test_attribute_applied_through_cfg_attr_is_refused(self):
+        # Neither read counts a test function made by cfg_attr, so it would run in every part (code review r1).
+        body = BASE["src/a.rs"] + "\n#[cfg_attr(test, test)]\nfn sneaky() {}\n"
+        self.assert_refused(with_files(src__a_DOT_rs=body), "test-attr")
+
+    def test_test_inside_a_cfg_attr_predicate_is_not_a_test_attribute(self):
+        # src/gateway/server/background.rs: `test` in the predicate, an `expect` applied (a false hit once).
+        body = BASE["src/a.rs"] + '\n#[cfg_attr(\n    not(any(feature = "x", test)),\n    expect(dead_code, reason = "y")\n)]\nfn kept() {}\n'
+        self.assert_green(with_files(src__a_DOT_rs=body))
 
     def test_a_comment_naming_tp1_is_not_code(self):
         # Review-round labels in comments ("gpt tp1 F3") are common in this tree.
@@ -373,6 +393,12 @@ class Codemod(Rows):
     def test_apply_refuses_a_tag_that_shares_a_line_with_code(self):
         body = "pub fn f() {}\n\n#[cfg(test)]\n#[cfg(tp2)] mod tests {\n    #[test]\n    fn t() {}\n}\n"
         self.assert_apply_refuses_and_leaves_the_tree(with_files(src__a_DOT_rs=body))
+
+    def test_apply_refuses_a_test_whose_attribute_shares_a_line_with_other_code(self):
+        # Inserting a tag line above `mod support { #[test] fn t() {} }` would tag the module, not the test
+        # (code review r1).
+        body = BASE["src/a.rs"] + "\n#[cfg(test)]\nmod support { #[test] fn t2() {} }\n"
+        self.assert_apply_refuses_and_leaves_the_tree(untagged(with_files(src__a_DOT_rs=body)))
 
 
 if __name__ == "__main__":
