@@ -60,7 +60,7 @@ impl Gateway {
             cap_backend.register_directories(&self.config.capabilities.directories);
             let mut refused = Vec::new();
             // Defined before the lock is taken, and called only after it is released.
-            let log_dirs = |logs: &[(String, Result<usize, String>)]| {
+            let log_dirs = |logs: &[(String, std::result::Result<usize, String>)]| {
                 for (dir, outcome) in logs {
                     match outcome {
                         Ok(count) => {
@@ -79,7 +79,7 @@ impl Gateway {
             cap_backend.begin_incremental_coverage();
             // Each directory's outcome, logged once the operation lock is
             // released: a blocked log write must not hold up a reload.
-            let mut dir_logs: Vec<(String, Result<usize, String>)> = Vec::new();
+            let mut dir_logs: Vec<(String, std::result::Result<usize, String>)> = Vec::new();
             for dir in &self.config.capabilities.directories {
                 match cap_backend.load_from_directory_reporting(dir).await {
                     Ok(report) => {

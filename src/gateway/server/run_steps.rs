@@ -115,7 +115,7 @@ impl Gateway {
                 let mut refused: Vec<String> = Vec::new();
                 // Each directory's outcome, logged once the operation lock is
                 // released: a blocked log write must not hold up a reload.
-                let mut dir_logs: Vec<(String, Result<usize, String>)> = Vec::new();
+                let mut dir_logs: Vec<(String, std::result::Result<usize, String>)> = Vec::new();
                 // Before any directory is read: this scan's unreadable set
                 // starts empty and is the one its catalogue carries.
                 cap_backend_for_load.begin_incremental_coverage();
