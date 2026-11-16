@@ -193,18 +193,24 @@ impl Drop for Armed {
 
 #[derive(Default)]
 pub(super) struct Pause {
-    state: Mutex<(bool, bool)>,
+    /// Entered, released, left.
+    state: Mutex<(bool, bool, bool)>,
     changed: Condvar,
 }
 
 impl Pause {
+    /// Park until released, or for at most 30 s: a row whose worker parks on the only thread the
+    /// releasing task needs must fail at that bound, never hang.
     fn enter(&self) {
         let mut state = self.state.lock().expect("pause");
         state.0 = true;
         self.changed.notify_all();
-        while !state.1 {
-            state = self.changed.wait(state).expect("pause");
-        }
+        let (mut state, _) = self
+            .changed
+            .wait_timeout_while(state, Duration::from_secs(30), |state| !state.1)
+            .expect("pause");
+        state.2 = true;
+        self.changed.notify_all();
     }
 
     pub(super) fn entered(&self) -> bool {
@@ -217,6 +223,12 @@ impl Pause {
             )
             .expect("pause deadline");
         state.0
+    }
+
+    /// Entered and not yet left: the parked worker is still inside the pause.
+    pub(super) fn parked(&self) -> bool {
+        let state = self.state.lock().expect("pause");
+        state.0 && !state.2
     }
 
     pub(super) fn release(&self) {

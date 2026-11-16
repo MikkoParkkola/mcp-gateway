@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use super::{Fact, IntentId, JournalError, JournalSession, Phase, TokenState};
+use super::{Fact, IntentId, JournalError, JournalSession, JournalV2, Phase, TokenState};
 use crate::config_persistence::commit::{self, Action, FileRevision, Found, NotDurable};
 use crate::config_persistence::journal::Recovered;
 use crate::config_persistence::lock::Locked;
@@ -24,6 +24,32 @@ pub(crate) struct DrainSession {
     locked: Locked,
     configured: PathBuf,
     journal: Option<JournalSession>,
+}
+
+impl DrainSession {
+    /// A session over the held lock and the journal opened under it (`None`: no v2 journal).
+    pub(crate) fn new(locked: Locked, configured: PathBuf, state: Option<JournalV2>) -> Self {
+        let journal = state.map(|state| JournalSession {
+            target: locked.target.clone(),
+            state,
+            backing: super::Backing::Journal,
+        });
+        Self {
+            locked,
+            configured,
+            journal,
+        }
+    }
+
+    /// The config the lock was taken for, resolved once at acquisition.
+    pub(crate) fn target(&self) -> &Path {
+        &self.locked.target
+    }
+
+    /// The v2 journal this session holds, if any.
+    pub(crate) fn journal(&self) -> Option<&JournalV2> {
+        self.journal.as_ref().map(|journal| &journal.state)
+    }
 }
 
 pub(crate) struct JournalDrain;
@@ -417,6 +443,11 @@ pub(crate) mod handover;
 mod repair_tests;
 #[path = "config_persistence_journal_v2_root_tests.rs"]
 mod root_tests;
+// Unix only: the abandoned-file fixtures come from a handover, and off Unix `hand_over` refuses
+// the donor as foreign before the startup gate is reached.
+#[cfg(unix)]
+#[path = "config_persistence_journal_v2_drain_startup_tests.rs"]
+mod startup_tests;
 #[path = "config_persistence_journal_v2_drain_tests.rs"]
 mod tests;
 
