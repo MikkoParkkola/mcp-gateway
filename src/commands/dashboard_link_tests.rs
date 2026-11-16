@@ -271,7 +271,12 @@ async fn a_token_equal_to_the_status_text_is_never_printed() {
         for (command, out) in both(&base, token).await {
             printed_nowhere(command, token, &out);
             assert!(!out.ok, "{command}, token {token:?}: a failure");
-            assert!(!out.stderr.is_empty(), "{command}: something is reported");
+            // Not the fixed fallback sentence: the report itself, redacted.
+            assert!(
+                out.stderr.contains("the gateway answered"),
+                "{command}, token {token:?}: {}",
+                out.stderr
+            );
         }
     }
 }
@@ -354,9 +359,17 @@ async fn a_token_in_fixed_text_is_never_printed() {
     let [(_, link), _] = both(&base, "once").await;
     assert!(link.ok, "{link:?}");
     printed_nowhere("dashboard-link", "once", &link);
+    // The gate redacted the note; the fixed fallback sentence would not hold this.
+    assert!(link.stderr.contains("from this machine only"), "{link:?}");
     let refused = answering(403, "{}".into()).await;
     let [_, (_, events)] = both(&refused, "events").await;
     printed_nowhere("events", "events", &events);
+    assert!(
+        events
+            .stderr
+            .contains("dead-letters: the gateway answered 403"),
+        "{events:?}"
+    );
 }
 
 fn dead_letters(
@@ -404,6 +417,21 @@ async fn a_config_error_quoting_the_token_is_never_printed() {
         unset.stderr.contains("could not load the config"),
         "{unset:?}"
     );
+    let unset = super::dashboard_link_args_output(
+        mcp_gateway::cli::dashboard_link::DashboardLinkArgs {
+            url: None,
+            tls: no_flags(),
+        },
+        load,
+        None,
+        None,
+        Err(TokenError::Missing),
+    )
+    .await;
+    assert!(
+        unset.stderr.contains("could not load the config"),
+        "{unset:?}"
+    );
 }
 
 /// MIK-9679.CLIUX.14: a usage error, a single character in the redaction
@@ -425,4 +453,44 @@ async fn usage_and_marker_edge_tokens_are_never_printed() {
             );
         }
     }
+}
+
+/// MIK-9679.CLIUX.14 and CLIUX.26: `admin_call` itself returns its errors
+/// redacted, status text included, for any caller that prints them.
+#[tokio::test]
+async fn admin_call_errors_never_hold_the_token() {
+    for (token, status, body) in [
+        ("404", 404, "{}".to_string()),
+        ("OK", 200, String::new()),
+        (
+            "tok-ECHOED-1185",
+            400,
+            r#"{"reason":"tok-ECHOED-1185"}"#.to_string(),
+        ),
+    ] {
+        let base = answering(status, body).await;
+        let error = super::admin_call(
+            reqwest::Method::GET,
+            &base,
+            "/ui/api/events/dead-letters",
+            token,
+            &LinkTls::default(),
+        )
+        .await
+        .expect_err("an error");
+        assert!(!error.contains(token), "token {token:?}: {error}");
+        assert!(error.contains("the gateway answered"), "{error}");
+    }
+    // A token re-formed at the marker's edge: the shared backstop's sentence.
+    let base = answering(400, r#"{"error":"denied: Xd]zz"}"#.into()).await;
+    let error = super::admin_call(
+        reqwest::Method::GET,
+        &base,
+        "/ui/api/events/dead-letters",
+        "d]z",
+        &LinkTls::default(),
+    )
+    .await
+    .expect_err("an error");
+    assert!(!error.contains("d]z"), "{error}");
 }

@@ -6,7 +6,7 @@
 //! The admin credential comes from the environment only. An argument would
 //! land in shell history and in every process listing on the machine.
 
-use crate::cli::stdout::println;
+use crate::cli::stdout::print;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -178,13 +178,28 @@ pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result
         .ok_or_else(|| "the gateway's answer carried no link".to_string())
 }
 
-/// One admin request to the gateway at `base`; the JSON answer of a success.
+/// One admin request to the gateway at `base`; the JSON answer of a success,
+/// redacted.
 ///
 /// # Errors
 ///
 /// A message carrying the gateway's status and reason, or the transport
-/// failure.
+/// failure, redacted as a whole (status text included: a token equal to
+/// "404" or "OK"), so no caller can print the token from it. The commands'
+/// output gate redacts each printed line again.
 pub(crate) async fn admin_call(
+    method: reqwest::Method,
+    base: &str,
+    path: &str,
+    token: &str,
+    tls: &LinkTls,
+) -> Result<serde_json::Value, String> {
+    admin_call_raw(method, base, path, token, tls)
+        .await
+        .map_err(|message| token_free(&message, token))
+}
+
+async fn admin_call_raw(
     method: reqwest::Method,
     base: &str,
     path: &str,
@@ -211,9 +226,6 @@ pub(crate) async fn admin_call(
         })?;
     let status = response.status;
     let mut body: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
-    // Error messages leave unredacted: the caller's output gate redacts each
-    // whole printed line, status text included, which a redaction of the
-    // reason alone missed (a token equal to "404" or "OK").
     if !status.is_success() {
         let reason = gateway_reason(&body).unwrap_or("no reason given");
         return Err(format!("the gateway answered {status}: {reason}"));
@@ -535,7 +547,7 @@ pub async fn run_dashboard_link_args(
     host_override: Option<&str>,
 ) -> ExitCode {
     let token = read_token(|name| std::env::var(name).ok());
-    print(dashboard_link_args_output(args, load, port_override, host_override, token).await)
+    emit(dashboard_link_args_output(args, load, port_override, host_override, token).await)
 }
 
 /// What `dashboard-link` prints for `token`. A resolution error comes before a
@@ -568,7 +580,7 @@ pub async fn run_events_command(
 ) -> ExitCode {
     let mcp_gateway::cli::events::EventsCommand::DeadLetters(args) = args.command;
     let token = read_token(|name| std::env::var(name).ok());
-    print(events_args_output(&args, load, port_override, host_override, token).await)
+    emit(events_args_output(&args, load, port_override, host_override, token).await)
 }
 
 /// What `events dead-letters` prints for `token`, resolving like
@@ -644,29 +656,37 @@ fn gate(prefix: &str, token: &str, result: Result<(String, &str), String>) -> Pr
             Ok((stdout, note))
         }
     });
-    let (stdout, stderr, ok) = match result {
+    let (stdout, line, ok) = match result {
         Ok((stdout, note)) => (stdout, note.to_string(), true),
-        Err(message) => (String::new(), format!("{prefix}: {message}\n"), false),
+        Err(message) => (String::new(), format!("{prefix}: {message}"), false),
     };
-    // A token re-formed across a redaction marker's edge would survive the
-    // redactor; then print one fixed sentence, or nothing if even that holds
-    // the token (as the api command does).
-    let stderr = mcp_gateway::cli::redact::text(&stderr, &[token.to_string()]);
-    let stderr = if !stderr.contains(token) {
-        stderr
-    } else if UNPRINTABLE_MESSAGE.contains(token) {
-        String::new()
+    let line = token_free(&line, token);
+    let stderr = if line.is_empty() {
+        line
     } else {
-        UNPRINTABLE_MESSAGE.to_string()
+        format!("{line}\n")
     };
     Printed { stdout, stderr, ok }
 }
 
-/// Printed instead of a message the redactor could not make token-free.
-const UNPRINTABLE_MESSAGE: &str =
-    "A message could not be printed without exposing the credential.\n";
+/// `text` through the shared redactor; when a token re-formed at a redaction
+/// marker's edge survives it, one fixed sentence instead, or nothing if even
+/// that holds the token (the api command's rule).
+fn token_free(text: &str, token: &str) -> String {
+    const UNPRINTABLE: &str = "A message could not be printed without exposing the credential.";
+    let text = mcp_gateway::cli::redact::text(text, &[token.to_string()]);
+    if !text.contains(token) {
+        text
+    } else if UNPRINTABLE.contains(token) {
+        String::new()
+    } else {
+        UNPRINTABLE.to_string()
+    }
+}
 
-fn print(out: Printed) -> ExitCode {
+/// Write a run's output: stdout through the CLI's `print!`, which ends the
+/// process cleanly when the reader has gone.
+fn emit(out: Printed) -> ExitCode {
     print!("{}", out.stdout);
     eprint!("{}", out.stderr);
     if out.ok {
@@ -755,7 +775,7 @@ fn transport_error(base: &str, error: reqwest::Error, tls: &LinkTls) -> String {
 async fn dashboard_link_output(base: &str, tls: &LinkTls, token: &str) -> Printed {
     let result = fetch_link(base, token, tls)
         .await
-        .map(|link| (format!("{link}\n"), "Opens once, from this machine only.\n"));
+        .map(|link| (format!("{link}\n"), "Opens once, from this machine only."));
     gate("dashboard-link", token, result)
 }
 
