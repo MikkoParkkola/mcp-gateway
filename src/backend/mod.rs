@@ -637,7 +637,7 @@ mod reserved_ingress_tests;
 #[path = "silence_resend_tests.rs"]
 mod silence_resend_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "slot_eviction_tests.rs"]
 mod slot_eviction_tests;
 

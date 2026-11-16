@@ -791,7 +791,7 @@ pub(crate) fn insert_notification_refused_by(
 #[path = "stored_scrub_pin_tests.rs"]
 mod stored_scrub_pin_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "delivery_facts_tests.rs"]
 mod tests;
 

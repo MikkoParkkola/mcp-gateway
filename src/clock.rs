@@ -226,6 +226,6 @@ pub(crate) mod test_clock {
     }
 }
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "clock_tests.rs"]
 pub(crate) mod tests;

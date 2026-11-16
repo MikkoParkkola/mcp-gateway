@@ -675,6 +675,6 @@ mod mapping_tests;
 #[path = "input_round_exit_tests.rs"]
 mod exit_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "input_round_park_tests.rs"]
 mod park_tests;

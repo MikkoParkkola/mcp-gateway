@@ -48,7 +48,7 @@ pub(crate) use persist::JourneysSlot;
 #[cfg(test)]
 use persist::read_journeys;
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
 #[cfg(test)]

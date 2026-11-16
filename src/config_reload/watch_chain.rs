@@ -513,7 +513,7 @@ pub(super) fn spawn_rewatch_task(
     })
 }
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "watch_chain_tests.rs"]
 mod tests;
 

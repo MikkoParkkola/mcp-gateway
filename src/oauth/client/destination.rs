@@ -270,7 +270,7 @@ fn cleartext_refusal(what: &str) -> String {
     )
 }
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "destination_tests.rs"]
 mod tests;
 

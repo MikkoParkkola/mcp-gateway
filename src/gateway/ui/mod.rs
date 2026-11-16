@@ -785,7 +785,7 @@ mod tests;
 #[cfg(test)]
 mod discovery_wiring_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "keys_create_fixture_tests.rs"]
 mod keys_create_fixture_tests;
 

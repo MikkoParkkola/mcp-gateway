@@ -361,7 +361,7 @@ impl GlobPattern {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "rule_id_tests.rs"]
 pub(crate) mod rule_id_tests;
 #[cfg(test)]

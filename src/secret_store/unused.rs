@@ -442,12 +442,12 @@ mod seam {
         pub(super) static GUARD_KEYCHAIN: Cell<Option<bool>> = const { Cell::new(None) };
     }
 }
-#[cfg(any())]
+#[cfg(test)]
 #[path = "unused_delete_tests.rs"]
 mod delete_tests;
 #[cfg(test)]
 #[path = "unused_seam_tests.rs"]
 mod seam_tests;
-#[cfg(any())]
+#[cfg(test)]
 #[path = "unused_tests.rs"]
 mod tests;

@@ -532,7 +532,7 @@ fn generate_client_id() -> String {
     URL_SAFE_NO_PAD.encode(id_bytes)
 }
 
-#[cfg(any())]
+#[cfg(test)]
 pub(crate) mod authorize_tests;
 mod browser;
 #[cfg(test)]

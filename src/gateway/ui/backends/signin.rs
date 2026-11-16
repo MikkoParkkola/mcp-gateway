@@ -380,7 +380,7 @@ mod admission_tests;
 #[cfg(test)]
 #[path = "signin_fixture.rs"]
 mod fixture;
-#[cfg(any())]
+#[cfg(test)]
 #[path = "signin_outcome_tests.rs"]
 mod outcome_tests;
 #[cfg(test)]
@@ -398,7 +398,7 @@ mod settle_tests;
 #[cfg(test)]
 #[path = "signin_tests.rs"]
 mod tests;
-#[cfg(any())]
+#[cfg(test)]
 #[path = "signin_timing_tests.rs"]
 mod timing_tests;
 #[cfg(test)]

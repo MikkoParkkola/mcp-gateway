@@ -590,7 +590,7 @@ fn export_response(
     }
 }
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "answer_alloc_tests.rs"]
 mod answer_alloc_tests;
 #[cfg(test)]
@@ -602,7 +602,7 @@ mod answer_export2_tests;
 #[cfg(test)]
 #[path = "answer_export3_tests.rs"]
 mod answer_export3_tests;
-#[cfg(any())]
+#[cfg(test)]
 #[path = "answer_export_tests.rs"]
 mod answer_export_tests;
 #[cfg(test)]
@@ -641,7 +641,7 @@ mod answer_receipt2_tests;
 #[cfg(test)]
 #[path = "answer_receipt3_tests.rs"]
 mod answer_receipt3_tests;
-#[cfg(any())]
+#[cfg(test)]
 #[path = "answer_receipt_tests.rs"]
 mod answer_receipt_tests;
 #[cfg(test)]

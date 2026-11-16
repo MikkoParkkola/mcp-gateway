@@ -395,7 +395,7 @@ mod grant_audit_journal_tests;
 mod grant_audit_plan_tests;
 #[cfg(test)]
 mod grant_audit_reload_tests;
-#[cfg(any())]
+#[cfg(test)]
 pub(crate) mod grant_audit_tests;
 #[cfg(test)]
 mod pattern_grammar_reload_tests;

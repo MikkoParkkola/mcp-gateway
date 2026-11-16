@@ -448,7 +448,7 @@ mod credential_count_tests;
 /// behind this auth?", and this asks "is exactly one human proven to be?". The
 /// auth-disabled case below is where the two answers differ, and it is the whole
 /// reason this predicate is not a negation of that one.
-#[cfg(any())]
+#[cfg(test)]
 #[path = "auth_single_user_principal_tests.rs"]
 mod single_user_principal_tests;
 

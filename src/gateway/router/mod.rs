@@ -213,7 +213,7 @@ mod live_key_authz_tests;
 mod live_key_identity_record_tests;
 #[cfg(all(test, feature = "webui"))]
 mod live_keys_dashboard_tests;
-#[cfg(any())]
+#[cfg(test)]
 mod live_keys_tests;
 /// LOG.1: requests that log complete while stderr never drains.
 #[cfg(test)]
@@ -222,7 +222,7 @@ mod log_lossy_tests;
 mod mcp_nonce_admission_tests;
 #[cfg(test)]
 mod mcp_nonce_tests;
-#[cfg(any())]
+#[cfg(test)]
 mod mcp_nonce_witness_tests;
 #[cfg(test)]
 mod mcp_refusal_kind_tests; // MIK-8353 3d-1: refusal kinds on the invoke path
@@ -291,7 +291,7 @@ mod delivery_effect_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
 /// The direct route's reach and its declared effect.
-#[cfg(any())]
+#[cfg(test)]
 mod direct_effect_tests;
 /// A late refusal keeps its own code, and its run keeps the key.
 #[cfg(all(test, feature = "firewall"))]
@@ -349,7 +349,7 @@ mod plan_replay_liveness_tests;
 mod playbook_busy_tests;
 #[cfg(test)]
 mod playbook_envelope_tests;
-#[cfg(any())]
+#[cfg(test)]
 mod playbook_key_tests;
 /// The key-by-policy barrier: one request, one generation.
 #[cfg(all(test, feature = "firewall"))]
@@ -419,7 +419,7 @@ mod mcp_route_signature_tests;
 mod meta_dispatch_edge_tests;
 #[cfg(test)]
 mod probe_tests;
-#[cfg(any())]
+#[cfg(test)]
 mod r2_identity_keys_tests;
 #[cfg(test)]
 mod r2_input_keys_tests;

@@ -673,7 +673,7 @@ mod grant_reload_tests;
 #[path = "grant_agent_key_tests.rs"]
 mod grant_agent_key_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "authz_tests.rs"]
 mod authz_tests;
 
@@ -717,7 +717,7 @@ mod surface_compaction_tests;
 #[path = "catalogue_isolation_tests.rs"]
 mod catalogue_isolation_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "catalogue_per_caller_tests.rs"]
 mod catalogue_per_caller_tests;
 
@@ -743,7 +743,7 @@ pub(super) mod grant_audit_fixture;
 /// A chain resume step refused before it dispatches.
 #[cfg(test)]
 mod grant_chain_resume_tests;
-#[cfg(any())]
+#[cfg(test)]
 mod grant_decision_audit_tests;
 #[cfg(test)]
 mod grant_decision_slot_tests;

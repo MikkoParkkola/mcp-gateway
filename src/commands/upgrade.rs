@@ -580,7 +580,7 @@ mod upgrade_notice_tests;
 #[path = "upgrade_webhook_notice_tests.rs"]
 mod upgrade_webhook_notice_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "upgrade_prerelease_tests.rs"]
 mod prerelease_tests;
 #[cfg(all(test, windows))]

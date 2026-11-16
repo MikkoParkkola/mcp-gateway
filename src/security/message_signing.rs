@@ -471,7 +471,7 @@ fn build_signature_block(sig: &str, nonce: Option<&str>, ts: u64, key_id: &str) 
 #[path = "message_signing_v2_tests.rs"]
 mod v2_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "message_signing_nonce_tests.rs"]
 mod nonce_tests;
 

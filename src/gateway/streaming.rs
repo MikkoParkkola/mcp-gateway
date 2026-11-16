@@ -733,7 +733,7 @@ mod ownership;
 #[cfg(test)]
 #[path = "streaming_request_scoped_tests.rs"]
 mod request_scoped_stream_tests;
-#[cfg(any())]
+#[cfg(test)]
 #[path = "streaming_told_cf_grace_tests.rs"]
 mod told_cf_grace_tests;
 #[cfg(test)]

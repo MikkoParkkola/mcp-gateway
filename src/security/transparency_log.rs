@@ -738,7 +738,7 @@ mod hwm_contradiction_tests;
 #[cfg(test)]
 #[path = "transparency_log_hwm_missing_tests.rs"]
 mod hwm_missing_tests;
-#[cfg(any())]
+#[cfg(test)]
 #[path = "transparency_log_identity_tests.rs"]
 mod identity_tests;
 #[cfg(test)]
@@ -774,7 +774,7 @@ mod reader_tests;
 #[cfg(test)]
 #[path = "transparency_log_recovery_tests.rs"]
 mod recovery_tests;
-#[cfg(any())]
+#[cfg(test)]
 #[path = "transparency_log_rotation_tests.rs"]
 mod rotation_tests;
 #[cfg(test)]
@@ -803,7 +803,7 @@ mod settle_bound_tests;
 #[path = "transparency_log_settle_kind_tests.rs"]
 mod settle_kind_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "transparency_log_pairing_tests.rs"]
 mod pairing_tests;
 
