@@ -89,6 +89,7 @@ pub(crate) use secret_file::{
 };
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
+pub(crate) use features::MIN_SECRET_LEN;
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyBinding, ApiKeyConfig,
     ApiKeyKind, AuthConfig, CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, ChainEmit,
@@ -96,8 +97,8 @@ pub use features::{
     ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS, DashboardSessionConfig, ErrorBudgetSection,
     FailsafeConfig, FileRoots, HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool,
     IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig,
-    KeyServerProviderConfig, MIN_SECRET_LEN, PlaybooksConfig, PolicyMatchConfig,
-    PolicyScopesConfig, ProcessCommand, ProcessExecution, RateLimitConfig, RecordPrincipalKeyRef,
+    KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig,
+    ProcessCommand, ProcessExecution, RateLimitConfig, RecordPrincipalKeyRef,
     RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeConfig,
     RuntimeProfileConfig, SecretStoreChoice, SecretsConfig, SecurityConfig, SignatureChainConfig,
     StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,

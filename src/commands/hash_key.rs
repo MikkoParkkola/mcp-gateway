@@ -21,7 +21,7 @@ const MAX_KEY_BYTES: u64 = 64 * 1024;
 const USAGE: &str = "usage: printf %s \"$KEY\" | mcp-gateway hash-key [--verify sha256:<hex>]";
 
 /// Run `hash-key`. Exit codes: 0 printed or matched, 1 mismatch, 2 usage error
-/// (stdin is a terminal, empty key, a new key under [`MIN_SECRET_LEN`] bytes,
+/// (stdin is a terminal, empty key, a new key under `MIN_SECRET_LEN` bytes,
 /// unreadable input, or a malformed digest).
 pub fn run_hash_key_command(verify: Option<&str>) -> ExitCode {
     let stdin = io::stdin();
