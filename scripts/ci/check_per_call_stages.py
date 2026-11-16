@@ -180,7 +180,7 @@ def check(root=ROOT, table_path=TABLE, harness_path=HARNESS, variants=None):
     `variants` maps a size-variant STAGES row to its base row; None means
     VARIANTS for the real harness and none for a caller's own harness."""
     if variants is None:
-        variants = VARIANTS if pathlib.Path(harness_path) == HARNESS else {}
+        variants = VARIANTS if pathlib.Path(harness_path).resolve() == HARNESS.resolve() else {}
     known = stages(harness_path)
     rows = table(table_path)
     errors = []
