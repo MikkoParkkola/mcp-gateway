@@ -219,7 +219,9 @@ pub async fn run_api_command(
             &outcome,
             args.json,
             redaction,
-            &mut std::io::stdout().lock(),
+            // Not locked up front: a streamed run's printing thread may hold
+            // stdout past its deadline, and an empty answer must not wait.
+            &mut std::io::stdout(),
             &mut std::io::stderr().lock(),
         )
         .code(),

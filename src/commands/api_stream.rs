@@ -103,6 +103,14 @@ pub(super) fn check_args(args: &ApiArgs, url: &reqwest::Url) -> Result<(), ApiEr
             "Remove --limit, or ask for /ui/api/stream.",
         );
     }
+    // The streamed sender carries no body and no If-Match; both routes are
+    // GET-only, so a request that sets either is refused, never sent without.
+    if mode_of(url) != Mode::Buffered && (args.data.is_some() || args.if_match.is_some()) {
+        return usage(
+            "--data and --if-match do not apply to the event stream or the activity export.",
+            "Remove --data and --if-match, then retry.",
+        );
+    }
     Ok(())
 }
 
@@ -114,7 +122,14 @@ pub(crate) fn write_outcome(
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> ApiExit {
-    if let Err(error) = stdout.write_all(&outcome.stdout) {
+    // Nothing to print touches no stdout: after a streamed deadline, the
+    // printing thread may still be parked in a write holding stdout's lock.
+    let written = if outcome.stdout.is_empty() {
+        Ok(())
+    } else {
+        stdout.write_all(&outcome.stdout)
+    };
+    if let Err(error) = written {
         if error.kind() == std::io::ErrorKind::BrokenPipe {
             return ApiExit::Ok;
         }
@@ -144,9 +159,18 @@ pub(super) struct StreamRequest {
 /// The production sender: the shared client and policy, with no total limit
 /// on the request (the caller's [`Deadlines`] bound it instead).
 pub(super) async fn send(request: StreamRequest) -> Result<AdminStream, AdminCallError> {
+    send_with(request, AdminClientOptions::default()).await
+}
+
+/// The sender over `base` options: whatever total limit `base` carries, a
+/// streamed request drops it (R14 drives this with a test-sized total).
+async fn send_with(
+    request: StreamRequest,
+    base: AdminClientOptions,
+) -> Result<AdminStream, AdminCallError> {
     let options = AdminClientOptions {
         total: None,
-        ..AdminClientOptions::default()
+        ..base
     };
     admin_stream_url(
         request.method,
@@ -170,13 +194,12 @@ pub(super) async fn run_production(
             .then(|| token.clone())
             .flatten()
     };
-    let mut stdout = std::io::stdout();
     run_streamed_with(
         args,
         base,
         tls,
         lookup,
-        &mut stdout,
+        std::io::stdout(),
         &Deadlines::default(),
         send,
     )
@@ -190,15 +213,26 @@ struct Lines {
 }
 
 impl Lines {
-    /// The complete lines `chunk` ends, in order; `None` once a pending line
-    /// passes [`PENDING_LIMIT`], so it is never printed unscanned.
+    /// The complete lines `chunk` ends, in order; `None` once a line, complete
+    /// or pending, passes [`PENDING_LIMIT`], so it is never printed unscanned.
     fn push(&mut self, chunk: &[u8]) -> Option<Vec<Vec<u8>>> {
+        // The pending bytes hold no LF, so the scan starts at the new chunk;
+        // one pass and one drain, as splitting per line would copy the rest
+        // once per line.
+        let mut scan = self.pending.len();
         self.pending.extend_from_slice(chunk);
         let mut done = Vec::new();
-        while let Some(at) = self.pending.iter().position(|&b| b == b'\n') {
-            let rest = self.pending.split_off(at + 1);
-            done.push(std::mem::replace(&mut self.pending, rest));
+        let mut start = 0;
+        while let Some(at) = self.pending[scan..].iter().position(|&b| b == b'\n') {
+            let end = scan + at;
+            if end - start > PENDING_LIMIT {
+                return None;
+            }
+            done.push(self.pending[start..=end].to_vec());
+            start = end + 1;
+            scan = start;
         }
+        self.pending.drain(..start);
         (self.pending.len() <= PENDING_LIMIT).then_some(done)
     }
 
@@ -213,10 +247,19 @@ impl Lines {
 /// and holds the credential.
 fn masked_line(line: &[u8], token: &str) -> Option<Vec<u8>> {
     match std::str::from_utf8(line) {
-        Ok(text) => Some(redact::text(text, &[token.to_owned()]).into_bytes()),
+        Ok(text) => checked(&redact::text(text, &[token.to_owned()]), text, token),
         Err(_) if !line.windows(token.len()).any(|w| w == token.as_bytes()) => Some(line.to_vec()),
         Err(_) => None,
     }
+}
+
+/// A masked piece as printed, or `None`. The redactor alone is not enough:
+/// a token can re-form at a marker's edge (`d]z` against `Xd]zz`), and a token
+/// found in every marker makes it fail closed to empty output, which would
+/// pass as an emptied line or event. Both refuse instead.
+fn checked(masked: &str, input: &str, token: &str) -> Option<Vec<u8>> {
+    let emptied = masked.is_empty() && !input.is_empty();
+    (!emptied && !masked.contains(token)).then(|| masked.as_bytes().to_vec())
 }
 
 /// One dispatched event-stream event.
@@ -322,7 +365,7 @@ fn rendered(event: Event, token: &str, json_output: bool) -> Option<Vec<u8>> {
             text.push_str(&format!("data: {line}\n"));
         }
         text.push('\n');
-        return Some(redact::text(&text, &secrets).into_bytes());
+        return checked(&redact::text(&text, &secrets), &text, token);
     }
     let data =
         serde_json::from_str::<Value>(&event.data).unwrap_or_else(|_| Value::String(event.data));
@@ -334,7 +377,8 @@ fn rendered(event: Event, token: &str, json_output: bool) -> Option<Vec<u8>> {
     }
     let mut line = serde_json::to_vec(&object).ok()?;
     line.push(b'\n');
-    Some(line)
+    // A token equal to JSON syntax survives the value redaction.
+    (!line.windows(token.len()).any(|w| w == token.as_bytes())).then_some(line)
 }
 
 /// The lower-cased MIME essence of the answer's Content-Type.
@@ -455,6 +499,56 @@ fn emit(sink: &mut impl Write, bytes: &[u8]) -> std::io::Result<bool> {
     }
 }
 
+/// The output side of a streamed run. A thread of its own owns the sink and
+/// prints one piece at a time, so a reader that stalls the pipe cannot hold
+/// the command past its overall deadline: each write and flush is awaited
+/// with the time left. A write still parked at the deadline stays on its
+/// thread, which the process does not wait for at exit.
+struct Printer {
+    pieces: std::sync::mpsc::Sender<Vec<u8>>,
+    acks: tokio::sync::mpsc::UnboundedReceiver<std::io::Result<bool>>,
+}
+
+/// How one piece went.
+enum Print {
+    /// Written and flushed.
+    Done,
+    /// The reader went away; the command ends successfully.
+    ReaderGone,
+    /// The overall deadline passed first.
+    Late,
+    /// Any other write failure.
+    Failed,
+}
+
+impl Printer {
+    fn start(mut sink: impl Write + Send + 'static) -> Self {
+        let (pieces, queue) = std::sync::mpsc::channel::<Vec<u8>>();
+        let (ack, acks) = tokio::sync::mpsc::unbounded_channel();
+        std::thread::spawn(move || {
+            for piece in queue {
+                if ack.send(emit(&mut sink, &piece)).is_err() {
+                    break;
+                }
+            }
+        });
+        Self { pieces, acks }
+    }
+
+    async fn print(&mut self, piece: Vec<u8>, until: Instant) -> Print {
+        if self.pieces.send(piece).is_err() {
+            return Print::Failed;
+        }
+        let left = until.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(left, self.acks.recv()).await {
+            Err(_) => Print::Late,
+            Ok(Some(Ok(true))) => Print::Done,
+            Ok(Some(Ok(false))) => Print::ReaderGone,
+            Ok(Some(Err(_)) | None) => Print::Failed,
+        }
+    }
+}
+
 fn write_failed(json: bool, token: &str) -> ApiOutcome {
     failure(
         ApiExit::LocalFailure,
@@ -473,7 +567,7 @@ pub(super) async fn run_streamed_with<F, Fut>(
     base: &str,
     tls: &LinkTls,
     lookup: impl Fn(&str) -> Option<String>,
-    sink: &mut impl Write,
+    sink: impl Write + Send + 'static,
     deadlines: &Deadlines,
     send: F,
 ) -> ApiOutcome
@@ -536,7 +630,9 @@ where
         limit: args.limit.map_or(usize::MAX, |n| n as usize),
         until: started + total,
     };
-    printing.run(answer, sink, deadlines).await
+    printing
+        .run(answer, &mut Printer::start(sink), deadlines)
+        .await
 }
 
 /// The print loop of one streamed answer.
@@ -550,13 +646,10 @@ struct Printing<'a> {
 }
 
 impl Printing<'_> {
-    // ponytail: a write the OS blocks forever (a stalled pipe) is not cut
-    // short; the deadline is checked as each write returns, and the reader
-    // owns the pipe.
     async fn run(
         self,
         answer: AdminStream,
-        sink: &mut impl Write,
+        printer: &mut Printer,
         deadlines: &Deadlines,
     ) -> ApiOutcome {
         let (json, token) = (self.json, self.token);
@@ -612,13 +705,11 @@ impl Printing<'_> {
                 }
             }
             for piece in pieces {
-                match emit(sink, &piece) {
-                    Ok(true) => {}
-                    Ok(false) => return self.done(),
-                    Err(_) => return write_failed(json, token),
-                }
-                if Instant::now() > self.until {
-                    return network(self.late(event_due), json, token);
+                match printer.print(piece, self.until).await {
+                    Print::Done => {}
+                    Print::ReaderGone => return self.done(),
+                    Print::Late => return network(self.late(event_due), json, token),
+                    Print::Failed => return write_failed(json, token),
                 }
                 if self.mode == Mode::Stream {
                     printed += 1;
@@ -636,8 +727,10 @@ impl Printing<'_> {
             let Some(bytes) = masked_line(&line, token) else {
                 return unsafe_body(json, token);
             };
-            if emit(sink, &bytes).is_err() {
-                return write_failed(json, token);
+            match printer.print(bytes, self.until).await {
+                Print::Done | Print::ReaderGone => {}
+                Print::Late => return network(self.late(event_due), json, token),
+                Print::Failed => return write_failed(json, token),
             }
         }
         self.done()

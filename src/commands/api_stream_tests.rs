@@ -39,6 +39,26 @@ fn credential(name: &str) -> Option<String> {
     (name == TOKEN_ENV).then(|| TOKEN.to_owned())
 }
 
+/// A sink the row reads back; the printing thread owns one clone.
+#[derive(Clone, Default)]
+struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl Write for Shared {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("sink").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Shared {
+    fn bytes(&self) -> Vec<u8> {
+        self.0.lock().expect("sink").clone()
+    }
+}
+
 fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
@@ -79,14 +99,23 @@ fn answer(status: u16, content_type: &str, chunks: Vec<Vec<u8>>, open: bool) -> 
 /// The streamed path with a scripted answer (`None`: it must not be sent):
 /// what it printed, its outcome, and how many requests it sent.
 async fn run(request: &ApiArgs, reply: Option<AdminStream>) -> (Vec<u8>, ApiOutcome, usize) {
+    run_as(request, reply, TOKEN).await
+}
+
+/// [`run`] with `token` as the credential.
+async fn run_as(
+    request: &ApiArgs,
+    reply: Option<AdminStream>,
+    token: &str,
+) -> (Vec<u8>, ApiOutcome, usize) {
     let sends = AtomicUsize::new(0);
-    let mut out = Vec::new();
+    let out = Shared::default();
     let outcome = run_streamed_with(
         request,
         BASE,
         &LinkTls::default(),
-        credential,
-        &mut out,
+        |name: &str| (name == TOKEN_ENV).then(|| token.to_owned()),
+        out.clone(),
         &short(),
         |_| {
             sends.fetch_add(1, Ordering::SeqCst);
@@ -101,7 +130,7 @@ async fn run(request: &ApiArgs, reply: Option<AdminStream>) -> (Vec<u8>, ApiOutc
         },
     )
     .await;
-    (out, outcome, sends.load(Ordering::SeqCst))
+    (out.bytes(), outcome, sends.load(Ordering::SeqCst))
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -124,6 +153,20 @@ async fn stream_flags_and_credentials_are_checked_before_sending() {
         args("/ui/api/stream?x=1", None, false),
         elsewhere,
     ] {
+        let (out, outcome, sends) = run(&request, None).await;
+        assert_eq!(
+            (outcome.exit, sends, out.len()),
+            (ApiExit::Usage, 0, 0),
+            "{}",
+            request.path
+        );
+    }
+    // The streamed sender carries no body or If-Match: refused, not dropped.
+    let mut with_data = args(STREAM, Some(1), false);
+    with_data.data = Some("{}".to_owned());
+    let mut with_if_match = args(EXPORT, None, false);
+    with_if_match.if_match = Some("\"v1\"".to_owned());
+    for request in [with_data, with_if_match] {
         let (out, outcome, sends) = run(&request, None).await;
         assert_eq!(
             (outcome.exit, sends, out.len()),
@@ -172,15 +215,16 @@ fn events_follow_the_event_stream_rules() {
 }
 
 /// R6: the credential cut at every offset across two chunks comes out masked,
-/// and the rest of each line is exactly the gateway's bytes.
+/// and the rest is exactly the gateway's bytes. The oracle redacts the whole
+/// body at once, so it does not share the line-wise path it checks; the body
+/// holds a CSV field with an LF inside quotes and the marker's own text, and
+/// few enough matches that the redactor never collapses a dense run.
 #[tokio::test]
 async fn a_download_masks_the_credential_at_every_cut() {
-    let body = format!("{{\"k\":\"{TOKEN}\"}}\nplain,line\nend {TOKEN}");
-    let expected: String = ["{\"k\":\"", TOKEN, "\"}\n", "plain,line\n", "end ", TOKEN]
-        .concat()
-        .split_inclusive('\n')
-        .map(|line| redact::text(line, &[TOKEN.to_owned()]))
-        .collect();
+    let body = format!(
+        "{{\"k\":\"{TOKEN}\"}}\n\"quoted\nfield {TOKEN}\",[redacted]\nplain,line\nend {TOKEN}"
+    );
+    let expected = redact::text(&body, &[TOKEN.to_owned()]);
     assert!(
         !expected.contains(TOKEN),
         "premise: the oracle masks the credential"
@@ -392,14 +436,13 @@ async fn write_failures_follow_the_buffered_rules() {
         (std::io::ErrorKind::Other, ApiExit::LocalFailure),
     ] {
         let reply = answer(200, "text/csv", vec![b"a\n".to_vec()], false);
-        let mut sink = Failing(kind);
         let request = args(EXPORT, None, false);
         let outcome = run_streamed_with(
             &request,
             BASE,
             &LinkTls::default(),
             credential,
-            &mut sink,
+            Failing(kind),
             &short(),
             |_| async { Ok(reply) },
         )
@@ -534,19 +577,23 @@ async fn a_live_stream_stops_at_the_limit_and_hangs_up() {
     )
     .await;
     let request = args("/ui/api/stream?last_event_id=0", Some(1), true);
-    let mut out = Vec::new();
+    let out = Shared::default();
     let outcome = run_streamed_with(
         &request,
         &gateway.base,
         &LinkTls::default(),
         credential,
-        &mut out,
+        out.clone(),
         &Deadlines::default(),
         send,
     )
     .await;
     assert_eq!(outcome.exit, ApiExit::Ok, "{}", outcome.stderr);
-    let lines: Vec<&str> = std::str::from_utf8(&out).expect("text").lines().collect();
+    let printed = out.bytes();
+    let lines: Vec<&str> = std::str::from_utf8(&printed)
+        .expect("text")
+        .lines()
+        .collect();
     assert_eq!(lines.len(), 1, "exactly one event: {lines:?}");
     let printed: Value = serde_json::from_str(lines[0]).expect("one JSON object");
     assert_eq!(
@@ -568,10 +615,11 @@ async fn a_live_stream_stops_at_the_limit_and_hangs_up() {
     );
 }
 
-/// R14 (round 3 HIGH): a streamed request carries no total limit. The
-/// stand-in withholds the second event until a buffered call to it, limited
-/// to 50 ms in total, has timed out; the stream, open all along, then gets
-/// its event and succeeds, so it outlived a total limit the buffered call hit.
+/// R14 (round 3 HIGH; final review): a streamed request drops the total
+/// limit of the options it is built from. The sender gets a 50 ms base total;
+/// the stand-in withholds the second event until a buffered call limited to
+/// 150 ms has timed out. A sender that kept its base total would end the
+/// stream at 50 ms, before the release; the stream instead outlives it.
 #[tokio::test]
 async fn a_streamed_request_has_no_total_limit() {
     let gateway = live(
@@ -581,7 +629,7 @@ async fn a_streamed_request_has_no_total_limit() {
     )
     .await;
     let request = args(STREAM, Some(2), false);
-    let mut out = Vec::new();
+    let out = Shared::default();
     // Bound first: the streamed future is joined later, past this statement.
     let (tls, deadlines) = (LinkTls::default(), Deadlines::default());
     let streamed = run_streamed_with(
@@ -589,16 +637,26 @@ async fn a_streamed_request_has_no_total_limit() {
         &gateway.base,
         &tls,
         credential,
-        &mut out,
+        out.clone(),
         &deadlines,
-        send,
+        |request| {
+            send_with(
+                request,
+                AdminClientOptions {
+                    // A sender keeping this would end the stream first.
+                    // timing: lower-bound
+                    total: Some(ms(50)),
+                    ..AdminClientOptions::default()
+                },
+            )
+        },
     );
     let release_after_a_timed_out_buffered_call = async {
         let options = AdminClientOptions {
-            // The buffered call must time out: it is the clock that proves
-            // time passed.
+            // Longer than the sender's base total, so the release comes
+            // after any stream that kept that total had already ended.
             // timing: lower-bound
-            total: Some(ms(50)),
+            total: Some(ms(150)),
             ..AdminClientOptions::default()
         };
         let Ok(url) = api_url(&gateway.base, STREAM) else {
@@ -616,14 +674,14 @@ async fn a_streamed_request_has_no_total_limit() {
         .await;
         assert!(
             buffered.is_err(),
-            "a 50 ms total limit stops the buffered read of an open stream"
+            "a 150 ms total limit stops the buffered read of an open stream"
         );
         gateway.release.notify_one();
     };
     let (outcome, ()) = tokio::join!(streamed, release_after_a_timed_out_buffered_call);
     assert_eq!(outcome.exit, ApiExit::Ok, "{}", outcome.stderr);
     assert_eq!(
-        text(&out),
+        text(&out.bytes()),
         "event: message\ndata: one\n\nevent: message\ndata: two\n\n"
     );
 }
@@ -632,24 +690,12 @@ async fn a_streamed_request_has_no_total_limit() {
 /// second chunk is sent.
 #[tokio::test]
 async fn a_download_prints_before_the_body_ends() {
-    use std::sync::{Arc, Mutex};
-    struct Shared(Arc<Mutex<Vec<u8>>>);
-    impl Write for Shared {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().expect("sink").extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let printed = Arc::new(Mutex::new(Vec::new()));
+    let printed = Shared::default();
     let (chunks, body) =
         futures::channel::mpsc::unbounded::<Result<bytes::Bytes, AdminCallError>>();
     let mut reply = answer(200, "text/csv", Vec::new(), false);
     reply.body = body.boxed();
     let request = args(EXPORT, None, false);
-    let mut sink = Shared(Arc::clone(&printed));
     // Bound first: the streamed future is joined later, past this statement.
     let (tls, deadlines) = (LinkTls::default(), short());
     let streamed = run_streamed_with(
@@ -657,7 +703,7 @@ async fn a_download_prints_before_the_body_ends() {
         BASE,
         &tls,
         credential,
-        &mut sink,
+        printed.clone(),
         &deadlines,
         |_| async { Ok(reply) },
     );
@@ -665,7 +711,7 @@ async fn a_download_prints_before_the_body_ends() {
         chunks
             .unbounded_send(Ok(bytes::Bytes::from_static(b"first\n")))
             .expect("send");
-        while printed.lock().expect("sink").as_slice() != b"first\n" {
+        while printed.bytes() != b"first\n" {
             tokio::task::yield_now().await;
         }
         chunks
@@ -675,5 +721,119 @@ async fn a_download_prints_before_the_body_ends() {
     };
     let (outcome, ()) = tokio::join!(streamed, feed);
     assert_eq!(outcome.exit, ApiExit::Ok);
-    assert_eq!(printed.lock().expect("sink").as_slice(), b"first\nsecond\n");
+    assert_eq!(printed.bytes(), b"first\nsecond\n");
+}
+
+/// A sink whose writes park until the row's [`Release`] drops, as a reader
+/// that stalls the pipe parks a real write.
+#[derive(Clone, Default)]
+struct Parked(std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+
+impl Write for Parked {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let (released, wake) = &*self.0;
+        let mut released = released.lock().expect("parked");
+        while !*released {
+            released = wake.wait(released).expect("parked");
+        }
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Frees a [`Parked`] sink's writes when the row ends, so no thread is left
+/// parked.
+struct Release(Parked);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        let (released, wake) = &*(self.0).0;
+        *released.lock().expect("parked") = true;
+        wake.notify_all();
+    }
+}
+
+/// R12 (final review HIGH): a reader that stalls the pipe cannot hold the
+/// command past its overall deadline. The export's first write parks; the
+/// run still ends, at the overall deadline, with the network exit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stalled_reader_ends_at_the_overall_deadline() {
+    let sink = Parked::default();
+    let _release = Release(sink.clone());
+    let reply = answer(200, "text/csv", vec![b"a\n".to_vec()], true);
+    // On a task of its own: a write that blocked the run's thread (the break
+    // this row catches) would stall it there, not the row.
+    let run = tokio::spawn(async move {
+        run_streamed_with(
+            &args(EXPORT, None, false),
+            BASE,
+            &LinkTls::default(),
+            credential,
+            sink,
+            &short(),
+            |_| async { Ok(reply) },
+        )
+        .await
+    });
+    // A hang guard: the run ends at its 1.5 s overall deadline.
+    let outcome = tokio::time::timeout(Duration::from_secs(30), run)
+        .await
+        .expect("a parked write does not hold the run past its deadline")
+        .expect("the run task");
+    assert_eq!(outcome.exit, ApiExit::Network, "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("overall time limit"),
+        "{}",
+        outcome.stderr
+    );
+}
+
+/// Final review: the redactor alone is not enough. A token re-formed at a
+/// marker's edge ("d]z" against "Xd]zz"), a token in every marker ("d", which
+/// makes the redactor fail closed to empty output), and a token equal to JSON
+/// syntax (":") each stop the run with the local-failure exit and print
+/// nothing, rather than print the token or emptied lines as a success.
+#[tokio::test]
+async fn tokens_the_redactor_cannot_mask_stop_the_run() {
+    let export = |body: &str| answer(200, "text/csv", vec![body.as_bytes().to_vec()], false);
+    let event = |data: &str| {
+        answer(
+            200,
+            "text/event-stream",
+            vec![format!("data: {data}\n\n").into_bytes()],
+            true,
+        )
+    };
+    for (request, reply, token) in [
+        (args(EXPORT, None, false), export("Xd]zz\n"), "d]z"),
+        (args(EXPORT, None, false), export("abc\n"), "d"),
+        (args(STREAM, Some(1), false), event("Xd]zz"), "d]z"),
+        (args(STREAM, Some(1), false), event("abc"), "d"),
+        (args(STREAM, Some(1), true), event("1"), ":"),
+    ] {
+        let (out, outcome, _) = run_as(&request, Some(reply), token).await;
+        assert_eq!(
+            (outcome.exit, out.len()),
+            (ApiExit::LocalFailure, 0),
+            "{} {token:?}: {}",
+            request.path,
+            outcome.stderr
+        );
+        assert!(!outcome.stderr.contains(token) || token == ":");
+    }
+}
+
+/// R13 (final review): a line over 16 MiB that arrives whole in one chunk,
+/// LF included, is refused like one still pending; nothing of the chunk is
+/// printed, the line before it included.
+#[tokio::test]
+async fn an_over_long_line_in_one_chunk_is_refused() {
+    let mut chunk = b"first\n".to_vec();
+    chunk.extend(vec![b'x'; PENDING_LIMIT + 1]);
+    chunk.push(b'\n');
+    let reply = answer(200, "application/x-ndjson", vec![chunk], false);
+    let (out, outcome, _) = run(&args(EXPORT, None, false), Some(reply)).await;
+    assert_eq!((outcome.exit, out.len()), (ApiExit::LocalFailure, 0));
 }

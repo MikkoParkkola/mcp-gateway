@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Every content type a UI API answer is sent with, and every body built by
 //! hand, classified for the api command, which streams exactly the download
-//! types and buffers everything else. A new type, a type set through a
-//! constant, a helper or a typed header, or a new hand-built body fails until
-//! it is classified here (and, if it is a download, designed for in the api
-//! command). Not read, by design: a response built outside src/gateway/ui,
-//! and a handler returning raw bytes (axum's implicit octet-stream).
+//! types and buffers everything else. A new type (named by the header
+//! constant or by its string name), a type set through a constant, a helper
+//! or a typed header, a new hand-built body, or a new raw response spelling
+//! (an HTML page, an event-stream or response builder, bytes built or
+//! returned) fails until it is classified here (and, if it is a download,
+//! designed for in the api command). Not read, by design: a response built
+//! outside src/gateway/ui.
 
 use std::collections::BTreeMap;
 
@@ -19,11 +21,19 @@ enum Class {
     Buffered,
     /// Set on a request the gateway sends itself, not on an answer.
     NotAnAnswer,
+    /// Served outside /ui/api, which the api command refuses to reach.
+    OutsideUiApi,
 }
 
 /// Every content-type value and hand-built body in the UI API's production
 /// code: file, value as written, class, and how many times it occurs.
 const SITES: &[(&str, &str, Class, usize)] = &[
+    (
+        "src/gateway/ui/activity/export.rs",
+        "-> Vec<u8>",
+        Class::Streamed,
+        1,
+    ),
     (
         "src/gateway/ui/activity/mod.rs",
         "\"application/x-ndjson\"",
@@ -41,6 +51,25 @@ const SITES: &[(&str, &str, Class, usize)] = &[
         "\"text/yaml; charset=utf-8\"",
         Class::Buffered,
         2,
+    ),
+    ("src/gateway/ui/mod.rs", "Html", Class::OutsideUiApi, 1),
+    (
+        "src/gateway/ui/stream/conn.rs",
+        "-> Bytes",
+        Class::Streamed,
+        2,
+    ),
+    (
+        "src/gateway/ui/stream/conn.rs",
+        "Bytes::from",
+        Class::Streamed,
+        2,
+    ),
+    (
+        "src/gateway/ui/stream/conn.rs",
+        "Bytes::from_static",
+        Class::Streamed,
+        1,
     ),
     (
         "src/gateway/ui/stream/mod.rs",
@@ -120,9 +149,19 @@ fn sources() -> Vec<(String, String)> {
 /// equals [`SITES`].
 #[test]
 fn every_ui_answer_type_is_classified() {
-    let value = regex::Regex::new(r#"\bCONTENT_TYPE\s*,\s*("[^"]*"|[A-Za-z_][A-Za-z0-9_.:]*)"#)
-        .expect("pattern");
+    // The header by its constant, or by its string name in any case.
+    let value = regex::Regex::new(
+        r#"(?:\bCONTENT_TYPE|"(?i:content-type)")\s*,\s*("[^"]*"|[A-Za-z_][A-Za-z0-9_.:]*)"#,
+    )
+    .expect("pattern");
     let body = regex::Regex::new(r"\bBody::(from_stream|from|new)\s*\(").expect("pattern");
+    // A response spelled without a content type or a Body: an HTML page, an
+    // event-stream or response builder, bytes built or returned. No word
+    // boundary after `Vec<u8>`: none follows `>`.
+    let raw = regex::Regex::new(
+        r"\b(Html|Sse::new|Response::builder|Bytes::from(?:_static)?)\s*\(|(->\s*(?:Vec<u8>|(?:axum::body::|bytes::)?Bytes\b))",
+    )
+    .expect("pattern");
     let sources = sources();
     assert!(
         sources.len() >= 50,
@@ -137,13 +176,20 @@ fn every_ui_answer_type_is_classified() {
         for c in body.captures_iter(code) {
             *found.entry(format!("{file} Body::{}", &c[1])).or_default() += 1;
         }
+        for c in raw.captures_iter(code) {
+            let spelling = c.get(1).or_else(|| c.get(2)).expect("one group").as_str();
+            let spelling = spelling.split_whitespace().collect::<Vec<_>>().join(" ");
+            *found.entry(format!("{file} {spelling}")).or_default() += 1;
+        }
     }
     let mut table: BTreeMap<String, usize> = BTreeMap::new();
     for &(file, written, class, count) in SITES {
         assert!(
             class == Class::NotAnAnswer
                 || written.starts_with('"')
-                || written.starts_with("Body::"),
+                || ["Body::", "Bytes::", "Html", "-> ", "Sse::", "Response::"]
+                    .iter()
+                    .any(|raw| written.starts_with(raw)),
             "{file}: an answer's type must be a literal: {written}"
         );
         *table.entry(format!("{file} {written}")).or_default() += count;
