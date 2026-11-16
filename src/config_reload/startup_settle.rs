@@ -29,7 +29,8 @@ pub(crate) struct StartupSession {
 }
 
 enum StartupState {
-    Locked(DrainSession),
+    // Boxed: the held session is far larger than the unlocked variant.
+    Locked(Box<DrainSession>),
     ArtifactFreeUnlocked {
         configured: PathBuf,
         target: PathBuf,
@@ -124,7 +125,7 @@ pub(crate) async fn finish_start(
         StartupState::Locked(session) => {
             // Captured on the caller: the worker is not inside a runtime until `block_on`.
             let handle = tokio::runtime::Handle::current();
-            from_worker(move || handle.block_on(drain_locked(session, log))).await
+            from_worker(move || handle.block_on(drain_locked(*session, log))).await
         }
     }
 }
@@ -227,7 +228,7 @@ fn recheck(configured: &Path, target: &Path) -> Result<(), Refusal> {
 
 fn held(locked: Locked, configured: PathBuf, state: Option<JournalV2>) -> StartupSession {
     StartupSession {
-        state: StartupState::Locked(DrainSession::new(locked, configured, state)),
+        state: StartupState::Locked(Box::new(DrainSession::new(locked, configured, state))),
     }
 }
 
@@ -249,7 +250,7 @@ fn open_locked(locked: Locked, configured: PathBuf) -> Result<StartupSession, Re
                 let mut session = DrainSession::new(locked, configured, Some(*state));
                 match JournalDrain::repair(&mut session, true) {
                     Ok(_) => Ok(StartupSession {
-                        state: StartupState::Locked(session),
+                        state: StartupState::Locked(Box::new(session)),
                     }),
                     Err(other) => {
                         let class = if other == DrainError::RepairPending {

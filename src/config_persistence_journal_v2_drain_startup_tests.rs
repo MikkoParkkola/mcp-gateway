@@ -317,7 +317,7 @@ fn prepare_repairs_before_load() {
     held(&live.path, ROW);
 }
 
-/// GATE.4: a staged restore whose original is gone is RepairPending and leaves the journal.
+/// GATE.4: a staged restore whose original is gone is `RepairPending` and leaves the journal.
 #[test]
 fn prepare_refuses_unrepairable() {
     const ROW: &str = "prepare_refuses_unrepairable";
@@ -342,7 +342,7 @@ fn prepare_refuses_unrepairable() {
     free(&live.path, ROW);
 }
 
-/// GATE.4: one handed-over token and one not is JournalPending before any caller load.
+/// GATE.4: one handed-over token and one not is `JournalPending` before any caller load.
 #[test]
 fn prepare_refuses_partial_handover() {
     const ROW: &str = "prepare_refuses_partial_handover";
@@ -423,7 +423,7 @@ fn prepare_leaves_handover_to_the_file_drain() {
     free(&live.path, ROW);
 }
 
-/// GATE.4: a repair that fails at RepairPaused is JournalPending and does not restore.
+/// GATE.4: a repair that fails at `RepairPaused` is `JournalPending` and does not restore.
 #[test]
 fn prepare_refuses_a_failed_repair() {
     const ROW: &str = "prepare_refuses_a_failed_repair";
@@ -480,8 +480,8 @@ impl<T: Clone> AmbiguousIfClone<u8> for T {}
 /// GATE.5: dropping the session releases the lock, keeps the journal, and appends nothing.
 #[test]
 fn startup_session_drop_releases() {
-    let _ = <StartupSession as AmbiguousIfClone<_>>::probe;
     const ROW: &str = "startup_session_drop_releases";
+    let _ = <StartupSession as AmbiguousIfClone<_>>::probe;
     let live = Live::new();
     drop(live.seed(state(&live.resolved), ROW));
     let session = prepared(&live.path, ROW);
@@ -590,7 +590,7 @@ async fn finish_cancelled_releases_the_lock() {
     free(&live.path, ROW);
 }
 
-/// GATE.4: a P2 refusal logs the journal path and OtherLog; Display stays the fixed sentence.
+/// GATE.4: a P2 refusal logs the journal path and `OtherLog`; `Display` stays the fixed sentence.
 #[tokio::test(flavor = "current_thread")]
 async fn refusal_logs_path_and_cause() {
     const ROW: &str = "refusal_logs_path_and_cause";

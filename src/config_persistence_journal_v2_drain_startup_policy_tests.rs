@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The startup gate's finish stage over real drains: each policy P1-P7, the journal then the
-//! file, the parked and refused cases, and a failed delivery (crash_s4).
+//! file, the parked and refused cases, and a failed delivery (`crash_s4`).
 
 use super::*;
 
@@ -85,7 +85,13 @@ fn policy_p4() -> Result<(), String> {
     const ROW: &str = "finish_maps_each_policy P4";
     let live = Live::new();
     let session = abandon(&live, ROW, |_| {});
-    finished(session, Some(Arc::clone(&live.log)), ROW);
+    let result =
+        super::super::fixtures::runtime(finish_start(session, Some(Arc::clone(&live.log))));
+    if result != Ok(()) {
+        return Err(format!(
+            "{ROW}: a matching log drains and accepts, got {result:?}"
+        ));
+    }
     gone(&live.resolved, ABANDONED, ROW);
     let records = live.records();
     intent_arrived(&records, "writer-1", ROW);
@@ -120,7 +126,10 @@ fn policy_p6() -> Result<(), String> {
     let live = Live::new();
     let session = abandon(&live, ROW, |_| {});
     let baseline = artifact(&live.resolved, ABANDONED, ROW);
-    finished(session, None, ROW);
+    let result = super::super::fixtures::runtime(finish_start(session, None));
+    if result != Ok(()) {
+        return Err(format!("{ROW}: logging off accepts, got {result:?}"));
+    }
     same(&live.resolved, ABANDONED, &baseline, ROW);
     free(&live.path, ROW);
     Ok(())
@@ -243,7 +252,7 @@ fn finish_parks_invalid_journal_payload() {
     );
 }
 
-/// GATE.4: a torn abandoned file with logging off is AbandonedPending, not P6's accept.
+/// GATE.4: a torn abandoned file with logging off is `AbandonedPending`, not P6's accept.
 #[test]
 fn finish_refuses_unreadable_file_without_log() {
     const ROW: &str = "finish_refuses_unreadable_file_without_log";
@@ -268,7 +277,7 @@ fn finish_refuses_unreadable_file_without_log() {
     free(&live.path, ROW);
 }
 
-/// GATE.4: a fault after the intent append is JournalPending and leaves the intent unflagged.
+/// GATE.4: a fault after the intent append is `JournalPending` and leaves the intent unflagged.
 #[test]
 fn crash_s4() {
     const ROW: &str = "crash_s4";

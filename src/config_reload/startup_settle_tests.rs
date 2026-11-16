@@ -182,12 +182,11 @@ fn want_session(
 }
 
 fn assert_locked(row: &str, session: &StartupSession) {
-    if !matches!(&session.state, StartupState::Locked(_)) {
-        panic!(
-            "{row}: Locked, got ArtifactFreeUnlocked on {}",
-            session.target().display()
-        );
-    }
+    assert!(
+        matches!(&session.state, StartupState::Locked(_)),
+        "{row}: Locked, got ArtifactFreeUnlocked on {}",
+        session.target().display()
+    );
 }
 
 fn assert_locked_no_journal(row: &str, session: &StartupSession) {
@@ -286,12 +285,11 @@ fn opened(row: &str, case: &str, outcome: Result<StartupSession, StartError>) ->
         Ok(session) => session,
         Err(error) => panic!("{row} {case}: ArtifactFreeUnlocked, got {error:?}"),
     };
-    if !matches!(&session.state, StartupState::ArtifactFreeUnlocked { .. }) {
-        panic!(
-            "{row} {case}: ArtifactFreeUnlocked, got Locked on {}",
-            session.target().display()
-        );
-    }
+    assert!(
+        matches!(&session.state, StartupState::ArtifactFreeUnlocked { .. }),
+        "{row} {case}: ArtifactFreeUnlocked, got Locked on {}",
+        session.target().display()
+    );
     session
 }
 
@@ -673,7 +671,7 @@ async fn prepare_refuses_unclassifiable_journal() {
     }
 }
 
-/// GATE.2, GATE.4: each StartError displays its one fixed sentence.
+/// GATE.2, GATE.4: each `StartError` displays its one fixed sentence.
 #[test]
 fn start_error_texts() {
     let rows = [
@@ -721,7 +719,7 @@ fn start_error_texts() {
     }
 }
 
-/// GATE.4: every DrainError variant maps to that stage's literal result.
+/// GATE.4: every `DrainError` variant maps to that stage's literal result.
 #[test]
 fn stage_maps_every_drain_error() {
     let pending = Err(StartError::JournalPending);
