@@ -247,3 +247,88 @@ fn library_printed_output_exits_as_with_a_reader() {
         );
     }
 }
+
+/// PROBE, never merged: the one-line reader case `ROUNDS` times on each of
+/// `THREADS` threads, beside a thread running the gone-reader case, so a hang
+/// on this OS fails at a bound naming its wait. Every failure is reported,
+/// then the probe fails if there was any.
+const THREADS: usize = 4;
+const ROUNDS: usize = 75;
+
+fn probe_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| {
+            payload
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+        })
+        .unwrap_or_default()
+}
+
+fn probe_one_line_case() {
+    let home = tempfile::tempdir().expect("home");
+    let spawned = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
+        .args(["list", "--available"])
+        .current_dir(home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mcp-gateway");
+    let mut child = Bounded(spawned);
+    let case = "probe: a reader that takes one line";
+    let first = child.first_line(case);
+    let ended = child.reap(case);
+    assert!(!first.is_empty(), "{case}: printed nothing");
+    assert!(
+        ended.status.success(),
+        "{case}: exited {}: {}",
+        ended.status,
+        ended.stderr
+    );
+}
+
+fn probe_gone_reader_case() {
+    let (status, stderr) = run_with_reader_gone(&["list", "--available"]);
+    assert!(
+        status.success(),
+        "probe: reader gone: exited {status}: {stderr}"
+    );
+}
+
+#[test]
+fn probe_one_line_reader_under_load() {
+    let started = Instant::now();
+    let mut workers: Vec<std::thread::JoinHandle<Vec<String>>> = (0..THREADS)
+        .map(|_| {
+            std::thread::spawn(|| {
+                (0..ROUNDS)
+                    .filter_map(|_| std::panic::catch_unwind(probe_one_line_case).err())
+                    .map(|payload| probe_message(&payload))
+                    .collect()
+            })
+        })
+        .collect();
+    workers.push(std::thread::spawn(|| {
+        (0..ROUNDS)
+            .filter_map(|_| std::panic::catch_unwind(probe_gone_reader_case).err())
+            .map(|payload| probe_message(&payload))
+            .collect()
+    }));
+    let failures: Vec<String> = workers
+        .into_iter()
+        .flat_map(|worker| worker.join().expect("probe worker"))
+        .collect();
+    println!(
+        "PROBE threads={THREADS} rounds={ROUNDS} one-line runs={} gone-reader runs={ROUNDS} failures={} secs={}",
+        THREADS * ROUNDS,
+        failures.len(),
+        started.elapsed().as_secs()
+    );
+    for failure in &failures {
+        println!("PROBE FAILURE {failure}");
+    }
+    assert!(failures.is_empty(), "probe failures: {failures:?}");
+}
