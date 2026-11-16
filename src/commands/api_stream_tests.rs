@@ -837,3 +837,31 @@ async fn an_over_long_line_in_one_chunk_is_refused() {
     let (out, outcome, _) = run(&args(EXPORT, None, false), Some(reply)).await;
     assert_eq!((outcome.exit, out.len()), (ApiExit::LocalFailure, 0));
 }
+
+/// D4 (final review): a gateway that never sends response headers ends at
+/// the headers wait with the network exit; nothing is printed.
+#[tokio::test]
+async fn no_response_headers_end_at_the_headers_wait() {
+    let out = Shared::default();
+    let outcome = run_streamed_with(
+        &args(EXPORT, None, false),
+        BASE,
+        &LinkTls::default(),
+        credential,
+        out.clone(),
+        &short(),
+        |_| futures::future::pending::<Result<AdminStream, AdminCallError>>(),
+    )
+    .await;
+    assert_eq!(
+        (outcome.exit, out.bytes().len()),
+        (ApiExit::Network, 0),
+        "{}",
+        outcome.stderr
+    );
+    assert!(
+        outcome.stderr.contains("no response headers"),
+        "{}",
+        outcome.stderr
+    );
+}
