@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 
 use super::super::dashboard_link::{
     AdminCallError, AdminClientOptions, AdminFailureKind, AdminResponse, AdminStream, LinkTls,
-    admin_stream_url, read_token,
+    admin_stream_url, read_token, redact_body,
 };
 use super::{ApiError, ApiExit, ApiOutcome, api_url, method, render_response, resolve_token};
 use crate::gateway::routes;
@@ -383,9 +383,8 @@ fn rendered(event: Event, token: &str, json_output: bool) -> Option<Vec<u8>> {
     }
     let data = serde_json::from_str::<Value>(&event.data).unwrap_or(Value::String(event.data));
     let mut object = json!({"event": event.name, "id": event.id, "data": data});
-    let entries = super::object_entry_count(&object);
-    redact::json(&mut object, &secrets);
-    if super::object_entry_count(&object) < entries {
+    // The shared refusal: an entry lost to redaction is not printed short.
+    if !redact_body(&mut object, token) {
         return None;
     }
     let mut line = serde_json::to_vec(&object).ok()?;
