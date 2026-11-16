@@ -291,6 +291,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: The installed compiler is the pinned one
         run: python3 scripts/ci/check_toolchain_pin.py --runtime
+      # Here because this job already has the pinned compiler and is cheap:
+      # build.rs alone, run with every value of MCP_GATEWAY_TEST_PART.
+      - name: build.rs emits exactly the lib test part cfgs for each value
+        run: python3 scripts/dev/test_build_rs_parts.py
       - name: Validate service-template smoke script
         run: bash -n scripts/dev/service-template-smoke.sh
       - name: Validate single-node templates with generated config
