@@ -7,11 +7,23 @@
 //! marked incomplete until a save succeeds.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::counter_wiring::{COUNTER_SAVE_INTERVAL, Counters};
 use super::persistence::{ShutdownSave, spawn_periodic_save};
+use crate::health_history::gate::HealthGate;
 use crate::health_history::{HealthHistory, file};
+
+/// The wall clock the closures and the floor adapter read; production passes
+/// `crate::clock::unix_secs`, rows a fixed clock.
+pub(super) type Clock = fn() -> Result<u64, crate::clock::ClockBeforeEpoch>;
+
+/// What the sampler reads each minute, shared with the floor adapter's replay
+/// so both read the same sources whichever is built first.
+pub(super) struct SampleInputs {
+    pub(super) memory: fn() -> Option<u64>,
+    pub(super) sessions: Arc<dyn Fn() -> usize + Send + Sync>,
+}
 
 /// How often memory and the session count are sampled.
 const SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
@@ -20,7 +32,11 @@ const SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 pub(super) struct Health {
     pub(super) history: Arc<HealthHistory>,
     /// `None` when saves are off for this run.
-    path: Option<PathBuf>,
+    pub(super) path: Option<PathBuf>,
+    /// The health floor's gate, shared by the saver, the sampler and the adapter.
+    pub(super) gate: Arc<HealthGate>,
+    /// Set by `spawn_sampler`.
+    pub(super) sample_inputs: Arc<OnceLock<SampleInputs>>,
 }
 
 /// Restore the history from `data_dir`, save it once, and start its periodic
@@ -34,10 +50,20 @@ pub(super) fn start(
     // counters.json's Restart marker for this start goes to disk now, so a
     // crash before its periodic save cannot hide this run (best effort).
     counters.save_now(now);
+    start_history(data_dir, now, counters.store.restores(), shutdown)
+}
+
+/// Everything `start` does after the counters' marker: restore, the first
+/// save, and the periodic save behind the health floor's gate.
+pub(super) fn start_history(
+    data_dir: &Path,
+    now: u64,
+    restores: crate::health_history::Restores,
+    shutdown: tokio::sync::broadcast::Receiver<()>,
+) -> (Health, tokio::task::JoinHandle<()>) {
     let path = data_dir.join("health.json");
     let previous = file::read(&path);
-    let (history, started) =
-        HealthHistory::start(previous.as_deref(), counters.store.restores(), now);
+    let (history, started) = HealthHistory::start(previous.as_deref(), restores, now);
     if started.missed_run {
         tracing::info!(
             "health history: a run it did not record happened; that time is shown as unaccounted"
@@ -65,15 +91,55 @@ pub(super) fn start(
         file::save(&history, path, now, file::Wait::Block);
     }
     file::install(Arc::clone(&history));
-    let saver = spawn_periodic_save("health save", COUNTER_SAVE_INTERVAL, Some(shutdown), {
-        let (history, path) = (Arc::clone(&history), path.clone());
-        move || {
-            if let (Some(path), Ok(now)) = (&path, crate::clock::unix_secs()) {
-                file::save(&history, path, now, file::Wait::SkipIfBusy);
-            }
+    let gate = Arc::new(HealthGate::default());
+    let saver = spawn_periodic_save(
+        "health save",
+        COUNTER_SAVE_INTERVAL,
+        Some(shutdown),
+        saver_closure(
+            Arc::clone(&gate),
+            Arc::clone(&history),
+            path.clone(),
+            crate::clock::unix_secs,
+        ),
+    );
+    let health = Health {
+        history,
+        path,
+        gate,
+        sample_inputs: Arc::default(),
+    };
+    (health, saver)
+}
+
+/// The periodic save, behind the gate (start's closure; rows build the same).
+pub(super) fn saver_closure(
+    gate: Arc<HealthGate>,
+    history: Arc<HealthHistory>,
+    path: Option<PathBuf>,
+    clock: Clock,
+) -> impl Fn() + Send + Sync + 'static {
+    move || {
+        if let (Some(path), Ok(now)) = (&path, clock()) {
+            file::save_gated(&history, path, now, &gate, file::Wait::SkipIfBusy);
         }
-    });
-    (Health { history, path }, saver)
+    }
+}
+
+/// The periodic sample, behind the gate (`spawn_sampler`'s closure; rows build
+/// the same). Without inputs set it does nothing.
+pub(super) fn sampler_closure(
+    gate: Arc<HealthGate>,
+    history: Arc<HealthHistory>,
+    inputs: Arc<OnceLock<SampleInputs>>,
+    clock: Clock,
+) -> impl Fn() + Send + Sync + 'static {
+    move || {
+        if let (Some(inputs), Ok(now)) = (inputs.get(), clock()) {
+            let memory = (inputs.memory)();
+            history.sample_and_tick_gated(&gate, memory, (inputs.sessions)() as u64, now);
+        }
+    }
 }
 
 /// Where this run saves health.json: `path`, unless an undecodable file was
@@ -109,18 +175,40 @@ impl Health {
         sessions: impl Fn() -> usize + Send + Sync + 'static,
         shutdown: tokio::sync::broadcast::Receiver<()>,
     ) -> tokio::task::JoinHandle<()> {
-        let history = Arc::clone(&self.history);
+        // One sampler per run: a second call keeps the first inputs.
+        let _ = self.sample_inputs.set(SampleInputs {
+            memory: crate::gateway::health_metrics::memory::resident_memory_bytes,
+            sessions: Arc::new(sessions),
+        });
         spawn_periodic_save(
             "health sample",
             SAMPLE_INTERVAL,
             Some(shutdown),
-            move || {
-                if let Ok(now) = crate::clock::unix_secs() {
-                    let memory = crate::gateway::health_metrics::memory::resident_memory_bytes();
-                    history.sample(memory, sessions() as u64, now);
-                    history.tick(now);
-                }
-            },
+            sampler_closure(
+                Arc::clone(&self.gate),
+                Arc::clone(&self.history),
+                Arc::clone(&self.sample_inputs),
+                crate::clock::unix_secs,
+            ),
+        )
+    }
+
+    /// The health floor adapter for a restart attempt (restart slice 6b),
+    /// over this run's gate, history, path and sample inputs.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "staged: the restart coordinator, a later part, calls this"
+        )
+    )]
+    pub(super) fn floor_adapter(&self, clock: Clock) -> super::health_floor::HealthFloor {
+        super::health_floor::HealthFloor::new(
+            Arc::clone(&self.gate),
+            Arc::clone(&self.history),
+            self.path.clone(),
+            Arc::clone(&self.sample_inputs),
+            clock,
         )
     }
 

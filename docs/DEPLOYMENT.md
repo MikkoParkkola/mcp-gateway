@@ -284,6 +284,12 @@ below 13 s). Whatever sends the signal must wait at least that timeout + 1 s
 before its SIGKILL. A kill that lands sooner cuts the saves or the backend stop
 short.
 
+The timeout covers the process's own exit too. A stop that still has work
+running when its time is up (a write stuck on a stalled disk, a log that cannot
+drain) exits with status 75 instead of 0, at most half a second after the
+timeout, so the + 1 s grace is never what ends it. A service manager that
+restarts on failure treats 75 as one.
+
 Every template in this repository gives the gateway 31 s:
 
 | Runner | Its own default | Setting | Where it is set here |

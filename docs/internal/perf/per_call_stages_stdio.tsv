@@ -36,6 +36,7 @@ src/gateway/server/construct.rs	new_evaluated_with_account_http	-	Gateway constr
 src/gateway/server/construct.rs	new_with_env	-	Gateway construction, once at startup
 src/gateway/server/construct.rs	new_with_path	-	Gateway construction, once at startup
 src/gateway/server/construct.rs	reload_path	-	startup and config-watcher accessor, not per call
+src/gateway/server/construct.rs	set_retire_cell	-	stores the boot's retirement plan cell at startup, once per boot
 src/gateway/server/construct.rs	shutdown_account_custody	-	account-custody shutdown
 src/gateway/server/construct.rs	shutdown_account_custody_by	-	account-custody shutdown, bounded by the stop deadline, once per stop
 src/gateway/server/construct.rs	start_account_custody	-	startup account custody, once per serve
@@ -74,10 +75,32 @@ src/gateway/server/first_list_wait.rs	end	-	not per call: once per session, when
 src/gateway/server/first_list_wait.rs	mark_waited_for_test	-	test-only helper (cfg(test))
 src/gateway/server/first_list_wait.rs	prepare	-	not on the tools/call path: stdio tools/list only (the grant recheck and own-view warm it already ran, and the first-list wait)
 src/gateway/server/first_list_wait.rs	scope	stdio_invoke_tiny	wraps every spawned stdio dispatch in the session's first-list ticket
+src/gateway/server/health_floor.rs	certified	-	test probe or hook of the health floor adapter, never compiled into a release
+src/gateway/server/health_floor.rs	checkpoint	-	restart checkpoint of the health history, run only by the restart coordinator (unwired until it lands), off the request path
+src/gateway/server/health_floor.rs	commit	-	restart checkpoint of the health history, run only by the restart coordinator (unwired until it lands), off the request path
+src/gateway/server/health_floor.rs	disarm	-	restart checkpoint of the health history, run only by the restart coordinator (unwired until it lands), off the request path
+src/gateway/server/health_floor.rs	drop	-	restart checkpoint of the health history, run only by the restart coordinator (unwired until it lands), off the request path
+src/gateway/server/health_floor.rs	end_attempt	-	restart checkpoint of the health history, run only by the restart coordinator (unwired until it lands), off the request path
+src/gateway/server/health_floor.rs	fail_next_replay_spawn	-	test probe or hook of the health floor adapter, never compiled into a release
+src/gateway/server/health_floor.rs	new	-	builds the health floor adapter for a restart attempt, off the request path
+src/gateway/server/health_floor.rs	owner	-	restart checkpoint of the health history, run only by the restart coordinator (unwired until it lands), off the request path
+src/gateway/server/health_floor.rs	panic_next_worker	-	test probe or hook of the health floor adapter, never compiled into a release
+src/gateway/server/health_floor.rs	pause	-	restart checkpoint of the health history, run only by the restart coordinator (unwired until it lands), off the request path
+src/gateway/server/health_floor.rs	refused	-	restart checkpoint of the health history, run only by the restart coordinator (unwired until it lands), off the request path
+src/gateway/server/health_floor.rs	release_for_stop	-	restart checkpoint of the health history, run only by the restart coordinator (unwired until it lands), off the request path
+src/gateway/server/health_floor.rs	resume	-	restart checkpoint of the health history, run only by the restart coordinator (unwired until it lands), off the request path
+src/gateway/server/health_floor.rs	settled	-	restart checkpoint of the health history, run only by the restart coordinator (unwired until it lands), off the request path
+src/gateway/server/health_floor.rs	spawn_replay	-	replays a skipped periodic health save or sample on its own thread after a cancelled restart, off the request path
+src/gateway/server/health_floor.rs	worker_done	-	restart checkpoint of the health history, run only by the restart coordinator (unwired until it lands), off the request path
+src/gateway/server/health_floor.rs	worker_finished	-	test probe or hook of the health floor adapter, never compiled into a release
+src/gateway/server/health_wiring.rs	floor_adapter	-	builds the health floor adapter for a restart attempt, off the request path
+src/gateway/server/health_wiring.rs	sampler_closure	-	the periodic health sampler task, off the request path
 src/gateway/server/health_wiring.rs	save_path	-	startup choice of where the health history saves, once per serve
+src/gateway/server/health_wiring.rs	saver_closure	-	the periodic health save task, off the request path
 src/gateway/server/health_wiring.rs	shutdown_save	-	shutdown health history save, off the request path
 src/gateway/server/health_wiring.rs	spawn_sampler	-	starts the background health sampler once per serve; the sampler runs on its own task, off the request path
 src/gateway/server/health_wiring.rs	start	-	startup health history restore and first save, once per serve
+src/gateway/server/health_wiring.rs	start_history	-	startup health history restore and first save, once per serve
 src/gateway/server/identity_grants.rs	audit_startup	-	startup identity-grant audit, before serving
 src/gateway/server/identity_grants.rs	from	-	startup identity-grant audit error conversion, before serving
 src/gateway/server/identity_grants.rs	identity_grant_sink_for	-	startup and reload grant-sink construction, not per call

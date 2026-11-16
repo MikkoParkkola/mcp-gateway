@@ -14,6 +14,7 @@ use tracing::{info, warn};
 use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::{Config, LiveEnv};
+use crate::gateway::restart_config_floor::Refusal;
 use crate::security::ssrf::DestinationPolicy;
 
 use super::{
@@ -307,15 +308,9 @@ impl ConfigWatcher {
         env_reloads: Arc<env_poll::EnvReloadCounts>,
         reporting: super::refusals::ReloadReporting,
     ) {
-        use env_poll::{DEBOUNCE, RELOAD_TICK};
+        use env_poll::RELOAD_TICK;
         tokio::spawn(async move {
-            let mut last_event: Option<Instant> = None;
-            let mut pending_trigger: Option<ReloadTrigger> = None;
             let mut ticker = tokio::time::interval(RELOAD_TICK);
-            // The poll re-triggers a failing env file every tick; this keeps
-            // its warning to one a minute unless the error changes.
-            let mut env_warns = env_poll::WarnLimiter::default();
-
             // The watcher runs the same reload transaction as the meta-tool and
             // the admin UI, through the same function (#397). It used to have a
             // private copy of that transaction, which meant the regression test
@@ -349,78 +344,29 @@ impl ConfigWatcher {
                 }
             };
 
+            let gate = ctx.registry.config_gate();
+            env_reloads.register_with(&gate);
+            let mut state = TickState {
+                pending_trigger: None,
+                last_event: None,
+                env_reloads,
+                env_warns: env_poll::WarnLimiter::default(),
+            };
             loop {
                 tokio::select! {
                     Some(trigger) = event_rx.recv() => {
-                        last_event = Some(Instant::now());
+                        state.last_event = Some(Instant::now());
                         // Keep the first trigger reason for the log message;
                         // the reload re-reads everything anyway.
-                        if pending_trigger.is_none() {
-                            pending_trigger = Some(trigger);
+                        if state.pending_trigger.is_none() {
+                            state.pending_trigger = Some(trigger);
                         }
                     }
                     _ = ticker.tick() => {
-                        if pending_trigger.is_some()
-                            && last_event.is_some_and(|t| t.elapsed() >= DEBOUNCE)
-                        {
-                            let trigger = pending_trigger.take().unwrap();
-                            last_event = None;
-                            env_poll::log_trigger(&trigger);
-                            env_reloads.count_attempt(&trigger);
-                            let result = ctx.reload_outcome().await;
-                            let error = result.as_ref().err().map(String::as_str);
-                            env_reloads.settled(&mut env_warns, error, &trigger);
-                            match (result, &trigger) {
-                                (Ok(outcome), ReloadTrigger::EnvFile(path)) => {
-                                    env_poll::report_reloaded(path, &outcome);
-                                }
-                                (Ok(outcome), _) if outcome.changes == NO_CHANGES_SUMMARY => {
-                                    tracing::debug!("Config reload: no changes detected");
-                                }
-                                (Ok(outcome), _) => {
-                                    info!(
-                                        changes = %outcome.changes,
-                                        restart_required = outcome.restart_required,
-                                        "Config reload: complete"
-                                    );
-                                }
-                                (Err(e), trigger)
-                                    if !matches!(trigger, ReloadTrigger::ConfigFile)
-                                        && !e.starts_with(SHUTDOWN_ABORTED_ERROR) =>
-                                {
-                                    env_reloads.report_failure(&mut env_warns, trigger, &e);
-                                }
-                                (Err(e), _) if is_posture_refusal(&e) => {
-                                    // Its own arm, ahead of the generic one: a
-                                    // posture refusal is a decision about this
-                                    // config, not a file the operator must fix
-                                    // the syntax of.
-                                    warn!("Config reload: {e}");
-                                }
-                                (Err(e), _) if e.starts_with(SHUTDOWN_ABORTED_ERROR) => {
-                                    warn!(
-                                        "Config reload: aborted, the gateway is \
-                                         shutting down; keeping the previous live \
-                                         config rather than publishing one that \
-                                         describes backends which were never \
-                                         registered"
-                                    );
-                                }
-                                (Err(e), _) => {
-                                    // Every other error out of `reload_outcome`
-                                    // comes from reading or parsing the file:
-                                    // that call has exactly two failure sources
-                                    // and the arm above catches the other one. A
-                                    // third source added later lands here and
-                                    // would be mislabelled, so give it its own
-                                    // arm rather than widening this message.
-                                    warn!(
-                                        error = %e,
-                                        "Config reload: failed to parse config file, keeping current config"
-                                    );
-                                }
-                            }
-                        }
+                        run_tick(&ctx, &mut state, Wake::Timer).await;
+                    }
+                    () = gate.watcher_poked().notified() => {
+                        run_tick(&ctx, &mut state, Wake::Resume).await;
                     }
                     _ = shutdown_rx.recv() => {
                         info!("Config watcher shutting down");
@@ -429,6 +375,185 @@ impl ConfigWatcher {
                 }
             }
         });
+    }
+}
+
+/// What the reload task keeps between ticks.
+pub(super) struct TickState {
+    pub(super) pending_trigger: Option<ReloadTrigger>,
+    pub(super) last_event: Option<Instant>,
+    /// Owns the failed-retry flag the gate holds weakly: it lives as long as the watcher.
+    pub(super) env_reloads: Arc<env_poll::EnvReloadCounts>,
+    pub(super) env_warns: env_poll::WarnLimiter,
+}
+
+/// Why a tick runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Wake {
+    /// The reload interval elapsed; a trigger is taken once its debounce has.
+    Timer,
+    /// `resume()` poked the watcher: a kept trigger and an owed replay run at once.
+    Resume,
+}
+
+/// One watcher tick, the body the spawned loop and the test fixture both run.
+///
+/// The watcher asks the gate for admission before it takes its pending trigger;
+/// a refused tick leaves the trigger in place. The owed-replay flag is taken
+/// while the admission guard is held, and the guard lives to the end of the tick.
+pub(super) async fn run_tick(ctx: &ReloadContext, state: &mut TickState, wake: Wake) {
+    let gate = ctx.registry.config_gate();
+    let debounced = state
+        .last_event
+        .is_some_and(|t| t.elapsed() >= env_poll::DEBOUNCE);
+    let due = state.pending_trigger.is_some() && (wake == Wake::Resume || debounced);
+    if !due && !gate.replay_owed() {
+        return;
+    }
+    #[cfg(test)]
+    gate.call_admitted(
+        crate::gateway::restart_config_floor::seams::AdmittedPoint::WatcherBeforeAdmission,
+    );
+    let guard = match gate.admit(crate::gateway::restart_config_floor::AdmitKind::Watcher) {
+        Ok(guard) => guard,
+        Err(refusal) => {
+            // Restarting and Stopping are final: the trigger is dropped with the
+            // gateway. A pause keeps it for the tick that follows the resume.
+            if matches!(refusal, Refusal::Restarting | Refusal::Stopping) {
+                state.pending_trigger = None;
+            }
+            return;
+        }
+    };
+    #[cfg(test)]
+    gate.call_admitted(
+        crate::gateway::restart_config_floor::seams::AdmittedPoint::WatcherAfterAdmission,
+    );
+    #[cfg_attr(
+        not(test),
+        allow(
+            unused_variables,
+            reason = "only the test reload record names its source"
+        )
+    )]
+    let replay = gate.take_replay_owed(&guard);
+    // Whatever its debounce state: the reload re-reads everything, and the
+    // trigger it reports should be the one that was waiting.
+    let trigger = state
+        .pending_trigger
+        .take()
+        .unwrap_or(ReloadTrigger::ConfigFile);
+    state.last_event = None;
+    env_poll::log_trigger(&trigger);
+    state.env_reloads.count_attempt(&trigger);
+    let result = ctx.reload_outcome().await;
+    #[cfg(test)]
+    if result.is_ok() {
+        let source = if replay || wake == Wake::Resume {
+            crate::gateway::restart_config_floor::seams::ReloadSource::Replay
+        } else {
+            crate::gateway::restart_config_floor::seams::ReloadSource::Watcher
+        };
+        // The active snapshot the reload published, not the boot config.
+        let active = ctx.live_config.get();
+        gate.record_reload(source, active.environment.as_deref().unwrap_or(""));
+    }
+    report_reload(state, result, &trigger);
+    drop(guard);
+}
+
+/// A watcher's tick state as a row drives it by hand (the support fixture's
+/// `tick` is the only caller): polling is off, and each tick runs [`run_tick`].
+#[cfg(test)]
+pub(crate) struct HandTick(tokio::sync::Mutex<TickState>);
+
+#[cfg(test)]
+impl HandTick {
+    /// Fresh state; the failed-retry flag registered with the registry's gate.
+    pub(crate) fn new(registry: &BackendRegistry) -> Self {
+        let env_reloads = Arc::new(env_poll::EnvReloadCounts::default());
+        env_reloads.register_with(&registry.config_gate());
+        Self(tokio::sync::Mutex::new(TickState {
+            pending_trigger: None,
+            last_event: None,
+            env_reloads,
+            env_warns: env_poll::WarnLimiter::default(),
+        }))
+    }
+
+    /// One tick. A file event plants the trigger with its debounce already
+    /// elapsed (the row waits on nothing); `resume` is the poke's kind.
+    pub(crate) async fn run(&self, ctx: &ReloadContext, file_event: bool, resume: bool) {
+        let mut state = self.0.lock().await;
+        if file_event {
+            state
+                .pending_trigger
+                .get_or_insert(ReloadTrigger::ConfigFile);
+            state.last_event = Instant::now().checked_sub(env_poll::DEBOUNCE);
+        }
+        let wake = if resume { Wake::Resume } else { Wake::Timer };
+        run_tick(ctx, &mut state, wake).await;
+    }
+}
+
+/// Record how the reload ended and log it.
+fn report_reload(
+    state: &mut TickState,
+    result: std::result::Result<super::ReloadOutcome, String>,
+    trigger: &ReloadTrigger,
+) {
+    let (env_reloads, env_warns) = (&state.env_reloads, &mut state.env_warns);
+    let error = result.as_ref().err().map(String::as_str);
+    env_reloads.settled(env_warns, error, trigger);
+    match (result, trigger) {
+        (Ok(outcome), ReloadTrigger::EnvFile(path)) => {
+            env_poll::report_reloaded(path, &outcome);
+        }
+        (Ok(outcome), _) if outcome.changes == NO_CHANGES_SUMMARY => {
+            tracing::debug!("Config reload: no changes detected");
+        }
+        (Ok(outcome), _) => {
+            info!(
+                changes = %outcome.changes,
+                restart_required = outcome.restart_required,
+                "Config reload: complete"
+            );
+        }
+        (Err(e), trigger)
+            if !matches!(trigger, ReloadTrigger::ConfigFile)
+                && !e.starts_with(SHUTDOWN_ABORTED_ERROR) =>
+        {
+            env_reloads.report_failure(env_warns, trigger, &e);
+        }
+        (Err(e), _) if is_posture_refusal(&e) => {
+            // Its own arm, ahead of the generic one: a
+            // posture refusal is a decision about this
+            // config, not a file the operator must fix
+            // the syntax of.
+            warn!("Config reload: {e}");
+        }
+        (Err(e), _) if e.starts_with(SHUTDOWN_ABORTED_ERROR) => {
+            warn!(
+                "Config reload: aborted, the gateway is \
+                 shutting down; keeping the previous live \
+                 config rather than publishing one that \
+                 describes backends which were never \
+                 registered"
+            );
+        }
+        (Err(e), _) => {
+            // Every other error out of `reload_outcome`
+            // comes from reading or parsing the file:
+            // that call has exactly two failure sources
+            // and the arm above catches the other one. A
+            // third source added later lands here and
+            // would be mislabelled, so give it its own
+            // arm rather than widening this message.
+            warn!(
+                error = %e,
+                "Config reload: failed to parse config file, keeping current config"
+            );
+        }
     }
 }
 

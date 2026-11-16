@@ -1,0 +1,1 @@
+src/gateway/server/construct.rs	set_retire_cell	1	Stores the boot's retirement plan cell on the gateway at startup; decides nothing

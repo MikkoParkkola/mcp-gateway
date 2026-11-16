@@ -27,6 +27,7 @@ mod cost_restore_attribution_tests;
 mod cost_save_stamp_tests;
 mod counter_wiring;
 mod events_wiring;
+mod health_floor;
 mod health_wiring;
 #[cfg(test)]
 mod key_server_start_tests;
@@ -211,6 +212,10 @@ pub struct Gateway {
     /// account shutdown releases the store and its two file locks while this
     /// handle stays here to refuse everything that arrives afterwards.
     custody: Option<Arc<crate::personal_accounts::GatewayCustody>>,
+    /// The boot's retirement plan cell, from `cli::run`: the HTTP stop stores
+    /// its plan here once it fixes its budget. `None` for a gateway built in
+    /// memory, whose stop then leaves the process exit to its caller.
+    retire: Option<crate::retire::RetireCell>,
     /// In-process test settings: data directory and bound-port channel.
     #[cfg(test)]
     test_seams: test_seams::TestSeams,
