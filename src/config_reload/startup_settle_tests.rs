@@ -564,7 +564,8 @@ async fn prepare_recovers_a_v1_journal() {
 #[tokio::test]
 async fn prepare_records_a_v1_recovery() {
     let row = "prepare_records_a_v1_recovery";
-    let dir = tempfile::tempdir().expect("tempdir");
+    // Registered: the gate and this row each open the log in this directory.
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = dir.path().join("gateway.yaml");
     let log = dir.path().join("audit.ndjson");
     let original = logged(&log);
