@@ -107,6 +107,7 @@ fn a_stuck_blocking_task_is_left_behind_at_the_bound_and_logged() {
             left_running = shut_down(
                 runtime,
                 RuntimeShutdown::Bounded(Duration::from_millis(200)),
+                None,
             );
         });
         (left_running, logged)
@@ -127,6 +128,7 @@ fn block_on_returns_behind_a_stuck_blocking_task() {
     within_watchdog(move || {
         block_on(
             RuntimeShutdown::Bounded(Duration::from_millis(200)),
+            &crate::retire::RetireCell::default(),
             async move {
                 let (started, running) = tokio::sync::oneshot::channel();
                 tokio::task::spawn_blocking(move || {
@@ -163,7 +165,11 @@ fn a_flush_inside_the_bound_completes_and_logs_nothing() {
     let shutdown = std::thread::spawn(move || {
         let mut left_running = true;
         let logged = errors_logged(|| {
-            left_running = shut_down(runtime, RuntimeShutdown::Bounded(Duration::from_secs(5)));
+            left_running = shut_down(
+                runtime,
+                RuntimeShutdown::Bounded(Duration::from_secs(5)),
+                None,
+            );
         });
         (left_running, logged)
     });
@@ -183,4 +189,125 @@ fn a_flush_inside_the_bound_completes_and_logs_nothing() {
     assert!(flushed.load(Ordering::SeqCst), "the flush was cut");
     assert!(!left_running, "a finished flush reported as left running");
     assert!(logged.is_empty(), "a clean shutdown logged: {logged:?}");
+}
+
+/// A plain stop's plan whose runtime wait ends at `runtime_end`.
+fn plan_with_runtime_end(runtime_end: tokio::time::Instant) -> crate::retire::RetirePlan {
+    crate::retire::RetirePlan::new(
+        runtime_end + Duration::from_secs(2),
+        runtime_end,
+        crate::retire::Exit::Plain,
+    )
+}
+
+/// U1 (RETIRE.4): under a plan the runtime waits at most 250 ms when its
+/// runtime deadline is further off, and only what is left to it when nearer;
+/// without a plan, the mode's timeout as before.
+#[test]
+fn a_plan_bounds_the_runtime_wait_by_the_cap_and_its_deadline() {
+    use super::wait_bound;
+    let now = tokio::time::Instant::now();
+    let ten = SERVE_RUNTIME_SHUTDOWN_TIMEOUT;
+    assert_eq!(
+        wait_bound(ten, None, now),
+        ten,
+        "no plan, the mode's timeout"
+    );
+    let far = plan_with_runtime_end(now + Duration::from_secs(60));
+    assert_eq!(
+        wait_bound(ten, Some(far), now),
+        crate::retire::RUNTIME_WAIT_CAP,
+        "a far runtime deadline did not cap the wait at 250 ms"
+    );
+    let near = plan_with_runtime_end(now + Duration::from_millis(100));
+    assert_eq!(
+        wait_bound(ten, Some(near), now),
+        Duration::from_millis(100),
+        "a near runtime deadline did not bound the wait"
+    );
+}
+
+/// U1c (RETIRE.4): at or past the runtime deadline the wait is zero, with no
+/// panic; the shutdown then reports work left running, which the tail maps to 75.
+#[test]
+fn a_spent_runtime_deadline_gives_a_zero_wait() {
+    use super::wait_bound;
+    let now = tokio::time::Instant::now();
+    let spent = plan_with_runtime_end(
+        now.checked_sub(Duration::from_secs(1))
+            .expect("the clock is past its first second"),
+    );
+    assert_eq!(
+        wait_bound(SERVE_RUNTIME_SHUTDOWN_TIMEOUT, Some(spent), now),
+        Duration::ZERO,
+        "a spent runtime deadline still allowed a wait"
+    );
+}
+
+/// U1 (RETIRE.4): a blocking task that never ends no longer holds an HTTP
+/// stop's runtime for the 10 s bound: the shutdown returns within the plan's
+/// 250 ms cap (well under 2 s here) and reports the work left running.
+#[test]
+fn a_planned_shutdown_leaves_a_stuck_task_behind_within_the_cap() {
+    let runtime = runtime();
+    let release = stuck_task(&runtime);
+    let plan = plan_with_runtime_end(tokio::time::Instant::now() + Duration::from_secs(60));
+    let (sent, got) = mpsc::channel();
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let left_running = shut_down(
+            runtime,
+            RuntimeShutdown::Bounded(SERVE_RUNTIME_SHUTDOWN_TIMEOUT),
+            Some(plan),
+        );
+        let _ = sent.send((left_running, started.elapsed()));
+    });
+    let (left_running, took) = got
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the shutdown returned within the watchdog");
+    drop(release);
+    assert!(left_running, "the shutdown did not report the stuck task");
+    assert!(
+        took < Duration::from_secs(2),
+        "the planned shutdown waited {took:?} for a stuck task"
+    );
+}
+
+/// U1d (RETIRE.4): `block_on` reads the plan its future stored in the cell, as
+/// the HTTP stop stores it during the run, when it shuts the runtime down: a
+/// stuck blocking task then holds the exit no longer than the cap, and the
+/// shutdown reports it left running.
+#[test]
+fn block_on_bounds_its_shutdown_by_the_plan_stored_during_the_run() {
+    let plan = crate::retire::RetireCell::default();
+    let cell = Arc::clone(&plan);
+    let (release, stuck) = mpsc::channel::<()>();
+    let (sent, got) = mpsc::channel();
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let ((), left_running) = block_on(
+            RuntimeShutdown::Bounded(SERVE_RUNTIME_SHUTDOWN_TIMEOUT),
+            &plan,
+            async move {
+                let far = tokio::time::Instant::now() + Duration::from_secs(60);
+                let _ = cell.set(plan_with_runtime_end(far));
+                let (started, running) = tokio::sync::oneshot::channel();
+                tokio::task::spawn_blocking(move || {
+                    let _ = started.send(());
+                    let _ = stuck.recv();
+                });
+                running.await.expect("the stuck task starts");
+            },
+        );
+        let _ = sent.send((left_running, started.elapsed()));
+    });
+    let (left_running, took) = got
+        .recv_timeout(Duration::from_secs(30))
+        .expect("block_on returned within the watchdog");
+    drop(release);
+    assert!(left_running, "the shutdown did not report the stuck task");
+    assert!(
+        took < Duration::from_secs(2),
+        "block_on ignored the plan stored during the run and waited {took:?}"
+    );
 }

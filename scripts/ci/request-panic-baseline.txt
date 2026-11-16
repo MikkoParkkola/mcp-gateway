@@ -48,8 +48,6 @@ src/gateway/server/run_steps.rs	GatewayKeyPair::generate().expect("RSA key pair 
 src/gateway/server/stdio_loop.rs	.expect("the admission semaphore is never closed");	2
 src/gateway/server/stdio_loop.rs	let slot = slot.expect("a spawned request holds the slot it was admitted on");	1
 src/gateway/server/stdio_nonce.rs	.expect("the OS RNG must yield 32 bytes");	1
-src/gateway/server/support.rs	.expect("Failed to install Ctrl+C handler");	1
-src/gateway/server/support.rs	.expect("Failed to install SIGTERM handler")	1
 src/gateway/task_service/execution.rs	_ => unreachable!("matched above"),	1
 src/gateway/task_service/execution/operations.rs	.expect("worker semaphore is never closed");	1
 src/gateway/task_service/execution/worker.rs	let job = job.expect("a handle is captured only for an armed job");	1
