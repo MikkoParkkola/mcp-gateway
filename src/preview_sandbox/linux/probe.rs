@@ -17,7 +17,7 @@ pub(super) const IP_CANDIDATES: [&str; 4] = ["/usr/sbin/ip", "/usr/bin/ip", "/sb
 /// npm older than this refuses the fetch.
 const NPM_FLOOR: u32 = 9;
 /// How long `npm --version` may take.
-const VERSION_BOUND: Duration = Duration::from_secs(2);
+const VERSION_BOUND: Duration = Duration::from_secs(10);
 
 /// npm and node's directory beside `npx` (the path it was found at, before
 /// symlinks are followed), as npm and node install them together.
@@ -37,7 +37,7 @@ pub(super) fn npm_beside(npx: &Path) -> Result<(PathBuf, PathBuf), Refusal> {
     Ok((npm, dir.to_path_buf()))
 }
 
-/// Refuse an npm older than 9: `npm --version` (2 s, environment cleared but
+/// Refuse an npm older than 9: `npm --version` (within `VERSION_BOUND`, environment cleared but
 /// PATH = `node_dir`, since npm starts through `/usr/bin/env node`).
 pub(super) fn check_npm(npm: &Path, node_dir: &Path) -> Result<(), Refusal> {
     let mut child = Command::new(npm)
@@ -54,9 +54,10 @@ pub(super) fn check_npm(npm: &Path, node_dir: &Path) -> Result<(), Refusal> {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(Refusal::Step(
-                "npm --version did not answer within 2 s".into(),
-            ));
+            return Err(Refusal::Step(format!(
+                "npm --version did not answer within {} s",
+                VERSION_BOUND.as_secs()
+            )));
         }
         std::thread::sleep(Duration::from_millis(20));
     }
