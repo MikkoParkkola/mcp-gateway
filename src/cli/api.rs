@@ -53,6 +53,14 @@ pub struct ApiArgs {
     /// Require the gateway resource to match this `ETag`.
     #[arg(long, value_name = "VALUE")]
     pub if_match: Option<String>,
+    /// The event stream (`/ui/api/stream`) only, and required there: print
+    /// this many events, then close the stream and exit.
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
+    pub limit: Option<u32>,
+    /// The event stream only: resume after this event id, sent as
+    /// `Last-Event-ID`.
+    #[arg(long, value_name = "ID")]
+    pub last_event_id: Option<String>,
     /// Gateway base URL (default as for `dashboard-link`).
     #[arg(short, long)]
     pub url: Option<String>,

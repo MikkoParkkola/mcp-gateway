@@ -873,6 +873,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway api --data` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:52 |
 | `mcp-gateway api --if-match` | KEEP | send the resource ETag as If-Match for conditional mutations | - | src/cli/api.rs:55 |
 | `mcp-gateway api --json` | KEEP | structured errors on stderr; successful responses retain native JSON or raw bytes | - | src/cli/api.rs:59 |
+| `mcp-gateway api --last-event-id` | KEEP | resume the event stream after this event id (sent as Last-Event-ID) | - | src/cli/api.rs:64 |
+| `mcp-gateway api --limit` | KEEP | print this many events from the event stream, then close it and exit | - | src/cli/api.rs:60 |
 | `mcp-gateway api --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:55 |
 | `mcp-gateway api -u` | KEEP | short alias of `--url` | - | src/cli/api.rs:55 |
 | `mcp-gateway api <METHOD>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:45 |

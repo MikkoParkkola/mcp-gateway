@@ -22,6 +22,9 @@ pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
 mod config_file;
+/// Every UI API answer type is classified for the api command.
+#[cfg(test)]
+mod content_types_tests;
 pub mod control_plane;
 mod dashboard;
 pub(in crate::gateway) mod decisions;
