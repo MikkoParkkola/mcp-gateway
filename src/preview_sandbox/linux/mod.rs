@@ -134,7 +134,7 @@ fn launch(unshare: &Path, helper: &Path, plan: &Plan) -> Result<tokio::process::
         .stderr(Stdio::piped())
         // Killing `unshare` makes `--kill-child` kill the helper, PID 1 of the
         // namespace, and with it every process inside.
-        .kill_on_drop(true);
+        .kill_on_drop(false);
     command
         .spawn()
         .map_err(|e| Refusal::Step(format!("starting unshare ({e})")))
