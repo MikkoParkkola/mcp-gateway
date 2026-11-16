@@ -718,9 +718,14 @@ async fn a_download_prints_before_the_body_ends() {
         chunks
             .unbounded_send(Ok(bytes::Bytes::from_static(b"first\n")))
             .expect("send");
-        while printed.bytes() != b"first\n" {
-            tokio::task::yield_now().await;
-        }
+        // A hang guard: a printer that buffered the line would never show it.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while printed.bytes() != b"first\n" {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first line prints before the second chunk is sent");
         chunks
             .unbounded_send(Ok(bytes::Bytes::from_static(b"second\n")))
             .expect("send");
@@ -947,5 +952,32 @@ async fn nothing_more_is_printed_after_the_deadline() {
         landed.is_empty() || landed == b"a\n",
         "only the write already begun may land: {:?}",
         String::from_utf8_lossy(&landed)
+    );
+}
+
+/// Final review (second seat): the buffered fallback on a streamed route ends
+/// at its total even when the body is always ready (endless empty chunks).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_always_ready_fallback_body_ends_at_its_total() {
+    let mut reply = answer(200, "application/json", Vec::new(), false);
+    reply.body = futures::stream::repeat_with(|| Ok(bytes::Bytes::new())).boxed();
+    // On a task of its own: without the deadline check the read loop never
+    // yields, so only another worker can notice.
+    let task = tokio::spawn(async move { run(&args(EXPORT, None, false), Some(reply)).await });
+    // A hang guard, far past the 400 ms fallback total under test.
+    let (out, outcome, _) = tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .expect("the fallback total ends an always-ready body")
+        .expect("the run task");
+    assert_eq!(
+        (outcome.exit, out.len()),
+        (ApiExit::Network, 0),
+        "{}",
+        outcome.stderr
+    );
+    assert!(
+        outcome.stderr.contains("did not finish its answer in time"),
+        "{}",
+        outcome.stderr
     );
 }

@@ -468,7 +468,17 @@ async fn buffered(
     } = answer;
     let mut bytes = Vec::new();
     loop {
-        let wait = until.saturating_duration_since(Instant::now());
+        // Checked before each read, not only by the timeout: a body that is
+        // always ready (endless empty chunks) never lets a zero wait fire.
+        let now = Instant::now();
+        if now >= until {
+            return network(
+                "The gateway did not finish its answer in time.",
+                json,
+                token,
+            );
+        }
+        let wait = until.saturating_duration_since(now);
         match tokio::time::timeout(wait, body.next()).await {
             Err(_) => {
                 return network(
