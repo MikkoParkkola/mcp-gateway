@@ -204,6 +204,8 @@ impl Pause {
     fn enter(&self) {
         let mut state = self.state.lock().expect("pause");
         state.0 = true;
+        // Not left yet: a pause entered again reports parked until this entry leaves.
+        state.2 = false;
         self.changed.notify_all();
         let (mut state, _) = self
             .changed

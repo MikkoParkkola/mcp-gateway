@@ -103,12 +103,14 @@ pub(crate) async fn prepare_start_within(
     wait: Duration,
 ) -> Result<StartupSession, StartError> {
     let configured = config.to_path_buf();
+    // The configured path, as given: resolving it here would touch the filesystem on this task.
+    let named = configured.clone();
     match lock_config_deferred(config, Instant::now() + wait).await {
-        Err(NotLocked::Busy) => Err(StartError::Busy),
+        Err(NotLocked::Busy) => Err(logged(refuse(StartError::Busy, named, "Busy"))),
         Err(NotLocked::Failed(_) | NotLocked::Refused(_)) => {
-            from_worker(move || unlocked(configured)).await
+            from_worker(named, move || unlocked(configured)).await
         }
-        Ok(locked) => from_worker(move || open_locked(locked, configured)).await,
+        Ok(locked) => from_worker(named, move || open_locked(locked, configured)).await,
     }
 }
 
@@ -118,14 +120,15 @@ pub(crate) async fn finish_start(
     session: StartupSession,
     log: Option<Arc<TransparencyLogger>>,
 ) -> Result<(), StartError> {
+    let named = session.target().to_path_buf();
     match session.state {
         StartupState::ArtifactFreeUnlocked { configured, target } => {
-            from_worker(move || recheck(&configured, &target)).await
+            from_worker(named, move || recheck(&configured, &target)).await
         }
         StartupState::Locked(session) => {
             // Captured on the caller: the worker is not inside a runtime until `block_on`.
             let handle = tokio::runtime::Handle::current();
-            from_worker(move || handle.block_on(drain_locked(*session, log))).await
+            from_worker(named, move || handle.block_on(drain_locked(*session, log))).await
         }
     }
 }
@@ -160,23 +163,31 @@ pub(crate) fn file_stage(error: DrainError) -> Result<(), StartError> {
     }
 }
 
-// Stalled retries. Lost proves nothing about the artifacts. The log is written on the caller.
+// Stalled retries. Lost proves nothing about the artifacts. Every refusal, these included, is logged
+// once on the caller with a path and its cause; `path` names the config for the two no-result causes.
 async fn from_worker<T: Send + 'static>(
+    path: PathBuf,
     work: impl FnOnce() -> Result<T, Refusal> + Send + 'static,
 ) -> Result<T, StartError> {
     match off_runtime(work).await {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(Refusal { class, path, cause })) => {
-            tracing::error!(
-                path = %path.display(),
-                cause = %cause,
-                "config-write startup refused: {class}"
-            );
-            Err(class)
-        }
-        Err(NoResult::Stalled) => Err(StartError::Busy),
-        Err(NoResult::Lost) => Err(StartError::ArtifactCheckFailed),
+        Ok(Err(refusal)) => Err(logged(refusal)),
+        Err(NoResult::Stalled) => Err(logged(refuse(StartError::Busy, path, "Stalled"))),
+        Err(NoResult::Lost) => Err(logged(refuse(
+            StartError::ArtifactCheckFailed,
+            path,
+            "Lost",
+        ))),
     }
+}
+
+fn logged(Refusal { class, path, cause }: Refusal) -> StartError {
+    tracing::error!(
+        path = %path.display(),
+        cause = %cause,
+        "config-write startup refused: {class}"
+    );
+    class
 }
 
 fn refuse(class: StartError, path: PathBuf, cause: impl Into<String>) -> Refusal {
