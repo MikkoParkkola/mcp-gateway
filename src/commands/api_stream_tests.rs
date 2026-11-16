@@ -732,17 +732,19 @@ async fn a_download_prints_before_the_body_ends() {
 }
 
 /// A sink whose writes park until the row's [`Release`] drops, as a reader
-/// that stalls the pipe parks a real write.
+/// that stalls the pipe parks a real write; once released, it keeps what it
+/// is given.
 #[derive(Clone, Default)]
-struct Parked(std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+struct Parked(std::sync::Arc<(std::sync::Mutex<(bool, Vec<u8>)>, std::sync::Condvar)>);
 
 impl Write for Parked {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let (released, wake) = &*self.0;
-        let mut released = released.lock().expect("parked");
-        while !*released {
-            released = wake.wait(released).expect("parked");
+        let (state, wake) = &*self.0;
+        let mut state = state.lock().expect("parked");
+        while !state.0 {
+            state = wake.wait(state).expect("parked");
         }
+        state.1.extend_from_slice(bytes);
         Ok(bytes.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -750,14 +752,19 @@ impl Write for Parked {
     }
 }
 
-/// Frees a [`Parked`] sink's writes when the row ends, so no thread is left
-/// parked.
+impl Parked {
+    fn bytes(&self) -> Vec<u8> {
+        (self.0).0.lock().expect("parked").1.clone()
+    }
+}
+
+/// Frees a [`Parked`] sink's writes when dropped, so no thread is left parked.
 struct Release(Parked);
 
 impl Drop for Release {
     fn drop(&mut self) {
-        let (released, wake) = &*(self.0).0;
-        *released.lock().expect("parked") = true;
+        let (state, wake) = &*(self.0).0;
+        state.lock().expect("parked").0 = true;
         wake.notify_all();
     }
 }
@@ -870,5 +877,54 @@ async fn no_response_headers_end_at_the_headers_wait() {
         outcome.stderr.contains("no response headers"),
         "{}",
         outcome.stderr
+    );
+}
+
+/// Final review (lead): a printing thread that outlives the deadline writes
+/// nothing more. The reader stalls on the first line and the run exits at the
+/// overall deadline with the network exit. When the reader resumes, at most
+/// the line whose write had already begun lands (a begun write cannot be
+/// withdrawn; the binary has exited by then), never a later line, and the
+/// thread ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nothing_more_is_printed_after_the_deadline() {
+    let sink = Parked::default();
+    let (watch, release) = (sink.clone(), Release(sink.clone()));
+    // One chunk: all three lines are in hand when the first write parks, so
+    // a printer that queued them would deliver the rest once released.
+    let reply = answer(200, "text/csv", vec![b"a\nb\nc\n".to_vec()], true);
+    let run = tokio::spawn(async move {
+        run_streamed_with(
+            &args(EXPORT, None, false),
+            BASE,
+            &LinkTls::default(),
+            credential,
+            sink,
+            &short(),
+            |_| async { Ok(reply) },
+        )
+        .await
+    });
+    // A hang guard: the run ends at its 1.5 s overall deadline.
+    let outcome = tokio::time::timeout(Duration::from_secs(30), run)
+        .await
+        .expect("the run ends at its deadline")
+        .expect("the run task");
+    assert_eq!(outcome.exit, ApiExit::Network, "{}", outcome.stderr);
+    drop(release);
+    // A hang guard: once its parked write returns, the thread finds the run
+    // gone and ends, dropping its copy of the sink.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while std::sync::Arc::strong_count(&watch.0) > 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the printing thread ends after the run");
+    let landed = watch.bytes();
+    assert!(
+        landed.is_empty() || landed == b"a\n",
+        "only the write already begun may land: {:?}",
+        String::from_utf8_lossy(&landed)
     );
 }
