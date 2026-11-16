@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/access_table.rs b/src/gateway/ui/access_table.rs
+index 517461ba45..3283f8ba14 100644
+--- a/src/gateway/ui/access_table.rs
++++ b/src/gateway/ui/access_table.rs
+@@ -562,7 +562,7 @@ pub(super) static ROWS: &[Row] = &[
+     row(
+         routes::UI_GATEWAY_RESTART,
+         Get,
+-        Admin(AdminRequired),
++        Open,
+         &[(Page::Gateway, Tab::Actions)],
+         false,
+     ),

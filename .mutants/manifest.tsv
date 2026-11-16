@@ -1,0 +1,4 @@
+head_sha	774e1c75cbef1859c822f3c612cbd2d5d8f5dbf2
+# the restart GET access entry opened; ROWS is a static, so no runtime switch reaches it. The parent carries the inert schemata wrappers of the previous batch (a normal build expands each to its original).
+g2-scoped	linux	g2-restart-get-open.patch	--lib gateway::ui::restart_get_tests::a_scoped_admins_confirm_request_is_refused_and_mints_nothing
+g2-authoff	linux	g2-restart-get-open.patch	--lib gateway::ui::restart_get_tests::an_auth_off_gateway_refuses_every_restart_get
