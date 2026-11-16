@@ -722,16 +722,6 @@ fn http_refusal(
     }
 }
 
-fn object_entry_count(value: &Value) -> usize {
-    match value {
-        Value::Object(entries) => {
-            entries.len() + entries.values().map(object_entry_count).sum::<usize>()
-        }
-        Value::Array(items) => items.iter().map(object_entry_count).sum(),
-        _ => 0,
-    }
-}
-
 fn render_response(
     response: &AdminResponse,
     token: &str,
@@ -752,9 +742,7 @@ fn render_response(
         return error.outcome(json_output, token);
     }
     let (stdout, stderr) = if let Some(body) = &mut json {
-        let entries = object_entry_count(body);
-        redact::json(body, &[token.to_string()]);
-        if object_entry_count(body) < entries {
+        if !super::dashboard_link::redact_body(body, token) {
             return ApiError::new(
                 ApiExit::LocalFailure,
                 UNSAFE_BODY_MESSAGE,
