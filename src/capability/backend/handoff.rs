@@ -251,6 +251,8 @@ impl Handoff {
         if fresh {
             #[cfg(test)]
             self.completions.fetch_add(1, Ordering::AcqRel);
+            #[cfg(test)]
+            reach(Step::Complete);
         }
         fresh
     }
@@ -360,6 +362,9 @@ enum Step {
     Park,
     Attach,
     Deliver,
+    /// Right after a completion made the scan ready, before the call that
+    /// completed it returns: what a concurrent probe can see first.
+    Complete,
 }
 
 #[cfg(test)]

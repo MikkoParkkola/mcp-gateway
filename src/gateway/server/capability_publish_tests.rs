@@ -15,7 +15,7 @@ use crate::config::Config;
 use crate::config_reload::LiveConfig;
 use crate::config_reload::refusals::ReloadReporting;
 use crate::config_reload::revision::{
-    AppliedInputs, CapabilityPart, PartDigest, config_revision, part_digest,
+    AppliedInputs, CapabilityPart, PartDigest, RawInputs, config_revision, part_digest,
 };
 use crate::gateway::webhooks::WebhookRegistry;
 
@@ -50,6 +50,37 @@ fn id_of(key: &[u8; 32], part: &CapabilityPart<PartDigest>) -> String {
     )
 }
 
+/// The gateway.yaml bytes the attached LiveConfig started from; any fixed
+/// bytes do, the rows compare ids built over the same ones.
+const YAML: &[u8] = b"server:\n  port: 1\n";
+
+/// A LiveConfig with the process's revision key and a startup revision whose
+/// capability part is not loaded, as a real startup builds one: a delivery
+/// into it changes its published revision.
+fn keyed_live(config: &Config, key: [u8; 32]) -> Arc<LiveConfig> {
+    Arc::new(
+        LiveConfig::new(config.clone())
+            .with_revision_key(key)
+            .with_applied(RawInputs {
+                gateway_yaml: YAML.to_vec(),
+                capabilities: CapabilityPart::NotLoaded,
+                ..RawInputs::default()
+            }),
+    )
+}
+
+/// The id that LiveConfig publishes once `part` reaches it.
+fn live_id(key: &[u8; 32], part: &CapabilityPart<PartDigest>) -> String {
+    config_revision(
+        key,
+        &AppliedInputs {
+            gateway_yaml: part_digest(key, YAML),
+            capabilities: part.clone(),
+            ..AppliedInputs::default()
+        },
+    )
+}
+
 fn loaded(key: &[u8; 32], path: &str, bytes: &[u8]) -> CapabilityPart<PartDigest> {
     CapabilityPart::Loaded(vec![(path.to_string(), part_digest(key, bytes))])
 }
@@ -60,6 +91,7 @@ fn revision_key_of_process() -> [u8; 32] {
 
 struct Started {
     backend: Arc<CapabilityBackend>,
+    live: Arc<LiveConfig>,
     key: [u8; 32],
     _shutdown: tokio::sync::broadcast::Sender<()>,
     _watcher: Option<CapabilityWatcher>,
@@ -158,7 +190,9 @@ async fn start_http(dirs: &[PathBuf], account_bound: bool, observer: Option<Obse
         );
     }
     // As run does after this step, once LiveConfig is built and before the bind.
-    backend.attach_revision(Arc::new(LiveConfig::new(gateway.config.clone())));
+    let key = meta.record_key().config_revision_key();
+    let live = keyed_live(&gateway.config, key);
+    backend.attach_revision(Arc::clone(&live));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while !backend.initial_scan_complete() {
         assert!(tokio::time::Instant::now() < deadline, "hung past 30s");
@@ -166,13 +200,17 @@ async fn start_http(dirs: &[PathBuf], account_bound: bool, observer: Option<Obse
     }
     Started {
         backend,
-        key: meta.record_key().config_revision_key(),
+        live,
+        key,
         _shutdown: shutdown,
         _watcher: watcher,
     }
 }
 
-async fn start_stdio(dir: &str, observer: Option<Observer>) -> (Arc<CapabilityBackend>, [u8; 32]) {
+async fn start_stdio(
+    dir: &str,
+    observer: Option<Observer>,
+) -> (Arc<CapabilityBackend>, [u8; 32], Arc<LiveConfig>) {
     let mut config = Config::default();
     config.capabilities.enabled = true;
     config.capabilities.directories = vec![dir.to_string()];
@@ -186,7 +224,8 @@ async fn start_stdio(dir: &str, observer: Option<Observer>) -> (Arc<CapabilityBa
         CapabilityBackend::install_next_delivery_observer(observer);
     }
     let warmer = WarmerGuard::new(&gateway.backends, WarmStartMode::Stdio, None);
-    let live = Arc::new(LiveConfig::new(gateway.config.clone()));
+    let key = meta.record_key().config_revision_key();
+    let live = keyed_live(&gateway.config, key);
     match tokio::time::timeout(
         Duration::from_secs(30),
         gateway.install_stdio_startup_catalogue(
@@ -204,7 +243,7 @@ async fn start_stdio(dir: &str, observer: Option<Observer>) -> (Arc<CapabilityBa
         Err(elapsed) => panic!("hung past 30s: {elapsed}"),
     }
     let backend = meta.get_capabilities().expect("the catalogue is installed");
-    (backend, meta.record_key().config_revision_key())
+    (backend, key, live)
 }
 
 fn watch_delivery() -> (Arc<AtomicBool>, Arc<AtomicBool>, Observer) {
@@ -220,7 +259,25 @@ fn watch_delivery() -> (Arc<AtomicBool>, Arc<AtomicBool>, Observer) {
     (ran, lock_free, observer)
 }
 
-fn covered(backend: &CapabilityBackend, key: &[u8; 32], path: &str, bytes: &[u8], startup: &str) {
+fn covered(
+    backend: &CapabilityBackend,
+    live: &LiveConfig,
+    key: &[u8; 32],
+    path: &str,
+    bytes: &[u8],
+    startup: &str,
+) {
+    // The running configuration itself, not only the handoff's record: its
+    // published revision is the one over the loaded file.
+    assert_eq!(
+        live.applied_now()
+            .published
+            .expect("a revision is published")
+            .revision
+            .clone(),
+        live_id(key, &loaded(key, path, bytes)),
+        "{startup}: the LiveConfig publishes the covered revision"
+    );
     assert_eq!(
         backend
             .delivered_revisions()
@@ -250,6 +307,7 @@ async fn h2_account_bound_http_startup_reaches_a_covered_part() {
     let started = Box::pin(start_http(&[dir.path().to_path_buf()], true, None)).await;
     covered(
         &started.backend,
+        &started.live,
         &started.key,
         &format!("{root}/alpha.yaml"),
         &bytes,
@@ -266,6 +324,7 @@ async fn h2_background_http_startup_reaches_a_covered_part() {
     let started = Box::pin(start_http(&[dir.path().to_path_buf()], false, None)).await;
     covered(
         &started.backend,
+        &started.live,
         &started.key,
         &format!("{root}/alpha.yaml"),
         &bytes,
@@ -318,9 +377,10 @@ async fn h2_stdio_startup_reaches_a_covered_part() {
     let bytes = yaml_bytes("alpha");
     write_good(dir.path(), "alpha", &bytes);
     let root = root_of(dir.path());
-    let (backend, key) = Box::pin(start_stdio(&root, None)).await;
+    let (backend, key, live) = Box::pin(start_stdio(&root, None)).await;
     covered(
         &backend,
+        &live,
         &key,
         &format!("{root}/alpha.yaml"),
         &bytes,

@@ -426,6 +426,38 @@ fn h1d_attach_announces_the_parked_scan_once() {
     );
 }
 
+/// The readiness-order snapshot is set before readiness is visible. Held at
+/// the instant the startup publish makes the scan ready, inside the call and
+/// before it returns, a probe that sees the scan complete must find the
+/// snapshot already set. Kills the mutant that sets it after the publish
+/// returns: a concurrent probe would read an empty slot.
+#[test]
+fn the_readiness_snapshot_is_set_before_readiness_is_visible() {
+    let started = scanning(scan_part());
+    // Attached before the scan's end, so its own publish completes it.
+    started.backend.attach_revision(Arc::clone(&started.live));
+    let (gate, arrived, release) = StepGate::open(Step::Complete);
+    let backend = Arc::clone(&started.backend);
+    let part = started.part.clone();
+    let worker = std::thread::spawn(move || {
+        arm(gate);
+        backend.publish_initial_scan(1, part);
+    });
+    let worker = wait_arrived(worker, &arrived);
+    assert!(
+        started.backend.initial_scan_complete(),
+        "premise: held after the publish made the scan ready"
+    );
+    assert!(
+        started.backend.records_at_scan_complete.get().is_some(),
+        "a probe that sees the scan ready finds the snapshot set"
+    );
+    release
+        .send(())
+        .expect("the step stopped waiting before it was released");
+    finish_30s(worker);
+}
+
 /// Integration row. Account-bound HTTP parks the scan, then attaches. The
 /// test makes no extra publish and does not finish the scan itself.
 #[test]
