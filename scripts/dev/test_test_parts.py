@@ -318,6 +318,15 @@ class PackageAndLists(Rows):
         toml = BASE["Cargo.toml"].replace('    "scripts/dev/test-parts-build.rs",\n', "")
         self.assert_refused(with_files(**{"Cargo.toml": toml}), "package")
 
+    def test_a_dockerfile_that_builds_without_the_build_script_is_refused(self):
+        # Cargo.toml's build key names the script, so an image that copies only the sources cannot build at all.
+        bare = "FROM rust AS builder\nCOPY Cargo.toml Cargo.lock ./\nCOPY src ./src\nRUN cargo build --release\n"
+        self.assert_refused(with_files(Dockerfile=bare), "package")
+        late = bare + "COPY scripts/dev/test-parts-build.rs ./scripts/dev/\n"
+        self.assert_refused(with_files(Dockerfile=late), "package")
+        good = bare.replace("COPY src ./src\n", "COPY src ./src\nCOPY scripts/dev/test-parts-build.rs ./scripts/dev/\n")
+        self.assertNotIn("package", self.codes(with_files(Dockerfile=good)))
+
     def test_a_build_key_outside_the_package_table_is_refused(self):
         # A line regex took a build key in any table and the path in an exclude list (code review r2).
         toml = BASE["Cargo.toml"].replace('build = "scripts/dev/test-parts-build.rs"\n', "")
