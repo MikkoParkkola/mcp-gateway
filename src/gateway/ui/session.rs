@@ -265,10 +265,16 @@ fn refusal_who() -> crate::security::audit::AuditWho {
     }
 }
 
-/// The session bound the handoff would store for this credential: the key's
-/// expiry, its quota and the fingerprint of the secret this request matched.
-/// The static bearer binds nothing, as a bearer-minted link does. An API key
-/// that cannot be bound may not mint.
+/// What a session minted by this credential is bound to, by a dashboard link
+/// or by the sign-in form. It ends no later than the minting key's expiry
+/// (otherwise a key used minutes before it expires would buy a full absolute
+/// limit of access), with that key on a reload, by its quota identity, and
+/// with the secret this request matched, by its fingerprint. The expiry comes
+/// from `auth`, the table that authenticated this request, so a reload cannot
+/// split them; the key is found by its credential, not its name, since two keys
+/// may share a name when a config skipped load validation. The static bearer
+/// binds nothing: it is restart-only. An API key that cannot be bound (not
+/// found, or no quota identity or fingerprint) may not mint: `None`.
 fn bound_for(
     auth: &crate::gateway::auth::ResolvedAuthConfig,
     client: &AuthenticatedClient,
@@ -354,26 +360,12 @@ pub(super) async fn dashboard_link(
     let Some(client) = guard.client else {
         return admin_auth_required().into_response();
     };
-    // A session opened by this link ends no later than the key that minted
-    // it: otherwise a key used minutes before its expiry would buy a full
-    // absolute limit of access after it.
-    // The expiry comes from the resolved key that authenticated this request,
-    // not the live file, so a reload cannot split them. A key that is not
-    // found cannot prove its expiry, so it may not mint: fail closed.
-    let not_after = if client.api_key_identity().is_some() {
-        // The table that authenticated this request: its pinned generation.
-        let keys = generation.auth().api_keys();
-        let Some(key) = keys
-            .iter()
-            // By the credential, not the name: two keys may share a name
-            // when a config skipped load validation (MIK-8489).
-            .find(|k| k.principal() == client.principal)
-        else {
-            return admin_auth_required().into_response();
-        };
-        key.expires_at.map(std::time::SystemTime::from)
-    } else {
-        None
+    let Some(bound) = bound_for(
+        generation.auth(),
+        &client,
+        named.as_ref().map(|Extension(key)| key),
+    ) else {
+        return admin_auth_required().into_response();
     };
     // Host, port and TLS are restart-only: the running listener's values, not
     // a reloaded file's, say where a browser can reach this process.
@@ -389,29 +381,7 @@ pub(super) async fn dashboard_link(
         )
         .into_response();
     }
-    // Bound to the minting key, by its quota identity, so the link and the
-    // session it opens end with that key on a reload (K13). The bearer binds
-    // nothing: it is restart-only.
-    // An API-key client that carries no quota identity cannot be bound to
-    // its key, so it may not mint: fail closed.
-    // The session lives while the secret this request matched is valid, so
-    // it is bound to that secret's fingerprint too; an API-key client whose
-    // match left none cannot be bound to its secret, and may not mint.
-    let digest_tag = named.map(|Extension(key)| key.digest_tag().to_owned());
-    let key = match (
-        client.api_key_identity(),
-        client.quota_principal.clone(),
-        digest_tag,
-    ) {
-        (None, _, _) => None,
-        (Some(_), Some(quota), Some(digest_tag)) => {
-            Some(crate::gateway::auth::MintingKey { quota, digest_tag })
-        }
-        (Some(_), _, _) => return admin_auth_required().into_response(),
-    };
-    let value = state
-        .dashboard_bootstrap
-        .rearm_bound(crate::gateway::auth::Bound { not_after, key });
+    let value = state.dashboard_bootstrap.rearm_bound(bound);
     let scheme = if running.mtls.enabled {
         "https"
     } else {
