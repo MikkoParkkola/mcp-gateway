@@ -699,13 +699,16 @@ fn private_home_routes_to_the_override() {
     );
 }
 
+/// One planted source: its name, its path relative to a home, and its file content.
+type Int1Source = (&'static str, String, fn(&str) -> String);
+
 /// The sources T1 plants, as literal paths per OS (relative to a home) and the
 /// file content for a server named `<n>` with the command `<n>`. One server
 /// per source, each with a unique name and command, so de-duplication cannot
-/// merge them. Parsers: src/discovery/config_scanner.rs parse_claude_config
-/// :275, parse_vscode_config :303, parse_zed_config :454, parse_continue_config
-/// :504, scan_mcp_config_dir :191.
-fn int1_sources() -> Vec<(&'static str, String, fn(&str) -> String)> {
+/// merge them. Parsers in `src/discovery/config_scanner.rs`: `parse_claude_config`
+/// :275, `parse_vscode_config` :303, `parse_zed_config` :454,
+/// `parse_continue_config` :504, `scan_mcp_config_dir` :191.
+fn int1_sources() -> Vec<Int1Source> {
     let mcp_servers: fn(&str) -> String =
         |n| format!(r#"{{"mcpServers":{{"{n}":{{"command":"{n}"}}}}}}"#);
     let vscode: fn(&str) -> String =
@@ -858,7 +861,7 @@ fn int1_discovery_reads_only_the_private_home() {
         private_home::run_row_child(command, ME, false, &private_home::Expect::Pass, vec![a, b]);
 }
 
-/// T6: with XDG_CONFIG_HOME removed, the config dir still routes to
+/// T6: with `XDG_CONFIG_HOME` removed, the config dir still routes to
 /// the override, so a lookup that ignored the override cannot hide behind an
 /// explicit XDG value.
 #[cfg(not(target_os = "macos"))]
