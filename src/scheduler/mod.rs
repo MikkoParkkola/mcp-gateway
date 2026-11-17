@@ -540,6 +540,7 @@ fn find_next_match(
     None
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

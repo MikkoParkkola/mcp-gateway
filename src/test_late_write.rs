@@ -112,6 +112,7 @@ fn attributed(thread: Option<&str>) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(tp3)]
     #[test]
     fn a_test_thread_names_its_test() {
         assert_eq!(
@@ -120,6 +121,7 @@ mod tests {
         );
     }
 
+    #[cfg(tp3)]
     #[test]
     fn main_unnamed_and_runtime_workers_are_unnamed() {
         for thread in [None, Some("main"), Some("tokio-runtime-worker")] {
@@ -128,6 +130,7 @@ mod tests {
         assert_eq!(attributed(Some("a::b")), "a::b");
     }
 
+    #[cfg(tp3)]
     #[test]
     fn a_live_witness_reports_nothing_and_a_missing_one_is_seen() {
         let dir = tempfile::tempdir().unwrap();
@@ -140,6 +143,7 @@ mod tests {
         assert!(!gone.exists(), "the check creates nothing");
     }
 
+    #[cfg(tp3)]
     #[test]
     fn only_a_file_directly_in_the_temp_root_is_flagged() {
         let root = std::env::temp_dir();

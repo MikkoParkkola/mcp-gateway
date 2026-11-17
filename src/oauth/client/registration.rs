@@ -177,6 +177,7 @@ impl OAuthClient {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "registration_tests.rs"]
 mod tests;

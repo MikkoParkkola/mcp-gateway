@@ -129,6 +129,7 @@ pub(super) fn refused(result: Result<impl Sized, JourneyError>) -> JourneyRefusa
     }
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_c06a_per_user_creation_is_a_sliding_ten_minute_rate() {
     // GIVEN: one principal creates 8 journeys for one account, each superseding.
@@ -150,6 +151,7 @@ fn t_c06a_per_user_creation_is_a_sliding_ten_minute_rate() {
     create(&store, T0 + PER_USER_WINDOW + 1, &limits, "alice");
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_c06b_active_journeys_are_bounded_gateway_wide() {
     let (_root, _config, store) = fresh();
@@ -169,6 +171,7 @@ fn t_c06b_active_journeys_are_bounded_gateway_wide() {
     );
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_c06c_supersede_is_keyed_on_principal_and_account() {
     let (_root, _config, store) = fresh();
@@ -196,6 +199,7 @@ fn file_len(config: &StoreConfig) -> usize {
     bytes.len()
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_flood_record_bound_evicts_oldest_terminal_and_never_refuses_callbacks() {
     // GIVEN: journeys_total = 4, so records_max = 16, and 3 started journeys.
@@ -247,6 +251,7 @@ fn t_flood_record_bound_evicts_oldest_terminal_and_never_refuses_callbacks() {
     }
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_flood_default_global_creation_rate_refuses_with_retry_after() {
     let (_root, _config, store) = fresh();
@@ -267,6 +272,7 @@ fn t_flood_default_global_creation_rate_refuses_with_retry_after() {
     );
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_c04c_every_terminal_record_holds_no_secret_and_stays_queryable() {
     // GIVEN: four started journeys, ended by connect, cancel, error and expiry.
@@ -330,6 +336,7 @@ fn t_c04c_every_terminal_record_holds_no_secret_and_stays_queryable() {
     }
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_ct_state_binding_and_owner_comparisons_are_constant_time() {
     let (_root, _config, store) = fresh();
@@ -383,6 +390,7 @@ pub(super) fn maximal_record() -> JourneyRecord {
     }
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_r2_5_over_cap_fields_are_refused_before_any_store_access() {
     let (_root, config, store) = fresh();
@@ -426,6 +434,7 @@ fn t_r2_5_over_cap_fields_are_refused_before_any_store_access() {
     );
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_r2_5_a_maximal_record_fits_record_max_rounded_to_256() {
     let serialized = serde_json::to_vec(&maximal_record()).unwrap();
@@ -470,6 +479,7 @@ fn digest_key_of(store: &PersonalAccountStore, config: &StoreConfig, id: &str) -
         .clone()
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_keyrot_digests_follow_the_recorded_key_not_the_current_one() {
     // GIVEN: two journeys started under k1.
@@ -509,6 +519,7 @@ fn t_keyrot_digests_follow_the_recorded_key_not_the_current_one() {
     assert_eq!(refused(refusal), JourneyRefusal::UnknownState);
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_keyrot2_start_recaptures_the_digest_key_it_mints_under() {
     let (_root, config, store) = fresh();
@@ -542,6 +553,7 @@ pub(super) fn sealed_grant() -> GrantRecord {
     }
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_c03d_consumed_is_durable_so_a_replay_after_restart_is_refused() {
     // GIVEN: a consumed callback, then a crash before the exchange.
@@ -569,6 +581,7 @@ fn t_c03d_consumed_is_durable_so_a_replay_after_restart_is_refused() {
     assert_eq!(record.replay_refusals, 1);
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_r3_2_a_late_first_callback_is_expiry_not_replay() {
     let (_root, _config, store) = fresh();

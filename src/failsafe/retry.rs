@@ -133,6 +133,7 @@ fn is_retryable(error: &Error) -> bool {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
 

@@ -742,12 +742,15 @@ fn collect_valid_params(schema: &Value) -> Vec<(String, String)> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "alternatives_tests.rs"]
 mod alternatives_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "integer_range_tests.rs"]
 mod integer_range_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests;

@@ -48,6 +48,7 @@ pub(super) async fn check_ws_backend(
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

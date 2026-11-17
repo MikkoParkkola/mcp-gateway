@@ -54,6 +54,7 @@ pub(crate) fn wipes_for_test() -> usize {
     WIPES.with(std::cell::Cell::get)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::{WIPES, WipedBytes};

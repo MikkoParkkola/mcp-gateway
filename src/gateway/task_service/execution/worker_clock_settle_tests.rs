@@ -103,6 +103,7 @@ pub(super) fn clock_waits(rendered: &str) -> u64 {
 /// dark again right after the wait's one readable read, so a fresh read is
 /// refused and the retry cannot commit.
 /// Red on base: base settles at chrono's wall clock, so `last_updated_at != flipped()`.
+#[cfg(tp3)]
 #[tokio::test(flavor = "current_thread")]
 async fn r2_a_settle_on_a_dark_clock_keeps_its_outcome_dated_at_the_first_readable_time() {
     #[cfg(feature = "metrics")]
@@ -159,6 +160,7 @@ async fn r2_a_settle_on_a_dark_clock_keeps_its_outcome_dated_at_the_first_readab
 /// Red on base: base settles at chrono's wall clock, so the date is not `created()`.
 /// P2's input-round Expired site is not rowed here: `readable_or_fail` is
 /// private to `input_round` and unreachable from this module.
+#[cfg(tp3)]
 #[tokio::test(flavor = "current_thread")]
 async fn r2b_an_expired_wait_settles_the_original_outcome_at_last_updated_at() {
     #[cfg(feature = "metrics")]
@@ -210,6 +212,7 @@ async fn r2b_an_expired_wait_settles_the_original_outcome_at_last_updated_at() {
 /// sends the cancel to `cancel_lost_the_revision`, whose retry reads the clock
 /// a second time. Red on base: base cancels at chrono's wall clock, so the
 /// cancel is dated at the real now, not at the record's last change.
+#[cfg(tp3)]
 #[tokio::test(flavor = "current_thread")]
 async fn r2c_a_cancel_on_a_dark_clock_still_cancels_dated_at_the_last_change() {
     let fx = day_task("r2c-cancel").await;
@@ -245,6 +248,7 @@ async fn r2c_a_cancel_on_a_dark_clock_still_cancels_dated_at_the_last_change() {
 /// `ClockUnreadable` falls into the catch-all) is killed by the `Completed`
 /// status and `delivered`. Red on base: both attempts read chrono's wall clock, so the
 /// date is not `flipped()`.
+#[cfg(tp3)]
 #[tokio::test(flavor = "current_thread")]
 async fn r2e_a_retry_after_a_conflict_that_meets_a_dark_clock_keeps_the_output() {
     let fx = day_task("r2e-conflict-dark").await;
@@ -295,6 +299,7 @@ async fn r2e_a_retry_after_a_conflict_that_meets_a_dark_clock_keeps_the_output()
 /// Mutant M2h (the terminal guard after the post-wait re-read is removed) is
 /// killed by `!delivered` and the `Cancelled` status. Red on base: base never
 /// waits and completes the task at chrono's wall clock, returning `true`.
+#[cfg(tp3)]
 #[tokio::test(flavor = "current_thread")]
 async fn r2g_a_cancel_during_the_wait_gives_no_receipt() {
     let fx = day_task("r2g-cancel-in-wait").await;

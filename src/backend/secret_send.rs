@@ -368,10 +368,12 @@ impl Backend {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "secret_send_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "secret_attach_refusal_tests.rs"]
 mod attach_refusal_tests;

@@ -324,6 +324,7 @@ async fn append(log: Option<&Arc<TransparencyLogger>>, t: &Transition) {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "override_audit_tests.rs"]
 mod tests;

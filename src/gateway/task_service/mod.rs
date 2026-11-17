@@ -14,20 +14,24 @@ use crate::idempotency::admission::ExecutionAdmission;
 mod record;
 mod store;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod store_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod delivery_pin_tests;
 
 mod service;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod service_tests;
 
 pub(crate) mod execution;
 pub(crate) mod host;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod runtime_tests;
 

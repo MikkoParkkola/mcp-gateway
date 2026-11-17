@@ -11,8 +11,8 @@ Static checks on ci.yml and scripts/ci/shard_tests.py:
 - together they cover the targets the unsharded command ran (Linux, macOS:
   lib, bins, tests, doctests; Windows: `--tests`, which is lib, bins, tests);
 - each shard matrix in ci.yml lists exactly that OS's shards;
-- the Linux lib legs run from the shared lib test binary in their own job (SHARED_LIB): the same check names,
-  run even when the build failed (`!cancelled()`), only `run-prebuilt`, and the aggregate needs it and the build;
+- the Linux lib legs run from the lib test part binaries in their own job (SHARED_LIB): the same check names,
+  run even when the build failed (`!cancelled()`), only `run-prebuilt-parts`, and the aggregate needs it and the build;
 - the aggregates keep the required names, need their shard jobs, run under
   !cancelled() with the shards' own skip guards, and pass the same job ids to
   check_needs.py;
@@ -36,7 +36,7 @@ JOBS = {  # os: (shard job, aggregate job, aggregate name, shard name prefix)
     "windows": ("windows-shards", "windows-check", "Windows check", "Windows shard "),
     "macos": ("macos-shards", "macos-check", "macOS check", "macOS shard "),
 }
-EXTRA_NEEDS = {"windows-check": ["windows-clippy"], "test": ["test-shards-lib", "linux-lib-build"]}
+EXTRA_NEEDS = {"windows-check": ["windows-clippy"], "test": ["test-shards-lib", "linux-lib-build", "linux-lib-union"]}
 # An OS whose lib legs run from one shared lib test binary: (their job, the build job). The legs are the runner's
 # SHARED_BUILD; they keep the shard job's name, so the check names stay; the build job's own wiring is
 # check_shared_lib.py's.
@@ -229,8 +229,8 @@ def workflow_problems(jobs: dict, st) -> list[str]:
         if str(agg.get("if", "")).replace(" ", "") != ("${{ !cancelled() && " + guard + " && " + TRAIN_SKIP + " }}").replace(" ", ""):
             out.append(f"{agg_key}: if must be !cancelled(), the shards' own guard and the merge-train skip, exactly")
         for extra in EXTRA_NEEDS.get(agg_key, []):
-            if extra == shared_key:
-                # It runs when the build failed too, so a failed build turns its legs red, never skipped.
+            if extra in (shared_key, "linux-lib-union"):
+                # It runs when the build failed too, so a failed part turns it red, never skipped.
                 want_if = "${{ !cancelled() && " + guard + " }}"
                 if str(jobs.get(extra, {}).get("if", "")).replace(" ", "") != want_if.replace(" ", ""):
                     out.append(f"{extra}: if must be !cancelled() and {shard_key}'s guard, exactly")
@@ -247,8 +247,9 @@ def workflow_problems(jobs: dict, st) -> list[str]:
             needs_s = sj.get("needs") or []
             if build_key not in ([needs_s] if isinstance(needs_s, str) else needs_s):
                 out.append(f"{shared_key}: must need {build_key}")
-            scalls = [s.get("run", "").strip() for s in sj.get("steps", []) if "shard_tests.py" in s.get("run", "")]
-            swant = [f'{py} scripts/ci/shard_tests.py run-prebuilt {os_kind} ${{{{ matrix.shard }}}} "$RUNNER_TEMP/lib-bin/lib-tests"']
+            # The shard run itself (the UPGRADING step's single-module run-one is not a shard run).
+            scalls = [s.get("run", "").strip() for s in sj.get("steps", []) if "shard_tests.py run-prebuilt" in s.get("run", "")]
+            swant = [f'{py} scripts/ci/shard_tests.py run-prebuilt-parts {os_kind} ${{{{ matrix.shard }}}} "$RUNNER_TEMP/lib-bin"']
             if scalls != swant:
                 out.append(f"{shared_key}: runner calls {scalls}, want exactly {swant!r}")
             for s in sj.get("steps", []):

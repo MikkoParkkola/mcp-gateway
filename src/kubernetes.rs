@@ -663,6 +663,7 @@ fn action(
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "kubernetes_tests.rs"]
 mod tests;

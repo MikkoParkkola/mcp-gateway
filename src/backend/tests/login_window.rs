@@ -246,6 +246,7 @@ pub(super) fn variant(error: &Error) -> String {
 /// it: one browser, one window. When the 300 s window passes, every one ends
 /// with `AuthorizationIncomplete`, the breaker counts nothing, and the next
 /// start begins a fresh login.
+#[cfg(tp3)]
 #[tokio::test]
 async fn five_starts_share_one_login_and_end_together_at_the_window() {
     let origin = authorization_server().await;
@@ -293,6 +294,7 @@ async fn five_starts_share_one_login_and_end_together_at_the_window() {
 
 /// MIK-7982.BOUND.3 (T3): stopping a backend whose start waits on a login
 /// ends that login and frees its callback port, and the waiting start ends.
+#[cfg(tp3)]
 #[tokio::test]
 async fn stop_ends_a_pending_login_and_frees_its_port() {
     let origin = authorization_server().await;
@@ -330,6 +332,7 @@ async fn stop_ends_a_pending_login_and_frees_its_port() {
 /// MIK-7982.BOUND.3 (T3b): a forced restart ends the pending login before it
 /// starts again, so the restart's own login binds the same fixed callback
 /// port and opens the browser, rather than queueing behind the stalled start.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_forced_restart_ends_the_pending_login_before_binding_again() {
     let origin = authorization_server().await;
@@ -365,6 +368,7 @@ async fn a_forced_restart_ends_the_pending_login_before_binding_again() {
 /// MIK-7982 r6 HIGH 1 (R6H1): a login whose token exchange fails fails every
 /// start that joined it with the same typed error, and the start after that
 /// begins a fresh login: a failure is not remembered as the cohort's outcome.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_failed_login_fails_its_joiners_and_leaves_the_next_start_fresh() {
     let origin = authorization_server().await;
@@ -413,6 +417,7 @@ async fn fill(
 /// cohort, and is still waiting on it when its own deadline passes, ends as
 /// `AuthorizationPending`: the backend did not fail, the person has not
 /// finished logging in. The breaker counts nothing.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_start_waiting_on_the_login_times_out_as_authorization_pending() {
     let origin = authorization_server().await;
@@ -443,6 +448,7 @@ async fn a_start_waiting_on_the_login_times_out_as_authorization_pending() {
 /// MIK-7982 r5 MED (R5M, C4): a fill that joined another caller's fill, whose
 /// owner waits on the pending login, keeps the owner's provenance at the outer
 /// `tools_for_check` deadline: both read `AuthorizationPending`.
+#[cfg(tp3)]
 #[tokio::test]
 async fn the_outer_tools_for_check_deadline_keeps_the_fill_owners_provenance() {
     let origin = authorization_server().await;
@@ -478,6 +484,7 @@ async fn the_outer_tools_for_check_deadline_keeps_the_fill_owners_provenance() {
 /// MIK-7982 (delta review, HIGH): a start keeps the cancel epoch it set out
 /// at, however late its detached OAuth task is first scheduled. A restart's
 /// cancel that came in between refuses its login: no browser opens.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_start_cancelled_before_its_login_task_runs_opens_no_login() {
     let origin = authorization_server().await;
@@ -514,6 +521,7 @@ async fn a_start_cancelled_before_its_login_task_runs_opens_no_login() {
 /// MIK-7982 (delta review): the health probe's rebuild with no login in
 /// flight leaves the cancel epoch alone, so it cannot refuse the login of an
 /// interactive start still discovering.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_non_interactive_restart_cancels_nothing() {
     let origin = authorization_server().await;
@@ -545,6 +553,7 @@ async fn a_non_interactive_restart_cancels_nothing() {
 /// MIK-7982 C2 (NonInteractive): a health probe on an OAuth backend with no
 /// token never begins a login. It answers `AuthorizationRequired` at once,
 /// and the browser stays closed.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_health_probe_never_begins_a_login() {
     let origin = authorization_server().await;
@@ -576,6 +585,7 @@ async fn a_health_probe_never_begins_a_login() {
 /// and a fill's request-time token step joins the login that opens. When the
 /// fill's deadline passes, nothing was handed to the transport yet, so it is
 /// `AuthorizationPending`, and the breaker counts nothing.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_request_waiting_on_a_request_time_login_times_out_as_authorization_pending() {
     let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(1)).await;
@@ -656,6 +666,7 @@ pub(crate) fn spawn_call(
 /// MIK-7982 r5 HIGH 2 (`R5H2a`, C3): a fill whose own request was handed to the
 /// transport and then timed out is a backend timeout, even while a login of
 /// its cohort is in flight: it waited on the backend, not on the login.
+#[cfg(tp3)]
 #[tokio::test]
 async fn an_unrelated_timeout_during_a_login_stays_a_backend_timeout() {
     // The fill sends both pages on a live token, and only then does the token
@@ -703,6 +714,7 @@ async fn an_unrelated_timeout_during_a_login_stays_a_backend_timeout() {
 /// MIK-7982 (dispatch path): a `tools/call` whose start waits on a login that
 /// nobody finishes ends at the window as `AuthorizationIncomplete`, and the
 /// dispatch path's breaker counts nothing, as the fill path's does not.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_call_whose_login_ends_at_the_window_counts_no_failure() {
     let origin = authorization_server().await;
@@ -738,6 +750,7 @@ async fn a_call_whose_login_ends_at_the_window_counts_no_failure() {
 /// is in flight, the health probe answers `AuthorizationRequired` at once
 /// rather than queueing on the client, and the probe's non-interactive
 /// rebuild leaves the working transport in the pool.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_probe_during_a_request_time_login_neither_waits_nor_rebuilds() {
     let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(30)).await;

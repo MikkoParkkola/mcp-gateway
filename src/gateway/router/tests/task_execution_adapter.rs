@@ -55,58 +55,75 @@
 //! under a separate heading for exactly that reason.
 
 /// A backend's `allowed_tools` narrowed between a task's intake and its run.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod allowed_tools_task;
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod live_key_tasks;
 mod support;
 
 /// A context-integrity refusal of a task settles with the gate's own code.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod ci_refusal_task;
 /// A gateway refusal inside a task worker's dispatch is tied to its task.
 /// A task-augmented composite call that ends on a gateway-refused step
 /// writes a settlement record naming the join to the step that refused.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod composite_settlement_task;
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod dispatch_refusal_task;
 
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod egress_task;
 /// MIK-7887.RECEIPT.4: the POST route receipts the answer it delivered.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod relay_delivered_route;
 /// MIK-8408: a plan's stored answer read again renews its step receipts.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod relay_plan_replay;
 /// MIK-8408 stage 4: the content guard rows, split from
 /// `relay_plan_replay_guards` for the file-size ceiling.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod relay_plan_replay_content_guards;
 /// MIK-8408 stage 4: the route-level guard rows (G1, G11-G47).
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod relay_plan_replay_guards;
 /// MIK-8408 stage 4: G27's notify-frame rows, split from the content
 /// guards for the file-size ceiling.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod relay_plan_replay_notify_guards;
 /// The persisted replay snapshot of a plan task's row.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod relay_plan_replay_snapshot_guards;
 /// MIK-7887.RECEIPT.2: a redacted plan answer keeps each step's delivered text.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod relay_plan_route;
 /// MIK-8113: seams between plan steps at the POST route.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod relay_plan_seam_route;
 /// MIK-7934.PLANRCPT.1: a task plan redacted at settlement keeps step receipts.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod relay_plan_task;
 /// COLLUDE.1 M9: a task's relay receipt is committed at settlement.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod relay_settlement;
 /// COLLUDE.1 M15: an upstream task's result is a relay source.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod relay_upstream;
 
@@ -114,77 +131,123 @@ mod grant_audit_order;
 /// D3-a: grant decision records at the route.
 mod grant_decision_tasks;
 mod grant_decisions;
+#[cfg(tp5)]
 mod grant_slot_release;
 pub(crate) mod submit_authz;
+#[cfg(tp5)]
 mod submit_authz_audit;
 /// MIK-8407: a followed job whose handle was refused settles its bindings.
+#[cfg(tp5)]
 mod upstream_bindings;
 pub(crate) mod x14_authorize_order;
 
+#[cfg(tp5)]
 mod admission_identity;
 /// MIK-7570.ATTEST.1 part 3: surfaced-tool tasks carry their attestation token.
+#[cfg(tp5)]
 mod attestation_tasks;
 /// MIK-7828.FIX.2: a running task's caller key outlives the idle TTL.
+#[cfg(tp5)]
 mod caller_key_ttl;
 /// G4: a task keys its arm and hints on its caller.
+#[cfg(tp5)]
 mod caller_keyed_hints;
+#[cfg(tp5)]
 mod cancel_chain;
+#[cfg(tp5)]
 mod capacity;
+#[cfg(tp5)]
 mod client_extensions;
+#[cfg(tp5)]
 mod confirmation;
+#[cfg(tp5)]
 mod dedupe;
+#[cfg(tp5)]
 mod drain;
 /// MIK-7311.LIFECYCLE.1 increment 1b: the input round on `/mcp`.
+#[cfg(tp5)]
 mod enforced_round;
 mod input_round;
+#[cfg(tp5)]
 mod input_round_clock;
+#[cfg(tp5)]
 mod input_round_clock_composite;
+#[cfg(tp5)]
 mod input_round_deadline;
+#[cfg(tp5)]
 mod input_round_races;
+#[cfg(tp5)]
 mod interlock;
+#[cfg(tp5)]
 mod lifecycle;
+#[cfg(tp5)]
 mod pending_input_policy;
 /// A call refused in its own send is no call a backend ran (tasks, plans).
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod presend_refused_send;
+#[cfg(tp5)]
 mod proven_subject_admission;
 /// MIK-8398 C1d: a task the worker runs stores a sealed result.
+#[cfg(tp5)]
 mod provenance_seal;
+#[cfg(tp5)]
 mod provide_input_guards;
 /// I5's during-the-wire half: one query per record at a time, worker and
 /// authenticated reader alike.
+#[cfg(tp5)]
 mod query_serialization;
+#[cfg(tp5)]
 mod refusals;
 /// A call refused before its backend is no call a backend ran.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod refused_step_targets;
+#[cfg(tp5)]
 mod replay_policy;
 /// No backend-planted gateway member in a task result or a replay.
+#[cfg(tp5)]
 mod reserved_members_task;
+#[cfg(tp5)]
 mod result_shapes;
+#[cfg(tp5)]
 mod settlement;
 /// MIK-7116.MIN.1 gap 1: the settlement record of a recovered upstream task.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod settlement_record;
+#[cfg(tp5)]
 mod signing_joint;
+#[cfg(tp5)]
 mod slot_release_tasks;
+#[cfg(tp5)]
 mod slot_release_top_level;
 /// `MIK-7993.STORE.1`/`.2`: a task row records the members the gateway wrote.
+#[cfg(tp5)]
 #[cfg(feature = "firewall")]
 mod stored_gateway_writes;
+#[cfg(tp5)]
 mod stored_result_policy;
 // MIK-8392.STORED.1: stored task reads judge the caller's current view.
+#[cfg(tp5)]
 mod stored_read_access;
 /// MIK-7974: a task keeps its request's meta-tool surface for its hints.
+#[cfg(tp5)]
 mod surface_hints;
 /// A surfaced task runs where it was created, or is refused.
+#[cfg(tp5)]
 mod surfaced_reload;
+#[cfg(tp5)]
 #[cfg(feature = "metrics")]
 mod unkeyed_task;
+#[cfg(tp5)]
 mod upstream_cancel;
 /// I5's before-the-wire half: the recovery descriptor's capacity, decided
 /// before the first `tools/call` rather than after the handle comes back.
+#[cfg(tp5)]
 mod upstream_descriptor;
+#[cfg(tp5)]
 mod x1_dispatch;
 
+#[cfg(tp5)]
 mod notifications;

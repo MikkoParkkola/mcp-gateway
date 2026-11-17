@@ -235,6 +235,7 @@ async fn markers(
     Json(markers).into_response()
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod tests;

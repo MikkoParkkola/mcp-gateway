@@ -639,6 +639,7 @@ pub(super) fn rebind(layer: Layer, before: &Value, after: &Value) {
     });
 }
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "gateway_writes_tests.rs"]
 mod tests;

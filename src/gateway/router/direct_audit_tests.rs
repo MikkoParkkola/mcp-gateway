@@ -26,32 +26,51 @@ use crate::transport::Transport;
 pub(in crate::gateway::router) mod anon_intake;
 mod extras;
 use extras::{Extra, Log, arm_extras, audit_log, backend_config, harden};
+#[cfg(tp1)]
 mod anon_key;
 mod backend_oracle;
+#[cfg(tp1)]
 mod backend_origin;
 mod composite_refusals;
 mod counting;
+#[cfg(tp1)]
 mod delivery;
+#[cfg(tp1)]
 mod delivery_who;
+#[cfg(tp1)]
 mod empty_grant;
+#[cfg(tp1)]
 mod late_refusals;
+#[cfg(tp1)]
 mod latency;
+#[cfg(tp1)]
 mod lost_round;
+#[cfg(tp1)]
 mod meta_malformed_retry;
+#[cfg(tp1)]
 mod meta_refusal;
 mod meta_replay;
+#[cfg(tp1)]
 mod one_record;
 mod one_record_meta;
+#[cfg(tp1)]
 mod one_record_replay;
 // A call to a backend that does not exist records not_found.
+#[cfg(tp1)]
 mod not_found;
+#[cfg(tp1)]
 mod refused_effect;
 /// MIK-8689 R-RECJUDGE: the judge's verdict rides the delivery record.
+#[cfg(tp1)]
 #[cfg(feature = "firewall")]
 mod response_judge;
+#[cfg(tp1)]
 mod rewritten_effect;
+#[cfg(tp1)]
 mod route_records;
+#[cfg(tp1)]
 mod sealed_refusal;
+#[cfg(tp1)]
 #[cfg(feature = "firewall")]
 mod session_less;
 #[cfg(feature = "firewall")]
@@ -574,9 +593,11 @@ fn only_invocation(fx: &Fixture) -> Value {
     all.remove(0)
 }
 
+#[cfg(tp1)]
 #[cfg(feature = "metrics")]
 #[path = "security_metrics_tests.rs"]
 mod security_metrics;
 
+#[cfg(tp1)]
 #[path = "direct_audit_tail_tests.rs"]
 mod tail_tests;

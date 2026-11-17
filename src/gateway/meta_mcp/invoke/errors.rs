@@ -264,6 +264,7 @@ pub(super) fn classify_from_detail(detail: Option<&str>) -> ErrorCategory {
     ErrorCategory::Validation
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "hint_surface_tests.rs"]
 mod hint_surface_tests;

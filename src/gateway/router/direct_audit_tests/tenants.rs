@@ -77,6 +77,7 @@ fn reply_naming(tenant: &str, note: &str) -> Value {
 /// T12. The direct record names request and response tenants, hashed and
 /// sorted, with the kernel's data classes: the direct route runs the same
 /// response gates as the meta route.
+#[cfg(tp1)]
 #[tokio::test]
 async fn direct_record_carries_tenants_and_data_classes() {
     let fx = fixture(Setup {
@@ -110,6 +111,7 @@ async fn direct_record_carries_tenants_and_data_classes() {
 
 /// T26. A response the inspection gate refuses on the direct route keeps
 /// its response tenants and has no data classes.
+#[cfg(tp1)]
 #[tokio::test]
 async fn direct_gate_refusal_keeps_response_tenants() {
     let key = ["AKIA", "IOSFODNN7", "EXAMPLE"].concat();
@@ -136,6 +138,7 @@ async fn direct_gate_refusal_keeps_response_tenants() {
 
 /// T28. A direct idempotent replay is answered before the gates; its record
 /// carries the delivered value's tenants, marked as a cached delivery.
+#[cfg(tp1)]
 #[tokio::test]
 async fn direct_idempotent_replay_record_carries_delivered_tenants() {
     let fx = fixture(Setup {
@@ -171,6 +174,7 @@ async fn direct_idempotent_replay_record_carries_delivered_tenants() {
 /// T2 (record half). A meta call the tenant guard refuses before dispatch:
 /// the #2421 `denied` record names the tenants the request reached, and
 /// carries no data classes (nothing was fetched).
+#[cfg(tp1)]
 #[tokio::test]
 async fn meta_tenant_guard_refusal_record_names_the_tenants() {
     let fx = fixture(Setup {
@@ -196,6 +200,7 @@ async fn meta_tenant_guard_refusal_record_names_the_tenants() {
 /// MIK-7646 (T2, two requests). `cust-1` is admitted, then a request naming
 /// only `cust-2` is refused at limit 1: its record names its own request's
 /// tenant, not the window's. Keyed, so both requests share one window.
+#[cfg(tp1)]
 #[tokio::test]
 async fn meta_tenant_guard_refusal_record_names_only_its_own_request() {
     let fx = fixture(Setup {
@@ -221,6 +226,7 @@ async fn meta_tenant_guard_refusal_record_names_only_its_own_request() {
 
 /// A replayed terminal error is a cached delivery too: no backend ran, so the
 /// record says so, names the request's tenants and carries no data classes.
+#[cfg(tp1)]
 #[tokio::test]
 async fn direct_cached_error_replay_is_marked_cached() {
     let fx = fixture(Setup {
@@ -255,6 +261,7 @@ async fn direct_cached_error_replay_is_marked_cached() {
 
 /// MIK-7636 GH2555 (direct route). A chain-refused call is recorded
 /// uninspected; its keyed replay is a cached delivery of a value no gate read.
+#[cfg(tp1)]
 #[tokio::test]
 async fn direct_replayed_chain_refusal_keeps_its_uninspected_attribution() {
     // With no tenant named first (GH2555.2), so that case fails on its own,
@@ -309,6 +316,7 @@ async fn direct_replayed_chain_refusal_keeps_its_uninspected_attribution() {
 /// #2523. A direct `tools/call` with no `arguments` member is scanned by the
 /// firewall over `params` itself; the refusal record must name the tenants
 /// that refusal read, not none.
+#[cfg(tp1)]
 #[tokio::test]
 async fn direct_refusal_without_arguments_names_the_tenants() {
     let fx = fixture(Setup {
@@ -336,6 +344,7 @@ async fn direct_refusal_without_arguments_names_the_tenants() {
 /// response firewall then refuses the answer for an instruction takeover. The
 /// key stores that refusal, and its replay is still a cached delivery of a
 /// value no gate fully read.
+#[cfg(tp1)]
 #[tokio::test]
 async fn direct_replayed_firewall_refusal_of_an_unread_answer_stays_uninspected() {
     let reply = json!({"content": [

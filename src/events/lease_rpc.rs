@@ -106,6 +106,7 @@ impl EventsHub {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "lease_rpc_tests.rs"]
 mod tests;

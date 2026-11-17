@@ -126,6 +126,7 @@ impl Provider for McpProvider {
 // Tests
 // ============================================================================
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

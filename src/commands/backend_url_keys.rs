@@ -301,6 +301,7 @@ fn backend_entries(lines: &[String]) -> Vec<Entry> {
     entries
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "backend_url_keys_tests.rs"]
 mod tests;

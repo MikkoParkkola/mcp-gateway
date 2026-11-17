@@ -419,21 +419,25 @@ fn acl_presence(_target: &std::fs::File, _scratch: &std::fs::File) -> AclPresenc
     AclPresence::PresentOrUnknown
 }
 
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 #[path = "config_persistence_atomic_tests.rs"]
 mod atomic_tests;
 
 // Linux only: writes POSIX ACL xattrs, which only the Linux probe reads.
+#[cfg(tp3)]
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 #[path = "config_persistence_acl_tests.rs"]
 mod acl_tests;
 
 // Windows: an `Inherit` save keeps the target's access list on Windows.
+#[cfg(tp3)]
 #[cfg(all(test, windows))]
 #[path = "config_persistence_winacl_tests.rs"]
 mod winacl_tests;
 
 // The same, through each runtime state caller.
+#[cfg(tp3)]
 #[cfg(all(test, windows))]
 #[path = "config_persistence_winacl_callers_tests.rs"]
 mod winacl_callers_tests;

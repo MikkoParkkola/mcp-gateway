@@ -213,6 +213,7 @@ fn unguarded_in(rel: &str, text: &str, tables: &[&[(&str, &str, &str, &str)]]) -
 }
 
 /// A1, red on base: every retained-payload projection is guarded or listed.
+#[cfg(tp2)]
 #[test]
 fn every_retained_output_projection_delivers_its_holds() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway");
@@ -251,6 +252,7 @@ fn synthetic(arm: &str) -> String {
 }
 
 /// MIK-8509.SHGUARD.1: a Replay arm that binds the payload in the excused fn is reported
+#[cfg(tp2)]
 #[test]
 fn shguard1_a_payload_binding_replay_is_reported() {
     assert_eq!(
@@ -265,6 +267,7 @@ fn shguard1_a_payload_binding_replay_is_reported() {
 }
 
 /// MIK-8509.SHGUARD.1: the twin, so the control cannot pass for an unrelated reason
+#[cfg(tp2)]
 #[test]
 fn shguard1_the_excused_line_alone_passes() {
     // The excused arm binds nothing but `dispatched`, so the live pin still
@@ -282,6 +285,7 @@ fn shguard1_the_excused_line_alone_passes() {
 }
 
 /// MIK-8509.SHGUARD.1: the control's excused line is still verbatim in admission.rs
+#[cfg(tp2)]
 #[test]
 fn shguard1_the_excused_line_is_the_live_one() {
     // Ties the fixture to the live source: if the arm in admission.rs drifts,
@@ -301,6 +305,7 @@ fn shguard1_the_excused_line_is_the_live_one() {
 }
 
 /// MIK-8509.SHGUARD.3: widening the pin to Replay\(.*\) hides the payload read, so SHGUARD.1 would go red
+#[cfg(tp2)]
 #[test]
 fn shguard3_a_widened_pin_would_hide_the_payload_read() {
     // Shows the pin's narrowness is load-bearing: a `Replay(.*)` pattern
@@ -342,6 +347,7 @@ const HELD_SURFACE: &[&str] = &["new", "deliver"];
 /// A2 (N2, lead pin): `Held` hands its payload out only through `deliver`.
 /// Its fields are private to `held.rs`, so the compiler confines every access
 /// to that file; this reads the file and pins what it exposes.
+#[cfg(tp2)]
 #[test]
 fn held_exposes_nothing_but_deliver_and_decisions() {
     let path =
@@ -374,6 +380,7 @@ fn held_exposes_nothing_but_deliver_and_decisions() {
 /// A2's positive control: the allowed path compiles, moves the holds onto the
 /// frame, and a frame that hands them off keeps the slot after the retained
 /// copy is gone.
+#[cfg(tp2)]
 #[tokio::test]
 async fn deliver_moves_the_holds_onto_a_frame() {
     use super::{CarriedHolds, Held, HoldSink, carried, hand_off, register, scoped};
@@ -467,6 +474,7 @@ const BOUNDARY_CELLS: &[(&str, &str)] = &[
 
 /// A3 (MATRIX.1, t3): the mint sites are exactly the pinned set, every
 /// scope-opening boundary is listed, and each listed cell exists as a test.
+#[cfg(tp2)]
 #[test]
 fn every_mint_site_and_scope_boundary_has_its_matrix_cell() {
     assert_eq!(callers_of("register"), MINT_SITES, "the mint sites changed");
@@ -490,6 +498,7 @@ fn every_mint_site_and_scope_boundary_has_its_matrix_cell() {
 /// retained owner) dropping a hold that was never handed off; a second,
 /// explicit release path would race it. The names are assembled so this
 /// file does not match itself.
+#[cfg(tp2)]
 #[test]
 fn the_pre_scope_release_points_are_gone() {
     let retired = [
@@ -534,6 +543,7 @@ fn synthetic_fn(name: &str, body: &str) -> String {
 
 /// A caller of the stored task's delivery projection that never delivers the
 /// row's holds is reported, wherever it is written.
+#[cfg(tp2)]
 #[test]
 fn an_unheld_caller_of_the_delivery_projection_is_reported() {
     assert_eq!(
@@ -548,6 +558,7 @@ fn an_unheld_caller_of_the_delivery_projection_is_reported() {
 
 /// The twin: the same call after the holds are delivered passes, so the row
 /// above fails only for the missing delivery.
+#[cfg(tp2)]
 #[test]
 fn a_caller_that_delivers_the_holds_passes() {
     assert!(
@@ -562,6 +573,7 @@ fn a_caller_that_delivers_the_holds_passes() {
 
 /// The excuse for the delivery projection covers its own inner wire call and
 /// nothing else: another projection added to it is reported.
+#[cfg(tp2)]
 #[test]
 fn the_delivery_projection_excuse_covers_its_inner_wire_only() {
     let excused = |body: &str| {
@@ -580,6 +592,7 @@ fn the_delivery_projection_excuse_covers_its_inner_wire_only() {
 
 /// The fully qualified spellings the compiler also accepts are projections
 /// too: an unheld `Type::method(&value)` call is reported like a dot-call.
+#[cfg(tp2)]
 #[test]
 fn an_unheld_qualified_path_projection_is_reported() {
     for (name, body) in [

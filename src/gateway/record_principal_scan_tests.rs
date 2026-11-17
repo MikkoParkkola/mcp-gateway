@@ -171,6 +171,18 @@ fn after_the_test_module() {}
     );
 }
 
+/// The lib test split's part tag sits above the unchanged `#[cfg(test)]`:
+/// the tagged module is still test code, and what follows is still kept.
+#[test]
+fn production_lines_skip_a_part_tagged_test_module() {
+    let src =
+        "fn early() {}\n#[cfg(tp2)]\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\nfn after() {}\n";
+    let kept: Vec<&str> = production_lines(src).into_iter().map(|(_, l)| l).collect();
+    assert!(kept.contains(&"fn early() {}"), "{kept:?}");
+    assert!(kept.contains(&"fn after() {}"), "{kept:?}");
+    assert!(!kept.iter().any(|l| l.contains("fn t()")), "{kept:?}");
+}
+
 // G-META (lead, 2026-10-23): `MetaMcp::record_key` panics when no key was
 // installed, which is acceptable only if no production MetaMcp can lack one.
 // (1) Outside test code, MetaMcp is constructed only in build_meta_mcp

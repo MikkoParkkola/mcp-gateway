@@ -775,6 +775,7 @@ impl CapabilityWatcher {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "watcher_tests.rs"]
 mod tests;

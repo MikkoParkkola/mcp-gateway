@@ -675,6 +675,7 @@ pub(super) fn slot_principal(
     None
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "slot_principal_tests.rs"]
 mod slot_principal_tests;

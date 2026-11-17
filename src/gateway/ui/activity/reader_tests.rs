@@ -110,6 +110,7 @@ fn log_path(dir: &tempfile::TempDir, name: &str) -> PathBuf {
     dir.path().join(name)
 }
 
+#[cfg(tp5)]
 #[test]
 fn p2_pages_every_call_once_newest_first_across_segments() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -127,6 +128,7 @@ fn p2_pages_every_call_once_newest_first_across_segments() {
     assert_eq!(seen, expected);
 }
 
+#[cfg(tp5)]
 #[test]
 fn p2_a_full_page_holds_exactly_the_limit() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -141,6 +143,7 @@ fn p2_a_full_page_holds_exactly_the_limit() {
     assert!(page.next.is_some());
 }
 
+#[cfg(tp5)]
 #[test]
 fn p2a_rotation_between_pages_neither_skips_nor_repeats() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -173,6 +176,7 @@ fn p2a_rotation_between_pages_neither_skips_nor_repeats() {
     assert_eq!(rest, (0..25).rev().collect::<Vec<_>>());
 }
 
+#[cfg(tp5)]
 #[test]
 fn p2a_rotation_inside_one_request_reads_the_sealed_bytes() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -204,6 +208,7 @@ fn p2a_rotation_inside_one_request_reads_the_sealed_bytes() {
 /// The log rotates inside resolving the newest page, after it has named the
 /// active segment and before reading anything of it: the page reads that
 /// segment from its own end, not from the new active file's shorter length.
+#[cfg(tp5)]
 #[test]
 fn a_rotation_while_resolving_the_newest_page_skips_nothing() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -242,6 +247,7 @@ fn a_rotation_while_resolving_the_newest_page_skips_nothing() {
 
 /// The only file of the log goes after the newest page has resolved it: the
 /// page fails rather than read as a log never written.
+#[cfg(tp5)]
 #[test]
 fn a_newest_segment_removed_while_resolving_fails_the_page() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -259,6 +265,7 @@ fn a_newest_segment_removed_while_resolving_fails_the_page() {
 /// Retention takes a cursor's segment between resolving and opening: the
 /// page fails, and the same cursor retried restarts at the newest record,
 /// flagged.
+#[cfg(tp5)]
 #[test]
 fn a_cursor_expiring_while_resolving_fails_then_restarts_on_retry() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -290,6 +297,7 @@ fn a_cursor_expiring_while_resolving_fails_then_restarts_on_retry() {
 /// Retention removes the segment a cursor names after the page resolved it:
 /// the page fails rather than read the active file, a different segment, in
 /// its place.
+#[cfg(tp5)]
 #[test]
 fn a_segment_removed_after_resolving_fails_the_page() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -332,6 +340,7 @@ fn entry(id: &str, ts: Option<&str>) -> Value {
     json!({"tool": format!("tool_{id}"), "timestamp": ts})
 }
 
+#[cfg(tp5)]
 #[test]
 fn p3_a_record_at_the_cap_is_assembled_across_windows() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -357,6 +366,7 @@ fn p3_a_record_at_the_cap_is_assembled_across_windows() {
 
 /// One byte over the cap (4 MiB of content plus its newline), a line the
 /// logger refuses, is reported once and never served.
+#[cfg(tp5)]
 #[test]
 fn p3_a_line_one_byte_over_the_cap_is_reported() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -378,6 +388,7 @@ fn p3_a_line_one_byte_over_the_cap_is_reported() {
     assert_eq!(page.unreadable.len(), 1, "{:?}", page.unreadable);
 }
 
+#[cfg(tp5)]
 #[test]
 fn p3_an_over_cap_line_is_reported_once_and_bounded() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -406,6 +417,7 @@ fn p3_an_over_cap_line_is_reported_once_and_bounded() {
     );
 }
 
+#[cfg(tp5)]
 #[test]
 fn p5_a_cursor_into_an_expired_segment_restarts_newest() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -471,6 +483,7 @@ type Scenario<'a> = (
     &'a [&'a str],
 );
 
+#[cfg(tp5)]
 #[test]
 fn p6_merge_is_the_full_expected_sequence_across_page_boundaries() {
     let ts = |t: &str| format!("2026-10-26T{t}Z");
@@ -521,6 +534,7 @@ fn p6_merge_is_the_full_expected_sequence_across_page_boundaries() {
     }
 }
 
+#[cfg(tp5)]
 #[test]
 fn p7_a_sparse_filter_stops_at_the_budget_and_resumes_to_an_older_match() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -545,6 +559,7 @@ fn p7_a_sparse_filter_stops_at_the_budget_and_resumes_to_an_older_match() {
     assert_eq!(resumed.lines.len(), 1);
 }
 
+#[cfg(tp5)]
 #[test]
 fn p6_untimed_governance_records_sort_just_below_the_oldest_timed_one() {
     let ts = |t: &str| Some(format!("2026-10-26T{t}Z"));
@@ -580,6 +595,7 @@ fn p6_untimed_governance_records_sort_just_below_the_oldest_timed_one() {
     }
 }
 
+#[cfg(tp5)]
 #[test]
 fn a_read_in_the_rotation_gap_finds_the_sealed_file() {
     // Rotation renames the active file to its sealed name, then creates the
@@ -595,6 +611,7 @@ fn a_read_in_the_rotation_gap_finds_the_sealed_file() {
     assert_eq!(page.lines.len(), 2, "the sealed file was read");
 }
 
+#[cfg(tp5)]
 #[test]
 fn the_active_segment_is_numbered_by_its_open_record() {
     // Every sealed segment expired (retention or the disk-full path): only

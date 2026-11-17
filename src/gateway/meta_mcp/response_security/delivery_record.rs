@@ -280,6 +280,7 @@ async fn append_delivery_attempt(
     true
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "delivery_record_tests.rs"]
 mod tests;

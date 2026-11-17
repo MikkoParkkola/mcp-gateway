@@ -338,6 +338,7 @@ fn count_unpinned<'a>(capabilities: impl IntoIterator<Item = &'a CapabilityDefin
     capabilities.into_iter().filter(|c| lacks_pin(c)).count()
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

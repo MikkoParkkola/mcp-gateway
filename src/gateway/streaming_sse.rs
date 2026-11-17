@@ -716,6 +716,7 @@ where
     response
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod terminal_frame_tests {
     use axum::http::{StatusCode, header::CONTENT_TYPE};
@@ -751,6 +752,7 @@ mod terminal_frame_tests {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "streaming_sse_gate_tests.rs"]
 mod gate_tests;

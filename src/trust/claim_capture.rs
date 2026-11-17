@@ -177,6 +177,7 @@ pub fn derive_claim(client_claim: Option<&ClientClaim>) -> Claim {
     client_claim.map_or(Claim::Succeeded, |c| c.claim().clone())
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

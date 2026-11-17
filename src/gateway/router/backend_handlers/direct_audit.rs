@@ -468,6 +468,7 @@ fn with_deferred_receipts(
     response
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use serde_json::json;

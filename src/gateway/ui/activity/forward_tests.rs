@@ -14,8 +14,10 @@ use crate::gateway::ui::activity::access::Access;
 use crate::security::transparency_log::recompute_entry_hash;
 use crate::security::transparency_log::segments::sealed_path;
 
+#[cfg(tp5)]
 #[path = "forward_resume_tests.rs"]
 mod resume;
+#[cfg(tp5)]
 #[path = "forward_rows_tests.rs"]
 mod rows;
 
@@ -244,6 +246,7 @@ fn counters(pages: &[ForwardPage]) -> Vec<u64> {
 
 /// The live stream serves a refused call as the list does: the activity
 /// stream keeps the refusal kind beside calls, the config stream does not.
+#[cfg(tp5)]
 #[test]
 fn the_activity_stream_keeps_refusal_rows_and_the_config_stream_does_not() {
     use super::super::rows::Kind;

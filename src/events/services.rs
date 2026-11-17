@@ -776,14 +776,17 @@ impl Services {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "services_tests.rs"]
 mod tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "services_audit_tests.rs"]
 mod audit_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "one_generation_tests.rs"]
 mod one_generation_tests;

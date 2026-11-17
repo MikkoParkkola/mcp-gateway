@@ -151,6 +151,7 @@ impl<'a> CallerProof<'a> {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "caller_proof_tests.rs"]
 mod caller_proof_tests;

@@ -508,6 +508,13 @@ def test_module_files_skip_test_only_declarations_and_inner_test_files() -> None
         found = {p.relative_to(src).as_posix() for p in inv.module_files(src / "lib.rs")}
     assert found == {"lib.rs", "plain.rs", "either.rs"}, sorted(found)
 
+def test_a_part_tag_beside_the_test_cfg_keeps_the_run_test_gated() -> None:
+    # The lib test split adds a separate `#[cfg(tpK)]` line above `#[cfg(test)]`.
+    assert inv.test_gated("#[cfg(tp3)]\n#[cfg(test)]\n")
+    assert inv.test_gated("#[cfg(test)]\n#[cfg(tp3)]\n")
+    assert not inv.test_gated("#[cfg(tp3)]\n")
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):

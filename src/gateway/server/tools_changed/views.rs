@@ -264,6 +264,7 @@ impl Views {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "views_tests.rs"]
 mod tests;

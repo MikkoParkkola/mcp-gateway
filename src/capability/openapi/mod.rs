@@ -34,5 +34,6 @@ pub use generated::{AuthTemplate, CacheTemplate, GeneratedCapability};
 #[cfg(test)]
 pub(crate) use sanitize::sanitize_description;
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests;
