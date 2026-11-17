@@ -1,0 +1,21 @@
+head_sha	0c3a982bb200a450a30565c1304a765c925b457b
+#mutant m1
+mcp_gateway	home_dir::probe_tests::r1a_without_the_override_each_process_gets_its_own_private_home	src/home_dir_probe_tests.rs:121
+#mutant m2r
+mcp_gateway	home_dir::tests::resolve_config_honours_xdg_only_under_the_override	src/home_dir.rs:262
+#mutant m2w
+mcp_gateway	home_dir::probe_tests::r1a_without_the_override_each_process_gets_its_own_private_home	src/home_dir_probe_tests.rs:139
+#mutant m5
+mcp_gateway	home_dir::probe_tests::r1a_without_the_override_each_process_gets_its_own_private_home	src/home_dir_probe_tests.rs:143
+#mutant m6
+mcp_gateway	home_dir::probe_tests::r2_a_spawned_test_binary_shares_its_parents_home	src/home_dir_probe_tests.rs:31
+#mutant m7
+mcp_gateway	home_dir::probe_tests::r1a_without_the_override_each_process_gets_its_own_private_home	src/home_dir_probe_tests.rs:147
+#mutant m8
+gateway_bin_isolation	the_operator_data_dir_wins_over_the_test_home_in_the_binary	tests/gateway_bin_isolation.rs:98
+#mutant m9a
+mcp_gateway	home_dir::probe_tests::r1b_with_the_override_the_child_resolves_it_and_builds_no_fallback	src/home_dir_probe_tests.rs:238
+#mutant m9b
+mcp_gateway	home_dir::probe_tests::r1b_with_the_override_the_child_resolves_it_and_builds_no_fallback	src/home_dir_probe_tests.rs:238
+#mutant m10
+mcp_gateway	home_dir::probe_tests::r1b_with_the_override_the_child_resolves_it_and_builds_no_fallback	src/home_dir_probe_tests.rs:231
