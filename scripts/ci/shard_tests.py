@@ -462,6 +462,9 @@ def self_test() -> int:
     # Neither a leaked TempLog folder nor, since the late audit writes were fixed,
     # a plain temp dir holding only the audit high-water mark is tolerated.
     assert unexpected({"audit-log-Ab12Cd": hwm, ".tmpAb12Cd": hwm}) == [".tmpAb12Cd", "audit-log-Ab12Cd"]
+    # The folder-name rule itself, held with the synthetic source: the same files pass in a
+    # .tmp-named folder and fail in a TempLog-named one.
+    assert unexpected({"audit-log-Ab12Cd": hwm, ".tmpAb12Cd": hwm}, synthetic) == ["audit-log-Ab12Cd"]
     # The families whose tests now use their own temp folders are no longer
     # tolerated.
     gone = ["oauth_test_no_token", "chain-test-0b1c", "http_transport_tls_guard", "stdio-tail-1"]
