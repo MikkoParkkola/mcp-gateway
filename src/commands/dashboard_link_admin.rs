@@ -168,12 +168,16 @@ pub(crate) struct AdminResponse {
 
 pub(crate) struct AdminClientOptions {
     pub(crate) connect_timeout: std::time::Duration,
+    /// The whole request's limit: 30 s for a buffered call; `None` for a
+    /// streamed one, whose caller keeps its own deadlines.
+    pub(crate) total: Option<std::time::Duration>,
 }
 
 impl Default for AdminClientOptions {
     fn default() -> Self {
         Self {
             connect_timeout: std::time::Duration::from_secs(10),
+            total: Some(std::time::Duration::from_secs(30)),
         }
     }
 }
@@ -262,6 +266,57 @@ async fn read_admin_response(
     })
 }
 
+/// The live answer of a streamed admin request: status and headers, and the
+/// body as chunks. A body read error carries the response metadata, as a
+/// buffered read's does.
+pub(crate) struct AdminStream {
+    pub(crate) status: reqwest::StatusCode,
+    pub(crate) headers: reqwest::header::HeaderMap,
+    pub(crate) body: futures::stream::BoxStream<'static, Result<bytes::Bytes, AdminCallError>>,
+}
+
+/// Send a streamed admin request: the same target check, client and TLS
+/// policy as a buffered call, `options.total` deciding whether a total limit
+/// applies, and the body left unread for the caller.
+///
+/// # Errors
+///
+/// A refused target, TLS setup failure, or failure to send.
+pub(crate) async fn admin_stream_url(
+    method: reqwest::Method,
+    endpoint: reqwest::Url,
+    token: &str,
+    tls: &LinkTls,
+    options: &AdminClientOptions,
+) -> Result<AdminStream, AdminCallError> {
+    use futures::StreamExt;
+    let response =
+        send_admin_request(method, endpoint.as_str(), token, tls, None, None, options).await?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let (endpoint, tls) = (endpoint.to_string(), tls.clone());
+    let body = response
+        .bytes_stream()
+        .map(move |chunk| {
+            chunk.map_err(|error| AdminCallError {
+                kind: AdminFailureKind::ResponseLost,
+                detail: transport_error(&endpoint, error, &tls),
+                status: Some(status),
+                request_id: request_id.clone(),
+            })
+        })
+        .boxed();
+    Ok(AdminStream {
+        status,
+        headers,
+        body,
+    })
+}
+
 /// Share target checks and TLS policy across admin callers.
 async fn send_admin_request(
     method: reqwest::Method,
@@ -298,10 +353,10 @@ async fn send_admin_request(
             format!("could not build the HTTP client: {error}"),
         )
     })?;
-    let mut request = client
-        .request(method, endpoint)
-        .timeout(std::time::Duration::from_secs(30))
-        .bearer_auth(token);
+    let mut request = client.request(method, endpoint).bearer_auth(token);
+    if let Some(total) = options.total {
+        request = request.timeout(total);
+    }
     if let Some(body) = body {
         request = request.json(body);
     }
