@@ -1112,7 +1112,7 @@ jobs:
     name: Linux lib test binary (part ${{ matrix.part }})
     # THROWAWAY (E1): runs on this throwaway PR too.
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -1160,7 +1160,7 @@ jobs:
     needs: [linux-lib-build]
     # THROWAWAY (E1): runs on this throwaway PR too.
     if: ${{ !cancelled() && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1194,7 +1194,7 @@ jobs:
   e1-unsplit:
     name: "E1: unsplit lib test binary"
     if: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'throwaway/') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1226,7 +1226,7 @@ jobs:
     name: "E1: union of the parts equals the unsplit list"
     needs: [linux-lib-build, e1-unsplit]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'throwaway/') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Fetch every part's list
@@ -1260,7 +1260,7 @@ jobs:
   e1-tripwire-alias:
     name: "E1: a whole build through a cargo alias trips the tripwire"
     if: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'throwaway/') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1281,7 +1281,7 @@ jobs:
   e1-tripwire-nested:
     name: "E1: a whole build through a nested launcher trips the tripwire"
     if: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'throwaway/') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
