@@ -520,6 +520,13 @@ def self_test() -> int:
         ("an in-word # before a whole build on the helper's next line",
          {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"] + "\necho a#b; "
                                                            + whole_job["steps"][0]["run"]}, tripwire]}}, True, True),
+        ("a quote glued to a word before a whole build on the helper's next line",
+         {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"] + '\necho x" #"; '
+                                                           + whole_job["steps"][0]["run"]}, tripwire]}}, True, True),
+        ("a whole build with a redirect before --lib, beside the helper",
+         {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"]
+                                                           + "; cargo test --all-features 2>&1 --lib --no-run"},
+                                                   tripwire]}}, True, True),
         ("a whole build whose trailing comment names the helper",
          {**allowed, ("ci.yml", "new"): {"steps": [{"run": whole_job["steps"][0]["run"] + "  # scripts/ci/lib-parts.sh"},
                                                    tripwire]}}, True, True),
@@ -561,6 +568,9 @@ def self_test() -> int:
         ("N not read from the build script", shape.format(part, rest).replace(n_line, "  n=2\n"), True),
         ("n overridden after it is read", shape.format(part, rest).replace(n_line, n_line + "  n=2\n"), True),
         ("n overridden after a separator", shape.format(part, rest).replace(n_line, n_line + "  true; n=2\n"), True),
+        ("n overridden after a quoted # glued to a word",
+         shape.format(part, rest).replace(n_line, n_line + '  true; msg=x" #"; n=2\n'), True),
+        ("n overridden inside a one-line if", shape.format(part, rest).replace(n_line, n_line + "  if true; then n=2; fi\n"), True),
         ("a part built outside the loop", shape.format(part, rest + "\n  " + part), True),
     ]
     for label, text, want_bad in packaged_cases:
@@ -568,6 +578,27 @@ def self_test() -> int:
         ok = bool(found) == want_bad
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} packaged build, {label}: problems {found}")
+    # The scanner itself, as bash splits a line into commands.
+    split_cases = [
+        ("a; b", ["a", "b"]),
+        ("a && b || c | d & e", ["a", "b", "c", "d", "e"]),
+        ("a |& b", ["a", "b"]),
+        ('echo " #"; b', ['echo " #"', "b"]),
+        ("echo ' # '; b", ["echo ' # '", "b"]),
+        ('echo x" #"; b', ['echo x" #"', "b"]),
+        ("echo a#b; b", ["echo a#b", "b"]),
+        ("a # c; b", ["a"]),
+        ("cargo test 2>&1 --lib", ["cargo test 2>&1 --lib"]),
+        ("a &>log; b", ["a &>log", "b"]),
+        ("echo \\; b", ["echo \\; b"]),
+        ('echo "a\\"; b"; c', ['echo "a\\"; b"', "c"]),
+        ("echo 'a\\'; b", ["echo 'a\\'", "b"]),
+        ('echo "open', None),
+    ]
+    for line, want in split_cases:
+        got = shell_commands(line)
+        wrong += got != want
+        print(f"{'ok   ' if got == want else 'WRONG'} shell commands of {line!r}: {got}")
     # main() judges the packaged job by the script it reads: a whole build there makes that job a census problem.
     # Its ::error:: lines are captured, so this expected failure raises no annotation.
     with tempfile.TemporaryDirectory() as tmp:
@@ -579,7 +610,7 @@ def self_test() -> int:
     ok = rc == 1 and "ci.yml:package-tests builds the library tests without" in out.getvalue()
     wrong += not ok
     print(f"{'ok   ' if ok else 'WRONG'} main, a whole build in the packaged script: exit {rc}")
-    print(f"self-test: {len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) + len(packaged_cases) + 1 - wrong} ok, {wrong} wrong")
+    print(f"self-test: {len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) + len(packaged_cases) + len(split_cases) + 1 - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 
