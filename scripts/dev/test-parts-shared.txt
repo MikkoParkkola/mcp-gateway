@@ -16,6 +16,7 @@ config_persistence::journal::v2::drain::decide
 config_persistence::journal::v2::drain::deliver
 config_persistence::journal::v2::drain::fault
 config_persistence::journal::v2::drain::file
+config_persistence::journal::v2::drain::handover
 config_reload::grant_audit_tests
 config_reload::replace_audit_tests
 config_reload::watch_chain::tests
