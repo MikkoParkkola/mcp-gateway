@@ -349,7 +349,7 @@ impl super::ConfigHistory {
         if self.generation.load(Ordering::SeqCst) == ticket
             && matches!(*mode, super::StoreMode::Unopened { .. })
         {
-            *mode = super::StoreMode::Disk { path: file };
+            *mode = super::StoreMode::Disk;
         }
         Ok(())
     }
@@ -422,5 +422,15 @@ impl super::ConfigHistory {
                 self.to_memory(record, rx.try_recv().ok(), &cause);
             }
         }
+    }
+}
+
+impl super::ConfigHistory {
+    /// `open`, then the read startup's worker would do, on this thread.
+    #[cfg(test)]
+    pub(crate) fn open_eagerly(data_dir: &Path, bounds: Bounds, now: u64) -> Self {
+        let store = Self::open(data_dir, bounds, now);
+        let _ = store.open_now(0, Instant::now() + super::SAVE_DEADLINE);
+        store
     }
 }

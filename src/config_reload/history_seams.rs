@@ -208,15 +208,6 @@ impl Seams {
         self.fault.lock().expect("fault").take()
     }
 
-    /// Code under test: the fault, taken only when it is a read fault.
-    pub(crate) fn take_read_fault(&self) -> Option<Fault> {
-        let mut slot = self.fault.lock().expect("fault");
-        match *slot {
-            Some(Fault::ReadIo | Fault::Unparseable) => slot.take(),
-            _ => None,
-        }
-    }
-
     /// Code under test: a reload found the record guard held and waits for it.
     pub(crate) fn note_guard_wait(&self) {
         self.guard_waits.notify_one();

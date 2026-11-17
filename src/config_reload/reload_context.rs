@@ -559,11 +559,12 @@ impl ReloadContext {
             // The env files can rotate under an unchanged config file, so the
             // overlay is published even here — a resolver reading the old one
             // would serve a value the operator has already replaced.
-            self.publish_overlay(overlay);
-            // The same rotation changes what the config was built from.
+            // The same rotation changes what the config was built from: the
+            // inputs swap first, then the overlay, then the record (design D-1).
             let pending = self
                 .live_config
                 .set_inputs_from(inputs, &env_restart_keys, source);
+            self.publish_overlay(overlay);
             slot.spawn(&self.live_config, pending);
             // No difference from the published snapshot does not mean nothing is
             // outstanding: a restart-only edit was published on an earlier

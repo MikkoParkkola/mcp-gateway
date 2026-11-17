@@ -182,7 +182,7 @@ fn t5_an_unreadable_file_is_moved_aside_by_hard_link() {
     crate::gateway::test_helpers::write_owner_only(&path, b"{not json").unwrap();
     let inode = std::fs::metadata(&path).unwrap().ino();
 
-    let history = ConfigHistory::open(dir.path(), Bounds::default(), 1000);
+    let history = ConfigHistory::open_eagerly(dir.path(), Bounds::default(), 1000);
     assert!(history.snapshots().is_empty());
     let aside = dir.path().join("config-history.json.unreadable-1000");
     assert!(aside.exists());
@@ -190,7 +190,7 @@ fn t5_an_unreadable_file_is_moved_aside_by_hard_link() {
     assert_eq!(std::fs::read(&aside).unwrap(), b"{not json");
 
     crate::gateway::test_helpers::write_owner_only(&path, b"{not json").unwrap();
-    let _ = ConfigHistory::open(dir.path(), Bounds::default(), 1000);
+    let _ = ConfigHistory::open_eagerly(dir.path(), Bounds::default(), 1000);
     assert_eq!(std::fs::read(&aside).unwrap(), b"{not json");
     assert_eq!(std::fs::metadata(&aside).unwrap().ino(), inode);
     assert!(

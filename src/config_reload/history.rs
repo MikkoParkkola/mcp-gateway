@@ -151,9 +151,7 @@ enum StoreMode {
     Unopened {
         now: u64,
     },
-    Disk {
-        path: PathBuf,
-    },
+    Disk,
     MemoryOnly {
         state: State,
     },
@@ -208,6 +206,7 @@ impl ConfigHistory {
 
     /// Remember `event` and, when present, `snapshot`, saved on this thread
     /// (design D-2); `running` is the revision an eviction must not drop.
+    #[cfg(test)]
     pub(crate) fn record(&self, event: Event, snapshot: Option<Snapshot>, running: &str, now: u64) {
         self.save_inline(Record {
             event,
@@ -262,7 +261,7 @@ impl ConfigHistory {
         let mode = self.mode.lock();
         match &*mode {
             StoreMode::MemoryOnly { state } => read(state),
-            StoreMode::Disk { .. } | StoreMode::Unopened { .. } => {
+            StoreMode::Disk | StoreMode::Unopened { .. } => {
                 let state = load_state(&self.file()).unwrap_or_default();
                 read(&state)
             }
@@ -349,7 +348,8 @@ impl HistoryHook {
     }
 
     /// Record one applied publish under `revision`. `previous == Some(revision)`
-    /// is an unchanged reload: an event and no new version.
+    /// is an unchanged reload: an event and no new version. Test-only.
+    #[cfg(test)]
     pub(crate) fn on_publish(
         &self,
         raw: &RawInputs,
@@ -364,7 +364,8 @@ impl HistoryHook {
     }
 
     /// Record a refused reload. No version is stored. `served` is the revision
-    /// still published, when there is one.
+    /// still published, when there is one. Test-only.
+    #[cfg(test)]
     pub(crate) fn on_refused(
         &self,
         source: Source,

@@ -35,6 +35,8 @@ fn names_in(dir: &Path) -> BTreeSet<String> {
                 .to_string_lossy()
                 .into_owned()
         })
+        // The history's own files: the reload keeps its config lock beside them.
+        .filter(|name| name.contains("config-history"))
         .collect()
 }
 
