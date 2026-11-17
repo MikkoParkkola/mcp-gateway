@@ -176,6 +176,8 @@ jobs:
           set -o pipefail
           # Probe: one aggregate sample a minute as a commit status (numbers only, no process list).
           (
+            # The step runs under bash -e with pipefail; a sampler must never die on one failed read.
+            set +e +o pipefail
             start=$(date +%s)
             while :; do
               m=$(free -m | awk '/^Mem:/ { printf "u%s a%s", $3, $7 }')
