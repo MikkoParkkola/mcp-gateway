@@ -95,6 +95,36 @@ sock.close()
 PY
   )"
 
+  # The templates force the bind address through MCP_GATEWAY_SERVER__HOST. Give
+  # the config file a different server.host, so the gateway answers on 127.0.0.1
+  # only if the variable overrides the file (on Linux 127.0.0.2 binds and the
+  # check below fails; on macOS the bind itself fails).
+  python3 - "$layout_dir/gateway.yaml" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+lines = open(path).read().splitlines()
+out, i, done = [], 0, False
+while i < len(lines):
+    line = lines[i]
+    out.append(line)
+    if line.rstrip() == "server:":
+        out.append("  host: 127.0.0.2")
+        i += 1
+        while i < len(lines) and (lines[i].startswith(" ") or not lines[i].strip()):
+            if not re.match(r"^\s+host\s*:", lines[i]):
+                out.append(lines[i])
+            i += 1
+        done = True
+        continue
+    i += 1
+if not done:
+    out += ["server:", "  host: 127.0.0.2"]
+open(path, "w").write("\n".join(out) + "\n")
+PY
+  grep -q "host: 127.0.0.2" "$layout_dir/gateway.yaml"
+
   (
     cd "$layout_dir"
     HOME="$home" MCP_GATEWAY_SERVER__HOST=127.0.0.1 "$bin" --config gateway.yaml --port "$port" \
