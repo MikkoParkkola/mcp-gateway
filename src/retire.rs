@@ -22,10 +22,6 @@ pub(crate) const EXEC_SHARE: Duration = Duration::from_millis(250);
 /// SIGKILLs it at D + 1 s.
 pub(crate) const WATCHDOG_SLACK: Duration = Duration::from_millis(500);
 
-/// The most the runtime waits for blocking work under an HTTP stop's plan,
-/// whatever is left to its runtime deadline.
-pub(crate) const RUNTIME_WAIT_CAP: Duration = Duration::from_millis(250);
-
 /// The exit status of a tail that overran its bound or did not join its logger.
 pub(crate) const EXIT_OVERRUN: u8 = 75;
 

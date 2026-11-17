@@ -250,12 +250,15 @@ fn blocking_work_that_ends_before_the_runtime_deadline_is_not_left_running() {
     let (started, running) = mpsc::channel();
     runtime.tokio.spawn_blocking(move || {
         started.send(()).expect("the test waits for the start");
+        // The work lasts at least 400 ms, past the old 250 ms cap; with the
+        // deadline 30 s away, a late wake under load still ends long before it.
+        // timing: lower-bound
         std::thread::sleep(Duration::from_millis(400));
     });
     running
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(Duration::from_secs(30))
         .expect("the blocking task starts");
-    let plan = plan_with_runtime_end(tokio::time::Instant::now() + Duration::from_secs(2));
+    let plan = plan_with_runtime_end(tokio::time::Instant::now() + Duration::from_secs(30));
     let (left_running, logged) = within_watchdog(move || {
         let mut left_running = true;
         let logged = errors_logged(|| {
@@ -269,9 +272,12 @@ fn blocking_work_that_ends_before_the_runtime_deadline_is_not_left_running() {
     });
     assert!(
         !left_running,
-        "work that ended 1.6 s before the runtime deadline was reported as left running"
+        "work that ended well before the runtime deadline was reported as left running"
     );
-    assert!(logged.is_empty(), "a clean planned shutdown logged: {logged:?}");
+    assert!(
+        logged.is_empty(),
+        "a clean planned shutdown logged: {logged:?}"
+    );
 }
 
 /// U1 (RETIRE.4): a blocking task that never ends no longer holds an
@@ -361,7 +367,10 @@ fn a_stuck_stop_logs_one_line_naming_what_was_still_running() {
         })
     });
     drop(release);
-    let lines: Vec<&str> = logged.lines().filter(|line| line.contains("ERROR")).collect();
+    let lines: Vec<&str> = logged
+        .lines()
+        .filter(|line| line.contains("ERROR"))
+        .collect();
     assert_eq!(lines.len(), 1, "not exactly one ERROR line: {logged:?}");
     let line = lines[0];
     let threads: usize = line

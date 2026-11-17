@@ -115,25 +115,31 @@ pub(crate) fn shut_down(
 ) -> bool {
     let CountedRuntime {
         tokio: runtime,
-        live_threads: _,
+        live_threads,
     } = runtime;
     let RuntimeShutdown::Bounded(timeout) = mode else {
         drop(runtime);
         return false;
     };
     let timeout = wait_bound(timeout, plan, tokio::time::Instant::now());
+    let tasks = runtime.handle().clone();
     let started = std::time::Instant::now();
     runtime.shutdown_timeout(timeout);
     // `shutdown_timeout` returns as soon as the blocking pool is idle, so a
     // wait that lasted the whole bound is read as work left running. Work
     // that ended in the bound's last instant reads the same; the log is a
     // pointer to look at the disk, not a proof.
-    let left_running = started.elapsed() >= timeout;
+    let waited = started.elapsed();
+    let left_running = waited >= timeout;
     if left_running {
+        // What can be known without tracking each blocking call: the threads
+        // and tasks still alive. The count never decides the exit.
         tracing::error!(
             target: "mcp_gateway::runtime",
-            ?timeout,
-            "shutdown exited with blocking work still running after the bound \
+            ?waited,
+            live_runtime_threads = live_threads.load(std::sync::atomic::Ordering::SeqCst),
+            live_tasks = tasks.metrics().num_alive_tasks(),
+            "shutdown reached the end of its wait with blocking work still running \
              (a disk or mount write that never returned; under doctor, its 1 s bound, \
              possibly the npm lookup's name resolution?)"
         );
@@ -142,15 +148,17 @@ pub(crate) fn shut_down(
 }
 
 /// The runtime's wait for blocking work: `timeout`, or under an HTTP stop's
-/// plan the lesser of [`crate::retire::RUNTIME_WAIT_CAP`] and what is left to
-/// the plan's runtime deadline at `now` (none once it has passed).
+/// plan what is left to the plan's runtime deadline at `now` (none once it has
+/// passed). The deadline comes from the stop's own budget, so blocking work
+/// that ends inside it is waited for, however slow the machine; only work still
+/// running at the deadline is left behind.
 pub(crate) fn wait_bound(
     timeout: std::time::Duration,
     plan: Option<crate::retire::RetirePlan>,
     now: tokio::time::Instant,
 ) -> std::time::Duration {
     plan.map_or(timeout, |plan| {
-        crate::retire::RUNTIME_WAIT_CAP.min(plan.runtime_end().saturating_duration_since(now))
+        plan.runtime_end().saturating_duration_since(now)
     })
 }
 
