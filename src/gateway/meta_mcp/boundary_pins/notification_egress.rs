@@ -712,5 +712,5 @@ fn every_notification_egress_is_scrubbed_or_unread() {
 
 #[path = "notification_egress_macros.rs"]
 mod macros;
-#[path = "notification_egress_proofs.rs"]
+#[path = "notification_egress_proof_tests.rs"]
 mod proofs;
