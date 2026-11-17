@@ -145,12 +145,15 @@ pub(super) fn save_record(
         Err(error) => return SaveOutcome::WriteFailed(error.into()),
     };
     let _ = sent.send(state);
+    // The job holds no sender past its one send; a value already sent is
+    // still received.
+    drop(sent);
     #[cfg(test)]
     if job.fault == Some(super::seams::Fault::Write) {
         job.done();
         return SaveOutcome::WriteFailed(std::io::Error::other("injected write fault"));
     }
-    let mut stale = false;
+    let mut superseded = false;
     let written = write_atomic_checked(
         file,
         bytes.as_bytes(),
@@ -160,7 +163,7 @@ pub(super) fn save_record(
             #[cfg(test)]
             job.park(super::seams::ParkAt::BeforeCheck);
             if generation.load(Ordering::SeqCst) != ticket {
-                stale = true;
+                superseded = true;
                 return Err(std::io::Error::other(
                     "the save was abandoned at its deadline",
                 ));
@@ -174,7 +177,7 @@ pub(super) fn save_record(
     job.done();
     match written {
         Ok(()) => SaveOutcome::Saved,
-        Err(_) if stale => SaveOutcome::Stale,
+        Err(_) if superseded => SaveOutcome::Stale,
         Err(error) => SaveOutcome::WriteFailed(error),
     }
 }
@@ -194,7 +197,8 @@ impl super::ConfigHistory {
     }
 
     /// Append in memory when this store is memory-only; otherwise `None` with
-    /// the file to save to (an unopened store is opened first).
+    /// the file to save to (an unopened store is opened first). Test-only.
+    #[cfg(test)]
     fn memory_or_file(&self, record: Record) -> Option<(Record, PathBuf)> {
         if matches!(*self.mode.lock(), super::StoreMode::Unopened { .. })
             && let Err(cause) = self.open_now(
@@ -225,8 +229,10 @@ impl super::ConfigHistory {
         }
     }
 
-    /// One record, saved on this thread (tests, and anything recording
-    /// outside a reload); the sidecar wait is bounded by the save deadline.
+    /// One record, saved on this thread; the sidecar wait is bounded by the
+    /// save deadline. Test-only: a reload saves through the record task and
+    /// startup through `ConfigHistory::start`.
+    #[cfg(test)]
     pub(crate) fn save_inline(&self, record: Record) {
         let Some((record, file)) = self.memory_or_file(record) else {
             return;
