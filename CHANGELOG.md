@@ -58,6 +58,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`x-mcp-header` mirroring covers nested properties and encoded values.**
+  `mirror_headers` walked only `inputSchema.properties`, so an annotation on a
+  property inside a nested object (`filter.repo`) was silently left out of the
+  `Mcp-Param-*` headers of that `tools/call`, and a mirrored string was sent
+  raw: a value carrying a space, a control character or non-ASCII text went out
+  as it stood or was dropped. The walk now follows `properties` to a bounded
+  depth, every mirrored value goes through the gateway's header-value encoder
+  (a value HTTP cannot carry as written is sent `=?base64?…?=`; an empty one is
+  sent as an empty header), and a tool whose nested annotations are invalid or
+  repeat a header name is left out of `tools/list` as a top-level one already
+  was. (MIK-9425, from
+  [#4771](https://github.com/MikkoParkkola/mcp-gateway/pull/4771))
+
 - **A restart no longer resets the daily cost budgets.** The gateway saved
   each day's spend to `costs.json` on shutdown but never read it back, so any
   restart put the global, per-tool and per-key daily totals at zero and an

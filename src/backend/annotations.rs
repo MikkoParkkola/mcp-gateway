@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use crate::protocol::param_headers::mirrored_params;
+use crate::protocol::param_headers::validate_mirrors;
 use crate::protocol::{Tool, ToolAnnotations};
 use tracing::warn;
 
@@ -121,13 +121,16 @@ fn infer_open_world_tool(server: &str, name: &str) -> bool {
 /// Drops every tool whose `inputSchema` breaches an `x-mcp-header` constraint
 /// (MIK-7214.HEADER.8).
 ///
+/// Validation traverses `properties` at every nested schema level, checking
+/// declarations and name uniqueness across the whole schema with bounded depth.
+///
 /// Exclusion changes the surfaced tool set, so it runs on the same
 /// tool-metadata path as the destructive-annotation gate rather than in a
 /// second filter of its own. A violation is per-tool: the rest of the
 /// backend's list is unaffected.
 fn exclude_invalid_header_tools(server: &str, tools: &mut Vec<Tool>) {
-    tools.retain(|tool| match mirrored_params(&tool.input_schema) {
-        Ok(_) => true,
+    tools.retain(|tool| match validate_mirrors(&tool.input_schema) {
+        Ok(()) => true,
         Err(violation) => {
             warn!(
                 server = %server,
