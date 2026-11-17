@@ -121,23 +121,15 @@ OUTPUT = {"windows": ["--show-output"]}
 # must match, most allowed, why). An entry is matched by its contents too, so
 # a leftover from any other source fails even when its folder name is generic.
 # It may only shrink: the self-test holds each entry and count to
-# LEFTOVER_CEILING.
+# LEFTOVER_CEILING. Empty since the late audit writes were fixed: the audit
+# high-water mark they left in a plain temp dir no longer appears in any lib or
+# int shard.
 TMP_GUARDED = {"linux"}
-_TMP = r"\.tmp[A-Za-z0-9]{6}"
-KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
-    (_TMP, r"audit\.jsonl\.hwm", 3,
-     "an audit write that outlives its test's temp dir "
-     "(transparency_log::bounded_tests, identity_propagation::audit_fail_closed, "
-     "signing_allocation_tests::withheld_parity_stdio, hardened_signing_e2e, "
-     "gateway::router::task_lifecycle_tests)"),
-]
+KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = []
 # Written out, not derived from the list above: an entry added there and not
 # here, or a count raised past its ceiling, fails the self-test, so the list
-# can only lose entries. A leaked TempLog folder is named `audit-log-*` and
-# matches none of these.
-LEFTOVER_CEILING: dict[tuple[str, str], int] = {
-    (r"\.tmp[A-Za-z0-9]{6}", r"audit\.jsonl\.hwm"): 3,
-}
+# can only lose entries.
+LEFTOVER_CEILING: dict[tuple[str, str], int] = {}
 
 HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -472,6 +464,10 @@ def self_test() -> int:
     assert all(n <= LEFTOVER_CEILING.get((p, h), 0) for p, h, n, _ in KNOWN_LEFTOVERS), \
         "KNOWN_LEFTOVERS may only shrink"
     hwm = ["audit.jsonl.hwm"]
+    # KNOWN_LEFTOVERS is empty, so the matcher's rules are held with a synthetic source: without
+    # it every folder fails and the stray and contents cases below would pass whatever the rules.
+    synthetic = [(r"\.tmp[A-Za-z0-9]{6}", r"audit\.jsonl\.hwm", 3, "a synthetic source")]
+    assert unexpected({".tmpAb12Cd": hwm}, synthetic) == [], "the synthetic source allows its own folder"
     home = [".mcp-gateway/protocol-revision-telemetry/window.json", "tasks/stdio/store.lease"]
     control = [".gateway.yaml.lock", ".mcp-gateway/transparency/transparency.jsonl",
                "gateway-control-plane/audit.jsonl"]
@@ -484,8 +480,12 @@ def self_test() -> int:
     # left one. Each of its three shapes now fails, even alone.
     for files in (home, control, full):
         assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
-    # A leaked TempLog folder is never one of the tolerated plain temp dirs.
-    assert unexpected({"audit-log-Ab12Cd": hwm, ".tmpAb12Cd": hwm}) == ["audit-log-Ab12Cd"]
+    # Neither a leaked TempLog folder nor, since the late audit writes were fixed,
+    # a plain temp dir holding only the audit high-water mark is tolerated.
+    assert unexpected({"audit-log-Ab12Cd": hwm, ".tmpAb12Cd": hwm}) == [".tmpAb12Cd", "audit-log-Ab12Cd"]
+    # The folder-name rule itself, held with the synthetic source: the same files pass in a
+    # .tmp-named folder and fail in a TempLog-named one.
+    assert unexpected({"audit-log-Ab12Cd": hwm, ".tmpAb12Cd": hwm}, synthetic) == ["audit-log-Ab12Cd"]
     # The families whose tests now use their own temp folders are no longer
     # tolerated.
     gone = ["oauth_test_no_token", "chain-test-0b1c", "http_transport_tls_guard", "stdio-tail-1"]
@@ -500,17 +500,16 @@ def self_test() -> int:
               ["audit.jsonl.hwm", "subs/sub_u1_pt.json"]]
     for files in stores:
         assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
-    # Each known source is tolerated up to its own count.
-    for files, most in ((hwm, 3),):
-        names = [f".tmpAb12C{i}" for i in range(most + 1)]
-        assert unexpected({n: files for n in names}) == [names[-1]], (files, most)
-    # A plain temp folder is tolerated only for what a known source writes: a
-    # stray file, a known file beside a stray one, an empty folder and a plain
-    # file all fail, though each has a tolerated name.
+    # No source is known any more, so not even one audit high-water-mark folder
+    # passes (the per-source count itself is held by "the count bounds a source").
+    assert unexpected({".tmpAb12C0": hwm}) == [".tmpAb12C0"]
+    # A plain temp folder is tolerated only for what its source writes: a stray
+    # file, a source's file beside a stray one and an empty folder all fail under
+    # the synthetic source, though each folder has a name it matches.
     for files in (["other.db"], [*hwm, "other.db"], [*home, "keys/secret.pem"],
                   [*control, "gateway-control-plane/other.jsonl"],
                   [*full, "serve.log.1"], [*full, ".mcp-gateway/tasks/task-x.json"], []):
-        assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
+        assert unexpected({".tmpAb12Cd": files}, synthetic) == [".tmpAb12Cd"], files
     # The same check end to end: a run that leaves a generically named temp
     # folder holding a stray file turns red on it.
     fake_dir = (*fake[:2], fake[2].replace(
@@ -528,8 +527,8 @@ def self_test() -> int:
     # Every file is named, the fourth too: no "+1 more" hides the writer.
     assert planted == ["left in TMPDIR: .tmpXyZ789 (a.db 0B, b.db 0B, c.db 0B, other.db 0B)"], \
         planted
-    # Through the same step, a planted gateway home now turns red, and the one
-    # known source's leftover, the audit high-water mark, stays green.
+    # Through the same step, a planted gateway home turns red, and so does the
+    # audit high-water mark that used to be the one known source.
     fake_home = (*fake[:2], fake[2].replace(
         "open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()",
         "d = os.path.join(os.environ['TMPDIR'], '.tmpHoMe12', 'tasks', 'stdio')\n"
@@ -547,12 +546,13 @@ def self_test() -> int:
         "d = os.path.join(os.environ['TMPDIR'], '.tmpKnoWn1')\n"
         "    os.makedirs(d)\n"
         "    open(os.path.join(d, 'audit.jsonl.hwm'), 'w').close()"))
-    assert fake_known != fake, "the planted known source must replace the planted file"
+    assert fake_known != fake, "the planted former known source must replace the planted file"
     os.environ["PLANT_LEAK"] = "1"
     try:
-        assert run_steps("linux", "lib-a", fake_known) == [], "a known source turned red"
+        known_run = run_steps("linux", "lib-a", fake_known)
     finally:
         del os.environ["PLANT_LEAK"]
+    assert known_run == ["left in TMPDIR: .tmpKnoWn1 (audit.jsonl.hwm 0B)"], known_run
     # The same on real folders: files_in feeds the match, and a link to a
     # folder beside an allowed file is a stray of its own.
     with tempfile.TemporaryDirectory() as root:
@@ -569,7 +569,9 @@ def self_test() -> int:
         found[".tmpLink01"] = files_in(os.path.join(root, ".tmpLink01"))
         assert found[".tmpKnown1"] == hwm, found
         assert found[".tmpLink01"] == ["audit.jsonl.hwm", "elsewhere"], found
-        assert unexpected(found) == [".tmpLink01", ".tmpStray1"], found
+        assert unexpected(found) == [".tmpKnown1", ".tmpLink01", ".tmpStray1"], found
+        # Under the synthetic source the link and the stray still fail on their contents alone.
+        assert unexpected(found, synthetic) == [".tmpLink01", ".tmpStray1"], found
     per_binary_rows()
     prebuilt_rows()
     # H1: every shard, on every OS, gives cargo and a prebuilt lib
@@ -852,13 +854,17 @@ def per_binary_rows() -> None:
         got = run("leak")
         assert got == ["left in TMPDIR: a0_per_caller_cache/.tmpXyZ789 (tasks/task-x.json 0B)",
                        "left in TMPDIR: gh452_session_owner/.tmpXyZ789 (tasks/task-x.json 0B)"], got
-        # A known leftover inside a binary's folder stays tolerated, and its count is shared across
-        # binaries (two here, within the allowance of three).
-        assert run("hwm") == [], run("hwm")
+        # An audit high-water mark inside a binary's folder fails too, named under each binary
+        # that left it.
+        got = run("hwm")
+        assert got == ["left in TMPDIR: a0_per_caller_cache/.tmpHwmA12 (audit.jsonl.hwm 0B)",
+                       "left in TMPDIR: gh452_session_owner/.tmpHwmA12 (audit.jsonl.hwm 0B)"], got
         assert run("") == [], "clean binaries leave only their empty folders"
-    # The allowance is shared across binaries: four known leftovers in four binaries fail on the fourth.
+    # An allowance is shared across binaries: with a known source of three, four leftovers in four
+    # binaries fail on the fourth (held with an explicit list now that KNOWN_LEFTOVERS is empty).
     four = {f"bin{i}/.tmpAb12C{i}": ["audit.jsonl.hwm"] for i in range(4)}
-    assert unexpected(four) == ["bin3/.tmpAb12C3"], unexpected(four)
+    three = [(r"\.tmp[A-Za-z0-9]{6}", r"audit\.jsonl\.hwm", 3, "a source allowed three")]
+    assert unexpected(four, three) == ["bin3/.tmpAb12C3"], unexpected(four, three)
     # An unexpected empty folder at the top of TMPDIR still fails, as before.
     assert unexpected({"stray": []}) == ["stray"]
 

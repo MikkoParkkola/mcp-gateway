@@ -1348,7 +1348,7 @@ CASES += [
 
 # The tooling unit tests fail every ref; only live-ledger checks are
 # report-only. Each anchor names the new job's own header or steps.
-UNIT_JOB = "    name: Release tooling unit tests\n    runs-on: ubuntu-latest\n"
+UNIT_JOB = "    name: Release tooling unit tests\n    runs-on: ubuntu-24.04\n"
 MUTATIONS_STEP = (
     "      - name: Test that the workflow-wiring assertions catch their mutations\n"
     "        run: python3 scripts/release/test_workflow_wiring_mutations.py\n"
@@ -1795,7 +1795,7 @@ CASES += [
 # named by its runner line, the trusted one by its env block, so each anchor
 # names one job although both run the same steps.
 _HOSTED_PY = (
-    "    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    permissions:\n      contents: read\n    steps:\n"
+    "    runs-on: ubuntu-24.04\n    timeout-minutes: 60\n    permissions:\n      contents: read\n    steps:\n"
     "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
     "        with:\n          persist-credentials: false\n"
     "      # Hosted runners only: the trusted machine sizes its own memory.\n"
@@ -1890,7 +1890,7 @@ CASES += [
     ("c6-resolver-continues-on-error", "c6-obligations.yml",
      "        timeout-minutes: 1\n", "        timeout-minutes: 1\n        continue-on-error: true\n", CAUGHT),
     ("c6-resolver-job-conditional", "c6-obligations.yml",
-     "    runs-on: ubuntu-latest\n", "    if: github.event_name == 'push'\n    runs-on: ubuntu-latest\n", CAUGHT),
+     "    runs-on: ubuntu-24.04\n", "    if: github.event_name == 'push'\n    runs-on: ubuntu-24.04\n", CAUGHT),
     ("c6-resolver-pull-requests-path-filtered", "c6-obligations.yml",
      "  pull_request:\n", "  pull_request:\n    paths: [\"docs/release/**\"]\n", CAUGHT),
     ("c6-resolver-release-push-dropped", "c6-obligations.yml",
