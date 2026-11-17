@@ -460,7 +460,8 @@ async fn n6c_loopback_spellings_and_the_default_port() {
 
 /// The bootstrap redirect carries no secret: the link answers 303 to
 /// `/dashboard`, that Location holds neither the sentinel nor a secret-named
-/// query, and following it does not hand the sentinel on.
+/// query, and following it with the session it set opens the dashboard page
+/// (200), which carries no sentinel.
 #[tokio::test]
 async fn n9_the_bootstrap_redirect_carries_no_secret() {
     let (state, _dir) = fixture().await;
@@ -476,11 +477,15 @@ async fn n9_the_bootstrap_redirect_carries_no_secret() {
     assert_eq!(location, DASHBOARD);
     assert!(!location.contains(&sentinel), "{location}");
     url_has_no_secret_query(&location);
-    let followed = send(&state, get(&location, None)).await;
-    if let Some(again) = followed.header(header::LOCATION) {
-        assert!(!again.contains(&sentinel), "{again}");
-        url_has_no_secret_query(&again);
-    }
+    // Followed with the session the redemption set, as a browser does.
+    let handle = session_handle(&redirected);
+    let followed = send(&state, get(&location, Some(&handle))).await;
+    assert_eq!(followed.status, StatusCode::OK, "{}", followed.body);
+    assert!(
+        !followed.body.contains(&sentinel),
+        "the dashboard page carries the sentinel"
+    );
+    assert!(followed.header(header::LOCATION).is_none());
 }
 
 /// The shell document answers `Referrer-Policy: same-origin`; the handoff
