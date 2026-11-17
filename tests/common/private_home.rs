@@ -30,7 +30,9 @@ macro_rules! require_private_home {
 /// fix for it.
 pub fn require_private_home_now() {
     if let Err(refusal) = judge() {
-        let fix = if refusal.env_fix {
+        let fix = if refusal.check == 1 {
+            "cargo test without --release: the release library ignores the test-home override"
+        } else if refusal.env_fix {
             "env -u XDG_CONFIG_HOME -u MCP_GATEWAY_CONFIG_DIR MCP_GATEWAY_TEST_HOME_DIR=$(mktemp -d) cargo test ... \
              (PowerShell: Remove-Item Env:XDG_CONFIG_HOME, Env:MCP_GATEWAY_CONFIG_DIR -ErrorAction Ignore; \
              $env:MCP_GATEWAY_TEST_HOME_DIR = (New-Item -ItemType Directory (Join-Path $env:TEMP (New-Guid))).FullName)"
@@ -182,13 +184,15 @@ pub fn test_path(module_path: &str, name: &str) -> String {
 pub enum Expect {
     /// Exit success and exactly one passed test.
     Pass,
-    /// Exit failure, exactly one failed test, and a panic containing every fragment.
-    Refuse(Vec<String>),
+    /// Exit failure, exactly one failed test, a panic containing every
+    /// fragment of the first list and none of the second.
+    Refuse(Vec<String>, Vec<String>),
 }
 
-/// [`Expect::Refuse`] from string slices.
-pub fn refuse(fragments: &[&str]) -> Expect {
-    Expect::Refuse(fragments.iter().map(|f| (*f).to_string()).collect())
+/// [`Expect::Refuse`] from string slices: what the panic must say, and what it must not.
+pub fn refuse(present: &[&str], absent: &[&str]) -> Expect {
+    let owned = |list: &[&str]| list.iter().map(|f| (*f).to_string()).collect();
+    Expect::Refuse(owned(present), owned(absent))
 }
 
 /// The current test binary with an empty env plus what any process needs:
@@ -278,16 +282,24 @@ pub fn run_row_child(
                 ))
             }
         }
-        (Some(status), Expect::Refuse(fragments)) => {
-            let missing: Vec<_> = fragments
+        (Some(status), Expect::Refuse(present, absent)) => {
+            let missing: Vec<_> = present
                 .iter()
                 .filter(|f| !stderr.contains(f.as_str()))
                 .collect();
-            if !status.success() && summary.contains(" 0 passed; 1 failed;") && missing.is_empty() {
+            let unwanted: Vec<_> = absent
+                .iter()
+                .filter(|f| stderr.contains(f.as_str()))
+                .collect();
+            if !status.success()
+                && summary.contains(" 0 passed; 1 failed;")
+                && missing.is_empty()
+                && unwanted.is_empty()
+            {
                 Ok(())
             } else {
                 Err(format!(
-                    "expected one refused test, got {status}, {summary:?}, missing {missing:?}"
+                    "expected one refused test, got {status}, {summary:?}, missing {missing:?}, unwanted {unwanted:?}"
                 ))
             }
         }

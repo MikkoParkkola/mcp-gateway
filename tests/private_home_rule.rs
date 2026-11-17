@@ -67,11 +67,14 @@ const FIX_ENV: &str = "env -u XDG_CONFIG_HOME -u MCP_GATEWAY_CONFIG_DIR";
 fn r1_an_unset_override_is_refused() {
     probe(
         literal_env_command(),
-        &refuse(&[
-            "(check 2)",
-            "MCP_GATEWAY_TEST_HOME_DIR is unset or empty",
-            FIX,
-        ]),
+        &refuse(
+            &[
+                "(check 2)",
+                "MCP_GATEWAY_TEST_HOME_DIR is unset or empty",
+                FIX,
+            ],
+            &[FIX_ENV],
+        ),
         Vec::new(),
     );
 }
@@ -83,11 +86,14 @@ fn r2_an_empty_override_is_refused() {
     command.env("MCP_GATEWAY_TEST_HOME_DIR", "");
     probe(
         command,
-        &refuse(&[
-            "(check 2)",
-            "MCP_GATEWAY_TEST_HOME_DIR is unset or empty",
-            FIX,
-        ]),
+        &refuse(
+            &[
+                "(check 2)",
+                "MCP_GATEWAY_TEST_HOME_DIR is unset or empty",
+                FIX,
+            ],
+            &[FIX_ENV],
+        ),
         Vec::new(),
     );
 }
@@ -99,7 +105,10 @@ fn r3_a_nonexistent_override_is_refused() {
     let command = with_override(&parent.path().join("absent"));
     probe(
         command,
-        &refuse(&["(check 3)", "names no existing directory", FIX]),
+        &refuse(
+            &["(check 3)", "names no existing directory", FIX],
+            &[FIX_ENV],
+        ),
         vec![parent],
     );
 }
@@ -112,7 +121,10 @@ fn r10_an_override_naming_a_file_is_refused() {
     std::fs::write(&file, b"").expect("a regular file");
     probe(
         with_override(&file),
-        &refuse(&["(check 3)", "names no existing directory", FIX]),
+        &refuse(
+            &["(check 3)", "names no existing directory", FIX],
+            &[FIX_ENV],
+        ),
         vec![parent],
     );
 }
@@ -123,7 +135,7 @@ fn r4_the_real_home_is_refused() {
     let home = private_home::real_home_raw().expect("this host has a home");
     probe(
         with_override(&home),
-        &refuse(&["(check 4)", "is the real home", FIX]),
+        &refuse(&["(check 4)", "is the real home", FIX], &[FIX_ENV]),
         Vec::new(),
     );
 }
@@ -138,7 +150,7 @@ fn r5_a_symlink_to_the_real_home_is_refused() {
     std::os::unix::fs::symlink(&home, &link).expect("a symlink");
     probe(
         with_override(&link),
-        &refuse(&["(check 4)", "is the real home", FIX]),
+        &refuse(&["(check 4)", "is the real home", FIX], &[FIX_ENV]),
         vec![dir],
     );
 }
@@ -152,7 +164,14 @@ fn r6_a_release_build_is_refused() {
     let home = fresh_private_dir();
     probe(
         with_override(home.path()),
-        &refuse(&["(check 1)", "these tests need a debug build"]),
+        &refuse(
+            &[
+                "(check 1)",
+                "these tests need a debug build",
+                "without --release",
+            ],
+            &[FIX],
+        ),
         vec![home],
     );
 }
@@ -169,7 +188,11 @@ fn refuse_var(
     let other = fresh_private_dir();
     let mut command = with_override(home.path());
     command.env(var, value(home.path(), other.path()));
-    probe(command, &refuse(&[check, text, FIX_ENV]), vec![home, other]);
+    probe(
+        command,
+        &refuse(&[check, text, FIX_ENV], &[]),
+        vec![home, other],
+    );
 }
 
 const XDG_TEXT: &str = "XDG_CONFIG_HOME must be unset or <override>/.config";
@@ -283,7 +306,7 @@ fn refuse_leaf(leaf: &str, link: impl FnOnce(&Path, &Path)) {
     let text = format!("{leaf} resolves outside the override");
     probe(
         with_override(home.path()),
-        &refuse(&["(check 7)", &text, FIX_ENV]),
+        &refuse(&["(check 7)", &text, FIX_ENV], &[]),
         vec![home, decoy],
     );
 }
@@ -342,7 +365,7 @@ mod r9_windows_aliases {
     fn refused(alias: &std::path::Path) {
         probe(
             with_override(alias),
-            &refuse(&["(check 4)", "is the real home", FIX]),
+            &refuse(&["(check 4)", "is the real home", FIX], &[FIX_ENV]),
             Vec::new(),
         );
     }
@@ -357,22 +380,32 @@ mod r9_windows_aliases {
     #[test]
     fn r9b_a_case_variant_is_refused() {
         let raw = crate::private_home::real_home_raw().expect("a home");
-        refused(&PathBuf::from(raw.to_string_lossy().to_uppercase()));
+        // ASCII only: Unicode uppercasing can change a name's length (ß to SS),
+        // which is another path, not a case alias.
+        refused(&PathBuf::from(raw.to_string_lossy().to_ascii_uppercase()));
     }
 
     /// The 8.3 short form, read from cmd. Skipped, saying why, when the volume
     /// has 8.3 names off (the short form equals the long one).
     #[test]
     fn r9c_the_short_form_is_refused() {
+        use std::os::windows::process::CommandExt as _;
         let raw = crate::private_home::real_home_raw().expect("a home");
+        // raw_arg: cmd parses its own command line, so the quotes must reach it
+        // unescaped. /u: cmd writes UTF-16LE, so a non-ASCII profile survives.
         let out = std::process::Command::new("cmd")
-            .args([
-                "/c",
-                &format!("for %I in (\"{}\") do @echo %~sI", raw.display()),
-            ])
+            .args(["/u", "/c"])
+            .raw_arg(format!("for %I in (\"{}\") do @echo %~sI", raw.display()))
             .output()
             .expect("cmd runs");
-        let short = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert!(out.status.success(), "cmd failed: {}", out.status);
+        let units: Vec<u16> = out
+            .stdout
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        let short = String::from_utf16_lossy(&units).trim().to_string();
+        assert!(!short.is_empty(), "cmd printed no short form");
         if short.eq_ignore_ascii_case(&raw.to_string_lossy()) {
             println!("skipped: 8.3 names are off on this volume ({short})");
             return;
@@ -754,7 +787,10 @@ fn g1_every_listed_test_starts_with_the_rule() {
         let text = std::fs::read_to_string(&path).expect("readable");
         let lines: Vec<&str> = text.lines().collect();
         for (i, line) in lines.iter().enumerate() {
-            if line.trim() != "require_private_home!();" {
+            // Any path to the macro counts (`crate::require_private_home!()` too); a
+            // commented-out call does not.
+            let t = line.trim();
+            if t.starts_with("//") || !t.ends_with("require_private_home!();") {
                 continue;
             }
             // The rule is the first statement: only items (`use`, `const`,

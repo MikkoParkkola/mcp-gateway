@@ -787,6 +787,17 @@ fn int1_discovery_reads_only_the_private_home() {
         );
         let b = std::path::PathBuf::from(std::env::var_os("HOME").expect("the decoy home"));
         // Preflight: nothing is written or scanned unless every routing check holds.
+        // The parent's own fixture paths come in variables the helper under test
+        // never sets, so a helper that left HOME or the override wrong is caught here.
+        for (var, dir) in [("MCP_GW_T1_A", &a), ("MCP_GW_T1_B", &b)] {
+            let given =
+                std::path::PathBuf::from(std::env::var_os(var).expect("the parent's fixture"));
+            assert_eq!(
+                private_home::canonical(dir),
+                private_home::canonical(&given),
+                "{var}: the child's home is not the fixture its parent made"
+            );
+        }
         let temp = private_home::canonical(&std::env::temp_dir());
         for dir in [&a, &b] {
             let canonical = private_home::canonical(dir);
@@ -816,6 +827,12 @@ fn int1_discovery_reads_only_the_private_home() {
             .expect("a runtime")
             .block_on(AutoDiscovery::new().discover_all())
             .expect("discovery runs");
+        // Each private entry exactly once, counted before any set can hide a duplicate.
+        for (source, _, _) in int1_sources() {
+            let name = format!("private-{pid}-{source}");
+            let seen = found.iter().filter(|server| server.name == name).count();
+            assert_eq!(seen, 1, "{name} discovered {seen} times");
+        }
         let names: std::collections::BTreeSet<String> =
             found.iter().map(|server| server.name.clone()).collect();
         let private: std::collections::BTreeSet<String> = names
@@ -851,12 +868,15 @@ fn int1_discovery_reads_only_the_private_home() {
     }
     let a = private_home::fresh_private_dir();
     let b = private_home::fresh_private_dir();
-    let command = gateway_bin::isolated_with_env_home(
+    let mut command = gateway_bin::isolated_with_env_home(
         std::process::Command::new(std::env::current_exe().expect("the test binary")),
         a.path(),
         b.path(),
         gateway_bin::Inherit::Environment,
     );
+    command
+        .env("MCP_GW_T1_A", a.path())
+        .env("MCP_GW_T1_B", b.path());
     let _kept =
         private_home::run_row_child(command, ME, false, &private_home::Expect::Pass, vec![a, b]);
 }
