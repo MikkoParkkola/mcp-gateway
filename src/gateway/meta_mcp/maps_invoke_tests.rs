@@ -278,3 +278,81 @@ async fn at4_without_attribution_the_answer_is_untouched() {
         );
     }
 }
+
+// ── AT9: projection keeps the credit under `_raw` ────────────────────
+
+#[tokio::test]
+async fn at9_a_projected_answer_keeps_the_attribution_under_raw() {
+    let stub = Stub::start(Reply::json(r#"{"name":"Helsinki","osm_id":"42"}"#)).await;
+    let top = format!(
+        "{}projection:\n  subject:\n    id: osm_id\n    title: name\n",
+        attributed()
+    );
+    let backend = Arc::new(CapabilityBackend::new(
+        CAPS,
+        Arc::new(executor(Names::default())),
+    ));
+    backend
+        .register_capability(cap(
+            "at9",
+            &stub.url("at9.test", "/s"),
+            &top,
+            &object_output(&["name", "osm_id"]),
+            "",
+        ))
+        .expect("registered");
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_projection_mode(crate::projection::ProjectionMode::On);
+    meta.set_capabilities(backend);
+    let (text, structured) = channels(&invoke(&meta, "at9", json!({ "q": "a" })).await);
+    for (channel, v) in [("text", &text), ("structuredContent", &structured)] {
+        assert_eq!(
+            v["subject"]["title"], "Helsinki",
+            "{channel}: projected: {v}"
+        );
+        assert_eq!(
+            v["_raw"]["attribution"], OSM,
+            "{channel}: credit under _raw: {v}"
+        );
+    }
+}
+
+// ── S1: search finds each new tool in the shipped catalogue ──────────
+
+#[tokio::test]
+async fn s1_gateway_search_finds_each_map_tool_by_name() {
+    let backend = Arc::new(CapabilityBackend::new(
+        CAPS,
+        Arc::new(executor(Names::default())),
+    ));
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+    backend
+        .load_from_directory(dir.to_str().expect("utf-8"))
+        .await
+        .expect("the shipped catalogue loads");
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_capabilities(backend);
+    let who = api_key("alice");
+    for (query, tool) in [
+        ("geocode", "geocode"),
+        ("nominatim", "nominatim_search"),
+        ("reverse geocode", "nominatim_reverse"),
+        ("photon", "photon_search"),
+        ("nearby", "overpass_nearby"),
+        ("route", "osrm_route"),
+    ] {
+        let response = Box::pin(meta.handle_tools_call(
+            RequestId::Number(1),
+            "gateway_search",
+            json!({ "query": query }),
+            Some("maps-session"),
+            context(&who),
+        ))
+        .await;
+        let text = serde_json::to_string(&response).expect("json");
+        assert!(
+            text.contains(&format!("\\\"{tool}\\\"")) || text.contains(&format!("\"{tool}\"")),
+            "{query}: finds {tool}: {text}"
+        );
+    }
+}
