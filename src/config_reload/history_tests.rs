@@ -508,3 +508,20 @@ fn t13_a_failed_save_keeps_the_record_in_memory() {
     let on_disk = ConfigHistory::open(dir.path(), Bounds::default(), 1);
     assert_eq!(revision_names(&on_disk), expect(&["r1"]));
 }
+
+/// A history opened inside a kept temp dir (`crate::test_dir_keep`) keeps it
+/// until its last handle drops: a save its test left running (a watched
+/// reload's record) lands before the dir goes, never mid-removal, where its
+/// sidecar open would leave the dir behind holding only the lock.
+#[test]
+fn t14_a_history_in_a_kept_tempdir_keeps_it_until_its_last_handle() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let root = dir.path().to_path_buf();
+    let history = ConfigHistory::open(&root, Bounds::default(), 0);
+    drop(dir);
+    assert!(root.is_dir(), "the dir went with the test's share while the history lived in it");
+    record_version(&history, "r1", 1, b"a: 1\n", "r1");
+    assert!(root.join(ConfigHistory::FILE).is_file(), "the late save landed");
+    drop(history);
+    assert!(!root.exists(), "the dir outlived the history's last handle");
+}
