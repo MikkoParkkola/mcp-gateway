@@ -30,7 +30,9 @@
 //!
 //! Syntax scan with `syn`, per function body. Its limits: names, not types;
 //! order is source order (a call counts after its arguments), so a second
-//! sink handing on other, unscrubbed data after a scrub passes; a `By` hop is
+//! sink handing on other, unscrubbed data after a scrub passes (a 4.0.1
+//! follow-up closes this by type: the sinks will accept only a
+//! `ScrubbedNotification` that only the scrub constructs); a `By` hop is
 //! a direct call by name; `Withhold` and `Refuse` outcomes are honoured only
 //! as the behaviour rows check. The behaviour rows (the route rows in
 //! `secret_echo_notify_tests.rs`, each transport's scrub rows) stay the
