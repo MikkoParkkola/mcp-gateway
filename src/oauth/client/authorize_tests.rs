@@ -724,39 +724,6 @@ async fn the_window_closes_the_callback_listener_before_the_wait_returns() {
         .expect("the window's end closes the callback listener before it returns");
 }
 
-/// MIK-7982: a login cancelled before it registers (a restart or shutdown of
-/// the backend) ends as cancelled and opens no browser.
-#[cfg(tp3)]
-#[tokio::test]
-async fn a_login_cancelled_before_registration_opens_no_browser() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut client = client(dir.path(), Some("https://as.example"));
-    let opened = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let seen = Arc::clone(&opened);
-    client.open_browser = Box::new(move |_| {
-        seen.store(true, std::sync::atomic::Ordering::SeqCst);
-        true
-    });
-    let cancel = tokio_util::sync::CancellationToken::new();
-    cancel.cancel();
-
-    let ended = tokio::time::timeout(
-        Duration::from_secs(10),
-        client.authorize_until(&cancel, None),
-    )
-    .await
-    .expect("a cancelled login ends at once");
-
-    assert!(
-        matches!(ended, Err(crate::Error::AuthorizationCancelled { ref backend }) if backend == BACKEND),
-        "{ended:?}"
-    );
-    assert!(
-        !opened.load(std::sync::atomic::Ordering::SeqCst),
-        "no browser opens for a cancelled login"
-    );
-}
-
 /// A login whose callback arrives after a sign-in under another issuer was
 /// confirmed redeems nothing: the code exchange spends the login's proof,
 /// which refuses then. Red before the exchange took a spent proof: the old
@@ -816,5 +783,7 @@ async fn a_callback_after_a_switch_redeems_nothing() {
     );
     assert!(forms.lock().unwrap().is_empty(), "no code was redeemed");
 }
+#[cfg(tp3)]
+mod cancelled;
 #[cfg(tp3)]
 mod switch;
