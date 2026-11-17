@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::record_tests::{ONE_BACKEND, TWO_BACKENDS, rig, rig_in};
+use super::record_tests::{ONE_BACKEND, TWO_BACKENDS, rig_in};
 use super::seams::{self, Fault};
 use super::{Outcome, StoredFile};
 use crate::gateway::test_helpers::write_owner_only;
@@ -96,7 +96,7 @@ async fn c4_a_failed_read_keeps_the_record_in_memory_and_the_file_as_it_was() {
 #[tokio::test]
 async fn c5_an_unreadable_file_is_left_as_it_is_and_the_record_kept() {
     use std::os::unix::fs::PermissionsExt as _;
-    let rig = rig(ONE_BACKEND);
+    let rig = super::record_tests::rig(ONE_BACKEND);
     let file = history_file(rig.dir.path());
     let before = bytes_of(rig.dir.path());
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).expect("chmod 000");

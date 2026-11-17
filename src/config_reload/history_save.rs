@@ -474,7 +474,7 @@ impl super::ConfigHistory {
     /// refusal is dropped and leaves the store unopened: the real first open
     /// carries a record, which a refusal sends to memory, so a row about a
     /// refused file records before it reads.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn open_eagerly(data_dir: &Path, bounds: Bounds, now: u64) -> Self {
         let store = Self::open(data_dir, bounds, now);
         let _ = store.open_now(0, Instant::now() + super::SAVE_DEADLINE);
