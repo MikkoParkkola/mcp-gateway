@@ -104,13 +104,12 @@ spec:
         - name: gateway
           image: "ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.3"
           imagePullPolicy: IfNotPresent
-          # No `serve`: --host/--port are top-level flags and the subcommand
-          # takes only --stdio, so `serve --host` exits 2 before reading config.
+          # No `serve`: --port is a top-level flag and the subcommand takes only
+          # --stdio, so `serve --port` exits 2 before reading config. The bind
+          # address is MCP_GATEWAY_SERVER__HOST below.
           args:
             - "--config"
             - "/etc/mcp-gateway/gateway.yaml"
-            - "--host"
-            - "0.0.0.0"
             - "--port"
             - "39400"
           ports:
@@ -122,6 +121,11 @@ spec:
             # caches) lands on the writable `state` volume; the root FS is read-only.
             - name: HOME
               value: "/var/lib/mcp-gateway"
+            # Every interface in the pod, whatever config.server.host says: the
+            # Service reaches the pod only on its network address. The env
+            # overlay overrides the config file, as the hidden host flag did.
+            - name: MCP_GATEWAY_SERVER__HOST
+              value: "0.0.0.0"
             - name: MCP_GATEWAY_LOG_FORMAT
               value: "json"
             - name: MCP_GATEWAY_LOG_LEVEL

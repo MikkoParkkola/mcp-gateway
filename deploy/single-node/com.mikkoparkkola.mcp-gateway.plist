@@ -11,8 +11,6 @@
     <string>/usr/local/bin/mcp-gateway</string>
     <string>--config</string>
     <string>/usr/local/etc/mcp-gateway/gateway.yaml</string>
-    <string>--host</string>
-    <string>127.0.0.1</string>
     <string>--port</string>
     <string>39400</string>
   </array>
@@ -26,6 +24,10 @@
     <string>info</string>
     <key>MCP_GATEWAY_LOG_FORMAT</key>
     <string>json</string>
+    <!-- Loopback only, whatever gateway.yaml's server.host says; the env
+         overlay overrides the config file. -->
+    <key>MCP_GATEWAY_SERVER__HOST</key>
+    <string>127.0.0.1</string>
   </dict>
 
   <!-- launchd's 20 s default SIGKILLs the gateway mid-stop; it needs its stop

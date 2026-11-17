@@ -122,6 +122,17 @@ echo "== helm_rendered_args_and_config_are_valid =="
 if grep -qE '^ *- "?serve"?$' <<<"$dep"; then
   fail "rendered args carry the serve subcommand; serve --host exits 2"
 fi
+# The bind address is the env overlay, never the hidden host flag, and a user
+# extraEnv cannot set a second MCP_GATEWAY_SERVER__HOST beside the chart's own.
+if grep -qE '^ *- "?--host"?$' <<<"$dep"; then
+  fail "rendered args pass the hidden --host flag"
+fi
+grep -A1 -E '^ *- name: MCP_GATEWAY_SERVER__HOST$' <<<"$dep" | grep -qE 'value: "?0\.0\.0\.0"?$' \
+  || fail "rendered env does not bind 0.0.0.0 through MCP_GATEWAY_SERVER__HOST"
+if "$HELM" template t "$CHART" --set 'extraEnv[0].name=MCP_GATEWAY_SERVER__HOST' \
+  --set 'extraEnv[0].value=127.0.0.1' >/dev/null 2>&1; then
+  fail "a user extraEnv MCP_GATEWAY_SERVER__HOST rendered beside the chart's own"
+fi
 grep -qE '^ *backends: \{\}$' <<<"$cm" \
   || fail "rendered gateway.yaml backends is not a map; Config.backends is a map"
 
