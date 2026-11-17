@@ -519,7 +519,7 @@ async fn an_over_long_line_in_one_chunk_is_refused() {
 }
 
 /// The shared refusal on the stream's JSON events (its third caller, beside
-/// admin_call and the buffered path): an event whose redaction would merge two
+/// `admin_call` and the buffered path): an event whose redaction would merge two
 /// keys is refused, not printed short.
 #[tokio::test]
 async fn a_json_event_that_loses_an_entry_to_redaction_is_refused() {
