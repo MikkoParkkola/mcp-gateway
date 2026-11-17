@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! X1-X3 of the U2 test plan: no secret, no call content and no unescaped
-//! caller text in any read or export.
+//! X1-X4 of the U2 test plan: no secret, no call content and no unescaped
+//! caller text in any read or export, nor in any log line one writes.
 
 use crate::gateway::ui::activity::rows::Check;
 use base64::Engine as _;
@@ -125,6 +125,38 @@ async fn x1_x2_no_secret_and_no_call_content_in_any_read_or_export() {
         ] {
             assert!(!out.contains(planted), "{planted} in {out}");
         }
+    }
+}
+
+/// X4: no secret and no call content in any log line a read or export writes.
+///
+/// The router runs these readers on the blocking pool, where a thread-scoped
+/// capture cannot see; here they run on the capturing thread itself, at
+/// TRACE, so every line the read path can write is in `logged`.
+#[test]
+fn x4_no_secret_and_no_call_content_in_any_log_line_of_a_read_or_export() {
+    let dir = tempfile::tempdir().unwrap();
+    let (logs, inv, gov) = fixture(&dir, "srv");
+    let seed_b64 = base64::engine::general_purpose::STANDARD.encode(SEED);
+    let (outputs, logged) = crate::test_log_capture::capture_at(tracing::Level::TRACE, || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(everything(&logs, &inv, &gov))
+    });
+    assert_eq!(outputs.len(), 5, "list, two receipts, two exports");
+    for planted in [
+        SECRET,
+        seed_b64.as_str(),
+        "DISTINCT-ARG-7731",
+        "DISTINCT-RESULT-9134",
+        "DISTINCT-ROLLBACK-5521",
+    ] {
+        assert!(
+            !logged.contains(planted),
+            "{planted} in a log line: {logged}"
+        );
     }
 }
 

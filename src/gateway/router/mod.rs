@@ -170,6 +170,8 @@ mod mrtr_component_tests;
 #[cfg(test)]
 mod task_lifecycle_tests;
 
+#[cfg(all(test, feature = "webui"))]
+mod activity_secret_tests;
 #[cfg(all(test, feature = "metrics"))]
 mod backend_origin_count_tests;
 #[cfg(test)]
