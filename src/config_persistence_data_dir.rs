@@ -22,7 +22,7 @@ pub fn gateway_data_dir() -> PathBuf {
 /// still the operator's; `var` would drop it for the default under home.
 #[cfg(not(test))]
 fn configured_data_dir() -> Option<std::ffi::OsString> {
-    std::env::var_os("MCP_GATEWAY_CONFIG_DIR")
+    mutant!("m8", None, std::env::var_os("MCP_GATEWAY_CONFIG_DIR"))
 }
 
 /// In a test build the override counts only beside the test-home override: a
@@ -30,8 +30,14 @@ fn configured_data_dir() -> Option<std::ffi::OsString> {
 /// at their real data dir. A harness, or a test passing `child_env`, sets both.
 #[cfg(test)]
 fn configured_data_dir() -> Option<std::ffi::OsString> {
-    crate::home_dir::test_override()?;
-    std::env::var_os("MCP_GATEWAY_CONFIG_DIR")
+    mutant!(
+        "m5",
+        std::env::var_os("MCP_GATEWAY_CONFIG_DIR"),
+        mutant!("m10", None, {
+            crate::home_dir::test_override()?;
+            std::env::var_os("MCP_GATEWAY_CONFIG_DIR")
+        })
+    )
 }
 
 /// `path` made absolute against the working directory, or kept as given when

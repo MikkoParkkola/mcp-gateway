@@ -147,7 +147,9 @@ pub(crate) fn kept_private_tempdir_prefixed(prefix: &str) -> Arc<tempfile::TempD
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        builder.permissions(std::fs::Permissions::from_mode(0o700));
+        mutant!("m7", (), {
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        });
     }
     register(builder.tempdir().expect("a temp dir"))
 }

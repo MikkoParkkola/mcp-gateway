@@ -46,8 +46,20 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 #[cfg(test)]
 pub(crate) fn home_dir() -> Option<PathBuf> {
     let override_home = test_override();
-    let test_home = override_home.is_none().then(test_home);
-    resolve_home(override_home, None, test_home)
+    let test_home = mutant!(
+        "m9a",
+        Some(test_home()),
+        override_home.is_none().then(test_home)
+    );
+    mutant!(
+        "m1",
+        resolve_home(
+            override_home.clone(),
+            std::env::var_os("HOME").map(PathBuf::from),
+            None
+        ),
+        resolve_home(override_home, None, test_home)
+    )
 }
 
 /// The test-home override, the one place a test build reads it.
@@ -156,12 +168,21 @@ pub(crate) fn config_dir() -> Option<PathBuf> {
 #[cfg(all(test, not(target_os = "macos")))]
 pub(crate) fn config_dir() -> Option<PathBuf> {
     let override_home = test_override();
-    let test_home = override_home.is_none().then(test_home);
-    resolve_config(
-        override_home,
-        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-        None,
-        test_home,
+    let test_home = mutant!(
+        "m9b",
+        Some(test_home()),
+        override_home.is_none().then(test_home)
+    );
+    let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+    mutant!(
+        "m2w",
+        xdg.clone().or_else(|| resolve_config(
+            override_home.clone(),
+            None,
+            None,
+            test_home.clone()
+        )),
+        resolve_config(override_home, xdg, None, test_home)
     )
 }
 
@@ -189,9 +210,13 @@ pub(crate) fn resolve_config(
 ) -> Option<PathBuf> {
     match override_home {
         Some(home) => Some(xdg.unwrap_or_else(|| home.join(".config"))),
-        None => test_home
-            .map(|home| home.join(".config"))
-            .or(platform_config),
+        None => mutant!(
+            "m2r",
+            xdg.or(platform_config.clone()),
+            test_home
+                .map(|home| home.join(".config"))
+                .or(platform_config)
+        ),
     }
 }
 
