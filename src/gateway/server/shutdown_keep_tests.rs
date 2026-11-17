@@ -311,7 +311,8 @@ pub(super) fn source_files() -> Vec<(String, String)> {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if path.is_dir() {
                 walk(&path, files);
-            } else if name.ends_with(".rs") && !name.ends_with("tests.rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") && !name.ends_with("tests.rs")
+            {
                 let text = std::fs::read_to_string(&path).expect("a source file");
                 files.push((path.display().to_string(), text));
             }

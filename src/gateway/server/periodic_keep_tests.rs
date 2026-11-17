@@ -42,7 +42,9 @@ async fn hold_one_tick(
     saver.abort();
     let ended = saver.await;
     assert!(
-        ended.as_ref().is_err_and(|error| error.is_cancelled()),
+        ended
+            .as_ref()
+            .is_err_and(tokio::task::JoinError::is_cancelled),
         "the saver was not cancelled: {ended:?}"
     );
 }

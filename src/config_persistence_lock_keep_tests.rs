@@ -40,7 +40,8 @@ async fn the_config_lock_thread_keeps_its_dir_after_its_caller_leaves() {
     caller.abort();
     let left = caller.await;
     assert!(
-        left.as_ref().is_err_and(|error| error.is_cancelled()),
+        left.as_ref()
+            .is_err_and(tokio::task::JoinError::is_cancelled),
         "the caller did not leave: {left:?}"
     );
     drop(dir);
